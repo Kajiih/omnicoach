@@ -1,0 +1,13 @@
+---
+source: tests/cli.rs
+expression: output
+---
+--- exit code ---
+1
+--- stdout ---
+VCS_Context:1:1: [VCS001] Running `jj edit @` on a described commit is discouraged.
+  Rationale: Editing described commits breaks atomicity and review stability.
+  Suggestion: Create a new change with `jj new @` instead of editing this commit directly.
+
+
+--- stderr ---

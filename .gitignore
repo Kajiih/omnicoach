@@ -1,0 +1,11 @@
+# Cargo/Rust build output
+/target
+
+# Jujutsu state directory
+.jj/
+
+# Insta test framework temporary/pending snapshots
+**/*.pending-snap
+
+# Local scratch and temporary scripts
+scratch/

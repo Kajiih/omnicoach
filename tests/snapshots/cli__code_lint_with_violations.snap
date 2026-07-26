@@ -1,0 +1,13 @@
+---
+source: tests/cli.rs
+expression: output
+---
+--- exit code ---
+1
+--- stdout ---
+[TEMP_PATH]:2:5: [PY002] Nested function definition `inner` is discouraged.
+  Rationale: Nested functions increase cognitive complexity and reduce testability.
+  Suggestion: Move `inner` to the module level or convert to a private helper.
+
+
+--- stderr ---

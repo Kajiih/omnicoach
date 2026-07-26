@@ -1,0 +1,15 @@
+---
+source: tests/cli.rs
+expression: output
+---
+--- exit code ---
+2
+--- stdout ---
+
+--- stderr ---
+Error: Failed to load configuration: TOML parse error at line 1, column 11
+  |
+1 | select = [invalid syntax]
+  |           ^
+invalid array
+expected `]`

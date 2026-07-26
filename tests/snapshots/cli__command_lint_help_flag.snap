@@ -1,0 +1,18 @@
+---
+source: tests/cli.rs
+expression: output
+---
+--- exit code ---
+0
+--- stdout ---
+Command execution workflow safety linter
+
+Usage: omni-command-lint [OPTIONS] --cmd <CMD>
+
+Options:
+      --format <FORMAT>  Format output (plain, json) [default: plain]
+      --cmd <CMD>        Shell command string to validate
+  -h, --help             Print help
+  -V, --version          Print version
+
+--- stderr ---

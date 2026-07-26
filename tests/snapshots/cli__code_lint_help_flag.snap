@@ -1,0 +1,20 @@
+---
+source: tests/cli.rs
+expression: output
+---
+--- exit code ---
+0
+--- stdout ---
+Static analysis codebase linter
+
+Usage: omni-code-lint [OPTIONS] [PATHS]...
+
+Arguments:
+  [PATHS]...  Paths to inspect [default: .]
+
+Options:
+      --format <FORMAT>  Output format for diagnostics (plain, json) [default: plain]
+  -h, --help             Print help
+  -V, --version          Print version
+
+--- stderr ---
