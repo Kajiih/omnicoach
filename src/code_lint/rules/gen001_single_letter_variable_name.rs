@@ -83,41 +83,35 @@ impl CodeRule for SingleLetterVariableName {
         grep: &AstGrep<ast_grep_core::source::StrDoc<SupportLang>>,
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        let rule_config: SingleLetterVariableNameConfig = config
-            .rules
-            .get(self.name().0)
-            .and_then(|val| serde_json::from_value(val.clone()).ok())
-            .unwrap_or_default();
+        let rule_config: SingleLetterVariableNameConfig = config.get_rule_config(self.name().0);
 
         let mut diagnostics = Vec::new();
 
-        for node in grep.root().dfs() {
-            let is_binding = match grep.lang() {
-                SupportLang::Rust => crate::code_lint::ast::is_rust_variable_binding(&node),
-                SupportLang::Python => crate::code_lint::ast::is_python_variable_binding(&node),
-                _ => false,
-            };
+        let bindings = match grep.lang() {
+            SupportLang::Rust => crate::code_lint::ast_rust::collect_bindings(&grep.root()),
+            SupportLang::Python => crate::code_lint::ast_python::collect_bindings(&grep.root()),
+            _ => Vec::new(),
+        };
 
-            if is_binding {
-                let name = node.text();
-                if name.len() == 1 && name != "_" && !rule_config.allowed_names.contains(name.as_ref()) {
-                    diagnostics.push(Diagnostic::new(
-                        self.code(),
-                        self.name(),
-                        ViolationMessage {
-                            summary: format!("Variable name `{}` is too short (single-letter).", name),
-                            rationale: "Single-letter variable names are not descriptive and make code harder to read and maintain.".to_string(),
-                            suggestion: "Choose a more descriptive name that reflects the variable's purpose.".to_string(),
+        for node in bindings {
+            let name = node.text();
+            if name.len() == 1 && name != "_" && !rule_config.is_allowed(&name, *grep.lang()) {
+                diagnostics.push(Diagnostic::new(
+                    self.code(),
+                    self.name(),
+                    ViolationMessage {
+                        summary: format!("Variable name `{name}` is too short (single-letter)."),
+                        rationale: "Single-letter variable names are not descriptive and make code harder to read and maintain.".to_string(),
+                        suggestion: "Choose a more descriptive name that reflects the variable's purpose.".to_string(),
+                    },
+                    SourceLocation {
+                        context: LocationContext::File(path.to_path_buf()),
+                        span: SourceSpan {
+                            start: node.range().start,
+                            end: node.range().end,
                         },
-                        SourceLocation {
-                            context: LocationContext::File(path.to_path_buf()),
-                            span: SourceSpan {
-                                start: node.range().start,
-                                end: node.range().end,
-                            },
-                        },
-                    ));
-                }
+                    },
+                ));
             }
         }
         diagnostics

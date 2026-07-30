@@ -107,6 +107,19 @@ impl Config {
         true
     }
 
+    /// Deserializes a rule-specific configuration.
+    /// Returns default value if not present or fails to deserialize.
+    #[must_use]
+    pub fn get_rule_config<T>(&self, rule_name: &str) -> T
+    where
+        T: serde::de::DeserializeOwned + Default,
+    {
+        self.rules
+            .get(rule_name)
+            .and_then(|val| serde_json::from_value(val.clone()).ok())
+            .unwrap_or_default()
+    }
+
     /// Loads configuration settings from the default `.omnilint.toml` in the current directory.
     /// Returns default settings if the file does not exist.
     ///

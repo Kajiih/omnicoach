@@ -71,6 +71,7 @@ pub const CODE_RULES: &[&dyn crate::code_lint::CodeRule] = &[
     &crate::code_lint::rules::py001_no_logging_in_except::NoLoggingInExcept,
     &crate::code_lint::rules::py002_flat_scope_enforced::FlatScopeEnforced,
     &crate::code_lint::rules::gen001_single_letter_variable_name::SingleLetterVariableName,
+    &crate::code_lint::rules::gen002_banned_abbreviations::BannedAbbreviations,
 ];
 
 /// Static list of all command linter rules.

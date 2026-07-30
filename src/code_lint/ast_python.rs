@@ -1,0 +1,310 @@
+//! AST helper predicates for structural traversal in Python.
+
+use ast_grep_language::SupportLang;
+
+/// Recursively extracts binding identifiers from a pattern node.
+fn extract_from_pattern<'a>(
+    node: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
+    bindings: &mut Vec<ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>>,
+) {
+    let kind = node.kind();
+    match kind.as_ref() {
+        "identifier" => {
+            if node.text() != "_" {
+                bindings.push(node.clone());
+            }
+        }
+        "dotted_name" => {
+            // Dotted names containing '.' represent attribute lookups/assignments
+            // (e.g., `self.x = 1`), which are attribute modifications rather than new local bindings.
+            if !node.text().contains('.') {
+                for child in node.children() {
+                    extract_from_pattern(&child, bindings);
+                }
+            }
+        }
+        "class_pattern" => {
+            // In a class match pattern like `case Point(x, y):`, the first child
+            // is the class name identifier (`Point`), which is not a variable binding.
+            let mut first = true;
+            for child in node.children() {
+                if first {
+                    first = false;
+                    continue;
+                }
+                extract_from_pattern(&child, bindings);
+            }
+        }
+        "keyword_pattern" => {
+            // In keyword match patterns like `case Point(x=z):`, the identifier
+            // before the `=` (`x`) is the parameter name, and only the value (`z`) is the binding.
+            let mut seen_equals = false;
+            for child in node.children() {
+                if child.kind() == "=" {
+                    seen_equals = true;
+                    continue;
+                }
+                if !seen_equals {
+                    continue;
+                }
+                extract_from_pattern(&child, bindings);
+            }
+        }
+        "typed_parameter" | "default_parameter" | "typed_default_parameter" => {
+            if let Some(name_node) = node.field("name") {
+                extract_from_pattern(&name_node, bindings);
+            } else if let Some(first_child) = node.child(0) {
+                if first_child.kind() == "identifier" {
+                    extract_from_pattern(&first_child, bindings);
+                }
+            }
+        }
+        "as_pattern" => {
+            if let Some(alias) = node.field("alias") {
+                extract_from_pattern(&alias, bindings);
+            }
+        }
+        _ => {
+            for child in node.children() {
+                extract_from_pattern(&child, bindings);
+            }
+        }
+    }
+}
+
+/// Helper to extract the first segment from a dotted name.
+fn extract_first_segment<'a>(
+    node: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
+) -> ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>> {
+    node.child(0).unwrap_or_else(|| node.clone())
+}
+
+/// Extracts bindings from Python import statements.
+fn extract_from_import<'a>(
+    node: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
+    bindings: &mut Vec<ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>>,
+) {
+    match node.kind().as_ref() {
+        "import_statement" => {
+            for child in node.children() {
+                let kind = child.kind();
+                if kind != "import" && kind != "," {
+                    extract_from_import(&child, bindings);
+                }
+            }
+        }
+        "import_from_statement" => {
+            let mut seen_import = false;
+            for child in node.children() {
+                if child.kind() == "import" {
+                    seen_import = true;
+                    continue;
+                }
+                if !seen_import {
+                    continue;
+                }
+                let kind = child.kind();
+                if kind != "," && kind != "(" && kind != ")" {
+                    extract_from_import(&child, bindings);
+                }
+            }
+        }
+        "aliased_import" => {
+            if let Some(alias) = node.field("alias") {
+                if alias.text() != "_" {
+                    bindings.push(alias);
+                }
+            }
+        }
+        "dotted_name" | "identifier" => {
+            let first_seg = extract_first_segment(node);
+            if first_seg.text() != "_" {
+                bindings.push(first_seg);
+            }
+        }
+        _ => {}
+    }
+}
+
+
+fn traverse_children_skipping<'a>(
+    node: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
+    skip: Option<&ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>>,
+    bindings: &mut Vec<ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>>,
+) {
+    for child in node.children() {
+        if let Some(skip_node) = skip {
+            if child.range() == skip_node.range() {
+                continue;
+            }
+        }
+        traverse_python(&child, bindings);
+    }
+}
+
+fn traverse_python<'a>(
+    node: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
+    bindings: &mut Vec<ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>>,
+) {
+    let kind = node.kind();
+    match kind.as_ref() {
+        "assignment" => {
+            let left = node.field("left");
+            if let Some(ref left_node) = left {
+                extract_from_pattern(left_node, bindings);
+            } else if let Some(first_child) = node.child(0) {
+                extract_from_pattern(&first_child, bindings);
+            }
+            traverse_children_skipping(node, left.as_ref(), bindings);
+        }
+        "for_statement" | "for_in_clause" => {
+            let left = node.field("left");
+            if let Some(ref left_node) = left {
+                extract_from_pattern(left_node, bindings);
+            } else {
+                let mut found_for = false;
+                for child in node.children() {
+                    if child.kind() == "for" {
+                        found_for = true;
+                        continue;
+                    }
+                    if found_for {
+                        extract_from_pattern(&child, bindings);
+                        break;
+                    }
+                }
+            }
+            traverse_children_skipping(node, left.as_ref(), bindings);
+        }
+        "as_pattern" => {
+            let alias = node.field("alias");
+            if let Some(ref alias_node) = alias {
+                extract_from_pattern(alias_node, bindings);
+            }
+            traverse_children_skipping(node, alias.as_ref(), bindings);
+        }
+        "named_expression" => {
+            let name_node = node.field("name");
+            if let Some(ref name) = name_node {
+                extract_from_pattern(name, bindings);
+            }
+            traverse_children_skipping(node, name_node.as_ref(), bindings);
+        }
+        "parameters" | "lambda_parameters" => {
+            for child in node.children() {
+                if child.kind() != "(" && child.kind() != ")" && child.kind() != "," {
+                    extract_from_pattern(&child, bindings);
+                }
+            }
+        }
+        "case_clause" => {
+            for child in node.children() {
+                if child.kind() == "case_pattern" {
+                    extract_from_pattern(&child, bindings);
+                } else if child.kind() != "case" && child.kind() != ":" {
+                    traverse_python(&child, bindings);
+                }
+            }
+        }
+        "function_definition" | "class_definition" => {
+            let name_node = node.field("name");
+            if let Some(ref name) = name_node {
+                bindings.push(name.clone());
+            }
+            traverse_children_skipping(node, name_node.as_ref(), bindings);
+        }
+        "import_statement" | "import_from_statement" => {
+            extract_from_import(node, bindings);
+        }
+        _ => {
+            for child in node.children() {
+                traverse_python(&child, bindings);
+            }
+        }
+    }
+}
+
+/// Collects all binding definitions (variables, functions, classes, etc.) within a node.
+#[must_use]
+pub fn collect_bindings<'a>(
+    root: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
+) -> Vec<ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>> {
+    let mut bindings = Vec::new();
+    traverse_python(root, &mut bindings);
+    bindings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ast_grep_core::AstGrep;
+
+    #[test]
+    fn test_collect_bindings_python() {
+        let source = r#"
+import os
+import os.path
+import numpy as np
+from sys import stderr as err
+from os import path
+import sys, re
+from os import * # wildcard
+c = 2
+d, e = 3, 4
+for x in range(10): pass
+[y for y in range(10)]
+def foo(b: int = 1):
+    pass
+try:
+    pass
+except Exception as g:
+    pass
+(v := 1)
+class MyClass:
+    def my_method(self):
+        pass
+        "#;
+        let grep = AstGrep::new(source, SupportLang::Python);
+        let bindings = collect_bindings(&grep.root());
+        let names: Vec<String> = bindings.iter().map(|node| node.text().to_string()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "os",
+                "os",
+                "np",
+                "err",
+                "path",
+                "sys",
+                "re",
+                "c",
+                "d",
+                "e",
+                "x",
+                "y",
+                "foo",
+                "b",
+                "g",
+                "v",
+                "MyClass",
+                "my_method",
+                "self",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_collect_bindings_python_match_case() {
+        let source = r#"
+match val:
+    case Point(x, y=z):
+        pass
+    case [a, b]:
+        pass
+        "#;
+        let grep = AstGrep::new(source, SupportLang::Python);
+        let bindings = collect_bindings(&grep.root());
+        let names: Vec<String> = bindings.iter().map(|node| node.text().to_string()).collect();
+        assert_eq!(names, vec!["x", "z", "a", "b"]);
+    }
+}

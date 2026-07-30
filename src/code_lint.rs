@@ -1,6 +1,7 @@
 //! Static file structure analysis domain using ast-grep-core.
 
-pub mod ast;
+pub mod ast_python;
+pub mod ast_rust;
 pub mod rules;
 
 use crate::core::Config;
