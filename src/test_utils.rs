@@ -38,13 +38,24 @@ pub fn assert_code_rule_snapshot(
     source: &str,
     filename: &str,
 ) -> String {
+    assert_code_rule_snapshot_with_config(rule, source, filename, &Config::default())
+}
+
+/// Helper to execute check_file on a CodeRule with custom configuration and return its formatted diagnostics snapshot.
+pub fn assert_code_rule_snapshot_with_config(
+    rule: &impl CodeRule,
+    source: &str,
+    filename: &str,
+    config: &Config,
+) -> String {
     let path = Path::new(filename);
     let lang = match path.extension().and_then(|ext| ext.to_str()) {
         Some("py") => SupportLang::Python,
+        Some("rs") => SupportLang::Rust,
         _ => panic!("Unsupported extension in test file: {}", filename),
     };
     let grep = AstGrep::new(source, lang);
-    let diags = rule.check_file(path, &grep);
+    let diags = rule.check_file(path, &grep, config);
     format_diagnostics_for_test(&diags, source)
 }
 

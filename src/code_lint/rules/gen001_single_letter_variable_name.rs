@@ -1,0 +1,328 @@
+//! Declarations of generic rules targeting multiple languages.
+
+use crate::code_lint::CodeRule;
+use crate::core::Rule;
+use crate::diagnostic::{Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage};
+use crate::rules::Tag;
+use ast_grep_core::AstGrep;
+use ast_grep_language::SupportLang;
+use serde::Deserialize;
+use std::collections::HashSet;
+use std::path::Path;
+
+/// Language-specific configuration overrides.
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct LanguageOverrideConfig {
+    /// Allowed names (exceptions) for single-letter variables in this language.
+    pub allowed_names: Option<HashSet<String>>,
+}
+
+/// Configuration for the `SingleLetterVariableName` rule.
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct SingleLetterVariableNameConfig {
+    /// Global allowed names (exceptions) for single-letter variables.
+    pub allowed_names: Option<HashSet<String>>,
+    /// Rust-specific overrides.
+    pub rust: Option<LanguageOverrideConfig>,
+    /// Python-specific overrides.
+    pub python: Option<LanguageOverrideConfig>,
+}
+
+impl SingleLetterVariableNameConfig {
+    /// Checks if a single-letter variable name is allowed for the given language.
+    #[must_use]
+    pub fn is_allowed(&self, name: &str, lang: SupportLang) -> bool {
+        if let Some(names) = self.allowed_names_for_lang(lang) {
+            return names.contains(name);
+        }
+
+        if let Some(ref names) = self.allowed_names {
+            return names.contains(name);
+        }
+
+        match lang {
+            SupportLang::Rust => is_default_allowed(name) || name == "c",
+            _ => is_default_allowed(name),
+        }
+    }
+
+    fn allowed_names_for_lang(&self, lang: SupportLang) -> Option<&HashSet<String>> {
+        match lang {
+            SupportLang::Rust => self.rust.as_ref()?.allowed_names.as_ref(),
+            SupportLang::Python => self.python.as_ref()?.allowed_names.as_ref(),
+            _ => None,
+        }
+    }
+}
+
+fn is_default_allowed(name: &str) -> bool {
+    matches!(name, "i" | "j" | "x" | "f")
+}
+
+/// Rule that bans single-letter variable names.
+pub struct SingleLetterVariableName;
+
+impl Rule for SingleLetterVariableName {
+    fn code(&self) -> RuleCode {
+        RuleCode("GEN001")
+    }
+
+    fn name(&self) -> RuleName {
+        RuleName("single-letter-variable-name")
+    }
+
+    fn tags(&self) -> &'static [Tag] {
+        &[Tag::Style, Tag::Python, Tag::Rust]
+    }
+}
+// TODO: Is this fully language agnostic?
+impl CodeRule for SingleLetterVariableName {
+    fn check_file(
+        &self,
+        path: &Path,
+        grep: &AstGrep<ast_grep_core::source::StrDoc<SupportLang>>,
+        config: &crate::core::Config,
+    ) -> Vec<Diagnostic> {
+        let rule_config: SingleLetterVariableNameConfig = config
+            .rules
+            .get(self.name().0)
+            .and_then(|val| serde_json::from_value(val.clone()).ok())
+            .unwrap_or_default();
+
+        let mut diagnostics = Vec::new();
+
+        for node in grep.root().dfs() {
+            let is_binding = match grep.lang() {
+                SupportLang::Rust => crate::code_lint::ast::is_rust_variable_binding(&node),
+                SupportLang::Python => crate::code_lint::ast::is_python_variable_binding(&node),
+                _ => false,
+            };
+
+            if is_binding {
+                let name = node.text();
+                if name.len() == 1 && name != "_" && !rule_config.allowed_names.contains(name.as_ref()) {
+                    diagnostics.push(Diagnostic::new(
+                        self.code(),
+                        self.name(),
+                        ViolationMessage {
+                            summary: format!("Variable name `{}` is too short (single-letter).", name),
+                            rationale: "Single-letter variable names are not descriptive and make code harder to read and maintain.".to_string(),
+                            suggestion: "Choose a more descriptive name that reflects the variable's purpose.".to_string(),
+                        },
+                        SourceLocation {
+                            context: LocationContext::File(path.to_path_buf()),
+                            span: SourceSpan {
+                                start: node.range().start,
+                                end: node.range().end,
+                            },
+                        },
+                    ));
+                }
+            }
+        }
+        diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
+
+    #[test]
+    fn test_rust_snapshots() {
+        let rule = SingleLetterVariableName;
+
+        // Standard let bindings
+        let source = "fn main() { let a = 1; }";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
+        [GEN001] Line 1, Col 17: Variable name `a` is too short (single-letter).
+        "###);
+
+        // Let reference assignment (b is reference, not definition)
+        let source = "fn main() { let a = b; }";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
+        [GEN001] Line 1, Col 17: Variable name `a` is too short (single-letter).
+        "###);
+
+        // Mutable binding
+        let source = "fn main() { let mut b = 2; }";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
+        [GEN001] Line 1, Col 21: Variable name `b` is too short (single-letter).
+        "###);
+
+        // Tuple destructuring (d violates, c is allowed by default in Rust)
+        let source = "fn main() { let (c, d) = (1, 2); }";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
+        [GEN001] Line 1, Col 21: Variable name `d` is too short (single-letter).
+        "###);
+
+        // Struct destructuring (explicit) - e violates, x is ignored (field name), _ is ignored (wildcard)
+        let source = "fn main() { let Point { x: e, y: _ } = p; }";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
+        [GEN001] Line 1, Col 28: Variable name `e` is too short (single-letter).
+        "###);
+
+        // Struct destructuring (shorthand) - f is allowed by default, g violates
+        let source = "fn main() { let Point { f, g } = p; }";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
+        [GEN001] Line 1, Col 28: Variable name `g` is too short (single-letter).
+        "###);
+
+        // Loop target
+        let source = "fn main() { for h in 0..10 {} }";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
+        [GEN001] Line 1, Col 17: Variable name `h` is too short (single-letter).
+        "###);
+
+        // Closure parameter (x is allowed by default)
+        let source = "fn main() { let f = |x: i32| x + 1; }";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###""###);
+
+        // Function parameter (i and j are allowed by default)
+        let source = "fn test(i: i32, j: i32) {}";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###""###);
+
+        // Match pattern variants (k violates, Some is constructor, None is constructor)
+        let source = "fn main() { match val { Some(k) => {}, None => {} } }";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
+        [GEN001] Line 1, Col 30: Variable name `k` is too short (single-letter).
+        "###);
+
+        // If-let and while-let
+        let source = "fn main() { if let Some(x) = y {} while let Some(z) = y {} }";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
+        [GEN001] Line 1, Col 50: Variable name `z` is too short (single-letter).
+        "###);
+
+        // Match pattern guards (binding z violates, reference z is ignored)
+        let source = "fn main() { match val { Some(z) if z > 0 => {} } }";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
+        [GEN001] Line 1, Col 30: Variable name `z` is too short (single-letter).
+        "###);
+
+        // Wildcards are ignored
+        let source = "fn main() { let _ = 1; }";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###""###);
+    }
+
+    #[test]
+    fn test_python_snapshots() {
+        let rule = SingleLetterVariableName;
+
+        // Parameter annotations (i allowed by default, b violates)
+        let source = "def foo(i: int = 1, b: int = 1): pass";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
+        [GEN001] Line 1, Col 21: Variable name `b` is too short (single-letter).
+        "###);
+
+        // Assignments
+        let source = "c = 2";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
+        [GEN001] Line 1, Col 1: Variable name `c` is too short (single-letter).
+        "###);
+
+        // Multi-assignments
+        let source = "d, e = 3, 4";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
+        [GEN001] Line 1, Col 1: Variable name `d` is too short (single-letter).
+        [GEN001] Line 1, Col 4: Variable name `e` is too short (single-letter).
+        "###);
+
+        // Comprehensions (y violates)
+        let source = "[y for y in range(10)]";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
+        [GEN001] Line 1, Col 8: Variable name `y` is too short (single-letter).
+        "###);
+
+        // Exception aliases (g violates, Exception is class)
+        let source = "try:\n    pass\nexcept Exception as g:\n    pass";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
+        [GEN001] Line 3, Col 21: Variable name `g` is too short (single-letter).
+        "###);
+
+        // Walrus expressions
+        let source = "(v := 1)";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
+        [GEN001] Line 1, Col 2: Variable name `v` is too short (single-letter).
+        "###);
+    }
+
+    #[test]
+    fn test_configuration_override() {
+        let rule = SingleLetterVariableName;
+
+        // Custom allowed list: allow 'y', deny 'i'
+        let config_toml = r#"
+            [rules.single-letter-variable-name]
+            allowed_names = ["y"]
+        "#;
+        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
+
+        let source = "fn main() { let i = 1; let y = 2; }";
+        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config), @r###"
+        [GEN001] Line 1, Col 17: Variable name `i` is too short (single-letter).
+        "###);
+    }
+
+    #[test]
+    fn test_language_nested_overrides() {
+        let rule = SingleLetterVariableName;
+
+        // Custom config:
+        // - Global allows 'g'
+        // - Rust allows 'r'
+        // - Python allows 'p'
+        let config_toml = r#"
+            [rules.single-letter-variable-name]
+            allowed_names = ["g"]
+            
+            [rules.single-letter-variable-name.rust]
+            allowed_names = ["r"]
+
+            [rules.single-letter-variable-name.python]
+            allowed_names = ["p"]
+        "#;
+        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
+
+        // For Rust:
+        // - 'r' is allowed by Rust override
+        // - 'g' is NOT allowed because Rust override takes precedence
+        // - 'c' is NOT allowed because we have overrides
+        let source_rs = "fn main() { let r = 1; let g = 2; let c = 3; }";
+        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source_rs, "test.rs", &config), @r###"
+        [GEN001] Line 1, Col 28: Variable name `g` is too short (single-letter).
+        [GEN001] Line 1, Col 39: Variable name `c` is too short (single-letter).
+        "###);
+
+        // For Python:
+        // - 'p' is allowed by Python override
+        // - 'g' is NOT allowed because Python override takes precedence
+        let source_py = "p = 1\ng = 2";
+        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source_py, "test.py", &config), @r###"
+        [GEN001] Line 2, Col 1: Variable name `g` is too short (single-letter).
+        "###);
+    }
+
+    #[test]
+    fn test_language_nested_overrides_fallback() {
+        let rule = SingleLetterVariableName;
+
+        // Custom config:
+        // - Global allows 'g'
+        // - Rust / Python have no language-specific overrides
+        let config_toml = r#"
+            [rules.single-letter-variable-name]
+            allowed_names = ["g"]
+        "#;
+        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
+
+        // For Rust:
+        // - 'g' is allowed by global override fallback
+        // - 'c' is NOT allowed
+        let source_rs = "fn main() { let g = 1; let c = 2; }";
+        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source_rs, "test.rs", &config), @r###"
+        [GEN001] Line 1, Col 28: Variable name `c` is too short (single-letter).
+        "###);
+    }
+}

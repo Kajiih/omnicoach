@@ -74,6 +74,9 @@ pub struct Config {
     pub select: Option<HashSet<Selector>>,
     /// Optional set of rules or tags to ignore.
     pub ignore: Option<HashSet<Selector>>,
+    /// Generic map of rule-specific configurations.
+    #[serde(default)]
+    pub rules: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl Config {
@@ -166,6 +169,7 @@ mod tests {
         let config = Config {
             select: Some(select),
             ignore: None,
+            rules: std::collections::HashMap::new(),
         };
 
         assert!(config.is_rule_enabled(&LOGGING_RULE));
@@ -179,6 +183,7 @@ mod tests {
         let config = Config {
             select: None,
             ignore: Some(ignore),
+            rules: std::collections::HashMap::new(),
         };
 
         assert!(!config.is_rule_enabled(&LOGGING_RULE));

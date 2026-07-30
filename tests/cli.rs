@@ -109,8 +109,8 @@ fn test_code_lint_help_flag() {
 #[test]
 fn test_code_lint_no_violations() {
     let clean_code = indoc! {r"
-        def calculate_sum(a, b):
-            return a + b
+        def calculate_sum(num1, num2):
+            return num1 + num2
     "};
     let temp_file = create_temp_file(".py", clean_code);
     let output = run_and_sanitize_cli(
