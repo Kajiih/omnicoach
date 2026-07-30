@@ -72,6 +72,7 @@ pub const CODE_RULES: &[&dyn crate::code_lint::CodeRule] = &[
     &crate::code_lint::rules::py002_flat_scope_enforced::FlatScopeEnforced,
     &crate::code_lint::rules::gen001_single_letter_variable_name::SingleLetterVariableName,
     &crate::code_lint::rules::gen002_banned_abbreviations::BannedAbbreviations,
+    &crate::code_lint::rules::gen003_no_hungarian_notation::NoHungarianNotation,
 ];
 
 /// Static list of all command linter rules.

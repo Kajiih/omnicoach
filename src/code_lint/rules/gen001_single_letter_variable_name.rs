@@ -87,11 +87,7 @@ impl CodeRule for SingleLetterVariableName {
 
         let mut diagnostics = Vec::new();
 
-        let bindings = match grep.lang() {
-            SupportLang::Rust => crate::code_lint::ast_rust::collect_bindings(&grep.root()),
-            SupportLang::Python => crate::code_lint::ast_python::collect_bindings(&grep.root()),
-            _ => Vec::new(),
-        };
+        let bindings = crate::code_lint::collect_bindings(grep);
 
         for node in bindings {
             let name = node.text();
