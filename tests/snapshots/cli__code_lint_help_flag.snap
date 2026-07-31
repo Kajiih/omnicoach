@@ -13,8 +13,10 @@ Arguments:
   [PATHS]...  Paths to inspect [default: .]
 
 Options:
-      --format <FORMAT>  Output format for diagnostics (plain, json) [default: plain]
-  -h, --help             Print help
-  -V, --version          Print version
+      --format <FORMAT>      Output format for diagnostics (plain, json) [default: plain]
+      --diff                 Run linter only on files/lines changed in VCS
+      --diff-rev <DIFF_REV>  Run linter comparing against a custom revision/commit (implies --diff)
+  -h, --help                 Print help
+  -V, --version              Print version
 
 --- stderr ---

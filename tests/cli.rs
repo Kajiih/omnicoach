@@ -92,8 +92,7 @@ fn run_and_sanitize_cli(
 
     // Sanitize any dynamic temporary paths
     for path in temp_paths {
-        let path_str = path.to_string_lossy();
-        combined = combined.replace(&*path_str, "[TEMP_PATH]");
+        combined = combined.replace(&*path.to_string_lossy(), "[TEMP_PATH]");
     }
 
     // Normalize windows CRLF to LF
@@ -195,3 +194,111 @@ fn test_command_lint_empty_commit_allowed() {
     );
     insta::assert_snapshot!(output);
 }
+
+#[test]
+fn test_code_lint_diff_flag_jj() {
+    let temp_repo = setup_temp_jj_repo();
+    let repo_path = temp_repo.path();
+
+    // 1. Create a file with a violation
+    let violating_code_1 = indoc! {r"
+        def outer():
+            def inner():
+                pass
+    "};
+    let file_path = repo_path.join("test.py");
+    fs::write(&file_path, violating_code_1).unwrap();
+
+    // 2. Commit it to draft state by creating a new change on top of it
+    let status = std::process::Command::new("jj")
+        .arg("new")
+        .current_dir(repo_path)
+        .status()
+        .expect("failed to run jj new");
+    assert!(status.success());
+
+    // 3. Now the first violation is in parent `@-`.
+    // Let's add a second violation in the working copy `@`
+    let violating_code_2 = indoc! {r"
+        def outer():
+            def inner():
+                pass
+        def hello():
+            def world():
+                pass
+    "};
+    fs::write(&file_path, violating_code_2).unwrap();
+
+    // 4. Run full linter (should report BOTH violations: `inner` and `world`)
+    let output_full = run_and_sanitize_cli(
+        "omni-code-lint",
+        &["test.py"],
+        Some(repo_path),
+        &[repo_path],
+    );
+    assert!(output_full.contains("Nested function definition `inner`"));
+    assert!(output_full.contains("Nested function definition `world`"));
+
+    // 5. Run with --diff-rev @- (compares @ relative to parent @-)
+    // It should ONLY report `world` because `inner` was already in the parent commit!
+    let output_diff = run_and_sanitize_cli(
+        "omni-code-lint",
+        &["--diff-rev", "@-", "test.py"],
+        Some(repo_path),
+        &[repo_path],
+    );
+    assert!(!output_diff.contains("Nested function definition `inner`"));
+    assert!(output_diff.contains("Nested function definition `world`"));
+}
+
+#[test]
+fn test_code_lint_non_existent_file_fails() {
+    let output = run_and_sanitize_cli("omni-code-lint", &["non_existent_file.rs"], None, &[]);
+    assert!(output.contains("Path does not exist: non_existent_file.rs"));
+    assert!(output.contains("exit code ---\n2"));
+}
+
+#[test]
+fn test_code_lint_diff_complex_revset_jj() {
+    let temp_repo = setup_temp_jj_repo();
+    let repo_path = temp_repo.path();
+
+    let violating_code = indoc! {r"
+        def outer():
+            def inner():
+                pass
+    "};
+    let file_path = repo_path.join("test.py");
+    fs::write(&file_path, violating_code).unwrap();
+
+    let output = run_and_sanitize_cli(
+        "omni-code-lint",
+        &["--diff-rev", "immutable()..", "test.py"],
+        Some(repo_path),
+        &[repo_path],
+    );
+    assert!(output.contains("Nested function definition `inner`"));
+}
+
+#[test]
+fn test_code_lint_diff_range_revset_jj() {
+    let temp_repo = setup_temp_jj_repo();
+    let repo_path = temp_repo.path();
+
+    let violating_code = indoc! {r"
+        def outer():
+            def inner():
+                pass
+    "};
+    let file_path = repo_path.join("test.py");
+    fs::write(&file_path, violating_code).unwrap();
+
+    let output = run_and_sanitize_cli(
+        "omni-code-lint",
+        &["--diff-rev", "@-..@", "test.py"],
+        Some(repo_path),
+        &[repo_path],
+    );
+    assert!(output.contains("Nested function definition `inner`"));
+}
+
