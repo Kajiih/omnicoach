@@ -42,8 +42,6 @@ etc
 
 ---
 
-## 🗺️ Performance & Optimization Roadmap
-To avoid premature optimization while ensuring `Ruff`-like execution speed in the future:
-1.  **Rule Execution Context:** All `VCS` and `ENV` rules will query repository/system state through a shared `EnvContext` struct.
-2.  **Subprocess Caching (Roadmap):** In a future iteration, the `EnvContext` will pre-fetch and cache Jujutsu/Git states (e.g., batching CLI invocations or caching the output of a single `jj log --json`) rather than allowing individual rules to run independent command spawns.
-3.  **Compile-Time Test Coverage (Roadmap):** Ensure that test suites exist for every rule. This will allow the tool/compiler to verify that colocated test suites exist for every rule without requiring manual checklists.
+## 🗺️ Roadmap & Future Work
+
+Performance optimizations, subprocess caching, and compile-time test verification are tracked in the centralized [ROADMAP.md](../ROADMAP.md).

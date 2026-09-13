@@ -1,0 +1,2 @@
+# Coexists as v2 (strum, rstest) and v3 (serde, clap, thiserror) during ecosystem migration
+allowed-duplicate-crates = ["syn"]

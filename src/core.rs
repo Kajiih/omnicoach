@@ -79,6 +79,24 @@ pub struct Config {
     pub rules: std::collections::HashMap<String, serde_json::Value>,
 }
 
+/// Errors encountered during configuration loading and parsing.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    /// Failed to read the configuration file from disk.
+    #[error("failed to read `{path}`: {source}")]
+    Io {
+        /// Path to the configuration file.
+        path: &'static str,
+        /// The underlying IO error.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// Failed to parse TOML configuration syntax or schema.
+    #[error(transparent)]
+    Toml(#[from] toml::de::Error),
+}
+
 impl Config {
     /// Returns true if the given rule is enabled in this configuration.
     #[must_use]
@@ -125,17 +143,18 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// Returns an error if the file is present but fails to read or has syntax errors.
-    pub fn load() -> anyhow::Result<Self> {
+    /// Returns [`ConfigError`] if the file is present but fails to read or has syntax errors.
+    pub fn load() -> Result<Self, ConfigError> {
         match std::fs::read_to_string(CONFIG_FILE_NAME) {
             Ok(content) => {
                 let config = toml::from_str(&content)?;
                 Ok(config)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(error) => Err(anyhow::anyhow!(
-                "failed to read `{CONFIG_FILE_NAME}`: {error}"
-            )),
+            Err(error) => Err(ConfigError::Io {
+                path: CONFIG_FILE_NAME,
+                source: error,
+            }),
         }
     }
 }

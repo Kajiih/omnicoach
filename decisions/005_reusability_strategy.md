@@ -23,9 +23,3 @@ Instead of writing complex traversal or parsing logic from scratch, the modules 
 
 ### 5. File System Traversal (`src/bin/omni-lint.rs`)
 *   **`ignore`**: Rather than writing custom recursive directory walkers and manually parsing gitignore rules, we embed the `ignore` crate (powering `ripgrep`). It respects `.gitignore`, `.ignore`, global exclusions, and hidden files out of the box with optimal multi-threaded performance.
-
-
----
-
-## 🗺️ Diagnostics Roadmap
-*   **Optional `miette` Integration**: In a future iteration, we can introduce a Cargo feature flag (e.g., `features = ["miette"]`). When enabled, this will pull in `miette` as an optional dependency and support rendering diagnostics using its rich, colorized terminal layout with source code snippets and pointing arrows. This keeps the default hook compilation and binary footprint extremely small, while giving users the option to enable graphical terminal reporting when running standalone commands.

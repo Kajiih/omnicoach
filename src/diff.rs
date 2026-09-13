@@ -1,9 +1,54 @@
 //! Differential VCS diff parsing and filtering utilities.
 
-use anyhow::{anyhow, Result};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Errors that can occur during VCS detection or diff extraction.
+#[derive(Debug, thiserror::Error)]
+pub enum DiffError {
+    /// No supported VCS repository found in working directory hierarchy.
+    #[error("--diff requires a Git or Jujutsu repository, but none was found")]
+    RepoNotFound,
+
+    /// Failed to canonicalize the repository root path.
+    #[error("failed to canonicalize repository root '{path}': {source}")]
+    Canonicalize {
+        /// The repository path that failed to canonicalize.
+        path: PathBuf,
+        /// The underlying IO error.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// Required VCS command-line binary was not found in PATH.
+    #[error("{name} CLI ('{binary}') was not found in PATH. Please install it or ensure it is accessible.")]
+    CliNotFound {
+        /// The human-readable name of the VCS tool.
+        name: &'static str,
+        /// The CLI binary name.
+        binary: &'static str,
+    },
+
+    /// Failed to execute the VCS subprocess command.
+    #[error("failed to run {binary} CLI: {source}")]
+    CliExecution {
+        /// The CLI binary name.
+        binary: &'static str,
+        /// The underlying IO error.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// VCS diff command exited with a non-zero status.
+    #[error("{binary} diff failed: {message}")]
+    CommandFailed {
+        /// The CLI binary name.
+        binary: &'static str,
+        /// The stderr error message from the CLI.
+        message: String,
+    },
+}
 
 /// The type of Version Control System detected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,20 +78,27 @@ pub fn find_repo_root() -> Option<(PathBuf, VcsType)> {
     None
 }
 
+/// Mapping of changed file paths to their 1-indexed changed line numbers.
+pub type ChangedLines = HashMap<PathBuf, HashSet<usize>>;
+
+/// Result of detecting differential VCS changes (VCS type, resolved revision, and changed lines).
+pub type DetectedDiff = (VcsType, String, ChangedLines);
+
 /// Runs the detected VCS diff command and parses the output into a map of absolute paths
 /// mapped to their 1-indexed changed line numbers.
 ///
 /// # Errors
 ///
-/// Returns an error if no VCS repository is found, if subprocess execution fails,
+/// Returns [`DiffError`] if no VCS repository is found, if subprocess execution fails,
 /// or if command stderr is non-empty.
-pub fn detect_vcs_diff(
-    custom_rev: Option<&str>,
-) -> Result<(VcsType, String, HashMap<PathBuf, HashSet<usize>>)> {
-    let (repo_root, vcs_type) = find_repo_root().ok_or_else(|| {
-        anyhow!("--diff requires a Git or Jujutsu repository, but none was found")
-    })?;
-    let repo_root = repo_root.canonicalize()?;
+pub fn detect_vcs_diff(custom_rev: Option<&str>) -> Result<DetectedDiff, DiffError> {
+    let (repo_root, vcs_type) = find_repo_root().ok_or(DiffError::RepoNotFound)?;
+    let canonical_root = repo_root
+        .canonicalize()
+        .map_err(|source| DiffError::Canonicalize {
+            path: repo_root,
+            source,
+        })?;
 
     let resolved_rev = match vcs_type {
         VcsType::Jujutsu => custom_rev.unwrap_or("immutable().."),
@@ -54,8 +106,8 @@ pub fn detect_vcs_diff(
     };
 
     let diff_content = match vcs_type {
-        VcsType::Jujutsu => get_jj_diff(&repo_root, resolved_rev)?,
-        VcsType::Git => get_git_diff(&repo_root, resolved_rev)?,
+        VcsType::Jujutsu => get_jj_diff(&canonical_root, resolved_rev)?,
+        VcsType::Git => get_git_diff(&canonical_root, resolved_rev)?,
     };
 
     let parsed_diff = parse_git_diff(&diff_content);
@@ -63,7 +115,7 @@ pub fn detect_vcs_diff(
     // Convert relative repository paths to absolute paths
     let mut absolute_diff = HashMap::new();
     for (rel_path, lines) in parsed_diff {
-        let abs_path = repo_root.join(rel_path);
+        let abs_path = canonical_root.join(rel_path);
         absolute_diff.insert(abs_path, lines);
     }
 
@@ -78,7 +130,7 @@ fn is_complex_jj_revset(rev: &str) -> bool {
         || rev.chars().any(|c| matches!(c, '|' | '&' | '~' | ' '))
 }
 
-fn get_jj_diff(repo_root: &Path, rev: &str) -> Result<String> {
+fn get_jj_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
     let mut cmd = Command::new("jj");
     cmd.current_dir(repo_root);
     cmd.arg("diff").arg("--git");
@@ -89,21 +141,30 @@ fn get_jj_diff(repo_root: &Path, rev: &str) -> Result<String> {
     }
     let output = cmd.output().map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
-            anyhow!("Jujutsu CLI ('jj') was not found in PATH. Please install it or ensure it is accessible.")
+            DiffError::CliNotFound {
+                name: "Jujutsu",
+                binary: "jj",
+            }
         } else {
-            anyhow!("Failed to run Jujutsu CLI: {error}")
+            DiffError::CliExecution {
+                binary: "Jujutsu",
+                source: error,
+            }
         }
     })?;
 
     if !output.status.success() {
         let error_message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(anyhow!("Jujutsu diff failed: {error_message}"));
+        return Err(DiffError::CommandFailed {
+            binary: "Jujutsu",
+            message: error_message,
+        });
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn get_git_diff(repo_root: &Path, rev: &str) -> Result<String> {
+fn get_git_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
     let output = Command::new("git")
         .current_dir(repo_root)
         .args([
@@ -117,15 +178,24 @@ fn get_git_diff(repo_root: &Path, rev: &str) -> Result<String> {
         .output()
         .map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
-                anyhow!("Git CLI ('git') was not found in PATH. Please install it or ensure it is accessible.")
+                DiffError::CliNotFound {
+                    name: "Git",
+                    binary: "git",
+                }
             } else {
-                anyhow!("Failed to run Git CLI: {error}")
+                DiffError::CliExecution {
+                    binary: "Git",
+                    source: error,
+                }
             }
         })?;
 
     if !output.status.success() {
         let error_message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(anyhow!("Git diff failed: {error_message}"));
+        return Err(DiffError::CommandFailed {
+            binary: "Git",
+            message: error_message,
+        });
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())

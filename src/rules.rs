@@ -1,69 +1,60 @@
 //! Centralized rule and tag registry.
 
 use serde::{Deserialize, Serialize};
+use strum::{Display, EnumIter, EnumMessage, EnumString, IntoStaticStr};
 
-macro_rules! define_tags {
-    ($( $(#[doc = $doc:expr])* $variant:ident => $desc:expr ),* $(,)?) => {
-        /// Metadata tags used to categorize rules.
-        #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-        pub enum Tag {
-            $(
-                $(#[doc = $doc])*
-                $variant
-            ),*
-        }
-
-        impl Tag {
-            /// Returns the tag name as a static string slice.
-            #[must_use]
-            pub const fn as_str(&self) -> &'static str {
-                match self {
-                    $(Tag::$variant => stringify!($variant)),*
-                }
-            }
-
-            /// Returns a human-readable description of the tag's purpose.
-            #[must_use]
-            pub const fn description(&self) -> &'static str {
-                match self {
-                    $(Tag::$variant => $desc),*
-                }
-            }
-        }
-
-        impl std::str::FromStr for Tag {
-            type Err = String;
-            fn from_str(s: &str) -> Result<Self, Self::Err> {
-                match s.to_ascii_lowercase().as_str() {
-                    $(s_low if s_low == stringify!($variant).to_ascii_lowercase() => Ok(Tag::$variant),)*
-                    _ => Err(format!("Unknown tag '{}'", s)),
-                }
-            }
-        }
-    };
+/// Metadata tags used to categorize rules.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    Display,
+    EnumString,
+    EnumIter,
+    IntoStaticStr,
+    EnumMessage,
+)]
+#[strum(ascii_case_insensitive)]
+pub enum Tag {
+    /// Checks related to logging configurations and invocations
+    Logging,
+    /// Checks targeting exception handling structures
+    Exceptions,
+    /// Checks targeting Python source code ASTs
+    Python,
+    /// Checks targeting Rust source code ASTs
+    Rust,
+    /// Code style and formatting conventions
+    Style,
+    /// Safety guidelines and command restrictions
+    Safety,
+    /// Command-line syntax checks
+    Cli,
+    /// Workflow execution rules
+    Workflow,
+    /// Version control systems integrations
+    Vcs,
+    /// JJ version control system
+    JJ,
 }
 
-define_tags! {
-    /// Checks related to logging configurations and invocations.
-    Logging => "Checks related to logging configurations and invocations",
-    /// Checks targeting exception handling structures.
-    Exceptions => "Checks targeting exception handling structures",
-    /// Checks targeting Python source code ASTs.
-    Python => "Checks targeting Python source code ASTs",
-    /// Checks targeting Rust source code ASTs.
-    Rust => "Checks targeting Rust source code ASTs",
-    /// Code style and formatting conventions.
-    Style => "Code style and formatting conventions",
-    /// Safety guidelines and command restrictions.
-    Safety => "Safety guidelines and command restrictions",
-    /// Command-line syntax checks.
-    Cli => "Command-line syntax checks",
-    /// Workflow execution rules.
-    Workflow => "Workflow execution rules",
-    /// Version control systems integrations.
-    Vcs => "Version control systems integrations",
-    /// JJ version control system.
-    JJ => "JJ version control system",
+impl Tag {
+    /// Returns the tag name as a static string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        (*self).into()
+    }
+
+    /// Returns a human-readable description of the tag's purpose.
+    #[must_use]
+    pub fn description(&self) -> &'static str {
+        self.get_documentation().unwrap_or_default().trim()
+    }
 }
 
 /// Static list of all code linter rules.
