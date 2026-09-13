@@ -21,14 +21,27 @@ use strum::{Display, EnumIter, EnumMessage, EnumString, IntoStaticStr};
 )]
 #[strum(ascii_case_insensitive)]
 pub enum Tag {
-    /// Checks related to logging configurations and invocations
-    Logging,
-    /// Checks targeting exception handling structures
-    Exceptions,
     /// Checks targeting Python source code ASTs
     Python,
     /// Checks targeting Rust source code ASTs
     Rust,
+
+    /// Identifier conventions, abbreviations, suffixes
+    Naming,
+    /// Asynchronous execution and structured concurrency
+    Async,
+    /// Test files, assertions, and mock hygiene
+    Testing,
+    /// Type annotations, dataclasses, and protocols
+    Typing,
+    /// Scope nesting, function length, and complexity
+    Complexity,
+    /// Checks related to logging configurations and invocations
+    Logging,
+    /// Checks targeting exception handling structures
+    Exceptions,
+    /// Inline and file-level suppression comment hygiene
+    Suppression,
     /// Code style and formatting conventions
     Style,
     /// Safety guidelines and command restrictions
@@ -41,6 +54,13 @@ pub enum Tag {
     Vcs,
     /// JJ version control system
     JJ,
+
+    /// Rule relies on heuristics and may trigger edge-case false positives
+    Heuristic,
+    /// Enforces team or architectural opinions beyond baseline bugs
+    Opinionated,
+    /// Detects likely bugs, resource leaks, or semantic anti-patterns
+    Correctness,
 }
 
 impl Tag {
@@ -74,6 +94,10 @@ pub const CODE_RULES: &[&dyn crate::code_lint::CodeRule] = &[
     &crate::code_lint::rules::gen001_single_letter_variable_name::SingleLetterVariableName,
     &crate::code_lint::rules::gen002_banned_abbreviations::BannedAbbreviations,
     &crate::code_lint::rules::gen003_no_hungarian_notation::NoHungarianNotation,
+    &crate::code_lint::suppression::MissingSuppressionReason,
+    &crate::code_lint::suppression::UnusedSuppression,
+    &crate::code_lint::suppression::UnknownSuppressionCode,
+    &crate::code_lint::suppression::BlanketSuppression,
 ];
 
 /// Static list of all command linter rules.
@@ -95,10 +119,14 @@ mod tests {
 
         assert!(codes.insert(code), "Duplicate rule code found in registry: {code}");
         assert!(names.insert(name), "Duplicate rule name found in registry: {name}");
+        let parts: Vec<&str> = code.split('-').collect();
         assert!(
-            code.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-                && code.chars().skip(1).all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()),
-            "Rule code '{code}' does not match standard pattern"
+            parts.len() == 2
+                && !parts[0].is_empty()
+                && parts[0].chars().all(|c| c.is_ascii_uppercase())
+                && parts[1].len() == 3
+                && parts[1].chars().all(|c| c.is_ascii_digit()),
+            "Rule code '{code}' does not match standard pattern ^[A-Z]+-[0-9]{{3}}$"
         );
     }
 

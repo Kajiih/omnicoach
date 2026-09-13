@@ -27,7 +27,7 @@ pub struct NoLoggingInExcept;
 
 impl Rule for NoLoggingInExcept {
     fn code(&self) -> RuleCode {
-        RuleCode("PY001")
+        RuleCode("LOG-001")
     }
     fn name(&self) -> RuleName {
         RuleName("no-logging-in-except")
@@ -101,7 +101,7 @@ mod tests {
             "test.py",
         );
         insta::assert_snapshot!(output_violating, @r###"
-        [PY001] Line 4, Col 5: Banned use of `logging.error` inside except block.
+        [LOG-001] Line 4, Col 5: Banned use of `logging.error` inside except block.
         "###);
 
         let output_ok =

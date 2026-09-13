@@ -52,17 +52,21 @@ impl FlatScopeEnforced {
 
 impl Rule for FlatScopeEnforced {
     fn code(&self) -> RuleCode {
-        RuleCode("PY002")
+        RuleCode("SCOPE-001")
     }
     fn name(&self) -> RuleName {
         RuleName("flat-scope-enforced")
     }
     fn tags(&self) -> &'static [Tag] {
-        &[Tag::Style, Tag::Python]
+        &[Tag::Complexity, Tag::Style, Tag::Python]
     }
 }
 
 impl CodeRule for FlatScopeEnforced {
+    fn target(&self) -> crate::code_lint::RuleTarget {
+        crate::code_lint::RuleTarget::SourceOnly
+    }
+
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python]
     }
@@ -129,7 +133,7 @@ mod tests {
             "test.py",
         );
         insta::assert_snapshot!(output_violating, @r###"
-        [PY002] Line 2, Col 5: Nested function definition `inner` is discouraged.
+        [SCOPE-001] Line 2, Col 5: Nested function definition `inner` is discouraged.
         "###);
 
         let output_ok =
@@ -148,8 +152,8 @@ mod tests {
         let output =
             crate::test_utils::assert_code_rule_snapshot(&FlatScopeEnforced, source, "test.py");
         insta::assert_snapshot!(output, @r###"
-        [PY002] Line 2, Col 5: Nested function definition `inner1` is discouraged.
-        [PY002] Line 3, Col 9: Nested function definition `inner2` is discouraged.
+        [SCOPE-001] Line 2, Col 5: Nested function definition `inner1` is discouraged.
+        [SCOPE-001] Line 3, Col 9: Nested function definition `inner2` is discouraged.
         "###);
     }
 }

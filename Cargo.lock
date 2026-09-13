@@ -558,6 +558,7 @@ dependencies = [
  "ast-grep-core",
  "ast-grep-language",
  "clap",
+ "globset",
  "ignore",
  "indoc",
  "insta",

@@ -38,6 +38,7 @@ ignore = "0.4"
 line-index = "0.1.2"
 strum = { version = "0.28", features = ["derive"] }
 thiserror = "2.0"
+globset = "0.4"
 
 [dev-dependencies]
 assert_cmd = "2.0"

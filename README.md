@@ -82,10 +82,14 @@ Create a `.omnilint.toml` file at the root of your project workspace to customiz
 
 ```toml
 # Select only specific tags or rule codes (optional)
-select = ["Style", "PY001"]
+select = ["Style", "LOG-001"]
 
 # Globally ignore specific rules (optional)
-ignore = ["GEN001"]
+ignore = ["NAME-001"]
+
+# Per-file rule ignores using glob patterns
+[per_file_ignores]
+"tests/**" = ["NAME-001", "heuristic"]
 
 # Rule-specific configuration parameters
 [rules.no-hungarian-notation]
@@ -93,12 +97,16 @@ banned_suffixes = ["_list", "_arr", "_dict"]
 ```
 
 ### Supported Rules:
-*   **`GEN001` (`single-letter-variable-name`)**: Bans short single-letter variables except allowed exceptions.
-*   **`GEN002` (`banned-abbreviations`)**: Bans naming definitions using cryptic abbreviations (`ctx`, `cfg`, etc.).
-*   **`GEN003` (`no-hungarian-notation`)**: Bans Hungarian type suffixes (e.g., `user_list`, `value_int`).
-*   **`PY001` (`no-logging-in-except`)**: Bans using `logging.error` inside Python except blocks (suggests `logging.exception`).
-*   **`PY002` (`flat-scope-enforced`)**: Bans nested function definitions in Python.
-*   **`VCS001` (`no-edits-on-described-commits`)**: Discourages/blocks running `jj edit` on commits that already have descriptions.
+*   **`NAME-001` (`single-letter-variable-name`)**: Bans short single-letter variables except allowed exceptions.
+*   **`NAME-002` (`banned-abbreviations`)**: Bans naming definitions using cryptic abbreviations (`ctx`, `cfg`, etc.).
+*   **`NAME-003` (`no-hungarian-notation`)**: Bans Hungarian type suffixes (e.g., `user_list`, `value_int`).
+*   **`SUPP-001` (`missing-suppression-reason`)**: Enforces non-empty `-- <reason>` explanations on inline and file suppressions.
+*   **`SUPP-002` (`unused-suppression`)**: Flags stale suppression directives when no violation occurred on that line or file.
+*   **`SUPP-003` (`unknown-suppression-code`)**: Flags suppression directives targeting unknown or invalid rule codes.
+*   **`SUPP-004` (`blanket-suppression`)**: Bans blanket suppression directives without explicit bracketed rule codes.
+*   **`LOG-001` (`no-logging-in-except`)**: Bans using `logging.error` inside Python except blocks (suggests `logging.exception`).
+*   **`SCOPE-001` (`flat-scope-enforced`)**: Bans nested function definitions in Python source files.
+*   **`JJ-001` (`no-edits-on-described-commits`)**: Discourages/blocks running `jj edit` on commits that already have descriptions.
 
 ---
 

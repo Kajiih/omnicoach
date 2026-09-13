@@ -67,7 +67,7 @@ impl NoJJEditOnDescribedCommits {
 
 impl Rule for NoJJEditOnDescribedCommits {
     fn code(&self) -> RuleCode {
-        RuleCode("VCS001")
+        RuleCode("JJ-001")
     }
     fn name(&self) -> RuleName {
         RuleName("no-edits-on-described-commits")
@@ -113,10 +113,7 @@ impl crate::command_lint::CommandRule for NoJJEditOnDescribedCommits {
                     name: crate::diagnostic::VCS_CONTEXT_NAME.to_string(),
                     content: cmd.raw_string.clone(),
                 },
-                span: SourceSpan {
-                    start: cmd.span.0,
-                    end: cmd.span.1,
-                },
+                span: SourceSpan { start: cmd.span.0, end: cmd.span.1 },
             },
         )]
     }
@@ -154,7 +151,7 @@ mod tests {
             &config,
         );
         insta::assert_snapshot!(output, @r###"
-        [VCS001] Line 1, Col 1: Running `jj edit d123` on a described commit is discouraged.
+        [JJ-001] Line 1, Col 1: Running `jj edit d123` on a described commit is discouraged.
         "###);
 
         // Allow empty/anonymous commit edit

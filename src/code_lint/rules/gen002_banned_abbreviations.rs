@@ -60,7 +60,7 @@ pub struct BannedAbbreviations;
 
 impl Rule for BannedAbbreviations {
     fn code(&self) -> RuleCode {
-        RuleCode("GEN002")
+        RuleCode("NAME-002")
     }
 
     fn name(&self) -> RuleName {
@@ -68,7 +68,7 @@ impl Rule for BannedAbbreviations {
     }
 
     fn tags(&self) -> &'static [Tag] {
-        &[Tag::Style, Tag::Python, Tag::Rust]
+        &[Tag::Style, Tag::Naming, Tag::Heuristic, Tag::Python, Tag::Rust]
     }
 }
 
@@ -139,11 +139,11 @@ mod tests {
             struct MyRes;
         ";
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
-        [GEN002] Line 2, Col 46: Definition name `my_cfg` contains banned abbreviation `cfg`.
-        [GEN002] Line 3, Col 16: Definition name `process_err` contains banned abbreviation `err`.
-        [GEN002] Line 4, Col 21: Definition name `ctx` contains banned abbreviation `ctx`.
-        [GEN002] Line 5, Col 21: Definition name `my_cfg_val` contains banned abbreviation `cfg`.
-        [GEN002] Line 7, Col 20: Definition name `MyRes` contains banned abbreviation `res`.
+        [NAME-002] Line 2, Col 46: Definition name `my_cfg` contains banned abbreviation `cfg`.
+        [NAME-002] Line 3, Col 16: Definition name `process_err` contains banned abbreviation `err`.
+        [NAME-002] Line 4, Col 21: Definition name `ctx` contains banned abbreviation `ctx`.
+        [NAME-002] Line 5, Col 21: Definition name `my_cfg_val` contains banned abbreviation `cfg`.
+        [NAME-002] Line 7, Col 20: Definition name `MyRes` contains banned abbreviation `res`.
         "###);
     }
 
@@ -158,10 +158,10 @@ def handle_msg(msg):
     pass
         "#;
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
-        [GEN002] Line 2, Col 14: Definition name `os_cfg` contains banned abbreviation `cfg`.
-        [GEN002] Line 3, Col 5: Definition name `handle_msg` contains banned abbreviation `msg`.
-        [GEN002] Line 3, Col 16: Definition name `msg` contains banned abbreviation `msg`.
-        [GEN002] Line 4, Col 5: Definition name `str_val` contains banned abbreviation `str`.
+        [NAME-002] Line 2, Col 14: Definition name `os_cfg` contains banned abbreviation `cfg`.
+        [NAME-002] Line 3, Col 5: Definition name `handle_msg` contains banned abbreviation `msg`.
+        [NAME-002] Line 3, Col 16: Definition name `msg` contains banned abbreviation `msg`.
+        [NAME-002] Line 4, Col 5: Definition name `str_val` contains banned abbreviation `str`.
         "###);
     }
 
@@ -179,7 +179,7 @@ def handle_msg(msg):
         // 'err' should be allowed now, but 'my_foo' should violate
         let source = "fn main() { let err = 1; let my_foo = 2; }";
         insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config), @r###"
-        [GEN002] Line 1, Col 30: Definition name `my_foo` contains banned abbreviation `foo`.
+        [NAME-002] Line 1, Col 30: Definition name `my_foo` contains banned abbreviation `foo`.
         "###);
     }
 

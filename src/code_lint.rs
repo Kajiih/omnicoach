@@ -3,6 +3,7 @@
 pub mod ast_python;
 pub mod ast_rust;
 pub mod rules;
+pub mod suppression;
 
 use crate::core::Config;
 use crate::diagnostic::Diagnostic;
@@ -15,8 +16,26 @@ pub type SourceDoc = ast_grep_core::tree_sitter::StrDoc<SupportLang>;
 /// Concrete AST node type used across code linting rules.
 pub type AstNode<'a> = ast_grep_core::Node<'a, SourceDoc>;
 
+/// Target execution scope for a code rule (source files vs test files).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RuleTarget {
+    /// Rule runs on all matching files.
+    #[default]
+    All,
+    /// Rule runs exclusively on test files.
+    TestsOnly,
+    /// Rule runs exclusively on production source files (skipped on test files).
+    SourceOnly,
+}
+
 /// Common trait for static file code validation rules.
 pub trait CodeRule: crate::core::Rule {
+    /// Returns the target execution scope of this code rule (defaults to `RuleTarget::All`).
+    #[must_use]
+    fn target(&self) -> RuleTarget {
+        RuleTarget::All
+    }
+
     /// Returns the languages supported by this code rule.
     #[must_use]
     fn supported_languages(&self) -> &'static [SupportLang];
@@ -55,13 +74,37 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
     };
 
     let grep = AstGrep::new(content, lang);
-    let mut diagnostics = Vec::new();
+    let mut tracker = suppression::SuppressionTracker::from_ast(&grep, content);
+
+    let is_test = config.is_test_path(path);
+    let mut raw_diagnostics = Vec::new();
 
     for rule in crate::rules::CODE_RULES {
-        if config.is_rule_enabled(*rule) && rule.supports_language(lang) {
-            diagnostics.extend(rule.check_file(path, &grep, config));
+        if rule.tags().contains(&crate::rules::Tag::Suppression) {
+            continue;
+        }
+
+        if !config.is_rule_enabled_for_path(*rule, path) {
+            continue;
+        }
+
+        let target = rule.target();
+        if is_test && target == RuleTarget::SourceOnly {
+            continue;
+        }
+        if !is_test && target == RuleTarget::TestsOnly {
+            continue;
+        }
+
+        if rule.supports_language(lang) {
+            raw_diagnostics.extend(rule.check_file(path, &grep, config));
         }
     }
+
+    let mut diagnostics = tracker.filter_diagnostics(raw_diagnostics, content);
+    let audit_diagnostics = tracker.audit(path, content, config);
+    diagnostics.extend(audit_diagnostics);
+
     diagnostics
 }
 

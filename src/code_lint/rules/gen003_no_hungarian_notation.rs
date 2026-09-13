@@ -28,7 +28,7 @@ pub struct NoHungarianNotation;
 
 impl Rule for NoHungarianNotation {
     fn code(&self) -> RuleCode {
-        RuleCode("GEN003")
+        RuleCode("NAME-003")
     }
 
     fn name(&self) -> RuleName {
@@ -36,7 +36,7 @@ impl Rule for NoHungarianNotation {
     }
 
     fn tags(&self) -> &'static [Tag] {
-        &[Tag::Style, Tag::Python, Tag::Rust]
+        &[Tag::Style, Tag::Naming, Tag::Python, Tag::Rust]
     }
 }
 
@@ -147,10 +147,10 @@ mod tests {
             }
         "#;
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
-        [GEN003] Line 6, Col 21: Identifier `user_list` contains a banned type suffix `_list`.
-        [GEN003] Line 7, Col 21: Identifier `id_set` contains a banned type suffix `_set`.
-        [GEN003] Line 8, Col 21: Identifier `name_str` contains a banned type suffix `_str`.
-        [GEN003] Line 9, Col 23: Identifier `MY_INT` contains a banned type suffix `_INT`.
+        [NAME-003] Line 6, Col 21: Identifier `user_list` contains a banned type suffix `_list`.
+        [NAME-003] Line 7, Col 21: Identifier `id_set` contains a banned type suffix `_set`.
+        [NAME-003] Line 8, Col 21: Identifier `name_str` contains a banned type suffix `_str`.
+        [NAME-003] Line 9, Col 23: Identifier `MY_INT` contains a banned type suffix `_INT`.
         "###);
     }
 
@@ -169,9 +169,9 @@ class ItemsArr: # OK (class definition)
         data = None # OK
         ";
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
-        [GEN003] Line 6, Col 9: Identifier `users_dict` contains a banned type suffix `_dict`.
-        [GEN003] Line 7, Col 9: Identifier `items_arr` contains a banned type suffix `_arr`.
-        [GEN003] Line 8, Col 9: Identifier `value_int` contains a banned type suffix `_int`.
+        [NAME-003] Line 6, Col 9: Identifier `users_dict` contains a banned type suffix `_dict`.
+        [NAME-003] Line 7, Col 9: Identifier `items_arr` contains a banned type suffix `_arr`.
+        [NAME-003] Line 8, Col 9: Identifier `value_int` contains a banned type suffix `_int`.
         "###);
     }
 
@@ -187,7 +187,7 @@ class ItemsArr: # OK (class definition)
 
         let source = "fn main() { let x_list = 1; let y_custom = 2; }";
         insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config), @r###"
-        [GEN003] Line 1, Col 33: Identifier `y_custom` contains a banned type suffix `_custom`.
+        [NAME-003] Line 1, Col 33: Identifier `y_custom` contains a banned type suffix `_custom`.
         "###);
     }
 

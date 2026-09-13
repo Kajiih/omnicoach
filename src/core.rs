@@ -4,6 +4,7 @@ use crate::diagnostic::{RuleCode, RuleName};
 use ast_grep_language::SupportLang;
 use serde::Deserialize;
 use std::collections::HashSet;
+use std::path::Path;
 
 /// Compile-time static descriptor for default filter lists (both allowlists and denylists).
 ///
@@ -267,6 +268,30 @@ impl<'de> Deserialize<'de> for Selector {
     }
 }
 
+/// Configuration settings for path context detection (e.g. test paths).
+#[derive(Deserialize, Debug, Clone)]
+pub struct ContextConfig {
+    /// Glob patterns used to identify test files.
+    #[serde(default = "default_test_patterns")]
+    pub test_patterns: Vec<String>,
+}
+
+fn default_test_patterns() -> Vec<String> {
+    vec![
+        "**/tests/**".to_string(),
+        "**/test_*.py".to_string(),
+        "**/*_test.py".to_string(),
+        "**/*_test.rs".to_string(),
+        "**/tests.rs".to_string(),
+    ]
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self { test_patterns: default_test_patterns() }
+    }
+}
+
 /// Configuration settings parsed from `.omnilint.toml`.
 #[derive(Deserialize, Debug, Default, Clone)]
 pub struct Config {
@@ -277,6 +302,12 @@ pub struct Config {
     /// Generic map of rule-specific configurations.
     #[serde(default)]
     pub rules: std::collections::HashMap<String, serde_json::Value>,
+    /// Path context classifier settings.
+    #[serde(default)]
+    pub context: ContextConfig,
+    /// Per-file rule ignores mapping glob patterns to rule selectors.
+    #[serde(default)]
+    pub per_file_ignores: std::collections::HashMap<String, HashSet<Selector>>,
 }
 
 /// Errors encountered during configuration loading and parsing.
@@ -297,7 +328,32 @@ pub enum ConfigError {
     Toml(#[from] toml::de::Error),
 }
 
+fn normalize_path_for_glob(path: &Path) -> String {
+    let relative = if path.is_absolute() {
+        std::env::current_dir().ok().and_then(|cwd| path.strip_prefix(cwd).ok()).unwrap_or(path)
+    } else {
+        path
+    };
+
+    let stripped = relative.strip_prefix("./").unwrap_or(relative);
+    stripped.to_string_lossy().replace('\\', "/")
+}
+
 impl Config {
+    /// Returns true if the given path matches any configured test pattern.
+    #[must_use]
+    pub fn is_test_path(&self, path: &Path) -> bool {
+        let normalized = normalize_path_for_glob(path);
+        for pattern in &self.context.test_patterns {
+            if let Ok(glob) = globset::GlobBuilder::new(pattern).literal_separator(false).build() {
+                if glob.compile_matcher().is_match(&normalized) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Returns true if the given rule is enabled in this configuration.
     #[must_use]
     pub fn is_rule_enabled(&self, rule: &dyn Rule) -> bool {
@@ -319,6 +375,36 @@ impl Config {
         if let Some(ref ignore) = self.ignore {
             if ignore.iter().any(matches_selector) {
                 return false;
+            }
+        }
+
+        true
+    }
+
+    /// Returns true if the given rule is enabled for a specific file path.
+    #[must_use]
+    pub fn is_rule_enabled_for_path(&self, rule: &dyn Rule, path: &Path) -> bool {
+        if !self.is_rule_enabled(rule) {
+            return false;
+        }
+
+        let normalized = normalize_path_for_glob(path);
+        let code = rule.code();
+        let name = rule.name();
+
+        let matches_selector = |sel: &Selector| match sel {
+            Selector::Code(code_selector) => *code_selector == code,
+            Selector::Name(name_selector) => *name_selector == name,
+            Selector::Tag(tag_selector) => rule.tags().contains(tag_selector),
+        };
+
+        for (pattern, selectors) in &self.per_file_ignores {
+            if let Ok(glob) = globset::GlobBuilder::new(pattern).literal_separator(false).build() {
+                if glob.compile_matcher().is_match(&normalized)
+                    && selectors.iter().any(matches_selector)
+                {
+                    return false;
+                }
             }
         }
 
@@ -389,8 +475,7 @@ mod tests {
     fn test_select_by_tag() {
         let mut select = HashSet::new();
         select.insert(Selector::Tag(Tag::Logging));
-        let config =
-            Config { select: Some(select), ignore: None, rules: std::collections::HashMap::new() };
+        let config = Config { select: Some(select), ignore: None, ..Default::default() };
 
         assert!(config.is_rule_enabled(&LOGGING_RULE));
         assert!(!config.is_rule_enabled(&STYLE_RULE));
@@ -400,8 +485,7 @@ mod tests {
     fn test_ignore_by_tag() {
         let mut ignore = HashSet::new();
         ignore.insert(Selector::Tag(Tag::Logging));
-        let config =
-            Config { select: None, ignore: Some(ignore), rules: std::collections::HashMap::new() };
+        let config = Config { select: None, ignore: Some(ignore), ..Default::default() };
 
         assert!(!config.is_rule_enabled(&LOGGING_RULE));
         assert!(config.is_rule_enabled(&STYLE_RULE));
@@ -419,13 +503,13 @@ mod tests {
     #[test]
     fn test_selector_deserialization() {
         let toml_content = r#"
-            select = ["logging", "VCS001"]
+            select = ["logging", "JJ-001"]
         "#;
         let config: Config = toml::from_str(toml_content).unwrap();
         let selectors = config.select.unwrap();
         assert_eq!(selectors.len(), 2);
         assert!(selectors.contains(&Selector::Tag(Tag::Logging)));
-        assert!(selectors.contains(&Selector::Code(RuleCode("VCS001"))));
+        assert!(selectors.contains(&Selector::Code(RuleCode("JJ-001"))));
     }
 
     #[test]
@@ -531,5 +615,33 @@ mod tests {
         assert!(py_effective.contains("py_only_allowed"));
         assert!(py_effective.contains("global_allowed"));
         assert!(!py_effective.contains("default_base"));
+    }
+
+    #[test]
+    fn test_context_test_path_detection() {
+        let config = Config::default();
+        assert!(config.is_test_path(Path::new("tests/foo.rs")));
+        assert!(config.is_test_path(Path::new("src/tests/foo.rs")));
+        assert!(config.is_test_path(Path::new("test_calculator.py")));
+        assert!(config.is_test_path(Path::new("foo/test_calculator.py")));
+        assert!(config.is_test_path(Path::new("foo/calculator_test.py")));
+        assert!(config.is_test_path(Path::new("src/foo_test.rs")));
+        assert!(config.is_test_path(Path::new("src/tests.rs")));
+
+        assert!(!config.is_test_path(Path::new("src/main.rs")));
+        assert!(!config.is_test_path(Path::new("src/calculator.py")));
+    }
+
+    #[test]
+    fn test_per_file_ignores() {
+        let toml_content = r#"
+            [per_file_ignores]
+            "tests/**" = ["style"]
+        "#;
+        let config: Config = toml::from_str(toml_content).unwrap();
+
+        assert!(!config.is_rule_enabled_for_path(&STYLE_RULE, Path::new("tests/my_test.rs")));
+        assert!(config.is_rule_enabled_for_path(&STYLE_RULE, Path::new("src/lib.rs")));
+        assert!(config.is_rule_enabled_for_path(&LOGGING_RULE, Path::new("tests/my_test.rs")));
     }
 }
