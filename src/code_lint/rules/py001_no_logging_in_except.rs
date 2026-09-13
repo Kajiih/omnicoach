@@ -7,6 +7,7 @@ use crate::diagnostic::{
 };
 use crate::rules::Tag;
 use ast_grep_core::{AstGrep, Doc, Node};
+use ast_grep_language::SupportLang;
 use std::path::Path;
 
 /// Helper to check if a node is nested inside an `except_clause`.
@@ -37,6 +38,10 @@ impl Rule for NoLoggingInExcept {
 }
 
 impl CodeRule for NoLoggingInExcept {
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python]
+    }
+
     fn check_file(
         &self,
         path: &Path,

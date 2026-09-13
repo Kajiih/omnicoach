@@ -17,6 +17,16 @@ pub type AstNode<'a> = ast_grep_core::Node<'a, SourceDoc>;
 
 /// Common trait for static file code validation rules.
 pub trait CodeRule: crate::core::Rule {
+    /// Returns the languages supported by this code rule.
+    #[must_use]
+    fn supported_languages(&self) -> &'static [SupportLang];
+
+    /// Returns true if this rule supports the given language.
+    #[must_use]
+    fn supports_language(&self, lang: SupportLang) -> bool {
+        self.supported_languages().contains(&lang)
+    }
+
     /// Evaluates the file against this static analysis rule.
     #[must_use]
     fn check_file(
@@ -30,25 +40,11 @@ pub trait CodeRule: crate::core::Rule {
 /// Helper to detect language from file extension.
 #[must_use]
 pub fn detect_language(path: &Path) -> Option<SupportLang> {
-    path.extension()
-        .and_then(std::ffi::OsStr::to_str)
-        .and_then(|ext| match ext {
-            "py" => Some(SupportLang::Python),
-            "rs" => Some(SupportLang::Rust),
-            _ => None,
-        })
-}
-
-const fn lang_to_tag(lang: SupportLang) -> Option<crate::rules::Tag> {
-    match lang {
-        SupportLang::Python => Some(crate::rules::Tag::Python),
-        SupportLang::Rust => Some(crate::rules::Tag::Rust),
+    path.extension().and_then(std::ffi::OsStr::to_str).and_then(|ext| match ext {
+        "py" => Some(SupportLang::Python),
+        "rs" => Some(SupportLang::Rust),
         _ => None,
-    }
-}
-
-fn rule_supports_language(rule: &dyn CodeRule, lang: SupportLang) -> bool {
-    lang_to_tag(lang).is_some_and(|tag| rule.tags().contains(&tag))
+    })
 }
 
 /// Analyzes the structure of a file and returns diagnostic alerts.
@@ -62,7 +58,7 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
     let mut diagnostics = Vec::new();
 
     for rule in crate::rules::CODE_RULES {
-        if config.is_rule_enabled(*rule) && rule_supports_language(*rule, lang) {
+        if config.is_rule_enabled(*rule) && rule.supports_language(lang) {
             diagnostics.extend(rule.check_file(path, &grep, config));
         }
     }
@@ -116,10 +112,9 @@ pub fn is_structural_definition(node: &AstNode<'_>, lang: SupportLang) -> bool {
                 | "associated_type"
                 | "function_item"
         ),
-        SupportLang::Python => matches!(
-            parent_kind.as_ref(),
-            "class_definition" | "function_definition"
-        ),
+        SupportLang::Python => {
+            matches!(parent_kind.as_ref(), "class_definition" | "function_definition")
+        }
         _ => false,
     }
 }

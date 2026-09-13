@@ -95,10 +95,7 @@ pub fn detect_vcs_diff(custom_rev: Option<&str>) -> Result<DetectedDiff, DiffErr
     let (repo_root, vcs_type) = find_repo_root().ok_or(DiffError::RepoNotFound)?;
     let canonical_root = repo_root
         .canonicalize()
-        .map_err(|source| DiffError::Canonicalize {
-            path: repo_root,
-            source,
-        })?;
+        .map_err(|source| DiffError::Canonicalize { path: repo_root, source })?;
 
     let resolved_rev = match vcs_type {
         VcsType::Jujutsu => custom_rev.unwrap_or("immutable().."),
@@ -141,24 +138,15 @@ fn get_jj_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
     }
     let output = cmd.output().map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
-            DiffError::CliNotFound {
-                name: "Jujutsu",
-                binary: "jj",
-            }
+            DiffError::CliNotFound { name: "Jujutsu", binary: "jj" }
         } else {
-            DiffError::CliExecution {
-                binary: "Jujutsu",
-                source: error,
-            }
+            DiffError::CliExecution { binary: "jj", source: error }
         }
     })?;
 
     if !output.status.success() {
         let error_message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(DiffError::CommandFailed {
-            binary: "Jujutsu",
-            message: error_message,
-        });
+        return Err(DiffError::CommandFailed { binary: "jj", message: error_message });
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -167,35 +155,19 @@ fn get_jj_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
 fn get_git_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
     let output = Command::new("git")
         .current_dir(repo_root)
-        .args([
-            "-c",
-            "core.quotepath=false",
-            "diff",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
-            rev,
-        ])
+        .args(["-c", "core.quotepath=false", "diff", "--src-prefix=a/", "--dst-prefix=b/", rev])
         .output()
         .map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
-                DiffError::CliNotFound {
-                    name: "Git",
-                    binary: "git",
-                }
+                DiffError::CliNotFound { name: "Git", binary: "git" }
             } else {
-                DiffError::CliExecution {
-                    binary: "Git",
-                    source: error,
-                }
+                DiffError::CliExecution { binary: "Git", source: error }
             }
         })?;
 
     if !output.status.success() {
         let error_message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(DiffError::CommandFailed {
-            binary: "Git",
-            message: error_message,
-        });
+        return Err(DiffError::CommandFailed { binary: "Git", message: error_message });
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())

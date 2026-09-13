@@ -1,65 +1,24 @@
 //! Declarations of generic rules targeting multiple languages.
 
 use crate::code_lint::CodeRule;
-use crate::core::Rule;
+use crate::core::{AllowListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
 use crate::diagnostic::{
     Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
-use serde::Deserialize;
-use std::collections::HashSet;
 use std::path::Path;
 
-/// Language-specific configuration overrides.
-#[derive(Deserialize, Debug, Clone, Default)]
-pub struct LanguageOverrideConfig {
-    /// Allowed names (exceptions) for single-letter variables in this language.
-    pub allowed_names: Option<HashSet<String>>,
-}
+/// Static defaults for single-letter variable names.
+const DEFAULT_ALLOWED: FilterListDefaults = FilterListDefaults {
+    base: &["i", "j", "x", "f"],
+    extend: &[(SupportLang::Rust, &["c"])],
+    exempt: &[],
+};
 
 /// Configuration for the `SingleLetterVariableName` rule.
-#[derive(Deserialize, Debug, Clone, Default)]
-pub struct SingleLetterVariableNameConfig {
-    /// Global allowed names (exceptions) for single-letter variables.
-    pub allowed_names: Option<HashSet<String>>,
-    /// Rust-specific overrides.
-    pub rust: Option<LanguageOverrideConfig>,
-    /// Python-specific overrides.
-    pub python: Option<LanguageOverrideConfig>,
-}
-
-impl SingleLetterVariableNameConfig {
-    /// Checks if a single-letter variable name is allowed for the given language.
-    #[must_use]
-    pub fn is_allowed(&self, name: &str, lang: SupportLang) -> bool {
-        if let Some(names) = self.allowed_names_for_lang(lang) {
-            return names.contains(name);
-        }
-
-        if let Some(ref names) = self.allowed_names {
-            return names.contains(name);
-        }
-
-        match lang {
-            SupportLang::Rust => is_default_allowed(name) || name == "c",
-            _ => is_default_allowed(name),
-        }
-    }
-
-    fn allowed_names_for_lang(&self, lang: SupportLang) -> Option<&HashSet<String>> {
-        match lang {
-            SupportLang::Rust => self.rust.as_ref()?.allowed_names.as_ref(),
-            SupportLang::Python => self.python.as_ref()?.allowed_names.as_ref(),
-            _ => None,
-        }
-    }
-}
-
-fn is_default_allowed(name: &str) -> bool {
-    matches!(name, "i" | "j" | "x" | "f")
-}
+pub type SingleLetterVariableNameConfig = DynamicRuleConfig<AllowListConfig>;
 
 /// Rule that bans single-letter variable names.
 pub struct SingleLetterVariableName;
@@ -79,6 +38,10 @@ impl Rule for SingleLetterVariableName {
 }
 // TODO: Is this fully language agnostic?
 impl CodeRule for SingleLetterVariableName {
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python, SupportLang::Rust]
+    }
+
     fn check_file(
         &self,
         path: &Path,
@@ -86,6 +49,8 @@ impl CodeRule for SingleLetterVariableName {
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
         let rule_config: SingleLetterVariableNameConfig = config.get_rule_config(self.name().0);
+        let effective_allowed =
+            rule_config.effective_allowed_for_lang(*grep.lang(), &DEFAULT_ALLOWED);
 
         let mut diagnostics = Vec::new();
 
@@ -93,7 +58,7 @@ impl CodeRule for SingleLetterVariableName {
 
         for node in bindings {
             let name = node.text();
-            if name.len() == 1 && name != "_" && !rule_config.is_allowed(&name, *grep.lang()) {
+            if name.len() == 1 && name != "_" && !effective_allowed.contains(&*name) {
                 diagnostics.push(Diagnostic::new(
                     self.code(),
                     self.name(),
@@ -247,7 +212,7 @@ mod tests {
         // Custom allowed list: allow 'y', deny 'i'
         let config_toml = r#"
             [rules.single-letter-variable-name]
-            allowed_names = ["y"]
+            allowed = ["y"]
         "#;
         let config: crate::core::Config = toml::from_str(config_toml).unwrap();
 
@@ -267,13 +232,13 @@ mod tests {
         // - Python allows 'p'
         let config_toml = r#"
             [rules.single-letter-variable-name]
-            allowed_names = ["g"]
+            allowed = ["g"]
             
             [rules.single-letter-variable-name.rust]
-            allowed_names = ["r"]
+            allowed = ["r"]
 
             [rules.single-letter-variable-name.python]
-            allowed_names = ["p"]
+            allowed = ["p"]
         "#;
         let config: crate::core::Config = toml::from_str(config_toml).unwrap();
 
@@ -305,7 +270,7 @@ mod tests {
         // - Rust / Python have no language-specific overrides
         let config_toml = r#"
             [rules.single-letter-variable-name]
-            allowed_names = ["g"]
+            allowed = ["g"]
         "#;
         let config: crate::core::Config = toml::from_str(config_toml).unwrap();
 
@@ -316,5 +281,40 @@ mod tests {
         insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source_rs, "test.rs", &config), @r###"
         [GEN001] Line 1, Col 28: Variable name `c` is too short (single-letter).
         "###);
+    }
+
+    #[test]
+    fn test_extend_allowed() {
+        let rule = SingleLetterVariableName;
+
+        let config_toml = r#"
+            [rules.single-letter-variable-name]
+            extend_allowed = ["k"]
+        "#;
+        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
+
+        // 'i' is allowed by default, 'k' is allowed by extend_allowed, 'a' violates
+        let source_rs = "fn main() { let i = 1; let k = 2; let a = 3; }";
+        let output = assert_code_rule_snapshot_with_config(&rule, source_rs, "test.rs", &config);
+        assert!(!output.contains("Variable name `i`"));
+        assert!(!output.contains("Variable name `k`"));
+        assert!(output.contains("Variable name `a` is too short"));
+    }
+
+    #[test]
+    fn test_banned_revocation() {
+        let rule = SingleLetterVariableName;
+
+        let config_toml = r#"
+            [rules.single-letter-variable-name]
+            banned = ["i"]
+        "#;
+        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
+
+        // 'i' is revoked/banned, 'x' remains allowed by default base
+        let source_rs = "fn main() { let i = 1; let x = 2; }";
+        let output = assert_code_rule_snapshot_with_config(&rule, source_rs, "test.rs", &config);
+        assert!(output.contains("Variable name `i` is too short"));
+        assert!(!output.contains("Variable name `x`"));
     }
 }

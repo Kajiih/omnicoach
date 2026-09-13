@@ -7,6 +7,7 @@ use crate::diagnostic::{
 };
 use crate::rules::Tag;
 use ast_grep_core::{AstGrep, Doc, Node};
+use ast_grep_language::SupportLang;
 use std::path::Path;
 
 /// Helper to check if a node is nested inside a `function_definition`.
@@ -62,6 +63,10 @@ impl Rule for FlatScopeEnforced {
 }
 
 impl CodeRule for FlatScopeEnforced {
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python]
+    }
+
     fn check_file(
         &self,
         path: &Path,
@@ -77,9 +82,7 @@ impl CodeRule for FlatScopeEnforced {
                     .field("name")
                     .map(|name_node| name_node.text())
                     .unwrap_or_default();
-                let violation = FlatScopeViolation {
-                    func_name: func_name.to_string(),
-                };
+                let violation = FlatScopeViolation { func_name: func_name.to_string() };
                 let message = Self::format_message(&violation);
 
                 diagnostics.push(Diagnostic::new(

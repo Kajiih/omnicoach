@@ -1,8 +1,208 @@
 //! Shared core module of the Omni linter toolkit.
 
 use crate::diagnostic::{RuleCode, RuleName};
+use ast_grep_language::SupportLang;
 use serde::Deserialize;
 use std::collections::HashSet;
+
+/// Compile-time static descriptor for default filter lists (both allowlists and denylists).
+///
+/// TODO: Consider if we should make a `ConfigDefault` that is not only for filter list, and with support of language-specific config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FilterListDefaults {
+    /// Base items active across all supported languages.
+    pub base: &'static [&'static str],
+    /// Language-specific items added to the base defaults.
+    pub extend: &'static [(SupportLang, &'static [&'static str])],
+    /// Language-specific items removed from the base defaults.
+    pub exempt: &'static [(SupportLang, &'static [&'static str])],
+}
+
+impl FilterListDefaults {
+    /// Creates a new static default filter list descriptor.
+    #[must_use]
+    pub const fn new(
+        base: &'static [&'static str],
+        extend: &'static [(SupportLang, &'static [&'static str])],
+        exempt: &'static [(SupportLang, &'static [&'static str])],
+    ) -> Self {
+        Self { base, extend, exempt }
+    }
+
+    /// Resolves the default set of strings for a specific language.
+    #[must_use]
+    pub fn resolve_default_for_lang(&self, lang: SupportLang) -> HashSet<String> {
+        let mut set: HashSet<String> = self.base.iter().map(|&s| s.to_string()).collect();
+        for &(target_lang, items) in self.extend {
+            if target_lang == lang {
+                set.extend(items.iter().map(|&s| s.to_string()));
+            }
+        }
+        for &(target_lang, items) in self.exempt {
+            if target_lang == lang {
+                for &item in items {
+                    set.remove(item);
+                }
+            }
+        }
+        set
+    }
+}
+
+/// Configuration for rules that filter identifier names, abbreviations, or suffixes (denylist rules).
+///
+/// Supports explicit replacement of base items, additive items (`extend_banned`),
+/// and subtractive items (`allowed`).
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct DenyListConfig {
+    /// Explicit replacement for the default base set (e.g., banned words or suffixes).
+    /// If `None`, the rule's built-in defaults are used.
+    /// If `Some`, completely replaces the default base set.
+    #[serde(default)]
+    pub banned: Option<HashSet<String>>,
+
+    /// Additional items to include in the banned set.
+    #[serde(default)]
+    pub extend_banned: HashSet<String>,
+
+    /// Allowed items exempted/removed from the banned set.
+    #[serde(default)]
+    pub allowed: HashSet<String>,
+}
+
+/// Configuration for rules that enforce an allowlist of valid identifiers (e.g. single-letter variable names).
+///
+/// Supports explicit replacement of base allowed items, additive items (`extend_allowed`),
+/// and subtractive/revocation items (`banned`).
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct AllowListConfig {
+    /// Explicit replacement for the default allowed set.
+    /// If `None`, the rule's built-in defaults are used.
+    /// If `Some`, completely replaces the default allowed set.
+    #[serde(default)]
+    pub allowed: Option<HashSet<String>>,
+
+    /// Additional items to include in the allowed set.
+    #[serde(default)]
+    pub extend_allowed: HashSet<String>,
+
+    /// Banned items revoked/removed from the allowed set.
+    #[serde(default)]
+    pub banned: HashSet<String>,
+}
+
+/// A generic configuration container that supports global settings across all
+/// supported languages, as well as dynamic per-language overrides.
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct DynamicRuleConfig<T = DenyListConfig> {
+    /// Global settings that apply across all languages.
+    #[serde(flatten)]
+    pub global: T,
+
+    /// Dynamic language-specific overrides, keyed by language name (e.g. "rust", "python").
+    #[serde(flatten)]
+    pub languages: std::collections::HashMap<String, T>,
+}
+
+/// Returns the lowercase canonical configuration key for a supported language.
+#[must_use]
+pub const fn support_lang_name(lang: SupportLang) -> &'static str {
+    match lang {
+        SupportLang::Python => "python",
+        SupportLang::Rust => "rust",
+        _ => "",
+    }
+}
+
+impl<T> DynamicRuleConfig<T> {
+    /// Returns the override configuration for a specific language, if configured.
+    #[must_use]
+    pub fn for_lang(&self, lang: SupportLang) -> Option<&T> {
+        self.languages.get(support_lang_name(lang))
+    }
+}
+
+impl DynamicRuleConfig<DenyListConfig> {
+    /// Computes the effective banned set for a specific language given the default descriptor.
+    ///
+    /// The resolution precedence is:
+    /// 1. Base set: Language-specific `banned` -> Global `banned` -> `defaults.resolve_default_for_lang(lang)`.
+    /// 2. Additive: Union with global `extend_banned` and language-specific `extend_banned`.
+    /// 3. Subtractive: Difference with global `allowed` and language-specific `allowed`.
+    #[must_use]
+    pub fn effective_banned_for_lang(
+        &self,
+        lang: SupportLang,
+        defaults: &FilterListDefaults,
+    ) -> HashSet<String> {
+        let lang_override = self.for_lang(lang);
+
+        // 1. Base set
+        let mut effective = lang_override
+            .and_then(|o| o.banned.as_ref())
+            .or(self.global.banned.as_ref())
+            .map_or_else(|| defaults.resolve_default_for_lang(lang), Clone::clone);
+
+        // 2. Additive
+        effective.extend(self.global.extend_banned.iter().cloned());
+        if let Some(override_cfg) = lang_override {
+            effective.extend(override_cfg.extend_banned.iter().cloned());
+        }
+
+        // 3. Subtractive
+        for item in &self.global.allowed {
+            effective.remove(item);
+        }
+        if let Some(override_cfg) = lang_override {
+            for item in &override_cfg.allowed {
+                effective.remove(item);
+            }
+        }
+
+        effective
+    }
+}
+
+impl DynamicRuleConfig<AllowListConfig> {
+    /// Computes the effective allowed set for a specific language given the default descriptor.
+    ///
+    /// The resolution precedence is:
+    /// 1. Base set: Language-specific `allowed` -> Global `allowed` -> `defaults.resolve_default_for_lang(lang)`.
+    /// 2. Additive: Union with global `extend_allowed` and language-specific `extend_allowed`.
+    /// 3. Subtractive: Difference with global `banned` and language-specific `banned`.
+    #[must_use]
+    pub fn effective_allowed_for_lang(
+        &self,
+        lang: SupportLang,
+        defaults: &FilterListDefaults,
+    ) -> HashSet<String> {
+        let lang_override = self.for_lang(lang);
+
+        // 1. Base set
+        let mut effective = lang_override
+            .and_then(|o| o.allowed.as_ref())
+            .or(self.global.allowed.as_ref())
+            .map_or_else(|| defaults.resolve_default_for_lang(lang), Clone::clone);
+
+        // 2. Additive
+        effective.extend(self.global.extend_allowed.iter().cloned());
+        if let Some(override_cfg) = lang_override {
+            effective.extend(override_cfg.extend_allowed.iter().cloned());
+        }
+
+        // 3. Subtractive
+        for item in &self.global.banned {
+            effective.remove(item);
+        }
+        if let Some(override_cfg) = lang_override {
+            for item in &override_cfg.banned {
+                effective.remove(item);
+            }
+        }
+
+        effective
+    }
+}
 
 /// The default configuration file name.
 pub const CONFIG_FILE_NAME: &str = ".omnilint.toml";
@@ -151,10 +351,7 @@ impl Config {
                 Ok(config)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(error) => Err(ConfigError::Io {
-                path: CONFIG_FILE_NAME,
-                source: error,
-            }),
+            Err(error) => Err(ConfigError::Io { path: CONFIG_FILE_NAME, source: error }),
         }
     }
 }
@@ -182,27 +379,18 @@ mod tests {
         }
     }
 
-    const LOGGING_RULE: MockRule = MockRule {
-        code: "T001",
-        name: "mock-logging-rule",
-        tags: &[Tag::Logging],
-    };
+    const LOGGING_RULE: MockRule =
+        MockRule { code: "T001", name: "mock-logging-rule", tags: &[Tag::Logging] };
 
-    const STYLE_RULE: MockRule = MockRule {
-        code: "T002",
-        name: "mock-style-rule",
-        tags: &[Tag::Style],
-    };
+    const STYLE_RULE: MockRule =
+        MockRule { code: "T002", name: "mock-style-rule", tags: &[Tag::Style] };
 
     #[test]
     fn test_select_by_tag() {
         let mut select = HashSet::new();
         select.insert(Selector::Tag(Tag::Logging));
-        let config = Config {
-            select: Some(select),
-            ignore: None,
-            rules: std::collections::HashMap::new(),
-        };
+        let config =
+            Config { select: Some(select), ignore: None, rules: std::collections::HashMap::new() };
 
         assert!(config.is_rule_enabled(&LOGGING_RULE));
         assert!(!config.is_rule_enabled(&STYLE_RULE));
@@ -212,11 +400,8 @@ mod tests {
     fn test_ignore_by_tag() {
         let mut ignore = HashSet::new();
         ignore.insert(Selector::Tag(Tag::Logging));
-        let config = Config {
-            select: None,
-            ignore: Some(ignore),
-            rules: std::collections::HashMap::new(),
-        };
+        let config =
+            Config { select: None, ignore: Some(ignore), rules: std::collections::HashMap::new() };
 
         assert!(!config.is_rule_enabled(&LOGGING_RULE));
         assert!(config.is_rule_enabled(&STYLE_RULE));
@@ -228,10 +413,7 @@ mod tests {
             Tag::Logging.description(),
             "Checks related to logging configurations and invocations"
         );
-        assert_eq!(
-            Tag::Exceptions.description(),
-            "Checks targeting exception handling structures"
-        );
+        assert_eq!(Tag::Exceptions.description(), "Checks targeting exception handling structures");
     }
 
     #[test]
@@ -244,5 +426,110 @@ mod tests {
         assert_eq!(selectors.len(), 2);
         assert!(selectors.contains(&Selector::Tag(Tag::Logging)));
         assert!(selectors.contains(&Selector::Code(RuleCode("VCS001"))));
+    }
+
+    #[test]
+    fn test_filter_list_defaults_resolve() {
+        const DEFAULTS: FilterListDefaults = FilterListDefaults {
+            base: &["common", "shared", "temp"],
+            extend: &[(SupportLang::Rust, &["rust_only"])],
+            exempt: &[(SupportLang::Rust, &["temp"])],
+        };
+
+        let python_set = DEFAULTS.resolve_default_for_lang(SupportLang::Python);
+        assert!(python_set.contains("common"));
+        assert!(python_set.contains("shared"));
+        assert!(python_set.contains("temp"));
+        assert!(!python_set.contains("rust_only"));
+
+        let rust_set = DEFAULTS.resolve_default_for_lang(SupportLang::Rust);
+        assert!(rust_set.contains("common"));
+        assert!(rust_set.contains("shared"));
+        assert!(rust_set.contains("rust_only"));
+        assert!(!rust_set.contains("temp"));
+    }
+
+    #[test]
+    fn test_dynamic_deny_list_config() {
+        const DEFAULTS: FilterListDefaults =
+            FilterListDefaults { base: &["default_one", "common_ok"], extend: &[], exempt: &[] };
+
+        let toml_content = r#"
+            allowed = ["common_ok"]
+            extend_banned = ["global_bad"]
+
+            [rust]
+            allowed = ["rust_ok"]
+            extend_banned = ["rust_bad"]
+
+            [python]
+            banned = ["py_only_bad"]
+        "#;
+
+        let config: DynamicRuleConfig<DenyListConfig> = toml::from_str(toml_content).unwrap();
+
+        // Rust resolution:
+        // Base: default_banned ("default_one", "common_ok")
+        // Additive: global ("global_bad") + rust ("rust_bad")
+        // Subtractive: global ("common_ok") + rust ("rust_ok")
+        let rust_effective = config.effective_banned_for_lang(SupportLang::Rust, &DEFAULTS);
+        assert!(!rust_effective.contains("common_ok"));
+        assert!(!rust_effective.contains("rust_ok"));
+        assert!(rust_effective.contains("default_one"));
+        assert!(rust_effective.contains("global_bad"));
+        assert!(rust_effective.contains("rust_bad"));
+
+        // Python resolution:
+        // Base: explicit python banned ("py_only_bad")
+        // Additive: global ("global_bad")
+        // Subtractive: global ("common_ok")
+        let py_effective = config.effective_banned_for_lang(SupportLang::Python, &DEFAULTS);
+        assert!(!py_effective.contains("default_one"));
+        assert!(py_effective.contains("py_only_bad"));
+        assert!(py_effective.contains("global_bad"));
+    }
+
+    #[test]
+    fn test_dynamic_allow_list_config() {
+        const DEFAULTS: FilterListDefaults = FilterListDefaults {
+            base: &["default_base", "revoked", "rust_revoked"],
+            extend: &[(SupportLang::Rust, &["rust_extra"])],
+            exempt: &[],
+        };
+
+        let toml_content = r#"
+            banned = ["revoked"]
+            extend_allowed = ["global_allowed"]
+
+            [rust]
+            banned = ["rust_revoked"]
+            extend_allowed = ["rust_allowed"]
+
+            [python]
+            allowed = ["py_only_allowed"]
+        "#;
+
+        let config: DynamicRuleConfig<AllowListConfig> = toml::from_str(toml_content).unwrap();
+
+        // Rust resolution:
+        // Base: default_base, revoked, rust_revoked + rust_extra
+        // Additive: global ("global_allowed") + rust ("rust_allowed")
+        // Subtractive: global ("revoked") + rust ("rust_revoked")
+        let rust_effective = config.effective_allowed_for_lang(SupportLang::Rust, &DEFAULTS);
+        assert!(rust_effective.contains("default_base"));
+        assert!(rust_effective.contains("rust_extra"));
+        assert!(rust_effective.contains("global_allowed"));
+        assert!(rust_effective.contains("rust_allowed"));
+        assert!(!rust_effective.contains("revoked"));
+        assert!(!rust_effective.contains("rust_revoked"));
+
+        // Python resolution:
+        // Base: explicit python allowed ("py_only_allowed")
+        // Additive: global ("global_allowed")
+        // Subtractive: global ("revoked")
+        let py_effective = config.effective_allowed_for_lang(SupportLang::Python, &DEFAULTS);
+        assert!(py_effective.contains("py_only_allowed"));
+        assert!(py_effective.contains("global_allowed"));
+        assert!(!py_effective.contains("default_base"));
     }
 }

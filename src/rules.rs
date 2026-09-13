@@ -55,6 +55,16 @@ impl Tag {
     pub fn description(&self) -> &'static str {
         self.get_documentation().unwrap_or_default().trim()
     }
+
+    /// Returns the corresponding ast-grep `SupportLang` if this tag represents a language.
+    #[must_use]
+    pub const fn to_support_lang(&self) -> Option<ast_grep_language::SupportLang> {
+        match self {
+            Self::Python => Some(ast_grep_language::SupportLang::Python),
+            Self::Rust => Some(ast_grep_language::SupportLang::Rust),
+            _ => None,
+        }
+    }
 }
 
 /// Static list of all code linter rules.
@@ -83,20 +93,11 @@ mod tests {
         let code = rule.code().0;
         let name = rule.name().0;
 
-        assert!(
-            codes.insert(code),
-            "Duplicate rule code found in registry: {code}"
-        );
-        assert!(
-            names.insert(name),
-            "Duplicate rule name found in registry: {name}"
-        );
+        assert!(codes.insert(code), "Duplicate rule code found in registry: {code}");
+        assert!(names.insert(name), "Duplicate rule name found in registry: {name}");
         assert!(
             code.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-                && code
-                    .chars()
-                    .skip(1)
-                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()),
+                && code.chars().skip(1).all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()),
             "Rule code '{code}' does not match standard pattern"
         );
     }
@@ -130,14 +131,32 @@ mod tests {
         for rule in COMMAND_RULES {
             let code = rule.code().0;
             let name = rule.name().0;
-            assert!(
-                codes.insert(code),
-                "Global rule code collision across registries: {code}"
-            );
-            assert!(
-                names.insert(name),
-                "Global rule name collision across registries: {name}"
-            );
+            assert!(codes.insert(code), "Global rule code collision across registries: {code}");
+            assert!(names.insert(name), "Global rule name collision across registries: {name}");
+        }
+    }
+
+    #[test]
+    fn test_code_rule_languages_match_tags() {
+        for rule in CODE_RULES {
+            let tag_langs: Vec<ast_grep_language::SupportLang> =
+                rule.tags().iter().filter_map(Tag::to_support_lang).collect();
+            for lang in rule.supported_languages() {
+                assert!(
+                    tag_langs.contains(lang),
+                    "Rule {} is missing Tag for supported language {:?}",
+                    rule.code().0,
+                    lang
+                );
+            }
+            for tag_lang in &tag_langs {
+                assert!(
+                    rule.supported_languages().contains(tag_lang),
+                    "Rule {} has Tag for {:?} but does not declare it in supported_languages()",
+                    rule.code().0,
+                    tag_lang
+                );
+            }
         }
     }
 }

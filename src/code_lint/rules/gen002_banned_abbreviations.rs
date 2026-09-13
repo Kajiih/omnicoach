@@ -1,41 +1,24 @@
 //! Rule targeting banned abbreviations in definitions across multiple languages.
 
 use crate::code_lint::CodeRule;
-use crate::core::Rule;
+use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
 use crate::diagnostic::{
     Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
-use serde::Deserialize;
-use std::collections::HashSet;
+use ast_grep_language::SupportLang;
 use std::path::Path;
 
 /// Configuration for the `BannedAbbreviations` rule.
-#[derive(Deserialize, Debug, Clone)]
-pub struct BannedAbbreviationsConfig {
-    /// Banned abbreviation words.
-    #[serde(default = "default_banned")]
-    pub banned: HashSet<String>,
-}
+pub type BannedAbbreviationsConfig = DynamicRuleConfig<DenyListConfig>;
 
-impl Default for BannedAbbreviationsConfig {
-    fn default() -> Self {
-        Self {
-            banned: default_banned(),
-        }
-    }
-}
-
-fn default_banned() -> HashSet<String> {
-    // Currently allowed: prev, curr, arg
-    [
-        "err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag",
-    ]
-    .into_iter()
-    .map(ToString::to_string)
-    .collect()
-}
+/// Static defaults for banned abbreviations.
+const DEFAULT_BANNED: FilterListDefaults = FilterListDefaults {
+    base: &["err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag"],
+    extend: &[],
+    exempt: &[],
+};
 
 /// Helper to split identifiers into sub-word segments.
 fn split_segments(name: &str) -> Vec<String> {
@@ -90,6 +73,10 @@ impl Rule for BannedAbbreviations {
 }
 
 impl CodeRule for BannedAbbreviations {
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python, SupportLang::Rust]
+    }
+
     fn check_file(
         &self,
         path: &Path,
@@ -97,6 +84,7 @@ impl CodeRule for BannedAbbreviations {
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
         let rule_config: BannedAbbreviationsConfig = config.get_rule_config(self.name().0);
+        let effective_banned = rule_config.effective_banned_for_lang(*grep.lang(), &DEFAULT_BANNED);
 
         let mut diagnostics = Vec::new();
 
@@ -106,7 +94,7 @@ impl CodeRule for BannedAbbreviations {
             let name = node.text();
             let segments = split_segments(&name);
             for segment in segments {
-                if rule_config.banned.contains(&segment) {
+                if effective_banned.contains(&segment) {
                     diagnostics.push(Diagnostic::new(
                         self.code(),
                         self.name(),
@@ -193,5 +181,51 @@ def handle_msg(msg):
         insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config), @r###"
         [GEN002] Line 1, Col 30: Definition name `my_foo` contains banned abbreviation `foo`.
         "###);
+    }
+
+    #[test]
+    fn test_global_allowed_and_extend_banned() {
+        let rule = BannedAbbreviations;
+
+        let config_toml = r#"
+            [rules.banned-abbreviations]
+            allowed = ["err"]
+            extend_banned = ["req"]
+        "#;
+        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
+
+        // 'err' is allowed (no violation), 'req' is banned (violates), 'ctx' is still default banned (violates)
+        let source = "fn main() { let err = 1; let my_req = 2; let ctx = 3; }";
+        let output = assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config);
+        assert!(!output.contains("err"));
+        assert!(output.contains("contains banned abbreviation `req`"));
+        assert!(output.contains("contains banned abbreviation `ctx`"));
+    }
+
+    #[test]
+    fn test_language_specific_overrides() {
+        let rule = BannedAbbreviations;
+
+        // In Rust allow 'str', in Python ban extra 'lst'
+        let config_toml = r#"
+            [rules.banned-abbreviations.rust]
+            allowed = ["str"]
+
+            [rules.banned-abbreviations.python]
+            extend_banned = ["lst"]
+        "#;
+        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
+
+        // In Rust, 'str' should not be flagged:
+        let rust_source = "fn as_str() { let my_str = 1; }";
+        let rust_output =
+            assert_code_rule_snapshot_with_config(&rule, rust_source, "test.rs", &config);
+        assert!(!rust_output.contains("str"));
+
+        // In Python, 'str' should still be flagged by default, AND 'lst' should be flagged:
+        let py_source = "def handle(my_str, my_lst):\n    pass\n";
+        let py_output = assert_code_rule_snapshot_with_config(&rule, py_source, "test.py", &config);
+        assert!(py_output.contains("contains banned abbreviation `str`"));
+        assert!(py_output.contains("contains banned abbreviation `lst`"));
     }
 }

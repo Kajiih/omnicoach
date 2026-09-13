@@ -1,41 +1,27 @@
 //! `GEN003`: Bans type suffixes (Hungarian notation) in variable names.
 
 use crate::code_lint::CodeRule;
-use crate::core::Rule;
+use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
 use crate::diagnostic::{
     Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
-use serde::Deserialize;
-use std::collections::HashSet;
+use ast_grep_language::SupportLang;
 use std::path::Path;
 
 /// Configuration for the `NoHungarianNotation` rule.
-#[derive(Deserialize, Debug, Clone)]
-pub struct NoHungarianNotationConfig {
-    /// Suffixes that are banned.
-    #[serde(default = "default_banned_suffixes")]
-    pub banned_suffixes: HashSet<String>,
-}
+pub type NoHungarianNotationConfig = DynamicRuleConfig<DenyListConfig>;
 
-impl Default for NoHungarianNotationConfig {
-    fn default() -> Self {
-        Self {
-            banned_suffixes: default_banned_suffixes(),
-        }
-    }
-}
-
-fn default_banned_suffixes() -> HashSet<String> {
-    [
+/// Static defaults for banned type suffixes.
+const DEFAULT_BANNED_SUFFIXES: FilterListDefaults = FilterListDefaults {
+    base: &[
         "_list", "_arr", "_dict", "_map", "_vec", "_str", "_int", "_bool", "_set", "_ptr", "_num",
         "_float", "_byte",
-    ]
-    .into_iter()
-    .map(ToString::to_string)
-    .collect()
-}
+    ],
+    extend: &[],
+    exempt: &[],
+};
 
 /// Rule that bans Hungarian notation type suffixes.
 pub struct NoHungarianNotation;
@@ -55,6 +41,10 @@ impl Rule for NoHungarianNotation {
 }
 
 impl CodeRule for NoHungarianNotation {
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python, SupportLang::Rust]
+    }
+
     fn check_file(
         &self,
         path: &Path,
@@ -62,6 +52,8 @@ impl CodeRule for NoHungarianNotation {
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
         let rule_config: NoHungarianNotationConfig = config.get_rule_config(self.name().0);
+        let effective_banned =
+            rule_config.effective_banned_for_lang(*grep.lang(), &DEFAULT_BANNED_SUFFIXES);
 
         let mut diagnostics = Vec::new();
 
@@ -79,7 +71,7 @@ impl CodeRule for NoHungarianNotation {
             let name = node.text();
             let name_lower = name.to_lowercase();
 
-            for suffix in &rule_config.banned_suffixes {
+            for suffix in &effective_banned {
                 let suffix_lower = suffix.to_lowercase();
                 if name_lower.ends_with(&suffix_lower) {
                     let base_name = &name[..name.len() - suffix.len()];
@@ -189,7 +181,7 @@ class ItemsArr: # OK (class definition)
 
         let config_toml = r#"
             [rules.no-hungarian-notation]
-            banned_suffixes = ["_custom"]
+            banned = ["_custom"]
         "#;
         let config: crate::core::Config = toml::from_str(config_toml).unwrap();
 
@@ -230,5 +222,50 @@ class ItemsArr: # OK (class definition)
             diags[3].message.suggestion,
             "Rename the identifier without the type suffix `_int`."
         );
+    }
+
+    #[test]
+    fn test_global_allowed_and_extend_banned() {
+        let rule = NoHungarianNotation;
+
+        let config_toml = r#"
+            [rules.no-hungarian-notation]
+            allowed = ["_str"]
+            extend_banned = ["_handle"]
+        "#;
+        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
+
+        // _str is allowed (no violation), _handle is banned (violates), _list is default banned (violates)
+        let source = "fn main() { let name_str = 1; let conn_handle = 2; let item_list = 3; }";
+        let output = assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config);
+        assert!(!output.contains("_str"));
+        assert!(output.contains("contains a banned type suffix `_handle`"));
+        assert!(output.contains("contains a banned type suffix `_list`"));
+    }
+
+    #[test]
+    fn test_language_specific_overrides() {
+        let rule = NoHungarianNotation;
+
+        let config_toml = r#"
+            [rules.no-hungarian-notation.rust]
+            allowed = ["_vec"]
+
+            [rules.no-hungarian-notation.python]
+            extend_banned = ["_tbl"]
+        "#;
+        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
+
+        // In Rust, _vec is allowed:
+        let rust_source = "fn main() { let users_vec = 1; }";
+        let rust_output =
+            assert_code_rule_snapshot_with_config(&rule, rust_source, "test.rs", &config);
+        assert!(!rust_output.contains("_vec"));
+
+        // In Python, _vec is still banned by default, AND _tbl is banned:
+        let py_source = "users_vec = []\nusers_tbl = []\n";
+        let py_output = assert_code_rule_snapshot_with_config(&rule, py_source, "test.py", &config);
+        assert!(py_output.contains("contains a banned type suffix `_vec`"));
+        assert!(py_output.contains("contains a banned type suffix `_tbl`"));
     }
 }
