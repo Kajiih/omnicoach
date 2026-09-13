@@ -2,7 +2,7 @@
 //!
 //! Exposes linter domains for static file analysis and command safety checks.
 
-#![cfg_attr(test, allow(clippy::unwrap_used))]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 #[cfg(test)]
 #[macro_use]
@@ -17,4 +17,3 @@ pub mod rules;
 
 #[cfg(test)]
 pub mod test_utils;
-

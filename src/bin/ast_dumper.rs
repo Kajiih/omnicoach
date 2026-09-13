@@ -4,10 +4,16 @@
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 
-fn print_tree(node: &ast_grep_core::Node<'_, ast_grep_core::source::StrDoc<SupportLang>>, depth: usize) {
+fn print_tree(node: &omni::code_lint::AstNode<'_>, depth: usize) {
     let indent = "  ".repeat(depth);
-    println!("{}{:?} ({}) [{:?}]", indent, node.kind(), node.text(), node.range());
-    
+    println!(
+        "{}{:?} ({}) [{:?}]",
+        indent,
+        node.kind(),
+        node.text(),
+        node.range()
+    );
+
     for child in node.children() {
         print_tree(&child, depth + 1);
     }

@@ -1,4 +1,6 @@
-#![allow(missing_docs, clippy::unwrap_used, clippy::expect_used)]
+//! End-to-end command-line interface integration tests.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use assert_cmd::Command;
 use indoc::indoc;
@@ -23,12 +25,11 @@ fn setup_temp_jj_repo() -> tempfile::TempDir {
         .stderr(std::process::Stdio::null())
         .status();
 
-    if jj_check.is_err() || !jj_check.unwrap().success() {
-        panic!(
-            "Error: Jujutsu CLI ('jj') is not installed or not in PATH.\n\
-             Please install Jujutsu to run VCS-related integration tests."
-        );
-    }
+    assert!(
+        matches!(jj_check, Ok(status) if status.success()),
+        "Error: Jujutsu CLI ('jj') is not installed or not in PATH.\n\
+         Please install Jujutsu to run VCS-related integration tests."
+    );
 
     let temp = tempfile::tempdir().unwrap();
 
@@ -301,4 +302,3 @@ fn test_code_lint_diff_range_revset_jj() {
     );
     assert!(output.contains("Nested function definition `inner`"));
 }
-

@@ -2,10 +2,11 @@
 
 use crate::code_lint::CodeRule;
 use crate::core::Rule;
-use crate::diagnostic::{Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage};
+use crate::diagnostic::{
+    Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::Path;
@@ -28,17 +29,19 @@ impl Default for BannedAbbreviationsConfig {
 
 fn default_banned() -> HashSet<String> {
     // Currently allowed: prev, curr, arg
-    ["err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag"]
-        .into_iter()
-        .map(ToString::to_string)
-        .collect()
+    [
+        "err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag",
+    ]
+    .into_iter()
+    .map(ToString::to_string)
+    .collect()
 }
 
 /// Helper to split identifiers into sub-word segments.
 fn split_segments(name: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let mut current = String::new();
-    
+
     let chars: Vec<char> = name.chars().collect();
     for i in 0..chars.len() {
         let c = chars[i];
@@ -49,7 +52,7 @@ fn split_segments(name: &str) -> Vec<String> {
             }
             continue;
         }
-        
+
         // Split at lowercase/digit -> uppercase transition
         if i > 0 && c.is_uppercase() {
             let prev = chars[i - 1];
@@ -58,14 +61,14 @@ fn split_segments(name: &str) -> Vec<String> {
                 current = String::new();
             }
         }
-        
+
         current.push(c);
     }
-    
+
     if !current.is_empty() {
         segments.push(current.to_lowercase());
     }
-    
+
     segments
 }
 
@@ -90,7 +93,7 @@ impl CodeRule for BannedAbbreviations {
     fn check_file(
         &self,
         path: &Path,
-        grep: &AstGrep<ast_grep_core::source::StrDoc<SupportLang>>,
+        grep: &AstGrep<crate::code_lint::SourceDoc>,
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
         let rule_config: BannedAbbreviationsConfig = config.get_rule_config(self.name().0);
@@ -139,14 +142,14 @@ mod tests {
         let rule = BannedAbbreviations;
 
         // Banned variables, functions, and structs
-        let source = r#"
+        let source = r"
             use std::collections::HashMap as my_cfg;
             fn process_err() {
                 let ctx = 1;
                 let my_cfg_val = 2;
             }
             struct MyRes;
-        "#;
+        ";
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
         [GEN002] Line 2, Col 46: Definition name `my_cfg` contains banned abbreviation `cfg`.
         [GEN002] Line 3, Col 16: Definition name `process_err` contains banned abbreviation `err`.

@@ -7,7 +7,6 @@ use crate::diagnostic::{
 };
 use crate::rules::Tag;
 use ast_grep_core::{AstGrep, Doc, Node};
-use ast_grep_language::SupportLang;
 use std::path::Path;
 
 /// Helper to check if a node is nested inside a `function_definition`.
@@ -66,14 +65,18 @@ impl CodeRule for FlatScopeEnforced {
     fn check_file(
         &self,
         path: &Path,
-        grep: &AstGrep<ast_grep_core::source::StrDoc<SupportLang>>,
+        grep: &AstGrep<crate::code_lint::SourceDoc>,
         _config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        let matches_func = grep.root().find_all("def $NAME($$$ARGS): $$$BODY");
+        let root = grep.root();
+        let matches_func = root.find_all("def $NAME($$$ARGS): $$$BODY");
         for matched_node in matches_func {
             if has_function_ancestor(&matched_node) {
-                let func_name = matched_node.field("name").map(|name_node| name_node.text()).unwrap_or_default();
+                let func_name = matched_node
+                    .field("name")
+                    .map(|name_node| name_node.text())
+                    .unwrap_or_default();
                 let violation = FlatScopeViolation {
                     func_name: func_name.to_string(),
                 };
@@ -126,11 +129,8 @@ mod tests {
         [PY002] Line 2, Col 5: Nested function definition `inner` is discouraged.
         "###);
 
-        let output_ok = crate::test_utils::assert_code_rule_snapshot(
-            &FlatScopeEnforced,
-            source_ok,
-            "test.py",
-        );
+        let output_ok =
+            crate::test_utils::assert_code_rule_snapshot(&FlatScopeEnforced, source_ok, "test.py");
         assert!(output_ok.is_empty());
     }
 
@@ -142,11 +142,8 @@ mod tests {
                     def inner2():
                         pass
         "};
-        let output = crate::test_utils::assert_code_rule_snapshot(
-            &FlatScopeEnforced,
-            source,
-            "test.py",
-        );
+        let output =
+            crate::test_utils::assert_code_rule_snapshot(&FlatScopeEnforced, source, "test.py");
         insta::assert_snapshot!(output, @r###"
         [PY002] Line 2, Col 5: Nested function definition `inner1` is discouraged.
         [PY002] Line 3, Col 9: Nested function definition `inner2` is discouraged.

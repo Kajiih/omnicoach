@@ -43,8 +43,8 @@ fn main() {
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let config = Config::load()
-        .map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
+    let config =
+        Config::load().map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
 
     let mut all_diagnostics = Vec::new();
 
@@ -58,11 +58,10 @@ fn run() -> anyhow::Result<()> {
             }
         }
 
-        let (vcs_type, resolved_rev, changes) = omni::diff::detect_vcs_diff(cli.diff_rev.as_deref())?;
+        let (vcs_type, resolved_rev, changes) =
+            omni::diff::detect_vcs_diff(cli.diff_rev.as_deref())?;
 
-        eprintln!(
-            "Info: Comparing against {vcs_type:?} revision '{resolved_rev}'."
-        );
+        eprintln!("Info: Comparing against {vcs_type:?} revision '{resolved_rev}'.");
 
         // Resolve input target paths to absolute paths
         let target_paths: Vec<PathBuf> = cli
@@ -85,7 +84,12 @@ fn run() -> anyhow::Result<()> {
             });
 
             if is_target {
-                lint_single_file(file_path, &config, &mut all_diagnostics, Some(changed_lines))?;
+                lint_single_file(
+                    file_path,
+                    &config,
+                    &mut all_diagnostics,
+                    Some(changed_lines),
+                )?;
             }
         }
     } else {

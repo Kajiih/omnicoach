@@ -6,7 +6,8 @@ use crate::command_lint::vcs::JjClient;
 use crate::core::Config;
 use crate::diagnostic::Diagnostic;
 
-use ast_grep_core::{AstGrep, Node};
+use crate::code_lint::AstNode;
+use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 
 /// Schema defining a program's command-line interface options layout.
@@ -41,11 +42,7 @@ impl InterceptedCommand {
         commands
     }
 
-    fn collect_commands(
-        node: &Node<'_, ast_grep_core::StrDoc<SupportLang>>,
-        raw_string: &str,
-        commands: &mut Vec<Self>,
-    ) {
+    fn collect_commands(node: &AstNode<'_>, raw_string: &str, commands: &mut Vec<Self>) {
         if node.kind() == "command" {
             if let Some(cmd) = Self::parse_single(node, raw_string) {
                 commands.push(cmd);
@@ -56,10 +53,7 @@ impl InterceptedCommand {
         }
     }
 
-    fn parse_single(
-        node: &Node<'_, ast_grep_core::StrDoc<SupportLang>>,
-        raw_string: &str,
-    ) -> Option<Self> {
+    fn parse_single(node: &AstNode<'_>, raw_string: &str) -> Option<Self> {
         let mut children = node.children();
         let command_name_node = children.find(|child| child.kind() == "command_name")?;
         let program_name = command_name_node.text().to_string();
@@ -250,7 +244,10 @@ impl ParsedArgs {
         if self.positionals.len() < sequence.len() {
             return false;
         }
-        self.positionals.iter().zip(sequence).all(|(arg, expected)| arg == expected)
+        self.positionals
+            .iter()
+            .zip(sequence)
+            .all(|(arg, expected)| arg == expected)
     }
 }
 

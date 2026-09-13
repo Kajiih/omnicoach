@@ -7,8 +7,13 @@ pub mod rules;
 use crate::core::Config;
 use crate::diagnostic::Diagnostic;
 use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
+pub use ast_grep_language::SupportLang;
 use std::path::Path;
+
+/// Concrete document type used across code linting rules.
+pub type SourceDoc = ast_grep_core::tree_sitter::StrDoc<SupportLang>;
+/// Concrete AST node type used across code linting rules.
+pub type AstNode<'a> = ast_grep_core::Node<'a, SourceDoc>;
 
 /// Common trait for static file code validation rules.
 pub trait CodeRule: crate::core::Rule {
@@ -17,7 +22,7 @@ pub trait CodeRule: crate::core::Rule {
     fn check_file(
         &self,
         path: &Path,
-        grep: &AstGrep<ast_grep_core::source::StrDoc<SupportLang>>,
+        grep: &AstGrep<SourceDoc>,
         config: &Config,
     ) -> Vec<Diagnostic>;
 }
@@ -43,8 +48,7 @@ const fn lang_to_tag(lang: SupportLang) -> Option<crate::rules::Tag> {
 }
 
 fn rule_supports_language(rule: &dyn CodeRule, lang: SupportLang) -> bool {
-    lang_to_tag(lang)
-        .is_some_and(|tag| rule.tags().contains(&tag))
+    lang_to_tag(lang).is_some_and(|tag| rule.tags().contains(&tag))
 }
 
 /// Analyzes the structure of a file and returns diagnostic alerts.
@@ -67,9 +71,7 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
 
 /// Helper to collect binding definition nodes from a parsed AST grep document.
 #[must_use]
-pub fn collect_bindings(
-    grep: &AstGrep<ast_grep_core::source::StrDoc<SupportLang>>,
-) -> Vec<ast_grep_core::Node<'_, ast_grep_core::source::StrDoc<SupportLang>>> {
+pub fn collect_bindings(grep: &AstGrep<SourceDoc>) -> Vec<AstNode<'_>> {
     match grep.lang() {
         SupportLang::Rust => ast_rust::collect_bindings(&grep.root()),
         SupportLang::Python => ast_python::collect_bindings(&grep.root()),
@@ -79,10 +81,7 @@ pub fn collect_bindings(
 
 /// Returns true if the node represents an import binding.
 #[must_use]
-pub fn is_import_binding(
-    node: &ast_grep_core::Node<'_, ast_grep_core::source::StrDoc<SupportLang>>,
-    lang: SupportLang,
-) -> bool {
+pub fn is_import_binding(node: &AstNode<'_>, lang: SupportLang) -> bool {
     let Some(parent) = node.parent() else {
         return false;
     };
@@ -102,10 +101,7 @@ pub fn is_import_binding(
 
 /// Returns true if the node represents a structural type, class, or function definition name.
 #[must_use]
-pub fn is_structural_definition(
-    node: &ast_grep_core::Node<'_, ast_grep_core::source::StrDoc<SupportLang>>,
-    lang: SupportLang,
-) -> bool {
+pub fn is_structural_definition(node: &AstNode<'_>, lang: SupportLang) -> bool {
     let Some(parent) = node.parent() else {
         return false;
     };
@@ -127,5 +123,3 @@ pub fn is_structural_definition(
         _ => false,
     }
 }
-
-

@@ -10,6 +10,5 @@ expression: output
 Error: Failed to load configuration: TOML parse error at line 1, column 11
   |
 1 | select = [invalid syntax]
-  |           ^
-invalid array
-expected `]`
+  |           ^^^^^^^^^^^^^^
+string values must be quoted, expected literal string

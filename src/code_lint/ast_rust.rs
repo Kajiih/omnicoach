@@ -1,12 +1,9 @@
 //! AST helper predicates for structural traversal in Rust.
 
-use ast_grep_language::SupportLang;
+use crate::code_lint::AstNode;
 
 /// Recursively extracts binding identifiers from a pattern node.
-fn extract_from_pattern<'a>(
-    node: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
-    bindings: &mut Vec<ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>>,
-) {
+fn extract_from_pattern<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
     let kind = node.kind();
     match kind.as_ref() {
         "identifier" => {
@@ -68,9 +65,7 @@ fn extract_from_pattern<'a>(
 }
 
 /// Helper to extract the last segment identifier from a path node.
-fn extract_last_segment<'a>(
-    node: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
-) -> Option<ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>> {
+fn extract_last_segment<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
     match node.kind().as_ref() {
         "identifier" => Some(node.clone()),
         "scoped_identifier" => node.field("name"),
@@ -80,9 +75,9 @@ fn extract_last_segment<'a>(
 
 /// Recursively extracts bindings from a use declaration.
 fn extract_from_use<'a>(
-    node: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
-    bindings: &mut Vec<ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>>,
-    prefix_last_segment: Option<&ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>>,
+    node: &AstNode<'a>,
+    bindings: &mut Vec<AstNode<'a>>,
+    prefix_last_segment: Option<&AstNode<'a>>,
 ) {
     match node.kind().as_ref() {
         "use_declaration" => {
@@ -134,10 +129,7 @@ fn extract_from_use<'a>(
     }
 }
 
-fn traverse_rust<'a>(
-    node: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
-    bindings: &mut Vec<ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>>,
-) {
+fn traverse_rust<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
     let kind = node.kind();
     match kind.as_ref() {
         "let_declaration" | "let_condition" => {
@@ -204,14 +196,8 @@ fn traverse_rust<'a>(
                 }
             }
         }
-        "const_item"
-        | "static_item"
-        | "function_item"
-        | "struct_item"
-        | "enum_item"
-        | "trait_item"
-        | "type_item"
-        | "associated_type" => {
+        "const_item" | "static_item" | "function_item" | "struct_item" | "enum_item"
+        | "trait_item" | "type_item" | "associated_type" => {
             if let Some(name_node) = node.field("name") {
                 bindings.push(name_node);
             }
@@ -237,9 +223,7 @@ fn traverse_rust<'a>(
 
 /// Collects all binding definitions (variables, functions, structs, etc.) within a node.
 #[must_use]
-pub fn collect_bindings<'a>(
-    root: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
-) -> Vec<ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>> {
+pub fn collect_bindings<'a>(root: &AstNode<'a>) -> Vec<AstNode<'a>> {
     let mut bindings = Vec::new();
     traverse_rust(root, &mut bindings);
     bindings
@@ -248,11 +232,12 @@ pub fn collect_bindings<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::code_lint::SupportLang;
     use ast_grep_core::AstGrep;
 
     #[test]
     fn test_collect_bindings_rust() {
-        let source = r#"
+        let source = r"
             use std;
             use std::collections::HashMap;
             use std::io::{self, Read};
@@ -284,10 +269,13 @@ mod tests {
             }
             const MY_CONST: i32 = 1;
             static MY_STATIC: i32 = 2;
-        "#;
+        ";
         let grep = AstGrep::new(source, SupportLang::Rust);
         let bindings = collect_bindings(&grep.root());
-        let names: Vec<String> = bindings.iter().map(|node| node.text().to_string()).collect();
+        let names: Vec<String> = bindings
+            .iter()
+            .map(|node| node.text().to_string())
+            .collect();
         assert_eq!(
             names,
             vec![
@@ -332,7 +320,10 @@ mod tests {
         let source = "fn main() { let x: MyStruct = MyStruct; }";
         let grep = AstGrep::new(source, SupportLang::Rust);
         let bindings = collect_bindings(&grep.root());
-        let names: Vec<String> = bindings.iter().map(|node| node.text().to_string()).collect();
+        let names: Vec<String> = bindings
+            .iter()
+            .map(|node| node.text().to_string())
+            .collect();
         assert_eq!(names, vec!["main", "x"]);
     }
 }

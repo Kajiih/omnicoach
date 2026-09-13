@@ -2,7 +2,9 @@
 
 use crate::code_lint::CodeRule;
 use crate::core::Rule;
-use crate::diagnostic::{Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage};
+use crate::diagnostic::{
+    Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -80,7 +82,7 @@ impl CodeRule for SingleLetterVariableName {
     fn check_file(
         &self,
         path: &Path,
-        grep: &AstGrep<ast_grep_core::source::StrDoc<SupportLang>>,
+        grep: &AstGrep<crate::code_lint::SourceDoc>,
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
         let rule_config: SingleLetterVariableNameConfig = config.get_rule_config(self.name().0);

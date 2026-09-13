@@ -7,7 +7,6 @@ use crate::diagnostic::{
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::Path;
@@ -30,8 +29,8 @@ impl Default for NoHungarianNotationConfig {
 
 fn default_banned_suffixes() -> HashSet<String> {
     [
-        "_list", "_arr", "_dict", "_map", "_vec", "_str", "_int", "_bool", "_set", "_ptr",
-        "_num", "_float", "_byte",
+        "_list", "_arr", "_dict", "_map", "_vec", "_str", "_int", "_bool", "_set", "_ptr", "_num",
+        "_float", "_byte",
     ]
     .into_iter()
     .map(ToString::to_string)
@@ -59,7 +58,7 @@ impl CodeRule for NoHungarianNotation {
     fn check_file(
         &self,
         path: &Path,
-        grep: &AstGrep<ast_grep_core::source::StrDoc<SupportLang>>,
+        grep: &AstGrep<crate::code_lint::SourceDoc>,
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
         let rule_config: NoHungarianNotationConfig = config.get_rule_config(self.name().0);
@@ -85,23 +84,26 @@ impl CodeRule for NoHungarianNotation {
                 if name_lower.ends_with(&suffix_lower) {
                     let base_name = &name[..name.len() - suffix.len()];
                     let actual_suffix = &name[name.len() - suffix.len()..];
-                    
+
                     // Case preservation for suggestions (Screaming Snake Case)
                     let is_uppercase = name.chars().all(|c| !c.is_alphabetic() || c.is_uppercase());
 
                     let suggestion = match suffix_lower.as_str() {
                         "_list" | "_arr" | "_vec" | "_set" => {
-                            let plural_suffix = if base_name.ends_with('s') || base_name.ends_with('S') {
-                                ""
-                            } else if is_uppercase {
-                                "S"
-                            } else {
-                                "s"
-                            };
+                            let plural_suffix =
+                                if base_name.ends_with('s') || base_name.ends_with('S') {
+                                    ""
+                                } else if is_uppercase {
+                                    "S"
+                                } else {
+                                    "s"
+                                };
                             format!("Rename the identifier to use plural form (e.g. `{base_name}{plural_suffix}`) or remove the suffix.")
                         }
                         _ => {
-                            format!("Rename the identifier without the type suffix `{actual_suffix}`.")
+                            format!(
+                                "Rename the identifier without the type suffix `{actual_suffix}`."
+                            )
                         }
                     };
 
@@ -133,6 +135,7 @@ impl CodeRule for NoHungarianNotation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::code_lint::SupportLang;
     use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
 
     #[test]
@@ -163,7 +166,7 @@ mod tests {
     fn test_python_snapshots() {
         let rule = NoHungarianNotation;
 
-        let source = r#"
+        let source = r"
 import os_path # OK (import)
 from sys import stderr as err_file # OK (import alias)
 class ItemsArr: # OK (class definition)
@@ -172,7 +175,7 @@ class ItemsArr: # OK (class definition)
         items_arr = []
         value_int = 42
         data = None # OK
-        "#;
+        ";
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
         [GEN003] Line 6, Col 9: Identifier `users_dict` contains a banned type suffix `_dict`.
         [GEN003] Line 7, Col 9: Identifier `items_arr` contains a banned type suffix `_arr`.

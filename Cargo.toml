@@ -24,15 +24,13 @@ dbg_macro = "deny"
 todo = "deny"
 panic = "deny"
 unimplemented = "deny"
-multiple_crate_versions = "allow"
-cargo_common_metadata = "allow"
 
 [dependencies]
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-toml = "0.8"
-ast-grep-core = "0.28" # SOTA structural search using tree-sitter
-ast-grep-language = "0.28"
+toml = "1.1"
+ast-grep-core = "0.45" # SOTA structural search using tree-sitter
+ast-grep-language = "0.45"
 shell-words = "1.1" # Safe shell tokenization for cmd guard
 serde_json = "1.0"
 clap = { version = "4.4", features = ["derive"] }
@@ -45,5 +43,5 @@ indoc = "2.0.7"
 insta = "1.38.0"
 predicates = "3.0"
 pretty_assertions = "1.4.0"
-rstest = "0.19.0"
+rstest = "0.27"
 tempfile = "3.10.1"

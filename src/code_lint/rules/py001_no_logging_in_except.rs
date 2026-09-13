@@ -7,7 +7,6 @@ use crate::diagnostic::{
 };
 use crate::rules::Tag;
 use ast_grep_core::{AstGrep, Doc, Node};
-use ast_grep_language::SupportLang;
 use std::path::Path;
 
 /// Helper to check if a node is nested inside an `except_clause`.
@@ -41,11 +40,12 @@ impl CodeRule for NoLoggingInExcept {
     fn check_file(
         &self,
         path: &Path,
-        grep: &AstGrep<ast_grep_core::source::StrDoc<SupportLang>>,
+        grep: &AstGrep<crate::code_lint::SourceDoc>,
         _config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        let matches = grep.root().find_all("logging.error($$$ARGS)");
+        let root = grep.root();
+        let matches = root.find_all("logging.error($$$ARGS)");
         for matched_node in matches {
             if has_except_ancestor(&matched_node) {
                 diagnostics.push(Diagnostic::new(
@@ -99,11 +99,8 @@ mod tests {
         [PY001] Line 4, Col 5: Banned use of `logging.error` inside except block.
         "###);
 
-        let output_ok = crate::test_utils::assert_code_rule_snapshot(
-            &NoLoggingInExcept,
-            source_ok,
-            "test.py",
-        );
+        let output_ok =
+            crate::test_utils::assert_code_rule_snapshot(&NoLoggingInExcept, source_ok, "test.py");
         assert!(output_ok.is_empty());
     }
 }

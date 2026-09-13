@@ -215,8 +215,6 @@ mod tests {
         );
     }
 
-
-
     #[test]
     fn test_selector_deserialization() {
         let toml_content = r#"

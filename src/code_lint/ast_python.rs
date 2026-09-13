@@ -1,12 +1,9 @@
 //! AST helper predicates for structural traversal in Python.
 
-use ast_grep_language::SupportLang;
+use crate::code_lint::AstNode;
 
 /// Recursively extracts binding identifiers from a pattern node.
-fn extract_from_pattern<'a>(
-    node: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
-    bindings: &mut Vec<ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>>,
-) {
+fn extract_from_pattern<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
     let kind = node.kind();
     match kind.as_ref() {
         "identifier" => {
@@ -73,17 +70,12 @@ fn extract_from_pattern<'a>(
 }
 
 /// Helper to extract the first segment from a dotted name.
-fn extract_first_segment<'a>(
-    node: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
-) -> ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>> {
+fn extract_first_segment<'a>(node: &AstNode<'a>) -> AstNode<'a> {
     node.child(0).unwrap_or_else(|| node.clone())
 }
 
 /// Extracts bindings from Python import statements.
-fn extract_from_import<'a>(
-    node: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
-    bindings: &mut Vec<ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>>,
-) {
+fn extract_from_import<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
     match node.kind().as_ref() {
         "import_statement" => {
             for child in node.children() {
@@ -126,11 +118,10 @@ fn extract_from_import<'a>(
     }
 }
 
-
 fn traverse_children_skipping<'a>(
-    node: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
-    skip: Option<&ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>>,
-    bindings: &mut Vec<ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>>,
+    node: &AstNode<'a>,
+    skip: Option<&AstNode<'a>>,
+    bindings: &mut Vec<AstNode<'a>>,
 ) {
     for child in node.children() {
         if let Some(skip_node) = skip {
@@ -142,10 +133,7 @@ fn traverse_children_skipping<'a>(
     }
 }
 
-fn traverse_python<'a>(
-    node: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
-    bindings: &mut Vec<ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>>,
-) {
+fn traverse_python<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
     let kind = node.kind();
     match kind.as_ref() {
         "assignment" => {
@@ -226,9 +214,7 @@ fn traverse_python<'a>(
 
 /// Collects all binding definitions (variables, functions, classes, etc.) within a node.
 #[must_use]
-pub fn collect_bindings<'a>(
-    root: &ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>,
-) -> Vec<ast_grep_core::Node<'a, ast_grep_core::source::StrDoc<SupportLang>>> {
+pub fn collect_bindings<'a>(root: &AstNode<'a>) -> Vec<AstNode<'a>> {
     let mut bindings = Vec::new();
     traverse_python(root, &mut bindings);
     bindings
@@ -237,11 +223,12 @@ pub fn collect_bindings<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::code_lint::SupportLang;
     use ast_grep_core::AstGrep;
 
     #[test]
     fn test_collect_bindings_python() {
-        let source = r#"
+        let source = r"
 import os
 import os.path
 import numpy as np
@@ -263,10 +250,13 @@ except Exception as g:
 class MyClass:
     def my_method(self):
         pass
-        "#;
+        ";
         let grep = AstGrep::new(source, SupportLang::Python);
         let bindings = collect_bindings(&grep.root());
-        let names: Vec<String> = bindings.iter().map(|node| node.text().to_string()).collect();
+        let names: Vec<String> = bindings
+            .iter()
+            .map(|node| node.text().to_string())
+            .collect();
         assert_eq!(
             names,
             vec![
@@ -295,16 +285,19 @@ class MyClass:
 
     #[test]
     fn test_collect_bindings_python_match_case() {
-        let source = r#"
+        let source = r"
 match val:
     case Point(x, y=z):
         pass
     case [a, b]:
         pass
-        "#;
+        ";
         let grep = AstGrep::new(source, SupportLang::Python);
         let bindings = collect_bindings(&grep.root());
-        let names: Vec<String> = bindings.iter().map(|node| node.text().to_string()).collect();
+        let names: Vec<String> = bindings
+            .iter()
+            .map(|node| node.text().to_string())
+            .collect();
         assert_eq!(names, vec!["x", "z", "a", "b"]);
     }
 }
