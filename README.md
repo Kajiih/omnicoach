@@ -97,6 +97,7 @@ banned_suffixes = ["_list", "_arr", "_dict"]
 ```
 
 ### Supported Rules:
+*   **`ASYNC-001` (`no-unstructured-task-creation`)**: Bans unstructured task creation (`asyncio.create_task`, `ensure_future`, `loop.create_task`).
 *   **`NAME-001` (`single-letter-variable-name`)**: Bans short single-letter variables except allowed exceptions.
 *   **`NAME-002` (`banned-abbreviations`)**: Bans naming definitions using cryptic abbreviations (`ctx`, `cfg`, etc.).
 *   **`NAME-003` (`no-hungarian-notation`)**: Bans Hungarian type suffixes (e.g., `user_list`, `value_int`).

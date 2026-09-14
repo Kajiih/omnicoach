@@ -249,6 +249,14 @@ impl SuppressionTracker {
             return None;
         };
 
+        // Require boundary delimiter (whitespace, '[', or '-') after directive prefix
+        // so ordinary comments like `# omni:ignored by compiler` are not treated as directives.
+        if !remainder.is_empty()
+            && !remainder.starts_with(|c: char| c.is_whitespace() || c == '[' || c == '-')
+        {
+            return None;
+        }
+
         // Parse bracketed codes and remainder
         let remainder_trimmed = remainder.trim_start();
         let (target_codes, is_blanket, after_codes) = if remainder_trimmed.starts_with('[') {
@@ -367,15 +375,12 @@ impl SuppressionTracker {
         let check_unknown = config.is_rule_enabled_for_path(&unknown_code_rule, path);
         let check_blanket = config.is_rule_enabled_for_path(&blanket_rule, path);
 
-        // Build set of all known suppressible rule codes (code rules & command rules, excluding SUPP)
+        // Build set of all known suppressible rule codes (code rules excluding SUPP)
         let mut suppressible_codes: HashSet<&'static str> = HashSet::new();
         for rule in crate::rules::CODE_RULES {
             if !rule.tags().contains(&Tag::Suppression) {
                 suppressible_codes.insert(rule.code().0);
             }
-        }
-        for rule in crate::rules::COMMAND_RULES {
-            suppressible_codes.insert(rule.code().0);
         }
 
         let context = LocationContext::File(path.to_path_buf());
@@ -619,5 +624,30 @@ mod tests {
 
         // Does not trigger SUPP-002 for unused suppression since it's a string literal, not a comment
         assert!(diags.is_empty(), "Expected 0 diagnostics, got: {diags:?}");
+    }
+
+    #[test]
+    fn test_comment_prefix_word_boundary() {
+        // Comments containing 'omni:ignored' should not be treated as omni:ignore directives
+        let content = "a = 1  # omni:ignored by other tool";
+        let config = Config::default();
+        let diags = crate::code_lint::lint_file(Path::new("src/test.py"), content, &config);
+
+        // Should flag NAME-001 violation, and NOT flag SUPP-004 (blanket suppression)
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_code.0, "NAME-001");
+    }
+
+    #[test]
+    fn test_command_rule_in_code_flagged_as_unknown() {
+        // JJ-001 is a command rule and cannot be suppressed in code files
+        let content = "a = 1  # omni:ignore [JJ-001] -- invalid code rule";
+        let config = Config::default();
+        let diags = crate::code_lint::lint_file(Path::new("src/test.py"), content, &config);
+
+        assert!(
+            diags.iter().any(|d| d.rule_code.0 == "SUPP-003"),
+            "Expected SUPP-003 for non-code rule in code directive, got: {diags:?}"
+        );
     }
 }
