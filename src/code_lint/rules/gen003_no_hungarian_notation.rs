@@ -3,7 +3,7 @@
 use crate::code_lint::CodeRule;
 use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
 use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+    Diagnostic, LocationContext, RuleName, SourceLocation, SourceSpan, ViolationMessage,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -27,10 +27,6 @@ const DEFAULT_BANNED_SUFFIXES: FilterListDefaults = FilterListDefaults {
 pub struct NoHungarianNotation;
 
 impl Rule for NoHungarianNotation {
-    fn code(&self) -> RuleCode {
-        RuleCode("NAME-003")
-    }
-
     fn name(&self) -> RuleName {
         RuleName("no-hungarian-notation")
     }
@@ -100,7 +96,6 @@ impl CodeRule for NoHungarianNotation {
                     };
 
                     diagnostics.push(Diagnostic::new(
-                        self.code(),
                         self.name(),
                         ViolationMessage {
                             summary: format!("Identifier `{name}` contains a banned type suffix `{actual_suffix}`."),
@@ -146,12 +141,12 @@ mod tests {
                 let age = 30; // OK
             }
         "#;
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
-        [NAME-003] Line 6, Col 21: Identifier `user_list` contains a banned type suffix `_list`.
-        [NAME-003] Line 7, Col 21: Identifier `id_set` contains a banned type suffix `_set`.
-        [NAME-003] Line 8, Col 21: Identifier `name_str` contains a banned type suffix `_str`.
-        [NAME-003] Line 9, Col 23: Identifier `MY_INT` contains a banned type suffix `_INT`.
-        "###);
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @"
+        [no-hungarian-notation] Line 6, Col 21: Identifier `user_list` contains a banned type suffix `_list`.
+        [no-hungarian-notation] Line 7, Col 21: Identifier `id_set` contains a banned type suffix `_set`.
+        [no-hungarian-notation] Line 8, Col 21: Identifier `name_str` contains a banned type suffix `_str`.
+        [no-hungarian-notation] Line 9, Col 23: Identifier `MY_INT` contains a banned type suffix `_INT`.
+        ");
     }
 
     #[test]
@@ -168,11 +163,11 @@ class ItemsArr: # OK (class definition)
         value_int = 42
         data = None # OK
         ";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
-        [NAME-003] Line 6, Col 9: Identifier `users_dict` contains a banned type suffix `_dict`.
-        [NAME-003] Line 7, Col 9: Identifier `items_arr` contains a banned type suffix `_arr`.
-        [NAME-003] Line 8, Col 9: Identifier `value_int` contains a banned type suffix `_int`.
-        "###);
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @"
+        [no-hungarian-notation] Line 6, Col 9: Identifier `users_dict` contains a banned type suffix `_dict`.
+        [no-hungarian-notation] Line 7, Col 9: Identifier `items_arr` contains a banned type suffix `_arr`.
+        [no-hungarian-notation] Line 8, Col 9: Identifier `value_int` contains a banned type suffix `_int`.
+        ");
     }
 
     #[test]
@@ -186,9 +181,7 @@ class ItemsArr: # OK (class definition)
         let config: crate::core::Config = toml::from_str(config_toml).unwrap();
 
         let source = "fn main() { let x_list = 1; let y_custom = 2; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config), @r###"
-        [NAME-003] Line 1, Col 33: Identifier `y_custom` contains a banned type suffix `_custom`.
-        "###);
+        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config), @"[no-hungarian-notation] Line 1, Col 33: Identifier `y_custom` contains a banned type suffix `_custom`.");
     }
 
     #[test]

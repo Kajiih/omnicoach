@@ -1,7 +1,7 @@
 //! Shared core module of the Omni linter toolkit.
 
 use crate::diagnostic::{
-    Diagnostic, RuleCode, RuleName, SourceLocation, ViolationMessage, ViolationTemplate,
+    Diagnostic, RuleName, SourceLocation, ViolationMessage, ViolationTemplate,
 };
 use ast_grep_language::SupportLang;
 use serde::Deserialize;
@@ -276,8 +276,6 @@ pub const CONFIG_FILE_NAME: &str = ".omnilint.toml";
 
 /// Common metadata shared by all lint rules.
 pub trait Rule: Send + Sync {
-    /// Returns the unique rule code (e.g., "LOG-001").
-    fn code(&self) -> RuleCode;
     /// Returns the rule name (e.g., "no-logging-in-except").
     fn name(&self) -> RuleName;
     /// Returns the domain tags of the rule (language tags are derived from `supported_languages`).
@@ -303,10 +301,10 @@ pub trait Rule: Send + Sync {
         None
     }
 
-    /// Constructs a `Diagnostic` with this rule's code and name.
+    /// Constructs a `Diagnostic` with this rule's name.
     #[must_use]
     fn create_diagnostic(&self, message: ViolationMessage, location: SourceLocation) -> Diagnostic {
-        Diagnostic::new(self.code(), self.name(), message, location)
+        Diagnostic::new(self.name(), message, location)
     }
 
     /// Renders a diagnostic from this rule's default `violation_template()`.
@@ -337,8 +335,6 @@ pub trait Rule: Send + Sync {
 /// A filter selector parsed from linter configuration settings.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Selector {
-    /// Matches a specific rule code.
-    Code(RuleCode),
     /// Matches a specific rule name.
     Name(RuleName),
     /// Matches all rules under a category tag.
@@ -359,27 +355,21 @@ impl<'de> Deserialize<'de> for Selector {
             return Ok(Self::Tag(tag));
         }
 
-        // 2. Try to parse as Code or Name from registries
+        // 2. Try to parse as Name from registries
         for rule in crate::rules::CODE_RULES {
-            if rule.code().0 == selector_input {
-                return Ok(Self::Code(rule.code()));
-            }
             if rule.name().0 == selector_input {
                 return Ok(Self::Name(rule.name()));
             }
         }
 
         for rule in crate::rules::COMMAND_RULES {
-            if rule.code().0 == selector_input {
-                return Ok(Self::Code(rule.code()));
-            }
             if rule.name().0 == selector_input {
                 return Ok(Self::Name(rule.name()));
             }
         }
 
         Err(serde::de::Error::custom(format!(
-            "invalid rule selector '{selector_input}'. Must be a valid rule code, rule name, or category tag."
+            "invalid rule selector '{selector_input}'. Must be a valid rule name or category tag."
         )))
     }
 }
@@ -473,11 +463,9 @@ impl Config {
     /// Returns true if the given rule is enabled in this configuration.
     #[must_use]
     pub fn is_rule_enabled(&self, rule: &dyn Rule) -> bool {
-        let code = rule.code();
         let name = rule.name();
 
         let matches_selector = |sel: &Selector| match sel {
-            Selector::Code(code_selector) => *code_selector == code,
             Selector::Name(name_selector) => *name_selector == name,
             Selector::Tag(tag_selector) => rule.has_tag(*tag_selector),
         };
@@ -505,11 +493,9 @@ impl Config {
         }
 
         let normalized = normalize_path_for_glob(path);
-        let code = rule.code();
         let name = rule.name();
 
         let matches_selector = |sel: &Selector| match sel {
-            Selector::Code(code_selector) => *code_selector == code,
             Selector::Name(name_selector) => *name_selector == name,
             Selector::Tag(tag_selector) => rule.has_tag(*tag_selector),
         };
@@ -564,15 +550,11 @@ mod tests {
     use crate::rules::Tag;
 
     struct MockRule {
-        code: &'static str,
         name: &'static str,
         tags: &'static [Tag],
     }
 
     impl Rule for MockRule {
-        fn code(&self) -> RuleCode {
-            RuleCode(self.code)
-        }
         fn name(&self) -> RuleName {
             RuleName(self.name)
         }
@@ -581,11 +563,9 @@ mod tests {
         }
     }
 
-    const LOGGING_RULE: MockRule =
-        MockRule { code: "T001", name: "mock-logging-rule", tags: &[Tag::Logging] };
+    const LOGGING_RULE: MockRule = MockRule { name: "mock-logging-rule", tags: &[Tag::Logging] };
 
-    const STYLE_RULE: MockRule =
-        MockRule { code: "T002", name: "mock-style-rule", tags: &[Tag::Style] };
+    const STYLE_RULE: MockRule = MockRule { name: "mock-style-rule", tags: &[Tag::Style] };
 
     #[test]
     fn test_select_by_tag() {
@@ -619,13 +599,13 @@ mod tests {
     #[test]
     fn test_selector_deserialization() {
         let toml_content = r#"
-            select = ["logging", "JJ-001"]
+            select = ["logging", "no-edits-on-described-commits"]
         "#;
         let config: Config = toml::from_str(toml_content).unwrap();
         let selectors = config.select.unwrap();
         assert_eq!(selectors.len(), 2);
         assert!(selectors.contains(&Selector::Tag(Tag::Logging)));
-        assert!(selectors.contains(&Selector::Code(RuleCode("JJ-001"))));
+        assert!(selectors.contains(&Selector::Name(RuleName("no-edits-on-described-commits"))));
     }
 
     #[test]

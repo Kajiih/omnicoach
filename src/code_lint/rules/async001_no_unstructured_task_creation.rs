@@ -3,7 +3,7 @@
 use crate::code_lint::{calls, CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
 use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+    Diagnostic, LocationContext, RuleName, SourceLocation, SourceSpan, ViolationMessage,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -35,10 +35,6 @@ pub type NoUnstructuredTaskCreationConfig = DynamicRuleConfig<DenyListConfig>;
 pub struct NoUnstructuredTaskCreation;
 
 impl Rule for NoUnstructuredTaskCreation {
-    fn code(&self) -> RuleCode {
-        RuleCode("ASYNC-001")
-    }
-
     fn name(&self) -> RuleName {
         RuleName("no-unstructured-task-creation")
     }
@@ -72,7 +68,6 @@ impl CodeRule for NoUnstructuredTaskCreation {
             .map(|call_match| {
                 let call_name = call_match.callee;
                 Diagnostic::new(
-                    self.code(),
                     self.name(),
                     ViolationMessage {
                         summary: format!("Unstructured task creation `{call_name}()` is discouraged."),
@@ -112,15 +107,15 @@ async def worker():
     t7 = asyncio.get_event_loop().create_task(do_work())
 ";
 
-        insta::assert_snapshot!(assert_code_rule_snapshot(&NoUnstructuredTaskCreation, source, "service.py"), @r###"
-        [ASYNC-001] Line 5, Col 10: Unstructured task creation `asyncio.create_task()` is discouraged.
-        [ASYNC-001] Line 6, Col 10: Unstructured task creation `asyncio.ensure_future()` is discouraged.
-        [ASYNC-001] Line 7, Col 10: Unstructured task creation `create_task()` is discouraged.
-        [ASYNC-001] Line 8, Col 10: Unstructured task creation `ensure_future()` is discouraged.
-        [ASYNC-001] Line 9, Col 10: Unstructured task creation `loop.create_task()` is discouraged.
-        [ASYNC-001] Line 10, Col 10: Unstructured task creation `event_loop.create_task()` is discouraged.
-        [ASYNC-001] Line 11, Col 10: Unstructured task creation `asyncio.get_event_loop().create_task()` is discouraged.
-        "###);
+        insta::assert_snapshot!(assert_code_rule_snapshot(&NoUnstructuredTaskCreation, source, "service.py"), @"
+        [no-unstructured-task-creation] Line 5, Col 10: Unstructured task creation `asyncio.create_task()` is discouraged.
+        [no-unstructured-task-creation] Line 6, Col 10: Unstructured task creation `asyncio.ensure_future()` is discouraged.
+        [no-unstructured-task-creation] Line 7, Col 10: Unstructured task creation `create_task()` is discouraged.
+        [no-unstructured-task-creation] Line 8, Col 10: Unstructured task creation `ensure_future()` is discouraged.
+        [no-unstructured-task-creation] Line 9, Col 10: Unstructured task creation `loop.create_task()` is discouraged.
+        [no-unstructured-task-creation] Line 10, Col 10: Unstructured task creation `event_loop.create_task()` is discouraged.
+        [no-unstructured-task-creation] Line 11, Col 10: Unstructured task creation `asyncio.get_event_loop().create_task()` is discouraged.
+        ");
     }
 
     #[test]
@@ -151,7 +146,7 @@ async def handle_requests():
 import asyncio
 
 async def background_poller():
-    task = asyncio.create_task(poll())  # omni:ignore [ASYNC-001] -- legacy daemon loop
+    task = asyncio.create_task(poll())  # omni:ignore [no-unstructured-task-creation] -- legacy daemon loop
 ";
 
         let config = Config::default();
@@ -178,8 +173,6 @@ allowed = ["loop.create_task"]
             "service.py",
             &config,
         );
-        insta::assert_snapshot!(output, @r###"
-        [ASYNC-001] Line 3, Col 5: Unstructured task creation `custom_scheduler.spawn_background()` is discouraged.
-        "###);
+        insta::assert_snapshot!(output, @"[no-unstructured-task-creation] Line 3, Col 5: Unstructured task creation `custom_scheduler.spawn_background()` is discouraged.");
     }
 }

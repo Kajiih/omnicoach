@@ -40,7 +40,7 @@ pub fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
     }
 }
 
-use crate::diagnostic::{RuleCode, RuleName};
+use crate::diagnostic::RuleName;
 use crate::rules::Tag;
 
 /// VCS001: Blocks running `jj edit <revision>` if the target revision has a non-empty description.
@@ -66,9 +66,6 @@ impl NoJJEditOnDescribedCommits {
 }
 
 impl Rule for NoJJEditOnDescribedCommits {
-    fn code(&self) -> RuleCode {
-        RuleCode("JJ-001")
-    }
     fn name(&self) -> RuleName {
         RuleName("no-edits-on-described-commits")
     }
@@ -105,7 +102,6 @@ impl crate::command_lint::CommandRule for NoJJEditOnDescribedCommits {
         let message = Self::format_message(&violation);
 
         vec![Diagnostic::new(
-            self.code(),
             self.name(),
             message,
             SourceLocation {
@@ -150,9 +146,7 @@ mod tests {
             &jj_client,
             &config,
         );
-        insta::assert_snapshot!(output, @r###"
-        [JJ-001] Line 1, Col 1: Running `jj edit d123` on a described commit is discouraged.
-        "###);
+        insta::assert_snapshot!(output, @"[no-edits-on-described-commits] Line 1, Col 1: Running `jj edit d123` on a described commit is discouraged.");
 
         // Allow empty/anonymous commit edit
         let output_allowed = crate::test_utils::assert_command_rule_snapshot(

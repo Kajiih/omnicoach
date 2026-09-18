@@ -4,8 +4,7 @@ use crate::code_lint::calls::{self, CallMatch};
 use crate::code_lint::{CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
 use crate::diagnostic::{
-    violation_template, Diagnostic, RuleCode, RuleName, SourceLocation, ViolationMessage,
-    ViolationTemplate,
+    violation_template, Diagnostic, RuleName, SourceLocation, ViolationMessage, ViolationTemplate,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -32,10 +31,6 @@ pub type NoSleepInTestsConfig = DynamicRuleConfig<DenyListConfig>;
 pub struct NoSleepInTests;
 
 impl Rule for NoSleepInTests {
-    fn code(&self) -> RuleCode {
-        RuleCode("TEST-001")
-    }
-
     fn name(&self) -> RuleName {
         RuleName("no-sleep-in-tests")
     }
@@ -149,13 +144,13 @@ async def test_polling():
 
         insta::assert_snapshot!(
             assert_code_rule_snapshot(&NoSleepInTests, source, "tests/test_worker.py"),
-            @r###"
-        [TEST-001] Line 7, Col 5: Wall-clock or async sleep `time.sleep()` in test is discouraged.
-        [TEST-001] Line 8, Col 11: Wall-clock or async sleep `asyncio.sleep()` in test is discouraged.
-        [TEST-001] Line 9, Col 11: Wall-clock or async sleep `anyio.sleep()` in test is discouraged.
-        [TEST-001] Line 10, Col 5: Wall-clock or async sleep `sleep()` in test is discouraged.
-        [TEST-001] Line 11, Col 11: Zero-duration sleep `asyncio.sleep(0)` in test is discouraged.
-        "###
+            @"
+        [no-sleep-in-tests] Line 7, Col 5: Wall-clock or async sleep `time.sleep()` in test is discouraged.
+        [no-sleep-in-tests] Line 8, Col 11: Wall-clock or async sleep `asyncio.sleep()` in test is discouraged.
+        [no-sleep-in-tests] Line 9, Col 11: Wall-clock or async sleep `anyio.sleep()` in test is discouraged.
+        [no-sleep-in-tests] Line 10, Col 5: Wall-clock or async sleep `sleep()` in test is discouraged.
+        [no-sleep-in-tests] Line 11, Col 11: Zero-duration sleep `asyncio.sleep(0)` in test is discouraged.
+        "
         );
     }
 
@@ -177,13 +172,13 @@ async fn test_retry_backoff() {
 
         insta::assert_snapshot!(
             assert_code_rule_snapshot(&NoSleepInTests, source, "tests/retry_test.rs"),
-            @r###"
-        [TEST-001] Line 6, Col 5: Wall-clock or async sleep `std::thread::sleep()` in test is discouraged.
-        [TEST-001] Line 7, Col 5: Wall-clock or async sleep `thread::sleep()` in test is discouraged.
-        [TEST-001] Line 8, Col 5: Wall-clock or async sleep `tokio::time::sleep()` in test is discouraged.
-        [TEST-001] Line 9, Col 5: Wall-clock or async sleep `sleep()` in test is discouraged.
-        [TEST-001] Line 10, Col 5: Zero-duration sleep `tokio::time::sleep(Duration::ZERO)` in test is discouraged.
-        "###
+            @"
+        [no-sleep-in-tests] Line 6, Col 5: Wall-clock or async sleep `std::thread::sleep()` in test is discouraged.
+        [no-sleep-in-tests] Line 7, Col 5: Wall-clock or async sleep `thread::sleep()` in test is discouraged.
+        [no-sleep-in-tests] Line 8, Col 5: Wall-clock or async sleep `tokio::time::sleep()` in test is discouraged.
+        [no-sleep-in-tests] Line 9, Col 5: Wall-clock or async sleep `sleep()` in test is discouraged.
+        [no-sleep-in-tests] Line 10, Col 5: Zero-duration sleep `tokio::time::sleep(Duration::ZERO)` in test is discouraged.
+        "
         );
     }
 
@@ -221,7 +216,7 @@ def run_daemon():
         let test_diags =
             crate::code_lint::lint_file(Path::new("tests/test_daemon.py"), source, &config);
         assert_eq!(test_diags.len(), 1);
-        assert_eq!(test_diags[0].rule_code, RuleCode("TEST-001"));
+        assert_eq!(test_diags[0].rule_name, RuleName("no-sleep-in-tests"));
     }
 
     #[test]
@@ -242,6 +237,6 @@ mod tests {
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("src/worker.rs"), source, &config);
         assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule_code, RuleCode("TEST-001"));
+        assert_eq!(diags[0].rule_name, RuleName("no-sleep-in-tests"));
     }
 }

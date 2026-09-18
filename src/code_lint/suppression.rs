@@ -3,7 +3,7 @@
 use crate::code_lint::{AstNode, CodeRule, SourceDoc};
 use crate::core::{Config, Rule};
 use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+    Diagnostic, LocationContext, RuleName, SourceLocation, SourceSpan, ViolationMessage,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -11,14 +11,28 @@ use ast_grep_language::SupportLang;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-/// SUPP-001: Flags suppression directives missing a non-empty explanation reason.
+/// Legacy rule code aliases mapped to their canonical rule names for migration diagnostics.
+const LEGACY_CODE_ALIASES: &[(&str, &str)] = &[
+    ("NAME-001", "single-letter-variable-name"),
+    ("NAME-002", "banned-abbreviations"),
+    ("NAME-003", "no-hungarian-notation"),
+    ("SCOPE-001", "flat-scope-enforced"),
+    ("LOG-001", "no-logging-in-except"),
+    ("ASYNC-001", "no-unstructured-task-creation"),
+    ("TEST-001", "no-sleep-in-tests"),
+    ("TEST-002", "max-test-assertions"),
+    ("TEST-003", "no-assertion-packing"),
+    ("SUPP-001", "missing-suppression-reason"),
+    ("SUPP-002", "unused-suppression"),
+    ("SUPP-003", "unknown-suppression-rule"),
+    ("SUPP-004", "blanket-suppression"),
+    ("JJ-001", "no-edits-on-described-commits"),
+];
+
+/// Flags suppression directives missing a non-empty explanation reason.
 pub struct MissingSuppressionReason;
 
 impl Rule for MissingSuppressionReason {
-    fn code(&self) -> RuleCode {
-        RuleCode("SUPP-001")
-    }
-
     fn name(&self) -> RuleName {
         RuleName("missing-suppression-reason")
     }
@@ -44,14 +58,10 @@ impl CodeRule for MissingSuppressionReason {
     }
 }
 
-/// SUPP-002: Flags suppression directives when no violation occurred for the specified rule.
+/// Flags suppression directives when no violation occurred for the specified rule.
 pub struct UnusedSuppression;
 
 impl Rule for UnusedSuppression {
-    fn code(&self) -> RuleCode {
-        RuleCode("SUPP-002")
-    }
-
     fn name(&self) -> RuleName {
         RuleName("unused-suppression")
     }
@@ -77,16 +87,12 @@ impl CodeRule for UnusedSuppression {
     }
 }
 
-/// SUPP-003: Flags suppression directives targeting unknown or non-suppressible rule codes.
-pub struct UnknownSuppressionCode;
+/// Flags suppression directives targeting unknown or non-suppressible rules.
+pub struct UnknownSuppressionRule;
 
-impl Rule for UnknownSuppressionCode {
-    fn code(&self) -> RuleCode {
-        RuleCode("SUPP-003")
-    }
-
+impl Rule for UnknownSuppressionRule {
     fn name(&self) -> RuleName {
-        RuleName("unknown-suppression-code")
+        RuleName("unknown-suppression-rule")
     }
 
     fn tags(&self) -> &'static [Tag] {
@@ -98,7 +104,7 @@ impl Rule for UnknownSuppressionCode {
     }
 }
 
-impl CodeRule for UnknownSuppressionCode {
+impl CodeRule for UnknownSuppressionRule {
     fn check_file(
         &self,
         _path: &Path,
@@ -110,14 +116,10 @@ impl CodeRule for UnknownSuppressionCode {
     }
 }
 
-/// SUPP-004: Flags blanket suppression directives that omit explicit rule codes.
+/// Flags blanket suppression directives that omit explicit rule names.
 pub struct BlanketSuppression;
 
 impl Rule for BlanketSuppression {
-    fn code(&self) -> RuleCode {
-        RuleCode("SUPP-004")
-    }
-
     fn name(&self) -> RuleName {
         RuleName("blanket-suppression")
     }
@@ -189,13 +191,13 @@ pub struct ParsedDirective {
     pub span: SourceSpan,
     /// The 1-indexed line number where the directive comment resides.
     pub raw_line: usize,
-    /// Rule codes targeted by the directive (e.g. `["NAME-001"]`).
-    pub target_codes: Vec<String>,
+    /// Rule names targeted by the directive (e.g. `["single-letter-variable-name"]`).
+    pub target_rules: Vec<String>,
     /// Optional explanatory reason provided after `--`.
     pub reason: Option<String>,
-    /// Whether the directive omitted bracketed rule codes (`[...]`).
+    /// Whether the directive omitted bracketed rule names (`[...]`).
     pub is_blanket: bool,
-    /// Counter of violations matched and suppressed for each target code.
+    /// Counter of violations matched and suppressed for each target rule.
     pub matched_count: HashMap<String, usize>,
 }
 
@@ -277,20 +279,20 @@ impl SuppressionTracker {
             return None;
         }
 
-        // Parse bracketed codes and remainder
+        // Parse bracketed rules and remainder
         let remainder_trimmed = remainder.trim_start();
-        let (target_codes, is_blanket, after_codes) = if remainder_trimmed.starts_with('[') {
+        let (target_rules, is_blanket, after_rules) = if remainder_trimmed.starts_with('[') {
             remainder_trimmed.find(']').map_or_else(
                 || (Vec::new(), true, remainder_trimmed),
                 |close_idx| {
-                    let raw_codes = &remainder_trimmed[1..close_idx];
-                    let codes: Vec<String> = raw_codes
+                    let raw_rules = &remainder_trimmed[1..close_idx];
+                    let rules: Vec<String> = raw_rules
                         .split(',')
                         .map(|segment| segment.trim().to_string())
                         .filter(|segment| !segment.is_empty())
                         .collect();
-                    let blanket = codes.is_empty();
-                    (codes, blanket, &remainder_trimmed[close_idx + 1..])
+                    let blanket = rules.is_empty();
+                    (rules, blanket, &remainder_trimmed[close_idx + 1..])
                 },
             )
         } else {
@@ -298,7 +300,7 @@ impl SuppressionTracker {
         };
 
         // Parse reason after '--'
-        let reason = after_codes
+        let reason = after_rules
             .trim_start()
             .strip_prefix("--")
             .map(str::trim)
@@ -325,22 +327,22 @@ impl SuppressionTracker {
         };
 
         let mut matched_count = HashMap::new();
-        for code in &target_codes {
-            matched_count.insert(code.clone(), 0);
+        for rule in &target_rules {
+            matched_count.insert(rule.clone(), 0);
         }
 
         Some(ParsedDirective {
             placement,
             span,
             raw_line,
-            target_codes,
+            target_rules,
             reason,
             is_blanket,
             matched_count,
         })
     }
 
-    /// Filters diagnostics against active directives, marking matched codes as used.
+    /// Filters diagnostics against active directives, marking matched rules as used.
     #[must_use]
     pub fn filter_diagnostics(
         &mut self,
@@ -356,7 +358,7 @@ impl SuppressionTracker {
 
         for diagnostic in diagnostics {
             let diagnostic_line = line_index.lookup(diagnostic.location.span.start).line;
-            let rule_code = diagnostic.rule_code.0;
+            let rule_name = diagnostic.rule_name.0;
 
             let mut suppressed = false;
 
@@ -369,9 +371,9 @@ impl SuppressionTracker {
                     }
                 };
 
-                if matches_line && directive.target_codes.iter().any(|c| c == rule_code) {
+                if matches_line && directive.target_rules.iter().any(|rule| rule == rule_name) {
                     suppressed = true;
-                    if let Some(count) = directive.matched_count.get_mut(rule_code) {
+                    if let Some(count) = directive.matched_count.get_mut(rule_name) {
                         *count += 1;
                     }
                 }
@@ -385,26 +387,26 @@ impl SuppressionTracker {
         retained
     }
 
-    /// Audits all parsed directives and emits `SUPP-*` diagnostics according to configuration.
+    /// Audits all parsed directives and emits suppression diagnostics according to configuration.
     #[must_use]
     pub fn audit(&self, path: &Path, _content: &str, config: &Config) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
 
         let missing_reason_rule = MissingSuppressionReason;
         let unused_rule = UnusedSuppression;
-        let unknown_code_rule = UnknownSuppressionCode;
+        let unknown_rule = UnknownSuppressionRule;
         let blanket_rule = BlanketSuppression;
 
         let check_missing_reason = config.is_rule_enabled_for_path(&missing_reason_rule, path);
         let check_unused = config.is_rule_enabled_for_path(&unused_rule, path);
-        let check_unknown = config.is_rule_enabled_for_path(&unknown_code_rule, path);
+        let check_unknown = config.is_rule_enabled_for_path(&unknown_rule, path);
         let check_blanket = config.is_rule_enabled_for_path(&blanket_rule, path);
 
-        // Build set of all known suppressible rule codes (code rules excluding SUPP)
-        let mut suppressible_codes: HashSet<&'static str> = HashSet::new();
+        // Build set of all known suppressible rule names (code rules excluding suppression tags)
+        let mut suppressible_rules: HashSet<&'static str> = HashSet::new();
         for rule in crate::rules::CODE_RULES {
             if !rule.tags().contains(&Tag::Suppression) {
-                suppressible_codes.insert(rule.code().0);
+                suppressible_rules.insert(rule.name().0);
             }
         }
 
@@ -413,45 +415,51 @@ impl SuppressionTracker {
         for directive in &self.directives {
             let location = SourceLocation { context: context.clone(), span: directive.span };
 
-            // SUPP-004: Blanket suppression
+            // Blanket suppression
             if directive.is_blanket && check_blanket {
                 diagnostics.push(Diagnostic::new(
-                    blanket_rule.code(),
                     blanket_rule.name(),
                     ViolationMessage {
-                        summary: "Blanket suppression directives without rule codes are banned.".to_string(),
-                        rationale: "Directives must explicitly target rule codes in brackets (e.g. `[CODE]`) to prevent unintended rule suppression.".to_string(),
-                        suggestion: "Specify the explicit rule codes in brackets, e.g. `[RULE-CODE] -- reason`.".to_string(),
+                        summary: "Blanket suppression directives without rule names are banned.".to_string(),
+                        rationale: "Directives must explicitly target rule names in brackets (e.g. `[rule-name]`) to prevent unintended rule suppression.".to_string(),
+                        suggestion: "Specify the explicit rule names in brackets, e.g. `[rule-name] -- reason`.".to_string(),
                     },
                     location.clone(),
                 ));
             }
 
-            // SUPP-001: Missing or empty explanation reason
+            // Missing or empty explanation reason
             if check_missing_reason && directive.reason.is_none() {
                 diagnostics.push(Diagnostic::new(
-                    missing_reason_rule.code(),
                     missing_reason_rule.name(),
                     ViolationMessage {
                         summary: "Suppression directive is missing an explanation reason.".to_string(),
                         rationale: "Suppression directives must include an explanation via '-- <reason>' to ensure code review accountability.".to_string(),
-                        suggestion: "Add '-- <reason>' after the rule codes explaining why this suppression is necessary.".to_string(),
+                        suggestion: "Add '-- <reason>' after the rule names explaining why this suppression is necessary.".to_string(),
                     },
                     location.clone(),
                 ));
             }
 
-            // SUPP-003: Unknown or non-suppressible rule code
+            // Unknown or non-suppressible rule
             if check_unknown {
-                for code in &directive.target_codes {
-                    if !suppressible_codes.contains(code.as_str()) {
+                for target_rule in &directive.target_rules {
+                    if !suppressible_rules.contains(target_rule.as_str()) {
+                        let suggestion = if let Some((_, canonical)) =
+                            LEGACY_CODE_ALIASES.iter().find(|(old, _)| *old == target_rule.as_str())
+                        {
+                            format!("`{target_rule}` is an obsolete rule code. Replace with `{canonical}`.")
+                        } else {
+                            "Verify the rule name spelling or check if the rule is registered."
+                                .to_string()
+                        };
+
                         diagnostics.push(Diagnostic::new(
-                            unknown_code_rule.code(),
-                            unknown_code_rule.name(),
+                            unknown_rule.name(),
                             ViolationMessage {
-                                summary: format!("Unknown rule code `{code}` in suppression directive."),
-                                rationale: "The specified rule code is not registered as a suppressible rule in Omni.".to_string(),
-                                suggestion: "Verify the rule code spelling or check if the rule is registered.".to_string(),
+                                summary: format!("Unknown rule `{target_rule}` in suppression directive."),
+                                rationale: "The specified rule is not registered as a suppressible rule in Omni.".to_string(),
+                                suggestion,
                             },
                             location.clone(),
                         ));
@@ -459,20 +467,19 @@ impl SuppressionTracker {
                 }
             }
 
-            // SUPP-002: Unused suppression
+            // Unused suppression
             if check_unused && !directive.is_blanket {
-                for code in &directive.target_codes {
-                    // Only flag known codes as unused (avoid redundant dual flagging with 003)
-                    if suppressible_codes.contains(code.as_str())
-                        && directive.matched_count.get(code).copied().unwrap_or(0) == 0
+                for target_rule in &directive.target_rules {
+                    // Only flag known rules as unused (avoid redundant dual flagging with unknown rule)
+                    if suppressible_rules.contains(target_rule.as_str())
+                        && directive.matched_count.get(target_rule).copied().unwrap_or(0) == 0
                     {
                         diagnostics.push(Diagnostic::new(
-                            unused_rule.code(),
                             unused_rule.name(),
                             ViolationMessage {
-                                summary: format!("Suppression directive for rule `{code}` is unused."),
+                                summary: format!("Suppression directive for rule `{target_rule}` is unused."),
                                 rationale: "No violation occurred for this rule; obsolete suppressions cause dead comments and confusion.".to_string(),
-                                suggestion: format!("Remove `{code}` from the suppression directive."),
+                                suggestion: format!("Remove `{target_rule}` from the suppression directive."),
                             },
                             location.clone(),
                         ));
@@ -492,13 +499,13 @@ mod tests {
 
     #[test]
     fn test_parse_valid_inline_directive_same_line() {
-        let content = "let a = 1; // omni:ignore [NAME-001] -- math variable";
+        let content = "let a = 1; // omni:ignore [single-letter-variable-name] -- math variable";
         let grep = AstGrep::new(content, SupportLang::Rust);
         let tracker = SuppressionTracker::from_ast(&grep, content);
 
         assert_eq!(tracker.directives.len(), 1);
         let directive = &tracker.directives[0];
-        assert_eq!(directive.target_codes, vec!["NAME-001"]);
+        assert_eq!(directive.target_rules, vec!["single-letter-variable-name"]);
         assert_eq!(
             (directive.reason.as_deref(), directive.is_blanket),
             (Some("math variable"), false)
@@ -508,13 +515,14 @@ mod tests {
 
     #[test]
     fn test_parse_valid_inline_directive_preceding_line() {
-        let content = "# omni:ignore [SCOPE-001] -- required for fixture\ndef inner(): pass";
+        let content =
+            "# omni:ignore [flat-scope-enforced] -- required for fixture\ndef inner(): pass";
         let grep = AstGrep::new(content, SupportLang::Python);
         let tracker = SuppressionTracker::from_ast(&grep, content);
 
         assert_eq!(tracker.directives.len(), 1);
         let directive = &tracker.directives[0];
-        assert_eq!(directive.target_codes, vec!["SCOPE-001"]);
+        assert_eq!(directive.target_rules, vec!["flat-scope-enforced"]);
         assert_eq!(
             (directive.reason.as_deref(), directive.is_blanket),
             (Some("required for fixture"), false)
@@ -528,13 +536,16 @@ mod tests {
     #[test]
     fn test_parse_file_level_directive() {
         let content =
-            "# omni:disable-file [SCOPE-001, NAME-001] -- legacy generated file\ndef foo(): pass";
+            "# omni:disable-file [flat-scope-enforced, single-letter-variable-name] -- legacy generated file\ndef foo(): pass";
         let grep = AstGrep::new(content, SupportLang::Python);
         let tracker = SuppressionTracker::from_ast(&grep, content);
 
         assert_eq!(tracker.directives.len(), 1);
         let directive = &tracker.directives[0];
-        assert_eq!(directive.target_codes, vec!["SCOPE-001", "NAME-001"]);
+        assert_eq!(
+            directive.target_rules,
+            vec!["flat-scope-enforced", "single-letter-variable-name"]
+        );
         assert_eq!(directive.reason.as_deref(), Some("legacy generated file"));
         assert_eq!(directive.placement, DirectivePlacement::File);
     }
@@ -551,7 +562,7 @@ mod tests {
 
     #[test]
     fn test_valid_inline_suppression_silences_violation() {
-        let content = "a = 1  # omni:ignore [NAME-001] -- math variable";
+        let content = "a = 1  # omni:ignore [single-letter-variable-name] -- math variable";
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
         assert!(diags.is_empty(), "Expected 0 diagnostics, got: {diags:?}");
@@ -559,7 +570,7 @@ mod tests {
 
     #[test]
     fn test_valid_preceding_line_suppression_silences_violation() {
-        let content = "# omni:ignore [NAME-001] -- math variable\na = 1";
+        let content = "# omni:ignore [single-letter-variable-name] -- math variable\na = 1";
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
         assert!(diags.is_empty(), "Expected 0 diagnostics, got: {diags:?}");
@@ -567,49 +578,64 @@ mod tests {
 
     #[test]
     fn test_unused_suppression_flagged() {
-        let content = "clean_name = 1  # omni:ignore [NAME-001] -- math variable";
+        let content =
+            "clean_name = 1  # omni:ignore [single-letter-variable-name] -- math variable";
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("clean.py"), content, &config);
         assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule_code.0, "SUPP-002");
+        assert_eq!(diags[0].rule_name.0, "unused-suppression");
     }
 
     #[test]
     fn test_missing_reason_flagged() {
-        let content = "a = 1  # omni:ignore [NAME-001]";
+        let content = "a = 1  # omni:ignore [single-letter-variable-name]";
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
-        assert!(diags.iter().any(|d| d.rule_code.0 == "SUPP-001"));
+        assert!(diags.iter().any(|diag| diag.rule_name.0 == "missing-suppression-reason"));
     }
 
     #[test]
     fn test_empty_reason_flagged() {
-        let content = "a = 1  # omni:ignore [NAME-001] --    ";
+        let content = "a = 1  # omni:ignore [single-letter-variable-name] --    ";
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
-        assert!(diags.iter().any(|d| d.rule_code.0 == "SUPP-001"));
+        assert!(diags.iter().any(|diag| diag.rule_name.0 == "missing-suppression-reason"));
     }
 
     #[test]
-    fn test_unknown_rule_code_flagged() {
-        let content = "a = 1  # omni:ignore [NON-EXISTENT-999] -- reason";
+    fn test_unknown_rule_flagged() {
+        let content = "a = 1  # omni:ignore [non-existent-rule] -- reason";
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
-        assert!(diags.iter().any(|d| d.rule_code.0 == "SUPP-003"));
+        assert!(diags.iter().any(|diag| diag.rule_name.0 == "unknown-suppression-rule"));
+    }
+
+    #[test]
+    fn test_legacy_rule_code_provides_hint() {
+        let content = "a = 1  # omni:ignore [NAME-001] -- legacy code";
+        let config = Config::default();
+        let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
+        let unknown = diags
+            .iter()
+            .find(|diagnostic| diagnostic.rule_name.0 == "unknown-suppression-rule")
+            .expect("Expected unknown-suppression-rule diagnostic");
+        assert!(unknown.message.suggestion.contains(
+            "`NAME-001` is an obsolete rule code. Replace with `single-letter-variable-name`."
+        ));
     }
 
     #[test]
     fn test_blanket_suppression_flagged() {
-        let content = "a = 1  # omni:ignore -- missing rule codes";
+        let content = "a = 1  # omni:ignore -- missing rule names";
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
-        assert!(diags.iter().any(|d| d.rule_code.0 == "SUPP-004"));
+        assert!(diags.iter().any(|diag| diag.rule_name.0 == "blanket-suppression"));
     }
 
     #[test]
     fn test_file_level_suppression_targets_specific_rule() {
         let content = indoc::indoc! {r"
-            # omni:disable-file [SCOPE-001] -- legacy nested functions
+            # omni:disable-file [flat-scope-enforced] -- legacy nested functions
             def outer():
                 def inner():
                     a = 1
@@ -617,15 +643,15 @@ mod tests {
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("src/module.py"), content, &config);
 
-        // SCOPE-001 should be suppressed, but NAME-001 should be reported!
+        // flat-scope-enforced should be suppressed, but single-letter-variable-name should be reported!
         assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule_code.0, "NAME-001");
+        assert_eq!(diags[0].rule_name.0, "single-letter-variable-name");
     }
 
     #[test]
     fn test_file_level_unused_suppression_flagged() {
         let content = indoc::indoc! {r"
-            # omni:disable-file [LOG-001] -- unused file disable
+            # omni:disable-file [no-logging-in-except] -- unused file disable
             def clean():
                 pass
         "};
@@ -633,14 +659,14 @@ mod tests {
         let diags = crate::code_lint::lint_file(Path::new("src/module.py"), content, &config);
 
         assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule_code.0, "SUPP-002");
+        assert_eq!(diags[0].rule_name.0, "unused-suppression");
     }
 
     #[test]
     fn test_suppressing_supp_in_config() {
-        let content = "clean_name = 1  # omni:ignore [NAME-001] -- intentional dormant suppression";
+        let content = "clean_name = 1  # omni:ignore [single-letter-variable-name] -- intentional dormant suppression";
         let toml_content = r#"
-            ignore = ["SUPP-002"]
+            ignore = ["unused-suppression"]
         "#;
         let config: Config = toml::from_str(toml_content).unwrap();
         let diags = crate::code_lint::lint_file(Path::new("src/template.py"), content, &config);
@@ -650,11 +676,12 @@ mod tests {
 
     #[test]
     fn test_string_literal_does_not_trigger_suppression() {
-        let content = r##"sample_text = "# omni:ignore [NAME-001] -- not a comment""##;
+        let content =
+            r##"sample_text = "# omni:ignore [single-letter-variable-name] -- not a comment""##;
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("src/test_case.py"), content, &config);
 
-        // Does not trigger SUPP-002 for unused suppression since it's a string literal, not a comment
+        // Does not trigger unused-suppression since it's a string literal, not a comment
         assert!(diags.is_empty(), "Expected 0 diagnostics, got: {diags:?}");
     }
 
@@ -665,21 +692,21 @@ mod tests {
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("src/test.py"), content, &config);
 
-        // Should flag NAME-001 violation, and NOT flag SUPP-004 (blanket suppression)
+        // Should flag single-letter-variable-name violation, and NOT flag blanket-suppression
         assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule_code.0, "NAME-001");
+        assert_eq!(diags[0].rule_name.0, "single-letter-variable-name");
     }
 
     #[test]
     fn test_command_rule_in_code_flagged_as_unknown() {
-        // JJ-001 is a command rule and cannot be suppressed in code files
-        let content = "a = 1  # omni:ignore [JJ-001] -- invalid code rule";
+        // no-edits-on-described-commits is a command rule and cannot be suppressed in code files
+        let content = "a = 1  # omni:ignore [no-edits-on-described-commits] -- invalid code rule";
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("src/test.py"), content, &config);
 
         assert!(
-            diags.iter().any(|d| d.rule_code.0 == "SUPP-003"),
-            "Expected SUPP-003 for non-code rule in code directive, got: {diags:?}"
+            diags.iter().any(|diag| diag.rule_name.0 == "unknown-suppression-rule"),
+            "Expected unknown-suppression-rule for non-code rule in code directive, got: {diags:?}"
         );
     }
 }

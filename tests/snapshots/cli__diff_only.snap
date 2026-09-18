@@ -5,7 +5,7 @@ expression: output_diff
 --- exit code ---
 1
 --- stdout ---
-[TEMP_PATH]/test.py:5:5: [SCOPE-001] Nested function definition `world` is discouraged.
+[TEMP_PATH]/test.py:5:5: [flat-scope-enforced] Nested function definition `world` is discouraged.
   Rationale: Nested functions increase cognitive complexity and reduce testability.
   Suggestion: Move `world` to the module level or convert to a private helper.
 

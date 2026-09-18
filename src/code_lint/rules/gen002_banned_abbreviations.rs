@@ -3,7 +3,7 @@
 use crate::code_lint::CodeRule;
 use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
 use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+    Diagnostic, LocationContext, RuleName, SourceLocation, SourceSpan, ViolationMessage,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -19,8 +19,7 @@ const DEFAULT_BANNED: FilterListDefaults = FilterListDefaults {
     extend: &[],
     // In Rust, `str` is a primitive type keyword rather than an abbreviation, and it is
     // load-bearing in conventional conversion names (`as_str`, `to_str`, `from_str`).
-    // Hungarian `_str` type suffixes remain covered by NAME-003.
-    // TODO: lints ids like NAME-003 are not explicit, we should rather use the actual name to make it understandable, same for the ignore comments
+    // Hungarian `_str` type suffixes remain covered by no-hungarian-notation.
     exempt: &[(SupportLang::Rust, &["str"])],
 };
 
@@ -63,10 +62,6 @@ fn split_segments(name: &str) -> Vec<String> {
 pub struct BannedAbbreviations;
 
 impl Rule for BannedAbbreviations {
-    fn code(&self) -> RuleCode {
-        RuleCode("NAME-002")
-    }
-
     fn name(&self) -> RuleName {
         RuleName("banned-abbreviations")
     }
@@ -106,7 +101,6 @@ impl CodeRule for BannedAbbreviations {
             for segment in segments {
                 if effective_banned.contains(&segment) {
                     diagnostics.push(Diagnostic::new(
-                        self.code(),
                         self.name(),
                         ViolationMessage {
                             summary: format!("Definition name `{name}` contains banned abbreviation `{segment}`."),
@@ -148,13 +142,13 @@ mod tests {
             }
             struct MyRes;
         ";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
-        [NAME-002] Line 2, Col 46: Definition name `my_cfg` contains banned abbreviation `cfg`.
-        [NAME-002] Line 3, Col 16: Definition name `process_err` contains banned abbreviation `err`.
-        [NAME-002] Line 4, Col 21: Definition name `ctx` contains banned abbreviation `ctx`.
-        [NAME-002] Line 5, Col 21: Definition name `my_cfg_val` contains banned abbreviation `cfg`.
-        [NAME-002] Line 7, Col 20: Definition name `MyRes` contains banned abbreviation `res`.
-        "###);
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @"
+        [banned-abbreviations] Line 2, Col 46: Definition name `my_cfg` contains banned abbreviation `cfg`.
+        [banned-abbreviations] Line 3, Col 16: Definition name `process_err` contains banned abbreviation `err`.
+        [banned-abbreviations] Line 4, Col 21: Definition name `ctx` contains banned abbreviation `ctx`.
+        [banned-abbreviations] Line 5, Col 21: Definition name `my_cfg_val` contains banned abbreviation `cfg`.
+        [banned-abbreviations] Line 7, Col 20: Definition name `MyRes` contains banned abbreviation `res`.
+        ");
     }
 
     #[test]
@@ -167,12 +161,12 @@ def handle_msg(msg):
     str_val = "hello"
     pass
         "#;
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
-        [NAME-002] Line 2, Col 14: Definition name `os_cfg` contains banned abbreviation `cfg`.
-        [NAME-002] Line 3, Col 5: Definition name `handle_msg` contains banned abbreviation `msg`.
-        [NAME-002] Line 3, Col 16: Definition name `msg` contains banned abbreviation `msg`.
-        [NAME-002] Line 4, Col 5: Definition name `str_val` contains banned abbreviation `str`.
-        "###);
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @"
+        [banned-abbreviations] Line 2, Col 14: Definition name `os_cfg` contains banned abbreviation `cfg`.
+        [banned-abbreviations] Line 3, Col 5: Definition name `handle_msg` contains banned abbreviation `msg`.
+        [banned-abbreviations] Line 3, Col 16: Definition name `msg` contains banned abbreviation `msg`.
+        [banned-abbreviations] Line 4, Col 5: Definition name `str_val` contains banned abbreviation `str`.
+        ");
     }
 
     #[test]
@@ -189,9 +183,7 @@ def handle_msg(msg):
 
         // Python keeps the base ban, since `str` is a plain abbreviation there.
         let py_source = "def to_str():\n    pass\n";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, py_source, "test.py"), @r###"
-        [NAME-002] Line 1, Col 5: Definition name `to_str` contains banned abbreviation `str`.
-        "###);
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, py_source, "test.py"), @"[banned-abbreviations] Line 1, Col 5: Definition name `to_str` contains banned abbreviation `str`.");
     }
 
     #[test]
@@ -210,10 +202,10 @@ def handle_msg(msg):
                 fn from_ctx(&self) {}
             }
         ";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
-        [NAME-002] Line 4, Col 36: Definition name `msg` contains banned abbreviation `msg`.
-        [NAME-002] Line 7, Col 20: Definition name `from_ctx` contains banned abbreviation `ctx`.
-        "###);
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @"
+        [banned-abbreviations] Line 4, Col 36: Definition name `msg` contains banned abbreviation `msg`.
+        [banned-abbreviations] Line 7, Col 20: Definition name `from_ctx` contains banned abbreviation `ctx`.
+        ");
     }
 
     #[test]
@@ -229,9 +221,7 @@ def handle_msg(msg):
 
         // 'err' should be allowed now, but 'my_foo' should violate
         let source = "fn main() { let err = 1; let my_foo = 2; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config), @r###"
-        [NAME-002] Line 1, Col 30: Definition name `my_foo` contains banned abbreviation `foo`.
-        "###);
+        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config), @"[banned-abbreviations] Line 1, Col 30: Definition name `my_foo` contains banned abbreviation `foo`.");
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, DynamicRuleConfig, LanguageDefaults, Rule, ThresholdConfig};
 use crate::diagnostic::{
-    violation_template, Diagnostic, RuleCode, RuleName, SourceLocation, ViolationTemplate,
+    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -30,10 +30,6 @@ const VIOLATION_TEMPLATE: ViolationTemplate = violation_template! {
 pub struct MaxTestAssertions;
 
 impl Rule for MaxTestAssertions {
-    fn code(&self) -> RuleCode {
-        RuleCode("TEST-002")
-    }
-
     fn name(&self) -> RuleName {
         RuleName("max-test-assertions")
     }
@@ -231,9 +227,7 @@ def test_kitchen_sink_endpoint(self, mock_service):
 
         insta::assert_snapshot!(
             assert_code_rule_snapshot(&MaxTestAssertions, source, "tests/test_api.py"),
-            @r###"
-        [TEST-002] Line 18, Col 5: Test function `test_kitchen_sink_endpoint` has 5 assertions, exceeding the maximum of 4.
-        "###
+            @"[max-test-assertions] Line 18, Col 5: Test function `test_kitchen_sink_endpoint` has 5 assertions, exceeding the maximum of 4."
         );
     }
 
@@ -267,9 +261,7 @@ fn verify_response_fields() {
 
         insta::assert_snapshot!(
             assert_code_rule_snapshot(&MaxTestAssertions, source, "tests/header_test.rs"),
-            @r###"
-        [TEST-002] Line 3, Col 4: Test function `parses_valid_header` has 5 assertions, exceeding the maximum of 4.
-        "###
+            @"[max-test-assertions] Line 3, Col 4: Test function `parses_valid_header` has 5 assertions, exceeding the maximum of 4."
         );
     }
 
@@ -281,7 +273,7 @@ def test_three_assertions():
     assert 2 == 2
     assert 3 == 3
 
-# omni:ignore [TEST-002] -- end-to-end state transition check
+# omni:ignore [max-test-assertions] -- end-to-end state transition check
 def test_suppressed_assertions():
     assert 1 == 1
     assert 2 == 2
@@ -300,14 +292,14 @@ max = 2
         );
         insta::assert_snapshot!(
             output,
-            @r###"
-        [TEST-002] Line 2, Col 5: Test function `test_three_assertions` has 3 assertions, exceeding the maximum of 2.
-        [TEST-002] Line 8, Col 5: Test function `test_suppressed_assertions` has 3 assertions, exceeding the maximum of 2.
-        "###
+            @"
+        [max-test-assertions] Line 2, Col 5: Test function `test_three_assertions` has 3 assertions, exceeding the maximum of 2.
+        [max-test-assertions] Line 8, Col 5: Test function `test_suppressed_assertions` has 3 assertions, exceeding the maximum of 2.
+        "
         );
 
         let diags = crate::code_lint::lint_file(Path::new("tests/test_custom.py"), source, &config);
         assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule_code, RuleCode("TEST-002"));
+        assert_eq!(diags[0].rule_name, RuleName("max-test-assertions"));
     }
 }

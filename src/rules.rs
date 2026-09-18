@@ -100,7 +100,7 @@ pub const CODE_RULES: &[&dyn crate::code_lint::CodeRule] = &[
     &crate::code_lint::rules::gen003_no_hungarian_notation::NoHungarianNotation,
     &crate::code_lint::suppression::MissingSuppressionReason,
     &crate::code_lint::suppression::UnusedSuppression,
-    &crate::code_lint::suppression::UnknownSuppressionCode,
+    &crate::code_lint::suppression::UnknownSuppressionRule,
     &crate::code_lint::suppression::BlanketSuppression,
 ];
 
@@ -114,24 +114,13 @@ mod tests {
     use std::collections::HashSet;
     use strum::IntoEnumIterator;
 
-    fn validate_rule(
-        rule: &(impl crate::core::Rule + ?Sized),
-        codes: &mut HashSet<&'static str>,
-        names: &mut HashSet<&'static str>,
-    ) {
-        let code = rule.code().0;
+    fn validate_rule(rule: &(impl crate::core::Rule + ?Sized), names: &mut HashSet<&'static str>) {
         let name = rule.name().0;
 
-        assert!(codes.insert(code), "Duplicate rule code found in registry: {code}");
         assert!(names.insert(name), "Duplicate rule name found in registry: {name}");
-        let parts: Vec<&str> = code.split('-').collect();
         assert!(
-            parts.len() == 2
-                && !parts[0].is_empty()
-                && parts[0].chars().all(|c| c.is_ascii_uppercase())
-                && parts[1].len() == 3
-                && parts[1].chars().all(|c| c.is_ascii_digit()),
-            "Rule code '{code}' does not match standard pattern ^[A-Z]+-[0-9]{{3}}$"
+            name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+            "Rule name '{name}' does not match standard kebab-case pattern"
         );
     }
 
@@ -144,27 +133,22 @@ mod tests {
     where
         R: crate::core::Rule + ?Sized,
     {
-        let mut codes = HashSet::new();
         let mut names = HashSet::new();
         for rule in rules {
-            validate_rule(*rule, &mut codes, &mut names);
+            validate_rule(*rule, &mut names);
         }
     }
 
     #[test]
     fn test_global_registry_uniqueness() {
-        let mut codes = HashSet::new();
         let mut names = HashSet::new();
 
         for rule in CODE_RULES {
-            codes.insert(rule.code().0);
             names.insert(rule.name().0);
         }
 
         for rule in COMMAND_RULES {
-            let code = rule.code().0;
             let name = rule.name().0;
-            assert!(codes.insert(code), "Global rule code collision across registries: {code}");
             assert!(names.insert(name), "Global rule name collision across registries: {name}");
         }
     }
@@ -175,7 +159,7 @@ mod tests {
             assert!(
                 !rule.supported_languages().is_empty(),
                 "Code rule {} must declare at least one supported language",
-                rule.code().0
+                rule.name().0
             );
         }
     }
@@ -192,7 +176,7 @@ mod tests {
                 assert!(
                     tag.to_support_lang().is_none(),
                     "Rule {} declares language tag {tag:?}; language tags are derived from supported_languages()",
-                    rule.code().0
+                    rule.name().0
                 );
             }
             for lang in rule.supported_languages() {
@@ -202,7 +186,7 @@ mod tests {
                 assert!(
                     rule.has_tag(lang_tag),
                     "Rule {} does not resolve derived language tag {lang_tag:?}",
-                    rule.code().0
+                    rule.name().0
                 );
             }
         }

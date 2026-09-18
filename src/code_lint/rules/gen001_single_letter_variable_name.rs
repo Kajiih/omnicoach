@@ -3,7 +3,7 @@
 use crate::code_lint::CodeRule;
 use crate::core::{AllowListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
 use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+    Diagnostic, LocationContext, RuleName, SourceLocation, SourceSpan, ViolationMessage,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -24,10 +24,6 @@ pub type SingleLetterVariableNameConfig = DynamicRuleConfig<AllowListConfig>;
 pub struct SingleLetterVariableName;
 
 impl Rule for SingleLetterVariableName {
-    fn code(&self) -> RuleCode {
-        RuleCode("NAME-001")
-    }
-
     fn name(&self) -> RuleName {
         RuleName("single-letter-variable-name")
     }
@@ -64,7 +60,6 @@ impl CodeRule for SingleLetterVariableName {
             let name = node.text();
             if name.len() == 1 && name != "_" && !effective_allowed.contains(&*name) {
                 diagnostics.push(Diagnostic::new(
-                    self.code(),
                     self.name(),
                     ViolationMessage {
                         summary: format!("Variable name `{name}` is too short (single-letter)."),
@@ -94,45 +89,45 @@ mod tests {
     #[rstest]
     #[case::let_binding(
         "fn main() { let a = 1; }",
-        "[NAME-001] Line 1, Col 17: Variable name `a` is too short (single-letter)."
+        "[single-letter-variable-name] Line 1, Col 17: Variable name `a` is too short (single-letter)."
     )]
     #[case::let_reference(
         "fn main() { let a = b; }",
-        "[NAME-001] Line 1, Col 17: Variable name `a` is too short (single-letter)."
+        "[single-letter-variable-name] Line 1, Col 17: Variable name `a` is too short (single-letter)."
     )]
     #[case::mutable_binding(
         "fn main() { let mut b = 2; }",
-        "[NAME-001] Line 1, Col 21: Variable name `b` is too short (single-letter)."
+        "[single-letter-variable-name] Line 1, Col 21: Variable name `b` is too short (single-letter)."
     )]
     #[case::tuple_destructuring(
         "fn main() { let (c, d) = (1, 2); }",
-        "[NAME-001] Line 1, Col 21: Variable name `d` is too short (single-letter)."
+        "[single-letter-variable-name] Line 1, Col 21: Variable name `d` is too short (single-letter)."
     )]
     #[case::struct_destructuring_explicit(
         "fn main() { let Point { x: e, y: _ } = p; }",
-        "[NAME-001] Line 1, Col 28: Variable name `e` is too short (single-letter)."
+        "[single-letter-variable-name] Line 1, Col 28: Variable name `e` is too short (single-letter)."
     )]
     #[case::struct_destructuring_shorthand(
         "fn main() { let Point { f, g } = p; }",
-        "[NAME-001] Line 1, Col 28: Variable name `g` is too short (single-letter)."
+        "[single-letter-variable-name] Line 1, Col 28: Variable name `g` is too short (single-letter)."
     )]
     #[case::loop_target(
         "fn main() { for h in 0..10 {} }",
-        "[NAME-001] Line 1, Col 17: Variable name `h` is too short (single-letter)."
+        "[single-letter-variable-name] Line 1, Col 17: Variable name `h` is too short (single-letter)."
     )]
     #[case::closure_parameter_allowed("fn main() { let f = |x: i32| x + 1; }", "")]
     #[case::fn_parameter_allowed("fn test(i: i32, j: i32) {}", "")]
     #[case::match_pattern_variants(
         "fn main() { match val { Some(k) => {}, None => {} } }",
-        "[NAME-001] Line 1, Col 30: Variable name `k` is too short (single-letter)."
+        "[single-letter-variable-name] Line 1, Col 30: Variable name `k` is too short (single-letter)."
     )]
     #[case::if_let_and_while_let(
         "fn main() { if let Some(x) = y {} while let Some(z) = y {} }",
-        "[NAME-001] Line 1, Col 50: Variable name `z` is too short (single-letter)."
+        "[single-letter-variable-name] Line 1, Col 50: Variable name `z` is too short (single-letter)."
     )]
     #[case::match_pattern_guard(
         "fn main() { match val { Some(z) if z > 0 => {} } }",
-        "[NAME-001] Line 1, Col 30: Variable name `z` is too short (single-letter)."
+        "[single-letter-variable-name] Line 1, Col 30: Variable name `z` is too short (single-letter)."
     )]
     #[case::wildcard_ignored("fn main() { let _ = 1; }", "")]
     fn test_rust_bindings(#[case] source: &str, #[case] expected: &str) {
@@ -143,27 +138,27 @@ mod tests {
     #[rstest]
     #[case::parameter_annotations(
         "def foo(i: int = 1, b: int = 1): pass",
-        "[NAME-001] Line 1, Col 21: Variable name `b` is too short (single-letter)."
+        "[single-letter-variable-name] Line 1, Col 21: Variable name `b` is too short (single-letter)."
     )]
     #[case::assignment(
         "c = 2",
-        "[NAME-001] Line 1, Col 1: Variable name `c` is too short (single-letter)."
+        "[single-letter-variable-name] Line 1, Col 1: Variable name `c` is too short (single-letter)."
     )]
     #[case::multi_assignment(
         "d, e = 3, 4",
-        "[NAME-001] Line 1, Col 1: Variable name `d` is too short (single-letter).\n[NAME-001] Line 1, Col 4: Variable name `e` is too short (single-letter)."
+        "[single-letter-variable-name] Line 1, Col 1: Variable name `d` is too short (single-letter).\n[single-letter-variable-name] Line 1, Col 4: Variable name `e` is too short (single-letter)."
     )]
     #[case::comprehension(
         "[y for y in range(10)]",
-        "[NAME-001] Line 1, Col 8: Variable name `y` is too short (single-letter)."
+        "[single-letter-variable-name] Line 1, Col 8: Variable name `y` is too short (single-letter)."
     )]
     #[case::exception_alias(
         "try:\n    pass\nexcept Exception as g:\n    pass",
-        "[NAME-001] Line 3, Col 21: Variable name `g` is too short (single-letter)."
+        "[single-letter-variable-name] Line 3, Col 21: Variable name `g` is too short (single-letter)."
     )]
     #[case::walrus_expression(
         "(v := 1)",
-        "[NAME-001] Line 1, Col 2: Variable name `v` is too short (single-letter)."
+        "[single-letter-variable-name] Line 1, Col 2: Variable name `v` is too short (single-letter)."
     )]
     fn test_python_bindings(#[case] source: &str, #[case] expected: &str) {
         let output = assert_code_rule_snapshot(&SingleLetterVariableName, source, "test.py");
@@ -182,9 +177,7 @@ mod tests {
         let config: crate::core::Config = toml::from_str(config_toml).unwrap();
 
         let source = "fn main() { let i = 1; let y = 2; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config), @r###"
-        [NAME-001] Line 1, Col 17: Variable name `i` is too short (single-letter).
-        "###);
+        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config), @"[single-letter-variable-name] Line 1, Col 17: Variable name `i` is too short (single-letter).");
     }
 
     #[test]
@@ -212,18 +205,16 @@ mod tests {
         // - 'g' is NOT allowed because Rust override takes precedence
         // - 'c' is NOT allowed because we have overrides
         let source_rs = "fn main() { let r = 1; let g = 2; let c = 3; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source_rs, "test.rs", &config), @r###"
-        [NAME-001] Line 1, Col 28: Variable name `g` is too short (single-letter).
-        [NAME-001] Line 1, Col 39: Variable name `c` is too short (single-letter).
-        "###);
+        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source_rs, "test.rs", &config), @"
+        [single-letter-variable-name] Line 1, Col 28: Variable name `g` is too short (single-letter).
+        [single-letter-variable-name] Line 1, Col 39: Variable name `c` is too short (single-letter).
+        ");
 
         // For Python:
         // - 'p' is allowed by Python override
         // - 'g' is NOT allowed because Python override takes precedence
         let source_py = "p = 1\ng = 2";
-        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source_py, "test.py", &config), @r###"
-        [NAME-001] Line 2, Col 1: Variable name `g` is too short (single-letter).
-        "###);
+        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source_py, "test.py", &config), @"[single-letter-variable-name] Line 2, Col 1: Variable name `g` is too short (single-letter).");
     }
 
     #[test]
@@ -243,9 +234,7 @@ mod tests {
         // - 'g' is allowed by global override fallback
         // - 'c' is NOT allowed
         let source_rs = "fn main() { let g = 1; let c = 2; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source_rs, "test.rs", &config), @r###"
-        [NAME-001] Line 1, Col 28: Variable name `c` is too short (single-letter).
-        "###);
+        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source_rs, "test.rs", &config), @"[single-letter-variable-name] Line 1, Col 28: Variable name `c` is too short (single-letter).");
     }
 
     #[test]

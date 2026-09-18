@@ -23,7 +23,7 @@ pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic], source_content: &
         let _ = writeln!(
             output,
             "[{}] Line {}, Col {}: {}",
-            diagnostic.rule_code, line_col.line, line_col.column, diagnostic.message.summary
+            diagnostic.rule_name, line_col.line, line_col.column, diagnostic.message.summary
         );
     }
     output

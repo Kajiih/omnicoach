@@ -3,7 +3,7 @@
 use crate::code_lint::CodeRule;
 use crate::core::Rule;
 use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+    Diagnostic, LocationContext, RuleName, SourceLocation, SourceSpan, ViolationMessage,
 };
 use crate::rules::Tag;
 use ast_grep_core::{AstGrep, Doc, Node};
@@ -26,9 +26,6 @@ fn has_except_ancestor<D: Doc>(node: &Node<'_, D>) -> bool {
 pub struct NoLoggingInExcept;
 
 impl Rule for NoLoggingInExcept {
-    fn code(&self) -> RuleCode {
-        RuleCode("LOG-001")
-    }
     fn name(&self) -> RuleName {
         RuleName("no-logging-in-except")
     }
@@ -53,7 +50,6 @@ impl CodeRule for NoLoggingInExcept {
         for matched_node in matches {
             if has_except_ancestor(&matched_node) {
                 diagnostics.push(Diagnostic::new(
-                    self.code(),
                     self.name(),
                     ViolationMessage {
                         summary: "Banned use of `logging.error` inside except block.".to_string(),
@@ -99,9 +95,7 @@ mod tests {
             source_violating,
             "test.py",
         );
-        insta::assert_snapshot!(output_violating, @r###"
-        [LOG-001] Line 4, Col 5: Banned use of `logging.error` inside except block.
-        "###);
+        insta::assert_snapshot!(output_violating, @"[no-logging-in-except] Line 4, Col 5: Banned use of `logging.error` inside except block.");
 
         let output_ok =
             crate::test_utils::assert_code_rule_snapshot(&NoLoggingInExcept, source_ok, "test.py");

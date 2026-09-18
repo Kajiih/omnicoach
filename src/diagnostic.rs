@@ -261,17 +261,6 @@ impl SourceLocation {
     }
 }
 
-/// The unique, short identifier code of a rule (e.g., "VCS001").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
-#[serde(transparent)]
-pub struct RuleCode(pub &'static str);
-
-impl std::fmt::Display for RuleCode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
 /// The verbose name of a rule (e.g., "no-edits-on-described-commits").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 #[serde(transparent)]
@@ -286,8 +275,6 @@ impl std::fmt::Display for RuleName {
 /// An alert diagnostic containing a rule violation payload and its source location.
 #[derive(Debug, Serialize, Clone)]
 pub struct Diagnostic {
-    /// The unique rule code (e.g., "PY001").
-    pub rule_code: RuleCode,
     /// The rule name (e.g., "no-edits-on-described-commits").
     pub rule_name: RuleName,
     /// The detailed explanation and description of the rule violation.
@@ -300,12 +287,11 @@ impl Diagnostic {
     /// Creates a new diagnostic.
     #[must_use]
     pub const fn new(
-        rule_code: RuleCode,
         rule_name: RuleName,
         message: ViolationMessage,
         location: SourceLocation,
     ) -> Self {
-        Self { rule_code, rule_name, message, location }
+        Self { rule_name, message, location }
     }
 }
 
@@ -377,7 +363,7 @@ pub fn print_diagnostics(diagnostics: &[Diagnostic], format: &str) -> anyhow::Re
                 println!(
                     "{}: [{}] {}\n  Rationale: {}\n  Suggestion: {}\n",
                     location_header,
-                    diagnostic.rule_code,
+                    diagnostic.rule_name,
                     diagnostic.message.summary,
                     diagnostic.message.rationale,
                     diagnostic.message.suggestion

@@ -81,15 +81,15 @@ omni-command-lint --cmd "jj edit 123"
 Create a `.omnilint.toml` file at the root of your project workspace to customize rule parameters, ignore rules, or run subset filters:
 
 ```toml
-# Select only specific tags or rule codes (optional)
-select = ["Style", "LOG-001"]
+# Select only specific tags or rule names (optional)
+select = ["Style", "no-logging-in-except"]
 
 # Globally ignore specific rules (optional)
-ignore = ["NAME-001"]
+ignore = ["single-letter-variable-name"]
 
 # Per-file rule ignores using glob patterns
 [per_file_ignores]
-"tests/**" = ["NAME-001", "heuristic"]
+"tests/**" = ["single-letter-variable-name", "heuristic"]
 
 # Rule-specific configuration parameters
 [rules.no-hungarian-notation]
@@ -97,20 +97,20 @@ banned_suffixes = ["_list", "_arr", "_dict"]
 ```
 
 ### Supported Rules:
-*   **`ASYNC-001` (`no-unstructured-task-creation`)**: Bans unstructured task creation (`asyncio.create_task`, `ensure_future`, `loop.create_task`).
-*   **`TEST-001` (`no-sleep-in-tests`)**: Bans wall-clock and async `sleep` calls in Python and Rust test files (with a distinct checkpoint/yield suggestion for zero-duration sleeps).
-*   **`TEST-002` (`max-test-assertions`)**: Limits test functions to at most 4 assertions by default (configurable via `[rules.max-test-assertions] max = N`) across Python and Rust.
-*   **`TEST-003` (`no-assertion-packing`)**: Bans compound boolean conditions (`&&`, `and`) and boolean tuple/collection equality packing in Python and Rust test assertions.
-*   **`NAME-001` (`single-letter-variable-name`)**: Bans short single-letter variables except allowed exceptions.
-*   **`NAME-002` (`banned-abbreviations`)**: Bans naming definitions using cryptic abbreviations (`ctx`, `cfg`, etc.).
-*   **`NAME-003` (`no-hungarian-notation`)**: Bans Hungarian type suffixes (e.g., `user_list`, `value_int`).
-*   **`SUPP-001` (`missing-suppression-reason`)**: Enforces non-empty `-- <reason>` explanations on inline and file suppressions.
-*   **`SUPP-002` (`unused-suppression`)**: Flags stale suppression directives when no violation occurred on that line or file.
-*   **`SUPP-003` (`unknown-suppression-code`)**: Flags suppression directives targeting unknown or invalid rule codes.
-*   **`SUPP-004` (`blanket-suppression`)**: Bans blanket suppression directives without explicit bracketed rule codes.
-*   **`LOG-001` (`no-logging-in-except`)**: Bans using `logging.error` inside Python except blocks (suggests `logging.exception`).
-*   **`SCOPE-001` (`flat-scope-enforced`)**: Bans nested function definitions in Python source files.
-*   **`JJ-001` (`no-edits-on-described-commits`)**: Discourages/blocks running `jj edit` on commits that already have descriptions.
+*   **`no-unstructured-task-creation`**: Bans unstructured task creation (`asyncio.create_task`, `ensure_future`, `loop.create_task`).
+*   **`no-sleep-in-tests`**: Bans wall-clock and async `sleep` calls in Python and Rust test files (with a distinct checkpoint/yield suggestion for zero-duration sleeps).
+*   **`max-test-assertions`**: Limits test functions to at most 4 assertions by default (configurable via `[rules.max-test-assertions] max = N`) across Python and Rust.
+*   **`no-assertion-packing`**: Bans compound boolean conditions (`&&`, `and`) and boolean tuple/collection equality packing in Python and Rust test assertions.
+*   **`single-letter-variable-name`**: Bans short single-letter variables except allowed exceptions.
+*   **`banned-abbreviations`**: Bans naming definitions using cryptic abbreviations (`ctx`, `cfg`, etc.).
+*   **`no-hungarian-notation`**: Bans Hungarian type suffixes (e.g., `user_list`, `value_int`).
+*   **`missing-suppression-reason`**: Enforces non-empty `-- <reason>` explanations on inline and file suppressions.
+*   **`unused-suppression`**: Flags stale suppression directives when no violation occurred on that line or file.
+*   **`unknown-suppression-rule`**: Flags suppression directives targeting unknown or invalid rules.
+*   **`blanket-suppression`**: Bans blanket suppression directives without explicit bracketed rule names.
+*   **`no-logging-in-except`**: Bans using `logging.error` inside Python except blocks (suggests `logging.exception`).
+*   **`flat-scope-enforced`**: Bans nested function definitions in Python source files.
+*   **`no-edits-on-described-commits`**: Discourages/blocks running `jj edit` on commits that already have descriptions.
 
 ---
 

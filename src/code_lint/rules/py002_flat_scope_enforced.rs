@@ -3,7 +3,7 @@
 use crate::code_lint::CodeRule;
 use crate::core::Rule;
 use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+    Diagnostic, LocationContext, RuleName, SourceLocation, SourceSpan, ViolationMessage,
 };
 use crate::rules::Tag;
 use ast_grep_core::{AstGrep, Doc, Node};
@@ -51,9 +51,6 @@ impl FlatScopeEnforced {
 }
 
 impl Rule for FlatScopeEnforced {
-    fn code(&self) -> RuleCode {
-        RuleCode("SCOPE-001")
-    }
     fn name(&self) -> RuleName {
         RuleName("flat-scope-enforced")
     }
@@ -89,7 +86,6 @@ impl CodeRule for FlatScopeEnforced {
                 let message = Self::format_message(&violation);
 
                 diagnostics.push(Diagnostic::new(
-                    self.code(),
                     self.name(),
                     message,
                     SourceLocation {
@@ -131,9 +127,7 @@ mod tests {
             source_violating,
             "test.py",
         );
-        insta::assert_snapshot!(output_violating, @r###"
-        [SCOPE-001] Line 2, Col 5: Nested function definition `inner` is discouraged.
-        "###);
+        insta::assert_snapshot!(output_violating, @"[flat-scope-enforced] Line 2, Col 5: Nested function definition `inner` is discouraged.");
 
         let output_ok =
             crate::test_utils::assert_code_rule_snapshot(&FlatScopeEnforced, source_ok, "test.py");
@@ -150,9 +144,9 @@ mod tests {
         "};
         let output =
             crate::test_utils::assert_code_rule_snapshot(&FlatScopeEnforced, source, "test.py");
-        insta::assert_snapshot!(output, @r###"
-        [SCOPE-001] Line 2, Col 5: Nested function definition `inner1` is discouraged.
-        [SCOPE-001] Line 3, Col 9: Nested function definition `inner2` is discouraged.
-        "###);
+        insta::assert_snapshot!(output, @"
+        [flat-scope-enforced] Line 2, Col 5: Nested function definition `inner1` is discouraged.
+        [flat-scope-enforced] Line 3, Col 9: Nested function definition `inner2` is discouraged.
+        ");
     }
 }

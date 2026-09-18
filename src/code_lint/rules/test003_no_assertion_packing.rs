@@ -3,7 +3,7 @@
 use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, Rule};
 use crate::diagnostic::{
-    violation_template, Diagnostic, RuleCode, RuleName, SourceLocation, ViolationTemplate,
+    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -14,10 +14,6 @@ use std::path::Path;
 pub struct NoAssertionPacking;
 
 impl Rule for NoAssertionPacking {
-    fn code(&self) -> RuleCode {
-        RuleCode("TEST-003")
-    }
-
     fn name(&self) -> RuleName {
         RuleName("no-assertion-packing")
     }
@@ -189,7 +185,6 @@ fn check_rust_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: 
             && has_rust_top_level_and(&token_tree)
         {
             diagnostics.push(Diagnostic::new(
-                RuleCode("TEST-003"),
                 RuleName("no-assertion-packing"),
                 COMPOUND_BOOLEAN_TEMPLATE.render(SupportLang::Rust, &[("macro_name", &macro_name)]),
                 SourceLocation::file_range(path, node.range()),
@@ -203,7 +198,6 @@ fn check_rust_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: 
             let has_boolean_sequence = args.iter().any(is_rust_boolean_tuple_or_array);
             if has_boolean_sequence {
                 diagnostics.push(Diagnostic::new(
-                    RuleCode("TEST-003"),
                     RuleName("no-assertion-packing"),
                     BOOLEAN_TUPLE_TEMPLATE
                         .render(SupportLang::Rust, &[("macro_name", &macro_name)]),
@@ -234,7 +228,6 @@ fn check_python_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path
 
         if has_and {
             diagnostics.push(Diagnostic::new(
-                RuleCode("TEST-003"),
                 RuleName("no-assertion-packing"),
                 COMPOUND_BOOLEAN_TEMPLATE.render(SupportLang::Python, &[]),
                 SourceLocation::file_range(path, node.range()),
@@ -247,7 +240,6 @@ fn check_python_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path
             let has_boolean_sequence = comp.children().any(|c| is_python_boolean_sequence(&c));
             if has_boolean_sequence {
                 diagnostics.push(Diagnostic::new(
-                    RuleCode("TEST-003"),
                     RuleName("no-assertion-packing"),
                     BOOLEAN_TUPLE_TEMPLATE.render(SupportLang::Python, &[]),
                     SourceLocation::file_range(path, node.range()),
@@ -350,7 +342,7 @@ mod tests {
             let coords = file_index.lookup(diagnostic.location.span.start);
             lines.push(format!(
                 "[{}] Line {}, Col {}: {}",
-                diagnostic.rule_code, coords.line, coords.column, diagnostic.message.summary
+                diagnostic.rule_name, coords.line, coords.column, diagnostic.message.summary
             ));
         }
         lines.join("\n")
@@ -379,12 +371,12 @@ mod tests {
         "};
 
         let output = run_test_rule(source, "tests/test_packing.rs");
-        insta::assert_snapshot!(output, @r###"
-        [TEST-003] Line 3, Col 5: Compound boolean condition (`&&`) in `assert!` assertion.
-        [TEST-003] Line 4, Col 5: Boolean tuple/collection equality in `assert_eq!` assertion.
-        [TEST-003] Line 5, Col 5: Boolean tuple/collection equality in `assert_eq!` assertion.
-        [TEST-003] Line 6, Col 5: Boolean tuple/collection equality in `assert_eq!` assertion.
-        "###);
+        insta::assert_snapshot!(output, @"
+        [no-assertion-packing] Line 3, Col 5: Compound boolean condition (`&&`) in `assert!` assertion.
+        [no-assertion-packing] Line 4, Col 5: Boolean tuple/collection equality in `assert_eq!` assertion.
+        [no-assertion-packing] Line 5, Col 5: Boolean tuple/collection equality in `assert_eq!` assertion.
+        [no-assertion-packing] Line 6, Col 5: Boolean tuple/collection equality in `assert_eq!` assertion.
+        ");
     }
 
     #[test]
@@ -406,11 +398,11 @@ mod tests {
         "};
 
         let output = run_test_rule(source, "tests/test_packing.py");
-        insta::assert_snapshot!(output, @r###"
-        [TEST-003] Line 2, Col 5: Compound boolean condition (`and`) in `assert` statement.
-        [TEST-003] Line 3, Col 5: Boolean tuple/collection equality in `assert` statement.
-        [TEST-003] Line 4, Col 5: Boolean tuple/collection equality in `assert` statement.
-        [TEST-003] Line 5, Col 5: Boolean tuple/collection equality in `assert` statement.
-        "###);
+        insta::assert_snapshot!(output, @"
+        [no-assertion-packing] Line 2, Col 5: Compound boolean condition (`and`) in `assert` statement.
+        [no-assertion-packing] Line 3, Col 5: Boolean tuple/collection equality in `assert` statement.
+        [no-assertion-packing] Line 4, Col 5: Boolean tuple/collection equality in `assert` statement.
+        [no-assertion-packing] Line 5, Col 5: Boolean tuple/collection equality in `assert` statement.
+        ");
     }
 }
