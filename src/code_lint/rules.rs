@@ -6,3 +6,4 @@ pub mod gen002_banned_abbreviations;
 pub mod gen003_no_hungarian_notation;
 pub mod py001_no_logging_in_except;
 pub mod py002_flat_scope_enforced;
+pub mod test001_no_sleep_in_tests;

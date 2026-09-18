@@ -90,6 +90,7 @@ impl Tag {
 /// Static list of all code linter rules.
 pub const CODE_RULES: &[&dyn crate::code_lint::CodeRule] = &[
     &crate::code_lint::rules::async001_no_unstructured_task_creation::NoUnstructuredTaskCreation,
+    &crate::code_lint::rules::test001_no_sleep_in_tests::NoSleepInTests,
     &crate::code_lint::rules::py001_no_logging_in_except::NoLoggingInExcept,
     &crate::code_lint::rules::py002_flat_scope_enforced::FlatScopeEnforced,
     &crate::code_lint::rules::gen001_single_letter_variable_name::SingleLetterVariableName,
