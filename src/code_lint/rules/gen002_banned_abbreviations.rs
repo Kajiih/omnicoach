@@ -96,7 +96,9 @@ impl CodeRule for BannedAbbreviations {
         let lang = *grep.lang();
 
         for node in bindings {
-            if crate::code_lint::is_unaliased_import_binding(&node, lang) {
+            if crate::code_lint::is_unaliased_import_binding(&node, lang)
+                || crate::code_lint::is_trait_impl_member(&node, lang)
+            {
                 continue;
             }
             let name = node.text();
@@ -189,6 +191,28 @@ def handle_msg(msg):
         let py_source = "def to_str():\n    pass\n";
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, py_source, "test.py"), @r###"
         [NAME-002] Line 1, Col 5: Definition name `to_str` contains banned abbreviation `str`.
+        "###);
+    }
+
+    #[test]
+    fn test_rust_trait_impl_members_are_exempt() {
+        let rule = BannedAbbreviations;
+
+        // `Err` and `from_ctx` are mandated by the trait contract and cannot be renamed, so
+        // they are exempt. The exemption is scoped to the member name itself: the parameter
+        // `msg` and the identical inherent method are the author's choice, so both are flagged.
+        let source = r"
+            impl Decoder for Wrapper {
+                type Err = ();
+                fn from_ctx(&self, msg: u8) {}
+            }
+            impl Wrapper {
+                fn from_ctx(&self) {}
+            }
+        ";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
+        [NAME-002] Line 4, Col 36: Definition name `msg` contains banned abbreviation `msg`.
+        [NAME-002] Line 7, Col 20: Definition name `from_ctx` contains banned abbreviation `ctx`.
         "###);
     }
 
