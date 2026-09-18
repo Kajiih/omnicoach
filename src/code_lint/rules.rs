@@ -7,3 +7,4 @@ pub mod gen003_no_hungarian_notation;
 pub mod py001_no_logging_in_except;
 pub mod py002_flat_scope_enforced;
 pub mod test001_no_sleep_in_tests;
+pub mod test002_max_test_assertions;

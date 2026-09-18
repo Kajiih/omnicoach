@@ -31,10 +31,10 @@ impl FilterListDefaults {
     /// Resolves the default set of strings for a specific language.
     #[must_use]
     pub fn resolve_default_for_lang(&self, lang: SupportLang) -> HashSet<String> {
-        let mut set: HashSet<String> = self.base.iter().map(|&s| s.to_string()).collect();
+        let mut set: HashSet<String> = self.base.iter().map(|&item| item.to_string()).collect();
         for &(target_lang, items) in self.extend {
             if target_lang == lang {
-                set.extend(items.iter().map(|&s| s.to_string()));
+                set.extend(items.iter().map(|&item| item.to_string()));
             }
         }
         for &(target_lang, items) in self.exempt {
@@ -183,7 +183,7 @@ impl DynamicRuleConfig<ThresholdConfig> {
         lang: SupportLang,
         defaults: &LanguageDefaults<usize>,
     ) -> usize {
-        self.resolve_with(lang, defaults, |cfg| cfg.max)
+        self.resolve_with(lang, defaults, |config| config.max)
     }
 }
 
@@ -204,22 +204,22 @@ impl DynamicRuleConfig<DenyListConfig> {
 
         // 1. Base set
         let mut effective = lang_override
-            .and_then(|o| o.banned.as_ref())
+            .and_then(|override_config| override_config.banned.as_ref())
             .or(self.global.banned.as_ref())
             .map_or_else(|| defaults.resolve_default_for_lang(lang), Clone::clone);
 
         // 2. Additive
         effective.extend(self.global.extend_banned.iter().cloned());
-        if let Some(override_cfg) = lang_override {
-            effective.extend(override_cfg.extend_banned.iter().cloned());
+        if let Some(override_config) = lang_override {
+            effective.extend(override_config.extend_banned.iter().cloned());
         }
 
         // 3. Subtractive
         for item in &self.global.allowed {
             effective.remove(item);
         }
-        if let Some(override_cfg) = lang_override {
-            for item in &override_cfg.allowed {
+        if let Some(override_config) = lang_override {
+            for item in &override_config.allowed {
                 effective.remove(item);
             }
         }
@@ -245,22 +245,22 @@ impl DynamicRuleConfig<AllowListConfig> {
 
         // 1. Base set
         let mut effective = lang_override
-            .and_then(|o| o.allowed.as_ref())
+            .and_then(|override_config| override_config.allowed.as_ref())
             .or(self.global.allowed.as_ref())
             .map_or_else(|| defaults.resolve_default_for_lang(lang), Clone::clone);
 
         // 2. Additive
         effective.extend(self.global.extend_allowed.iter().cloned());
-        if let Some(override_cfg) = lang_override {
-            effective.extend(override_cfg.extend_allowed.iter().cloned());
+        if let Some(override_config) = lang_override {
+            effective.extend(override_config.extend_allowed.iter().cloned());
         }
 
         // 3. Subtractive
         for item in &self.global.banned {
             effective.remove(item);
         }
-        if let Some(override_cfg) = lang_override {
-            for item in &override_cfg.banned {
+        if let Some(override_config) = lang_override {
+            for item in &override_config.banned {
                 effective.remove(item);
             }
         }
@@ -598,17 +598,14 @@ mod tests {
             exempt: &[(SupportLang::Rust, &["temp"])],
         };
 
-        let python_set = DEFAULTS.resolve_default_for_lang(SupportLang::Python);
-        assert!(python_set.contains("common"));
-        assert!(python_set.contains("shared"));
-        assert!(python_set.contains("temp"));
-        assert!(!python_set.contains("rust_only"));
+        let python_defaults = DEFAULTS.resolve_default_for_lang(SupportLang::Python);
+        assert_eq!(python_defaults, HashSet::from(["common", "shared", "temp"].map(String::from)));
 
-        let rust_set = DEFAULTS.resolve_default_for_lang(SupportLang::Rust);
-        assert!(rust_set.contains("common"));
-        assert!(rust_set.contains("shared"));
-        assert!(rust_set.contains("rust_only"));
-        assert!(!rust_set.contains("temp"));
+        let rust_defaults = DEFAULTS.resolve_default_for_lang(SupportLang::Rust);
+        assert_eq!(
+            rust_defaults,
+            HashSet::from(["common", "shared", "rust_only"].map(String::from))
+        );
     }
 
     #[test]
@@ -635,20 +632,17 @@ mod tests {
         // Additive: global ("global_bad") + rust ("rust_bad")
         // Subtractive: global ("common_ok") + rust ("rust_ok")
         let rust_effective = config.effective_banned_for_lang(SupportLang::Rust, &DEFAULTS);
-        assert!(!rust_effective.contains("common_ok"));
-        assert!(!rust_effective.contains("rust_ok"));
-        assert!(rust_effective.contains("default_one"));
-        assert!(rust_effective.contains("global_bad"));
-        assert!(rust_effective.contains("rust_bad"));
+        assert_eq!(
+            rust_effective,
+            HashSet::from(["default_one", "global_bad", "rust_bad"].map(String::from))
+        );
 
         // Python resolution:
         // Base: explicit python banned ("py_only_bad")
         // Additive: global ("global_bad")
         // Subtractive: global ("common_ok")
         let py_effective = config.effective_banned_for_lang(SupportLang::Python, &DEFAULTS);
-        assert!(!py_effective.contains("default_one"));
-        assert!(py_effective.contains("py_only_bad"));
-        assert!(py_effective.contains("global_bad"));
+        assert_eq!(py_effective, HashSet::from(["py_only_bad", "global_bad"].map(String::from)));
     }
 
     #[test]
@@ -678,36 +672,37 @@ mod tests {
         // Additive: global ("global_allowed") + rust ("rust_allowed")
         // Subtractive: global ("revoked") + rust ("rust_revoked")
         let rust_effective = config.effective_allowed_for_lang(SupportLang::Rust, &DEFAULTS);
-        assert!(rust_effective.contains("default_base"));
-        assert!(rust_effective.contains("rust_extra"));
-        assert!(rust_effective.contains("global_allowed"));
-        assert!(rust_effective.contains("rust_allowed"));
-        assert!(!rust_effective.contains("revoked"));
-        assert!(!rust_effective.contains("rust_revoked"));
+        assert_eq!(
+            rust_effective,
+            HashSet::from(
+                ["default_base", "rust_extra", "global_allowed", "rust_allowed",].map(String::from)
+            )
+        );
 
         // Python resolution:
         // Base: explicit python allowed ("py_only_allowed")
         // Additive: global ("global_allowed")
         // Subtractive: global ("revoked")
         let py_effective = config.effective_allowed_for_lang(SupportLang::Python, &DEFAULTS);
-        assert!(py_effective.contains("py_only_allowed"));
-        assert!(py_effective.contains("global_allowed"));
-        assert!(!py_effective.contains("default_base"));
+        assert_eq!(
+            py_effective,
+            HashSet::from(["py_only_allowed", "global_allowed"].map(String::from))
+        );
     }
 
-    #[test]
-    fn test_context_test_path_detection() {
+    #[rstest::rstest]
+    #[case("tests/foo.rs", true)]
+    #[case("src/tests/foo.rs", true)]
+    #[case("test_calculator.py", true)]
+    #[case("foo/test_calculator.py", true)]
+    #[case("foo/calculator_test.py", true)]
+    #[case("src/foo_test.rs", true)]
+    #[case("src/tests.rs", true)]
+    #[case("src/main.rs", false)]
+    #[case("src/calculator.py", false)]
+    fn test_context_test_path_detection(#[case] path: &str, #[case] expected: bool) {
         let config = Config::default();
-        assert!(config.is_test_path(Path::new("tests/foo.rs")));
-        assert!(config.is_test_path(Path::new("src/tests/foo.rs")));
-        assert!(config.is_test_path(Path::new("test_calculator.py")));
-        assert!(config.is_test_path(Path::new("foo/test_calculator.py")));
-        assert!(config.is_test_path(Path::new("foo/calculator_test.py")));
-        assert!(config.is_test_path(Path::new("src/foo_test.rs")));
-        assert!(config.is_test_path(Path::new("src/tests.rs")));
-
-        assert!(!config.is_test_path(Path::new("src/main.rs")));
-        assert!(!config.is_test_path(Path::new("src/calculator.py")));
+        assert_eq!(config.is_test_path(Path::new(path)), expected);
     }
 
     #[test]
@@ -723,29 +718,25 @@ mod tests {
         assert!(config.is_rule_enabled_for_path(&LOGGING_RULE, Path::new("tests/my_test.rs")));
     }
 
-    #[test]
-    fn test_language_defaults_and_threshold_config() {
+    #[rstest::rstest]
+    #[case("", SupportLang::Python, 4)]
+    #[case("", SupportLang::Rust, 6)]
+    #[case("max = 5", SupportLang::Python, 5)]
+    #[case("max = 5", SupportLang::Rust, 5)]
+    #[case("max = 5\n[rust]\nmax = 10", SupportLang::Python, 5)]
+    #[case("max = 5\n[rust]\nmax = 10", SupportLang::Rust, 10)]
+    fn test_language_defaults_and_threshold_config(
+        #[case] toml_content: &str,
+        #[case] lang: SupportLang,
+        #[case] expected: usize,
+    ) {
         const DEFAULTS: LanguageDefaults<usize> =
             LanguageDefaults::new(4, &[(SupportLang::Rust, 6)]);
-
-        let default_cfg: DynamicRuleConfig<ThresholdConfig> = DynamicRuleConfig::default();
-        assert_eq!(default_cfg.effective_max_for_lang(SupportLang::Python, &DEFAULTS), 4);
-        assert_eq!(default_cfg.effective_max_for_lang(SupportLang::Rust, &DEFAULTS), 6);
-
-        let global_override: DynamicRuleConfig<ThresholdConfig> =
-            toml::from_str("max = 5").unwrap();
-        assert_eq!(global_override.effective_max_for_lang(SupportLang::Python, &DEFAULTS), 5);
-        assert_eq!(global_override.effective_max_for_lang(SupportLang::Rust, &DEFAULTS), 5);
-
-        let lang_override: DynamicRuleConfig<ThresholdConfig> = toml::from_str(
-            r"
-            max = 5
-            [rust]
-            max = 10
-        ",
-        )
-        .unwrap();
-        assert_eq!(lang_override.effective_max_for_lang(SupportLang::Python, &DEFAULTS), 5);
-        assert_eq!(lang_override.effective_max_for_lang(SupportLang::Rust, &DEFAULTS), 10);
+        let config: DynamicRuleConfig<ThresholdConfig> = if toml_content.is_empty() {
+            DynamicRuleConfig::default()
+        } else {
+            toml::from_str(toml_content).unwrap()
+        };
+        assert_eq!(config.effective_max_for_lang(lang, &DEFAULTS), expected);
     }
 }

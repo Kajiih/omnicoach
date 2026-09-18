@@ -99,6 +99,7 @@ banned_suffixes = ["_list", "_arr", "_dict"]
 ### Supported Rules:
 *   **`ASYNC-001` (`no-unstructured-task-creation`)**: Bans unstructured task creation (`asyncio.create_task`, `ensure_future`, `loop.create_task`).
 *   **`TEST-001` (`no-sleep-in-tests`)**: Bans wall-clock and async `sleep` calls in Python and Rust test files (with a distinct checkpoint/yield suggestion for zero-duration sleeps).
+*   **`TEST-002` (`max-test-assertions`)**: Limits test functions to at most 4 assertions by default (configurable via `[rules.max-test-assertions] max = N`) across Python and Rust.
 *   **`NAME-001` (`single-letter-variable-name`)**: Bans short single-letter variables except allowed exceptions.
 *   **`NAME-002` (`banned-abbreviations`)**: Bans naming definitions using cryptic abbreviations (`ctx`, `cfg`, etc.).
 *   **`NAME-003` (`no-hungarian-notation`)**: Bans Hungarian type suffixes (e.g., `user_list`, `value_int`).

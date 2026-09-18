@@ -89,8 +89,12 @@ impl CodeRule for BannedAbbreviations {
         let mut diagnostics = Vec::new();
 
         let bindings = crate::code_lint::collect_bindings(grep);
+        let lang = *grep.lang();
 
         for node in bindings {
+            if crate::code_lint::is_unaliased_import_binding(&node, lang) {
+                continue;
+            }
             let name = node.text();
             let segments = split_segments(&name);
             for segment in segments {

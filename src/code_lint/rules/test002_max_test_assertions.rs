@@ -1,0 +1,319 @@
+//! TEST-002: Enforces a maximum number of assertions per test function (`max-test-assertions`).
+
+use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
+use crate::core::{Config, DynamicRuleConfig, LanguageDefaults, Rule, ThresholdConfig};
+use crate::diagnostic::{
+    Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+};
+use crate::rules::Tag;
+use ast_grep_core::AstGrep;
+use ast_grep_language::SupportLang;
+use std::path::Path;
+
+/// Default maximum assertions allowed per test function (`4`).
+const DEFAULT_MAX_ASSERTIONS: LanguageDefaults<usize> = LanguageDefaults::new(4, &[]);
+
+/// Configuration for the `MaxTestAssertions` rule.
+pub type MaxTestAssertionsConfig = DynamicRuleConfig<ThresholdConfig>;
+
+/// Rule that limits the number of assertions inside a single test function.
+pub struct MaxTestAssertions;
+
+impl Rule for MaxTestAssertions {
+    fn code(&self) -> RuleCode {
+        RuleCode("TEST-002")
+    }
+
+    fn name(&self) -> RuleName {
+        RuleName("max-test-assertions")
+    }
+
+    fn tags(&self) -> &'static [Tag] {
+        &[Tag::Testing, Tag::Heuristic, Tag::Opinionated]
+    }
+
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python, SupportLang::Rust]
+    }
+}
+
+/// Returns true if a Python `"call"` node represents an assertion helper (`pytest.raises`, `self.assert*`, `mock.assert_*`).
+fn is_python_assertion_call(call_node: &AstNode<'_>) -> bool {
+    let Some(func) = call_node.field("function") else {
+        return false;
+    };
+    match func.kind().as_ref() {
+        "identifier" => func.text() == "raises",
+        "attribute" => {
+            let Some(attr) = func.field("attribute") else {
+                return false;
+            };
+            let attr_name = attr.text();
+            if attr_name.starts_with("assert") {
+                return true;
+            }
+            if let Some(obj) = func.field("object") {
+                let obj_text = obj.text();
+                if obj_text == "pytest" && (attr_name == "raises" || attr_name == "warns") {
+                    return true;
+                }
+                if obj_text == "self" && attr_name == "fail" {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Recursively counts top-level assertion constructs in a Python test function body.
+fn count_python_assertions(node: &AstNode<'_>) -> usize {
+    let kind = node.kind();
+    if matches!(kind.as_ref(), "function_definition" | "class_definition") {
+        return 0;
+    }
+    if kind == "assert_statement" || (kind == "call" && is_python_assertion_call(node)) {
+        return 1;
+    }
+    node.children().map(|child| count_python_assertions(&child)).sum()
+}
+
+/// Returns true if a Rust `macro_invocation` node invokes an assertion macro (`assert!`, `assert_*!`, `insta::assert_snapshot!`, etc.).
+fn is_rust_assertion_macro(macro_node: &AstNode<'_>) -> bool {
+    let raw_text = macro_node.text();
+    let prefix = raw_text.split('!').next().unwrap_or("");
+    let terminal = prefix.rsplit("::").next().unwrap_or("").trim();
+    terminal == "assert"
+        || terminal.starts_with("assert_")
+        || terminal == "debug_assert"
+        || terminal.starts_with("debug_assert_")
+}
+
+/// Recursively counts top-level assertion macro invocations in a Rust test function body.
+fn count_rust_assertions(node: &AstNode<'_>) -> usize {
+    let kind = node.kind();
+    if kind == "function_item" {
+        return 0;
+    }
+    if kind == "macro_invocation" && is_rust_assertion_macro(node) {
+        return 1;
+    }
+    node.children().map(|child| count_rust_assertions(&child)).sum()
+}
+
+/// Collects all top-level AST nodes of `target_kind`.
+fn collect_top_level_functions<'a>(
+    node: &AstNode<'a>,
+    target_kind: &str,
+    out: &mut Vec<AstNode<'a>>,
+) {
+    if node.kind() == target_kind {
+        out.push(node.clone());
+        return;
+    }
+    for child in node.children() {
+        collect_top_level_functions(&child, target_kind, out);
+    }
+}
+// TODO: Should we generalize this in the framework?
+fn format_suggestion(func_name: &str, lang: SupportLang) -> String {
+    match lang {
+        SupportLang::Rust => format!(
+            "Refactor `{func_name}` by choosing the appropriate pattern: (1) Split distinct steps or behaviors into separate focused `#[test]` functions, (2) Snapshot formatted output (`insta::assert_snapshot!`) or compare whole domain models directly, or (3) Parameterize test cases with `#[rstest]` and `#[case(...)]. Do NOT add accidental complexity with ad-hoc assertion helpers, extraction closures, filtering loops, or boolean tuples solely to reduce assertion count."
+        ),
+        _ => format!(
+            "Refactor `{func_name}` by choosing the appropriate pattern: (1) Split distinct steps or behaviors into separate focused `test_*` functions, (2) Snapshot formatted output or compare whole domain models directly, or (3) Parameterize test cases with `@pytest.mark.parametrize`. Do NOT add accidental complexity with ad-hoc assertion helpers, extraction closures, filtering loops, or boolean tuples solely to reduce assertion count."
+        ),
+    }
+}
+
+impl CodeRule for MaxTestAssertions {
+    fn target(&self) -> RuleTarget {
+        RuleTarget::TestsOnly
+    }
+
+    fn check_file(
+        &self,
+        path: &Path,
+        grep: &AstGrep<SourceDoc>,
+        config: &Config,
+    ) -> Vec<Diagnostic> {
+        let lang = *grep.lang();
+        let rule_config: MaxTestAssertionsConfig = config.get_rule_config(self.name().0);
+        let max_allowed = rule_config.effective_max_for_lang(lang, &DEFAULT_MAX_ASSERTIONS);
+
+        let func_kind = match lang {
+            SupportLang::Rust => "function_item",
+            _ => "function_definition",
+        };
+
+        let mut functions = Vec::new();
+        collect_top_level_functions(&grep.root(), func_kind, &mut functions);
+
+        let mut diagnostics = Vec::new();
+
+        for func_node in functions {
+            let Some(name_node) = func_node.field("name") else {
+                continue;
+            };
+            let func_name = name_node.text();
+            let is_test_fn = func_name == "test"
+                || func_name.starts_with("test_")
+                || (lang == SupportLang::Rust
+                    && crate::code_lint::ast_rust::has_test_attribute(&func_node));
+
+            if !is_test_fn {
+                continue;
+            }
+
+            let Some(body_node) = func_node.field("body") else {
+                continue;
+            };
+
+            let assertion_count = match lang {
+                SupportLang::Rust => count_rust_assertions(&body_node),
+                _ => count_python_assertions(&body_node),
+            };
+
+            if assertion_count > max_allowed {
+                diagnostics.push(Diagnostic::new(
+                    self.code(),
+                    self.name(),
+                    ViolationMessage {
+                        summary: format!(
+                            "Test function `{func_name}` has {assertion_count} assertions, exceeding the maximum of {max_allowed}."
+                        ),
+                        rationale: "Tests with too many assertions often verify multiple unrelated behaviors. Obscuring them with ad-hoc helper closures, filtering loops, or artificial compression hurts readability and makes failures harder to diagnose.".to_string(),
+                        suggestion: format_suggestion(&func_name, lang),
+                    },
+                    SourceLocation {
+                        context: LocationContext::File(path.to_path_buf()),
+                        span: SourceSpan {
+                            start: name_node.range().start,
+                            end: name_node.range().end,
+                        },
+                    },
+                ));
+            }
+        }
+
+        diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
+
+    #[test]
+    fn test_python_max_assertions_flagged() {
+        let source = r"
+import pytest
+
+def assert_helper(response):
+    assert response.status == 200
+    assert response.body is not None
+    assert response.headers
+    assert response.cookies
+    assert response.ok
+
+def test_focused_behavior():
+    assert 1 + 1 == 2
+    assert 2 + 2 == 4
+    with pytest.raises(ValueError):
+        int('bad')
+    assert True
+
+def test_kitchen_sink_endpoint(self, mock_service):
+    assert 1 == 1
+    self.assertEqual(2, 2)
+    mock_service.assert_called_once()
+    with pytest.raises(KeyError):
+        {}['missing']
+    assert 5 == 5
+";
+
+        insta::assert_snapshot!(
+            assert_code_rule_snapshot(&MaxTestAssertions, source, "tests/test_api.py"),
+            @r###"
+        [TEST-002] Line 18, Col 5: Test function `test_kitchen_sink_endpoint` has 5 assertions, exceeding the maximum of 4.
+        "###
+        );
+    }
+
+    #[test]
+    fn test_rust_max_assertions_flagged() {
+        let source = r#"
+#[test]
+fn parses_valid_header() {
+    assert_eq!(1, 1);
+    assert_ne!(1, 2);
+    assert!(true);
+    debug_assert_eq!(3, 3);
+    insta::assert_snapshot!("ok");
+}
+
+#[tokio::test]
+async fn focused_async_check() {
+    assert_eq!(1, 1);
+    assert!(matches!(Some(1), Some(_)));
+}
+
+#[cfg(test)]
+fn verify_response_fields() {
+    assert_eq!(1, 1);
+    assert_eq!(2, 2);
+    assert_eq!(3, 3);
+    assert_eq!(4, 4);
+    assert_eq!(5, 5);
+}
+"#;
+
+        insta::assert_snapshot!(
+            assert_code_rule_snapshot(&MaxTestAssertions, source, "tests/header_test.rs"),
+            @r###"
+        [TEST-002] Line 3, Col 4: Test function `parses_valid_header` has 5 assertions, exceeding the maximum of 4.
+        "###
+        );
+    }
+
+    #[test]
+    fn test_configurable_threshold_and_suppression() {
+        let source = r"
+def test_three_assertions():
+    assert 1 == 1
+    assert 2 == 2
+    assert 3 == 3
+
+# omni:ignore [TEST-002] -- end-to-end state transition check
+def test_suppressed_assertions():
+    assert 1 == 1
+    assert 2 == 2
+    assert 3 == 3
+";
+        let config_toml = r"
+[rules.max-test-assertions]
+max = 2
+";
+        let config: Config = toml::from_str(config_toml).unwrap();
+        let output = assert_code_rule_snapshot_with_config(
+            &MaxTestAssertions,
+            source,
+            "tests/test_custom.py",
+            &config,
+        );
+        insta::assert_snapshot!(
+            output,
+            @r###"
+        [TEST-002] Line 2, Col 5: Test function `test_three_assertions` has 3 assertions, exceeding the maximum of 2.
+        [TEST-002] Line 8, Col 5: Test function `test_suppressed_assertions` has 3 assertions, exceeding the maximum of 2.
+        "###
+        );
+
+        let diags = crate::code_lint::lint_file(Path::new("tests/test_custom.py"), source, &config);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_code, RuleCode("TEST-002"));
+    }
+}
