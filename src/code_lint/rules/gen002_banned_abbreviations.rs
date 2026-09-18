@@ -17,7 +17,11 @@ pub type BannedAbbreviationsConfig = DynamicRuleConfig<DenyListConfig>;
 const DEFAULT_BANNED: FilterListDefaults = FilterListDefaults {
     base: &["err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag"],
     extend: &[],
-    exempt: &[],
+    // In Rust, `str` is a primitive type keyword rather than an abbreviation, and it is
+    // load-bearing in conventional conversion names (`as_str`, `to_str`, `from_str`).
+    // Hungarian `_str` type suffixes remain covered by NAME-003.
+    // TODO: lints ids like NAME-003 are not explicit, we should rather use the actual name to make it understandable, same for the ignore comments
+    exempt: &[(SupportLang::Rust, &["str"])],
 };
 
 /// Helper to split identifiers into sub-word segments.
@@ -166,6 +170,25 @@ def handle_msg(msg):
         [NAME-002] Line 3, Col 5: Definition name `handle_msg` contains banned abbreviation `msg`.
         [NAME-002] Line 3, Col 16: Definition name `msg` contains banned abbreviation `msg`.
         [NAME-002] Line 4, Col 5: Definition name `str_val` contains banned abbreviation `str`.
+        "###);
+    }
+
+    #[test]
+    fn test_rust_default_exempts_str_abbreviation() {
+        let rule = BannedAbbreviations;
+
+        let rust_source = r"
+            fn as_str() {}
+            fn to_str() {}
+            fn from_str() {}
+            fn build_str_cache() { let str_buffer = 1; }
+        ";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, rust_source, "test.rs"), @"");
+
+        // Python keeps the base ban, since `str` is a plain abbreviation there.
+        let py_source = "def to_str():\n    pass\n";
+        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, py_source, "test.py"), @r###"
+        [NAME-002] Line 1, Col 5: Definition name `to_str` contains banned abbreviation `str`.
         "###);
     }
 
