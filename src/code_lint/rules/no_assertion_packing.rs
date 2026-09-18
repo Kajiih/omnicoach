@@ -1,4 +1,4 @@
-//! TEST-003: Flags compound boolean conditions (`&&`, `and`) and boolean tuple equality packing in test assertions (`no-assertion-packing`).
+//! Flags compound boolean conditions (`&&`, `and`) and boolean tuple equality packing in test assertions (`no-assertion-packing`).
 
 use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, Rule};

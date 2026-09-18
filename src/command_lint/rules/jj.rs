@@ -43,7 +43,7 @@ pub fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
 use crate::diagnostic::RuleName;
 use crate::rules::Tag;
 
-/// VCS001: Blocks running `jj edit <revision>` if the target revision has a non-empty description.
+/// Blocks running `jj edit <revision>` if the target revision has a non-empty description.
 pub struct NoJJEditOnDescribedCommits;
 
 /// Violation attributes for `NoJJEditOnDescribedCommits` rule.

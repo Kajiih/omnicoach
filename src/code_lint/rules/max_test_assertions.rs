@@ -1,4 +1,4 @@
-//! TEST-002: Enforces a maximum number of assertions per test function (`max-test-assertions`).
+//! Enforces a maximum number of assertions per test function (`max-test-assertions`).
 
 use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, DynamicRuleConfig, LanguageDefaults, Rule, ThresholdConfig};

@@ -1,4 +1,4 @@
-//! ASYNC-001: Flags unstructured task creation (`asyncio.create_task`, `ensure_future`, `loop.create_task`).
+//! Flags unstructured task creation (`asyncio.create_task`, `ensure_future`, `loop.create_task`).
 
 use crate::code_lint::{calls, CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};

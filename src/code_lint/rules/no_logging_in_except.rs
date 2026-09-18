@@ -1,4 +1,4 @@
-//! PY001: Verifies that `logging.error` is not used inside python except blocks.
+//! Verifies that `logging.error` is not used inside python except blocks.
 
 use crate::code_lint::CodeRule;
 use crate::core::Rule;

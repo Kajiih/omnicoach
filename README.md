@@ -114,6 +114,44 @@ banned_suffixes = ["_list", "_arr", "_dict"]
 
 ---
 
+## 🔕 Suppressions & Hygiene
+
+Omni provides granular, review-accountable suppression comment directives directly in source code.
+
+### Syntax
+
+The token shown in brackets in any diagnostic `[rule-name]` is the exact token accepted in suppression directives. Every directive requires bracketed rule names and an explicit reason after `--`:
+
+#### 1. Same-Line Suppression (`omni:ignore`)
+Suppresses rule violations occurring on the exact same line:
+```rust
+let x = 1; // omni:ignore [single-letter-variable-name] -- mathematical coordinate in 2D vector
+```
+```python
+task = asyncio.create_task(loop())  # omni:ignore [no-unstructured-task-creation] -- top-level background daemon
+```
+
+#### 2. Preceding-Line Suppression (`omni:ignore`)
+A standalone directive comment on the line immediately preceding a declaration applies to that declaration, automatically skipping any contiguous decorators or attributes:
+```python
+# omni:ignore [flat-scope-enforced] -- factory method requires localized closure
+@dataclass
+def make_handler():
+    def helper(): pass
+    return helper
+```
+```rust
+// omni:ignore [banned-abbreviations] -- external C FFI struct definition
+#[repr(C)]
+struct ctx_t;
+```
+
+#### 3. File-Level Suppression (`omni:disable-file`)
+Placed anywhere in the file (conventionally at the top) to suppress specific rules for the entire file:
+```python
+# omni:disable-file [flat-scope-enforced, single-letter-variable-name] -- generated protobuf schema
+```
+
 ## 🤝 Sharing with the Team
 
 ### 1. Git Pre-Commit Hook Integration

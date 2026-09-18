@@ -1,4 +1,4 @@
-//! PY002: Verifies that python functions are flat (no nested defs).
+//! Verifies that python functions are flat (no nested defs).
 
 use crate::code_lint::CodeRule;
 use crate::core::Rule;

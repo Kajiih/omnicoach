@@ -1,11 +1,10 @@
 //! Submodules containing implementations of code validation rules.
-// TODO: Do we really need to re-export those?
-pub mod async001_no_unstructured_task_creation;
-pub mod gen001_single_letter_variable_name;
-pub mod gen002_banned_abbreviations;
-pub mod gen003_no_hungarian_notation;
-pub mod py001_no_logging_in_except;
-pub mod py002_flat_scope_enforced;
-pub mod test001_no_sleep_in_tests;
-pub mod test002_max_test_assertions;
-pub mod test003_no_assertion_packing;
+pub mod banned_abbreviations;
+pub mod flat_scope_enforced;
+pub mod max_test_assertions;
+pub mod no_assertion_packing;
+pub mod no_hungarian_notation;
+pub mod no_logging_in_except;
+pub mod no_sleep_in_tests;
+pub mod no_unstructured_task_creation;
+pub mod single_letter_variable_name;

@@ -1,6 +1,6 @@
 //! Shared helpers for matching call expressions declaratively via `ast-grep-core`.
 //!
-//! Rules that flag banned function or method invocations (`ASYNC-001`, `TEST-001`, `TEST-003`)
+//! Rules that flag banned function or method invocations
 //! specify their targets via [`crate::core::FilterListDefaults`] and [`crate::core::DenyListConfig`].
 //! Each callee entry (e.g. `"time.sleep"`, `"tokio::time::sleep"`, `"$LOOP($$$LOOP_ARGS).create_task"`)
 //! is normalized into a `<callee>($$$ARGS)` pattern and matched structurally against the AST.

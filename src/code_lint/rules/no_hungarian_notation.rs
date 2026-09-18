@@ -1,4 +1,4 @@
-//! `GEN003`: Bans type suffixes (Hungarian notation) in variable names.
+//! Bans type suffixes (Hungarian notation) in variable names.
 
 use crate::code_lint::CodeRule;
 use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};

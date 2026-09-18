@@ -1,4 +1,4 @@
-//! TEST-001: Flags `sleep` calls in Python and Rust test files (`no-sleep-in-tests`).
+//! Flags `sleep` calls in Python and Rust test files (`no-sleep-in-tests`).
 
 use crate::code_lint::calls::{self, CallMatch};
 use crate::code_lint::{CodeRule, RuleTarget, SourceDoc};
@@ -210,7 +210,7 @@ def run_daemon():
         let prod_diags = crate::code_lint::lint_file(Path::new("src/daemon.py"), source, &config);
         assert!(
             prod_diags.is_empty(),
-            "Expected TEST-001 to skip production file, got: {prod_diags:?}"
+            "Expected no-sleep-in-tests to skip production file, got: {prod_diags:?}"
         );
 
         let test_diags =

@@ -1,4 +1,4 @@
-//! Inline and file-level suppression comment hygiene (`SUPP` family).
+//! Inline and file-level suppression comment hygiene.
 
 use crate::code_lint::{AstNode, CodeRule, SourceDoc};
 use crate::core::{Config, Rule};
@@ -10,24 +10,6 @@ use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-
-/// Legacy rule code aliases mapped to their canonical rule names for migration diagnostics.
-const LEGACY_CODE_ALIASES: &[(&str, &str)] = &[
-    ("NAME-001", "single-letter-variable-name"),
-    ("NAME-002", "banned-abbreviations"),
-    ("NAME-003", "no-hungarian-notation"),
-    ("SCOPE-001", "flat-scope-enforced"),
-    ("LOG-001", "no-logging-in-except"),
-    ("ASYNC-001", "no-unstructured-task-creation"),
-    ("TEST-001", "no-sleep-in-tests"),
-    ("TEST-002", "max-test-assertions"),
-    ("TEST-003", "no-assertion-packing"),
-    ("SUPP-001", "missing-suppression-reason"),
-    ("SUPP-002", "unused-suppression"),
-    ("SUPP-003", "unknown-suppression-rule"),
-    ("SUPP-004", "blanket-suppression"),
-    ("JJ-001", "no-edits-on-described-commits"),
-];
 
 /// Flags suppression directives missing a non-empty explanation reason.
 pub struct MissingSuppressionReason;
@@ -445,21 +427,12 @@ impl SuppressionTracker {
             if check_unknown {
                 for target_rule in &directive.target_rules {
                     if !suppressible_rules.contains(target_rule.as_str()) {
-                        let suggestion = if let Some((_, canonical)) =
-                            LEGACY_CODE_ALIASES.iter().find(|(old, _)| *old == target_rule.as_str())
-                        {
-                            format!("`{target_rule}` is an obsolete rule code. Replace with `{canonical}`.")
-                        } else {
-                            "Verify the rule name spelling or check if the rule is registered."
-                                .to_string()
-                        };
-
                         diagnostics.push(Diagnostic::new(
                             unknown_rule.name(),
                             ViolationMessage {
                                 summary: format!("Unknown rule `{target_rule}` in suppression directive."),
                                 rationale: "The specified rule is not registered as a suppressible rule in Omni.".to_string(),
-                                suggestion,
+                                suggestion: "Verify the rule name spelling or check if the rule is registered.".to_string(),
                             },
                             location.clone(),
                         ));
@@ -608,20 +581,6 @@ mod tests {
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
         assert!(diags.iter().any(|diag| diag.rule_name.0 == "unknown-suppression-rule"));
-    }
-
-    #[test]
-    fn test_legacy_rule_code_provides_hint() {
-        let content = "a = 1  # omni:ignore [NAME-001] -- legacy code";
-        let config = Config::default();
-        let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
-        let unknown = diags
-            .iter()
-            .find(|diagnostic| diagnostic.rule_name.0 == "unknown-suppression-rule")
-            .expect("Expected unknown-suppression-rule diagnostic");
-        assert!(unknown.message.suggestion.contains(
-            "`NAME-001` is an obsolete rule code. Replace with `single-letter-variable-name`."
-        ));
     }
 
     #[test]
