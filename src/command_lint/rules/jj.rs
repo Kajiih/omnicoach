@@ -3,9 +3,7 @@
 use crate::command_lint::vcs::JjClient;
 use crate::command_lint::InterceptedCommand;
 use crate::core::{Config, Rule};
-use crate::diagnostic::{
-    Diagnostic, LocationContext, SourceLocation, SourceSpan, ViolationMessage,
-};
+use crate::diagnostic::{Diagnostic, SourceLocation, SourceSpan, ViolationMessage};
 
 use crate::command_lint::ProgramCliSchema;
 
@@ -104,13 +102,11 @@ impl crate::command_lint::CommandRule for NoJJEditOnDescribedCommits {
         vec![Diagnostic::new(
             self.name(),
             message,
-            SourceLocation {
-                context: LocationContext::Virtual {
-                    name: crate::diagnostic::VCS_CONTEXT_NAME.to_string(),
-                    content: cmd.raw_string.clone(),
-                },
-                span: SourceSpan { start: cmd.span.0, end: cmd.span.1 },
-            },
+            SourceLocation::virtual_span(
+                crate::diagnostic::VCS_CONTEXT_NAME,
+                &cmd.raw_string,
+                SourceSpan::new(cmd.span.0, cmd.span.1),
+            ),
         )]
     }
 }

@@ -2,7 +2,7 @@
 
 use omni::code_lint::lint_file;
 use omni::core::Config;
-use omni::diagnostic::{print_diagnostics, Diagnostic, LineIndex};
+use omni::diagnostic::{print_diagnostics, Diagnostic};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -112,11 +112,8 @@ fn lint_single_file(
         .map_err(|error| anyhow::anyhow!("Failed to read file '{}': {}", path.display(), error))?;
     let diags = lint_file(path, &content, config);
     if let Some(changed) = changed_lines {
-        let line_index = LineIndex::new(&content);
-        let filtered = diags.into_iter().filter(|diagnostic| {
-            let coords = line_index.lookup(diagnostic.location.span.start);
-            changed.contains(&coords.line)
-        });
+        let filtered =
+            diags.into_iter().filter(|diagnostic| changed.contains(&diagnostic.location.line));
         diagnostics.extend(filtered);
     } else {
         diagnostics.extend(diags);

@@ -181,7 +181,7 @@ impl CodeRule for MaxTestAssertions {
                 if let Some(diagnostic) = self.render_default_diagnostic(
                     lang,
                     &[("func", &func_name), ("count", &formatted_count), ("max", &formatted_max)],
-                    SourceLocation::file_range(path, name_node.range()),
+                    SourceLocation::from_node(path, &name_node),
                 ) {
                     diagnostics.push(diagnostic);
                 }

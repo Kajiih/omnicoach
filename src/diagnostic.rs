@@ -174,12 +174,16 @@ pub enum LocationContext {
     /// A physical file on disk.
     File(PathBuf),
     /// A virtual execution context (e.g., `VCS_Context`).
-    Virtual {
-        /// The name of the virtual context.
-        name: String,
-        /// The raw string content of the virtual context.
-        content: String,
-    },
+    Virtual(String),
+}
+
+impl std::fmt::Display for LocationContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::File(path) => write!(f, "{}", path.display()),
+            Self::Virtual(name) => write!(f, "{name}"),
+        }
+    }
 }
 
 impl Serialize for LocationContext {
@@ -189,7 +193,7 @@ impl Serialize for LocationContext {
     {
         match self {
             Self::File(path) => serializer.serialize_str(&path.to_string_lossy()),
-            Self::Virtual { name, .. } => serializer.serialize_str(name),
+            Self::Virtual(name) => serializer.serialize_str(name),
         }
     }
 }
@@ -217,47 +221,60 @@ impl SourceSpan {
     }
 }
 
-/// Represents a location span inside a source file or linter context.
+// TODO: Should we use line-index of the line/column?
+/// Represents a location span and 1-indexed coordinate inside a source file or linter context.
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct SourceLocation {
     /// The file path or virtual context name.
     pub context: LocationContext,
     /// The byte range span of the violation.
     pub span: SourceSpan,
+    /// 1-indexed start line number.
+    pub line: usize,
+    /// 1-indexed start column number.
+    pub column: usize,
 }
 
 impl SourceLocation {
-    /// Creates a `SourceLocation` for a file path and span.
+    /// Creates a `SourceLocation` directly from a file path and an AST node.
     #[must_use]
-    pub fn file(path: impl Into<PathBuf>, span: SourceSpan) -> Self {
-        Self { context: LocationContext::File(path.into()), span }
+    pub fn from_node(path: impl Into<PathBuf>, node: &crate::code_lint::AstNode<'_>) -> Self {
+        let start_pos = node.start_pos();
+        Self {
+            context: LocationContext::File(path.into()),
+            span: SourceSpan::from_range(node.range()),
+            line: start_pos.line() + 1,
+            column: start_pos.column(node) + 1,
+        }
     }
 
-    /// Creates a `SourceLocation` for a file path and an AST byte range.
+    /// Creates a `SourceLocation` for a file path, byte span, and resolved 1-indexed coordinate.
     #[must_use]
-    pub fn file_range(path: impl Into<PathBuf>, range: std::ops::Range<usize>) -> Self {
-        Self::file(path, SourceSpan::from_range(range))
+    pub fn file_span(path: impl Into<PathBuf>, span: SourceSpan, coord: LineColumn) -> Self {
+        Self {
+            context: LocationContext::File(path.into()),
+            span,
+            line: coord.line,
+            column: coord.column,
+        }
+    }
+
+    /// Creates a `SourceLocation` for a virtual context, resolving `(line, column)` from `content`.
+    #[must_use]
+    pub fn virtual_span(name: impl Into<String>, content: &str, span: SourceSpan) -> Self {
+        let coord = LineIndex::new(content).lookup(span.start);
+        Self {
+            context: LocationContext::Virtual(name.into()),
+            span,
+            line: coord.line,
+            column: coord.column,
+        }
     }
 
     /// Formats the source location into a user-friendly coordinate header (e.g. `path/to/file.rs:10:4`).
     #[must_use]
-    pub fn format_header(&self, file_index: Option<&LineIndex>) -> String {
-        match &self.context {
-            LocationContext::File(path) => file_index.map_or_else(
-                || path.to_string_lossy().into_owned(),
-                |idx| {
-                    let coords = idx.lookup(self.span.start);
-                    format!("{}:{}:{}", path.to_string_lossy(), coords.line, coords.column)
-                },
-            ),
-            LocationContext::Virtual { name, .. } => file_index.map_or_else(
-                || name.clone(),
-                |idx| {
-                    let coords = idx.lookup(self.span.start);
-                    format!("{}:{}:{}", name, coords.line, coords.column)
-                },
-            ),
-        }
+    pub fn format_header(&self) -> String {
+        format!("{}:{}:{}", self.context, self.line, self.column)
     }
 }
 
@@ -328,8 +345,7 @@ impl LineIndex {
 
 /// Formats and prints a list of diagnostics to stdout.
 ///
-/// Supports JSON pretty-printing and plain text with automatic line-column offset resolution
-/// for source file diagnostics.
+/// Supports JSON pretty-printing and plain text with pre-resolved line-column coordinates.
 ///
 /// # Errors
 ///
@@ -339,26 +355,19 @@ pub fn print_diagnostics(diagnostics: &[Diagnostic], format: &str) -> anyhow::Re
         println!("{}", serde_json::to_string_pretty(diagnostics)?);
     } else {
         use std::collections::BTreeMap;
-        // TODO(performance): Avoid redundant file disk reads here when file content has already been loaded for linting.
         // Group diagnostics by location context directly and deterministically
-        let mut grouped: BTreeMap<LocationContext, Vec<&Diagnostic>> = BTreeMap::new();
+        let mut grouped: BTreeMap<&LocationContext, Vec<&Diagnostic>> = BTreeMap::new();
         for diagnostic in diagnostics {
-            grouped.entry(diagnostic.location.context.clone()).or_default().push(diagnostic);
+            grouped.entry(&diagnostic.location.context).or_default().push(diagnostic);
         }
 
-        for (context, mut diags) in grouped {
+        for diags in grouped.into_values() {
+            let mut sorted_diags = diags;
             // Sort diagnostics by their span start position to ensure stable/orderly reporting within each context
-            diags.sort_by_key(|diagnostic| diagnostic.location.span.start);
+            sorted_diags.sort_by_key(|diagnostic| diagnostic.location.span.start);
 
-            let file_index = match &context {
-                LocationContext::File(path) => {
-                    std::fs::read_to_string(path).ok().map(|content| LineIndex::new(&content))
-                }
-                LocationContext::Virtual { content, .. } => Some(LineIndex::new(content)),
-            };
-
-            for diagnostic in diags {
-                let location_header = diagnostic.location.format_header(file_index.as_ref());
+            for diagnostic in sorted_diags {
+                let location_header = diagnostic.location.format_header();
 
                 println!(
                     "{}: [{}] {}\n  Rationale: {}\n  Suggestion: {}\n",
@@ -463,5 +472,54 @@ mod tests {
                 "Extract logic from `process_data` into sub-functions",
             )
         );
+    }
+
+    #[test]
+    fn test_source_location_from_node() {
+        let source = "fn main() {\n    let value = 42;\n}\n";
+        let grep = ast_grep_core::AstGrep::new(source, SupportLang::Rust);
+        let let_node = grep.root().find("let $VAR = $VAL");
+        assert!(let_node.is_some());
+        if let Some(matched) = let_node {
+            let loc = SourceLocation::from_node("src/main.rs", &matched);
+            assert_eq!(
+                loc,
+                SourceLocation {
+                    context: LocationContext::File(PathBuf::from("src/main.rs")),
+                    span: SourceSpan::new(16, 31),
+                    line: 2,
+                    column: 5,
+                }
+            );
+            assert_eq!(loc.format_header(), "src/main.rs:2:5");
+            assert_eq!(
+                serde_json::to_value(&loc).ok(),
+                Some(serde_json::json!({
+                    "context": "src/main.rs",
+                    "span": { "start": 16, "end": 31 },
+                    "line": 2,
+                    "column": 5,
+                }))
+            );
+        }
+    }
+
+    #[test]
+    fn test_source_location_virtual_span() {
+        let virtual_loc = SourceLocation::virtual_span(
+            VCS_CONTEXT_NAME,
+            "echo ok\njj edit main",
+            SourceSpan::new(8, 20),
+        );
+        assert_eq!(
+            virtual_loc,
+            SourceLocation {
+                context: LocationContext::Virtual(VCS_CONTEXT_NAME.to_string()),
+                span: SourceSpan::new(8, 20),
+                line: 2,
+                column: 1,
+            }
+        );
+        assert_eq!(virtual_loc.format_header(), "VCS_Context:2:1");
     }
 }

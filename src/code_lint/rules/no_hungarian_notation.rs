@@ -2,9 +2,7 @@
 
 use crate::code_lint::CodeRule;
 use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
-use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleName, SourceLocation, SourceSpan, ViolationMessage,
-};
+use crate::diagnostic::{Diagnostic, RuleName, SourceLocation, ViolationMessage};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -102,13 +100,7 @@ impl CodeRule for NoHungarianNotation {
                             rationale: "Naming variables with their type suffixes (Hungarian notation) makes refactoring harder and clutters the code.".to_string(),
                             suggestion,
                         },
-                        SourceLocation {
-                            context: LocationContext::File(path.to_path_buf()),
-                            span: SourceSpan {
-                                start: node.range().start,
-                                end: node.range().end,
-                            },
-                        },
+                        SourceLocation::from_node(path, &node),
                     ));
                     // Check only one suffix per node
                     break;

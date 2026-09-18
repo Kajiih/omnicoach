@@ -2,9 +2,7 @@
 
 use crate::code_lint::CodeRule;
 use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
-use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleName, SourceLocation, SourceSpan, ViolationMessage,
-};
+use crate::diagnostic::{Diagnostic, RuleName, SourceLocation, ViolationMessage};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -107,13 +105,7 @@ impl CodeRule for BannedAbbreviations {
                             rationale: "Banned abbreviations make identifier names less clear, harder to read, and difficult to search for.".to_string(),
                             suggestion: "Rename the identifier using full words or a non-banned term.".to_string(),
                         },
-                        SourceLocation {
-                            context: LocationContext::File(path.to_path_buf()),
-                            span: SourceSpan {
-                                start: node.range().start,
-                                end: node.range().end,
-                            },
-                        },
+                        SourceLocation::from_node(path, &node),
                     ));
                     // Flag each node at most once
                     break;

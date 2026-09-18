@@ -3,7 +3,7 @@
 use crate::code_lint::{AstNode, CodeRule, SourceDoc};
 use crate::core::{Config, Rule};
 use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+    Diagnostic, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationMessage,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -171,8 +171,8 @@ pub struct ParsedDirective {
     pub placement: DirectivePlacement,
     /// The byte span of the comment in the source file.
     pub span: SourceSpan,
-    /// The 1-indexed line number where the directive comment resides.
-    pub raw_line: usize,
+    /// The 1-indexed line and column coordinate where the directive comment resides.
+    pub coord: LineColumn,
     /// Rule names targeted by the directive (e.g. `["single-letter-variable-name"]`).
     pub target_rules: Vec<String>,
     /// Optional explanatory reason provided after `--`.
@@ -208,15 +208,18 @@ impl SuppressionTracker {
         let mut comment_nodes = Vec::new();
         collect_comments(&grep.root(), &mut comment_nodes);
 
-        let line_index = crate::diagnostic::LineIndex::new(content);
         let mut directives = Vec::new();
 
         for comment_node in comment_nodes {
             let text = comment_node.text();
-            let range = comment_node.range();
-            let span = SourceSpan { start: range.start, end: range.end };
+            let span = SourceSpan::from_range(comment_node.range());
+            let start_pos = comment_node.start_pos();
+            let coord = LineColumn {
+                line: start_pos.line() + 1,
+                column: start_pos.column(&comment_node) + 1,
+            };
 
-            if let Some(directive) = Self::parse_comment_text(&text, span, content, &line_index) {
+            if let Some(directive) = Self::parse_comment_text(&text, span, coord, content) {
                 directives.push(directive);
             }
         }
@@ -228,10 +231,10 @@ impl SuppressionTracker {
     fn parse_comment_text(
         text: &str,
         span: SourceSpan,
+        coord: LineColumn,
         content: &str,
-        line_index: &crate::diagnostic::LineIndex,
     ) -> Option<ParsedDirective> {
-        let raw_line = line_index.lookup(span.start).line;
+        let raw_line = coord.line;
 
         // Strip comment prefix: '#' or '//' or '/*'
         let trimmed = text.trim();
@@ -316,7 +319,7 @@ impl SuppressionTracker {
         Some(ParsedDirective {
             placement,
             span,
-            raw_line,
+            coord,
             target_rules,
             reason,
             is_blanket,
@@ -326,20 +329,15 @@ impl SuppressionTracker {
 
     /// Filters diagnostics against active directives, marking matched rules as used.
     #[must_use]
-    pub fn filter_diagnostics(
-        &mut self,
-        diagnostics: Vec<Diagnostic>,
-        content: &str,
-    ) -> Vec<Diagnostic> {
+    pub fn filter_diagnostics(&mut self, diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
         if self.directives.is_empty() {
             return diagnostics;
         }
 
-        let line_index = crate::diagnostic::LineIndex::new(content);
         let mut retained = Vec::new();
 
         for diagnostic in diagnostics {
-            let diagnostic_line = line_index.lookup(diagnostic.location.span.start).line;
+            let diagnostic_line = diagnostic.location.line;
             let rule_name = diagnostic.rule_name.0;
 
             let mut suppressed = false;
@@ -371,7 +369,7 @@ impl SuppressionTracker {
 
     /// Audits all parsed directives and emits suppression diagnostics according to configuration.
     #[must_use]
-    pub fn audit(&self, path: &Path, _content: &str, config: &Config) -> Vec<Diagnostic> {
+    pub fn audit(&self, path: &Path, config: &Config) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
 
         let missing_reason_rule = MissingSuppressionReason;
@@ -392,10 +390,8 @@ impl SuppressionTracker {
             }
         }
 
-        let context = LocationContext::File(path.to_path_buf());
-
         for directive in &self.directives {
-            let location = SourceLocation { context: context.clone(), span: directive.span };
+            let location = SourceLocation::file_span(path, directive.span, directive.coord);
 
             // Blanket suppression
             if directive.is_blanket && check_blanket {

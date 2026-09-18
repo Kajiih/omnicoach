@@ -124,8 +124,8 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
         }
     }
 
-    let mut diagnostics = tracker.filter_diagnostics(raw_diagnostics, content);
-    let audit_diagnostics = tracker.audit(path, content, config);
+    let mut diagnostics = tracker.filter_diagnostics(raw_diagnostics);
+    let audit_diagnostics = tracker.audit(path, config);
     diagnostics.extend(audit_diagnostics);
 
     diagnostics

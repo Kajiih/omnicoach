@@ -4,7 +4,7 @@ use crate::code_lint::CodeRule;
 use crate::command_lint::vcs::JjClient;
 use crate::command_lint::CommandRule;
 use crate::core::Config;
-use crate::diagnostic::{Diagnostic, LineIndex};
+use crate::diagnostic::Diagnostic;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::fmt::Write;
@@ -12,18 +12,19 @@ use std::path::Path;
 
 /// Formats a list of diagnostics to a clean, human-readable simplified snapshot string.
 #[must_use]
-pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic], source_content: &str) -> String {
+pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic]) -> String {
     let mut sorted_diags = diagnostics.to_vec();
     sorted_diags.sort_by_key(|diagnostic| diagnostic.location.span.start);
 
-    let line_index = LineIndex::new(source_content);
     let mut output = String::new();
     for diagnostic in &sorted_diags {
-        let line_col = line_index.lookup(diagnostic.location.span.start);
         let _ = writeln!(
             output,
             "[{}] Line {}, Col {}: {}",
-            diagnostic.rule_name, line_col.line, line_col.column, diagnostic.message.summary
+            diagnostic.rule_name,
+            diagnostic.location.line,
+            diagnostic.location.column,
+            diagnostic.message.summary
         );
     }
     output
@@ -51,7 +52,7 @@ pub fn assert_code_rule_snapshot_with_config(
     };
     let grep = AstGrep::new(source, lang);
     let diags = rule.check_file(path, &grep, config);
-    format_diagnostics_for_test(&diags, source)
+    format_diagnostics_for_test(&diags)
 }
 
 /// Helper to execute `check_command` on a `CommandRule` and return its formatted diagnostics snapshot.
@@ -64,5 +65,5 @@ pub fn assert_command_rule_snapshot(
 ) -> String {
     let cmd = crate::command_lint::InterceptedCommand::parse_all(command_input).remove(0);
     let diags = rule.check_command(&cmd, client, config);
-    format_diagnostics_for_test(&diags, command_input)
+    format_diagnostics_for_test(&diags)
 }

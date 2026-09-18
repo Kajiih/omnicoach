@@ -2,9 +2,7 @@
 
 use crate::code_lint::CodeRule;
 use crate::core::Rule;
-use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleName, SourceLocation, SourceSpan, ViolationMessage,
-};
+use crate::diagnostic::{Diagnostic, RuleName, SourceLocation, ViolationMessage};
 use crate::rules::Tag;
 use ast_grep_core::{AstGrep, Doc, Node};
 use ast_grep_language::SupportLang;
@@ -56,13 +54,7 @@ impl CodeRule for NoLoggingInExcept {
                         rationale: "Logging errors inside except blocks using logging.error does not capture exception context automatically, which can hide root causes.".to_string(),
                         suggestion: "Use `logging.exception` instead of `logging.error` inside except blocks.".to_string(),
                     },
-                    SourceLocation {
-                        context: LocationContext::File(path.to_path_buf()),
-                        span: SourceSpan {
-                            start: matched_node.range().start,
-                            end: matched_node.range().end,
-                        },
-                    },
+                    SourceLocation::from_node(path, &matched_node),
                 ));
             }
         }

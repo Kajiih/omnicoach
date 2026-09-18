@@ -111,10 +111,7 @@ impl CodeRule for NoSleepInTests {
             .into_iter()
             .map(|call_match| {
                 let message = format_violation_message(&call_match, lang);
-                self.create_diagnostic(
-                    message,
-                    SourceLocation::file_range(path, call_match.node.range()),
-                )
+                self.create_diagnostic(message, SourceLocation::from_node(path, &call_match.node))
             })
             .collect()
     }

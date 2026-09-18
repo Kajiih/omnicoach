@@ -187,7 +187,7 @@ fn check_rust_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: 
             diagnostics.push(Diagnostic::new(
                 RuleName("no-assertion-packing"),
                 COMPOUND_BOOLEAN_TEMPLATE.render(SupportLang::Rust, &[("macro_name", &macro_name)]),
-                SourceLocation::file_range(path, node.range()),
+                SourceLocation::from_node(path, node),
             ));
             return;
         }
@@ -201,7 +201,7 @@ fn check_rust_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: 
                     RuleName("no-assertion-packing"),
                     BOOLEAN_TUPLE_TEMPLATE
                         .render(SupportLang::Rust, &[("macro_name", &macro_name)]),
-                    SourceLocation::file_range(path, node.range()),
+                    SourceLocation::from_node(path, node),
                 ));
                 return;
             }
@@ -230,7 +230,7 @@ fn check_python_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path
             diagnostics.push(Diagnostic::new(
                 RuleName("no-assertion-packing"),
                 COMPOUND_BOOLEAN_TEMPLATE.render(SupportLang::Python, &[]),
-                SourceLocation::file_range(path, node.range()),
+                SourceLocation::from_node(path, node),
             ));
             return;
         }
@@ -242,7 +242,7 @@ fn check_python_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path
                 diagnostics.push(Diagnostic::new(
                     RuleName("no-assertion-packing"),
                     BOOLEAN_TUPLE_TEMPLATE.render(SupportLang::Python, &[]),
-                    SourceLocation::file_range(path, node.range()),
+                    SourceLocation::from_node(path, node),
                 ));
                 return;
             }
@@ -336,13 +336,14 @@ mod tests {
         let grep = AstGrep::new(source, lang);
         let diags = NoAssertionPacking.check_file(Path::new(file_name), &grep, &config);
 
-        let file_index = crate::diagnostic::LineIndex::new(source);
         let mut lines = Vec::new();
         for diagnostic in diags {
-            let coords = file_index.lookup(diagnostic.location.span.start);
             lines.push(format!(
                 "[{}] Line {}, Col {}: {}",
-                diagnostic.rule_name, coords.line, coords.column, diagnostic.message.summary
+                diagnostic.rule_name,
+                diagnostic.location.line,
+                diagnostic.location.column,
+                diagnostic.message.summary
             ));
         }
         lines.join("\n")

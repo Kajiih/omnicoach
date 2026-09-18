@@ -2,9 +2,7 @@
 
 use crate::code_lint::{calls, CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
-use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleName, SourceLocation, SourceSpan, ViolationMessage,
-};
+use crate::diagnostic::{Diagnostic, RuleName, SourceLocation, ViolationMessage};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -74,13 +72,7 @@ impl CodeRule for NoUnstructuredTaskCreation {
                         rationale: "Unstructured background tasks can fail silently, leak upon cancellation, and introduce race conditions.".to_string(),
                         suggestion: "Use structured concurrency with AnyIO (`async with anyio.create_task_group() as tg: tg.start_soon(...)`) or Python 3.11+ TaskGroup (`async with asyncio.TaskGroup() as tg: tg.create_task(...)`).".to_string(),
                     },
-                    SourceLocation {
-                        context: LocationContext::File(path.to_path_buf()),
-                        span: SourceSpan {
-                            start: call_match.node.range().start,
-                            end: call_match.node.range().end,
-                        },
-                    },
+                    SourceLocation::from_node(path, &call_match.node),
                 )
             })
             .collect()

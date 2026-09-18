@@ -2,9 +2,7 @@
 
 use crate::code_lint::CodeRule;
 use crate::core::{AllowListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
-use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleName, SourceLocation, SourceSpan, ViolationMessage,
-};
+use crate::diagnostic::{Diagnostic, RuleName, SourceLocation, ViolationMessage};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -66,13 +64,7 @@ impl CodeRule for SingleLetterVariableName {
                         rationale: "Single-letter variable names are not descriptive and make code harder to read and maintain.".to_string(),
                         suggestion: "Choose a more descriptive name that reflects the variable's purpose.".to_string(),
                     },
-                    SourceLocation {
-                        context: LocationContext::File(path.to_path_buf()),
-                        span: SourceSpan {
-                            start: node.range().start,
-                            end: node.range().end,
-                        },
-                    },
+                    SourceLocation::from_node(path, &node),
                 ));
             }
         }
