@@ -109,6 +109,7 @@ pub const COMMAND_RULES: &[&dyn crate::command_lint::CommandRule] =
 mod tests {
     use super::*;
     use std::collections::HashSet;
+    use strum::IntoEnumIterator;
 
     fn validate_rule(
         rule: &(impl crate::core::Rule + ?Sized),
@@ -166,24 +167,39 @@ mod tests {
     }
 
     #[test]
-    fn test_code_rule_languages_match_tags() {
+    fn test_code_rules_declare_supported_languages() {
         for rule in CODE_RULES {
-            let tag_langs: Vec<ast_grep_language::SupportLang> =
-                rule.tags().iter().filter_map(Tag::to_support_lang).collect();
-            for lang in rule.supported_languages() {
+            assert!(
+                !rule.supported_languages().is_empty(),
+                "Code rule {} must declare at least one supported language",
+                rule.code().0
+            );
+        }
+    }
+
+    #[rstest]
+    #[case::code_rules(CODE_RULES)]
+    #[case::command_rules(COMMAND_RULES)]
+    fn test_language_tags_are_derived_not_declared<R>(#[case] rules: &[&R])
+    where
+        R: crate::core::Rule + ?Sized,
+    {
+        for rule in rules {
+            for tag in rule.tags() {
                 assert!(
-                    tag_langs.contains(lang),
-                    "Rule {} is missing Tag for supported language {:?}",
-                    rule.code().0,
-                    lang
+                    tag.to_support_lang().is_none(),
+                    "Rule {} declares language tag {tag:?}; language tags are derived from supported_languages()",
+                    rule.code().0
                 );
             }
-            for tag_lang in &tag_langs {
+            for lang in rule.supported_languages() {
+                let lang_tag = Tag::iter()
+                    .find(|tag| tag.to_support_lang() == Some(*lang))
+                    .expect("supported language must have a matching Tag variant");
                 assert!(
-                    rule.supported_languages().contains(tag_lang),
-                    "Rule {} has Tag for {:?} but does not declare it in supported_languages()",
-                    rule.code().0,
-                    tag_lang
+                    rule.has_tag(lang_tag),
+                    "Rule {} does not resolve derived language tag {lang_tag:?}",
+                    rule.code().0
                 );
             }
         }

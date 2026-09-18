@@ -36,10 +36,6 @@ pub trait CodeRule: crate::core::Rule {
         RuleTarget::All
     }
 
-    /// Returns the languages supported by this code rule.
-    #[must_use]
-    fn supported_languages(&self) -> &'static [SupportLang];
-
     /// Returns true if this rule supports the given language.
     #[must_use]
     fn supports_language(&self, lang: SupportLang) -> bool {

@@ -24,15 +24,15 @@ impl Rule for MissingSuppressionReason {
     }
 
     fn tags(&self) -> &'static [Tag] {
-        &[Tag::Suppression, Tag::Python, Tag::Rust]
+        &[Tag::Suppression]
+    }
+
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python, SupportLang::Rust]
     }
 }
 
 impl CodeRule for MissingSuppressionReason {
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
     fn check_file(
         &self,
         _path: &Path,
@@ -57,15 +57,15 @@ impl Rule for UnusedSuppression {
     }
 
     fn tags(&self) -> &'static [Tag] {
-        &[Tag::Suppression, Tag::Python, Tag::Rust]
+        &[Tag::Suppression]
+    }
+
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python, SupportLang::Rust]
     }
 }
 
 impl CodeRule for UnusedSuppression {
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
     fn check_file(
         &self,
         _path: &Path,
@@ -90,15 +90,15 @@ impl Rule for UnknownSuppressionCode {
     }
 
     fn tags(&self) -> &'static [Tag] {
-        &[Tag::Suppression, Tag::Python, Tag::Rust]
+        &[Tag::Suppression]
+    }
+
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python, SupportLang::Rust]
     }
 }
 
 impl CodeRule for UnknownSuppressionCode {
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
     fn check_file(
         &self,
         _path: &Path,
@@ -123,15 +123,15 @@ impl Rule for BlanketSuppression {
     }
 
     fn tags(&self) -> &'static [Tag] {
-        &[Tag::Suppression, Tag::Python, Tag::Rust]
+        &[Tag::Suppression]
+    }
+
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python, SupportLang::Rust]
     }
 }
 
 impl CodeRule for BlanketSuppression {
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
     fn check_file(
         &self,
         _path: &Path,

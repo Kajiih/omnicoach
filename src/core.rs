@@ -210,12 +210,26 @@ pub const CONFIG_FILE_NAME: &str = ".omnilint.toml";
 
 /// Common metadata shared by all lint rules.
 pub trait Rule: Send + Sync {
-    /// Returns the unique rule code (e.g., "PY001").
+    /// Returns the unique rule code (e.g., "LOG-001").
     fn code(&self) -> RuleCode;
     /// Returns the rule name (e.g., "no-logging-in-except").
     fn name(&self) -> RuleName;
-    /// Returns the list of tags associated with the rule.
+    /// Returns the domain tags of the rule (language tags are derived from `supported_languages`).
     fn tags(&self) -> &'static [crate::rules::Tag];
+
+    /// Returns the languages analyzed by this rule. Non-language rules return an empty slice.
+    #[must_use]
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[]
+    }
+
+    /// Returns true if the rule carries the given tag, including language tags
+    /// derived from `supported_languages`.
+    #[must_use]
+    fn has_tag(&self, tag: crate::rules::Tag) -> bool {
+        self.tags().contains(&tag)
+            || tag.to_support_lang().is_some_and(|lang| self.supported_languages().contains(&lang))
+    }
 }
 
 /// A filter selector parsed from linter configuration settings.
@@ -363,7 +377,7 @@ impl Config {
         let matches_selector = |sel: &Selector| match sel {
             Selector::Code(code_selector) => *code_selector == code,
             Selector::Name(name_selector) => *name_selector == name,
-            Selector::Tag(tag_selector) => rule.tags().contains(tag_selector),
+            Selector::Tag(tag_selector) => rule.has_tag(*tag_selector),
         };
 
         if let Some(ref select) = self.select {
@@ -395,7 +409,7 @@ impl Config {
         let matches_selector = |sel: &Selector| match sel {
             Selector::Code(code_selector) => *code_selector == code,
             Selector::Name(name_selector) => *name_selector == name,
-            Selector::Tag(tag_selector) => rule.tags().contains(tag_selector),
+            Selector::Tag(tag_selector) => rule.has_tag(*tag_selector),
         };
 
         for (pattern, selectors) in &self.per_file_ignores {

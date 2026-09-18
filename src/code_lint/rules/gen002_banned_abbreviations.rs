@@ -68,15 +68,15 @@ impl Rule for BannedAbbreviations {
     }
 
     fn tags(&self) -> &'static [Tag] {
-        &[Tag::Style, Tag::Naming, Tag::Heuristic, Tag::Python, Tag::Rust]
+        &[Tag::Style, Tag::Naming, Tag::Heuristic]
+    }
+
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python, SupportLang::Rust]
     }
 }
 
 impl CodeRule for BannedAbbreviations {
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
     fn check_file(
         &self,
         path: &Path,

@@ -33,15 +33,14 @@ impl Rule for NoLoggingInExcept {
         RuleName("no-logging-in-except")
     }
     fn tags(&self) -> &'static [Tag] {
-        &[Tag::Logging, Tag::Exceptions, Tag::Python]
+        &[Tag::Logging, Tag::Exceptions]
+    }
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python]
     }
 }
 
 impl CodeRule for NoLoggingInExcept {
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python]
-    }
-
     fn check_file(
         &self,
         path: &Path,

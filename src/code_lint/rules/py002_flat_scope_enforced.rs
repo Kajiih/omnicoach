@@ -58,17 +58,16 @@ impl Rule for FlatScopeEnforced {
         RuleName("flat-scope-enforced")
     }
     fn tags(&self) -> &'static [Tag] {
-        &[Tag::Complexity, Tag::Style, Tag::Python]
+        &[Tag::Complexity, Tag::Style]
+    }
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python]
     }
 }
 
 impl CodeRule for FlatScopeEnforced {
     fn target(&self) -> crate::code_lint::RuleTarget {
         crate::code_lint::RuleTarget::SourceOnly
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python]
     }
 
     fn check_file(

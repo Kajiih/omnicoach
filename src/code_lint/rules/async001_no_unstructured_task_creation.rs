@@ -23,7 +23,11 @@ impl Rule for NoUnstructuredTaskCreation {
     }
 
     fn tags(&self) -> &'static [Tag] {
-        &[Tag::Async, Tag::Python]
+        &[Tag::Async]
+    }
+
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python]
     }
 }
 
@@ -82,10 +86,6 @@ fn check_unstructured_call(call_node: &AstNode<'_>) -> Option<String> {
 impl CodeRule for NoUnstructuredTaskCreation {
     fn target(&self) -> RuleTarget {
         RuleTarget::All
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python]
     }
 
     fn check_file(

@@ -33,15 +33,15 @@ impl Rule for SingleLetterVariableName {
     }
 
     fn tags(&self) -> &'static [Tag] {
-        &[Tag::Style, Tag::Naming, Tag::Python, Tag::Rust]
+        &[Tag::Style, Tag::Naming]
+    }
+
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python, SupportLang::Rust]
     }
 }
 // TODO: Is this fully language agnostic?
 impl CodeRule for SingleLetterVariableName {
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
     fn check_file(
         &self,
         path: &Path,
