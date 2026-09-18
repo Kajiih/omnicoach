@@ -1,6 +1,8 @@
 //! Shared core module of the Omni linter toolkit.
 
-use crate::diagnostic::{RuleCode, RuleName};
+use crate::diagnostic::{
+    Diagnostic, RuleCode, RuleName, SourceLocation, ViolationMessage, ViolationTemplate,
+};
 use ast_grep_language::SupportLang;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -293,6 +295,42 @@ pub trait Rule: Send + Sync {
     fn has_tag(&self, tag: crate::rules::Tag) -> bool {
         self.tags().contains(&tag)
             || tag.to_support_lang().is_some_and(|lang| self.supported_languages().contains(&lang))
+    }
+
+    /// Optional default violation template for this rule.
+    #[must_use]
+    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
+        None
+    }
+
+    /// Constructs a `Diagnostic` with this rule's code and name.
+    #[must_use]
+    fn create_diagnostic(&self, message: ViolationMessage, location: SourceLocation) -> Diagnostic {
+        Diagnostic::new(self.code(), self.name(), message, location)
+    }
+
+    /// Renders a diagnostic from this rule's default `violation_template()`.
+    #[must_use]
+    fn render_default_diagnostic(
+        &self,
+        lang: SupportLang,
+        params: &[(&str, &str)],
+        location: SourceLocation,
+    ) -> Option<Diagnostic> {
+        self.violation_template()
+            .map(|template| self.create_diagnostic(template.render(lang, params), location))
+    }
+
+    /// Renders a diagnostic from an explicit `ViolationTemplate`.
+    #[must_use]
+    fn render_diagnostic(
+        &self,
+        template: &ViolationTemplate,
+        lang: SupportLang,
+        params: &[(&str, &str)],
+        location: SourceLocation,
+    ) -> Diagnostic {
+        self.create_diagnostic(template.render(lang, params), location)
     }
 }
 

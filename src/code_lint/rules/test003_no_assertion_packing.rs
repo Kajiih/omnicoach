@@ -3,7 +3,7 @@
 use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, Rule};
 use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+    violation_template, Diagnostic, RuleCode, RuleName, SourceLocation, ViolationTemplate,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -30,6 +30,34 @@ impl Rule for NoAssertionPacking {
         &[SupportLang::Python, SupportLang::Rust]
     }
 }
+
+const COMPOUND_BOOLEAN_TEMPLATE: ViolationTemplate = violation_template! {
+    summary: {
+        base: "Compound boolean condition in assertion.",
+        Python => "Compound boolean condition (`and`) in `assert` statement.",
+        Rust => "Compound boolean condition (`&&`) in `{macro_name}!` assertion.",
+    },
+    rationale: "Combining multiple boolean conditions into a single assertion obscures which condition failed and circumvents assertion limits. Assertions should be atomic or operate directly on domain models.",
+    suggestion: {
+        base: "Split into separate atomic assertions or verify distinct behaviors in separate tests.",
+        Python => "Split into separate atomic assertions (e.g. `assert a\\nassert b`) or verify distinct behaviors in separate tests.",
+        Rust => "Split into separate atomic assertions (e.g. `assert!(...); assert!(...);`) or verify distinct behaviors in separate tests.",
+    },
+};
+
+const BOOLEAN_TUPLE_TEMPLATE: ViolationTemplate = violation_template! {
+    summary: {
+        base: "Boolean tuple/collection equality in assertion.",
+        Python => "Boolean tuple/collection equality in `assert` statement.",
+        Rust => "Boolean tuple/collection equality in `{macro_name}!` assertion.",
+    },
+    rationale: "Asserting equality against synthesized boolean tuples/collections circumvents assertion limits and yields unhelpful diffs. Assert directly on domain objects/collections or write separate atomic assertions.",
+    suggestion: {
+        base: "Assert directly on the domain model/collection or split into separate atomic assertions.",
+        Python => "Assert directly on the domain model/collection (e.g. `assert actual == expected`) or split into separate atomic assertions.",
+        Rust => "Assert directly on the domain model/collection (e.g. `assert_eq!(actual, expected)`) or split into separate atomic assertions.",
+    },
+};
 
 /// Returns true if a Rust macro node is an assertion macro (`assert!`, `assert_*!`, `debug_assert!`, etc.).
 fn is_rust_assertion_macro(macro_node: &AstNode<'_>) -> bool {
@@ -163,18 +191,8 @@ fn check_rust_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: 
             diagnostics.push(Diagnostic::new(
                 RuleCode("TEST-003"),
                 RuleName("no-assertion-packing"),
-                ViolationMessage {
-                    summary: format!("Compound boolean condition (`&&`) in `{macro_name}!` assertion."),
-                    rationale: "Combining multiple boolean conditions into a single assertion obscures which condition failed and circumvents assertion limits. Assertions should be atomic or operate directly on domain models.".to_string(),
-                    suggestion: "Split into separate atomic assertions (e.g. `assert!(...); assert!(...);`) or verify distinct behaviors in separate tests.".to_string(),
-                },
-                SourceLocation {
-                    context: LocationContext::File(path.to_path_buf()),
-                    span: SourceSpan {
-                        start: node.range().start,
-                        end: node.range().end,
-                    },
-                },
+                COMPOUND_BOOLEAN_TEMPLATE.render(SupportLang::Rust, &[("macro_name", &macro_name)]),
+                SourceLocation::file_range(path, node.range()),
             ));
             return;
         }
@@ -187,18 +205,9 @@ fn check_rust_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: 
                 diagnostics.push(Diagnostic::new(
                     RuleCode("TEST-003"),
                     RuleName("no-assertion-packing"),
-                    ViolationMessage {
-                        summary: format!("Boolean tuple/collection equality in `{macro_name}!` assertion."),
-                        rationale: "Asserting equality against synthesized boolean tuples/collections circumvents assertion limits and yields unhelpful diffs. Assert directly on domain objects/collections or write separate atomic assertions.".to_string(),
-                        suggestion: "Assert directly on the domain model/collection (e.g. `assert_eq!(actual, expected)`) or split into separate atomic assertions.".to_string(),
-                    },
-                    SourceLocation {
-                        context: LocationContext::File(path.to_path_buf()),
-                        span: SourceSpan {
-                            start: node.range().start,
-                            end: node.range().end,
-                        },
-                    },
+                    BOOLEAN_TUPLE_TEMPLATE
+                        .render(SupportLang::Rust, &[("macro_name", &macro_name)]),
+                    SourceLocation::file_range(path, node.range()),
                 ));
                 return;
             }
@@ -227,18 +236,8 @@ fn check_python_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path
             diagnostics.push(Diagnostic::new(
                 RuleCode("TEST-003"),
                 RuleName("no-assertion-packing"),
-                ViolationMessage {
-                    summary: "Compound boolean condition (`and`) in `assert` statement.".to_string(),
-                    rationale: "Combining multiple boolean conditions into a single assertion obscures which condition failed and circumvents assertion limits. Assertions should be atomic or operate directly on domain models.".to_string(),
-                    suggestion: "Split into separate atomic assertions (e.g. `assert a\\nassert b`) or verify distinct behaviors in separate tests.".to_string(),
-                },
-                SourceLocation {
-                    context: LocationContext::File(path.to_path_buf()),
-                    span: SourceSpan {
-                        start: node.range().start,
-                        end: node.range().end,
-                    },
-                },
+                COMPOUND_BOOLEAN_TEMPLATE.render(SupportLang::Python, &[]),
+                SourceLocation::file_range(path, node.range()),
             ));
             return;
         }
@@ -250,18 +249,8 @@ fn check_python_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path
                 diagnostics.push(Diagnostic::new(
                     RuleCode("TEST-003"),
                     RuleName("no-assertion-packing"),
-                    ViolationMessage {
-                        summary: "Boolean tuple/collection equality in `assert` statement.".to_string(),
-                        rationale: "Asserting equality against synthesized boolean tuples/collections circumvents assertion limits and yields unhelpful diffs. Assert directly on domain objects/collections or write separate atomic assertions.".to_string(),
-                        suggestion: "Assert directly on the domain model/collection (e.g. `assert actual == expected`) or split into separate atomic assertions.".to_string(),
-                    },
-                    SourceLocation {
-                        context: LocationContext::File(path.to_path_buf()),
-                        span: SourceSpan {
-                            start: node.range().start,
-                            end: node.range().end,
-                        },
-                    },
+                    BOOLEAN_TUPLE_TEMPLATE.render(SupportLang::Python, &[]),
+                    SourceLocation::file_range(path, node.range()),
                 ));
                 return;
             }

@@ -3,7 +3,7 @@
 use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, DynamicRuleConfig, LanguageDefaults, Rule, ThresholdConfig};
 use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+    violation_template, Diagnostic, RuleCode, RuleName, SourceLocation, ViolationTemplate,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -15,6 +15,16 @@ const DEFAULT_MAX_ASSERTIONS: LanguageDefaults<usize> = LanguageDefaults::new(4,
 
 /// Configuration for the `MaxTestAssertions` rule.
 pub type MaxTestAssertionsConfig = DynamicRuleConfig<ThresholdConfig>;
+
+const VIOLATION_TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Test function `{func}` has {count} assertions, exceeding the maximum of {max}.",
+    rationale: "Tests with too many assertions often verify multiple unrelated behaviors. Obscuring them with ad-hoc helper closures, filtering loops, or artificial compression hurts readability and makes failures harder to diagnose.",
+    suggestion: {
+        base: "Refactor `{func}` by choosing the appropriate pattern: (1) Split distinct steps or behaviors into separate focused test functions, (2) Snapshot formatted output or compare whole domain models directly, or (3) Parameterize test variations. Do NOT add accidental complexity with ad-hoc assertion helpers, extraction closures, filtering loops, or boolean tuples solely to reduce assertion count.",
+        Python => "Refactor `{func}` by choosing the appropriate pattern: (1) Split distinct steps or behaviors into separate focused `test_*` functions, (2) Snapshot formatted output or compare whole domain models directly, or (3) Parameterize variations with `@pytest.mark.parametrize`. Do NOT add accidental complexity with ad-hoc assertion helpers, extraction closures, filtering loops, or boolean tuples solely to reduce assertion count.",
+        Rust => "Refactor `{func}` by choosing the appropriate pattern: (1) Split distinct steps or behaviors into separate focused `#[test]` functions, (2) Snapshot formatted output (`insta::assert_snapshot!`) or compare whole domain models directly, or (3) Parameterize test cases with `#[rstest]` and `#[case(...)]`. Do NOT add accidental complexity with ad-hoc assertion helpers, extraction closures, filtering loops, or boolean tuples solely to reduce assertion count.",
+    },
+};
 
 /// Rule that limits the number of assertions inside a single test function.
 pub struct MaxTestAssertions;
@@ -34,6 +44,10 @@ impl Rule for MaxTestAssertions {
 
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python, SupportLang::Rust]
+    }
+
+    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
+        Some(&VIOLATION_TEMPLATE)
     }
 }
 
@@ -116,17 +130,6 @@ fn collect_top_level_functions<'a>(
         collect_top_level_functions(&child, target_kind, out);
     }
 }
-// TODO: Should we generalize this in the framework?
-fn format_suggestion(func_name: &str, lang: SupportLang) -> String {
-    match lang {
-        SupportLang::Rust => format!(
-            "Refactor `{func_name}` by choosing the appropriate pattern: (1) Split distinct steps or behaviors into separate focused `#[test]` functions, (2) Snapshot formatted output (`insta::assert_snapshot!`) or compare whole domain models directly, or (3) Parameterize test cases with `#[rstest]` and `#[case(...)]. Do NOT add accidental complexity with ad-hoc assertion helpers, extraction closures, filtering loops, or boolean tuples solely to reduce assertion count."
-        ),
-        _ => format!(
-            "Refactor `{func_name}` by choosing the appropriate pattern: (1) Split distinct steps or behaviors into separate focused `test_*` functions, (2) Snapshot formatted output or compare whole domain models directly, or (3) Parameterize test cases with `@pytest.mark.parametrize`. Do NOT add accidental complexity with ad-hoc assertion helpers, extraction closures, filtering loops, or boolean tuples solely to reduce assertion count."
-        ),
-    }
-}
 
 impl CodeRule for MaxTestAssertions {
     fn target(&self) -> RuleTarget {
@@ -177,24 +180,15 @@ impl CodeRule for MaxTestAssertions {
             };
 
             if assertion_count > max_allowed {
-                diagnostics.push(Diagnostic::new(
-                    self.code(),
-                    self.name(),
-                    ViolationMessage {
-                        summary: format!(
-                            "Test function `{func_name}` has {assertion_count} assertions, exceeding the maximum of {max_allowed}."
-                        ),
-                        rationale: "Tests with too many assertions often verify multiple unrelated behaviors. Obscuring them with ad-hoc helper closures, filtering loops, or artificial compression hurts readability and makes failures harder to diagnose.".to_string(),
-                        suggestion: format_suggestion(&func_name, lang),
-                    },
-                    SourceLocation {
-                        context: LocationContext::File(path.to_path_buf()),
-                        span: SourceSpan {
-                            start: name_node.range().start,
-                            end: name_node.range().end,
-                        },
-                    },
-                ));
+                let formatted_count = assertion_count.to_string();
+                let formatted_max = max_allowed.to_string();
+                if let Some(diagnostic) = self.render_default_diagnostic(
+                    lang,
+                    &[("func", &func_name), ("count", &formatted_count), ("max", &formatted_max)],
+                    SourceLocation::file_range(path, name_node.range()),
+                ) {
+                    diagnostics.push(diagnostic);
+                }
             }
         }
 

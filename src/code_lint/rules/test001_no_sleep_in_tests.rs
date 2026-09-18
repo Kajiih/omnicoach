@@ -4,7 +4,8 @@ use crate::code_lint::calls::{self, CallMatch};
 use crate::code_lint::{CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
 use crate::diagnostic::{
-    Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+    violation_template, Diagnostic, RuleCode, RuleName, SourceLocation, ViolationMessage,
+    ViolationTemplate,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -48,6 +49,26 @@ impl Rule for NoSleepInTests {
     }
 }
 
+const SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Wall-clock or async sleep `{call}()` in test is discouraged.",
+    rationale: "Sleeping in tests slows down the test suite and introduces timing-dependent flakiness under load.",
+    suggestion: {
+        base: "Synchronize on deterministic signals or primitives (events, channels, conditions) or inject a virtual/fake clock (`clock.sleep(...)`).",
+        Python => "Synchronize on deterministic signals (`anyio.Event`, `asyncio.Event`, or a queue/condition) or inject a virtual/fake clock (`clock.sleep(...)`).",
+        Rust => "Synchronize on deterministic primitives (`tokio::sync::Notify`, channels, `Condvar`) or use virtual time (`tokio::time::pause()`) or an injected clock (`clock.sleep(...)`).",
+    },
+};
+
+const ZERO_SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Zero-duration sleep `{call}({arg})` in test is discouraged.",
+    rationale: "Zero-duration sleep is an indirect way to yield execution to the scheduler and obscures intent.",
+    suggestion: {
+        base: "To yield control to the scheduler or runtime without delaying, use an explicit yield or checkpoint primitive.",
+        Python => "To yield control to the event loop without delaying, use `await anyio.lowlevel.checkpoint()`.",
+        Rust => "To yield control to the executor without delaying, use `tokio::task::yield_now().await`.",
+    },
+};
+
 /// Returns the trimmed argument string if the call is a zero-duration sleep (e.g. `sleep(0)`, `sleep(Duration::ZERO)`).
 fn zero_duration_arg(call_match: &CallMatch<'_>) -> Option<String> {
     if call_match.arguments.len() != 1 {
@@ -71,36 +92,8 @@ fn zero_duration_arg(call_match: &CallMatch<'_>) -> Option<String> {
 fn format_violation_message(call_match: &CallMatch<'_>, lang: SupportLang) -> ViolationMessage {
     let call_name = &call_match.callee;
     zero_duration_arg(call_match).map_or_else(
-        || {
-            let suggestion = match lang {
-                SupportLang::Rust => {
-                    "Synchronize on deterministic primitives (`tokio::sync::Notify`, channels, `Condvar`) or use virtual time (`tokio::time::pause()`) or an injected clock (`clock.sleep(...)`)."
-                }
-                _ => {
-                    "Synchronize on deterministic signals (`anyio.Event`, `asyncio.Event`, or a queue/condition) or inject a virtual/fake clock (`clock.sleep(...)`)."
-                }
-            };
-            ViolationMessage {
-                summary: format!("Wall-clock or async sleep `{call_name}()` in test is discouraged."),
-                rationale: "Sleeping in tests slows down the test suite and introduces timing-dependent flakiness under load.".to_string(),
-                suggestion: suggestion.to_string(),
-            }
-        },
-        |zero_arg| {
-            let suggestion = match lang {
-                SupportLang::Rust => {
-                    "To yield control to the executor without delaying, use `tokio::task::yield_now().await`."
-                }
-                _ => {
-                    "To yield control to the event loop without delaying, use `await anyio.lowlevel.checkpoint()`."
-                }
-            };
-            ViolationMessage {
-                summary: format!("Zero-duration sleep `{call_name}({zero_arg})` in test is discouraged."),
-                rationale: "Zero-duration sleep is an indirect way to yield execution to the scheduler and obscures intent.".to_string(),
-                suggestion: suggestion.to_string(),
-            }
-        },
+        || SLEEP_TEMPLATE.render(lang, &[("call", call_name)]),
+        |zero_arg| ZERO_SLEEP_TEMPLATE.render(lang, &[("call", call_name), ("arg", &zero_arg)]),
     )
 }
 
@@ -123,17 +116,9 @@ impl CodeRule for NoSleepInTests {
             .into_iter()
             .map(|call_match| {
                 let message = format_violation_message(&call_match, lang);
-                Diagnostic::new(
-                    self.code(),
-                    self.name(),
+                self.create_diagnostic(
                     message,
-                    SourceLocation {
-                        context: LocationContext::File(path.to_path_buf()),
-                        span: SourceSpan {
-                            start: call_match.node.range().start,
-                            end: call_match.node.range().end,
-                        },
-                    },
+                    SourceLocation::file_range(path, call_match.node.range()),
                 )
             })
             .collect()
