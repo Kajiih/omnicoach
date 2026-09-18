@@ -205,22 +205,16 @@ class ItemsArr: # OK (class definition)
         let grep = AstGrep::new(source, SupportLang::Rust);
         let diags = rule.check_file(Path::new("test.rs"), &grep, &crate::core::Config::default());
 
-        assert_eq!(diags.len(), 4);
+        let suggestions: Vec<&str> =
+            diags.iter().map(|diagnostic| diagnostic.message.suggestion.as_str()).collect();
         assert_eq!(
-            diags[0].message.suggestion,
-            "Rename the identifier to use plural form (e.g. `users`) or remove the suffix."
-        );
-        assert_eq!(
-            diags[1].message.suggestion,
-            "Rename the identifier to use plural form (e.g. `users`) or remove the suffix."
-        );
-        assert_eq!(
-            diags[2].message.suggestion,
-            "Rename the identifier to use plural form (e.g. `USERS`) or remove the suffix."
-        );
-        assert_eq!(
-            diags[3].message.suggestion,
-            "Rename the identifier without the type suffix `_int`."
+            suggestions,
+            vec![
+                "Rename the identifier to use plural form (e.g. `users`) or remove the suffix.",
+                "Rename the identifier to use plural form (e.g. `users`) or remove the suffix.",
+                "Rename the identifier to use plural form (e.g. `USERS`) or remove the suffix.",
+                "Rename the identifier without the type suffix `_int`.",
+            ]
         );
     }
 

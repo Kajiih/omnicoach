@@ -74,6 +74,11 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
     let mut tracker = suppression::SuppressionTracker::from_ast(&grep, content);
 
     let is_test = config.is_test_path(path);
+    let inline_test_ranges = if !is_test && lang == SupportLang::Rust {
+        ast_rust::collect_inline_test_ranges(&grep.root())
+    } else {
+        Vec::new()
+    };
     let mut raw_diagnostics = Vec::new();
 
     for rule in crate::rules::CODE_RULES {
@@ -89,12 +94,33 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
         if is_test && target == RuleTarget::SourceOnly {
             continue;
         }
-        if !is_test && target == RuleTarget::TestsOnly {
+        if !is_test && target == RuleTarget::TestsOnly && inline_test_ranges.is_empty() {
             continue;
         }
 
         if rule.supports_language(lang) {
-            raw_diagnostics.extend(rule.check_file(path, &grep, config));
+            let rule_diagnostics = rule.check_file(path, &grep, config);
+            if !is_test && !inline_test_ranges.is_empty() {
+                match target {
+                    RuleTarget::TestsOnly => {
+                        raw_diagnostics.extend(rule_diagnostics.into_iter().filter(|diagnostic| {
+                            let pos = diagnostic.location.span.start;
+                            inline_test_ranges.iter().any(|range| range.contains(&pos))
+                        }));
+                    }
+                    RuleTarget::SourceOnly => {
+                        raw_diagnostics.extend(rule_diagnostics.into_iter().filter(|diagnostic| {
+                            let pos = diagnostic.location.span.start;
+                            !inline_test_ranges.iter().any(|range| range.contains(&pos))
+                        }));
+                    }
+                    RuleTarget::All => {
+                        raw_diagnostics.extend(rule_diagnostics);
+                    }
+                }
+            } else {
+                raw_diagnostics.extend(rule_diagnostics);
+            }
         }
     }
 
@@ -130,6 +156,26 @@ pub fn is_import_binding(node: &AstNode<'_>, lang: SupportLang) -> bool {
         SupportLang::Python => matches!(
             parent_kind.as_ref(),
             "import_statement" | "import_from_statement" | "aliased_import" | "dotted_name"
+        ),
+        _ => false,
+    }
+}
+
+/// Returns true if the node represents an unaliased import binding (an external symbol
+/// imported directly without a local `as` alias).
+#[must_use]
+pub fn is_unaliased_import_binding(node: &AstNode<'_>, lang: SupportLang) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    let parent_kind = parent.kind();
+    match lang {
+        SupportLang::Rust => {
+            matches!(parent_kind.as_ref(), "use_declaration" | "use_list" | "scoped_identifier")
+        }
+        SupportLang::Python => matches!(
+            parent_kind.as_ref(),
+            "import_statement" | "import_from_statement" | "dotted_name"
         ),
         _ => false,
     }

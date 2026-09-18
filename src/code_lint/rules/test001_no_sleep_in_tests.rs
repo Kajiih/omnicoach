@@ -238,4 +238,25 @@ def run_daemon():
         assert_eq!(test_diags.len(), 1);
         assert_eq!(test_diags[0].rule_code, RuleCode("TEST-001"));
     }
+
+    #[test]
+    fn test_rust_inline_conditional_test_scoped_in_source_file() {
+        let source = r"
+pub fn run_worker() {
+    std::thread::sleep(std::time::Duration::from_secs(1));
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_worker() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+";
+        let config = Config::default();
+        let diags = crate::code_lint::lint_file(Path::new("src/worker.rs"), source, &config);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_code, RuleCode("TEST-001"));
+    }
 }

@@ -55,8 +55,12 @@ impl CodeRule for SingleLetterVariableName {
         let mut diagnostics = Vec::new();
 
         let bindings = crate::code_lint::collect_bindings(grep);
+        let lang = *grep.lang();
 
         for node in bindings {
+            if crate::code_lint::is_unaliased_import_binding(&node, lang) {
+                continue;
+            }
             let name = node.text();
             if name.len() == 1 && name != "_" && !effective_allowed.contains(&*name) {
                 diagnostics.push(Diagnostic::new(
@@ -85,124 +89,85 @@ impl CodeRule for SingleLetterVariableName {
 mod tests {
     use super::*;
     use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
+    use rstest::rstest;
 
-    #[test]
-    fn test_rust_snapshots() {
-        let rule = SingleLetterVariableName;
-
-        // Standard let bindings
-        let source = "fn main() { let a = 1; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
-        [NAME-001] Line 1, Col 17: Variable name `a` is too short (single-letter).
-        "###);
-
-        // Let reference assignment (b is reference, not definition)
-        let source = "fn main() { let a = b; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
-        [NAME-001] Line 1, Col 17: Variable name `a` is too short (single-letter).
-        "###);
-
-        // Mutable binding
-        let source = "fn main() { let mut b = 2; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
-        [NAME-001] Line 1, Col 21: Variable name `b` is too short (single-letter).
-        "###);
-
-        // Tuple destructuring (d violates, c is allowed by default in Rust)
-        let source = "fn main() { let (c, d) = (1, 2); }";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
-        [NAME-001] Line 1, Col 21: Variable name `d` is too short (single-letter).
-        "###);
-
-        // Struct destructuring (explicit) - e violates, x is ignored (field name), _ is ignored (wildcard)
-        let source = "fn main() { let Point { x: e, y: _ } = p; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
-        [NAME-001] Line 1, Col 28: Variable name `e` is too short (single-letter).
-        "###);
-
-        // Struct destructuring (shorthand) - f is allowed by default, g violates
-        let source = "fn main() { let Point { f, g } = p; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
-        [NAME-001] Line 1, Col 28: Variable name `g` is too short (single-letter).
-        "###);
-
-        // Loop target
-        let source = "fn main() { for h in 0..10 {} }";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
-        [NAME-001] Line 1, Col 17: Variable name `h` is too short (single-letter).
-        "###);
-
-        // Closure parameter (x is allowed by default)
-        let source = "fn main() { let f = |x: i32| x + 1; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###""###);
-
-        // Function parameter (i and j are allowed by default)
-        let source = "fn test(i: i32, j: i32) {}";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###""###);
-
-        // Match pattern variants (k violates, Some is constructor, None is constructor)
-        let source = "fn main() { match val { Some(k) => {}, None => {} } }";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
-        [NAME-001] Line 1, Col 30: Variable name `k` is too short (single-letter).
-        "###);
-
-        // If-let and while-let
-        let source = "fn main() { if let Some(x) = y {} while let Some(z) = y {} }";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
-        [NAME-001] Line 1, Col 50: Variable name `z` is too short (single-letter).
-        "###);
-
-        // Match pattern guards (binding z violates, reference z is ignored)
-        let source = "fn main() { match val { Some(z) if z > 0 => {} } }";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###"
-        [NAME-001] Line 1, Col 30: Variable name `z` is too short (single-letter).
-        "###);
-
-        // Wildcards are ignored
-        let source = "fn main() { let _ = 1; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @r###""###);
+    #[rstest]
+    #[case::let_binding(
+        "fn main() { let a = 1; }",
+        "[NAME-001] Line 1, Col 17: Variable name `a` is too short (single-letter)."
+    )]
+    #[case::let_reference(
+        "fn main() { let a = b; }",
+        "[NAME-001] Line 1, Col 17: Variable name `a` is too short (single-letter)."
+    )]
+    #[case::mutable_binding(
+        "fn main() { let mut b = 2; }",
+        "[NAME-001] Line 1, Col 21: Variable name `b` is too short (single-letter)."
+    )]
+    #[case::tuple_destructuring(
+        "fn main() { let (c, d) = (1, 2); }",
+        "[NAME-001] Line 1, Col 21: Variable name `d` is too short (single-letter)."
+    )]
+    #[case::struct_destructuring_explicit(
+        "fn main() { let Point { x: e, y: _ } = p; }",
+        "[NAME-001] Line 1, Col 28: Variable name `e` is too short (single-letter)."
+    )]
+    #[case::struct_destructuring_shorthand(
+        "fn main() { let Point { f, g } = p; }",
+        "[NAME-001] Line 1, Col 28: Variable name `g` is too short (single-letter)."
+    )]
+    #[case::loop_target(
+        "fn main() { for h in 0..10 {} }",
+        "[NAME-001] Line 1, Col 17: Variable name `h` is too short (single-letter)."
+    )]
+    #[case::closure_parameter_allowed("fn main() { let f = |x: i32| x + 1; }", "")]
+    #[case::fn_parameter_allowed("fn test(i: i32, j: i32) {}", "")]
+    #[case::match_pattern_variants(
+        "fn main() { match val { Some(k) => {}, None => {} } }",
+        "[NAME-001] Line 1, Col 30: Variable name `k` is too short (single-letter)."
+    )]
+    #[case::if_let_and_while_let(
+        "fn main() { if let Some(x) = y {} while let Some(z) = y {} }",
+        "[NAME-001] Line 1, Col 50: Variable name `z` is too short (single-letter)."
+    )]
+    #[case::match_pattern_guard(
+        "fn main() { match val { Some(z) if z > 0 => {} } }",
+        "[NAME-001] Line 1, Col 30: Variable name `z` is too short (single-letter)."
+    )]
+    #[case::wildcard_ignored("fn main() { let _ = 1; }", "")]
+    fn test_rust_bindings(#[case] source: &str, #[case] expected: &str) {
+        let output = assert_code_rule_snapshot(&SingleLetterVariableName, source, "test.rs");
+        assert_eq!(output.trim(), expected);
     }
 
-    #[test]
-    fn test_python_snapshots() {
-        let rule = SingleLetterVariableName;
-
-        // Parameter annotations (i allowed by default, b violates)
-        let source = "def foo(i: int = 1, b: int = 1): pass";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
-        [NAME-001] Line 1, Col 21: Variable name `b` is too short (single-letter).
-        "###);
-
-        // Assignments
-        let source = "c = 2";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
-        [NAME-001] Line 1, Col 1: Variable name `c` is too short (single-letter).
-        "###);
-
-        // Multi-assignments
-        let source = "d, e = 3, 4";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
-        [NAME-001] Line 1, Col 1: Variable name `d` is too short (single-letter).
-        [NAME-001] Line 1, Col 4: Variable name `e` is too short (single-letter).
-        "###);
-
-        // Comprehensions (y violates)
-        let source = "[y for y in range(10)]";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
-        [NAME-001] Line 1, Col 8: Variable name `y` is too short (single-letter).
-        "###);
-
-        // Exception aliases (g violates, Exception is class)
-        let source = "try:\n    pass\nexcept Exception as g:\n    pass";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
-        [NAME-001] Line 3, Col 21: Variable name `g` is too short (single-letter).
-        "###);
-
-        // Walrus expressions
-        let source = "(v := 1)";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @r###"
-        [NAME-001] Line 1, Col 2: Variable name `v` is too short (single-letter).
-        "###);
+    #[rstest]
+    #[case::parameter_annotations(
+        "def foo(i: int = 1, b: int = 1): pass",
+        "[NAME-001] Line 1, Col 21: Variable name `b` is too short (single-letter)."
+    )]
+    #[case::assignment(
+        "c = 2",
+        "[NAME-001] Line 1, Col 1: Variable name `c` is too short (single-letter)."
+    )]
+    #[case::multi_assignment(
+        "d, e = 3, 4",
+        "[NAME-001] Line 1, Col 1: Variable name `d` is too short (single-letter).\n[NAME-001] Line 1, Col 4: Variable name `e` is too short (single-letter)."
+    )]
+    #[case::comprehension(
+        "[y for y in range(10)]",
+        "[NAME-001] Line 1, Col 8: Variable name `y` is too short (single-letter)."
+    )]
+    #[case::exception_alias(
+        "try:\n    pass\nexcept Exception as g:\n    pass",
+        "[NAME-001] Line 3, Col 21: Variable name `g` is too short (single-letter)."
+    )]
+    #[case::walrus_expression(
+        "(v := 1)",
+        "[NAME-001] Line 1, Col 2: Variable name `v` is too short (single-letter)."
+    )]
+    fn test_python_bindings(#[case] source: &str, #[case] expected: &str) {
+        let output = assert_code_rule_snapshot(&SingleLetterVariableName, source, "test.py");
+        assert_eq!(output.trim(), expected);
     }
 
     #[test]

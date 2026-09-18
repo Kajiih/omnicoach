@@ -366,22 +366,22 @@ deleted file mode 100644
         assert!(changed_lines[&path].contains(&3));
     }
 
-    #[test]
-    fn test_is_complex_jj_revset() {
-        assert!(is_complex_jj_revset("immutable().."));
-        assert!(is_complex_jj_revset("@-..@"));
-        assert!(is_complex_jj_revset("main..@"));
-        assert!(is_complex_jj_revset("root()..@"));
-        assert!(is_complex_jj_revset("all()"));
-        assert!(is_complex_jj_revset("@-::@"));
-        assert!(is_complex_jj_revset("a | b"));
-        assert!(is_complex_jj_revset("a & b"));
-        assert!(is_complex_jj_revset("~a"));
-
-        assert!(!is_complex_jj_revset("@-"));
-        assert!(!is_complex_jj_revset("@"));
-        assert!(!is_complex_jj_revset("main"));
-        assert!(!is_complex_jj_revset("v1.0"));
-        assert!(!is_complex_jj_revset("cad67343"));
+    #[rstest::rstest]
+    #[case("immutable()..", true)]
+    #[case("@-..@", true)]
+    #[case("main..@", true)]
+    #[case("root()..@", true)]
+    #[case("all()", true)]
+    #[case("@-::@", true)]
+    #[case("a | b", true)]
+    #[case("a & b", true)]
+    #[case("~a", true)]
+    #[case("@-", false)]
+    #[case("@", false)]
+    #[case("main", false)]
+    #[case("v1.0", false)]
+    #[case("cad67343", false)]
+    fn test_is_complex_jj_revset(#[case] revset: &str, #[case] expected: bool) {
+        assert_eq!(is_complex_jj_revset(revset), expected);
     }
 }

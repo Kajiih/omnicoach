@@ -1,0 +1,17 @@
+---
+source: tests/cli.rs
+expression: output_full
+---
+--- exit code ---
+1
+--- stdout ---
+test.py:2:5: [SCOPE-001] Nested function definition `inner` is discouraged.
+  Rationale: Nested functions increase cognitive complexity and reduce testability.
+  Suggestion: Move `inner` to the module level or convert to a private helper.
+
+test.py:5:5: [SCOPE-001] Nested function definition `world` is discouraged.
+  Rationale: Nested functions increase cognitive complexity and reduce testability.
+  Suggestion: Move `world` to the module level or convert to a private helper.
+
+
+--- stderr ---

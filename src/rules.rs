@@ -65,6 +65,7 @@ pub enum Tag {
 
 impl Tag {
     /// Returns the tag name as a static string slice.
+    // omni:ignore [NAME-002] -- idiomatic Rust conversion method name matching std::str
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         (*self).into()

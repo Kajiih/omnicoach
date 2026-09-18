@@ -8,11 +8,7 @@ use std::fs;
 use std::io::Write;
 
 fn create_temp_file(suffix: &str, content: &str) -> tempfile::NamedTempFile {
-    let mut file = tempfile::Builder::new()
-        .prefix("omni_test_")
-        .suffix(suffix)
-        .tempfile()
-        .unwrap();
+    let mut file = tempfile::Builder::new().prefix("omni_test_").suffix(suffix).tempfile().unwrap();
     write!(file, "{content}").unwrap();
     file
 }
@@ -142,17 +138,10 @@ fn test_code_lint_with_violations() {
 #[test]
 fn test_code_lint_invalid_config() {
     let temp_dir = tempfile::tempdir().unwrap();
-    fs::write(
-        temp_dir.path().join(omni::core::CONFIG_FILE_NAME),
-        "select = [invalid syntax]",
-    )
-    .unwrap();
-    let output = run_and_sanitize_cli(
-        "omni-code-lint",
-        &[],
-        Some(temp_dir.path()),
-        &[temp_dir.path()],
-    );
+    fs::write(temp_dir.path().join(omni::core::CONFIG_FILE_NAME), "select = [invalid syntax]")
+        .unwrap();
+    let output =
+        run_and_sanitize_cli("omni-code-lint", &[], Some(temp_dir.path()), &[temp_dir.path()]);
     insta::assert_snapshot!(output);
 }
 
@@ -231,14 +220,9 @@ fn test_code_lint_diff_flag_jj() {
     fs::write(&file_path, violating_code_2).unwrap();
 
     // 4. Run full linter (should report BOTH violations: `inner` and `world`)
-    let output_full = run_and_sanitize_cli(
-        "omni-code-lint",
-        &["test.py"],
-        Some(repo_path),
-        &[repo_path],
-    );
-    assert!(output_full.contains("Nested function definition `inner`"));
-    assert!(output_full.contains("Nested function definition `world`"));
+    let output_full =
+        run_and_sanitize_cli("omni-code-lint", &["test.py"], Some(repo_path), &[repo_path]);
+    insta::assert_snapshot!("full_baseline", output_full);
 
     // 5. Run with --diff-rev @- (compares @ relative to parent @-)
     // It should ONLY report `world` because `inner` was already in the parent commit!
@@ -248,8 +232,7 @@ fn test_code_lint_diff_flag_jj() {
         Some(repo_path),
         &[repo_path],
     );
-    assert!(!output_diff.contains("Nested function definition `inner`"));
-    assert!(output_diff.contains("Nested function definition `world`"));
+    insta::assert_snapshot!("diff_only", output_diff);
 }
 
 #[test]
@@ -301,4 +284,22 @@ fn test_code_lint_diff_range_revset_jj() {
         &[repo_path],
     );
     assert!(output.contains("Nested function definition `inner`"));
+}
+
+#[test]
+fn test_self_dogfooding_code_lint() {
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let output = Command::cargo_bin("omni-code-lint")
+        .unwrap()
+        .args(["src", "tests"])
+        .current_dir(&manifest_dir)
+        .output()
+        .expect("failed to execute omni-code-lint on workspace");
+
+    assert!(
+        output.status.success(),
+        "omni-code-lint reported violations on its own repository:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

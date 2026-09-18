@@ -145,33 +145,21 @@ impl<'a> ArgParser<'a> {
             }
         }
 
-        ParsedArgs {
-            positionals: self.positionals,
-            options: self.options,
-        }
+        ParsedArgs { positionals: self.positionals, options: self.options }
     }
 
     fn parse_long_option(&mut self, arg: &str) {
         if let Some((flag, val)) = arg.split_once('=') {
             if self.options_with_values.contains(&flag) {
-                self.options
-                    .entry(flag.to_string())
-                    .or_default()
-                    .push(val.to_string());
+                self.options.entry(flag.to_string()).or_default().push(val.to_string());
             } else {
                 self.options.entry(arg.to_string()).or_default();
             }
         } else if self.options_with_values.contains(&arg)
-            && self
-                .args_iter
-                .peek()
-                .is_some_and(|next_val| !next_val.starts_with('-'))
+            && self.args_iter.peek().is_some_and(|next_val| !next_val.starts_with('-'))
         {
             if let Some(val) = self.args_iter.next() {
-                self.options
-                    .entry(arg.to_string())
-                    .or_default()
-                    .push(val.clone());
+                self.options.entry(arg.to_string()).or_default().push(val.clone());
             }
         } else {
             self.options.entry(arg.to_string()).or_default();
@@ -191,10 +179,8 @@ impl<'a> ArgParser<'a> {
                     self.options.entry(flag).or_default().push(val);
                     break;
                 }
-                let next_is_val = self
-                    .args_iter
-                    .peek()
-                    .is_some_and(|next_val| !next_val.starts_with('-'));
+                let next_is_val =
+                    self.args_iter.peek().is_some_and(|next_val| !next_val.starts_with('-'));
                 if next_is_val {
                     if let Some(val) = self.args_iter.next() {
                         self.options.entry(flag).or_default().push(val.clone());
@@ -226,10 +212,7 @@ impl ParsedArgs {
     /// Gets the first value associated with an option flag, if present.
     #[must_use]
     pub fn get_option(&self, option: &str) -> Option<&str> {
-        self.options
-            .get(option)
-            .and_then(|values| values.first())
-            .map(String::as_str)
+        self.options.get(option).and_then(|values| values.first()).map(String::as_str)
     }
 
     /// Gets all values associated with an option flag.
@@ -244,10 +227,7 @@ impl ParsedArgs {
         if self.positionals.len() < sequence.len() {
             return false;
         }
-        self.positionals
-            .iter()
-            .zip(sequence)
-            .all(|(arg, expected)| arg == expected)
+        self.positionals.iter().zip(sequence).all(|(arg, expected)| arg == expected)
     }
 }
 
@@ -268,25 +248,28 @@ mod tests {
     fn test_parse_compound_commands() {
         let cmds = InterceptedCommand::parse_all("jj edit @- && jj describe");
         assert_eq!(cmds.len(), 2);
-        assert_eq!(cmds[0].program_name, "jj");
-        assert_eq!(cmds[0].arguments, vec!["edit", "@-"]);
-        assert_eq!(cmds[0].span, (0, 10));
-
-        assert_eq!(cmds[1].program_name, "jj");
-        assert_eq!(cmds[1].arguments, vec!["describe"]);
-        assert_eq!(cmds[1].span, (14, 25));
+        assert_eq!(
+            (cmds[0].program_name.as_str(), &cmds[0].arguments[..], cmds[0].span),
+            ("jj", &["edit".to_string(), "@-".to_string()][..], (0, 10))
+        );
+        assert_eq!(
+            (cmds[1].program_name.as_str(), &cmds[1].arguments[..], cmds[1].span),
+            ("jj", &["describe".to_string()][..], (14, 25))
+        );
     }
 
     #[test]
     fn test_parse_nested_subshell() {
         let cmds = InterceptedCommand::parse_all("(cd dir && jj edit @-)");
         assert_eq!(cmds.len(), 2);
-        assert_eq!(cmds[0].program_name, "cd");
-        assert_eq!(cmds[0].arguments, vec!["dir"]);
-        assert_eq!(cmds[0].span, (1, 7));
-
-        assert_eq!(cmds[1].program_name, "jj");
-        assert_eq!(cmds[1].arguments, vec!["edit", "@-"]);
+        assert_eq!(
+            (cmds[0].program_name.as_str(), &cmds[0].arguments[..], cmds[0].span),
+            ("cd", &["dir".to_string()][..], (1, 7))
+        );
+        assert_eq!(
+            (cmds[1].program_name.as_str(), &cmds[1].arguments[..]),
+            ("jj", &["edit".to_string(), "@-".to_string()][..])
+        );
     }
 
     #[test]
@@ -310,8 +293,10 @@ mod tests {
         };
         let args = cmd.parse_args(&schema);
         assert_eq!(args.positionals, vec!["edit", "@-"]);
-        assert_eq!(args.get_option("-R"), Some("."));
-        assert_eq!(args.get_option("--config"), Some("myconf"));
+        assert_eq!(
+            (args.get_option("-R"), args.get_option("--config")),
+            (Some("."), Some("myconf"))
+        );
         assert!(args.has_subcommand_sequence(&["edit"]));
         assert!(!args.has_subcommand_sequence(&["describe"]));
     }
@@ -319,10 +304,8 @@ mod tests {
     #[test]
     fn test_parse_args_equals_syntax() {
         let cmd = InterceptedCommand::parse_all("jj edit --repository=. @-").remove(0);
-        let schema = ProgramCliSchema {
-            program_name: "jj",
-            options_with_values: &["-R", "--repository"],
-        };
+        let schema =
+            ProgramCliSchema { program_name: "jj", options_with_values: &["-R", "--repository"] };
         let args = cmd.parse_args(&schema);
         assert_eq!(args.positionals, vec!["edit", "@-"]);
         assert_eq!(args.get_option("--repository"), Some("."));
@@ -331,10 +314,7 @@ mod tests {
     #[test]
     fn test_parse_args_posix_clustering() {
         let cmd = InterceptedCommand::parse_all("jj edit -am").remove(0);
-        let schema = ProgramCliSchema {
-            program_name: "jj",
-            options_with_values: &[],
-        };
+        let schema = ProgramCliSchema { program_name: "jj", options_with_values: &[] };
         let args = cmd.parse_args(&schema);
         assert_eq!(args.positionals, vec!["edit"]);
         assert!(args.has_flag("-a"));
@@ -344,10 +324,7 @@ mod tests {
     #[test]
     fn test_parse_args_posix_glued_value() {
         let cmd = InterceptedCommand::parse_all("jj edit -R. @-").remove(0);
-        let schema = ProgramCliSchema {
-            program_name: "jj",
-            options_with_values: &["-R"],
-        };
+        let schema = ProgramCliSchema { program_name: "jj", options_with_values: &["-R"] };
         let args = cmd.parse_args(&schema);
         assert_eq!(args.positionals, vec!["edit", "@-"]);
         assert_eq!(args.get_option("-R"), Some("."));
@@ -356,10 +333,7 @@ mod tests {
     #[test]
     fn test_parse_args_posix_cluster_with_value() {
         let cmd = InterceptedCommand::parse_all("git commit -am msg").remove(0);
-        let schema = ProgramCliSchema {
-            program_name: "git",
-            options_with_values: &["-m"],
-        };
+        let schema = ProgramCliSchema { program_name: "git", options_with_values: &["-m"] };
         let args = cmd.parse_args(&schema);
         assert_eq!(args.positionals, vec!["commit"]);
         assert!(args.has_flag("-a"));
@@ -369,10 +343,7 @@ mod tests {
     #[test]
     fn test_parse_args_posix_terminator() {
         let cmd = InterceptedCommand::parse_all("git log -- -R").remove(0);
-        let schema = ProgramCliSchema {
-            program_name: "git",
-            options_with_values: &["-R"],
-        };
+        let schema = ProgramCliSchema { program_name: "git", options_with_values: &["-R"] };
         let args_term = cmd.parse_args(&schema);
         assert_eq!(args_term.positionals, vec!["log", "-R"]);
         assert!(!args_term.has_flag("-R"));

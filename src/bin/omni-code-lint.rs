@@ -10,11 +10,7 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "omni-code-lint",
-    version,
-    about = "Static analysis codebase linter"
-)]
+#[command(name = "omni-code-lint", version, about = "Static analysis codebase linter")]
 struct Cli {
     /// Paths to inspect
     #[arg(default_value = ".")]
@@ -68,9 +64,7 @@ fn run() -> anyhow::Result<()> {
             .paths
             .iter()
             .map(|path_arg| {
-                Path::new(path_arg)
-                    .canonicalize()
-                    .unwrap_or_else(|_| PathBuf::from(path_arg))
+                Path::new(path_arg).canonicalize().unwrap_or_else(|_| PathBuf::from(path_arg))
             })
             .collect();
 
@@ -84,12 +78,7 @@ fn run() -> anyhow::Result<()> {
             });
 
             if is_target {
-                lint_single_file(
-                    file_path,
-                    &config,
-                    &mut all_diagnostics,
-                    Some(changed_lines),
-                )?;
+                lint_single_file(file_path, &config, &mut all_diagnostics, Some(changed_lines))?;
             }
         }
     } else {
@@ -136,7 +125,7 @@ fn lint_single_file(
 }
 
 fn lint_directory(dir: &Path, config: &Config, diagnostics: &mut Vec<Diagnostic>) {
-    for entry in ignore::WalkBuilder::new(dir).build().flatten() {
+    for entry in ignore::WalkBuilder::new(dir).require_git(false).build().flatten() {
         let path = entry.path();
         if path.is_file() {
             if let Err(error) = lint_single_file(path, config, diagnostics, None) {

@@ -173,21 +173,17 @@ mod tests {
         assert!(output_log.is_empty());
     }
 
-    #[test]
-    fn test_extract_jj_edit_revision_helper() {
-        let cmd = InterceptedCommand::parse_all("jj edit").remove(0);
-        assert_eq!(extract_jj_edit_revision(&cmd), Some("@".to_string()));
-
-        let cmd = InterceptedCommand::parse_all("jj edit rev").remove(0);
-        assert_eq!(extract_jj_edit_revision(&cmd), Some("rev".to_string()));
-
-        let cmd = InterceptedCommand::parse_all("jj -R . edit rev").remove(0);
-        assert_eq!(extract_jj_edit_revision(&cmd), Some("rev".to_string()));
-
-        let cmd = InterceptedCommand::parse_all("jj edit --ignore-working-copy rev").remove(0);
-        assert_eq!(extract_jj_edit_revision(&cmd), Some("rev".to_string()));
-
-        let cmd = InterceptedCommand::parse_all("jj log").remove(0);
-        assert_eq!(extract_jj_edit_revision(&cmd), None);
+    #[rstest::rstest]
+    #[case("jj edit", Some("@"))]
+    #[case("jj edit rev", Some("rev"))]
+    #[case("jj -R . edit rev", Some("rev"))]
+    #[case("jj edit --ignore-working-copy rev", Some("rev"))]
+    #[case("jj log", None)]
+    fn test_extract_jj_edit_revision_helper(
+        #[case] command_line: &str,
+        #[case] expected_revision: Option<&str>,
+    ) {
+        let cmd = InterceptedCommand::parse_all(command_line).remove(0);
+        assert_eq!(extract_jj_edit_revision(&cmd), expected_revision.map(ToString::to_string));
     }
 }

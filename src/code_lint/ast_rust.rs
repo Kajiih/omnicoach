@@ -229,6 +229,75 @@ pub fn collect_bindings<'a>(root: &AstNode<'a>) -> Vec<AstNode<'a>> {
     bindings
 }
 
+/// Returns true if an `attribute_item` text represents a Rust test attribute
+/// (`#[test]`, `#[tokio::test]`, `#[rstest]`, `#[test_case(...)]`).
+#[must_use]
+pub fn is_test_attribute(attr_text: &str) -> bool {
+    let trimmed = attr_text.trim().trim_start_matches("#[").trim_end_matches(']');
+    let attr_path = trimmed.split(['(', '=']).next().unwrap_or("").trim();
+    let terminal = attr_path.rsplit("::").next().unwrap_or("").trim();
+    matches!(terminal, "test" | "rstest" | "test_case")
+}
+
+/// Returns true if an `attribute_item` text represents a `#[cfg(test)]` attribute.
+#[must_use]
+pub fn is_conditional_test_attribute(attr_text: &str) -> bool {
+    let trimmed = attr_text.trim().trim_start_matches("#[").trim_end_matches(']').trim();
+    trimmed.strip_prefix("cfg(").and_then(|inner| inner.strip_suffix(')')).is_some_and(|inner| {
+        inner
+            .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+            .any(|token| token == "test")
+    })
+}
+
+/// Returns true if `node` is preceded by an `attribute_item` sibling matching `predicate`.
+fn has_matching_attribute(node: &AstNode<'_>, predicate: fn(&str) -> bool) -> bool {
+    let mut prev = node.prev();
+    while let Some(sibling) = prev {
+        let kind = sibling.kind();
+        if kind == "attribute_item" {
+            if predicate(&sibling.text()) {
+                return true;
+            }
+        } else if kind != "line_comment" && kind != "block_comment" {
+            break;
+        }
+        prev = sibling.prev();
+    }
+    false
+}
+
+/// Returns true if a Rust item is preceded by a test attribute (`#[test]`, `#[tokio::test]`, `#[rstest]`, etc.).
+#[must_use]
+pub fn has_test_attribute(node: &AstNode<'_>) -> bool {
+    has_matching_attribute(node, is_test_attribute)
+}
+
+/// Returns true if a Rust item is preceded by a `#[cfg(test)]` attribute.
+#[must_use]
+pub fn has_conditional_test_attribute(node: &AstNode<'_>) -> bool {
+    has_matching_attribute(node, is_conditional_test_attribute)
+}
+
+/// Collects byte spans for all inline test items (`#[cfg(test)]` modules/items and `#[test]` functions)
+/// within a Rust source file.
+#[must_use]
+pub fn collect_inline_test_ranges(root: &AstNode<'_>) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    collect_inline_test_ranges_rec(root, &mut ranges);
+    ranges
+}
+
+fn collect_inline_test_ranges_rec(node: &AstNode<'_>, ranges: &mut Vec<std::ops::Range<usize>>) {
+    if has_conditional_test_attribute(node) || has_test_attribute(node) {
+        ranges.push(node.range());
+        return;
+    }
+    for child in node.children() {
+        collect_inline_test_ranges_rec(&child, ranges);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,10 +341,7 @@ mod tests {
         ";
         let grep = AstGrep::new(source, SupportLang::Rust);
         let bindings = collect_bindings(&grep.root());
-        let names: Vec<String> = bindings
-            .iter()
-            .map(|node| node.text().to_string())
-            .collect();
+        let names: Vec<String> = bindings.iter().map(|node| node.text().to_string()).collect();
         assert_eq!(
             names,
             vec![
@@ -320,10 +386,7 @@ mod tests {
         let source = "fn main() { let x: MyStruct = MyStruct; }";
         let grep = AstGrep::new(source, SupportLang::Rust);
         let bindings = collect_bindings(&grep.root());
-        let names: Vec<String> = bindings
-            .iter()
-            .map(|node| node.text().to_string())
-            .collect();
+        let names: Vec<String> = bindings.iter().map(|node| node.text().to_string()).collect();
         assert_eq!(names, vec!["main", "x"]);
     }
 }

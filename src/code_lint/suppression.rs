@@ -151,13 +151,33 @@ pub enum DirectivePlacement {
         /// The 1-indexed line number where the directive is placed.
         line: usize,
     },
-    /// Directive placed on its own standalone line preceding code (suppresses violations on `target_line`).
+    /// Directive placed on its own standalone line preceding code (suppresses violations on `target_line..=end_target_line`).
     PrecedingLine {
-        /// The 1-indexed line number of the code immediately following the directive.
+        /// The 1-indexed line number immediately following the directive.
         target_line: usize,
+        /// The 1-indexed line number of the declaration after any contiguous attributes/decorators (`#[...]`, `@...`).
+        end_target_line: usize,
     },
     /// Directive applying to the entire file.
     File,
+}
+
+/// Computes the declaration line after skipping contiguous attributes, decorators, or comments.
+fn compute_effective_target_line(content: &str, raw_line: usize) -> usize {
+    let mut current_line = raw_line + 1;
+    for line_text in content.lines().skip(raw_line) {
+        let trimmed = line_text.trim();
+        if trimmed.starts_with("#[")
+            || trimmed.starts_with('@')
+            || trimmed.starts_with("//")
+            || trimmed.starts_with('#')
+        {
+            current_line += 1;
+        } else {
+            break;
+        }
+    }
+    current_line
 }
 
 /// A parsed omni suppression directive comment.
@@ -231,20 +251,20 @@ impl SuppressionTracker {
 
         // Strip comment prefix: '#' or '//' or '/*'
         let trimmed = text.trim();
-        let stripped = if let Some(s) = trimmed.strip_prefix("//") {
-            s.trim_start()
-        } else if let Some(s) = trimmed.strip_prefix('#') {
-            s.trim_start()
-        } else if let Some(s) = trimmed.strip_prefix("/*") {
-            s.trim_start().trim_end_matches("*/").trim_end()
+        let stripped = if let Some(body) = trimmed.strip_prefix("//") {
+            body.trim_start()
+        } else if let Some(body) = trimmed.strip_prefix('#') {
+            body.trim_start()
+        } else if let Some(body) = trimmed.strip_prefix("/*") {
+            body.trim_start().trim_end_matches("*/").trim_end()
         } else {
             return None;
         };
 
-        let (is_file, remainder) = if let Some(r) = stripped.strip_prefix("omni:disable-file") {
-            (true, r)
-        } else if let Some(r) = stripped.strip_prefix("omni:ignore") {
-            (false, r)
+        let (is_file, remainder) = if let Some(rest) = stripped.strip_prefix("omni:disable-file") {
+            (true, rest)
+        } else if let Some(rest) = stripped.strip_prefix("omni:ignore") {
+            (false, rest)
         } else {
             return None;
         };
@@ -263,11 +283,11 @@ impl SuppressionTracker {
             remainder_trimmed.find(']').map_or_else(
                 || (Vec::new(), true, remainder_trimmed),
                 |close_idx| {
-                    let codes_str = &remainder_trimmed[1..close_idx];
-                    let codes: Vec<String> = codes_str
+                    let raw_codes = &remainder_trimmed[1..close_idx];
+                    let codes: Vec<String> = raw_codes
                         .split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
+                        .map(|segment| segment.trim().to_string())
+                        .filter(|segment| !segment.is_empty())
                         .collect();
                     let blanket = codes.is_empty();
                     (codes, blanket, &remainder_trimmed[close_idx + 1..])
@@ -282,7 +302,7 @@ impl SuppressionTracker {
             .trim_start()
             .strip_prefix("--")
             .map(str::trim)
-            .filter(|r| !r.is_empty())
+            .filter(|reason_text| !reason_text.is_empty())
             .map(ToString::to_string);
 
         // Determine placement: file vs same-line vs preceding-line
@@ -295,7 +315,10 @@ impl SuppressionTracker {
             let is_standalone = prefix_on_line.trim().is_empty();
 
             if is_standalone {
-                DirectivePlacement::PrecedingLine { target_line: raw_line + 1 }
+                DirectivePlacement::PrecedingLine {
+                    target_line: raw_line + 1,
+                    end_target_line: compute_effective_target_line(content, raw_line),
+                }
             } else {
                 DirectivePlacement::SameLine { line: raw_line }
             }
@@ -332,7 +355,7 @@ impl SuppressionTracker {
         let mut retained = Vec::new();
 
         for diagnostic in diagnostics {
-            let diag_line = line_index.lookup(diagnostic.location.span.start).line;
+            let diagnostic_line = line_index.lookup(diagnostic.location.span.start).line;
             let rule_code = diagnostic.rule_code.0;
 
             let mut suppressed = false;
@@ -340,8 +363,10 @@ impl SuppressionTracker {
             for directive in &mut self.directives {
                 let matches_line = match directive.placement {
                     DirectivePlacement::File => true,
-                    DirectivePlacement::SameLine { line } => line == diag_line,
-                    DirectivePlacement::PrecedingLine { target_line } => target_line == diag_line,
+                    DirectivePlacement::SameLine { line } => line == diagnostic_line,
+                    DirectivePlacement::PrecedingLine { target_line, end_target_line } => {
+                        (target_line..=end_target_line).contains(&diagnostic_line)
+                    }
                 };
 
                 if matches_line && directive.target_codes.iter().any(|c| c == rule_code) {
@@ -474,8 +499,10 @@ mod tests {
         assert_eq!(tracker.directives.len(), 1);
         let directive = &tracker.directives[0];
         assert_eq!(directive.target_codes, vec!["NAME-001"]);
-        assert_eq!(directive.reason.as_deref(), Some("math variable"));
-        assert!(!directive.is_blanket);
+        assert_eq!(
+            (directive.reason.as_deref(), directive.is_blanket),
+            (Some("math variable"), false)
+        );
         assert_eq!(directive.placement, DirectivePlacement::SameLine { line: 1 });
     }
 
@@ -488,9 +515,14 @@ mod tests {
         assert_eq!(tracker.directives.len(), 1);
         let directive = &tracker.directives[0];
         assert_eq!(directive.target_codes, vec!["SCOPE-001"]);
-        assert_eq!(directive.reason.as_deref(), Some("required for fixture"));
-        assert!(!directive.is_blanket);
-        assert_eq!(directive.placement, DirectivePlacement::PrecedingLine { target_line: 2 });
+        assert_eq!(
+            (directive.reason.as_deref(), directive.is_blanket),
+            (Some("required for fixture"), false)
+        );
+        assert_eq!(
+            directive.placement,
+            DirectivePlacement::PrecedingLine { target_line: 2, end_target_line: 2 }
+        );
     }
 
     #[test]
