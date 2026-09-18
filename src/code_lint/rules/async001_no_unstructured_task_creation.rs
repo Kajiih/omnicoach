@@ -1,7 +1,7 @@
 //! ASYNC-001: Flags unstructured task creation (`asyncio.create_task`, `ensure_future`, `loop.create_task`).
 
-use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, Rule};
+use crate::code_lint::{calls, CodeRule, RuleTarget, SourceDoc};
+use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
 use crate::diagnostic::{
     Diagnostic, LocationContext, RuleCode, RuleName, SourceLocation, SourceSpan, ViolationMessage,
 };
@@ -9,6 +9,27 @@ use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::path::Path;
+
+/// Static default banned unstructured task creation call patterns.
+const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
+    base: &[],
+    extend: &[(
+        SupportLang::Python,
+        &[
+            "create_task",
+            "ensure_future",
+            "asyncio.create_task",
+            "asyncio.ensure_future",
+            "loop.create_task",
+            "event_loop.create_task",
+            "$LOOP($$$LOOP_ARGS).create_task",
+        ],
+    )],
+    exempt: &[],
+};
+
+/// Configuration for the `NoUnstructuredTaskCreation` rule.
+pub type NoUnstructuredTaskCreationConfig = DynamicRuleConfig<DenyListConfig>;
 
 /// Rule that bans unstructured asyncio task creation.
 pub struct NoUnstructuredTaskCreation;
@@ -31,58 +52,6 @@ impl Rule for NoUnstructuredTaskCreation {
     }
 }
 
-/// Recursively collects all AST nodes of kind `"call"`.
-fn collect_call_nodes<'a>(node: &AstNode<'a>, calls: &mut Vec<AstNode<'a>>) {
-    if node.kind() == "call" {
-        calls.push(node.clone());
-    }
-    for child in node.children() {
-        collect_call_nodes(&child, calls);
-    }
-}
-
-/// Inspects a `"call"` node to determine if it represents an unstructured task creation call.
-fn check_unstructured_call(call_node: &AstNode<'_>) -> Option<String> {
-    let func = call_node.field("function")?;
-    match func.kind().as_ref() {
-        "identifier" => {
-            let name = func.text();
-            if name == "create_task" || name == "ensure_future" {
-                Some(name.to_string())
-            } else {
-                None
-            }
-        }
-        "attribute" => {
-            let attr = func.field("attribute")?;
-            let attr_name = attr.text();
-            let object = func.field("object")?;
-            let obj_text = object.text();
-
-            if attr_name == "ensure_future" {
-                if obj_text == "asyncio" {
-                    Some("asyncio.ensure_future".to_string())
-                } else {
-                    None
-                }
-            } else if attr_name == "create_task" {
-                if obj_text == "asyncio"
-                    || obj_text == "loop"
-                    || obj_text == "event_loop"
-                    || object.kind() == "call"
-                {
-                    Some(format!("{obj_text}.create_task"))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
 impl CodeRule for NoUnstructuredTaskCreation {
     fn target(&self) -> RuleTarget {
         RuleTarget::All
@@ -92,15 +61,17 @@ impl CodeRule for NoUnstructuredTaskCreation {
         &self,
         path: &Path,
         grep: &AstGrep<SourceDoc>,
-        _config: &Config,
+        config: &Config,
     ) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        let mut call_nodes = Vec::new();
-        collect_call_nodes(&grep.root(), &mut call_nodes);
+        let rule_config: NoUnstructuredTaskCreationConfig = config.get_rule_config(self.name().0);
+        let effective_banned =
+            rule_config.effective_banned_for_lang(*grep.lang(), &DEFAULT_BANNED_CALLS);
 
-        for call_node in call_nodes {
-            if let Some(call_name) = check_unstructured_call(&call_node) {
-                diagnostics.push(Diagnostic::new(
+        calls::find_banned_calls(grep, &effective_banned)
+            .into_iter()
+            .map(|call_match| {
+                let call_name = call_match.callee;
+                Diagnostic::new(
                     self.code(),
                     self.name(),
                     ViolationMessage {
@@ -111,15 +82,13 @@ impl CodeRule for NoUnstructuredTaskCreation {
                     SourceLocation {
                         context: LocationContext::File(path.to_path_buf()),
                         span: SourceSpan {
-                            start: call_node.range().start,
-                            end: call_node.range().end,
+                            start: call_match.node.range().start,
+                            end: call_match.node.range().end,
                         },
                     },
-                ));
-            }
-        }
-
-        diagnostics
+                )
+            })
+            .collect()
     }
 }
 
@@ -188,5 +157,29 @@ async def background_poller():
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("daemon.py"), source, &config);
         assert!(diags.is_empty(), "Expected 0 diagnostics with suppression, got: {diags:?}");
+    }
+
+    #[test]
+    fn test_config_extend_and_allowed() {
+        let source = r"
+async def worker():
+    custom_scheduler.spawn_background(do_work())
+    loop.create_task(do_work())
+";
+        let config_toml = r#"
+[rules.no-unstructured-task-creation]
+extend_banned = ["custom_scheduler.spawn_background"]
+allowed = ["loop.create_task"]
+"#;
+        let config: Config = toml::from_str(config_toml).unwrap();
+        let output = crate::test_utils::assert_code_rule_snapshot_with_config(
+            &NoUnstructuredTaskCreation,
+            source,
+            "service.py",
+            &config,
+        );
+        insta::assert_snapshot!(output, @r###"
+        [ASYNC-001] Line 3, Col 5: Unstructured task creation `custom_scheduler.spawn_background()` is discouraged.
+        "###);
     }
 }

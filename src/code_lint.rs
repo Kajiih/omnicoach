@@ -2,6 +2,7 @@
 
 pub mod ast_python;
 pub mod ast_rust;
+pub mod calls;
 pub mod rules;
 pub mod suppression;
 

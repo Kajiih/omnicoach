@@ -7,8 +7,6 @@ use std::collections::HashSet;
 use std::path::Path;
 
 /// Compile-time static descriptor for default filter lists (both allowlists and denylists).
-///
-/// TODO: Consider if we should make a `ConfigDefault` that is not only for filter list, and with support of language-specific config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FilterListDefaults {
     /// Base items active across all supported languages.
@@ -48,6 +46,43 @@ impl FilterListDefaults {
         }
         set
     }
+}
+
+/// Compile-time static descriptor for scalar or structured default configuration values
+/// with optional per-language overrides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LanguageDefaults<T: Copy + 'static> {
+    /// Default value active across all supported languages unless overridden.
+    pub base: T,
+    /// Language-specific default values that override `base`.
+    pub overrides: &'static [(SupportLang, T)],
+}
+
+impl<T: Copy + 'static> LanguageDefaults<T> {
+    /// Creates a new static language-aware default descriptor.
+    #[must_use]
+    pub const fn new(base: T, overrides: &'static [(SupportLang, T)]) -> Self {
+        Self { base, overrides }
+    }
+
+    /// Resolves the compile-time default value for a specific language.
+    #[must_use]
+    pub fn resolve_default_for_lang(&self, lang: SupportLang) -> T {
+        for &(target_lang, value) in self.overrides {
+            if target_lang == lang {
+                return value;
+            }
+        }
+        self.base
+    }
+}
+
+/// Configuration for rules controlled by a numeric `max` threshold (e.g., `max-test-assertions`).
+#[derive(Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ThresholdConfig {
+    /// Optional override for the maximum threshold.
+    #[serde(default)]
+    pub max: Option<usize>,
 }
 
 /// Configuration for rules that filter identifier names, abbreviations, or suffixes (denylist rules).
@@ -120,6 +155,35 @@ impl<T> DynamicRuleConfig<T> {
     #[must_use]
     pub fn for_lang(&self, lang: SupportLang) -> Option<&T> {
         self.languages.get(support_lang_name(lang))
+    }
+
+    /// Resolves an effective value for `lang` with precedence:
+    /// 1. Language-specific override (`[rules.<name>.<lang>]`)
+    /// 2. Global rule setting (`[rules.<name>]`)
+    /// 3. Compile-time language default (`defaults.resolve_default_for_lang(lang)`)
+    #[must_use]
+    pub fn resolve_with<V: Copy + 'static>(
+        &self,
+        lang: SupportLang,
+        defaults: &LanguageDefaults<V>,
+        extractor: impl Fn(&T) -> Option<V>,
+    ) -> V {
+        self.for_lang(lang)
+            .and_then(&extractor)
+            .or_else(|| extractor(&self.global))
+            .unwrap_or_else(|| defaults.resolve_default_for_lang(lang))
+    }
+}
+
+impl DynamicRuleConfig<ThresholdConfig> {
+    /// Resolves the effective `max` threshold for `lang` against `defaults`.
+    #[must_use]
+    pub fn effective_max_for_lang(
+        &self,
+        lang: SupportLang,
+        defaults: &LanguageDefaults<usize>,
+    ) -> usize {
+        self.resolve_with(lang, defaults, |cfg| cfg.max)
     }
 }
 
@@ -657,5 +721,31 @@ mod tests {
         assert!(!config.is_rule_enabled_for_path(&STYLE_RULE, Path::new("tests/my_test.rs")));
         assert!(config.is_rule_enabled_for_path(&STYLE_RULE, Path::new("src/lib.rs")));
         assert!(config.is_rule_enabled_for_path(&LOGGING_RULE, Path::new("tests/my_test.rs")));
+    }
+
+    #[test]
+    fn test_language_defaults_and_threshold_config() {
+        const DEFAULTS: LanguageDefaults<usize> =
+            LanguageDefaults::new(4, &[(SupportLang::Rust, 6)]);
+
+        let default_cfg: DynamicRuleConfig<ThresholdConfig> = DynamicRuleConfig::default();
+        assert_eq!(default_cfg.effective_max_for_lang(SupportLang::Python, &DEFAULTS), 4);
+        assert_eq!(default_cfg.effective_max_for_lang(SupportLang::Rust, &DEFAULTS), 6);
+
+        let global_override: DynamicRuleConfig<ThresholdConfig> =
+            toml::from_str("max = 5").unwrap();
+        assert_eq!(global_override.effective_max_for_lang(SupportLang::Python, &DEFAULTS), 5);
+        assert_eq!(global_override.effective_max_for_lang(SupportLang::Rust, &DEFAULTS), 5);
+
+        let lang_override: DynamicRuleConfig<ThresholdConfig> = toml::from_str(
+            r"
+            max = 5
+            [rust]
+            max = 10
+        ",
+        )
+        .unwrap();
+        assert_eq!(lang_override.effective_max_for_lang(SupportLang::Python, &DEFAULTS), 5);
+        assert_eq!(lang_override.effective_max_for_lang(SupportLang::Rust, &DEFAULTS), 10);
     }
 }
