@@ -2,7 +2,9 @@
 
 use crate::code_lint::CodeRule;
 use crate::core::{AllowListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
-use crate::diagnostic::{Diagnostic, RuleName, SourceLocation, ViolationMessage};
+use crate::diagnostic::{
+    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
+};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -13,6 +15,12 @@ const DEFAULT_ALLOWED: FilterListDefaults = FilterListDefaults {
     base: &["i", "j", "x", "f"],
     extend: &[(SupportLang::Rust, &["c"])],
     exempt: &[],
+};
+
+const TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Variable name `{name}` is too short (single-letter).",
+    rationale: "Single-letter variable names are not descriptive and make code harder to read and maintain.",
+    suggestion: "Choose a more descriptive name that reflects the variable's purpose.",
 };
 
 /// Configuration for the `SingleLetterVariableName` rule.
@@ -32,6 +40,10 @@ impl Rule for SingleLetterVariableName {
 
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python, SupportLang::Rust]
+    }
+
+    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
+        Some(&TEMPLATE)
     }
 }
 // TODO: Is this fully language agnostic?
@@ -59,11 +71,7 @@ impl CodeRule for SingleLetterVariableName {
             if name.len() == 1 && name != "_" && !effective_allowed.contains(&*name) {
                 diagnostics.push(Diagnostic::new(
                     self.name(),
-                    ViolationMessage {
-                        summary: format!("Variable name `{name}` is too short (single-letter)."),
-                        rationale: "Single-letter variable names are not descriptive and make code harder to read and maintain.".to_string(),
-                        suggestion: "Choose a more descriptive name that reflects the variable's purpose.".to_string(),
-                    },
+                    TEMPLATE.render(lang, &[("name", &name)]),
                     SourceLocation::from_node(path, &node),
                 ));
             }

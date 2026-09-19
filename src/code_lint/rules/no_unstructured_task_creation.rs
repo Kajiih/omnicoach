@@ -2,7 +2,9 @@
 
 use crate::code_lint::{calls, CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
-use crate::diagnostic::{Diagnostic, RuleName, SourceLocation, ViolationMessage};
+use crate::diagnostic::{
+    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
+};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -26,6 +28,12 @@ const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
     exempt: &[],
 };
 
+const TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Unstructured task creation `{call_name}()` is discouraged.",
+    rationale: "Unstructured background tasks can fail silently, leak upon cancellation, and introduce race conditions.",
+    suggestion: "Use structured concurrency with AnyIO (`async with anyio.create_task_group() as tg: tg.start_soon(...)`) or Python 3.11+ TaskGroup (`async with asyncio.TaskGroup() as tg: tg.create_task(...)`).",
+};
+
 /// Configuration for the `NoUnstructuredTaskCreation` rule.
 pub type NoUnstructuredTaskCreationConfig = DynamicRuleConfig<DenyListConfig>;
 
@@ -43,6 +51,10 @@ impl Rule for NoUnstructuredTaskCreation {
 
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python]
+    }
+
+    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
+        Some(&TEMPLATE)
     }
 }
 
@@ -67,11 +79,7 @@ impl CodeRule for NoUnstructuredTaskCreation {
                 let call_name = call_match.callee;
                 Diagnostic::new(
                     self.name(),
-                    ViolationMessage {
-                        summary: format!("Unstructured task creation `{call_name}()` is discouraged."),
-                        rationale: "Unstructured background tasks can fail silently, leak upon cancellation, and introduce race conditions.".to_string(),
-                        suggestion: "Use structured concurrency with AnyIO (`async with anyio.create_task_group() as tg: tg.start_soon(...)`) or Python 3.11+ TaskGroup (`async with asyncio.TaskGroup() as tg: tg.create_task(...)`).".to_string(),
-                    },
+                    TEMPLATE.render(*grep.lang(), &[("call_name", &call_name)]),
                     SourceLocation::from_node(path, &call_match.node),
                 )
             })

@@ -2,7 +2,9 @@
 
 use crate::code_lint::CodeRule;
 use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
-use crate::diagnostic::{Diagnostic, RuleName, SourceLocation, ViolationMessage};
+use crate::diagnostic::{
+    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
+};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -21,6 +23,12 @@ const DEFAULT_BANNED_SUFFIXES: FilterListDefaults = FilterListDefaults {
     exempt: &[],
 };
 
+const TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Identifier `{name}` contains a banned type suffix `{actual_suffix}`.",
+    rationale: "Naming variables with their type suffixes (Hungarian notation) makes refactoring harder and clutters the code.",
+    suggestion: "{suggestion}",
+};
+
 /// Rule that bans Hungarian notation type suffixes.
 pub struct NoHungarianNotation;
 
@@ -35,6 +43,10 @@ impl Rule for NoHungarianNotation {
 
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python, SupportLang::Rust]
+    }
+
+    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
+        Some(&TEMPLATE)
     }
 }
 
@@ -76,6 +88,7 @@ impl CodeRule for NoHungarianNotation {
 
                     let suggestion = match suffix_lower.as_str() {
                         "_list" | "_arr" | "_vec" | "_set" => {
+                            // TODO: I'm not sure this plural/suffix management is ricr.
                             let plural_suffix =
                                 if base_name.ends_with('s') || base_name.ends_with('S') {
                                     ""
@@ -95,11 +108,14 @@ impl CodeRule for NoHungarianNotation {
 
                     diagnostics.push(Diagnostic::new(
                         self.name(),
-                        ViolationMessage {
-                            summary: format!("Identifier `{name}` contains a banned type suffix `{actual_suffix}`."),
-                            rationale: "Naming variables with their type suffixes (Hungarian notation) makes refactoring harder and clutters the code.".to_string(),
-                            suggestion,
-                        },
+                        TEMPLATE.render(
+                            *lang,
+                            &[
+                                ("name", &name),
+                                ("actual_suffix", actual_suffix),
+                                ("suggestion", &suggestion),
+                            ],
+                        ),
                         SourceLocation::from_node(path, &node),
                     ));
                     // Check only one suffix per node

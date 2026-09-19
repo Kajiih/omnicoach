@@ -2,7 +2,9 @@
 
 use crate::code_lint::CodeRule;
 use crate::core::Rule;
-use crate::diagnostic::{Diagnostic, RuleName, SourceLocation, ViolationMessage};
+use crate::diagnostic::{
+    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
+};
 use crate::rules::Tag;
 use ast_grep_core::{AstGrep, Doc, Node};
 use ast_grep_language::SupportLang;
@@ -20,33 +22,14 @@ fn has_function_ancestor<D: Doc>(node: &Node<'_, D>) -> bool {
     false
 }
 
+const TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Nested function definition `{func_name}` is discouraged.",
+    rationale: "Nested functions increase cognitive complexity and reduce testability.",
+    suggestion: "Move `{func_name}` to the module level or convert to a private helper.",
+};
+
 /// Rule struct.
 pub struct FlatScopeEnforced;
-
-/// Violation attributes for `FlatScopeEnforced` rule.
-pub struct FlatScopeViolation {
-    /// The name of the violating nested function.
-    pub func_name: String,
-}
-
-impl FlatScopeEnforced {
-    /// Formats the human-readable diagnostic message.
-    #[must_use]
-    pub fn format_message(violation: &FlatScopeViolation) -> ViolationMessage {
-        ViolationMessage {
-            summary: format!(
-                "Nested function definition `{}` is discouraged.",
-                violation.func_name
-            ),
-            rationale: "Nested functions increase cognitive complexity and reduce testability."
-                .to_string(),
-            suggestion: format!(
-                "Move `{}` to the module level or convert to a private helper.",
-                violation.func_name
-            ),
-        }
-    }
-}
 
 impl Rule for FlatScopeEnforced {
     fn name(&self) -> RuleName {
@@ -57,6 +40,9 @@ impl Rule for FlatScopeEnforced {
     }
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python]
+    }
+    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
+        Some(&TEMPLATE)
     }
 }
 
@@ -72,6 +58,7 @@ impl CodeRule for FlatScopeEnforced {
         _config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
+
         let root = grep.root();
         let matches_func = root.find_all("def $NAME($$$ARGS): $$$BODY");
         for matched_node in matches_func {
@@ -80,12 +67,10 @@ impl CodeRule for FlatScopeEnforced {
                     .field("name")
                     .map(|name_node| name_node.text())
                     .unwrap_or_default();
-                let violation = FlatScopeViolation { func_name: func_name.to_string() };
-                let message = Self::format_message(&violation);
 
                 diagnostics.push(Diagnostic::new(
                     self.name(),
-                    message,
+                    TEMPLATE.render(*grep.lang(), &[("func_name", &func_name)]),
                     SourceLocation::from_node(path, &matched_node),
                 ));
             }

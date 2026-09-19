@@ -2,7 +2,9 @@
 
 use crate::code_lint::CodeRule;
 use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
-use crate::diagnostic::{Diagnostic, RuleName, SourceLocation, ViolationMessage};
+use crate::diagnostic::{
+    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
+};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -19,6 +21,12 @@ const DEFAULT_BANNED: FilterListDefaults = FilterListDefaults {
     // load-bearing in conventional conversion names (`as_str`, `to_str`, `from_str`).
     // Hungarian `_str` type suffixes remain covered by no-hungarian-notation.
     exempt: &[(SupportLang::Rust, &["str"])],
+};
+
+const TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Definition name `{name}` contains banned abbreviation `{segment}`.",
+    rationale: "Banned abbreviations make identifier names less clear, harder to read, and difficult to search for.",
+    suggestion: "Rename the identifier using full words or a non-banned term.",
 };
 
 /// Helper to split identifiers into sub-word segments.
@@ -71,6 +79,10 @@ impl Rule for BannedAbbreviations {
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python, SupportLang::Rust]
     }
+
+    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
+        Some(&TEMPLATE)
+    }
 }
 
 impl CodeRule for BannedAbbreviations {
@@ -100,11 +112,7 @@ impl CodeRule for BannedAbbreviations {
                 if effective_banned.contains(&segment) {
                     diagnostics.push(Diagnostic::new(
                         self.name(),
-                        ViolationMessage {
-                            summary: format!("Definition name `{name}` contains banned abbreviation `{segment}`."),
-                            rationale: "Banned abbreviations make identifier names less clear, harder to read, and difficult to search for.".to_string(),
-                            suggestion: "Rename the identifier using full words or a non-banned term.".to_string(),
-                        },
+                        TEMPLATE.render(lang, &[("name", &name), ("segment", &segment)]),
                         SourceLocation::from_node(path, &node),
                     ));
                     // Flag each node at most once

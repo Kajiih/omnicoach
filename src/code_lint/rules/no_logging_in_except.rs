@@ -2,7 +2,9 @@
 
 use crate::code_lint::CodeRule;
 use crate::core::Rule;
-use crate::diagnostic::{Diagnostic, RuleName, SourceLocation, ViolationMessage};
+use crate::diagnostic::{
+    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
+};
 use crate::rules::Tag;
 use ast_grep_core::{AstGrep, Doc, Node};
 use ast_grep_language::SupportLang;
@@ -20,6 +22,12 @@ fn has_except_ancestor<D: Doc>(node: &Node<'_, D>) -> bool {
     false
 }
 
+const TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Banned use of `logging.error` inside except block.",
+    rationale: "Logging errors inside except blocks using logging.error does not capture exception context automatically, which can hide root causes.",
+    suggestion: "Use `logging.exception` instead of `logging.error` inside except blocks.",
+};
+
 /// Rule struct.
 pub struct NoLoggingInExcept;
 
@@ -32,6 +40,9 @@ impl Rule for NoLoggingInExcept {
     }
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python]
+    }
+    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
+        Some(&TEMPLATE)
     }
 }
 
@@ -49,11 +60,7 @@ impl CodeRule for NoLoggingInExcept {
             if has_except_ancestor(&matched_node) {
                 diagnostics.push(Diagnostic::new(
                     self.name(),
-                    ViolationMessage {
-                        summary: "Banned use of `logging.error` inside except block.".to_string(),
-                        rationale: "Logging errors inside except blocks using logging.error does not capture exception context automatically, which can hide root causes.".to_string(),
-                        suggestion: "Use `logging.exception` instead of `logging.error` inside except blocks.".to_string(),
-                    },
+                    TEMPLATE.render(*grep.lang(), &[]),
                     SourceLocation::from_node(path, &matched_node),
                 ));
             }
