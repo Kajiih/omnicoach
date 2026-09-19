@@ -1,10 +1,8 @@
 //! Enforces a maximum number of assertions per test function (`max-test-assertions`).
 
 use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, DynamicRuleConfig, LanguageDefaults, Rule, ThresholdConfig};
-use crate::diagnostic::{
-    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
-};
+use crate::core::{Config, DynamicRuleConfig, LanguageDefaults, Rule, RuleName, ThresholdConfig};
+use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -16,7 +14,7 @@ const DEFAULT_MAX_ASSERTIONS: LanguageDefaults<usize> = LanguageDefaults::new(4,
 /// Configuration for the `MaxTestAssertions` rule.
 pub type MaxTestAssertionsConfig = DynamicRuleConfig<ThresholdConfig>;
 
-const VIOLATION_TEMPLATE: ViolationTemplate = violation_template! {
+const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Test function `{func}` has {count} assertions, exceeding the maximum of {max}.",
     rationale: "Tests with too many assertions often verify multiple unrelated behaviors. Obscuring them with ad-hoc helper closures, filtering loops, or artificial compression hurts readability and makes failures harder to diagnose.",
     suggestion: {
@@ -42,8 +40,8 @@ impl Rule for MaxTestAssertions {
         &[SupportLang::Python, SupportLang::Rust]
     }
 
-    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
-        Some(&VIOLATION_TEMPLATE)
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &TEMPLATE
     }
 }
 
@@ -178,13 +176,11 @@ impl CodeRule for MaxTestAssertions {
             if assertion_count > max_allowed {
                 let formatted_count = assertion_count.to_string();
                 let formatted_max = max_allowed.to_string();
-                if let Some(diagnostic) = self.render_default_diagnostic(
-                    lang,
+                diagnostics.push(self.diagnostic_at_node(
+                    path,
+                    &name_node,
                     &[("func", &func_name), ("count", &formatted_count), ("max", &formatted_max)],
-                    SourceLocation::from_node(path, &name_node),
-                ) {
-                    diagnostics.push(diagnostic);
-                }
+                ));
             }
         }
 
@@ -195,6 +191,7 @@ impl CodeRule for MaxTestAssertions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostic::RuleName;
     use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
 
     #[test]

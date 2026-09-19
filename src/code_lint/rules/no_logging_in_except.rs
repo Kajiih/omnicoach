@@ -1,10 +1,8 @@
 //! Verifies that `logging.error` is not used inside python except blocks.
 
 use crate::code_lint::CodeRule;
-use crate::core::Rule;
-use crate::diagnostic::{
-    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
-};
+use crate::core::{Rule, RuleName};
+use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
 use crate::rules::Tag;
 use ast_grep_core::{AstGrep, Doc, Node};
 use ast_grep_language::SupportLang;
@@ -35,14 +33,17 @@ impl Rule for NoLoggingInExcept {
     fn name(&self) -> RuleName {
         RuleName("no-logging-in-except")
     }
+
     fn tags(&self) -> &'static [Tag] {
         &[Tag::Logging, Tag::Exceptions]
     }
+
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python]
     }
-    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
-        Some(&TEMPLATE)
+
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &TEMPLATE
     }
 }
 
@@ -58,11 +59,7 @@ impl CodeRule for NoLoggingInExcept {
         let matches = root.find_all("logging.error($$$ARGS)");
         for matched_node in matches {
             if has_except_ancestor(&matched_node) {
-                diagnostics.push(Diagnostic::new(
-                    self.name(),
-                    TEMPLATE.render(*grep.lang(), &[]),
-                    SourceLocation::from_node(path, &matched_node),
-                ));
+                diagnostics.push(self.diagnostic_at_node(path, &matched_node, &[]));
             }
         }
         diagnostics

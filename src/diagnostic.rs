@@ -37,7 +37,7 @@ pub struct LanguageText {
 }
 
 impl LanguageText {
-    /// Creates a new `LanguageText` with the given base and overrides.
+    /// Creates a new `LanguageText` with a base string and language-specific overrides.
     #[must_use]
     pub const fn new(
         base: &'static str,
@@ -54,7 +54,7 @@ impl LanguageText {
 
     /// Resolves the raw static text for the given language.
     #[must_use]
-    pub fn resolve(&self, lang: SupportLang) -> &'static str {
+    pub fn resolve_for_lang(&self, lang: SupportLang) -> &'static str {
         for &(override_lang, text) in self.overrides {
             if override_lang == lang {
                 return text;
@@ -63,10 +63,20 @@ impl LanguageText {
         self.base
     }
 
+    /// Interpolates named `{key}` placeholders on the base text (for language-independent rules).
+    #[must_use]
+    pub fn render(&self, params: &[(&str, &str)]) -> String {
+        Self::interpolate(self.base, params)
+    }
+
     /// Resolves and interpolates named `{key}` placeholders for the given language.
     #[must_use]
-    pub fn render(&self, lang: SupportLang, params: &[(&str, &str)]) -> String {
-        let mut result = self.resolve(lang).to_string();
+    pub fn render_for_lang(&self, lang: SupportLang, params: &[(&str, &str)]) -> String {
+        Self::interpolate(self.resolve_for_lang(lang), params)
+    }
+
+    fn interpolate(template: &str, params: &[(&str, &str)]) -> String {
+        let mut result = template.to_string();
         for &(placeholder, replacement) in params {
             let pattern = format!("{{{placeholder}}}");
             result = result.replace(&pattern, replacement);
@@ -75,7 +85,7 @@ impl LanguageText {
     }
 }
 
-/// A declarative template for constructing multi-language `ViolationMessage`s.
+/// A declarative template for constructing `ViolationMessage`s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViolationTemplate {
     /// Summary template.
@@ -97,7 +107,7 @@ impl ViolationTemplate {
         Self { summary, rationale, suggestion }
     }
 
-    /// Creates a template with uniform static text for all languages.
+    /// Creates a template with uniform static text and no language overrides.
     #[must_use]
     pub const fn from_static(
         summary: &'static str,
@@ -111,13 +121,23 @@ impl ViolationTemplate {
         }
     }
 
-    /// Renders the template into a concrete `ViolationMessage` for the given language and parameters.
+    /// Renders the base template into a concrete `ViolationMessage` (for command/language-independent rules).
     #[must_use]
-    pub fn render(&self, lang: SupportLang, params: &[(&str, &str)]) -> ViolationMessage {
+    pub fn render(&self, params: &[(&str, &str)]) -> ViolationMessage {
         ViolationMessage {
-            summary: self.summary.render(lang, params),
-            rationale: self.rationale.render(lang, params),
-            suggestion: self.suggestion.render(lang, params),
+            summary: self.summary.render(params),
+            rationale: self.rationale.render(params),
+            suggestion: self.suggestion.render(params),
+        }
+    }
+
+    /// Renders the template into a concrete `ViolationMessage` for a specific programming language.
+    #[must_use]
+    pub fn render_for_lang(&self, lang: SupportLang, params: &[(&str, &str)]) -> ViolationMessage {
+        ViolationMessage {
+            summary: self.summary.render_for_lang(lang, params),
+            rationale: self.rationale.render_for_lang(lang, params),
+            suggestion: self.suggestion.render_for_lang(lang, params),
         }
     }
 }
@@ -397,16 +417,21 @@ mod tests {
             ],
         );
 
-        assert_eq!(ADVICE.resolve(SupportLang::Python), "Use @pytest.mark.parametrize for {func}");
-        assert_eq!(ADVICE.resolve(SupportLang::Rust), "Use #[rstest] for {func}");
-
         assert_eq!(
-            ADVICE.render(SupportLang::Python, &[("func", "test_math")]),
+            ADVICE.resolve_for_lang(SupportLang::Python),
+            "Use @pytest.mark.parametrize for {func}"
+        );
+        assert_eq!(
+            ADVICE.render_for_lang(SupportLang::Python, &[("func", "test_math")]),
             "Use @pytest.mark.parametrize for test_math"
         );
         assert_eq!(
-            ADVICE.render(SupportLang::Rust, &[("func", "test_math")]),
+            ADVICE.render_for_lang(SupportLang::Rust, &[("func", "test_math")]),
             "Use #[rstest] for test_math"
+        );
+        assert_eq!(
+            ADVICE.render(&[("func", "test_math")]),
+            "Parameterize variations for test_math"
         );
     }
 
@@ -425,7 +450,7 @@ mod tests {
         );
 
         assert_eq!(
-            TEMPLATE.render(SupportLang::Python, &[("func", "process_data")]),
+            TEMPLATE.render_for_lang(SupportLang::Python, &[("func", "process_data")]),
             ViolationMessage::new(
                 "Function `process_data` too long",
                 "Long functions are hard to read",
@@ -434,7 +459,7 @@ mod tests {
         );
 
         assert_eq!(
-            TEMPLATE.render(SupportLang::Rust, &[("func", "process_data")]),
+            TEMPLATE.render_for_lang(SupportLang::Rust, &[("func", "process_data")]),
             ViolationMessage::new(
                 "Function `process_data` too long",
                 "Long functions are hard to read",
@@ -456,7 +481,7 @@ mod tests {
         };
 
         assert_eq!(
-            TEMPLATE.render(SupportLang::Python, &[("func", "process_data")]),
+            TEMPLATE.render_for_lang(SupportLang::Python, &[("func", "process_data")]),
             ViolationMessage::new(
                 "Function `process_data` too long",
                 "Long functions are hard to read",
@@ -465,7 +490,7 @@ mod tests {
         );
 
         assert_eq!(
-            TEMPLATE.render(SupportLang::Rust, &[("func", "process_data")]),
+            TEMPLATE.render_for_lang(SupportLang::Rust, &[("func", "process_data")]),
             ViolationMessage::new(
                 "Function `process_data` too long",
                 "Long functions are hard to read",

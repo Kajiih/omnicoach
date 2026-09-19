@@ -1,8 +1,7 @@
 //! Shared core module of the Omni linter toolkit.
 
-use crate::diagnostic::{
-    Diagnostic, RuleName, SourceLocation, ViolationMessage, ViolationTemplate,
-};
+pub use crate::diagnostic::RuleName;
+use crate::diagnostic::{Diagnostic, SourceLocation, ViolationMessage, ViolationTemplate};
 use ast_grep_language::SupportLang;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -276,12 +275,19 @@ pub const CONFIG_FILE_NAME: &str = ".omnilint.toml";
 
 /// Common metadata shared by all lint rules.
 pub trait Rule: Send + Sync {
-    /// Returns the rule name (e.g., "no-logging-in-except").
+    /// Returns the rule name (e.g., `RuleName("no-logging-in-except")`).
+    #[must_use]
     fn name(&self) -> RuleName;
+
     /// Returns the domain tags of the rule (language tags are derived from `supported_languages`).
+    #[must_use]
     fn tags(&self) -> &'static [crate::rules::Tag];
 
-    /// Returns the languages analyzed by this rule. Non-language rules return an empty slice.
+    /// Returns the single violation template for this rule (`1 Rule = 1 Template`).
+    #[must_use]
+    fn violation_template(&self) -> &'static ViolationTemplate;
+
+    /// Returns the languages analyzed by this rule. Command rules default to an empty slice.
     #[must_use]
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[]
@@ -295,40 +301,27 @@ pub trait Rule: Send + Sync {
             || tag.to_support_lang().is_some_and(|lang| self.supported_languages().contains(&lang))
     }
 
-    /// Optional default violation template for this rule.
-    #[must_use]
-    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
-        None
-    }
-
     /// Constructs a `Diagnostic` with this rule's name.
     #[must_use]
     fn create_diagnostic(&self, message: ViolationMessage, location: SourceLocation) -> Diagnostic {
         Diagnostic::new(self.name(), message, location)
     }
 
-    /// Renders a diagnostic from this rule's default `violation_template()`.
+    /// Renders a diagnostic using the base template (for command and language-independent rules).
     #[must_use]
-    fn render_default_diagnostic(
-        &self,
-        lang: SupportLang,
-        params: &[(&str, &str)],
-        location: SourceLocation,
-    ) -> Option<Diagnostic> {
-        self.violation_template()
-            .map(|template| self.create_diagnostic(template.render(lang, params), location))
+    fn render_diagnostic(&self, params: &[(&str, &str)], location: SourceLocation) -> Diagnostic {
+        self.create_diagnostic(self.violation_template().render(params), location)
     }
 
-    /// Renders a diagnostic from an explicit `ViolationTemplate`.
+    /// Renders a diagnostic for a specific programming language (for code rules).
     #[must_use]
-    fn render_diagnostic(
+    fn render_diagnostic_for_lang(
         &self,
-        template: &ViolationTemplate,
         lang: SupportLang,
         params: &[(&str, &str)],
         location: SourceLocation,
     ) -> Diagnostic {
-        self.create_diagnostic(template.render(lang, params), location)
+        self.create_diagnostic(self.violation_template().render_for_lang(lang, params), location)
     }
 }
 
@@ -554,12 +547,20 @@ mod tests {
         tags: &'static [Tag],
     }
 
+    const MOCK_TEMPLATE: ViolationTemplate =
+        ViolationTemplate::from_static("Mock summary", "Mock rationale", "Mock suggestion");
+
     impl Rule for MockRule {
         fn name(&self) -> RuleName {
             RuleName(self.name)
         }
+
         fn tags(&self) -> &'static [Tag] {
             self.tags
+        }
+
+        fn violation_template(&self) -> &'static ViolationTemplate {
+            &MOCK_TEMPLATE
         }
     }
 

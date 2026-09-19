@@ -1,15 +1,21 @@
 //! Inline and file-level suppression comment hygiene.
 
 use crate::code_lint::{AstNode, CodeRule, SourceDoc};
-use crate::core::{Config, Rule};
+use crate::core::{Config, Rule, RuleName};
 use crate::diagnostic::{
-    Diagnostic, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+    violation_template, Diagnostic, LineColumn, SourceLocation, SourceSpan, ViolationTemplate,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+
+const MISSING_REASON_TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Suppression directive is missing an explanation reason.",
+    rationale: "Suppression directives must include an explanation via '-- <reason>' to ensure code review accountability.",
+    suggestion: "Add '-- <reason>' after the rule names explaining why this suppression is necessary.",
+};
 
 /// Flags suppression directives missing a non-empty explanation reason.
 pub struct MissingSuppressionReason;
@@ -26,6 +32,10 @@ impl Rule for MissingSuppressionReason {
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python, SupportLang::Rust]
     }
+
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &MISSING_REASON_TEMPLATE
+    }
 }
 
 impl CodeRule for MissingSuppressionReason {
@@ -39,6 +49,12 @@ impl CodeRule for MissingSuppressionReason {
         Vec::new()
     }
 }
+
+const UNUSED_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Suppression directive for rule `{target_rule}` is unused.",
+    rationale: "No violation occurred for this rule; obsolete suppressions cause dead comments and confusion.",
+    suggestion: "Remove `{target_rule}` from the suppression directive.",
+};
 
 /// Flags suppression directives when no violation occurred for the specified rule.
 pub struct UnusedSuppression;
@@ -55,6 +71,10 @@ impl Rule for UnusedSuppression {
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python, SupportLang::Rust]
     }
+
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &UNUSED_SUPPRESSION_TEMPLATE
+    }
 }
 
 impl CodeRule for UnusedSuppression {
@@ -68,6 +88,12 @@ impl CodeRule for UnusedSuppression {
         Vec::new()
     }
 }
+
+const UNKNOWN_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Unknown rule `{target_rule}` in suppression directive.",
+    rationale: "The specified rule is not registered as a suppressible rule in Omni.",
+    suggestion: "Verify the rule name spelling or check if the rule is registered.",
+};
 
 /// Flags suppression directives targeting unknown or non-suppressible rules.
 pub struct UnknownSuppressionRule;
@@ -84,6 +110,10 @@ impl Rule for UnknownSuppressionRule {
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python, SupportLang::Rust]
     }
+
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &UNKNOWN_SUPPRESSION_TEMPLATE
+    }
 }
 
 impl CodeRule for UnknownSuppressionRule {
@@ -97,6 +127,12 @@ impl CodeRule for UnknownSuppressionRule {
         Vec::new()
     }
 }
+
+const BLANKET_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Blanket suppression directives without rule names are banned.",
+    rationale: "Directives must explicitly target rule names in brackets (e.g. `[rule-name]`) to prevent unintended rule suppression.",
+    suggestion: "Specify the explicit rule names in brackets, e.g. `[rule-name] -- reason`.",
+};
 
 /// Flags blanket suppression directives that omit explicit rule names.
 pub struct BlanketSuppression;
@@ -112,6 +148,10 @@ impl Rule for BlanketSuppression {
 
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python, SupportLang::Rust]
+    }
+
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &BLANKET_SUPPRESSION_TEMPLATE
     }
 }
 
@@ -395,43 +435,24 @@ impl SuppressionTracker {
 
             // Blanket suppression
             if directive.is_blanket && check_blanket {
-                diagnostics.push(Diagnostic::new(
-                    blanket_rule.name(),
-                    ViolationMessage {
-                        summary: "Blanket suppression directives without rule names are banned.".to_string(),
-                        rationale: "Directives must explicitly target rule names in brackets (e.g. `[rule-name]`) to prevent unintended rule suppression.".to_string(),
-                        suggestion: "Specify the explicit rule names in brackets, e.g. `[rule-name] -- reason`.".to_string(),
-                    },
-                    location.clone(),
-                ));
+                diagnostics.push(blanket_rule.render_diagnostic(&[], location.clone()));
             }
 
             // Missing or empty explanation reason
             if check_missing_reason && directive.reason.is_none() {
-                diagnostics.push(Diagnostic::new(
-                    missing_reason_rule.name(),
-                    ViolationMessage {
-                        summary: "Suppression directive is missing an explanation reason.".to_string(),
-                        rationale: "Suppression directives must include an explanation via '-- <reason>' to ensure code review accountability.".to_string(),
-                        suggestion: "Add '-- <reason>' after the rule names explaining why this suppression is necessary.".to_string(),
-                    },
-                    location.clone(),
-                ));
+                diagnostics.push(missing_reason_rule.render_diagnostic(&[], location.clone()));
             }
 
             // Unknown or non-suppressible rule
             if check_unknown {
                 for target_rule in &directive.target_rules {
                     if !suppressible_rules.contains(target_rule.as_str()) {
-                        diagnostics.push(Diagnostic::new(
-                            unknown_rule.name(),
-                            ViolationMessage {
-                                summary: format!("Unknown rule `{target_rule}` in suppression directive."),
-                                rationale: "The specified rule is not registered as a suppressible rule in Omni.".to_string(),
-                                suggestion: "Verify the rule name spelling or check if the rule is registered.".to_string(),
-                            },
-                            location.clone(),
-                        ));
+                        diagnostics.push(
+                            unknown_rule.render_diagnostic(
+                                &[("target_rule", target_rule)],
+                                location.clone(),
+                            ),
+                        );
                     }
                 }
             }
@@ -443,15 +464,12 @@ impl SuppressionTracker {
                     if suppressible_rules.contains(target_rule.as_str())
                         && directive.matched_count.get(target_rule).copied().unwrap_or(0) == 0
                     {
-                        diagnostics.push(Diagnostic::new(
-                            unused_rule.name(),
-                            ViolationMessage {
-                                summary: format!("Suppression directive for rule `{target_rule}` is unused."),
-                                rationale: "No violation occurred for this rule; obsolete suppressions cause dead comments and confusion.".to_string(),
-                                suggestion: format!("Remove `{target_rule}` from the suppression directive."),
-                            },
-                            location.clone(),
-                        ));
+                        diagnostics.push(
+                            unused_rule.render_diagnostic(
+                                &[("target_rule", target_rule)],
+                                location.clone(),
+                            ),
+                        );
                     }
                 }
             }

@@ -43,6 +43,21 @@ pub trait CodeRule: crate::core::Rule {
         self.supported_languages().contains(&lang)
     }
 
+    /// Renders this rule's violation template at the given AST node using the node's language.
+    #[must_use]
+    fn diagnostic_at_node(
+        &self,
+        path: &Path,
+        node: &AstNode<'_>,
+        params: &[(&str, &str)],
+    ) -> Diagnostic {
+        self.render_diagnostic_for_lang(
+            *node.lang(),
+            params,
+            crate::diagnostic::SourceLocation::from_node(path, node),
+        )
+    }
+
     /// Evaluates the file against this static analysis rule.
     #[must_use]
     fn check_file(

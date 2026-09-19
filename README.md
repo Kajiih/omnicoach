@@ -98,7 +98,8 @@ banned_suffixes = ["_list", "_arr", "_dict"]
 
 ### Supported Rules:
 *   **`no-unstructured-task-creation`**: Bans unstructured task creation (`asyncio.create_task`, `ensure_future`, `loop.create_task`).
-*   **`no-sleep-in-tests`**: Bans wall-clock and async `sleep` calls in Python and Rust test files (with a distinct checkpoint/yield suggestion for zero-duration sleeps).
+*   **`no-sleep-in-tests`**: Bans wall-clock and async `sleep` calls in Python and Rust test files.
+*   **`no-zero-sleep-in-tests`**: Bans zero-duration `sleep(0)` / `sleep(Duration::ZERO)` calls in Python and Rust test files (suggests explicit scheduler checkpoints or yields).
 *   **`max-test-assertions`**: Limits test functions to at most 4 assertions by default (configurable via `[rules.max-test-assertions] max = N`) across Python and Rust.
 *   **`no-assertion-packing`**: Bans compound boolean conditions (`&&`, `and`) and boolean tuple/collection equality packing in Python and Rust test assertions.
 *   **`single-letter-variable-name`**: Bans short single-letter variables except allowed exceptions.

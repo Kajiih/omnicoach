@@ -1,14 +1,26 @@
 //! Flags compound boolean conditions (`&&`, `and`) and boolean tuple equality packing in test assertions (`no-assertion-packing`).
 
 use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, Rule};
-use crate::diagnostic::{
-    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
-};
+use crate::core::{Config, Rule, RuleName};
+use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::path::Path;
+
+const TEMPLATE: ViolationTemplate = violation_template! {
+    summary: {
+        base: "{construct} in assertion.",
+        Python => "{construct} in `assert` statement.",
+        Rust => "{construct} in `{macro_name}!` assertion.",
+    },
+    rationale: "Packing multiple conditions or synthesized boolean tuples into a single assertion obscures which check failed, yields unhelpful diffs, and circumvents assertion limits.",
+    suggestion: {
+        base: "Split into separate atomic assertions or assert directly on domain objects/collections.",
+        Python => "Split into separate atomic assertions (e.g. `assert a\\nassert b`) or assert directly on the domain model (`assert actual == expected`).",
+        Rust => "Split into separate atomic assertions (`assert!(...); assert!(...);`) or assert directly on the domain model (`assert_eq!(actual, expected)`).",
+    },
+};
 
 /// Rule that bans compound boolean conditions and boolean tuple packing in assertions.
 pub struct NoAssertionPacking;
@@ -25,35 +37,11 @@ impl Rule for NoAssertionPacking {
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python, SupportLang::Rust]
     }
+
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &TEMPLATE
+    }
 }
-
-const COMPOUND_BOOLEAN_TEMPLATE: ViolationTemplate = violation_template! {
-    summary: {
-        base: "Compound boolean condition in assertion.",
-        Python => "Compound boolean condition (`and`) in `assert` statement.",
-        Rust => "Compound boolean condition (`&&`) in `{macro_name}!` assertion.",
-    },
-    rationale: "Combining multiple boolean conditions into a single assertion obscures which condition failed and circumvents assertion limits. Assertions should be atomic or operate directly on domain models.",
-    suggestion: {
-        base: "Split into separate atomic assertions or verify distinct behaviors in separate tests.",
-        Python => "Split into separate atomic assertions (e.g. `assert a\\nassert b`) or verify distinct behaviors in separate tests.",
-        Rust => "Split into separate atomic assertions (e.g. `assert!(...); assert!(...);`) or verify distinct behaviors in separate tests.",
-    },
-};
-
-const BOOLEAN_TUPLE_TEMPLATE: ViolationTemplate = violation_template! {
-    summary: {
-        base: "Boolean tuple/collection equality in assertion.",
-        Python => "Boolean tuple/collection equality in `assert` statement.",
-        Rust => "Boolean tuple/collection equality in `{macro_name}!` assertion.",
-    },
-    rationale: "Asserting equality against synthesized boolean tuples/collections circumvents assertion limits and yields unhelpful diffs. Assert directly on domain objects/collections or write separate atomic assertions.",
-    suggestion: {
-        base: "Assert directly on the domain model/collection or split into separate atomic assertions.",
-        Python => "Assert directly on the domain model/collection (e.g. `assert actual == expected`) or split into separate atomic assertions.",
-        Rust => "Assert directly on the domain model/collection (e.g. `assert_eq!(actual, expected)`) or split into separate atomic assertions.",
-    },
-};
 
 /// Returns true if a Rust macro node is an assertion macro (`assert!`, `assert_*!`, `debug_assert!`, etc.).
 fn is_rust_assertion_macro(macro_node: &AstNode<'_>) -> bool {
@@ -184,10 +172,10 @@ fn check_rust_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: 
         if (macro_name == "assert" || macro_name == "debug_assert")
             && has_rust_top_level_and(&token_tree)
         {
-            diagnostics.push(Diagnostic::new(
-                RuleName("no-assertion-packing"),
-                COMPOUND_BOOLEAN_TEMPLATE.render(SupportLang::Rust, &[("macro_name", &macro_name)]),
-                SourceLocation::from_node(path, node),
+            diagnostics.push(NoAssertionPacking.diagnostic_at_node(
+                path,
+                node,
+                &[("construct", "Compound boolean condition (`&&`)"), ("macro_name", &macro_name)],
             ));
             return;
         }
@@ -197,11 +185,13 @@ fn check_rust_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: 
             let args = extract_rust_macro_args(&token_tree);
             let has_boolean_sequence = args.iter().any(is_rust_boolean_tuple_or_array);
             if has_boolean_sequence {
-                diagnostics.push(Diagnostic::new(
-                    RuleName("no-assertion-packing"),
-                    BOOLEAN_TUPLE_TEMPLATE
-                        .render(SupportLang::Rust, &[("macro_name", &macro_name)]),
-                    SourceLocation::from_node(path, node),
+                diagnostics.push(NoAssertionPacking.diagnostic_at_node(
+                    path,
+                    node,
+                    &[
+                        ("construct", "Boolean tuple/collection equality"),
+                        ("macro_name", &macro_name),
+                    ],
                 ));
                 return;
             }
@@ -227,10 +217,10 @@ fn check_python_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path
             .any(|c| c.kind() == "boolean_operator" && c.children().any(|op| op.kind() == "and"));
 
         if has_and {
-            diagnostics.push(Diagnostic::new(
-                RuleName("no-assertion-packing"),
-                COMPOUND_BOOLEAN_TEMPLATE.render(SupportLang::Python, &[]),
-                SourceLocation::from_node(path, node),
+            diagnostics.push(NoAssertionPacking.diagnostic_at_node(
+                path,
+                node,
+                &[("construct", "Compound boolean condition (`and`)")],
             ));
             return;
         }
@@ -239,10 +229,10 @@ fn check_python_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path
         if let Some(comp) = node.children().find(|c| c.kind() == "comparison_operator") {
             let has_boolean_sequence = comp.children().any(|c| is_python_boolean_sequence(&c));
             if has_boolean_sequence {
-                diagnostics.push(Diagnostic::new(
-                    RuleName("no-assertion-packing"),
-                    BOOLEAN_TUPLE_TEMPLATE.render(SupportLang::Python, &[]),
-                    SourceLocation::from_node(path, node),
+                diagnostics.push(NoAssertionPacking.diagnostic_at_node(
+                    path,
+                    node,
+                    &[("construct", "Boolean tuple/collection equality")],
                 ));
                 return;
             }

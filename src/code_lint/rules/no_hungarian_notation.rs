@@ -1,10 +1,8 @@
 //! Bans type suffixes (Hungarian notation) in variable names.
 
 use crate::code_lint::CodeRule;
-use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
-use crate::diagnostic::{
-    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
-};
+use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
+use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -26,7 +24,7 @@ const DEFAULT_BANNED_SUFFIXES: FilterListDefaults = FilterListDefaults {
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Identifier `{name}` contains a banned type suffix `{actual_suffix}`.",
     rationale: "Naming variables with their type suffixes (Hungarian notation) makes refactoring harder and clutters the code.",
-    suggestion: "{suggestion}",
+    suggestion: "Rename `{name}` without the type suffix `{actual_suffix}` (e.g. `{base_name}`, or a plural noun for collections).",
 };
 
 /// Rule that bans Hungarian notation type suffixes.
@@ -45,8 +43,8 @@ impl Rule for NoHungarianNotation {
         &[SupportLang::Python, SupportLang::Rust]
     }
 
-    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
-        Some(&TEMPLATE)
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &TEMPLATE
     }
 }
 
@@ -83,40 +81,14 @@ impl CodeRule for NoHungarianNotation {
                     let base_name = &name[..name.len() - suffix.len()];
                     let actual_suffix = &name[name.len() - suffix.len()..];
 
-                    // Case preservation for suggestions (Screaming Snake Case)
-                    let is_uppercase = name.chars().all(|c| !c.is_alphabetic() || c.is_uppercase());
-
-                    let suggestion = match suffix_lower.as_str() {
-                        "_list" | "_arr" | "_vec" | "_set" => {
-                            // TODO: I'm not sure this plural/suffix management is ricr.
-                            let plural_suffix =
-                                if base_name.ends_with('s') || base_name.ends_with('S') {
-                                    ""
-                                } else if is_uppercase {
-                                    "S"
-                                } else {
-                                    "s"
-                                };
-                            format!("Rename the identifier to use plural form (e.g. `{base_name}{plural_suffix}`) or remove the suffix.")
-                        }
-                        _ => {
-                            format!(
-                                "Rename the identifier without the type suffix `{actual_suffix}`."
-                            )
-                        }
-                    };
-
-                    diagnostics.push(Diagnostic::new(
-                        self.name(),
-                        TEMPLATE.render(
-                            *lang,
-                            &[
-                                ("name", &name),
-                                ("actual_suffix", actual_suffix),
-                                ("suggestion", &suggestion),
-                            ],
-                        ),
-                        SourceLocation::from_node(path, &node),
+                    diagnostics.push(self.diagnostic_at_node(
+                        path,
+                        &node,
+                        &[
+                            ("name", &name),
+                            ("actual_suffix", actual_suffix),
+                            ("base_name", base_name),
+                        ],
                     ));
                     // Check only one suffix per node
                     break;
@@ -130,7 +102,6 @@ impl CodeRule for NoHungarianNotation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::code_lint::SupportLang;
     use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
 
     #[test]
@@ -190,33 +161,6 @@ class ItemsArr: # OK (class definition)
 
         let source = "fn main() { let x_list = 1; let y_custom = 2; }";
         insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config), @"[no-hungarian-notation] Line 1, Col 33: Identifier `y_custom` contains a banned type suffix `_custom`.");
-    }
-
-    #[test]
-    fn test_suggestions() {
-        let rule = NoHungarianNotation;
-        let source = r#"
-            fn main() {
-                let user_list = vec!["alice"];
-                let users_list = vec!["bob"];
-                const USER_LIST: &[&str] = &["charlie"];
-                let val_int = 42;
-            }
-        "#;
-        let grep = AstGrep::new(source, SupportLang::Rust);
-        let diags = rule.check_file(Path::new("test.rs"), &grep, &crate::core::Config::default());
-
-        let suggestions: Vec<&str> =
-            diags.iter().map(|diagnostic| diagnostic.message.suggestion.as_str()).collect();
-        assert_eq!(
-            suggestions,
-            vec![
-                "Rename the identifier to use plural form (e.g. `users`) or remove the suffix.",
-                "Rename the identifier to use plural form (e.g. `users`) or remove the suffix.",
-                "Rename the identifier to use plural form (e.g. `USERS`) or remove the suffix.",
-                "Rename the identifier without the type suffix `_int`.",
-            ]
-        );
     }
 
     #[test]

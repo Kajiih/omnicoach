@@ -2,8 +2,11 @@
 
 use crate::command_lint::vcs::JjClient;
 use crate::command_lint::InterceptedCommand;
-use crate::core::{Config, Rule};
-use crate::diagnostic::{Diagnostic, SourceLocation, SourceSpan, ViolationMessage};
+use crate::core::{Config, Rule, RuleName};
+use crate::diagnostic::{
+    violation_template, Diagnostic, SourceLocation, SourceSpan, ViolationTemplate,
+};
+use crate::rules::Tag;
 
 use crate::command_lint::ProgramCliSchema;
 
@@ -38,37 +41,26 @@ pub fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
     }
 }
 
-use crate::diagnostic::RuleName;
-use crate::rules::Tag;
+const TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Running `jj edit {revision}` on a described commit is discouraged.",
+    rationale: "Editing described commits breaks atomicity and review stability.",
+    suggestion: "Create a new change with `jj new {revision}` instead of editing this commit directly.",
+};
 
 /// Blocks running `jj edit <revision>` if the target revision has a non-empty description.
 pub struct NoJJEditOnDescribedCommits;
-
-/// Violation attributes for `NoJJEditOnDescribedCommits` rule.
-pub struct NoJJEditViolation {
-    /// The target revision argument of the command.
-    pub revision: String,
-}
-
-impl NoJJEditOnDescribedCommits {
-    /// Formats the human-readable diagnostic message.
-    #[must_use]
-    pub fn format_message(violation: &NoJJEditViolation) -> ViolationMessage {
-        let revision = &violation.revision;
-        ViolationMessage {
-            summary: format!("Running `jj edit {revision}` on a described commit is discouraged."),
-            rationale: "Editing described commits breaks atomicity and review stability.".to_string(),
-            suggestion: format!("Create a new change with `jj new {revision}` instead of editing this commit directly."),
-        }
-    }
-}
 
 impl Rule for NoJJEditOnDescribedCommits {
     fn name(&self) -> RuleName {
         RuleName("no-edits-on-described-commits")
     }
+
     fn tags(&self) -> &'static [Tag] {
         &[Tag::Workflow, Tag::Vcs, Tag::JJ]
+    }
+
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &TEMPLATE
     }
 }
 
@@ -96,12 +88,8 @@ impl crate::command_lint::CommandRule for NoJJEditOnDescribedCommits {
             return Vec::new();
         }
 
-        let violation = NoJJEditViolation { revision };
-        let message = Self::format_message(&violation);
-
-        vec![Diagnostic::new(
-            self.name(),
-            message,
+        vec![self.render_diagnostic(
+            &[("revision", &revision)],
             SourceLocation::virtual_span(
                 crate::diagnostic::VCS_CONTEXT_NAME,
                 &cmd.raw_string,

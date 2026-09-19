@@ -1,10 +1,8 @@
 //! Verifies that python functions are flat (no nested defs).
 
 use crate::code_lint::CodeRule;
-use crate::core::Rule;
-use crate::diagnostic::{
-    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
-};
+use crate::core::{Rule, RuleName};
+use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
 use crate::rules::Tag;
 use ast_grep_core::{AstGrep, Doc, Node};
 use ast_grep_language::SupportLang;
@@ -35,14 +33,17 @@ impl Rule for FlatScopeEnforced {
     fn name(&self) -> RuleName {
         RuleName("flat-scope-enforced")
     }
+
     fn tags(&self) -> &'static [Tag] {
         &[Tag::Complexity, Tag::Style]
     }
+
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python]
     }
-    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
-        Some(&TEMPLATE)
+
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &TEMPLATE
     }
 }
 
@@ -68,10 +69,10 @@ impl CodeRule for FlatScopeEnforced {
                     .map(|name_node| name_node.text())
                     .unwrap_or_default();
 
-                diagnostics.push(Diagnostic::new(
-                    self.name(),
-                    TEMPLATE.render(*grep.lang(), &[("func_name", &func_name)]),
-                    SourceLocation::from_node(path, &matched_node),
+                diagnostics.push(self.diagnostic_at_node(
+                    path,
+                    &matched_node,
+                    &[("func_name", &func_name)],
                 ));
             }
         }

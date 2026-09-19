@@ -1,10 +1,8 @@
 //! Declarations of generic rules targeting multiple languages.
 
 use crate::code_lint::CodeRule;
-use crate::core::{AllowListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
-use crate::diagnostic::{
-    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
-};
+use crate::core::{AllowListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
+use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -42,8 +40,8 @@ impl Rule for SingleLetterVariableName {
         &[SupportLang::Python, SupportLang::Rust]
     }
 
-    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
-        Some(&TEMPLATE)
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &TEMPLATE
     }
 }
 // TODO: Is this fully language agnostic?
@@ -69,11 +67,7 @@ impl CodeRule for SingleLetterVariableName {
             }
             let name = node.text();
             if name.len() == 1 && name != "_" && !effective_allowed.contains(&*name) {
-                diagnostics.push(Diagnostic::new(
-                    self.name(),
-                    TEMPLATE.render(lang, &[("name", &name)]),
-                    SourceLocation::from_node(path, &node),
-                ));
+                diagnostics.push(self.diagnostic_at_node(path, &node, &[("name", &name)]));
             }
         }
         diagnostics

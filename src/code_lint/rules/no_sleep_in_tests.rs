@@ -1,11 +1,9 @@
-//! Flags `sleep` calls in Python and Rust test files (`no-sleep-in-tests`).
+//! Flags wall-clock/async `sleep` calls (`no-sleep-in-tests`) and zero-duration sleeps (`no-zero-sleep-in-tests`) in test files.
 
 use crate::code_lint::calls::{self, CallMatch};
 use crate::code_lint::{CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
-use crate::diagnostic::{
-    violation_template, Diagnostic, RuleName, SourceLocation, ViolationMessage, ViolationTemplate,
-};
+use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
+use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -24,25 +22,8 @@ const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
     exempt: &[],
 };
 
-/// Configuration for the `NoSleepInTests` rule.
+/// Configuration for the `NoSleepInTests` and `NoZeroSleepInTests` rules.
 pub type NoSleepInTestsConfig = DynamicRuleConfig<DenyListConfig>;
-
-/// Rule that bans wall-clock and async sleeps in test files.
-pub struct NoSleepInTests;
-
-impl Rule for NoSleepInTests {
-    fn name(&self) -> RuleName {
-        RuleName("no-sleep-in-tests")
-    }
-
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::Testing]
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-}
 
 const SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Wall-clock or async sleep `{call}()` in test is discouraged.",
@@ -64,6 +45,48 @@ const ZERO_SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
     },
 };
 
+/// Rule that bans non-zero wall-clock and async sleeps in test files.
+pub struct NoSleepInTests;
+
+impl Rule for NoSleepInTests {
+    fn name(&self) -> RuleName {
+        RuleName("no-sleep-in-tests")
+    }
+
+    fn tags(&self) -> &'static [Tag] {
+        &[Tag::Testing]
+    }
+
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python, SupportLang::Rust]
+    }
+
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &SLEEP_TEMPLATE
+    }
+}
+
+/// Rule that bans zero-duration sleeps (`sleep(0)`, `sleep(Duration::ZERO)`) in test files.
+pub struct NoZeroSleepInTests;
+
+impl Rule for NoZeroSleepInTests {
+    fn name(&self) -> RuleName {
+        RuleName("no-zero-sleep-in-tests")
+    }
+
+    fn tags(&self) -> &'static [Tag] {
+        &[Tag::Testing]
+    }
+
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python, SupportLang::Rust]
+    }
+
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &ZERO_SLEEP_TEMPLATE
+    }
+}
+
 /// Returns the trimmed argument string if the call is a zero-duration sleep (e.g. `sleep(0)`, `sleep(Duration::ZERO)`).
 fn zero_duration_arg(call_match: &CallMatch<'_>) -> Option<String> {
     if call_match.arguments.len() != 1 {
@@ -84,14 +107,6 @@ fn zero_duration_arg(call_match: &CallMatch<'_>) -> Option<String> {
     .then(|| trimmed.to_string())
 }
 
-fn format_violation_message(call_match: &CallMatch<'_>, lang: SupportLang) -> ViolationMessage {
-    let call_name = &call_match.callee;
-    zero_duration_arg(call_match).map_or_else(
-        || SLEEP_TEMPLATE.render(lang, &[("call", call_name)]),
-        |zero_arg| ZERO_SLEEP_TEMPLATE.render(lang, &[("call", call_name), ("arg", &zero_arg)]),
-    )
-}
-
 impl CodeRule for NoSleepInTests {
     fn target(&self) -> RuleTarget {
         RuleTarget::TestsOnly
@@ -109,9 +124,38 @@ impl CodeRule for NoSleepInTests {
 
         calls::find_banned_calls(grep, &effective_banned)
             .into_iter()
+            .filter(|call_match| zero_duration_arg(call_match).is_none())
             .map(|call_match| {
-                let message = format_violation_message(&call_match, lang);
-                self.create_diagnostic(message, SourceLocation::from_node(path, &call_match.node))
+                self.diagnostic_at_node(path, &call_match.node, &[("call", &call_match.callee)])
+            })
+            .collect()
+    }
+}
+
+impl CodeRule for NoZeroSleepInTests {
+    fn target(&self) -> RuleTarget {
+        RuleTarget::TestsOnly
+    }
+
+    fn check_file(
+        &self,
+        path: &Path,
+        grep: &AstGrep<SourceDoc>,
+        config: &Config,
+    ) -> Vec<Diagnostic> {
+        let lang = *grep.lang();
+        let rule_config: NoSleepInTestsConfig = config.get_rule_config(self.name().0);
+        let effective_banned = rule_config.effective_banned_for_lang(lang, &DEFAULT_BANNED_CALLS);
+
+        calls::find_banned_calls(grep, &effective_banned)
+            .into_iter()
+            .filter_map(|call_match| {
+                let zero_arg = zero_duration_arg(&call_match)?;
+                Some(self.diagnostic_at_node(
+                    path,
+                    &call_match.node,
+                    &[("call", &call_match.callee), ("arg", &zero_arg)],
+                ))
             })
             .collect()
     }
@@ -146,8 +190,12 @@ async def test_polling():
         [no-sleep-in-tests] Line 8, Col 11: Wall-clock or async sleep `asyncio.sleep()` in test is discouraged.
         [no-sleep-in-tests] Line 9, Col 11: Wall-clock or async sleep `anyio.sleep()` in test is discouraged.
         [no-sleep-in-tests] Line 10, Col 5: Wall-clock or async sleep `sleep()` in test is discouraged.
-        [no-sleep-in-tests] Line 11, Col 11: Zero-duration sleep `asyncio.sleep(0)` in test is discouraged.
         "
+        );
+
+        insta::assert_snapshot!(
+            assert_code_rule_snapshot(&NoZeroSleepInTests, source, "tests/test_worker.py"),
+            @"[no-zero-sleep-in-tests] Line 11, Col 11: Zero-duration sleep `asyncio.sleep(0)` in test is discouraged."
         );
     }
 
@@ -174,25 +222,13 @@ async fn test_retry_backoff() {
         [no-sleep-in-tests] Line 7, Col 5: Wall-clock or async sleep `thread::sleep()` in test is discouraged.
         [no-sleep-in-tests] Line 8, Col 5: Wall-clock or async sleep `tokio::time::sleep()` in test is discouraged.
         [no-sleep-in-tests] Line 9, Col 5: Wall-clock or async sleep `sleep()` in test is discouraged.
-        [no-sleep-in-tests] Line 10, Col 5: Zero-duration sleep `tokio::time::sleep(Duration::ZERO)` in test is discouraged.
         "
         );
-    }
 
-    #[test]
-    fn test_zero_duration_distinct_suggestions() {
-        let py_grep = AstGrep::new("await asyncio.sleep(0)", SupportLang::Python);
-        let py_diags =
-            NoSleepInTests.check_file(Path::new("tests/test_app.py"), &py_grep, &Config::default());
-        assert_eq!(py_diags.len(), 1);
-        assert!(py_diags[0].message.suggestion.contains("anyio.lowlevel.checkpoint()"));
-
-        let rs_grep =
-            AstGrep::new("fn test_it() { tokio::time::sleep(Duration::ZERO); }", SupportLang::Rust);
-        let rs_diags =
-            NoSleepInTests.check_file(Path::new("tests/app_test.rs"), &rs_grep, &Config::default());
-        assert_eq!(rs_diags.len(), 1);
-        assert!(rs_diags[0].message.suggestion.contains("tokio::task::yield_now().await"));
+        insta::assert_snapshot!(
+            assert_code_rule_snapshot(&NoZeroSleepInTests, source, "tests/retry_test.rs"),
+            @"[no-zero-sleep-in-tests] Line 10, Col 5: Zero-duration sleep `tokio::time::sleep(Duration::ZERO)` in test is discouraged."
+        );
     }
 
     #[test]

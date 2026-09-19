@@ -20,6 +20,9 @@ This document serves as the single source of truth for architectural milestones,
 
 ## 2. Performance & VCS Optimizations
 
+- **Single-Pass Call Expression Matching (`find_banned_calls`)**:
+  - *Current*: `calls::find_banned_calls` executes `root.find_all(...)` sequentially for each pattern entry, repeatedly traversing the entire syntax tree (causing ~1.3s overhead per pattern on 800+ line files in debug mode).
+  - *Target*: Perform a single-pass AST traversal collecting `call_expression` (Rust) and `call` (Python) nodes, resolving callee text and checking against a `HashSet` in $O(1)$ to eliminate redundant full-tree traversals and achieve sub-millisecond execution.
 - **Subprocess Batching & Caching (`EnvContext`)**:
   - *Current*: Command rules spawn individual `jj` or `git` CLI calls per evaluation.
   - *Target*: Introduce a shared `EnvContext` struct that pre-fetches and caches repository state (e.g., batching queries into a single `jj log --json` or `git status` invocation) to ensure sub-10ms execution across multiple rules.
@@ -36,6 +39,9 @@ This document serves as the single source of truth for architectural milestones,
   - *Target*: Add an optional Cargo feature (`features = ["miette"]`) that enables rich, syntax-highlighted source snippets with colored squiggly underlines and clickable rule documentation URLs, while keeping the default pre-commit hook binary lightweight and fast.
 - **Polished Diagnostic Summaries (`pluralizer` / Native Helper)**:
   - *Target*: Clean grammatical inflection ("1 violation" vs "3 violations") in terminal summary footers, JSON reports, and future JUnit/SARIF export formats.
+- **Single-Pass Placeholder Tokenizer / Interpolator (`LanguageText`)**:
+  - *Current*: `LanguageText::interpolate` performs sequential string replacement (`result.replace("{key}", val)`).
+  - *Target*: Replace sequential search-and-replace with a single-pass scanner/tokenizer (or regex) to avoid potential secondary replacement issues when interpolated values contain curly braces (`{}`) matching other parameter names.
 
 ---
 

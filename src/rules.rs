@@ -91,6 +91,7 @@ impl Tag {
 pub const CODE_RULES: &[&dyn crate::code_lint::CodeRule] = &[
     &crate::code_lint::rules::no_unstructured_task_creation::NoUnstructuredTaskCreation,
     &crate::code_lint::rules::no_sleep_in_tests::NoSleepInTests,
+    &crate::code_lint::rules::no_sleep_in_tests::NoZeroSleepInTests,
     &crate::code_lint::rules::max_test_assertions::MaxTestAssertions,
     &crate::code_lint::rules::no_assertion_packing::NoAssertionPacking,
     &crate::code_lint::rules::no_logging_in_except::NoLoggingInExcept,
@@ -119,9 +120,43 @@ mod tests {
 
         assert!(names.insert(name), "Duplicate rule name found in registry: {name}");
         assert!(
-            name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+            !name.is_empty()
+                && !name.starts_with('-')
+                && !name.ends_with('-')
+                && name
+                    .chars()
+                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'),
             "Rule name '{name}' does not match standard kebab-case pattern"
         );
+        assert!(!rule.tags().is_empty(), "Rule {name} must declare at least one domain tag");
+
+        let template = rule.violation_template();
+        for field in [template.summary, template.rationale, template.suggestion] {
+            for text in std::iter::once(field.base)
+                .chain(field.overrides.iter().map(|(_, override_text)| *override_text))
+            {
+                let trimmed = text.trim();
+                assert!(!trimmed.is_empty(), "Rule {name} has an empty template field");
+                let is_bare_placeholder = trimmed.starts_with('{')
+                    && trimmed.ends_with('}')
+                    && !trimmed[1..trimmed.len() - 1].contains(['{', '}']);
+                assert!(
+                    !is_bare_placeholder,
+                    "Rule {name} template field '{trimmed}' must not be a bare placeholder pass-through"
+                );
+            }
+            let mut seen_langs = HashSet::new();
+            for (lang, _) in field.overrides {
+                assert!(
+                    seen_langs.insert(lang),
+                    "Rule {name} has duplicate template override for {lang:?}"
+                );
+                assert!(
+                    rule.supported_languages().contains(lang),
+                    "Rule {name} declares template override for {lang:?}, which is not in supported_languages()"
+                );
+            }
+        }
     }
 
     use rstest::rstest;

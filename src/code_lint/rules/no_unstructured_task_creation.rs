@@ -1,10 +1,8 @@
 //! Flags unstructured task creation (`asyncio.create_task`, `ensure_future`, `loop.create_task`).
 
 use crate::code_lint::{calls, CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
-use crate::diagnostic::{
-    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
-};
+use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
+use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -53,8 +51,8 @@ impl Rule for NoUnstructuredTaskCreation {
         &[SupportLang::Python]
     }
 
-    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
-        Some(&TEMPLATE)
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &TEMPLATE
     }
 }
 
@@ -76,11 +74,10 @@ impl CodeRule for NoUnstructuredTaskCreation {
         calls::find_banned_calls(grep, &effective_banned)
             .into_iter()
             .map(|call_match| {
-                let call_name = call_match.callee;
-                Diagnostic::new(
-                    self.name(),
-                    TEMPLATE.render(*grep.lang(), &[("call_name", &call_name)]),
-                    SourceLocation::from_node(path, &call_match.node),
+                self.diagnostic_at_node(
+                    path,
+                    &call_match.node,
+                    &[("call_name", &call_match.callee)],
                 )
             })
             .collect()

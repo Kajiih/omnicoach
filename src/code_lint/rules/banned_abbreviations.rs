@@ -1,10 +1,8 @@
 //! Rule targeting banned abbreviations in definitions across multiple languages.
 
 use crate::code_lint::CodeRule;
-use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule};
-use crate::diagnostic::{
-    violation_template, Diagnostic, RuleName, SourceLocation, ViolationTemplate,
-};
+use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
+use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -80,8 +78,8 @@ impl Rule for BannedAbbreviations {
         &[SupportLang::Python, SupportLang::Rust]
     }
 
-    fn violation_template(&self) -> Option<&'static ViolationTemplate> {
-        Some(&TEMPLATE)
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &TEMPLATE
     }
 }
 
@@ -110,10 +108,10 @@ impl CodeRule for BannedAbbreviations {
             let segments = split_segments(&name);
             for segment in segments {
                 if effective_banned.contains(&segment) {
-                    diagnostics.push(Diagnostic::new(
-                        self.name(),
-                        TEMPLATE.render(lang, &[("name", &name), ("segment", &segment)]),
-                        SourceLocation::from_node(path, &node),
+                    diagnostics.push(self.diagnostic_at_node(
+                        path,
+                        &node,
+                        &[("name", &name), ("segment", &segment)],
                     ));
                     // Flag each node at most once
                     break;
