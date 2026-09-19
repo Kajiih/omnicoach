@@ -298,6 +298,36 @@ fn collect_inline_test_ranges_rec(node: &AstNode<'_>, ranges: &mut Vec<std::ops:
     }
 }
 
+/// Returns true if a Rust `function_item` node is a test function (`#[test]` / `#[rstest]` or named `test` / `test_*`).
+#[must_use]
+pub fn is_test_function(func_node: &AstNode<'_>) -> bool {
+    let is_named_test = func_node.field("name").is_some_and(|name_node| {
+        let func_name = name_node.text();
+        func_name == "test" || func_name.starts_with("test_")
+    });
+    is_named_test || has_test_attribute(func_node)
+}
+
+/// Extracts the terminal macro identifier from a Rust `macro_invocation` node (e.g. `assert` from `std::assert!`).
+#[must_use]
+pub fn macro_terminal_name(macro_node: &AstNode<'_>) -> String {
+    let Some(macro_id) = macro_node.field("macro") else {
+        return String::new();
+    };
+    macro_id.text().rsplit("::").next().unwrap_or("").trim().to_string()
+}
+
+/// Returns true if a Rust `macro_invocation` node invokes an assertion macro
+/// (`assert!`, `assert_*!`, `debug_assert!`, `debug_assert_*!`, `insta::assert_snapshot!`, etc.).
+#[must_use]
+pub fn is_assertion_macro(macro_node: &AstNode<'_>) -> bool {
+    let terminal = macro_terminal_name(macro_node);
+    terminal == "assert"
+        || terminal.starts_with("assert_")
+        || terminal == "debug_assert"
+        || terminal.starts_with("debug_assert_")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -173,6 +173,31 @@ fn get_git_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Commits a parsed file's changed line numbers into `changed_lines` if the file was not deleted.
+fn commit_file_changes(
+    current_file: &mut Option<(PathBuf, HashSet<usize>)>,
+    is_deleted: bool,
+    changed_lines: &mut ChangedLines,
+) {
+    if let Some((path, lines)) = current_file.take() {
+        if !is_deleted && !lines.is_empty() {
+            changed_lines.insert(path, lines);
+        }
+    }
+}
+
+/// Extracts the normalized relative file path from a `+++ b/...` diff header line, or `None` if `/dev/null`.
+fn extract_diff_header_path(line: &str) -> Option<PathBuf> {
+    let path_part = &line[4..];
+    if path_part == "/dev/null" {
+        return None;
+    }
+    let parsed_path =
+        path_part.split_once('\t').map_or(path_part, |(path, _)| path).trim_matches('"');
+    let parsed_path = parsed_path.strip_prefix("b/").unwrap_or(parsed_path).trim_matches('"');
+    Some(PathBuf::from(parsed_path))
+}
+
 /// Parses a unified git-compatible diff output and returns a mapping from relative file paths
 /// to their 1-indexed changed line numbers in the new file.
 #[must_use]
@@ -185,36 +210,19 @@ pub fn parse_git_diff(content: &str) -> HashMap<PathBuf, HashSet<usize>> {
 
     for line in content.lines() {
         if line.starts_with("diff --git") {
-            // Commit the previous file if it was not deleted and has changes
-            if let Some((path, lines)) = current_file.take() {
-                if !is_deleted && !lines.is_empty() {
-                    changed_lines.insert(path, lines);
-                }
-            }
+            commit_file_changes(&mut current_file, is_deleted, &mut changed_lines);
             is_deleted = false;
             line_counter = 0;
             expecting_file_header = true;
         } else if line.starts_with("+++ ") && expecting_file_header {
-            let path_part = &line[4..];
-            if path_part == "/dev/null" {
-                is_deleted = true;
+            if let Some(parsed_path) = extract_diff_header_path(line) {
+                current_file = Some((parsed_path, HashSet::new()));
             } else {
-                let parsed_path = match path_part.split_once('\t') {
-                    Some((path, _)) => path,
-                    None => path_part,
-                };
-                let parsed_path = parsed_path.trim_matches('"');
-                let parsed_path = parsed_path.strip_prefix("b/").unwrap_or(parsed_path);
-                let parsed_path = parsed_path.trim_matches('"');
-                current_file = Some((PathBuf::from(parsed_path), HashSet::new()));
+                is_deleted = true;
             }
             expecting_file_header = false;
         } else if line.starts_with("@@ ") {
-            if let Some(new_start) = parse_hunk_header(line) {
-                line_counter = new_start;
-            } else {
-                line_counter = 0;
-            }
+            line_counter = parse_hunk_header(line).unwrap_or(0);
         } else if let Some((_, lines)) = current_file.as_mut() {
             if is_deleted || line_counter == 0 {
                 continue;
@@ -222,22 +230,13 @@ pub fn parse_git_diff(content: &str) -> HashMap<PathBuf, HashSet<usize>> {
             if line.starts_with('+') {
                 lines.insert(line_counter);
                 line_counter += 1;
-            } else if line.starts_with('-') {
-                // Deleted line: exists only in old file, do not increment new line counter
             } else if line.starts_with(' ') || line.is_empty() {
-                // Context line: exists in new file, increment counter
                 line_counter += 1;
             }
         }
     }
 
-    // Commit the last file
-    if let Some((path, lines)) = current_file {
-        if !is_deleted && !lines.is_empty() {
-            changed_lines.insert(path, lines);
-        }
-    }
-
+    commit_file_changes(&mut current_file, is_deleted, &mut changed_lines);
     changed_lines
 }
 

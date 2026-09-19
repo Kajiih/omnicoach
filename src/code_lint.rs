@@ -78,6 +78,57 @@ pub fn detect_language(path: &Path) -> Option<SupportLang> {
     })
 }
 
+/// Returns true if `rule` should be evaluated on `path` given its language and test-file context.
+fn should_evaluate_rule(
+    rule: &dyn CodeRule,
+    path: &Path,
+    lang: SupportLang,
+    is_test: bool,
+    has_inline_tests: bool,
+    config: &Config,
+) -> bool {
+    if rule.tags().contains(&crate::rules::Tag::Suppression) {
+        return false;
+    }
+    if !config.is_rule_enabled_for_path(rule, path) || !rule.supports_language(lang) {
+        return false;
+    }
+    match rule.target() {
+        RuleTarget::SourceOnly => !is_test,
+        RuleTarget::TestsOnly => is_test || has_inline_tests,
+        RuleTarget::All => true,
+    }
+}
+
+/// Filters rule diagnostics according to `RuleTarget` and inline `#[cfg(test)]` / `#[test]` byte ranges.
+fn filter_diagnostics_by_target(
+    rule_diagnostics: Vec<Diagnostic>,
+    target: RuleTarget,
+    is_test: bool,
+    inline_test_ranges: &[std::ops::Range<usize>],
+) -> Vec<Diagnostic> {
+    if is_test || inline_test_ranges.is_empty() {
+        return rule_diagnostics;
+    }
+    match target {
+        RuleTarget::TestsOnly => rule_diagnostics
+            .into_iter()
+            .filter(|diagnostic| {
+                let pos = diagnostic.location.span.start;
+                inline_test_ranges.iter().any(|range| range.contains(&pos))
+            })
+            .collect(),
+        RuleTarget::SourceOnly => rule_diagnostics
+            .into_iter()
+            .filter(|diagnostic| {
+                let pos = diagnostic.location.span.start;
+                !inline_test_ranges.iter().any(|range| range.contains(&pos))
+            })
+            .collect(),
+        RuleTarget::All => rule_diagnostics,
+    }
+}
+
 /// Analyzes the structure of a file and returns diagnostic alerts.
 #[must_use]
 pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic> {
@@ -94,56 +145,58 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
     } else {
         Vec::new()
     };
+    let has_inline_tests = !inline_test_ranges.is_empty();
     let mut raw_diagnostics = Vec::new();
 
     for rule in crate::rules::CODE_RULES {
-        if rule.tags().contains(&crate::rules::Tag::Suppression) {
+        if !should_evaluate_rule(*rule, path, lang, is_test, has_inline_tests, config) {
             continue;
         }
-
-        if !config.is_rule_enabled_for_path(*rule, path) {
-            continue;
-        }
-
-        let target = rule.target();
-        if is_test && target == RuleTarget::SourceOnly {
-            continue;
-        }
-        if !is_test && target == RuleTarget::TestsOnly && inline_test_ranges.is_empty() {
-            continue;
-        }
-
-        if rule.supports_language(lang) {
-            let rule_diagnostics = rule.check_file(path, &grep, config);
-            if !is_test && !inline_test_ranges.is_empty() {
-                match target {
-                    RuleTarget::TestsOnly => {
-                        raw_diagnostics.extend(rule_diagnostics.into_iter().filter(|diagnostic| {
-                            let pos = diagnostic.location.span.start;
-                            inline_test_ranges.iter().any(|range| range.contains(&pos))
-                        }));
-                    }
-                    RuleTarget::SourceOnly => {
-                        raw_diagnostics.extend(rule_diagnostics.into_iter().filter(|diagnostic| {
-                            let pos = diagnostic.location.span.start;
-                            !inline_test_ranges.iter().any(|range| range.contains(&pos))
-                        }));
-                    }
-                    RuleTarget::All => {
-                        raw_diagnostics.extend(rule_diagnostics);
-                    }
-                }
-            } else {
-                raw_diagnostics.extend(rule_diagnostics);
-            }
-        }
+        let rule_diagnostics = rule.check_file(path, &grep, config);
+        raw_diagnostics.extend(filter_diagnostics_by_target(
+            rule_diagnostics,
+            rule.target(),
+            is_test,
+            &inline_test_ranges,
+        ));
     }
 
     let mut diagnostics = tracker.filter_diagnostics(raw_diagnostics);
-    let audit_diagnostics = tracker.audit(path, config);
-    diagnostics.extend(audit_diagnostics);
-
+    diagnostics.extend(tracker.audit(path, config));
     diagnostics
+}
+
+/// Collects all outermost test function and test method nodes (`def test_*` in Python, `#[test]` / `fn test_*` in Rust).
+#[must_use]
+pub fn collect_test_functions<'a>(root: &AstNode<'a>, lang: SupportLang) -> Vec<AstNode<'a>> {
+    let mut functions = Vec::new();
+    collect_outer_test_functions(root, lang, &mut functions);
+    functions
+}
+
+fn collect_outer_test_functions<'a>(
+    node: &AstNode<'a>,
+    lang: SupportLang,
+    out: &mut Vec<AstNode<'a>>,
+) {
+    let target_kind = match lang {
+        SupportLang::Rust => "function_item",
+        _ => "function_definition",
+    };
+    if node.kind() == target_kind {
+        let is_test = match lang {
+            SupportLang::Rust => ast_rust::is_test_function(node),
+            SupportLang::Python => ast_python::is_test_function(node),
+            _ => false,
+        };
+        if is_test {
+            out.push(node.clone());
+        }
+        return;
+    }
+    for child in node.children() {
+        collect_outer_test_functions(&child, lang, out);
+    }
 }
 
 /// Helper to collect binding definition nodes from a parsed AST grep document.

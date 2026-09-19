@@ -45,57 +45,18 @@ impl Rule for MaxTestAssertions {
     }
 }
 
-/// Returns true if a Python `"call"` node represents an assertion helper (`pytest.raises`, `self.assert*`, `mock.assert_*`).
-fn is_python_assertion_call(call_node: &AstNode<'_>) -> bool {
-    let Some(func) = call_node.field("function") else {
-        return false;
-    };
-    match func.kind().as_ref() {
-        "identifier" => func.text() == "raises",
-        "attribute" => {
-            let Some(attr) = func.field("attribute") else {
-                return false;
-            };
-            let attr_name = attr.text();
-            if attr_name.starts_with("assert") {
-                return true;
-            }
-            if let Some(obj) = func.field("object") {
-                let obj_text = obj.text();
-                if obj_text == "pytest" && (attr_name == "raises" || attr_name == "warns") {
-                    return true;
-                }
-                if obj_text == "self" && attr_name == "fail" {
-                    return true;
-                }
-            }
-            false
-        }
-        _ => false,
-    }
-}
-
 /// Recursively counts top-level assertion constructs in a Python test function body.
 fn count_python_assertions(node: &AstNode<'_>) -> usize {
     let kind = node.kind();
     if matches!(kind.as_ref(), "function_definition" | "class_definition") {
         return 0;
     }
-    if kind == "assert_statement" || (kind == "call" && is_python_assertion_call(node)) {
+    if kind == "assert_statement"
+        || (kind == "call" && crate::code_lint::ast_python::is_assertion_call(node))
+    {
         return 1;
     }
     node.children().map(|child| count_python_assertions(&child)).sum()
-}
-
-/// Returns true if a Rust `macro_invocation` node invokes an assertion macro (`assert!`, `assert_*!`, `insta::assert_snapshot!`, etc.).
-fn is_rust_assertion_macro(macro_node: &AstNode<'_>) -> bool {
-    let raw_text = macro_node.text();
-    let prefix = raw_text.split('!').next().unwrap_or("");
-    let terminal = prefix.rsplit("::").next().unwrap_or("").trim();
-    terminal == "assert"
-        || terminal.starts_with("assert_")
-        || terminal == "debug_assert"
-        || terminal.starts_with("debug_assert_")
 }
 
 /// Recursively counts top-level assertion macro invocations in a Rust test function body.
@@ -104,25 +65,40 @@ fn count_rust_assertions(node: &AstNode<'_>) -> usize {
     if kind == "function_item" {
         return 0;
     }
-    if kind == "macro_invocation" && is_rust_assertion_macro(node) {
+    if kind == "macro_invocation" && crate::code_lint::ast_rust::is_assertion_macro(node) {
         return 1;
     }
     node.children().map(|child| count_rust_assertions(&child)).sum()
 }
 
-/// Collects all top-level AST nodes of `target_kind`.
-fn collect_top_level_functions<'a>(
-    node: &AstNode<'a>,
-    target_kind: &str,
-    out: &mut Vec<AstNode<'a>>,
-) {
-    if node.kind() == target_kind {
-        out.push(node.clone());
-        return;
+/// Evaluates a single test function against `max_allowed` assertions.
+fn check_test_function(
+    rule: &MaxTestAssertions,
+    func_node: &AstNode<'_>,
+    lang: SupportLang,
+    path: &Path,
+    max_allowed: usize,
+) -> Option<Diagnostic> {
+    let name_node = func_node.field("name")?;
+    let body_node = func_node.field("body")?;
+    let func_name = name_node.text();
+
+    let assertion_count = match lang {
+        SupportLang::Rust => count_rust_assertions(&body_node),
+        _ => count_python_assertions(&body_node),
+    };
+
+    if assertion_count <= max_allowed {
+        return None;
     }
-    for child in node.children() {
-        collect_top_level_functions(&child, target_kind, out);
-    }
+
+    let formatted_count = assertion_count.to_string();
+    let formatted_max = max_allowed.to_string();
+    Some(rule.diagnostic_at_node(
+        path,
+        &name_node,
+        &[("func", &func_name), ("count", &formatted_count), ("max", &formatted_max)],
+    ))
 }
 
 impl CodeRule for MaxTestAssertions {
@@ -140,51 +116,10 @@ impl CodeRule for MaxTestAssertions {
         let rule_config: MaxTestAssertionsConfig = config.get_rule_config(self.name().0);
         let max_allowed = rule_config.effective_max_for_lang(lang, &DEFAULT_MAX_ASSERTIONS);
 
-        let func_kind = match lang {
-            SupportLang::Rust => "function_item",
-            _ => "function_definition",
-        };
-
-        let mut functions = Vec::new();
-        collect_top_level_functions(&grep.root(), func_kind, &mut functions);
-
-        let mut diagnostics = Vec::new();
-
-        for func_node in functions {
-            let Some(name_node) = func_node.field("name") else {
-                continue;
-            };
-            let func_name = name_node.text();
-            let is_test_fn = func_name == "test"
-                || func_name.starts_with("test_")
-                || (lang == SupportLang::Rust
-                    && crate::code_lint::ast_rust::has_test_attribute(&func_node));
-
-            if !is_test_fn {
-                continue;
-            }
-
-            let Some(body_node) = func_node.field("body") else {
-                continue;
-            };
-
-            let assertion_count = match lang {
-                SupportLang::Rust => count_rust_assertions(&body_node),
-                _ => count_python_assertions(&body_node),
-            };
-
-            if assertion_count > max_allowed {
-                let formatted_count = assertion_count.to_string();
-                let formatted_max = max_allowed.to_string();
-                diagnostics.push(self.diagnostic_at_node(
-                    path,
-                    &name_node,
-                    &[("func", &func_name), ("count", &formatted_count), ("max", &formatted_max)],
-                ));
-            }
-        }
-
-        diagnostics
+        crate::code_lint::collect_test_functions(&grep.root(), lang)
+            .iter()
+            .filter_map(|func_node| check_test_function(self, func_node, lang, path, max_allowed))
+            .collect()
     }
 }
 

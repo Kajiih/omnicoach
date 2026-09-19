@@ -99,6 +99,7 @@ pub const CODE_RULES: &[&dyn crate::code_lint::CodeRule] = &[
     &crate::code_lint::rules::single_letter_variable_name::SingleLetterVariableName,
     &crate::code_lint::rules::banned_abbreviations::BannedAbbreviations,
     &crate::code_lint::rules::no_hungarian_notation::NoHungarianNotation,
+    &crate::code_lint::rules::no_identical_positional_types::NoIdenticalPositionalTypes,
     &crate::code_lint::suppression::MissingSuppressionReason,
     &crate::code_lint::suppression::UnusedSuppression,
     &crate::code_lint::suppression::UnknownSuppressionRule,
@@ -115,17 +116,21 @@ mod tests {
     use std::collections::HashSet;
     use strum::IntoEnumIterator;
 
+    fn is_kebab_case(name: &str) -> bool {
+        !name.is_empty()
+            && !name.starts_with('-')
+            && !name.ends_with('-')
+            && name.chars().all(|character| {
+                character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+            })
+    }
+
     fn validate_rule(rule: &(impl crate::core::Rule + ?Sized), names: &mut HashSet<&'static str>) {
         let name = rule.name().0;
 
         assert!(names.insert(name), "Duplicate rule name found in registry: {name}");
         assert!(
-            !name.is_empty()
-                && !name.starts_with('-')
-                && !name.ends_with('-')
-                && name
-                    .chars()
-                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'),
+            is_kebab_case(name),
             "Rule name '{name}' does not match standard kebab-case pattern"
         );
         assert!(!rule.tags().is_empty(), "Rule {name} must declare at least one domain tag");

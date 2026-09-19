@@ -220,6 +220,43 @@ pub fn collect_bindings<'a>(root: &AstNode<'a>) -> Vec<AstNode<'a>> {
     bindings
 }
 
+/// Returns true if a Python `function_definition` node is a test function (`test` or `test_*`).
+#[must_use]
+pub fn is_test_function(func_node: &AstNode<'_>) -> bool {
+    func_node.field("name").is_some_and(|name_node| {
+        let func_name = name_node.text();
+        func_name == "test" || func_name.starts_with("test_")
+    })
+}
+
+/// Returns true if a Python `call` node is a test assertion call
+/// (`self.assert*()`, `pytest.raises(...)`, `raises(...)`, `pytest.warns(...)`, `self.fail(...)`).
+#[must_use]
+pub fn is_assertion_call(call_node: &AstNode<'_>) -> bool {
+    let Some(func) = call_node.field("function") else {
+        return false;
+    };
+    match func.kind().as_ref() {
+        "identifier" => func.text() == "raises",
+        "attribute" => {
+            let Some(attr) = func.field("attribute") else {
+                return false;
+            };
+            let attr_name = attr.text();
+            if attr_name.starts_with("assert") {
+                return true;
+            }
+            let Some(obj) = func.field("object") else {
+                return false;
+            };
+            let obj_text = obj.text();
+            (obj_text == "pytest" && (attr_name == "raises" || attr_name == "warns"))
+                || (obj_text == "self" && attr_name == "fail")
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,10 +290,7 @@ class MyClass:
         ";
         let grep = AstGrep::new(source, SupportLang::Python);
         let bindings = collect_bindings(&grep.root());
-        let names: Vec<String> = bindings
-            .iter()
-            .map(|node| node.text().to_string())
-            .collect();
+        let names: Vec<String> = bindings.iter().map(|node| node.text().to_string()).collect();
         assert_eq!(
             names,
             vec![
@@ -294,10 +328,7 @@ match val:
         ";
         let grep = AstGrep::new(source, SupportLang::Python);
         let bindings = collect_bindings(&grep.root());
-        let names: Vec<String> = bindings
-            .iter()
-            .map(|node| node.text().to_string())
-            .collect();
+        let names: Vec<String> = bindings.iter().map(|node| node.text().to_string()).collect();
         assert_eq!(names, vec!["x", "z", "a", "b"]);
     }
 }

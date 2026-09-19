@@ -43,24 +43,6 @@ impl Rule for NoAssertionPacking {
     }
 }
 
-/// Returns true if a Rust macro node is an assertion macro (`assert!`, `assert_*!`, `debug_assert!`, etc.).
-fn is_rust_assertion_macro(macro_node: &AstNode<'_>) -> bool {
-    let raw_text = macro_node.text();
-    let prefix = raw_text.split('!').next().unwrap_or("");
-    let terminal = prefix.rsplit("::").next().unwrap_or("").trim();
-    terminal == "assert"
-        || terminal.starts_with("assert_")
-        || terminal == "debug_assert"
-        || terminal.starts_with("debug_assert_")
-}
-
-/// Returns the terminal macro name (e.g. `assert`, `assert_eq`).
-fn rust_macro_terminal(macro_node: &AstNode<'_>) -> String {
-    let raw_text = macro_node.text();
-    let prefix = raw_text.split('!').next().unwrap_or("");
-    prefix.rsplit("::").next().unwrap_or("").trim().to_string()
-}
-
 /// Checks if a Rust `token_tree` contains a top-level `&&` operator.
 fn has_rust_top_level_and(token_tree: &AstNode<'_>) -> bool {
     let meaningful_children: Vec<_> =
@@ -111,19 +93,10 @@ fn is_rust_boolean_tuple_or_array(node: &AstNode<'_>) -> bool {
 
 /// Splits the arguments inside a Rust macro invocation's `token_tree`.
 fn extract_rust_macro_args<'a>(token_tree: &AstNode<'a>) -> Vec<AstNode<'a>> {
-    let mut args = Vec::new();
-    for child in token_tree.children() {
-        let child_kind = child.kind();
-        if child_kind != "("
-            && child_kind != ")"
-            && child_kind != "["
-            && child_kind != "]"
-            && child_kind != ","
-        {
-            args.push(child);
-        }
-    }
-    args
+    token_tree
+        .children()
+        .filter(|child| !matches!(child.kind().as_ref(), "(" | ")" | "[" | "]" | ","))
+        .collect()
 }
 
 /// Checks if a Python node represents a tuple or list consisting solely of boolean literals (>= 2 elements).
@@ -135,66 +108,48 @@ fn is_python_boolean_sequence(node: &AstNode<'_>) -> bool {
 
     let items: Vec<AstNode<'_>> = node
         .children()
-        .filter(|child| {
-            let child_kind = child.kind();
-            child_kind != "("
-                && child_kind != ")"
-                && child_kind != "["
-                && child_kind != "]"
-                && child_kind != ","
-        })
+        .filter(|child| !matches!(child.kind().as_ref(), "(" | ")" | "[" | "]" | ","))
         .collect();
 
-    if items.len() < 2 {
-        return false;
-    }
-
-    items.iter().all(|item| {
-        let item_kind = item.kind();
-        item_kind == "true" || item_kind == "false"
-    })
+    items.len() >= 2 && items.iter().all(|item| matches!(item.kind().as_ref(), "true" | "false"))
 }
 
-/// Recursively inspects a Rust test function body for packed assertions.
-fn check_rust_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: &Path) {
-    let kind = node.kind();
-    if kind == "function_item" {
-        return;
+/// Evaluates a single Rust assertion `macro_invocation` node for packed conditions.
+fn check_rust_assertion_macro(macro_node: &AstNode<'_>, path: &Path) -> Option<Diagnostic> {
+    let macro_name = crate::code_lint::ast_rust::macro_terminal_name(macro_node);
+    let token_tree = macro_node.children().find(|c| c.kind() == "token_tree")?;
+
+    // 1. Compound boolean condition: assert!(a && b)
+    if (macro_name == "assert" || macro_name == "debug_assert")
+        && has_rust_top_level_and(&token_tree)
+    {
+        return Some(NoAssertionPacking.diagnostic_at_node(
+            path,
+            macro_node,
+            &[("construct", "Compound boolean condition (`&&`)"), ("macro_name", &macro_name)],
+        ));
     }
 
-    if kind == "macro_invocation" && is_rust_assertion_macro(node) {
-        let macro_name = rust_macro_terminal(node);
-        let Some(token_tree) = node.children().find(|c| c.kind() == "token_tree") else {
-            return;
-        };
+    // 2. Boolean tuple/array equality packing: assert_eq!((a, b), (true, true))
+    if (macro_name.starts_with("assert_") || macro_name.starts_with("debug_assert_"))
+        && extract_rust_macro_args(&token_tree).iter().any(is_rust_boolean_tuple_or_array)
+    {
+        return Some(NoAssertionPacking.diagnostic_at_node(
+            path,
+            macro_node,
+            &[("construct", "Boolean tuple/collection equality"), ("macro_name", &macro_name)],
+        ));
+    }
 
-        // 1. Compound boolean condition: assert!(a && b)
-        if (macro_name == "assert" || macro_name == "debug_assert")
-            && has_rust_top_level_and(&token_tree)
-        {
-            diagnostics.push(NoAssertionPacking.diagnostic_at_node(
-                path,
-                node,
-                &[("construct", "Compound boolean condition (`&&`)"), ("macro_name", &macro_name)],
-            ));
-            return;
-        }
+    None
+}
 
-        // 2. Boolean tuple/array equality packing: assert_eq!((a, b), (true, true))
-        if macro_name.starts_with("assert_") || macro_name.starts_with("debug_assert_") {
-            let args = extract_rust_macro_args(&token_tree);
-            let has_boolean_sequence = args.iter().any(is_rust_boolean_tuple_or_array);
-            if has_boolean_sequence {
-                diagnostics.push(NoAssertionPacking.diagnostic_at_node(
-                    path,
-                    node,
-                    &[
-                        ("construct", "Boolean tuple/collection equality"),
-                        ("macro_name", &macro_name),
-                    ],
-                ));
-                return;
-            }
+/// Recursively inspects a Rust AST for packed assertion macros.
+fn check_rust_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: &Path) {
+    if node.kind() == "macro_invocation" {
+        if let Some(diagnostic) = check_rust_assertion_macro(node, path) {
+            diagnostics.push(diagnostic);
+            return;
         }
     }
 
@@ -203,59 +158,45 @@ fn check_rust_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: 
     }
 }
 
-/// Recursively inspects a Python test function body for packed assertions.
-fn check_python_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: &Path) {
-    let kind = node.kind();
-    if matches!(kind.as_ref(), "function_definition" | "class_definition") {
-        return;
+/// Evaluates a single Python `assert_statement` node for packed conditions.
+fn check_python_assert_statement(assert_node: &AstNode<'_>, path: &Path) -> Option<Diagnostic> {
+    // 1. Compound boolean condition: assert a and b
+    let has_and = assert_node
+        .children()
+        .any(|c| c.kind() == "boolean_operator" && c.children().any(|op| op.kind() == "and"));
+
+    if has_and {
+        return Some(NoAssertionPacking.diagnostic_at_node(
+            path,
+            assert_node,
+            &[("construct", "Compound boolean condition (`and`)")],
+        ));
     }
 
-    if kind == "assert_statement" {
-        // 1. Compound boolean condition: assert a and b
-        let has_and = node
-            .children()
-            .any(|c| c.kind() == "boolean_operator" && c.children().any(|op| op.kind() == "and"));
+    // 2. Boolean tuple/list equality: assert (a, b) == (True, True)
+    let comparison = assert_node.children().find(|c| c.kind() == "comparison_operator")?;
+    if comparison.children().any(|c| is_python_boolean_sequence(&c)) {
+        return Some(NoAssertionPacking.diagnostic_at_node(
+            path,
+            assert_node,
+            &[("construct", "Boolean tuple/collection equality")],
+        ));
+    }
 
-        if has_and {
-            diagnostics.push(NoAssertionPacking.diagnostic_at_node(
-                path,
-                node,
-                &[("construct", "Compound boolean condition (`and`)")],
-            ));
+    None
+}
+
+/// Recursively inspects a Python AST for packed `assert` statements.
+fn check_python_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: &Path) {
+    if node.kind() == "assert_statement" {
+        if let Some(diagnostic) = check_python_assert_statement(node, path) {
+            diagnostics.push(diagnostic);
             return;
-        }
-
-        // 2. Boolean tuple/list equality: assert (a, b) == (True, True)
-        if let Some(comp) = node.children().find(|c| c.kind() == "comparison_operator") {
-            let has_boolean_sequence = comp.children().any(|c| is_python_boolean_sequence(&c));
-            if has_boolean_sequence {
-                diagnostics.push(NoAssertionPacking.diagnostic_at_node(
-                    path,
-                    node,
-                    &[("construct", "Boolean tuple/collection equality")],
-                ));
-                return;
-            }
         }
     }
 
     for child in node.children() {
         check_python_node(&child, diagnostics, path);
-    }
-}
-
-/// Collects all top-level functions matching `target_kind`.
-fn collect_top_level_functions<'a>(
-    node: &AstNode<'a>,
-    target_kind: &str,
-    out: &mut Vec<AstNode<'a>>,
-) {
-    if node.kind() == target_kind {
-        out.push(node.clone());
-        return;
-    }
-    for child in node.children() {
-        collect_top_level_functions(&child, target_kind, out);
     }
 }
 
@@ -270,41 +211,11 @@ impl CodeRule for NoAssertionPacking {
         grep: &AstGrep<SourceDoc>,
         _config: &Config,
     ) -> Vec<Diagnostic> {
-        let lang = *grep.lang();
-        let func_kind = match lang {
-            SupportLang::Rust => "function_item",
-            _ => "function_definition",
-        };
-
-        let mut functions = Vec::new();
-        collect_top_level_functions(&grep.root(), func_kind, &mut functions);
-
         let mut diagnostics = Vec::new();
-
-        for func_node in functions {
-            let Some(name_node) = func_node.field("name") else {
-                continue;
-            };
-            let func_name = name_node.text();
-            let is_test_fn = func_name == "test"
-                || func_name.starts_with("test_")
-                || (lang == SupportLang::Rust
-                    && crate::code_lint::ast_rust::has_test_attribute(&func_node));
-
-            if !is_test_fn {
-                continue;
-            }
-
-            let Some(body_node) = func_node.field("body") else {
-                continue;
-            };
-
-            match lang {
-                SupportLang::Rust => check_rust_node(&body_node, &mut diagnostics, path),
-                _ => check_python_node(&body_node, &mut diagnostics, path),
-            }
+        match grep.lang() {
+            SupportLang::Rust => check_rust_node(&grep.root(), &mut diagnostics, path),
+            _ => check_python_node(&grep.root(), &mut diagnostics, path),
         }
-
         diagnostics
     }
 }
@@ -312,36 +223,16 @@ impl CodeRule for NoAssertionPacking {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Config;
+    use crate::test_utils::assert_code_rule_snapshot;
     use indoc::indoc;
-
-    fn run_test_rule(source: &str, file_name: &str) -> String {
-        let config = Config::default();
-        let lang =
-            if Path::new(file_name).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("rs")) {
-                SupportLang::Rust
-            } else {
-                SupportLang::Python
-            };
-        let grep = AstGrep::new(source, lang);
-        let diags = NoAssertionPacking.check_file(Path::new(file_name), &grep, &config);
-
-        let mut lines = Vec::new();
-        for diagnostic in diags {
-            lines.push(format!(
-                "[{}] Line {}, Col {}: {}",
-                diagnostic.rule_name,
-                diagnostic.location.line,
-                diagnostic.location.column,
-                diagnostic.message.summary
-            ));
-        }
-        lines.join("\n")
-    }
 
     #[test]
     fn test_rust_assertion_packing_flagged() {
         let source = indoc! {r"
+            fn assert_helper_packed(ready: bool, connected: bool) {
+                assert!(ready && connected);
+            }
+
             #[test]
             fn test_packed_assertions() {
                 assert!(ready && connected);
@@ -361,18 +252,24 @@ mod tests {
             }
         "};
 
-        let output = run_test_rule(source, "tests/test_packing.rs");
-        insta::assert_snapshot!(output, @"
-        [no-assertion-packing] Line 3, Col 5: Compound boolean condition (`&&`) in `assert!` assertion.
-        [no-assertion-packing] Line 4, Col 5: Boolean tuple/collection equality in `assert_eq!` assertion.
-        [no-assertion-packing] Line 5, Col 5: Boolean tuple/collection equality in `assert_eq!` assertion.
-        [no-assertion-packing] Line 6, Col 5: Boolean tuple/collection equality in `assert_eq!` assertion.
-        ");
+        insta::assert_snapshot!(
+            assert_code_rule_snapshot(&NoAssertionPacking, source, "tests/test_packing.rs"),
+            @"
+        [no-assertion-packing] Line 2, Col 5: Compound boolean condition (`&&`) in `assert!` assertion.
+        [no-assertion-packing] Line 7, Col 5: Compound boolean condition (`&&`) in `assert!` assertion.
+        [no-assertion-packing] Line 8, Col 5: Boolean tuple/collection equality in `assert_eq!` assertion.
+        [no-assertion-packing] Line 9, Col 5: Boolean tuple/collection equality in `assert_eq!` assertion.
+        [no-assertion-packing] Line 10, Col 5: Boolean tuple/collection equality in `assert_eq!` assertion.
+        "
+        );
     }
 
     #[test]
     fn test_python_assertion_packing_flagged() {
         let source = indoc! {r"
+            def check_helper_packed(ready: bool, connected: bool) -> None:
+                assert ready and connected
+
             def test_packed():
                 assert ready and connected
                 assert (valid, active) == (True, True)
@@ -388,12 +285,15 @@ mod tests {
                 assert check_connection(ready and connected)
         "};
 
-        let output = run_test_rule(source, "tests/test_packing.py");
-        insta::assert_snapshot!(output, @"
+        insta::assert_snapshot!(
+            assert_code_rule_snapshot(&NoAssertionPacking, source, "tests/test_packing.py"),
+            @"
         [no-assertion-packing] Line 2, Col 5: Compound boolean condition (`and`) in `assert` statement.
-        [no-assertion-packing] Line 3, Col 5: Boolean tuple/collection equality in `assert` statement.
-        [no-assertion-packing] Line 4, Col 5: Boolean tuple/collection equality in `assert` statement.
-        [no-assertion-packing] Line 5, Col 5: Boolean tuple/collection equality in `assert` statement.
-        ");
+        [no-assertion-packing] Line 5, Col 5: Compound boolean condition (`and`) in `assert` statement.
+        [no-assertion-packing] Line 6, Col 5: Boolean tuple/collection equality in `assert` statement.
+        [no-assertion-packing] Line 7, Col 5: Boolean tuple/collection equality in `assert` statement.
+        [no-assertion-packing] Line 8, Col 5: Boolean tuple/collection equality in `assert` statement.
+        "
+        );
     }
 }

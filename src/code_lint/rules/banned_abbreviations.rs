@@ -13,7 +13,7 @@ pub type BannedAbbreviationsConfig = DynamicRuleConfig<DenyListConfig>;
 
 /// Static defaults for banned abbreviations.
 const DEFAULT_BANNED: FilterListDefaults = FilterListDefaults {
-    base: &["err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag"],
+    base: &["err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag", "ty"],
     extend: &[],
     // In Rust, `str` is a primitive type keyword rather than an abbreviation, and it is
     // load-bearing in conventional conversion names (`as_str`, `to_str`, `from_str`).

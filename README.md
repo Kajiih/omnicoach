@@ -111,6 +111,7 @@ banned_suffixes = ["_list", "_arr", "_dict"]
 *   **`blanket-suppression`**: Bans blanket suppression directives without explicit bracketed rule names.
 *   **`no-logging-in-except`**: Bans using `logging.error` inside Python except blocks (suggests `logging.exception`).
 *   **`flat-scope-enforced`**: Bans nested function definitions in Python source files.
+*   **`no-identical-positional-types`**: Bans functions with `>= 3` positional parameters (configurable via `[rules.no-identical-positional-types] min_args = N`) where 2 or more share an identical type annotation (suggests keyword-only arguments via `*`).
 *   **`no-edits-on-described-commits`**: Discourages/blocks running `jj edit` on commits that already have descriptions.
 
 ---

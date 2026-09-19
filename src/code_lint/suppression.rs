@@ -274,57 +274,10 @@ impl SuppressionTracker {
         coord: LineColumn,
         content: &str,
     ) -> Option<ParsedDirective> {
-        let raw_line = coord.line;
+        let stripped = strip_comment_delimiters(text)?;
+        let (is_file, remainder) = parse_directive_prefix(stripped)?;
+        let (target_rules, is_blanket, after_rules) = parse_bracketed_rules(remainder.trim_start());
 
-        // Strip comment prefix: '#' or '//' or '/*'
-        let trimmed = text.trim();
-        let stripped = if let Some(body) = trimmed.strip_prefix("//") {
-            body.trim_start()
-        } else if let Some(body) = trimmed.strip_prefix('#') {
-            body.trim_start()
-        } else if let Some(body) = trimmed.strip_prefix("/*") {
-            body.trim_start().trim_end_matches("*/").trim_end()
-        } else {
-            return None;
-        };
-
-        let (is_file, remainder) = if let Some(rest) = stripped.strip_prefix("omni:disable-file") {
-            (true, rest)
-        } else if let Some(rest) = stripped.strip_prefix("omni:ignore") {
-            (false, rest)
-        } else {
-            return None;
-        };
-
-        // Require boundary delimiter (whitespace, '[', or '-') after directive prefix
-        // so ordinary comments like `# omni:ignored by compiler` are not treated as directives.
-        if !remainder.is_empty()
-            && !remainder.starts_with(|c: char| c.is_whitespace() || c == '[' || c == '-')
-        {
-            return None;
-        }
-
-        // Parse bracketed rules and remainder
-        let remainder_trimmed = remainder.trim_start();
-        let (target_rules, is_blanket, after_rules) = if remainder_trimmed.starts_with('[') {
-            remainder_trimmed.find(']').map_or_else(
-                || (Vec::new(), true, remainder_trimmed),
-                |close_idx| {
-                    let raw_rules = &remainder_trimmed[1..close_idx];
-                    let rules: Vec<String> = raw_rules
-                        .split(',')
-                        .map(|segment| segment.trim().to_string())
-                        .filter(|segment| !segment.is_empty())
-                        .collect();
-                    let blanket = rules.is_empty();
-                    (rules, blanket, &remainder_trimmed[close_idx + 1..])
-                },
-            )
-        } else {
-            (Vec::new(), true, remainder_trimmed)
-        };
-
-        // Parse reason after '--'
         let reason = after_rules
             .trim_start()
             .strip_prefix("--")
@@ -332,29 +285,8 @@ impl SuppressionTracker {
             .filter(|reason_text| !reason_text.is_empty())
             .map(ToString::to_string);
 
-        // Determine placement: file vs same-line vs preceding-line
-        let placement = if is_file {
-            DirectivePlacement::File
-        } else {
-            // Check if there is non-whitespace preceding this comment on the same line
-            let line_start_offset = content[..span.start].rfind('\n').map_or(0, |idx| idx + 1);
-            let prefix_on_line = &content[line_start_offset..span.start];
-            let is_standalone = prefix_on_line.trim().is_empty();
-
-            if is_standalone {
-                DirectivePlacement::PrecedingLine {
-                    target_line: raw_line + 1,
-                    end_target_line: compute_effective_target_line(content, raw_line),
-                }
-            } else {
-                DirectivePlacement::SameLine { line: raw_line }
-            }
-        };
-
-        let mut matched_count = HashMap::new();
-        for rule in &target_rules {
-            matched_count.insert(rule.clone(), 0);
-        }
+        let placement = resolve_directive_placement(is_file, content, span, coord.line);
+        let matched_count = target_rules.iter().map(|rule| (rule.clone(), 0)).collect();
 
         Some(ParsedDirective {
             placement,
@@ -383,15 +315,9 @@ impl SuppressionTracker {
             let mut suppressed = false;
 
             for directive in &mut self.directives {
-                let matches_line = match directive.placement {
-                    DirectivePlacement::File => true,
-                    DirectivePlacement::SameLine { line } => line == diagnostic_line,
-                    DirectivePlacement::PrecedingLine { target_line, end_target_line } => {
-                        (target_line..=end_target_line).contains(&diagnostic_line)
-                    }
-                };
-
-                if matches_line && directive.target_rules.iter().any(|rule| rule == rule_name) {
+                if directive_matches_line(&directive.placement, diagnostic_line)
+                    && directive.target_rules.iter().any(|rule| rule == rule_name)
+                {
                     suppressed = true;
                     if let Some(count) = directive.matched_count.get_mut(rule_name) {
                         *count += 1;
@@ -410,72 +336,148 @@ impl SuppressionTracker {
     /// Audits all parsed directives and emits suppression diagnostics according to configuration.
     #[must_use]
     pub fn audit(&self, path: &Path, config: &Config) -> Vec<Diagnostic> {
+        let suppressible_rules: HashSet<&'static str> = crate::rules::CODE_RULES
+            .iter()
+            .filter(|rule| !rule.tags().contains(&Tag::Suppression))
+            .map(|rule| rule.name().0)
+            .collect();
+
         let mut diagnostics = Vec::new();
-
-        let missing_reason_rule = MissingSuppressionReason;
-        let unused_rule = UnusedSuppression;
-        let unknown_rule = UnknownSuppressionRule;
-        let blanket_rule = BlanketSuppression;
-
-        let check_missing_reason = config.is_rule_enabled_for_path(&missing_reason_rule, path);
-        let check_unused = config.is_rule_enabled_for_path(&unused_rule, path);
-        let check_unknown = config.is_rule_enabled_for_path(&unknown_rule, path);
-        let check_blanket = config.is_rule_enabled_for_path(&blanket_rule, path);
-
-        // Build set of all known suppressible rule names (code rules excluding suppression tags)
-        let mut suppressible_rules: HashSet<&'static str> = HashSet::new();
-        for rule in crate::rules::CODE_RULES {
-            if !rule.tags().contains(&Tag::Suppression) {
-                suppressible_rules.insert(rule.name().0);
-            }
-        }
-
         for directive in &self.directives {
-            let location = SourceLocation::file_span(path, directive.span, directive.coord);
+            audit_single_directive(directive, path, config, &suppressible_rules, &mut diagnostics);
+        }
+        diagnostics
+    }
+}
 
-            // Blanket suppression
-            if directive.is_blanket && check_blanket {
-                diagnostics.push(blanket_rule.render_diagnostic(&[], location.clone()));
-            }
+/// Strips leading and trailing comment delimiters (`//`, `#`, `/* ... */`).
+fn strip_comment_delimiters(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    trimmed.strip_prefix("//").or_else(|| trimmed.strip_prefix('#')).map(str::trim_start).or_else(
+        || {
+            trimmed
+                .strip_prefix("/*")
+                .map(|body| body.trim_start().trim_end_matches("*/").trim_end())
+        },
+    )
+}
 
-            // Missing or empty explanation reason
-            if check_missing_reason && directive.reason.is_none() {
-                diagnostics.push(missing_reason_rule.render_diagnostic(&[], location.clone()));
-            }
+/// Parses the `omni:disable-file` or `omni:ignore` prefix and validates boundary delimiters.
+fn parse_directive_prefix(stripped: &str) -> Option<(bool, &str)> {
+    let (is_file, remainder) = if let Some(rest) = stripped.strip_prefix("omni:disable-file") {
+        (true, rest)
+    } else if let Some(rest) = stripped.strip_prefix("omni:ignore") {
+        (false, rest)
+    } else {
+        return None;
+    };
 
-            // Unknown or non-suppressible rule
-            if check_unknown {
-                for target_rule in &directive.target_rules {
-                    if !suppressible_rules.contains(target_rule.as_str()) {
-                        diagnostics.push(
-                            unknown_rule.render_diagnostic(
-                                &[("target_rule", target_rule)],
-                                location.clone(),
-                            ),
-                        );
-                    }
-                }
-            }
+    // Require boundary delimiter (whitespace, '[', or '-') after directive prefix
+    // so ordinary comments like `# omni:ignored by compiler` are not treated as directives.
+    if !remainder.is_empty()
+        && !remainder.starts_with(|c: char| c.is_whitespace() || c == '[' || c == '-')
+    {
+        return None;
+    }
 
-            // Unused suppression
-            if check_unused && !directive.is_blanket {
-                for target_rule in &directive.target_rules {
-                    // Only flag known rules as unused (avoid redundant dual flagging with unknown rule)
-                    if suppressible_rules.contains(target_rule.as_str())
-                        && directive.matched_count.get(target_rule).copied().unwrap_or(0) == 0
-                    {
-                        diagnostics.push(
-                            unused_rule.render_diagnostic(
-                                &[("target_rule", target_rule)],
-                                location.clone(),
-                            ),
-                        );
-                    }
-                }
+    Some((is_file, remainder))
+}
+
+/// Parses bracketed rule names `[rule-a, rule-b]` from the directive body.
+fn parse_bracketed_rules(remainder_trimmed: &str) -> (Vec<String>, bool, &str) {
+    if !remainder_trimmed.starts_with('[') {
+        return (Vec::new(), true, remainder_trimmed);
+    }
+    remainder_trimmed.find(']').map_or_else(
+        || (Vec::new(), true, remainder_trimmed),
+        |close_idx| {
+            let raw_rules = &remainder_trimmed[1..close_idx];
+            let rules: Vec<String> = raw_rules
+                .split(',')
+                .map(|segment| segment.trim().to_string())
+                .filter(|segment| !segment.is_empty())
+                .collect();
+            let is_blanket = rules.is_empty();
+            (rules, is_blanket, &remainder_trimmed[close_idx + 1..])
+        },
+    )
+}
+
+/// Resolves whether a directive applies to the whole file, the same line, or the following declaration line(s).
+fn resolve_directive_placement(
+    is_file: bool,
+    content: &str,
+    span: SourceSpan,
+    raw_line: usize,
+) -> DirectivePlacement {
+    if is_file {
+        return DirectivePlacement::File;
+    }
+    let line_start_offset = content[..span.start].rfind('\n').map_or(0, |idx| idx + 1);
+    let prefix_on_line = &content[line_start_offset..span.start];
+    if prefix_on_line.trim().is_empty() {
+        DirectivePlacement::PrecedingLine {
+            target_line: raw_line + 1,
+            end_target_line: compute_effective_target_line(content, raw_line),
+        }
+    } else {
+        DirectivePlacement::SameLine { line: raw_line }
+    }
+}
+
+/// Returns true if `placement` covers `diagnostic_line`.
+fn directive_matches_line(placement: &DirectivePlacement, diagnostic_line: usize) -> bool {
+    match *placement {
+        DirectivePlacement::File => true,
+        DirectivePlacement::SameLine { line } => line == diagnostic_line,
+        DirectivePlacement::PrecedingLine { target_line, end_target_line } => {
+            (target_line..=end_target_line).contains(&diagnostic_line)
+        }
+    }
+}
+
+/// Audits a single `ParsedDirective` for blanket usage, missing reason, unknown rule names, and unused targets.
+fn audit_single_directive(
+    directive: &ParsedDirective,
+    path: &Path,
+    config: &Config,
+    suppressible_rules: &HashSet<&'static str>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let location = SourceLocation::file_span(path, directive.span, directive.coord);
+
+    if directive.is_blanket && config.is_rule_enabled_for_path(&BlanketSuppression, path) {
+        diagnostics.push(BlanketSuppression.render_diagnostic(&[], location.clone()));
+    }
+
+    if directive.reason.is_none()
+        && config.is_rule_enabled_for_path(&MissingSuppressionReason, path)
+    {
+        diagnostics.push(MissingSuppressionReason.render_diagnostic(&[], location.clone()));
+    }
+
+    if config.is_rule_enabled_for_path(&UnknownSuppressionRule, path) {
+        for target_rule in &directive.target_rules {
+            if !suppressible_rules.contains(target_rule.as_str()) {
+                diagnostics.push(
+                    UnknownSuppressionRule
+                        .render_diagnostic(&[("target_rule", target_rule)], location.clone()),
+                );
             }
         }
+    }
 
-        diagnostics
+    if !directive.is_blanket && config.is_rule_enabled_for_path(&UnusedSuppression, path) {
+        for target_rule in &directive.target_rules {
+            if suppressible_rules.contains(target_rule.as_str())
+                && directive.matched_count.get(target_rule).copied().unwrap_or(0) == 0
+            {
+                diagnostics.push(
+                    UnusedSuppression
+                        .render_diagnostic(&[("target_rule", target_rule)], location.clone()),
+                );
+            }
+        }
     }
 }
 

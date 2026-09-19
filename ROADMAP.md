@@ -15,6 +15,12 @@ This document serves as the single source of truth for architectural milestones,
 - **Rule Autofix Engine (`diffy` / `similar`)**:
   - *Target*: Extend `CodeRule` and `CommandRule` with optional auto-fix transformations. Support `--fix` and `--fix --dry-run` with in-memory unified diff previews before writing changes to disk.
   - *Trigger*: When implementing the first batch of auto-fixable rules (e.g., replacing `logging.error` with `logging.exception`).
+- **Decorator & Attribute Span Awareness for `disable-next-line`**:
+  - *Current*: `disable-next-line` matches diagnostics anchored on `comment_line + 1`, which misses function-level diagnostics anchored on `def` / `fn` when `@decorator` or `#[attribute]` lines appear in between.
+  - *Target*: Propagate decorated/attributed span boundaries to the suppression resolver so `disable-next-line` placed above a decorator/attribute block suppresses diagnostics on the decorated declaration.
+- **Generic Container Base-Type Matching (`no-identical-positional-types`)**:
+  - *Current*: Positional parameter types are compared by exact formatted annotation string (`dict[str, int]` != `dict[str, float]`).
+  - *Target*: Optionally normalize or group generic collection/mapping containers (`dict[...]`, `Mapping[...]`, `list[...]`, `Sequence[...]`) so multiple positional mappings or sequences are flagged even when their inner type arguments differ.
 
 ---
 
@@ -34,6 +40,9 @@ This document serves as the single source of truth for architectural milestones,
 
 ## 3. Reporting & Diagnostics
 
+- **Multi-Violation AST Node Aggregation / Deduplication**:
+  - *Current*: Rules that can trigger multiple times on a single declaration node (e.g., `no-identical-positional-types` when a function has both duplicate `str` and duplicate `int` parameter groups) emit separate diagnostics anchored at the same `(line, column)`.
+  - *Target*: Define a unified strategy for either consolidating same-node rule findings into a single diagnostic or anchoring sub-findings on offending child tokens while preserving single-directive suppression ergonomics.
 - **Feature-Gated Rich Terminal Diagnostics (`miette`)**:
   - *Current*: Fast, zero-dependency printer in `src/diagnostic.rs` outputting standard compiler-style format (`path:line:col: [CODE] message`) and JSON.
   - *Target*: Add an optional Cargo feature (`features = ["miette"]`) that enables rich, syntax-highlighted source snippets with colored squiggly underlines and clickable rule documentation URLs, while keeping the default pre-commit hook binary lightweight and fast.

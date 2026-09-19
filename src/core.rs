@@ -78,9 +78,13 @@ impl<T: Copy + 'static> LanguageDefaults<T> {
     }
 }
 
-/// Configuration for rules controlled by a numeric `max` threshold (e.g., `max-test-assertions`).
+/// Configuration for rules controlled by numeric `min` or `max` thresholds (e.g., `max-test-assertions`, `no-identical-positional-types`).
 #[derive(Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ThresholdConfig {
+    /// Optional override for the minimum threshold (also accepts `min_args`).
+    #[serde(default, alias = "min_args")]
+    pub min: Option<usize>,
+
     /// Optional override for the maximum threshold.
     #[serde(default)]
     pub max: Option<usize>,
@@ -177,6 +181,16 @@ impl<T> DynamicRuleConfig<T> {
 }
 
 impl DynamicRuleConfig<ThresholdConfig> {
+    /// Resolves the effective `min` threshold for `lang` against `defaults`.
+    #[must_use]
+    pub fn effective_min_for_lang(
+        &self,
+        lang: SupportLang,
+        defaults: &LanguageDefaults<usize>,
+    ) -> usize {
+        self.resolve_with(lang, defaults, |config| config.min)
+    }
+
     /// Resolves the effective `max` threshold for `lang` against `defaults`.
     #[must_use]
     pub fn effective_max_for_lang(
