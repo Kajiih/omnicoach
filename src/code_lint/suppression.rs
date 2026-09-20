@@ -1,6 +1,6 @@
 //! Inline and file-level suppression comment hygiene.
 
-use crate::code_lint::{AstNode, CodeRule, SourceDoc};
+use crate::code_lint::{CodeRule, SourceDoc};
 use crate::core::{Config, Rule, RuleName};
 use crate::diagnostic::{
     Diagnostic, LineColumn, SourceLocation, SourceSpan, ViolationTemplate, violation_template,
@@ -230,23 +230,12 @@ pub struct SuppressionTracker {
     directives: Vec<ParsedDirective>,
 }
 
-fn collect_comments<'a>(node: &AstNode<'a>, comments: &mut Vec<AstNode<'a>>) {
-    let kind = node.kind();
-    if kind == "comment" || kind == "line_comment" || kind == "block_comment" {
-        comments.push(node.clone());
-        return;
-    }
-    for child in node.children() {
-        collect_comments(&child, comments);
-    }
-}
-
 impl SuppressionTracker {
     /// Parses suppression directives from the AST and file content.
     #[must_use]
     pub fn from_ast(grep: &AstGrep<SourceDoc>, content: &str) -> Self {
         let mut comment_nodes = Vec::new();
-        collect_comments(&grep.root(), &mut comment_nodes);
+        crate::code_lint::comments::collect_comment_nodes(&grep.root(), &mut comment_nodes);
 
         let mut directives = Vec::new();
 
