@@ -249,4 +249,26 @@ mod tests {
             }
         }
     }
+
+    /// Diagnostic ordering is owned by the reporting layer (see [`crate::code_lint::CodeRule::check_file`]),
+    /// so a rule sorting its own output is dead work.
+    #[test]
+    fn test_rule_sources_do_not_sort_diagnostics() {
+        let rules_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/code_lint/rules");
+        let suppression = concat!(env!("CARGO_MANIFEST_DIR"), "/src/code_lint/suppression.rs");
+
+        let rule_sources = std::fs::read_dir(rules_dir)
+            .expect("rule directory must be readable")
+            .map(|entry| entry.expect("rule directory entry must be readable").path())
+            .chain(std::iter::once(std::path::PathBuf::from(suppression)));
+
+        for path in rule_sources {
+            let source = std::fs::read_to_string(&path).expect("rule source must be readable");
+            assert!(
+                !source.contains(".sort"),
+                "{} sorts its output; diagnostic ordering belongs to the reporting layer",
+                path.display()
+            );
+        }
+    }
 }

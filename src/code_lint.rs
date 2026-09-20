@@ -59,6 +59,9 @@ pub trait CodeRule: crate::core::Rule {
     }
 
     /// Evaluates the file against this static analysis rule.
+    ///
+    /// Returned diagnostics may be in any order: ordering is owned by the reporting layer
+    /// ([`crate::diagnostic`]), so sorting here is dead work.
     #[must_use]
     fn check_file(
         &self,
