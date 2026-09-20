@@ -1,11 +1,20 @@
 # Omni Toolkit Roadmap
 
-This document serves as the single source of truth for architectural milestones, performance optimizations, and planned ecosystem integrations for Omni.
+This document serves as the single source of truth for architectural milestones, performance investigations, and planned ecosystem integrations for Omni.
+
+Items here represent design areas and technical directions to evaluate rather than fixed implementation mandates.
 
 ---
 
 ## 1. Rule Engine & Declarative Rules
 
+- **Unified Single-Pass AST Visitor Dispatch**:
+  - *Context & Problem*: Today, each registered rule implements `check_file` independently and executes its own AST search or traversal over the file. At 16 rules on ~8k lines, rule passes take ~180ms total (~11ms/rule). However, this scales linearly as $O(\text{files} \times \text{rules})$: at 100+ rules, traversing the syntax tree 100 times per file becomes a multi-second bottleneck.
+  - *Investigation & Design Questions*:
+    - Investigate how high-throughput linters dispatch rules. (e.g. Ruff's `Checker` uses a single AST walk with match arms and $O(1)$ bitset checks; Biome groups subscriptions by `SyntaxKind`; Clippy fuses passes into combined callbacks).
+    - Can we establish a rule interest declaration (e.g. target node kinds) early in the trait lifecycle without breaking existing rule independence?
+    - How do we handle rules that need multi-stage context (like `no_env_in_functions` traversing upward or `max_test_assertions` counting inner blocks) within a unified traversal?
+  - *Trigger*: When the code rule registry approaches ~30–40 rules, or when rule evaluation time exceeds parse time.
 - **Dynamic Selector Deserialization**:
   - *Current*: `Selector` deserialization directly scans static `CODE_RULES` and `COMMAND_RULES` registries.
   - *Target*: Decouple selector resolution from static arrays to allow dynamically registered and external declarative rules loaded from configuration files (`.omnilint.toml`).
@@ -27,11 +36,21 @@ This document serves as the single source of truth for architectural milestones,
 
 ---
 
-## 2. Performance & VCS Optimizations
+## 2. Performance & Concurrency Architecture
 
-- **Partitioned Call Expression Matching (`find_banned_calls`)**:
-  - *Current*: `calls::find_banned_calls` executes `root.find_all(...)` sequentially for each pattern entry, repeatedly traversing the entire syntax tree (measured at ~1.4s per pattern on an 830-line file in debug mode; 70s on the 8k-line repo in release).
-  - *Target*: Partition the deny list into literal callee names and structural `ast-grep` patterns. Literal names are evaluated in a single-pass AST traversal collecting `call_expression` (Rust) and `call` (Python) nodes and checked against a `HashSet` in $O(1)$; entries with metavariables (e.g. `$LOOP($$$LOOP_ARGS).create_task`) or custom pattern syntax retain structural `find_all` matching. Eliminates redundant traversals for the vast majority of entries while preserving full rule expressiveness.
+- **Concurrent File-Level Analysis**:
+  - *Context & Problem*: Analysis is currently single-threaded. On multi-core development workstations, scanning 31 files (~8,200 lines) sequentially takes ~400ms in release mode. The work is embarrassingly parallel across files.
+  - *Investigation & Design Questions*:
+    - Evaluate using `ignore::WalkParallel` (already present in the dependency tree) vs. collecting files and scheduling via `rayon`.
+    - Ensure output determinism: `print_diagnostics` already groups findings into a `BTreeMap` by location context and sorts by byte span for text output, but JSON formatting must also preserve deterministic ordering across runs.
+    - Measure overhead on small repositories to ensure thread-pool initialization does not degrade latency for micro-runs or pre-commit hooks.
+  - *Target*: Bring full-workspace cold-cache execution down to ~50–80ms on multi-core systems.
+- **Parse & Pipeline Floor Profiling**:
+  - *Context*: Disabling all rules via tag exclusion shows that the shared per-file pipeline (walking files, reading from disk, tree-sitter parsing via `ast-grep`, and comment suppression scanning) accounts for ~228ms (56% of total runtime on ~8k lines).
+  - *Investigation*:
+    - Filter files before I/O: currently `lint_single_file` reads files to a string before checking `detect_language` (reading snapshots and ignored extensions unnecessarily).
+    - Investigate the parse cost breakdown: how much of the ~228ms is Tree-sitter parser initialization / tree building vs. `SuppressionTracker::from_ast` traversing comment nodes?
+    - Determine whether suppression comments can be scanned more cheaply or parsed concurrently with AST visitation.
 - **Subprocess Batching & Caching (`EnvContext`)**:
   - *Current*: Command rules spawn individual `jj` or `git` CLI calls per evaluation.
   - *Target*: Introduce a shared `EnvContext` struct that pre-fetches and caches repository state (e.g., batching queries into a single `jj log --json` or `git status` invocation) to ensure sub-10ms execution across multiple rules.
@@ -41,7 +60,26 @@ This document serves as the single source of truth for architectural milestones,
 
 ---
 
-## 3. Reporting & Diagnostics
+## 3. Performance Measurement, Tracing & Tooling
+
+- **Execution Timing & Observability (`--timings`)**:
+  - *Context*: Understanding which rules or pipeline stages dominate execution on a user's machine is essential for performance triage.
+  - *Investigation & Design Questions*:
+    - Compare a lightweight, zero-dependency `--timings` flag (using `std::time::Instant` around rule executions to produce a sorted table, following oxlint's `--debug timings` or ESLint's `TIMING=1`) against heavyweight runtime tracing.
+    - SOTA review shows that full `tracing-subscriber` pipelines pull in substantial dependencies (`sharded-slab`, `regex-automata`, etc.) and are best suited for server/LSP contexts rather than fast batch CLI invocations.
+    - Explore what level of timing granularity is useful (per-rule vs. pipeline phase) without penalizing normal runs.
+- **Benchmarking & Regression Guard Strategy**:
+  - *Context*: Simple shell-level timing (`date +%s%N`) exhibits $\pm 17\%$ noise on sub-second runs, causing false regressions. At the same time, threshold-based wall-clock assertions on shared CI runners (e.g. GitHub Actions) suffer from high variance (15–30%) and lead to flaky CI.
+  - *Investigation & Design Questions*:
+    - Evaluate local developer micro-benchmarking harnesses: `divan` (lightweight, zero additional heavy dependencies) vs. `criterion` (industry standard, but heavier dependency footprint).
+    - Explore CI regression gating models: evaluate simulated instruction-count tracking (e.g., CodSpeed or Valgrind cachegrind) vs. keeping performance gates advisory/local to prevent CI alert fatigue.
+    - Define a standardized macro-benchmark corpus (e.g., fixed snapshot of source files) executed via `hyperfine` for reproducible end-to-end timing.
+- **Profiling Workflow & Cargo Configuration**:
+  - *Target*: Document standard profiling recipes for Linux (`samply`, `perf`) and macOS (`cargo-instruments`). Establish a dedicated `[profile.profiling]` Cargo profile (`inherits = "release"`, `debug = "line-tables-only"`, `strip = "none"`) that provides symbolicated stack traces without bloating production binaries.
+
+---
+
+## 4. Reporting & Diagnostics
 
 - **Multi-Violation AST Node Aggregation / Deduplication**:
   - *Current*: Rules that can trigger multiple times on a single declaration node (e.g., `no-identical-positional-types` when a function has both duplicate `str` and duplicate `int` parameter groups) emit separate diagnostics anchored at the same `(line, column)`.
@@ -57,7 +95,7 @@ This document serves as the single source of truth for architectural milestones,
 
 ---
 
-## 4. Testing & Verification
+## 5. Testing & Verification
 
 - **Automated Rule Test Verification**:
   - *Current*: Tests are validated via runtime registry loops.
@@ -65,7 +103,7 @@ This document serves as the single source of truth for architectural milestones,
 
 ---
 
-## 5. Tags, Discovery & Documentation
+## 6. Tags, Discovery & Documentation
 
 Prior analysis, candidate designs, and open questions: [docs/dev/tag_system_analysis.md](docs/dev/tag_system_analysis.md). Nothing in that document is decided; it is the starting point for the design work below, not a specification of it.
 
