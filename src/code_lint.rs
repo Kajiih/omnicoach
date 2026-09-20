@@ -465,15 +465,14 @@ fn collect_targets(options: &LintOptions) -> anyhow::Result<Vec<LintTarget>> {
         let targets = changes
             .into_iter()
             .filter(|(file_path, _)| {
-                file_path.is_file()
-                    && detect_language(file_path).is_some()
-                    && target_paths.iter().any(|target| {
-                        if target.is_file() {
-                            target == file_path
-                        } else {
-                            file_path.starts_with(target)
-                        }
-                    })
+                target_paths.iter().any(|target| {
+                    if target.is_file() {
+                        target == file_path
+                    } else {
+                        file_path.starts_with(target)
+                    }
+                }) && detect_language(file_path).is_some()
+                    && file_path.is_file()
             })
             .map(|(file_path, changed_lines)| LintTarget {
                 path: file_path,
