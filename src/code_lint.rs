@@ -540,134 +540,120 @@ fn lint_single_file(
     }
 }
 
-// TODO: Those test should be designed properly with parameterized, and if possible test more edge cases
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::Selector;
+    use rstest::rstest;
     use std::collections::HashSet;
 
-    #[test]
-    fn test_is_rule_candidate_language_and_suppression() {
+    #[rstest]
+    #[case::python_rule_on_python_file(
+        &rules::no_logging_error_in_except::NoLoggingErrorInExcept,
+        "service.py",
+        SupportLang::Python,
+        false,
+        true
+    )]
+    #[case::python_rule_on_rust_file(
+        &rules::no_logging_error_in_except::NoLoggingErrorInExcept,
+        "service.rs",
+        SupportLang::Rust,
+        false,
+        false
+    )]
+    #[case::suppression_rule_excluded(
+        &suppression::BlanketSuppression,
+        "service.py",
+        SupportLang::Python,
+        false,
+        false
+    )]
+    #[case::tests_only_python_in_test_path(
+        &rules::no_sleep_in_tests::NoSleepInTests,
+        "test_service.py",
+        SupportLang::Python,
+        true,
+        true
+    )]
+    #[case::tests_only_python_in_source_path(
+        &rules::no_sleep_in_tests::NoSleepInTests,
+        "service.py",
+        SupportLang::Python,
+        false,
+        false
+    )]
+    #[case::tests_only_rust_source_path_eligible_for_inline_cfg_test(
+        &rules::no_sleep_in_tests::NoSleepInTests,
+        "service.rs",
+        SupportLang::Rust,
+        false,
+        true
+    )]
+    #[case::source_only_on_production_file(
+        &rules::no_env_in_functions::NoEnvInFunctions,
+        "service.rs",
+        SupportLang::Rust,
+        false,
+        true
+    )]
+    #[case::source_only_skipped_on_test_file(
+        &rules::no_env_in_functions::NoEnvInFunctions,
+        "tests/test_service.rs",
+        SupportLang::Rust,
+        true,
+        false
+    )]
+    fn test_is_rule_candidate(
+        #[case] rule: &dyn CodeRule,
+        #[case] path: &str,
+        #[case] lang: SupportLang,
+        #[case] is_test: bool,
+        #[case] expected: bool,
+    ) {
         let config = Config::default();
-        let py_rule = &rules::no_logging_error_in_except::NoLoggingErrorInExcept;
-        let suppression_rule = &suppression::BlanketSuppression;
-
-        // Python rule on Python file vs Rust file
-        assert!(is_rule_candidate_for_path(
-            py_rule,
-            Path::new("service.py"),
-            SupportLang::Python,
-            false,
-            &config
-        ));
-        assert!(!is_rule_candidate_for_path(
-            py_rule,
-            Path::new("service.rs"),
-            SupportLang::Rust,
-            false,
-            &config
-        ));
-
-        // Suppression rules are excluded from standard code rule evaluation
-        assert!(!is_rule_candidate_for_path(
-            suppression_rule,
-            Path::new("service.py"),
-            SupportLang::Python,
-            false,
-            &config
-        ));
+        assert_eq!(
+            is_rule_candidate_for_path(rule, Path::new(path), lang, is_test, &config),
+            expected
+        );
     }
 
-    #[test]
-    fn test_is_rule_candidate_target_scope() {
-        let config = Config::default();
-        let test_rule = &rules::no_sleep_in_tests::NoSleepInTests;
-
-        // Python tests vs Python non-test source files
-        assert!(is_rule_candidate_for_path(
-            test_rule,
-            Path::new("service.py"),
-            SupportLang::Python,
-            true,
-            &config
-        ));
-        assert!(!is_rule_candidate_for_path(
-            test_rule,
-            Path::new("service.py"),
-            SupportLang::Python,
-            false,
-            &config
-        ));
-
-        // Rust source files remain candidates because of potential inline #[cfg(test)]
-        assert!(is_rule_candidate_for_path(
-            test_rule,
-            Path::new("service.rs"),
-            SupportLang::Rust,
-            false,
-            &config
-        ));
-    }
-
-    #[test]
-    fn test_is_rule_candidate_source_only() {
-        let config = Config::default();
-        let source_rule = &rules::no_env_in_functions::NoEnvInFunctions;
-
-        // SourceOnly runs on production source files, but is skipped on test files
-        assert!(is_rule_candidate_for_path(
-            source_rule,
-            Path::new("service.rs"),
-            SupportLang::Rust,
-            false,
-            &config
-        ));
-        assert!(!is_rule_candidate_for_path(
-            source_rule,
-            Path::new("tests/test_service.rs"),
-            SupportLang::Rust,
-            true,
-            &config
-        ));
-    }
-
-    #[test]
-    fn test_has_active_suppression_audit() {
-        let config = Config::default();
-        let path = Path::new("main.py");
-
-        // Content with suppression directive prefix
-        let with_directive = "# omni:ignore[no-logging-error-in-except] -- reason\nprint('hi')";
-        assert!(has_active_suppression_audit(
-            path,
-            SupportLang::Python,
-            with_directive,
-            &config
-        ));
-
-        // Content without suppression directive prefix
-        let without_directive = "print('hello world')";
-        assert!(!has_active_suppression_audit(
-            path,
-            SupportLang::Python,
-            without_directive,
-            &config
-        ));
-
-        // When all suppression rules are ignored in config
-        let disabled_config = Config {
-            ignore: Some(HashSet::from([Selector::Tag(
-                crate::rules::Tag::Suppression,
-            )])),
-            ..Default::default()
+    #[rstest]
+    #[case::with_directive(
+        "# omni:ignore[no-logging-error-in-except] -- reason\nprint('hi')",
+        false,
+        true
+    )]
+    #[case::without_directive("print('hello world')", false, false)]
+    #[case::with_directive_but_suppression_disabled(
+        "# omni:ignore[no-logging-error-in-except] -- reason\nprint('hi')",
+        true,
+        false
+    )]
+    fn test_has_active_suppression_audit(
+        #[case] content: &str,
+        #[case] disable_suppression_rules: bool,
+        #[case] expected: bool,
+    ) {
+        let config = if disable_suppression_rules {
+            Config {
+                ignore: Some(HashSet::from([Selector::Tag(
+                    crate::rules::Tag::Suppression,
+                )])),
+                ..Default::default()
+            }
+        } else {
+            Config::default()
         };
-        assert!(!has_active_suppression_audit(
-            path,
-            SupportLang::Python,
-            with_directive,
-            &disabled_config
-        ));
+        assert_eq!(
+            has_active_suppression_audit(
+                Path::new("main.py"),
+                SupportLang::Python,
+                content,
+                &config
+            ),
+            expected
+        );
     }
 
     #[test]
