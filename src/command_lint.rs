@@ -2,11 +2,10 @@
 pub(crate) mod rules;
 pub mod vcs;
 
-use crate::command_lint::vcs::JjClient;
-use crate::core::Config;
-use crate::diagnostic::Diagnostic;
+pub use vcs::{JjCliClient, JjClient};
 
-use crate::code_lint::AstNode;
+use crate::core::{AstNode, Config};
+use crate::diagnostic::Diagnostic;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 

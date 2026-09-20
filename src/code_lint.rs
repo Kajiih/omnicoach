@@ -9,16 +9,13 @@ pub(crate) mod suppression;
 use crate::core::Config;
 use crate::diagnostic::Diagnostic;
 use ast_grep_core::AstGrep;
-pub use ast_grep_language::SupportLang;
+use ast_grep_language::SupportLang;
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Concrete document type used across code linting rules.
-pub type SourceDoc = ast_grep_core::tree_sitter::StrDoc<SupportLang>;
-/// Concrete AST node type used across code linting rules.
-pub type AstNode<'a> = ast_grep_core::Node<'a, SourceDoc>;
+pub use crate::core::{AstNode, SourceDoc};
 
 /// Target execution scope for a code rule (source files vs test files).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -1,11 +1,27 @@
 //! Shared core module of the Omni linter toolkit.
 
-pub use crate::diagnostic::RuleName;
 use crate::diagnostic::{Diagnostic, SourceLocation, ViolationMessage, ViolationTemplate};
 use ast_grep_language::SupportLang;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
+
+/// Strongly-typed static rule identifier name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+#[serde(transparent)]
+pub struct RuleName(pub &'static str);
+
+impl std::fmt::Display for RuleName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Concrete document type used across Omni AST analysis.
+pub type SourceDoc = ast_grep_core::tree_sitter::StrDoc<SupportLang>;
+
+/// Concrete AST node type used across Omni AST analysis.
+pub type AstNode<'a> = ast_grep_core::Node<'a, SourceDoc>;
 
 /// Compile-time static descriptor for default filter lists (both allowlists and denylists).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

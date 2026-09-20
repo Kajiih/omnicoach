@@ -290,8 +290,8 @@ pub fn has_override_decorator(func_node: &AstNode<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::code_lint::SupportLang;
     use ast_grep_core::AstGrep;
+    use ast_grep_language::SupportLang;
 
     #[test]
     fn test_collect_bindings_python() {

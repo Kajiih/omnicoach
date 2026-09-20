@@ -1,7 +1,6 @@
 //! Command execution safety and workflow context linter binary.
 
-use omni::command_lint::InterceptedCommand;
-use omni::command_lint::vcs::JjCliClient;
+use omni::command_lint::{InterceptedCommand, JjCliClient};
 use omni::core::Config;
 use omni::diagnostic::print_diagnostics;
 

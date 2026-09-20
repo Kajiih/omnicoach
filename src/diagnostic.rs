@@ -1,5 +1,7 @@
 //! Diagnostic representation, serialization, and reporting.
 
+use crate::core::AstNode;
+pub use crate::core::RuleName;
 use ast_grep_language::SupportLang;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -272,7 +274,7 @@ pub struct SourceLocation {
 impl SourceLocation {
     /// Creates a `SourceLocation` directly from a file path and an AST node.
     #[must_use]
-    pub fn from_node(path: impl Into<PathBuf>, node: &crate::code_lint::AstNode<'_>) -> Self {
+    pub fn from_node(path: impl Into<PathBuf>, node: &AstNode<'_>) -> Self {
         Self::file_span(
             path,
             SourceSpan::from_range(node.range()),
@@ -307,19 +309,6 @@ impl SourceLocation {
     #[must_use]
     pub fn format_header(&self) -> String {
         format!("{}:{}:{}", self.context, self.line, self.column)
-    }
-}
-
-/// The verbose name of a rule (e.g., "no-edits-on-described-commits").
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize, PartialOrd, Ord,
-)]
-#[serde(transparent)]
-pub struct RuleName(pub &'static str);
-
-impl std::fmt::Display for RuleName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
     }
 }
 
@@ -377,7 +366,7 @@ pub struct LineColumn {
 impl LineColumn {
     /// Resolves the 1-indexed start `(line, column)` coordinate of an AST node.
     #[must_use]
-    pub fn from_node(node: &crate::code_lint::AstNode<'_>) -> Self {
+    pub fn from_node(node: &AstNode<'_>) -> Self {
         let start_pos = node.start_pos();
         Self {
             line: start_pos.line() + 1,

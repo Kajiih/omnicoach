@@ -3,8 +3,9 @@
 
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
+use omni::core::AstNode;
 
-fn print_tree(node: &omni::code_lint::AstNode<'_>, depth: usize) {
+fn print_tree(node: &AstNode<'_>, depth: usize) {
     let indent = "  ".repeat(depth);
     println!(
         "{}{:?} ({}) [{:?}]",
