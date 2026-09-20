@@ -29,9 +29,9 @@ This document serves as the single source of truth for architectural milestones,
 
 ## 2. Performance & VCS Optimizations
 
-- **Single-Pass Call Expression Matching (`find_banned_calls`)**:
-  - *Current*: `calls::find_banned_calls` executes `root.find_all(...)` sequentially for each pattern entry, repeatedly traversing the entire syntax tree (causing ~1.3s overhead per pattern on 800+ line files in debug mode).
-  - *Target*: Perform a single-pass AST traversal collecting `call_expression` (Rust) and `call` (Python) nodes, resolving callee text and checking against a `HashSet` in $O(1)$ to eliminate redundant full-tree traversals and achieve sub-millisecond execution.
+- **Partitioned Call Expression Matching (`find_banned_calls`)**:
+  - *Current*: `calls::find_banned_calls` executes `root.find_all(...)` sequentially for each pattern entry, repeatedly traversing the entire syntax tree (measured at ~1.4s per pattern on an 830-line file in debug mode; 70s on the 8k-line repo in release).
+  - *Target*: Partition the deny list into literal callee names and structural `ast-grep` patterns. Literal names are evaluated in a single-pass AST traversal collecting `call_expression` (Rust) and `call` (Python) nodes and checked against a `HashSet` in $O(1)$; entries with metavariables (e.g. `$LOOP($$$LOOP_ARGS).create_task`) or custom pattern syntax retain structural `find_all` matching. Eliminates redundant traversals for the vast majority of entries while preserving full rule expressiveness.
 - **Subprocess Batching & Caching (`EnvContext`)**:
   - *Current*: Command rules spawn individual `jj` or `git` CLI calls per evaluation.
   - *Target*: Introduce a shared `EnvContext` struct that pre-fetches and caches repository state (e.g., batching queries into a single `jj log --json` or `git status` invocation) to ensure sub-10ms execution across multiple rules.
