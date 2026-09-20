@@ -76,28 +76,19 @@ fn find_directive_prefix(text: &str) -> Option<usize> {
 /// This prevents legitimate lowercase English explanation words (e.g. `safe`, `transient`)
 /// from being erroneously swallowed as rule codes.
 fn is_rule_code_token(word: &str) -> bool {
-    let trimmed = word.trim_matches(|character: char| character == ',' || character == ';');
+    let trimmed = word.trim_matches(|c: char| c == ',' || c == ';');
     !trimmed.is_empty()
         && trimmed.split(',').all(|part| {
             let segment = part.trim();
-            if segment.is_empty() {
-                return false;
-            }
-            let is_valid_chars = segment.chars().all(|character| {
-                character.is_ascii_alphanumeric()
-                    || character == '-'
-                    || character == '_'
-                    || character == '.'
-            });
-            if !is_valid_chars {
-                return false;
-            }
-            let has_digit = segment.chars().any(|character| character.is_ascii_digit());
-            let has_separator = segment.contains('-') || segment.contains('.');
-            let is_all_uppercase = segment
-                .chars()
-                .all(|character| character.is_ascii_uppercase() || character == '_');
-            has_digit || has_separator || is_all_uppercase
+            let is_valid = !segment.is_empty()
+                && segment
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+            let is_code = segment.chars().any(|c| c.is_ascii_digit())
+                || segment.contains('-')
+                || segment.contains('.')
+                || segment.chars().all(|c| c.is_ascii_uppercase() || c == '_');
+            is_valid && is_code
         })
 }
 
@@ -284,17 +275,6 @@ impl<'a> CommentIndex<'a> {
         }
         parts.reverse();
         is_substantive_explanation(&parts.join(" "))
-    }
-
-    /// Checks whether an AST node is accompanied by an explanatory comment:
-    /// 1. A contiguous standalone comment block directly above its start line.
-    /// 2. An inline comment on any line spanning the node.
-    #[must_use]
-    pub fn has_explanation_for_node(&self, node: &AstNode<'_>) -> bool {
-        let start_line = node.start_pos().line() + 1;
-        let end_line = node.end_pos().line() + 1;
-        self.has_adjacent_explanation(start_line)
-            || (start_line..=end_line).any(|target_line| self.has_inline_explanation(target_line))
     }
 }
 

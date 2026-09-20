@@ -7,7 +7,7 @@
 use crate::code_lint::ast_python::{find_enclosing_with_item, find_enclosing_with_statement};
 use crate::code_lint::comments::CommentIndex;
 use crate::code_lint::{CodeRule, SourceDoc};
-use crate::core::{Config, Rule, RuleName};
+use crate::core::{AstNode, Config, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -49,45 +49,24 @@ impl CodeRule for NoUncommentedSuppress {
         _config: &Config,
     ) -> Vec<Diagnostic> {
         let root = grep.root();
-        let calls: Vec<_> = root
+        let calls = root
             .find_all("suppress($$$ARGS)")
-            .chain(root.find_all("contextlib.suppress($$$ARGS)"))
-            .collect();
+            .chain(root.find_all("contextlib.suppress($$$ARGS)"));
 
-        if calls.is_empty() {
-            return Vec::new();
-        }
-
-        let comment_index = CommentIndex::from_ast(grep);
+        let mut comment_index = None;
         let mut diagnostics = Vec::new();
 
         for call in calls {
             // Verify that this call is actually used as a context manager expression in a with statement
-            let Some(with_item) = find_enclosing_with_item(&call) else {
-                continue;
-            };
-
             let Some(with_stmt) = find_enclosing_with_statement(&call) else {
                 continue;
             };
+            if find_enclosing_with_item(&call).is_none() {
+                continue;
+            }
 
-            // Check whether the suppress call, its with-item, or the enclosing with-statement
-            // is documented by an adjacent explanatory comment.
-            // Note: with_stmt spans the entire with body; inspect preceding comments directly above
-            // with_stmt, or inline comments on the with header lines before the body begins.
-            let header_end_line = with_stmt.field("body").map_or_else(
-                || with_stmt.end_pos().line() + 1,
-                |body| body.start_pos().line(),
-            );
-            let with_start_line = with_stmt.start_pos().line() + 1;
-
-            let is_documented = comment_index.has_explanation_for_node(&call)
-                || comment_index.has_explanation_for_node(&with_item)
-                || comment_index.has_adjacent_explanation(with_start_line)
-                || (with_start_line..=header_end_line)
-                    .any(|target_line| comment_index.has_inline_explanation(target_line));
-
-            if !is_documented {
+            let index = comment_index.get_or_insert_with(|| CommentIndex::from_ast(grep));
+            if !is_suppression_documented(index, &with_stmt, &call) {
                 diagnostics.push(self.diagnostic_at_node(path, &call, &[]));
             }
         }
@@ -96,230 +75,139 @@ impl CodeRule for NoUncommentedSuppress {
     }
 }
 
-// TODO: A lot of the test suite can be made more ricr with best practices (parameterized, etc)
+/// Determines if a `suppress(...)` context manager invocation is documented by an explanatory comment.
+///
+/// Documentation can be provided in two forms:
+/// 1. Standalone comment block directly preceding the `with` statement, or directly
+///    preceding the `suppress(...)` call within a multiline header.
+/// 2. Inline explanatory comment on any line of the `with` header (from `with` to `:`).
+fn is_suppression_documented(
+    comment_index: &CommentIndex<'_>,
+    with_stmt: &AstNode<'_>,
+    call: &AstNode<'_>,
+) -> bool {
+    let with_start_line = with_stmt.start_pos().line() + 1;
+    let call_start_line = call.start_pos().line() + 1;
+    let header_end_line = with_stmt.field("body").map_or_else(
+        || with_stmt.end_pos().line() + 1,
+        |body| body.start_pos().line(),
+    );
+
+    comment_index.has_adjacent_explanation(with_start_line)
+        || comment_index.has_adjacent_explanation(call_start_line)
+        || (with_start_line..=header_end_line)
+            .any(|line| comment_index.has_inline_explanation(line))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use indoc::indoc;
+    use rstest::rstest;
 
-    #[test]
-    fn test_uncommented_suppress_flagged() {
-        let source_violating = indoc! {r#"
+    #[rstest]
+    #[case::single_line_inline(indoc! {r#"
+        with suppress(FileNotFoundError):  # Safe to ignore if temp file was already deleted
+            os.remove("tmp.txt")
+    "#})]
+    #[case::preceding_comment_block(indoc! {r#"
+        # The background worker cleans up stale lock files,
+        # so ignoring FileNotFoundError is safe here.
+        with suppress(FileNotFoundError):
+            os.remove("lock.txt")
+    "#})]
+    #[case::multiline_parenthesized_with_inline(indoc! {r#"
+        with (
+            open("log.txt") as log,
+            suppress(KeyError),  # Config key is optional in legacy environments
+        ):
+            process(log)
+    "#})]
+    #[case::multiline_parenthesized_with_preceding(indoc! {r"
+        # Optional cleanup of lock file if created
+        with (
+            suppress(FileNotFoundError),
+        ):
+            pass
+    "})]
+    #[case::nested_with_statement(indoc! {r#"
+        with file_lock:
+            # File may already have been removed by another thread
             with suppress(FileNotFoundError):
-                os.remove("tmp.txt")
-        "#};
-
-        let output = crate::test_utils::assert_code_rule_snapshot(
-            &NoUncommentedSuppress,
-            source_violating,
-            "test.py",
-        );
-        insta::assert_snapshot!(output, @"[no-uncommented-suppress] Line 1, Col 6: Exception suppression must include an explanatory comment.");
+                os.remove("cache.bin")
+    "#})]
+    #[case::suppress_call_outside_with_ignored(indoc! {r"
+        # Suppress object passed as an argument or assigned
+        mgr = suppress(FileNotFoundError)
+    "})]
+    #[case::multiline_suppress_trailing_comment(indoc! {r"
+        with suppress(
+            FileNotFoundError,
+        ):  # Safe if lock file was already deleted
+            pass
+    "})]
+    #[case::multiline_suppress_argument_comment(indoc! {r"
+        with suppress(
+            FileNotFoundError,  # Lock file may already be removed by daemon
+        ):
+            pass
+    "})]
+    #[case::noqa_with_plain_words_explanation(indoc! {r"
+        with suppress(FileNotFoundError):  # noqa: SIM105 safe because transient cache
+            pass
+    "})]
+    #[case::multiline_header_trailing_comment(indoc! {r"
+        with (
+            open('log.txt'),
+            suppress(FileNotFoundError),
+        ):  # Safe if lock file was already deleted
+            pass
+    "})]
+    fn test_valid_suppressions_allowed(#[case] source: &str) {
+        let output =
+            crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
+        assert!(output.is_empty());
     }
 
-    #[test]
-    fn test_contextlib_qualified_uncommented_suppress_flagged() {
-        let source_violating = indoc! {r#"
+    #[rstest]
+    #[case::bare_suppress(
+        indoc! {r#"
+            with suppress(FileNotFoundError):
+                os.remove("tmp.txt")
+        "#},
+        "[no-uncommented-suppress] Line 1, Col 6: Exception suppression must include an explanatory comment."
+    )]
+    #[case::contextlib_qualified(
+        indoc! {r#"
             with contextlib.suppress(KeyError):
                 data = cache["missing"]
-        "#};
-
-        let output = crate::test_utils::assert_code_rule_snapshot(
-            &NoUncommentedSuppress,
-            source_violating,
-            "test.py",
-        );
-        insta::assert_snapshot!(output, @"[no-uncommented-suppress] Line 1, Col 6: Exception suppression must include an explanatory comment.");
-    }
-
-    #[test]
-    fn test_inline_comment_explanation_allowed() {
-        let source_ok = indoc! {r#"
-            with suppress(FileNotFoundError):  # Safe to ignore if temp file was already deleted
-                os.remove("tmp.txt")
-        "#};
-
-        let output = crate::test_utils::assert_code_rule_snapshot(
-            &NoUncommentedSuppress,
-            source_ok,
-            "test.py",
-        );
-        assert!(output.is_empty());
-    }
-
-    #[test]
-    fn test_preceding_comment_block_allowed() {
-        let source_ok = indoc! {r#"
-            # The background worker cleans up stale lock files,
-            # so ignoring FileNotFoundError is safe here.
-            with suppress(FileNotFoundError):
-                os.remove("lock.txt")
-        "#};
-
-        let output = crate::test_utils::assert_code_rule_snapshot(
-            &NoUncommentedSuppress,
-            source_ok,
-            "test.py",
-        );
-        assert!(output.is_empty());
-    }
-
-    #[test]
-    fn test_multiline_parenthesized_with_allowed() {
-        let source_ok = indoc! {r#"
-            with (
-                open("log.txt") as log,
-                suppress(KeyError),  # Config key is optional in legacy environments
-            ):
-                process(log)
-        "#};
-
-        let output = crate::test_utils::assert_code_rule_snapshot(
-            &NoUncommentedSuppress,
-            source_ok,
-            "test.py",
-        );
-        assert!(output.is_empty());
-    }
-
-    #[test]
-    fn test_multiline_parenthesized_with_preceding_comment_allowed() {
-        let source_ok = indoc! {r"
-            # Optional cleanup of lock file if created
-            with (
-                suppress(FileNotFoundError),
-            ):
-                pass
-        "};
-
-        let output = crate::test_utils::assert_code_rule_snapshot(
-            &NoUncommentedSuppress,
-            source_ok,
-            "test.py",
-        );
-        assert!(output.is_empty());
-    }
-
-    #[test]
-    fn test_nested_with_statement_no_outer_false_positive() {
-        let source = indoc! {r#"
-            with file_lock:
-                # File may already have been removed by another thread
-                with suppress(FileNotFoundError):
-                    os.remove("cache.bin")
-        "#};
-
-        let output =
-            crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
-        assert!(output.is_empty());
-    }
-
-    #[test]
-    fn test_directive_only_comment_flagged() {
-        let source_violating = indoc! {r"
+        "#},
+        "[no-uncommented-suppress] Line 1, Col 6: Exception suppression must include an explanatory comment."
+    )]
+    #[case::directive_only(
+        indoc! {r"
             with suppress(FileNotFoundError):  # noqa: SIM105
                 pass
-        "};
-
-        let output = crate::test_utils::assert_code_rule_snapshot(
-            &NoUncommentedSuppress,
-            source_violating,
-            "test.py",
-        );
-        insta::assert_snapshot!(output, @"[no-uncommented-suppress] Line 1, Col 6: Exception suppression must include an explanatory comment.");
-    }
-
-    #[test]
-    fn test_too_short_comment_flagged() {
-        let source_violating = indoc! {r"
+        "},
+        "[no-uncommented-suppress] Line 1, Col 6: Exception suppression must include an explanatory comment."
+    )]
+    #[case::too_short_comment(
+        indoc! {r"
             with suppress(FileNotFoundError):  # ignore
                 pass
-        "};
-
-        let output = crate::test_utils::assert_code_rule_snapshot(
-            &NoUncommentedSuppress,
-            source_violating,
-            "test.py",
-        );
-        insta::assert_snapshot!(output, @"[no-uncommented-suppress] Line 1, Col 6: Exception suppression must include an explanatory comment.");
-    }
-
-    #[test]
-    fn test_suppress_call_outside_with_ignored() {
-        let source = indoc! {r"
-            # Suppress object passed as an argument or assigned
-            mgr = suppress(FileNotFoundError)
-        "};
-
-        let output =
-            crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
-        assert!(output.is_empty());
-    }
-
-    #[test]
-    fn test_multiline_suppress_with_trailing_inline_comment() {
-        let source = indoc! {r"
-            with suppress(
-                FileNotFoundError,
-            ):  # Safe if lock file was already deleted
-                pass
-        "};
-
-        let output =
-            crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
-        assert!(output.is_empty());
-    }
-
-    #[test]
-    fn test_multiline_suppress_with_argument_comment() {
-        let source = indoc! {r"
-            with suppress(
-                FileNotFoundError,  # Lock file may already be removed by daemon
-            ):
-                pass
-        "};
-
-        let output =
-            crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
-        assert!(output.is_empty());
-    }
-
-    #[test]
-    fn test_noqa_with_plain_words_explanation() {
-        let source = indoc! {r"
-            with suppress(FileNotFoundError):  # noqa: SIM105 safe because transient cache
-                pass
-        "};
-
-        let output =
-            crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
-        assert!(output.is_empty());
-    }
-
-    #[test]
-    fn test_body_inline_comment_does_not_suppress_violation() {
-        let source = indoc! {r#"
+        "},
+        "[no-uncommented-suppress] Line 1, Col 6: Exception suppression must include an explanatory comment."
+    )]
+    #[case::body_inline_comment_does_not_mask(
+        indoc! {r#"
             with suppress(FileNotFoundError):
                 os.remove("tmp.txt")  # inline comment inside body
-        "#};
-
+        "#},
+        "[no-uncommented-suppress] Line 1, Col 6: Exception suppression must include an explanatory comment."
+    )]
+    fn test_uncommented_suppress_flagged(#[case] source: &str, #[case] expected: &str) {
         let output =
             crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
-        insta::assert_snapshot!(output, @"[no-uncommented-suppress] Line 1, Col 6: Exception suppression must include an explanatory comment.");
-    }
-
-    #[test]
-    fn test_multiline_parenthesized_with_header_inline_comment() {
-        let source = indoc! {r"
-            with (
-                open('log.txt'),
-                suppress(FileNotFoundError),
-            ):  # Safe if lock file was already deleted
-                pass
-        "};
-
-        let output =
-            crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
-        assert!(output.is_empty());
+        assert_eq!(output.trim(), expected);
     }
 }
