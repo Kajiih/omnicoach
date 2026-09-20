@@ -1,5 +1,5 @@
 //! Command linter module.
-pub mod rules;
+pub(crate) mod rules;
 pub mod vcs;
 
 use crate::command_lint::vcs::JjClient;

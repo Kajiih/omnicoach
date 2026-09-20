@@ -1,10 +1,10 @@
 //! Static file structure analysis domain using ast-grep-core.
 
-pub mod ast_python;
-pub mod ast_rust;
-pub mod calls;
-pub mod rules;
-pub mod suppression;
+pub(crate) mod ast_python;
+pub(crate) mod ast_rust;
+pub(crate) mod calls;
+pub(crate) mod rules;
+pub(crate) mod suppression;
 
 use crate::core::Config;
 use crate::diagnostic::Diagnostic;
@@ -144,7 +144,7 @@ fn filter_diagnostics_by_target(
 /// Omni does not support inline Python tests. Rust source files, however, can declare inline test
 /// modules (`#[cfg(test)]`), so `TestsOnly` rules remain eligible until AST ranges are inspected.
 #[must_use]
-pub(crate) fn is_rule_candidate_for_path(
+fn is_rule_candidate_for_path(
     rule: &dyn CodeRule,
     path: &Path,
     lang: SupportLang,
@@ -166,7 +166,7 @@ pub(crate) fn is_rule_candidate_for_path(
 /// Returns true if any active suppression hygiene rule is enabled and applicable to `path`,
 /// and the file content contains a suppression directive prefix (`"omni:"`).
 #[must_use]
-pub(crate) fn has_active_suppression_audit(
+fn has_active_suppression_audit(
     path: &Path,
     lang: SupportLang,
     content: &str,
@@ -185,7 +185,7 @@ pub(crate) fn has_active_suppression_audit(
 /// Skips Tree-sitter parsing when neither standard code rules nor active suppression audit
 /// directives can produce findings for the file given its language, test-path status, and config.
 #[must_use]
-pub(crate) fn should_skip_ast_parse(
+fn should_skip_ast_parse(
     path: &Path,
     lang: SupportLang,
     content: &str,
@@ -241,7 +241,10 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
 
 /// Collects all outermost test function and test method nodes (`def test_*` in Python, `#[test]` / `fn test_*` in Rust).
 #[must_use]
-pub fn collect_test_functions<'a>(root: &AstNode<'a>, lang: SupportLang) -> Vec<AstNode<'a>> {
+pub(crate) fn collect_test_functions<'a>(
+    root: &AstNode<'a>,
+    lang: SupportLang,
+) -> Vec<AstNode<'a>> {
     let mut functions = Vec::new();
     collect_outer_test_functions(root, lang, &mut functions);
     functions
@@ -274,7 +277,7 @@ fn collect_outer_test_functions<'a>(
 
 /// Helper to collect binding definition nodes from a parsed AST grep document.
 #[must_use]
-pub fn collect_bindings(grep: &AstGrep<SourceDoc>) -> Vec<AstNode<'_>> {
+pub(crate) fn collect_bindings(grep: &AstGrep<SourceDoc>) -> Vec<AstNode<'_>> {
     match grep.lang() {
         SupportLang::Rust => ast_rust::collect_bindings(&grep.root()),
         SupportLang::Python => ast_python::collect_bindings(&grep.root()),
@@ -284,7 +287,7 @@ pub fn collect_bindings(grep: &AstGrep<SourceDoc>) -> Vec<AstNode<'_>> {
 
 /// Returns true if the node represents an import binding.
 #[must_use]
-pub fn is_import_binding(node: &AstNode<'_>, lang: SupportLang) -> bool {
+pub(crate) fn is_import_binding(node: &AstNode<'_>, lang: SupportLang) -> bool {
     let Some(parent) = node.parent() else {
         return false;
     };
@@ -305,7 +308,7 @@ pub fn is_import_binding(node: &AstNode<'_>, lang: SupportLang) -> bool {
 /// Returns true if the node represents an unaliased import binding (an external symbol
 /// imported directly without a local `as` alias).
 #[must_use]
-pub fn is_unaliased_import_binding(node: &AstNode<'_>, lang: SupportLang) -> bool {
+pub(crate) fn is_unaliased_import_binding(node: &AstNode<'_>, lang: SupportLang) -> bool {
     let Some(parent) = node.parent() else {
         return false;
     };
@@ -327,7 +330,7 @@ pub fn is_unaliased_import_binding(node: &AstNode<'_>, lang: SupportLang) -> boo
 
 /// Returns true if the node represents a structural type, class, or function definition name.
 #[must_use]
-pub fn is_structural_definition(node: &AstNode<'_>, lang: SupportLang) -> bool {
+pub(crate) fn is_structural_definition(node: &AstNode<'_>, lang: SupportLang) -> bool {
     let Some(parent) = node.parent() else {
         return false;
     };
@@ -359,7 +362,7 @@ pub fn is_structural_definition(node: &AstNode<'_>, lang: SupportLang) -> bool {
 /// suggest renaming do not meaningfully apply to them. Only the member name itself qualifies;
 /// nested names the author does control, such as locals, do not.
 #[must_use]
-pub fn is_trait_impl_member(node: &AstNode<'_>, lang: SupportLang) -> bool {
+pub(crate) fn is_trait_impl_member(node: &AstNode<'_>, lang: SupportLang) -> bool {
     let Some(item) = node.parent() else {
         return false;
     };
