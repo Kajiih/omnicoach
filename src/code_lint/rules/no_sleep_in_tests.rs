@@ -3,7 +3,7 @@
 use crate::code_lint::calls::{self, CallMatch};
 use crate::code_lint::{CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
-use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
+use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -13,10 +13,18 @@ use std::path::Path;
 const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
     base: &["sleep"],
     extend: &[
-        (SupportLang::Python, &["time.sleep", "asyncio.sleep", "anyio.sleep", "trio.sleep"]),
+        (
+            SupportLang::Python,
+            &["time.sleep", "asyncio.sleep", "anyio.sleep", "trio.sleep"],
+        ),
         (
             SupportLang::Rust,
-            &["thread::sleep", "std::thread::sleep", "time::sleep", "tokio::time::sleep"],
+            &[
+                "thread::sleep",
+                "std::thread::sleep",
+                "time::sleep",
+                "tokio::time::sleep",
+            ],
         ),
     ],
     exempt: &[],

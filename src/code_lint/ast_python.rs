@@ -320,7 +320,10 @@ class MyClass:
         ";
         let grep = AstGrep::new(source, SupportLang::Python);
         let bindings = collect_bindings(&grep.root());
-        let names: Vec<String> = bindings.iter().map(|node| node.text().to_string()).collect();
+        let names: Vec<String> = bindings
+            .iter()
+            .map(|node| node.text().to_string())
+            .collect();
         assert_eq!(
             names,
             vec![
@@ -358,7 +361,10 @@ match val:
         ";
         let grep = AstGrep::new(source, SupportLang::Python);
         let bindings = collect_bindings(&grep.root());
-        let names: Vec<String> = bindings.iter().map(|node| node.text().to_string()).collect();
+        let names: Vec<String> = bindings
+            .iter()
+            .map(|node| node.text().to_string())
+            .collect();
         assert_eq!(names, vec!["x", "z", "a", "b"]);
     }
 }

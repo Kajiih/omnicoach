@@ -233,7 +233,10 @@ pub fn collect_bindings<'a>(root: &AstNode<'a>) -> Vec<AstNode<'a>> {
 /// (`#[test]`, `#[tokio::test]`, `#[rstest]`, `#[test_case(...)]`).
 #[must_use]
 pub fn is_test_attribute(attr_text: &str) -> bool {
-    let trimmed = attr_text.trim().trim_start_matches("#[").trim_end_matches(']');
+    let trimmed = attr_text
+        .trim()
+        .trim_start_matches("#[")
+        .trim_end_matches(']');
     let attr_path = trimmed.split(['(', '=']).next().unwrap_or("").trim();
     let terminal = attr_path.rsplit("::").next().unwrap_or("").trim();
     matches!(terminal, "test" | "rstest" | "test_case")
@@ -242,12 +245,19 @@ pub fn is_test_attribute(attr_text: &str) -> bool {
 /// Returns true if an `attribute_item` text represents a `#[cfg(test)]` attribute.
 #[must_use]
 pub fn is_conditional_test_attribute(attr_text: &str) -> bool {
-    let trimmed = attr_text.trim().trim_start_matches("#[").trim_end_matches(']').trim();
-    trimmed.strip_prefix("cfg(").and_then(|inner| inner.strip_suffix(')')).is_some_and(|inner| {
-        inner
-            .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-            .any(|token| token == "test")
-    })
+    let trimmed = attr_text
+        .trim()
+        .trim_start_matches("#[")
+        .trim_end_matches(']')
+        .trim();
+    trimmed
+        .strip_prefix("cfg(")
+        .and_then(|inner| inner.strip_suffix(')'))
+        .is_some_and(|inner| {
+            inner
+                .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+                .any(|token| token == "test")
+        })
 }
 
 /// Returns true if `node` is preceded by an `attribute_item` sibling matching `predicate`.
@@ -314,7 +324,13 @@ pub fn macro_terminal_name(macro_node: &AstNode<'_>) -> String {
     let Some(macro_id) = macro_node.field("macro") else {
         return String::new();
     };
-    macro_id.text().rsplit("::").next().unwrap_or("").trim().to_string()
+    macro_id
+        .text()
+        .rsplit("::")
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 /// Returns true if a Rust `macro_invocation` node invokes an assertion macro
@@ -371,7 +387,10 @@ mod tests {
         ";
         let grep = AstGrep::new(source, SupportLang::Rust);
         let bindings = collect_bindings(&grep.root());
-        let names: Vec<String> = bindings.iter().map(|node| node.text().to_string()).collect();
+        let names: Vec<String> = bindings
+            .iter()
+            .map(|node| node.text().to_string())
+            .collect();
         assert_eq!(
             names,
             vec![
@@ -416,7 +435,10 @@ mod tests {
         let source = "fn main() { let x: MyStruct = MyStruct; }";
         let grep = AstGrep::new(source, SupportLang::Rust);
         let bindings = collect_bindings(&grep.root());
-        let names: Vec<String> = bindings.iter().map(|node| node.text().to_string()).collect();
+        let names: Vec<String> = bindings
+            .iter()
+            .map(|node| node.text().to_string())
+            .collect();
         assert_eq!(names, vec!["main", "x"]);
     }
 }

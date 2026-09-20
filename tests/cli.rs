@@ -8,7 +8,11 @@ use std::fs;
 use std::io::Write;
 
 fn create_temp_file(suffix: &str, content: &str) -> tempfile::NamedTempFile {
-    let mut file = tempfile::Builder::new().prefix("omni_test_").suffix(suffix).tempfile().unwrap();
+    let mut file = tempfile::Builder::new()
+        .prefix("omni_test_")
+        .suffix(suffix)
+        .tempfile()
+        .unwrap();
     write!(file, "{content}").unwrap();
     file
 }
@@ -138,10 +142,17 @@ fn test_code_lint_with_violations() {
 #[test]
 fn test_code_lint_invalid_config() {
     let temp_dir = tempfile::tempdir().unwrap();
-    fs::write(temp_dir.path().join(omni::core::CONFIG_FILE_NAME), "select = [invalid syntax]")
-        .unwrap();
-    let output =
-        run_and_sanitize_cli("omni-code-lint", &[], Some(temp_dir.path()), &[temp_dir.path()]);
+    fs::write(
+        temp_dir.path().join(omni::core::CONFIG_FILE_NAME),
+        "select = [invalid syntax]",
+    )
+    .unwrap();
+    let output = run_and_sanitize_cli(
+        "omni-code-lint",
+        &[],
+        Some(temp_dir.path()),
+        &[temp_dir.path()],
+    );
     insta::assert_snapshot!(output);
 }
 
@@ -220,8 +231,12 @@ fn test_code_lint_diff_flag_jj() {
     fs::write(&file_path, violating_code_2).unwrap();
 
     // 4. Run full linter (should report BOTH violations: `inner` and `world`)
-    let output_full =
-        run_and_sanitize_cli("omni-code-lint", &["test.py"], Some(repo_path), &[repo_path]);
+    let output_full = run_and_sanitize_cli(
+        "omni-code-lint",
+        &["test.py"],
+        Some(repo_path),
+        &[repo_path],
+    );
     insta::assert_snapshot!("full_baseline", output_full);
 
     // 5. Run with --diff-rev @- (compares @ relative to parent @-)

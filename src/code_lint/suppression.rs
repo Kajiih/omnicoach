@@ -3,7 +3,7 @@
 use crate::code_lint::{AstNode, CodeRule, SourceDoc};
 use crate::core::{Config, Rule, RuleName};
 use crate::diagnostic::{
-    violation_template, Diagnostic, LineColumn, SourceLocation, SourceSpan, ViolationTemplate,
+    Diagnostic, LineColumn, SourceLocation, SourceSpan, ViolationTemplate, violation_template,
 };
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -340,7 +340,13 @@ impl SuppressionTracker {
 
         let mut diagnostics = Vec::new();
         for directive in &self.directives {
-            audit_single_directive(directive, path, config, &suppressible_rules, &mut diagnostics);
+            audit_single_directive(
+                directive,
+                path,
+                config,
+                &suppressible_rules,
+                &mut diagnostics,
+            );
         }
         diagnostics
     }
@@ -349,13 +355,15 @@ impl SuppressionTracker {
 /// Strips leading and trailing comment delimiters (`//`, `#`, `/* ... */`).
 fn strip_comment_delimiters(text: &str) -> Option<&str> {
     let trimmed = text.trim();
-    trimmed.strip_prefix("//").or_else(|| trimmed.strip_prefix('#')).map(str::trim_start).or_else(
-        || {
+    trimmed
+        .strip_prefix("//")
+        .or_else(|| trimmed.strip_prefix('#'))
+        .map(str::trim_start)
+        .or_else(|| {
             trimmed
                 .strip_prefix("/*")
                 .map(|body| body.trim_start().trim_end_matches("*/").trim_end())
-        },
-    )
+        })
 }
 
 /// Parses the `omni:disable-file` or `omni:ignore` prefix and validates boundary delimiters.
@@ -426,9 +434,10 @@ fn directive_matches_line(placement: &DirectivePlacement, diagnostic_line: usize
     match *placement {
         DirectivePlacement::File => true,
         DirectivePlacement::SameLine { line } => line == diagnostic_line,
-        DirectivePlacement::PrecedingLine { target_line, end_target_line } => {
-            (target_line..=end_target_line).contains(&diagnostic_line)
-        }
+        DirectivePlacement::PrecedingLine {
+            target_line,
+            end_target_line,
+        } => (target_line..=end_target_line).contains(&diagnostic_line),
     }
 }
 
@@ -466,7 +475,12 @@ fn audit_single_directive(
     if !directive.is_blanket && config.is_rule_enabled_for_path(&UnusedSuppression, path) {
         for target_rule in &directive.target_rules {
             if suppressible_rules.contains(target_rule.as_str())
-                && directive.matched_count.get(target_rule).copied().unwrap_or(0) == 0
+                && directive
+                    .matched_count
+                    .get(target_rule)
+                    .copied()
+                    .unwrap_or(0)
+                    == 0
             {
                 diagnostics.push(
                     UnusedSuppression
@@ -495,7 +509,10 @@ mod tests {
             (directive.reason.as_deref(), directive.is_blanket),
             (Some("math variable"), false)
         );
-        assert_eq!(directive.placement, DirectivePlacement::SameLine { line: 1 });
+        assert_eq!(
+            directive.placement,
+            DirectivePlacement::SameLine { line: 1 }
+        );
     }
 
     #[test]
@@ -514,14 +531,16 @@ mod tests {
         );
         assert_eq!(
             directive.placement,
-            DirectivePlacement::PrecedingLine { target_line: 2, end_target_line: 2 }
+            DirectivePlacement::PrecedingLine {
+                target_line: 2,
+                end_target_line: 2
+            }
         );
     }
 
     #[test]
     fn test_parse_file_level_directive() {
-        let content =
-            "# omni:disable-file [flat-scope-enforced, single-letter-variable-name] -- legacy generated file\ndef foo(): pass";
+        let content = "# omni:disable-file [flat-scope-enforced, single-letter-variable-name] -- legacy generated file\ndef foo(): pass";
         let grep = AstGrep::new(content, SupportLang::Python);
         let tracker = SuppressionTracker::from_ast(&grep, content);
 
@@ -576,7 +595,11 @@ mod tests {
         let content = "a = 1  # omni:ignore [single-letter-variable-name]";
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
-        assert!(diags.iter().any(|diag| diag.rule_name.0 == "missing-suppression-reason"));
+        assert!(
+            diags
+                .iter()
+                .any(|diag| diag.rule_name.0 == "missing-suppression-reason")
+        );
     }
 
     #[test]
@@ -584,7 +607,11 @@ mod tests {
         let content = "a = 1  # omni:ignore [single-letter-variable-name] --    ";
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
-        assert!(diags.iter().any(|diag| diag.rule_name.0 == "missing-suppression-reason"));
+        assert!(
+            diags
+                .iter()
+                .any(|diag| diag.rule_name.0 == "missing-suppression-reason")
+        );
     }
 
     #[test]
@@ -592,7 +619,11 @@ mod tests {
         let content = "a = 1  # omni:ignore [non-existent-rule] -- reason";
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
-        assert!(diags.iter().any(|diag| diag.rule_name.0 == "unknown-suppression-rule"));
+        assert!(
+            diags
+                .iter()
+                .any(|diag| diag.rule_name.0 == "unknown-suppression-rule")
+        );
     }
 
     #[test]
@@ -600,7 +631,11 @@ mod tests {
         let content = "a = 1  # omni:ignore -- missing rule names";
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
-        assert!(diags.iter().any(|diag| diag.rule_name.0 == "blanket-suppression"));
+        assert!(
+            diags
+                .iter()
+                .any(|diag| diag.rule_name.0 == "blanket-suppression")
+        );
     }
 
     #[test]
@@ -676,7 +711,9 @@ mod tests {
         let diags = crate::code_lint::lint_file(Path::new("src/test.py"), content, &config);
 
         assert!(
-            diags.iter().any(|diag| diag.rule_name.0 == "unknown-suppression-rule"),
+            diags
+                .iter()
+                .any(|diag| diag.rule_name.0 == "unknown-suppression-rule"),
             "Expected unknown-suppression-rule for non-code rule in code directive, got: {diags:?}"
         );
     }

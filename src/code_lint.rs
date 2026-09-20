@@ -71,11 +71,13 @@ pub trait CodeRule: crate::core::Rule {
 /// Helper to detect language from file extension.
 #[must_use]
 pub fn detect_language(path: &Path) -> Option<SupportLang> {
-    path.extension().and_then(std::ffi::OsStr::to_str).and_then(|ext| match ext {
-        "py" => Some(SupportLang::Python),
-        "rs" => Some(SupportLang::Rust),
-        _ => None,
-    })
+    path.extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .and_then(|ext| match ext {
+            "py" => Some(SupportLang::Python),
+            "rs" => Some(SupportLang::Rust),
+            _ => None,
+        })
 }
 
 /// Returns true if `rule` should be evaluated on `path` given its language and test-file context.
@@ -239,7 +241,10 @@ pub fn is_unaliased_import_binding(node: &AstNode<'_>, lang: SupportLang) -> boo
     let parent_kind = parent.kind();
     match lang {
         SupportLang::Rust => {
-            matches!(parent_kind.as_ref(), "use_declaration" | "use_list" | "scoped_identifier")
+            matches!(
+                parent_kind.as_ref(),
+                "use_declaration" | "use_list" | "scoped_identifier"
+            )
         }
         SupportLang::Python => matches!(
             parent_kind.as_ref(),
@@ -267,7 +272,10 @@ pub fn is_structural_definition(node: &AstNode<'_>, lang: SupportLang) -> bool {
                 | "function_item"
         ),
         SupportLang::Python => {
-            matches!(parent_kind.as_ref(), "class_definition" | "function_definition")
+            matches!(
+                parent_kind.as_ref(),
+                "class_definition" | "function_definition"
+            )
         }
         _ => false,
     }

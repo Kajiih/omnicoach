@@ -51,9 +51,17 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
             let callee = node
                 .field("function")
                 .map_or_else(|| entry.clone(), |func| func.text().to_string());
-            let arguments = matched.get_env().get_multiple_matches("ARGS").into_iter().collect();
+            let arguments = matched
+                .get_env()
+                .get_multiple_matches("ARGS")
+                .into_iter()
+                .collect();
 
-            matches.push(CallMatch { node, callee, arguments });
+            matches.push(CallMatch {
+                node,
+                callee,
+                arguments,
+            });
         }
     }
 
@@ -85,7 +93,14 @@ asyncio.get_event_loop().create_task(work())
         let matched = find_banned_calls(&grep, &banned);
         let callees: Vec<&str> = matched.iter().map(|item| item.callee.as_str()).collect();
 
-        assert_eq!(callees, vec!["time.sleep", "sleep", "asyncio.get_event_loop().create_task"]);
+        assert_eq!(
+            callees,
+            vec![
+                "time.sleep",
+                "sleep",
+                "asyncio.get_event_loop().create_task"
+            ]
+        );
         assert_eq!(matched[0].arguments.len(), 1);
         assert_eq!(matched[0].arguments[0].text(), "1");
         assert_eq!(matched[1].arguments[0].text(), "0");
@@ -110,7 +125,10 @@ fn test_case() {
         let matched = find_banned_calls(&grep, &banned);
         let callees: Vec<&str> = matched.iter().map(|item| item.callee.as_str()).collect();
 
-        assert_eq!(callees, vec!["std::thread::sleep", "tokio::time::sleep", "sleep"]);
+        assert_eq!(
+            callees,
+            vec!["std::thread::sleep", "tokio::time::sleep", "sleep"]
+        );
         assert_eq!(matched[1].arguments.len(), 1);
         assert_eq!(matched[1].arguments[0].text(), "Duration::ZERO");
     }

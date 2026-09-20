@@ -2,7 +2,7 @@
 
 use crate::code_lint::CodeRule;
 use crate::core::{Rule, RuleName};
-use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
+use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::{AstGrep, Doc, Node};
 use ast_grep_language::SupportLang;

@@ -1,8 +1,8 @@
 //! Test utilities and helpers for snapshot testing.
 
 use crate::code_lint::CodeRule;
-use crate::command_lint::vcs::JjClient;
 use crate::command_lint::CommandRule;
+use crate::command_lint::vcs::JjClient;
 use crate::core::Config;
 use crate::diagnostic::Diagnostic;
 use ast_grep_core::AstGrep;

@@ -26,7 +26,11 @@ impl FilterListDefaults {
         extend: &'static [(SupportLang, &'static [&'static str])],
         exempt: &'static [(SupportLang, &'static [&'static str])],
     ) -> Self {
-        Self { base, extend, exempt }
+        Self {
+            base,
+            extend,
+            exempt,
+        }
     }
 
     /// Resolves the default set of strings for a specific language.
@@ -312,7 +316,9 @@ pub trait Rule: Send + Sync {
     #[must_use]
     fn has_tag(&self, tag: crate::rules::Tag) -> bool {
         self.tags().contains(&tag)
-            || tag.to_support_lang().is_some_and(|lang| self.supported_languages().contains(&lang))
+            || tag
+                .to_support_lang()
+                .is_some_and(|lang| self.supported_languages().contains(&lang))
     }
 
     /// Constructs a `Diagnostic` with this rule's name.
@@ -335,7 +341,10 @@ pub trait Rule: Send + Sync {
         params: &[(&str, &str)],
         location: SourceLocation,
     ) -> Diagnostic {
-        self.create_diagnostic(self.violation_template().render_for_lang(lang, params), location)
+        self.create_diagnostic(
+            self.violation_template().render_for_lang(lang, params),
+            location,
+        )
     }
 }
 
@@ -401,7 +410,9 @@ fn default_test_patterns() -> Vec<String> {
 
 impl Default for ContextConfig {
     fn default() -> Self {
-        Self { test_patterns: default_test_patterns() }
+        Self {
+            test_patterns: default_test_patterns(),
+        }
     }
 }
 
@@ -443,7 +454,10 @@ pub enum ConfigError {
 
 fn normalize_path_for_glob(path: &Path) -> String {
     let relative = if path.is_absolute() {
-        std::env::current_dir().ok().and_then(|cwd| path.strip_prefix(cwd).ok()).unwrap_or(path)
+        std::env::current_dir()
+            .ok()
+            .and_then(|cwd| path.strip_prefix(cwd).ok())
+            .unwrap_or(path)
     } else {
         path
     };
@@ -458,7 +472,10 @@ impl Config {
     pub fn is_test_path(&self, path: &Path) -> bool {
         let normalized = normalize_path_for_glob(path);
         for pattern in &self.context.test_patterns {
-            if let Ok(glob) = globset::GlobBuilder::new(pattern).literal_separator(false).build() {
+            if let Ok(glob) = globset::GlobBuilder::new(pattern)
+                .literal_separator(false)
+                .build()
+            {
                 if glob.compile_matcher().is_match(&normalized) {
                     return true;
                 }
@@ -508,7 +525,10 @@ impl Config {
         };
 
         for (pattern, selectors) in &self.per_file_ignores {
-            if let Ok(glob) = globset::GlobBuilder::new(pattern).literal_separator(false).build() {
+            if let Ok(glob) = globset::GlobBuilder::new(pattern)
+                .literal_separator(false)
+                .build()
+            {
                 if glob.compile_matcher().is_match(&normalized)
                     && selectors.iter().any(matches_selector)
                 {
@@ -546,7 +566,10 @@ impl Config {
                 Ok(config)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(error) => Err(ConfigError::Io { path: CONFIG_FILE_NAME, source: error }),
+            Err(error) => Err(ConfigError::Io {
+                path: CONFIG_FILE_NAME,
+                source: error,
+            }),
         }
     }
 }
@@ -578,15 +601,25 @@ mod tests {
         }
     }
 
-    const LOGGING_RULE: MockRule = MockRule { name: "mock-logging-rule", tags: &[Tag::Logging] };
+    const LOGGING_RULE: MockRule = MockRule {
+        name: "mock-logging-rule",
+        tags: &[Tag::Logging],
+    };
 
-    const STYLE_RULE: MockRule = MockRule { name: "mock-style-rule", tags: &[Tag::Style] };
+    const STYLE_RULE: MockRule = MockRule {
+        name: "mock-style-rule",
+        tags: &[Tag::Style],
+    };
 
     #[test]
     fn test_select_by_tag() {
         let mut select = HashSet::new();
         select.insert(Selector::Tag(Tag::Logging));
-        let config = Config { select: Some(select), ignore: None, ..Default::default() };
+        let config = Config {
+            select: Some(select),
+            ignore: None,
+            ..Default::default()
+        };
 
         assert!(config.is_rule_enabled(&LOGGING_RULE));
         assert!(!config.is_rule_enabled(&STYLE_RULE));
@@ -596,7 +629,11 @@ mod tests {
     fn test_ignore_by_tag() {
         let mut ignore = HashSet::new();
         ignore.insert(Selector::Tag(Tag::Logging));
-        let config = Config { select: None, ignore: Some(ignore), ..Default::default() };
+        let config = Config {
+            select: None,
+            ignore: Some(ignore),
+            ..Default::default()
+        };
 
         assert!(!config.is_rule_enabled(&LOGGING_RULE));
         assert!(config.is_rule_enabled(&STYLE_RULE));
@@ -608,7 +645,10 @@ mod tests {
             Tag::Logging.description(),
             "Checks related to logging configurations and invocations"
         );
-        assert_eq!(Tag::Exceptions.description(), "Checks targeting exception handling structures");
+        assert_eq!(
+            Tag::Exceptions.description(),
+            "Checks targeting exception handling structures"
+        );
     }
 
     #[test]
@@ -632,7 +672,10 @@ mod tests {
         };
 
         let python_defaults = DEFAULTS.resolve_default_for_lang(SupportLang::Python);
-        assert_eq!(python_defaults, HashSet::from(["common", "shared", "temp"].map(String::from)));
+        assert_eq!(
+            python_defaults,
+            HashSet::from(["common", "shared", "temp"].map(String::from))
+        );
 
         let rust_defaults = DEFAULTS.resolve_default_for_lang(SupportLang::Rust);
         assert_eq!(
@@ -643,8 +686,11 @@ mod tests {
 
     #[test]
     fn test_dynamic_deny_list_config() {
-        const DEFAULTS: FilterListDefaults =
-            FilterListDefaults { base: &["default_one", "common_ok"], extend: &[], exempt: &[] };
+        const DEFAULTS: FilterListDefaults = FilterListDefaults {
+            base: &["default_one", "common_ok"],
+            extend: &[],
+            exempt: &[],
+        };
 
         let toml_content = r#"
             allowed = ["common_ok"]
@@ -675,7 +721,10 @@ mod tests {
         // Additive: global ("global_bad")
         // Subtractive: global ("common_ok")
         let py_effective = config.effective_banned_for_lang(SupportLang::Python, &DEFAULTS);
-        assert_eq!(py_effective, HashSet::from(["py_only_bad", "global_bad"].map(String::from)));
+        assert_eq!(
+            py_effective,
+            HashSet::from(["py_only_bad", "global_bad"].map(String::from))
+        );
     }
 
     #[test]
@@ -708,7 +757,13 @@ mod tests {
         assert_eq!(
             rust_effective,
             HashSet::from(
-                ["default_base", "rust_extra", "global_allowed", "rust_allowed",].map(String::from)
+                [
+                    "default_base",
+                    "rust_extra",
+                    "global_allowed",
+                    "rust_allowed",
+                ]
+                .map(String::from)
             )
         );
 

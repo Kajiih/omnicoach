@@ -2,7 +2,7 @@
 
 use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, Rule, RuleName};
-use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
+use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -45,8 +45,10 @@ impl Rule for NoAssertionPacking {
 
 /// Checks if a Rust `token_tree` contains a top-level `&&` operator.
 fn has_rust_top_level_and(token_tree: &AstNode<'_>) -> bool {
-    let meaningful_children: Vec<_> =
-        token_tree.children().filter(|c| c.kind() != "(" && c.kind() != ")").collect();
+    let meaningful_children: Vec<_> = token_tree
+        .children()
+        .filter(|c| c.kind() != "(" && c.kind() != ")")
+        .collect();
 
     // Direct top-level: assert!(a && b)
     if meaningful_children.iter().any(|c| c.kind() == "&&") {
@@ -87,7 +89,9 @@ fn is_rust_boolean_tuple_or_array(node: &AstNode<'_>) -> bool {
     items.iter().all(|item| {
         let item_kind = item.kind();
         item_kind == "boolean_literal"
-            || item.children().any(|child| child.kind() == "true" || child.kind() == "false")
+            || item
+                .children()
+                .any(|child| child.kind() == "true" || child.kind() == "false")
     })
 }
 
@@ -111,7 +115,10 @@ fn is_python_boolean_sequence(node: &AstNode<'_>) -> bool {
         .filter(|child| !matches!(child.kind().as_ref(), "(" | ")" | "[" | "]" | ","))
         .collect();
 
-    items.len() >= 2 && items.iter().all(|item| matches!(item.kind().as_ref(), "true" | "false"))
+    items.len() >= 2
+        && items
+            .iter()
+            .all(|item| matches!(item.kind().as_ref(), "true" | "false"))
 }
 
 /// Evaluates a single Rust assertion `macro_invocation` node for packed conditions.
@@ -126,18 +133,26 @@ fn check_rust_assertion_macro(macro_node: &AstNode<'_>, path: &Path) -> Option<D
         return Some(NoAssertionPacking.diagnostic_at_node(
             path,
             macro_node,
-            &[("construct", "Compound boolean condition (`&&`)"), ("macro_name", &macro_name)],
+            &[
+                ("construct", "Compound boolean condition (`&&`)"),
+                ("macro_name", &macro_name),
+            ],
         ));
     }
 
     // 2. Boolean tuple/array equality packing: assert_eq!((a, b), (true, true))
     if (macro_name.starts_with("assert_") || macro_name.starts_with("debug_assert_"))
-        && extract_rust_macro_args(&token_tree).iter().any(is_rust_boolean_tuple_or_array)
+        && extract_rust_macro_args(&token_tree)
+            .iter()
+            .any(is_rust_boolean_tuple_or_array)
     {
         return Some(NoAssertionPacking.diagnostic_at_node(
             path,
             macro_node,
-            &[("construct", "Boolean tuple/collection equality"), ("macro_name", &macro_name)],
+            &[
+                ("construct", "Boolean tuple/collection equality"),
+                ("macro_name", &macro_name),
+            ],
         ));
     }
 
@@ -174,8 +189,13 @@ fn check_python_assert_statement(assert_node: &AstNode<'_>, path: &Path) -> Opti
     }
 
     // 2. Boolean tuple/list equality: assert (a, b) == (True, True)
-    let comparison = assert_node.children().find(|c| c.kind() == "comparison_operator")?;
-    if comparison.children().any(|c| is_python_boolean_sequence(&c)) {
+    let comparison = assert_node
+        .children()
+        .find(|c| c.kind() == "comparison_operator")?;
+    if comparison
+        .children()
+        .any(|c| is_python_boolean_sequence(&c))
+    {
         return Some(NoAssertionPacking.diagnostic_at_node(
             path,
             assert_node,

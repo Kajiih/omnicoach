@@ -1,8 +1,8 @@
 //! Flags unstructured task creation (`asyncio.create_task`, `ensure_future`, `loop.create_task`).
 
-use crate::code_lint::{calls, CodeRule, RuleTarget, SourceDoc};
+use crate::code_lint::{CodeRule, RuleTarget, SourceDoc, calls};
 use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
-use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
+use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -148,7 +148,10 @@ async def background_poller():
 
         let config = Config::default();
         let diags = crate::code_lint::lint_file(Path::new("daemon.py"), source, &config);
-        assert!(diags.is_empty(), "Expected 0 diagnostics with suppression, got: {diags:?}");
+        assert!(
+            diags.is_empty(),
+            "Expected 0 diagnostics with suppression, got: {diags:?}"
+        );
     }
 
     #[test]

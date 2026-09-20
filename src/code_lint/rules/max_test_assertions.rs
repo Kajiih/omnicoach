@@ -2,7 +2,7 @@
 
 use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, DynamicRuleConfig, LanguageDefaults, Rule, RuleName, ThresholdConfig};
-use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
+use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -56,7 +56,9 @@ fn count_python_assertions(node: &AstNode<'_>) -> usize {
     {
         return 1;
     }
-    node.children().map(|child| count_python_assertions(&child)).sum()
+    node.children()
+        .map(|child| count_python_assertions(&child))
+        .sum()
 }
 
 /// Recursively counts top-level assertion macro invocations in a Rust test function body.
@@ -68,7 +70,9 @@ fn count_rust_assertions(node: &AstNode<'_>) -> usize {
     if kind == "macro_invocation" && crate::code_lint::ast_rust::is_assertion_macro(node) {
         return 1;
     }
-    node.children().map(|child| count_rust_assertions(&child)).sum()
+    node.children()
+        .map(|child| count_rust_assertions(&child))
+        .sum()
 }
 
 /// Evaluates a single test function against `max_allowed` assertions.
@@ -97,7 +101,11 @@ fn check_test_function(
     Some(rule.diagnostic_at_node(
         path,
         &name_node,
-        &[("func", &func_name), ("count", &formatted_count), ("max", &formatted_max)],
+        &[
+            ("func", &func_name),
+            ("count", &formatted_count),
+            ("max", &formatted_max),
+        ],
     ))
 }
 

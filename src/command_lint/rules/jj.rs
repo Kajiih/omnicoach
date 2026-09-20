@@ -1,10 +1,10 @@
 //! Validation checks for the `jj edit` command.
 
-use crate::command_lint::vcs::JjClient;
 use crate::command_lint::InterceptedCommand;
+use crate::command_lint::vcs::JjClient;
 use crate::core::{Config, Rule, RuleName};
 use crate::diagnostic::{
-    violation_template, Diagnostic, SourceLocation, SourceSpan, ViolationTemplate,
+    Diagnostic, SourceLocation, SourceSpan, ViolationTemplate, violation_template,
 };
 use crate::rules::Tag;
 
@@ -162,6 +162,9 @@ mod tests {
         #[case] expected_revision: Option<&str>,
     ) {
         let cmd = InterceptedCommand::parse_all(command_line).remove(0);
-        assert_eq!(extract_jj_edit_revision(&cmd), expected_revision.map(ToString::to_string));
+        assert_eq!(
+            extract_jj_edit_revision(&cmd),
+            expected_revision.map(ToString::to_string)
+        );
     }
 }

@@ -23,7 +23,11 @@ impl ViolationMessage {
         rationale: impl Into<String>,
         suggestion: impl Into<String>,
     ) -> Self {
-        Self { summary: summary.into(), rationale: rationale.into(), suggestion: suggestion.into() }
+        Self {
+            summary: summary.into(),
+            rationale: rationale.into(),
+            suggestion: suggestion.into(),
+        }
     }
 }
 
@@ -49,7 +53,10 @@ impl LanguageText {
     /// Creates a `LanguageText` with no language overrides.
     #[must_use]
     pub const fn from_static(base: &'static str) -> Self {
-        Self { base, overrides: &[] }
+        Self {
+            base,
+            overrides: &[],
+        }
     }
 
     /// Resolves the raw static text for the given language.
@@ -104,7 +111,11 @@ impl ViolationTemplate {
         rationale: LanguageText,
         suggestion: LanguageText,
     ) -> Self {
-        Self { summary, rationale, suggestion }
+        Self {
+            summary,
+            rationale,
+            suggestion,
+        }
     }
 
     /// Creates a template with uniform static text and no language overrides.
@@ -237,7 +248,10 @@ impl SourceSpan {
     /// Creates a `SourceSpan` from an AST node byte range.
     #[must_use]
     pub const fn from_range(range: std::ops::Range<usize>) -> Self {
-        Self { start: range.start, end: range.end }
+        Self {
+            start: range.start,
+            end: range.end,
+        }
     }
 }
 
@@ -259,7 +273,11 @@ impl SourceLocation {
     /// Creates a `SourceLocation` directly from a file path and an AST node.
     #[must_use]
     pub fn from_node(path: impl Into<PathBuf>, node: &crate::code_lint::AstNode<'_>) -> Self {
-        Self::file_span(path, SourceSpan::from_range(node.range()), LineColumn::from_node(node))
+        Self::file_span(
+            path,
+            SourceSpan::from_range(node.range()),
+            LineColumn::from_node(node),
+        )
     }
 
     /// Creates a `SourceLocation` for a file path, byte span, and resolved 1-indexed coordinate.
@@ -322,7 +340,11 @@ impl Diagnostic {
         message: ViolationMessage,
         location: SourceLocation,
     ) -> Self {
-        Self { rule_name, message, location }
+        Self {
+            rule_name,
+            message,
+            location,
+        }
     }
 }
 
@@ -340,7 +362,10 @@ impl LineColumn {
     #[must_use]
     pub fn from_node(node: &crate::code_lint::AstNode<'_>) -> Self {
         let start_pos = node.start_pos();
-        Self { line: start_pos.line() + 1, column: start_pos.column(node) + 1 }
+        Self {
+            line: start_pos.line() + 1,
+            column: start_pos.column(node) + 1,
+        }
     }
 }
 
@@ -353,16 +378,21 @@ impl LineIndex {
     /// Creates a new `LineIndex` for the given file content.
     #[must_use]
     pub fn new(content: &str) -> Self {
-        Self { inner: line_index::LineIndex::new(content) }
+        Self {
+            inner: line_index::LineIndex::new(content),
+        }
     }
 
     /// Resolves a byte offset to a 1-indexed (line, column) coordinate.
     #[must_use]
     pub fn lookup(&self, offset: usize) -> LineColumn {
-        let line_col = self
-            .inner
-            .line_col(line_index::TextSize::from(u32::try_from(offset).unwrap_or(u32::MAX)));
-        LineColumn { line: line_col.line as usize + 1, column: line_col.col as usize + 1 }
+        let line_col = self.inner.line_col(line_index::TextSize::from(
+            u32::try_from(offset).unwrap_or(u32::MAX),
+        ));
+        LineColumn {
+            line: line_col.line as usize + 1,
+            column: line_col.col as usize + 1,
+        }
     }
 }
 
@@ -381,7 +411,10 @@ pub fn print_diagnostics(diagnostics: &[Diagnostic], format: &str) -> anyhow::Re
         // Group diagnostics by location context directly and deterministically
         let mut grouped: BTreeMap<&LocationContext, Vec<&Diagnostic>> = BTreeMap::new();
         for diagnostic in diagnostics {
-            grouped.entry(&diagnostic.location.context).or_default().push(diagnostic);
+            grouped
+                .entry(&diagnostic.location.context)
+                .or_default()
+                .push(diagnostic);
         }
 
         for diags in grouped.into_values() {
@@ -415,7 +448,10 @@ mod tests {
         const ADVICE: LanguageText = LanguageText::new(
             "Parameterize variations for {func}",
             &[
-                (SupportLang::Python, "Use @pytest.mark.parametrize for {func}"),
+                (
+                    SupportLang::Python,
+                    "Use @pytest.mark.parametrize for {func}",
+                ),
                 (SupportLang::Rust, "Use #[rstest] for {func}"),
             ],
         );
@@ -446,8 +482,14 @@ mod tests {
             LanguageText::new(
                 "Split function `{func}` into smaller helpers",
                 &[
-                    (SupportLang::Python, "Refactor `{func}` with helper functions"),
-                    (SupportLang::Rust, "Extract logic from `{func}` into sub-functions"),
+                    (
+                        SupportLang::Python,
+                        "Refactor `{func}` with helper functions",
+                    ),
+                    (
+                        SupportLang::Rust,
+                        "Extract logic from `{func}` into sub-functions",
+                    ),
                 ],
             ),
         );

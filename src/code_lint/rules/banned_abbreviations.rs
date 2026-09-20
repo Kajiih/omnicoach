@@ -2,7 +2,7 @@
 
 use crate::code_lint::CodeRule;
 use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
-use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
+use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -13,7 +13,9 @@ pub type BannedAbbreviationsConfig = DynamicRuleConfig<DenyListConfig>;
 
 /// Static defaults for banned abbreviations.
 const DEFAULT_BANNED: FilterListDefaults = FilterListDefaults {
-    base: &["err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag", "ty"],
+    base: &[
+        "err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag", "ty",
+    ],
     extend: &[],
     // In Rust, `str` is a primitive type keyword rather than an abbreviation, and it is
     // load-bearing in conventional conversion names (`as_str`, `to_str`, `from_str`).

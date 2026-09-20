@@ -128,20 +128,32 @@ mod tests {
     fn validate_rule(rule: &(impl crate::core::Rule + ?Sized), names: &mut HashSet<&'static str>) {
         let name = rule.name().0;
 
-        assert!(names.insert(name), "Duplicate rule name found in registry: {name}");
+        assert!(
+            names.insert(name),
+            "Duplicate rule name found in registry: {name}"
+        );
         assert!(
             is_kebab_case(name),
             "Rule name '{name}' does not match standard kebab-case pattern"
         );
-        assert!(!rule.tags().is_empty(), "Rule {name} must declare at least one domain tag");
+        assert!(
+            !rule.tags().is_empty(),
+            "Rule {name} must declare at least one domain tag"
+        );
 
         let template = rule.violation_template();
         for field in [template.summary, template.rationale, template.suggestion] {
-            for text in std::iter::once(field.base)
-                .chain(field.overrides.iter().map(|(_, override_text)| *override_text))
-            {
+            for text in std::iter::once(field.base).chain(
+                field
+                    .overrides
+                    .iter()
+                    .map(|(_, override_text)| *override_text),
+            ) {
                 let trimmed = text.trim();
-                assert!(!trimmed.is_empty(), "Rule {name} has an empty template field");
+                assert!(
+                    !trimmed.is_empty(),
+                    "Rule {name} has an empty template field"
+                );
                 let is_bare_placeholder = trimmed.starts_with('{')
                     && trimmed.ends_with('}')
                     && !trimmed[1..trimmed.len() - 1].contains(['{', '}']);
@@ -189,7 +201,10 @@ mod tests {
 
         for rule in COMMAND_RULES {
             let name = rule.name().0;
-            assert!(names.insert(name), "Global rule name collision across registries: {name}");
+            assert!(
+                names.insert(name),
+                "Global rule name collision across registries: {name}"
+            );
         }
     }
 

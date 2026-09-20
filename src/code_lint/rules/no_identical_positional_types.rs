@@ -2,7 +2,7 @@
 
 use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, DynamicRuleConfig, LanguageDefaults, Rule, RuleName, ThresholdConfig};
-use crate::diagnostic::{violation_template, Diagnostic, ViolationTemplate};
+use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
@@ -53,7 +53,10 @@ fn is_exempt_dunder(func_name: &str) -> bool {
 /// Returns true if `func_node` is decorated with `@override`, `@overload`, `@abstractmethod`, or `@fixture`.
 fn has_exempt_decorator(func_node: &AstNode<'_>) -> bool {
     crate::code_lint::ast_python::has_decorator(func_node, |terminal| {
-        matches!(terminal, "override" | "overload" | "abstractmethod" | "fixture")
+        matches!(
+            terminal,
+            "override" | "overload" | "abstractmethod" | "fixture"
+        )
     })
 }
 
@@ -68,7 +71,10 @@ fn is_keyword_or_variadic_boundary(param_node: &AstNode<'_>) -> bool {
     }
     kind == "typed_parameter"
         && param_node.children().any(|sub| {
-            matches!(sub.kind().as_ref(), "list_splat_pattern" | "dictionary_splat_pattern")
+            matches!(
+                sub.kind().as_ref(),
+                "list_splat_pattern" | "dictionary_splat_pattern"
+            )
         })
 }
 
@@ -76,20 +82,24 @@ fn is_keyword_or_variadic_boundary(param_node: &AstNode<'_>) -> bool {
 fn extract_parameter_name_and_type(param_node: &AstNode<'_>) -> Option<(String, Option<String>)> {
     match param_node.kind().as_ref() {
         "identifier" => Some((param_node.text().to_string(), None)),
-        "default_parameter" => param_node.field("name").map(|node| (node.text().to_string(), None)),
+        "default_parameter" => param_node
+            .field("name")
+            .map(|node| (node.text().to_string(), None)),
         "typed_parameter" => {
             let param_name = param_node
                 .field("name")
                 .or_else(|| param_node.children().find(|sub| sub.kind() == "identifier"))
                 .map(|node| node.text().to_string())?;
-            let type_annotation =
-                param_node.field("type").map(|type_node| type_node.text().to_string());
+            let type_annotation = param_node
+                .field("type")
+                .map(|type_node| type_node.text().to_string());
             Some((param_name, type_annotation))
         }
         "typed_default_parameter" => {
             let param_name = param_node.field("name")?.text().to_string();
-            let type_annotation =
-                param_node.field("type").map(|type_node| type_node.text().to_string());
+            let type_annotation = param_node
+                .field("type")
+                .map(|type_node| type_node.text().to_string());
             Some((param_name, type_annotation))
         }
         _ => None,
@@ -130,8 +140,9 @@ fn collect_duplicate_type_groups(
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     for (param_name, optional_type) in positional_params {
         if let Some(type_annotation) = optional_type {
-            if let Some((_, existing)) =
-                groups.iter_mut().find(|(seen_type, _)| *seen_type == type_annotation)
+            if let Some((_, existing)) = groups
+                .iter_mut()
+                .find(|(seen_type, _)| *seen_type == type_annotation)
             {
                 existing.push(param_name);
             } else {
@@ -140,7 +151,10 @@ fn collect_duplicate_type_groups(
         }
     }
 
-    groups.into_iter().filter(|(_, params)| params.len() >= 2).collect()
+    groups
+        .into_iter()
+        .filter(|(_, params)| params.len() >= 2)
+        .collect()
 }
 
 /// Evaluates a single Python `"function_definition"` node and returns a consolidated diagnostic if violated.
@@ -182,7 +196,11 @@ fn check_function_definition(
     Some(rule.diagnostic_at_node(
         path,
         &name_node,
-        &[("func", &func_name), ("duplicates", &duplicates), ("params", &all_params)],
+        &[
+            ("func", &func_name),
+            ("duplicates", &duplicates),
+            ("params", &all_params),
+        ],
     ))
 }
 
