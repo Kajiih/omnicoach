@@ -550,7 +550,7 @@ mod tests {
     #[test]
     fn test_is_rule_candidate_language_and_suppression() {
         let config = Config::default();
-        let py_rule = &rules::no_logging_in_except::NoLoggingInExcept;
+        let py_rule = &rules::no_logging_error_in_except::NoLoggingErrorInExcept;
         let suppression_rule = &suppression::BlanketSuppression;
 
         // Python rule on Python file vs Rust file
@@ -638,7 +638,7 @@ mod tests {
         let path = Path::new("main.py");
 
         // Content with suppression directive prefix
-        let with_directive = "# omni:ignore[no-logging-in-except] -- reason\nprint('hi')";
+        let with_directive = "# omni:ignore[no-logging-error-in-except] -- reason\nprint('hi')";
         assert!(has_active_suppression_audit(
             path,
             SupportLang::Python,

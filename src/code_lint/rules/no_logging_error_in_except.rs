@@ -27,11 +27,11 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule struct.
-pub struct NoLoggingInExcept;
+pub struct NoLoggingErrorInExcept;
 
-impl Rule for NoLoggingInExcept {
+impl Rule for NoLoggingErrorInExcept {
     fn name(&self) -> RuleName {
-        RuleName("no-logging-in-except")
+        RuleName("no-logging-error-in-except")
     }
 
     fn tags(&self) -> &'static [Tag] {
@@ -47,7 +47,7 @@ impl Rule for NoLoggingInExcept {
     }
 }
 
-impl CodeRule for NoLoggingInExcept {
+impl CodeRule for NoLoggingErrorInExcept {
     fn check_file(
         &self,
         path: &Path,
@@ -72,7 +72,7 @@ mod tests {
     use indoc::indoc;
 
     #[test]
-    fn test_no_logging_in_except_rule() {
+    fn test_no_logging_error_in_except_rule() {
         let source_violating = indoc! {r#"
             try:
                 x = 1 / 0
@@ -87,14 +87,17 @@ mod tests {
         "#};
 
         let output_violating = crate::test_utils::assert_code_rule_snapshot(
-            &NoLoggingInExcept,
+            &NoLoggingErrorInExcept,
             source_violating,
             "test.py",
         );
-        insta::assert_snapshot!(output_violating, @"[no-logging-in-except] Line 4, Col 5: Banned use of `logging.error` inside except block.");
+        insta::assert_snapshot!(output_violating, @"[no-logging-error-in-except] Line 4, Col 5: Banned use of `logging.error` inside except block.");
 
-        let output_ok =
-            crate::test_utils::assert_code_rule_snapshot(&NoLoggingInExcept, source_ok, "test.py");
+        let output_ok = crate::test_utils::assert_code_rule_snapshot(
+            &NoLoggingErrorInExcept,
+            source_ok,
+            "test.py",
+        );
         assert!(output_ok.is_empty());
     }
 }

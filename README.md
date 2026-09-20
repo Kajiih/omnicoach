@@ -82,7 +82,7 @@ Create a `.omnilint.toml` file at the root of your project workspace to customiz
 
 ```toml
 # Select only specific tags or rule names (optional)
-select = ["Style", "no-logging-in-except"]
+select = ["Style", "no-logging-error-in-except"]
 
 # Globally ignore specific rules (optional)
 ignore = ["single-letter-variable-name"]
@@ -109,7 +109,7 @@ banned_suffixes = ["_list", "_arr", "_dict"]
 *   **`unused-suppression`**: Flags stale suppression directives when no violation occurred on that line or file.
 *   **`unknown-suppression-rule`**: Flags suppression directives targeting unknown or invalid rules.
 *   **`blanket-suppression`**: Bans blanket suppression directives without explicit bracketed rule names.
-*   **`no-logging-in-except`**: Bans using `logging.error` inside Python except blocks (suggests `logging.exception`).
+*   **`no-logging-error-in-except`**: Bans using `logging.error` inside Python except blocks (suggests `logging.exception`).
 *   **`flat-scope-enforced`**: Bans nested function definitions in Python source files.
 *   **`no-identical-positional-types`**: Bans functions with `>= 3` positional parameters (configurable via `[rules.no-identical-positional-types] min_args = N`) where 2 or more share an identical type annotation (suggests keyword-only arguments via `*`).
 *   **`no-env-in-functions`**: Bans direct environment variable reads/writes (`os.getenv`, `os.environ[...]`, `std::env::var`, etc.) inside functions and methods outside of startup/config boundaries (`main`, `from_env`, `load_env`, or module/static scope).

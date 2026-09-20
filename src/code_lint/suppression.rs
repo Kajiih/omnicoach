@@ -657,7 +657,7 @@ mod tests {
     #[test]
     fn test_file_level_unused_suppression_flagged() {
         let content = indoc::indoc! {r"
-            # omni:disable-file [no-logging-in-except] -- unused file disable
+            # omni:disable-file [no-logging-error-in-except] -- unused file disable
             def clean():
                 pass
         "};

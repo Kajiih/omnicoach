@@ -96,7 +96,7 @@ pub const CODE_RULES: &[&dyn crate::code_lint::CodeRule] = &[
     &crate::code_lint::rules::no_sleep_in_tests::NoZeroSleepInTests,
     &crate::code_lint::rules::max_test_assertions::MaxTestAssertions,
     &crate::code_lint::rules::no_assertion_packing::NoAssertionPacking,
-    &crate::code_lint::rules::no_logging_in_except::NoLoggingInExcept,
+    &crate::code_lint::rules::no_logging_error_in_except::NoLoggingErrorInExcept,
     &crate::code_lint::rules::flat_scope_enforced::FlatScopeEnforced,
     &crate::code_lint::rules::single_letter_variable_name::SingleLetterVariableName,
     &crate::code_lint::rules::banned_abbreviations::BannedAbbreviations,

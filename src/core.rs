@@ -309,7 +309,7 @@ pub const CONFIG_FILE_NAME: &str = ".omnilint.toml";
 
 /// Common metadata shared by all lint rules.
 pub trait Rule: Send + Sync {
-    /// Returns the rule name (e.g., `RuleName("no-logging-in-except")`).
+    /// Returns the rule name (e.g., `RuleName("no-logging-error-in-except")`).
     #[must_use]
     fn name(&self) -> RuleName;
 
