@@ -159,20 +159,6 @@ fn check_rust_assertion_macro(macro_node: &AstNode<'_>, path: &Path) -> Option<D
     None
 }
 
-/// Recursively inspects a Rust AST for packed assertion macros.
-fn check_rust_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: &Path) {
-    if node.kind() == "macro_invocation"
-        && let Some(diagnostic) = check_rust_assertion_macro(node, path)
-    {
-        diagnostics.push(diagnostic);
-        return;
-    }
-
-    for child in node.children() {
-        check_rust_node(&child, diagnostics, path);
-    }
-}
-
 /// Evaluates a single Python `assert_statement` node for packed conditions.
 fn check_python_assert_statement(assert_node: &AstNode<'_>, path: &Path) -> Option<Diagnostic> {
     // 1. Compound boolean condition: assert a and b
@@ -206,20 +192,6 @@ fn check_python_assert_statement(assert_node: &AstNode<'_>, path: &Path) -> Opti
     None
 }
 
-/// Recursively inspects a Python AST for packed `assert` statements.
-fn check_python_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: &Path) {
-    if node.kind() == "assert_statement"
-        && let Some(diagnostic) = check_python_assert_statement(node, path)
-    {
-        diagnostics.push(diagnostic);
-        return;
-    }
-
-    for child in node.children() {
-        check_python_node(&child, diagnostics, path);
-    }
-}
-
 impl CodeRule for NoAssertionPacking {
     fn target(&self) -> RuleTarget {
         RuleTarget::TestsOnly
@@ -231,12 +203,20 @@ impl CodeRule for NoAssertionPacking {
         grep: &AstGrep<SourceDoc>,
         _config: &Config,
     ) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
         match grep.lang() {
-            SupportLang::Rust => check_rust_node(&grep.root(), &mut diagnostics, path),
-            _ => check_python_node(&grep.root(), &mut diagnostics, path),
+            SupportLang::Rust => grep
+                .root()
+                .dfs()
+                .filter(|node| node.kind() == "macro_invocation")
+                .filter_map(|node| check_rust_assertion_macro(&node, path))
+                .collect(),
+            _ => grep
+                .root()
+                .dfs()
+                .filter(|node| node.kind() == "assert_statement")
+                .filter_map(|node| check_python_assert_statement(&node, path))
+                .collect(),
         }
-        diagnostics
     }
 }
 

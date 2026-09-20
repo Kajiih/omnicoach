@@ -4,21 +4,9 @@ use crate::code_lint::CodeRule;
 use crate::core::{Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
-use ast_grep_core::{AstGrep, Doc, Node};
+use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::path::Path;
-
-/// Helper to check if a node is nested inside a `function_definition`.
-fn has_function_ancestor<D: Doc>(node: &Node<'_, D>) -> bool {
-    let mut parent = node.parent();
-    while let Some(ancestor) = parent {
-        if ancestor.kind() == "function_definition" {
-            return true;
-        }
-        parent = ancestor.parent();
-    }
-    false
-}
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Nested function definition `{func_name}` is discouraged.",
@@ -58,25 +46,20 @@ impl CodeRule for FlatScopeEnforced {
         grep: &AstGrep<crate::code_lint::SourceDoc>,
         _config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-
-        let root = grep.root();
-        let matches_func = root.find_all("def $NAME($$$ARGS): $$$BODY");
-        for matched_node in matches_func {
-            if has_function_ancestor(&matched_node) {
-                let func_name = matched_node
+        grep.root()
+            .find_all("def $NAME($$$ARGS): $$$BODY")
+            .filter(|func| {
+                func.ancestors()
+                    .any(|ancestor| ancestor.kind() == "function_definition")
+            })
+            .map(|func| {
+                let func_name = func
                     .field("name")
                     .map(|name_node| name_node.text())
                     .unwrap_or_default();
-
-                diagnostics.push(self.diagnostic_at_node(
-                    path,
-                    &matched_node,
-                    &[("func_name", &func_name)],
-                ));
-            }
-        }
-        diagnostics
+                self.diagnostic_at_node(path, &func, &[("func_name", &func_name)])
+            })
+            .collect()
     }
 }
 

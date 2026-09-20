@@ -4,21 +4,9 @@ use crate::code_lint::CodeRule;
 use crate::core::{Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
-use ast_grep_core::{AstGrep, Doc, Node};
+use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::path::Path;
-
-/// Helper to check if a node is nested inside an `except_clause`.
-fn has_except_ancestor<D: Doc>(node: &Node<'_, D>) -> bool {
-    let mut parent = node.parent();
-    while let Some(ancestor) = parent {
-        if ancestor.kind() == "except_clause" {
-            return true;
-        }
-        parent = ancestor.parent();
-    }
-    false
-}
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Banned use of `logging.error` inside except block.",
@@ -54,15 +42,14 @@ impl CodeRule for NoLoggingErrorInExcept {
         grep: &AstGrep<crate::code_lint::SourceDoc>,
         _config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        let root = grep.root();
-        let matches = root.find_all("logging.error($$$ARGS)");
-        for matched_node in matches {
-            if has_except_ancestor(&matched_node) {
-                diagnostics.push(self.diagnostic_at_node(path, &matched_node, &[]));
-            }
-        }
-        diagnostics
+        grep.root()
+            .find_all("logging.error($$$ARGS)")
+            .filter(|call| {
+                call.ancestors()
+                    .any(|ancestor| ancestor.kind() == "except_clause")
+            })
+            .map(|call| self.diagnostic_at_node(path, &call, &[]))
+            .collect()
     }
 }
 

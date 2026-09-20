@@ -126,9 +126,8 @@ fn enclosing_non_exempt_function_name(node: &AstNode<'_>, lang: SupportLang) -> 
     };
 
     let mut nearest_function_name: Option<String> = None;
-    let mut current = node.parent();
 
-    while let Some(ancestor) = current {
+    for ancestor in node.ancestors() {
         if ancestor.kind() == func_kind
             && let Some(name_node) = ancestor.field("name")
         {
@@ -140,7 +139,6 @@ fn enclosing_non_exempt_function_name(node: &AstNode<'_>, lang: SupportLang) -> 
                 nearest_function_name = Some(func_name);
             }
         }
-        current = ancestor.parent();
     }
 
     nearest_function_name
@@ -161,19 +159,6 @@ fn python_environ_subscript_label(node: &AstNode<'_>) -> Option<&'static str> {
             (obj.text() == "os" && attr.text() == "environ").then_some("os.environ[...]")
         }
         _ => None,
-    }
-}
-
-/// Recursively collects Python `os.environ[...]` and `environ[...]` subscript expressions.
-fn collect_python_environ_subscripts<'a>(
-    node: &AstNode<'a>,
-    out: &mut Vec<(AstNode<'a>, &'static str)>,
-) {
-    if let Some(label) = python_environ_subscript_label(node) {
-        out.push((node.clone(), label));
-    }
-    for child in node.children() {
-        collect_python_environ_subscripts(&child, out);
     }
 }
 
@@ -206,10 +191,11 @@ impl CodeRule for NoEnvInFunctions {
         }
 
         if lang == SupportLang::Python {
-            let mut subscripts = Vec::new();
-            collect_python_environ_subscripts(&grep.root(), &mut subscripts);
-            for (subscript_node, label) in subscripts {
-                if let Some(func_name) = enclosing_non_exempt_function_name(&subscript_node, lang) {
+            for subscript_node in grep.root().dfs().filter(|node| node.kind() == "subscript") {
+                if let Some(label) = python_environ_subscript_label(&subscript_node)
+                    && let Some(func_name) =
+                        enclosing_non_exempt_function_name(&subscript_node, lang)
+                {
                     diagnostics.push(self.diagnostic_at_node(
                         path,
                         &subscript_node,

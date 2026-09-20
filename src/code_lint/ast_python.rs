@@ -307,14 +307,8 @@ pub fn find_enclosing_with_item<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
 /// Traverses upward from a node to find its nearest enclosing `with_statement`.
 #[must_use]
 pub fn find_enclosing_with_statement<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
-    let mut curr = node.parent();
-    while let Some(parent) = curr {
-        if parent.kind() == "with_statement" {
-            return Some(parent);
-        }
-        curr = parent.parent();
-    }
-    None
+    node.ancestors()
+        .find(|parent| parent.kind() == "with_statement")
 }
 
 #[cfg(test)]
