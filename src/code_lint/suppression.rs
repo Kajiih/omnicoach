@@ -234,20 +234,14 @@ impl SuppressionTracker {
     /// Parses suppression directives from the AST and file content.
     #[must_use]
     pub fn from_ast(grep: &AstGrep<SourceDoc>, content: &str) -> Self {
-        let mut comment_nodes = Vec::new();
-        crate::code_lint::comments::collect_comment_nodes(&grep.root(), &mut comment_nodes);
-
-        let mut directives = Vec::new();
-
-        for comment_node in comment_nodes {
-            let text = comment_node.text();
-            let span = SourceSpan::from_range(comment_node.range());
-            let coord = LineColumn::from_node(&comment_node);
-
-            if let Some(directive) = Self::parse_comment_text(&text, span, coord, content) {
-                directives.push(directive);
-            }
-        }
+        let directives = crate::code_lint::comments::collect_comment_nodes(&grep.root())
+            .filter_map(|comment_node| {
+                let text = comment_node.text();
+                let span = SourceSpan::from_range(comment_node.range());
+                let coord = LineColumn::from_node(&comment_node);
+                Self::parse_comment_text(&text, span, coord, content)
+            })
+            .collect();
 
         Self { directives }
     }

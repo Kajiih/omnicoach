@@ -262,19 +262,15 @@ fn is_conditional_test_attribute(attr_text: &str) -> bool {
 
 /// Returns true if `node` is preceded by an `attribute_item` sibling matching `predicate`.
 fn has_matching_attribute(node: &AstNode<'_>, predicate: fn(&str) -> bool) -> bool {
-    let mut prev = node.prev();
-    while let Some(sibling) = prev {
-        let kind = sibling.kind();
-        if kind == "attribute_item" {
-            if predicate(&sibling.text()) {
-                return true;
-            }
-        } else if kind != "line_comment" && kind != "block_comment" {
-            break;
-        }
-        prev = sibling.prev();
-    }
-    false
+    std::iter::successors(node.prev(), AstNode::prev)
+        .take_while(|sibling| {
+            matches!(
+                sibling.kind().as_ref(),
+                "attribute_item" | "line_comment" | "block_comment"
+            )
+        })
+        .filter(|sibling| sibling.kind() == "attribute_item")
+        .any(|sibling| predicate(&sibling.text()))
 }
 
 /// Returns true if a Rust item is preceded by a test attribute (`#[test]`, `#[tokio::test]`, `#[rstest]`, etc.).

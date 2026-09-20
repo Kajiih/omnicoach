@@ -132,24 +132,17 @@ fn is_complex_jj_revset(rev: &str) -> bool {
         || rev.chars().any(|c| matches!(c, '|' | '&' | '~' | ' '))
 }
 
-fn get_jj_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
-    let mut cmd = Command::new("jj");
-    cmd.current_dir(repo_root);
-    cmd.arg("diff").arg("--git");
-    if is_complex_jj_revset(rev) {
-        cmd.arg("-r").arg(rev);
-    } else {
-        cmd.arg("--from").arg(rev);
-    }
+fn run_vcs_command(
+    mut cmd: Command,
+    name: &'static str,
+    binary: &'static str,
+) -> Result<String, DiffError> {
     let output = cmd.output().map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
-            DiffError::CliNotFound {
-                name: "Jujutsu",
-                binary: "jj",
-            }
+            DiffError::CliNotFound { name, binary }
         } else {
             DiffError::CliExecution {
-                binary: "jj",
+                binary,
                 source: error,
             }
         }
@@ -158,7 +151,7 @@ fn get_jj_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
     if !output.status.success() {
         let error_message = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(DiffError::CommandFailed {
-            binary: "jj",
+            binary,
             message: error_message,
         });
     }
@@ -166,41 +159,28 @@ fn get_jj_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn get_git_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
-    let output = Command::new("git")
-        .current_dir(repo_root)
-        .args([
-            "-c",
-            "core.quotepath=false",
-            "diff",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
-            rev,
-        ])
-        .output()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                DiffError::CliNotFound {
-                    name: "Git",
-                    binary: "git",
-                }
-            } else {
-                DiffError::CliExecution {
-                    binary: "Git",
-                    source: error,
-                }
-            }
-        })?;
-
-    if !output.status.success() {
-        let error_message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(DiffError::CommandFailed {
-            binary: "Git",
-            message: error_message,
-        });
+fn get_jj_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
+    let mut cmd = Command::new("jj");
+    cmd.current_dir(repo_root).arg("diff").arg("--git");
+    if is_complex_jj_revset(rev) {
+        cmd.arg("-r").arg(rev);
+    } else {
+        cmd.arg("--from").arg(rev);
     }
+    run_vcs_command(cmd, "Jujutsu", "jj")
+}
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+fn get_git_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(repo_root).args([
+        "-c",
+        "core.quotepath=false",
+        "diff",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        rev,
+    ]);
+    run_vcs_command(cmd, "Git", "git")
 }
 
 /// Commits a parsed file's changed line numbers into `changed_lines` if the file was not deleted.
@@ -279,9 +259,8 @@ fn parse_git_diff(content: &str) -> HashMap<PathBuf, HashSet<usize>> {
 fn parse_hunk_header(line: &str) -> Option<usize> {
     // Example: @@ -1,3 +4,5 @@
     // We want to extract '4' from '+4,5'
-    let parts: Vec<&str> = line.split("@@").collect();
-    let header = parts.get(1)?;
-    let new_file_part = header.split('+').nth(1)?; // "4,5 "
+    let header = line.split("@@").nth(1)?;
+    let new_file_part = header.split('+').nth(1)?;
     let new_start_text = new_file_part.split(',').next()?.trim();
     new_start_text.parse().ok()
 }

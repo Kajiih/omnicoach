@@ -204,25 +204,6 @@ fn check_function_definition(
     ))
 }
 
-/// Recursively traverses the AST to check all Python function definitions.
-fn check_functions_recursive(
-    rule: &NoIdenticalPositionalTypes,
-    node: &AstNode<'_>,
-    path: &Path,
-    min_args: usize,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    if node.kind() == "function_definition"
-        && let Some(diagnostic) = check_function_definition(rule, node, path, min_args)
-    {
-        diagnostics.push(diagnostic);
-    }
-
-    for child in node.children() {
-        check_functions_recursive(rule, &child, path, min_args, diagnostics);
-    }
-}
-
 impl CodeRule for NoIdenticalPositionalTypes {
     fn target(&self) -> RuleTarget {
         RuleTarget::SourceOnly
@@ -238,9 +219,11 @@ impl CodeRule for NoIdenticalPositionalTypes {
         let rule_config: NoIdenticalPositionalTypesConfig = config.get_rule_config(self.name().0);
         let min_args = rule_config.effective_min_for_lang(lang, &DEFAULT_MIN_ARGS);
 
-        let mut diagnostics = Vec::new();
-        check_functions_recursive(self, &grep.root(), path, min_args, &mut diagnostics);
-        diagnostics
+        grep.root()
+            .dfs()
+            .filter(|node| node.kind() == "function_definition")
+            .filter_map(|node| check_function_definition(self, &node, path, min_args))
+            .collect()
     }
 }
 

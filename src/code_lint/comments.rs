@@ -8,16 +8,14 @@ use crate::code_lint::{AstNode, SourceDoc};
 use ast_grep_core::AstGrep;
 use std::collections::HashMap;
 
-/// Recursively collects all Tree-sitter comment nodes in source order.
-pub fn collect_comment_nodes<'a>(node: &AstNode<'a>, comments: &mut Vec<AstNode<'a>>) {
-    let kind = node.kind();
-    if kind == "comment" || kind == "line_comment" || kind == "block_comment" {
-        comments.push(node.clone());
-        return;
-    }
-    for child in node.children() {
-        collect_comment_nodes(&child, comments);
-    }
+/// Collects all Tree-sitter comment nodes in source order.
+pub fn collect_comment_nodes<'a>(node: &AstNode<'a>) -> impl Iterator<Item = AstNode<'a>> {
+    node.dfs().filter(|curr| {
+        matches!(
+            curr.kind().as_ref(),
+            "comment" | "line_comment" | "block_comment"
+        )
+    })
 }
 
 /// Strips leading and trailing comment delimiters (`//`, `#`, `/* ... */`).
@@ -184,11 +182,8 @@ impl<'a> CommentIndex<'a> {
         let root = grep.root();
         let root_text = root.text();
         let source = root_text.as_ref();
-        let mut comment_nodes = Vec::new();
-        collect_comment_nodes(&root, &mut comment_nodes);
-
-        let mut comments_by_line = HashMap::with_capacity(comment_nodes.len());
-        for node in comment_nodes {
+        let mut comments_by_line = HashMap::new();
+        for node in collect_comment_nodes(&root) {
             let start_line = node.start_pos().line() + 1;
             let end_line = node.end_pos().line() + 1;
             let node_offset = node.range().start;

@@ -33,28 +33,30 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 fn split_segments(name: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let mut current = String::new();
+    let mut previous_char: Option<char> = None;
 
-    let chars: Vec<char> = name.chars().collect();
-    for i in 0..chars.len() {
-        let c = chars[i];
-        if c == '_' {
+    for character in name.chars() {
+        if character == '_' {
             if !current.is_empty() {
                 segments.push(current.to_lowercase());
-                current = String::new();
+                current.clear();
             }
+            previous_char = None;
             continue;
         }
 
         // Split at lowercase/digit -> uppercase transition
-        if i > 0 && c.is_uppercase() {
-            let prev = chars[i - 1];
-            if (prev.is_lowercase() || prev.is_numeric()) && !current.is_empty() {
-                segments.push(current.to_lowercase());
-                current = String::new();
-            }
+        if let Some(prev) = previous_char
+            && character.is_uppercase()
+            && (prev.is_lowercase() || prev.is_numeric())
+            && !current.is_empty()
+        {
+            segments.push(current.to_lowercase());
+            current.clear();
         }
 
-        current.push(c);
+        current.push(character);
+        previous_char = Some(character);
     }
 
     if !current.is_empty() {

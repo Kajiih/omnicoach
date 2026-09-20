@@ -36,20 +36,11 @@ impl InterceptedCommand {
     #[must_use]
     pub fn parse_all(raw_string: &str) -> Vec<Self> {
         let grep = AstGrep::new(raw_string, SupportLang::Bash);
-        let mut commands = Vec::new();
-        Self::collect_commands(&grep.root(), raw_string, &mut commands);
-        commands
-    }
-
-    fn collect_commands(node: &AstNode<'_>, raw_string: &str, commands: &mut Vec<Self>) {
-        if node.kind() == "command"
-            && let Some(cmd) = Self::parse_single(node, raw_string)
-        {
-            commands.push(cmd);
-        }
-        for child in node.children() {
-            Self::collect_commands(&child, raw_string, commands);
-        }
+        grep.root()
+            .dfs()
+            .filter(|node| node.kind() == "command")
+            .filter_map(|node| Self::parse_single(&node, raw_string))
+            .collect()
     }
 
     fn parse_single(node: &AstNode<'_>, raw_string: &str) -> Option<Self> {
