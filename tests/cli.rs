@@ -318,3 +318,69 @@ fn test_self_dogfooding_code_lint() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn test_code_lint_json_format_deterministic() {
+    let violating_code = indoc! {r"
+        def outer():
+            def inner():
+                pass
+    "};
+    let temp_file = create_temp_file(".py", violating_code);
+    let output = run_and_sanitize_cli(
+        "omni-code-lint",
+        &["--format", "json", temp_file.path().to_str().unwrap()],
+        None,
+        &[temp_file.path()],
+    );
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn test_code_lint_json_format_parallel_multi_run_deterministic() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let py_code_1 = indoc! {r"
+        def func_a():
+            def nested_1():
+                pass
+    "};
+    let py_code_2 = indoc! {r"
+        def func_b():
+            def nested_2():
+                pass
+    "};
+    let py_code_3 = indoc! {r"
+        def func_c():
+            def nested_3():
+                pass
+    "};
+
+    fs::write(temp_dir.path().join("a.py"), py_code_1).unwrap();
+    fs::write(temp_dir.path().join("b.py"), py_code_2).unwrap();
+    fs::write(temp_dir.path().join("c.py"), py_code_3).unwrap();
+
+    let baseline = run_and_sanitize_cli(
+        "omni-code-lint",
+        &["--format", "json", temp_dir.path().to_str().unwrap()],
+        None,
+        &[temp_dir.path()],
+    );
+
+    assert!(baseline.contains("nested_1"));
+    assert!(baseline.contains("nested_2"));
+    assert!(baseline.contains("nested_3"));
+
+    for iteration in 1..=5 {
+        let run_output = run_and_sanitize_cli(
+            "omni-code-lint",
+            &["--format", "json", temp_dir.path().to_str().unwrap()],
+            None,
+            &[temp_dir.path()],
+        );
+        assert_eq!(
+            baseline, run_output,
+            "JSON output diverged on iteration {iteration}; output must be 100% deterministic"
+        );
+    }
+}

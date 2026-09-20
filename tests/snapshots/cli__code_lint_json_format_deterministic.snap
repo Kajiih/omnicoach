@@ -1,0 +1,28 @@
+---
+source: tests/cli.rs
+expression: output
+---
+--- exit code ---
+1
+--- stdout ---
+[
+  {
+    "rule_name": "flat-scope-enforced",
+    "message": {
+      "summary": "Nested function definition `inner` is discouraged.",
+      "rationale": "Nested functions increase cognitive complexity and reduce testability.",
+      "suggestion": "Move `inner` to the module level or convert to a private helper."
+    },
+    "location": {
+      "context": "[TEMP_PATH]",
+      "span": {
+        "start": 17,
+        "end": 42
+      },
+      "line": 2,
+      "column": 5
+    }
+  }
+]
+
+--- stderr ---

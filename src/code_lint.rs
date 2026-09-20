@@ -10,7 +10,10 @@ use crate::core::Config;
 use crate::diagnostic::Diagnostic;
 use ast_grep_core::AstGrep;
 pub use ast_grep_language::SupportLang;
-use std::path::Path;
+use rayon::prelude::*;
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Concrete document type used across code linting rules.
 pub type SourceDoc = ast_grep_core::tree_sitter::StrDoc<SupportLang>;
@@ -319,5 +322,155 @@ pub fn is_trait_impl_member(node: &AstNode<'_>, lang: SupportLang) -> bool {
                 && ast_python::has_override_decorator(&item)
         }
         _ => false,
+    }
+}
+
+/// Configuration options for the codebase linting pipeline.
+#[derive(Debug, Clone, Default)]
+pub struct LintOptions {
+    /// File or directory paths to inspect.
+    pub paths: Vec<PathBuf>,
+    /// Run linter only on files/lines changed in VCS.
+    pub diff: bool,
+    /// Run linter comparing against a custom revision/commit (implies diff).
+    pub diff_rev: Option<String>,
+}
+
+impl LintOptions {
+    /// Creates a new `LintOptions` with default values.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// A target file scheduled for static analysis.
+#[derive(Debug)]
+struct LintTarget {
+    path: PathBuf,
+    changed_lines: Option<HashSet<usize>>,
+}
+
+/// Executes codebase linting over the specified targets using parallel analysis.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - A specified input path does not exist on disk.
+/// - VCS diff detection fails in `--diff` mode.
+/// - A source file cannot be read from disk.
+pub fn run_code_lint(options: &LintOptions, config: &Config) -> anyhow::Result<Vec<Diagnostic>> {
+    let targets = collect_targets(options)?;
+
+    let nested_diagnostics: Vec<Vec<Diagnostic>> = targets
+        .into_par_iter()
+        .map(|target| lint_single_file(&target.path, config, target.changed_lines.as_ref()))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    let all_diagnostics = nested_diagnostics.into_iter().flatten().collect();
+    Ok(all_diagnostics)
+}
+
+fn collect_targets(options: &LintOptions) -> anyhow::Result<Vec<LintTarget>> {
+    let enable_diff = options.diff || options.diff_rev.is_some();
+    let effective_paths = if options.paths.is_empty() {
+        vec![PathBuf::from(".")]
+    } else {
+        options.paths.clone()
+    };
+
+    if enable_diff {
+        for path in &effective_paths {
+            if !path.exists() {
+                anyhow::bail!("Path does not exist: {}", path.display());
+            }
+        }
+
+        let (vcs_type, resolved_rev, changes) =
+            crate::diff::detect_vcs_diff(options.diff_rev.as_deref())?;
+
+        eprintln!("Info: Comparing against {vcs_type:?} revision '{resolved_rev}'.");
+
+        let target_paths: Vec<PathBuf> = effective_paths
+            .iter()
+            .map(|path| path.canonicalize().unwrap_or_else(|_| path.clone()))
+            .collect();
+
+        let mut targets = Vec::new();
+        for (file_path, changed_lines) in changes {
+            let is_target = target_paths.iter().any(|target| {
+                if target.is_file() {
+                    target == &file_path
+                } else {
+                    file_path.starts_with(target)
+                }
+            });
+
+            if is_target && file_path.is_file() && detect_language(&file_path).is_some() {
+                targets.push(LintTarget {
+                    path: file_path,
+                    changed_lines: Some(changed_lines),
+                });
+            }
+        }
+        Ok(targets)
+    } else {
+        let mut targets = Vec::new();
+        for path in &effective_paths {
+            if path.is_file() {
+                if detect_language(path).is_some() {
+                    targets.push(LintTarget {
+                        path: path.clone(),
+                        changed_lines: None,
+                    });
+                }
+            } else if path.is_dir() {
+                collect_directory_candidates(path, &mut targets);
+            } else {
+                anyhow::bail!("Path does not exist: {}", path.display());
+            }
+        }
+        Ok(targets)
+    }
+}
+
+fn collect_directory_candidates(dir: &Path, targets: &mut Vec<LintTarget>) {
+    for entry in ignore::WalkBuilder::new(dir)
+        .require_git(false)
+        .build()
+        .flatten()
+    {
+        let path = entry.path();
+        if path.is_file() && detect_language(path).is_some() {
+            targets.push(LintTarget {
+                path: path.to_path_buf(),
+                changed_lines: None,
+            });
+        }
+    }
+}
+
+fn lint_single_file(
+    path: &Path,
+    config: &Config,
+    changed_lines: Option<&HashSet<usize>>,
+) -> anyhow::Result<Vec<Diagnostic>> {
+    if !path.is_file() || detect_language(path).is_none() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(path)
+        .map_err(|error| anyhow::anyhow!("Failed to read file '{}': {}", path.display(), error))?;
+
+    let diags = lint_file(path, &content, config);
+
+    if let Some(changed) = changed_lines {
+        let filtered = diags
+            .into_iter()
+            .filter(|diagnostic| changed.contains(&diagnostic.location.line))
+            .collect();
+        Ok(filtered)
+    } else {
+        Ok(diags)
     }
 }

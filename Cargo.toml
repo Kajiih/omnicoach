@@ -33,18 +33,19 @@ ast-grep-core = "0.45" # SOTA structural search using tree-sitter
 ast-grep-language = "0.45"
 shell-words = "1.1" # Safe shell tokenization for cmd guard
 serde_json = "1.0"
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 ignore = "0.4"
 line-index = "0.1.2"
 strum = { version = "0.28", features = ["derive"] }
 thiserror = "2.0"
 globset = "0.4"
+rayon = "1.12"
 
 [dev-dependencies]
 assert_cmd = "2.0"
 indoc = "2.0.7"
-insta = "1.38.0"
+insta = "1.48"
 predicates = "3.0"
 pretty_assertions = "1.4.0"
 rstest = "0.27"
-tempfile = "3.10.1"
+tempfile = "3.27"

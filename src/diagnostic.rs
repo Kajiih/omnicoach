@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 /// Detailed explanation and description of a rule violation.
-#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ViolationMessage {
     /// A short summary of the violation.
     pub summary: String,
@@ -230,7 +230,7 @@ impl Serialize for LocationContext {
 }
 
 /// A byte range span (start, end) inside a source file.
-#[derive(Debug, Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SourceSpan {
     /// Start byte offset (inclusive).
     pub start: usize,
@@ -257,7 +257,7 @@ impl SourceSpan {
 
 // TODO: Should we use line-index of the line/column?
 /// Represents a location span and 1-indexed coordinate inside a source file or linter context.
-#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SourceLocation {
     /// The file path or virtual context name.
     pub context: LocationContext,
@@ -311,7 +311,9 @@ impl SourceLocation {
 }
 
 /// The verbose name of a rule (e.g., "no-edits-on-described-commits").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize, PartialOrd, Ord,
+)]
 #[serde(transparent)]
 pub struct RuleName(pub &'static str);
 
@@ -322,7 +324,7 @@ impl std::fmt::Display for RuleName {
 }
 
 /// An alert diagnostic containing a rule violation payload and its source location.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     /// The rule name (e.g., "no-edits-on-described-commits").
     pub rule_name: RuleName,
@@ -330,6 +332,21 @@ pub struct Diagnostic {
     pub message: ViolationMessage,
     /// The source location where the violation occurred.
     pub location: SourceLocation,
+}
+
+impl Ord for Diagnostic {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.location
+            .cmp(&other.location)
+            .then_with(|| self.rule_name.cmp(&other.rule_name))
+            .then_with(|| self.message.cmp(&other.message))
+    }
+}
+
+impl PartialOrd for Diagnostic {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl Diagnostic {
@@ -404,36 +421,23 @@ impl LineIndex {
 ///
 /// Returns an error if JSON serialization fails.
 pub fn print_diagnostics(diagnostics: &[Diagnostic], format: &str) -> anyhow::Result<()> {
+    let mut sorted: Vec<&Diagnostic> = diagnostics.iter().collect();
+    sorted.sort_unstable();
+
     if format == "json" {
-        println!("{}", serde_json::to_string_pretty(diagnostics)?);
+        println!("{}", serde_json::to_string_pretty(&sorted)?);
     } else {
-        use std::collections::BTreeMap;
-        // Group diagnostics by location context directly and deterministically
-        let mut grouped: BTreeMap<&LocationContext, Vec<&Diagnostic>> = BTreeMap::new();
-        for diagnostic in diagnostics {
-            grouped
-                .entry(&diagnostic.location.context)
-                .or_default()
-                .push(diagnostic);
-        }
+        for diagnostic in sorted {
+            let location_header = diagnostic.location.format_header();
 
-        for diags in grouped.into_values() {
-            let mut sorted_diags = diags;
-            // Sort diagnostics by their span start position to ensure stable/orderly reporting within each context
-            sorted_diags.sort_by_key(|diagnostic| diagnostic.location.span.start);
-
-            for diagnostic in sorted_diags {
-                let location_header = diagnostic.location.format_header();
-
-                println!(
-                    "{}: [{}] {}\n  Rationale: {}\n  Suggestion: {}\n",
-                    location_header,
-                    diagnostic.rule_name,
-                    diagnostic.message.summary,
-                    diagnostic.message.rationale,
-                    diagnostic.message.suggestion
-                );
-            }
+            println!(
+                "{}: [{}] {}\n  Rationale: {}\n  Suggestion: {}\n",
+                location_header,
+                diagnostic.rule_name,
+                diagnostic.message.summary,
+                diagnostic.message.rationale,
+                diagnostic.message.suggestion
+            );
         }
     }
     Ok(())
@@ -591,5 +595,44 @@ mod tests {
             }
         );
         assert_eq!(virtual_loc.format_header(), "VCS_Context:2:1");
+    }
+
+    #[test]
+    fn test_diagnostic_canonical_ordering() {
+        let message_a = ViolationMessage::new("Summary A", "Rationale A", "Suggestion A");
+        let message_b = ViolationMessage::new("Summary B", "Rationale B", "Suggestion B");
+
+        let diag1 = Diagnostic::new(
+            RuleName("rule-b"),
+            message_a.clone(),
+            SourceLocation::file_span(
+                "src/b.rs",
+                SourceSpan::new(10, 20),
+                LineColumn { line: 2, column: 1 },
+            ),
+        );
+        let diag2 = Diagnostic::new(
+            RuleName("rule-a"),
+            message_a,
+            SourceLocation::file_span(
+                "src/a.rs",
+                SourceSpan::new(5, 15),
+                LineColumn { line: 1, column: 1 },
+            ),
+        );
+        let diag3 = Diagnostic::new(
+            RuleName("rule-a"),
+            message_b,
+            SourceLocation::file_span(
+                "src/a.rs",
+                SourceSpan::new(5, 15),
+                LineColumn { line: 1, column: 1 },
+            ),
+        );
+
+        let mut diagnostics = vec![diag1.clone(), diag3.clone(), diag2.clone()];
+        diagnostics.sort_unstable();
+
+        assert_eq!(diagnostics, vec![diag2, diag3, diag1]);
     }
 }
