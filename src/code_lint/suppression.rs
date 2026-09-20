@@ -169,7 +169,7 @@ impl CodeRule for BlanketSuppression {
 
 /// The placement scope of a parsed suppression directive.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DirectivePlacement {
+enum DirectivePlacement {
     /// Directive placed on the same line as code (suppresses violations on `line`).
     SameLine {
         /// The 1-indexed line number where the directive is placed.
@@ -206,28 +206,28 @@ fn compute_effective_target_line(content: &str, raw_line: usize) -> usize {
 
 /// A parsed omni suppression directive comment.
 #[derive(Debug, Clone)]
-pub struct ParsedDirective {
+struct ParsedDirective {
     /// The placement scope of the directive.
-    pub placement: DirectivePlacement,
+    placement: DirectivePlacement,
     /// The byte span of the comment in the source file.
-    pub span: SourceSpan,
+    span: SourceSpan,
     /// The 1-indexed line and column coordinate where the directive comment resides.
-    pub coord: LineColumn,
+    coord: LineColumn,
     /// Rule names targeted by the directive (e.g. `["single-letter-variable-name"]`).
-    pub target_rules: Vec<String>,
+    target_rules: Vec<String>,
     /// Optional explanatory reason provided after `--`.
-    pub reason: Option<String>,
+    reason: Option<String>,
     /// Whether the directive omitted bracketed rule names (`[...]`).
-    pub is_blanket: bool,
+    is_blanket: bool,
     /// Counter of violations matched and suppressed for each target rule.
-    pub matched_count: HashMap<String, usize>,
+    matched_count: HashMap<String, usize>,
 }
 
 /// Tracker responsible for collecting directives, filtering diagnostics, and auditing hygiene.
 #[derive(Debug, Default)]
 pub struct SuppressionTracker {
     /// Collected suppression directives in the file.
-    pub directives: Vec<ParsedDirective>,
+    directives: Vec<ParsedDirective>,
 }
 
 fn collect_comments<'a>(node: &AstNode<'a>, comments: &mut Vec<AstNode<'a>>) {

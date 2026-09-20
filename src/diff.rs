@@ -64,7 +64,7 @@ pub enum VcsType {
 /// Walks up from the current working directory to locate the repository root
 /// and determine the active VCS type.
 #[must_use]
-pub fn find_repo_root() -> Option<(PathBuf, VcsType)> {
+fn find_repo_root() -> Option<(PathBuf, VcsType)> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
         if dir.join(".jj").is_dir() {
@@ -237,7 +237,7 @@ fn extract_diff_header_path(line: &str) -> Option<PathBuf> {
 /// Parses a unified git-compatible diff output and returns a mapping from relative file paths
 /// to their 1-indexed changed line numbers in the new file.
 #[must_use]
-pub fn parse_git_diff(content: &str) -> HashMap<PathBuf, HashSet<usize>> {
+fn parse_git_diff(content: &str) -> HashMap<PathBuf, HashSet<usize>> {
     let mut changed_lines = HashMap::new();
     let mut current_file: Option<(PathBuf, HashSet<usize>)> = None;
     let mut line_counter = 0;

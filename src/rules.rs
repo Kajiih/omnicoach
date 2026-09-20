@@ -80,7 +80,7 @@ impl Tag {
 
     /// Returns the corresponding ast-grep `SupportLang` if this tag represents a language.
     #[must_use]
-    pub const fn to_support_lang(&self) -> Option<ast_grep_language::SupportLang> {
+    pub const fn to_support_lang(self) -> Option<ast_grep_language::SupportLang> {
         match self {
             Self::Python => Some(ast_grep_language::SupportLang::Python),
             Self::Rust => Some(ast_grep_language::SupportLang::Rust),

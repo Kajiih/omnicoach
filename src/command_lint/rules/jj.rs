@@ -11,7 +11,7 @@ use crate::rules::Tag;
 use crate::command_lint::ProgramCliSchema;
 
 /// CLI schema definition for Jujutsu commands.
-pub const JJ_CLI_SCHEMA: ProgramCliSchema = ProgramCliSchema {
+const JJ_CLI_SCHEMA: ProgramCliSchema = ProgramCliSchema {
     program_name: "jj",
     options_with_values: &[
         "-R",
@@ -29,7 +29,7 @@ pub const JJ_CLI_SCHEMA: ProgramCliSchema = ProgramCliSchema {
 /// It ignores global options (e.g. `jj -R . edit`) and options passed to the `edit` subcommand
 /// (e.g. `jj edit --ignore-working-copy revision`).
 #[must_use]
-pub fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
+fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
     let args = cmd.parse_args(&JJ_CLI_SCHEMA);
     if !args.has_subcommand_sequence(&["edit"]) {
         return None;

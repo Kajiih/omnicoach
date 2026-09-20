@@ -232,7 +232,7 @@ pub fn collect_bindings<'a>(root: &AstNode<'a>) -> Vec<AstNode<'a>> {
 /// Returns true if an `attribute_item` text represents a Rust test attribute
 /// (`#[test]`, `#[tokio::test]`, `#[rstest]`, `#[test_case(...)]`).
 #[must_use]
-pub fn is_test_attribute(attr_text: &str) -> bool {
+fn is_test_attribute(attr_text: &str) -> bool {
     let trimmed = attr_text
         .trim()
         .trim_start_matches("#[")
@@ -244,7 +244,7 @@ pub fn is_test_attribute(attr_text: &str) -> bool {
 
 /// Returns true if an `attribute_item` text represents a `#[cfg(test)]` attribute.
 #[must_use]
-pub fn is_conditional_test_attribute(attr_text: &str) -> bool {
+fn is_conditional_test_attribute(attr_text: &str) -> bool {
     let trimmed = attr_text
         .trim()
         .trim_start_matches("#[")
@@ -279,13 +279,13 @@ fn has_matching_attribute(node: &AstNode<'_>, predicate: fn(&str) -> bool) -> bo
 
 /// Returns true if a Rust item is preceded by a test attribute (`#[test]`, `#[tokio::test]`, `#[rstest]`, etc.).
 #[must_use]
-pub fn has_test_attribute(node: &AstNode<'_>) -> bool {
+fn has_test_attribute(node: &AstNode<'_>) -> bool {
     has_matching_attribute(node, is_test_attribute)
 }
 
 /// Returns true if a Rust item is preceded by a `#[cfg(test)]` attribute.
 #[must_use]
-pub fn has_conditional_test_attribute(node: &AstNode<'_>) -> bool {
+fn has_conditional_test_attribute(node: &AstNode<'_>) -> bool {
     has_matching_attribute(node, is_conditional_test_attribute)
 }
 

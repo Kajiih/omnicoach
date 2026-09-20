@@ -23,7 +23,7 @@ pub struct CallMatch<'a> {
 ///
 /// If the entry already ends with `)` (a full call pattern), it is returned unchanged.
 #[must_use]
-pub fn to_call_pattern(entry: &str) -> String {
+fn to_call_pattern(entry: &str) -> String {
     let trimmed = entry.trim();
     if trimmed.ends_with(')') {
         trimmed.to_string()
@@ -74,7 +74,7 @@ fn collect_literal_call_matches<'a, S: std::hash::BuildHasher>(
 
 /// Finds all call expressions in `grep` matching any of the `banned_callees` entries.
 ///
-/// Literal callee names are evaluated in a single-pass AST traversal with $O(1)$ set lookups.
+/// Literal callee names are evaluated in a single-pass AST traversal with O(1) set lookups.
 /// Entries containing metavariables (e.g. `"$LOOP($$$ARGS).create_task"`) or custom call
 /// signatures fall back to structural `ast-grep` pattern matching.
 ///

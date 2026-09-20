@@ -12,8 +12,8 @@ pub mod code_lint;
 pub mod command_lint;
 pub mod core;
 pub mod diagnostic;
-pub mod diff;
+pub(crate) mod diff;
 pub mod rules;
 
 #[cfg(test)]
-pub mod test_utils;
+pub(crate) mod test_utils;

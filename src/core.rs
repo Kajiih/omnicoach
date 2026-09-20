@@ -151,7 +151,7 @@ pub struct DynamicRuleConfig<T = DenyListConfig> {
 
 /// Returns the lowercase canonical configuration key for a supported language.
 #[must_use]
-pub const fn support_lang_name(lang: SupportLang) -> &'static str {
+const fn support_lang_name(lang: SupportLang) -> &'static str {
     match lang {
         SupportLang::Python => "python",
         SupportLang::Rust => "rust",
