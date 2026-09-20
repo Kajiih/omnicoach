@@ -73,12 +73,19 @@ impl CodeRule for NoUncommentedSuppress {
 
             // Check whether the suppress call, its with-item, or the enclosing with-statement
             // is documented by an adjacent explanatory comment.
-            // Note: with_stmt spans the entire with body; only preceding comments directly above
-            // with_stmt should be considered, to avoid arbitrary inline comments in the body
-            // erroneously silencing unannotated suppression.
+            // Note: with_stmt spans the entire with body; inspect preceding comments directly above
+            // with_stmt, or inline comments on the with header lines before the body begins.
+            let header_end_line = with_stmt.field("body").map_or_else(
+                || with_stmt.end_pos().line() + 1,
+                |body| body.start_pos().line(),
+            );
+            let with_start_line = with_stmt.start_pos().line() + 1;
+
             let is_documented = comment_index.has_explanation_for_node(&call)
                 || comment_index.has_explanation_for_node(&with_item)
-                || comment_index.has_adjacent_explanation(with_stmt.start_pos().line() + 1);
+                || comment_index.has_adjacent_explanation(with_start_line)
+                || (with_start_line..=header_end_line)
+                    .any(|target_line| comment_index.has_inline_explanation(target_line));
 
             if !is_documented {
                 diagnostics.push(self.diagnostic_at_node(path, &call, &[]));
@@ -89,6 +96,7 @@ impl CodeRule for NoUncommentedSuppress {
     }
 }
 
+// TODO: A lot of the test suite can be made more ricr with best practices (parameterized, etc)
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,5 +306,20 @@ mod tests {
         let output =
             crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
         insta::assert_snapshot!(output, @"[no-uncommented-suppress] Line 1, Col 6: Exception suppression must include an explanatory comment.");
+    }
+
+    #[test]
+    fn test_multiline_parenthesized_with_header_inline_comment() {
+        let source = indoc! {r"
+            with (
+                open('log.txt'),
+                suppress(FileNotFoundError),
+            ):  # Safe if lock file was already deleted
+                pass
+        "};
+
+        let output =
+            crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
+        assert!(output.is_empty());
     }
 }

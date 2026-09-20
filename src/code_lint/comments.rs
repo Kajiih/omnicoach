@@ -70,15 +70,34 @@ fn find_directive_prefix(text: &str) -> Option<usize> {
 }
 
 /// Checks if a whitespace-delimited word consists of rule codes (e.g. `SIM105`, `F401,`, `SIM105,F401`).
+///
+/// Rule codes must either contain digits (`SIM105`, `E501`), contain hyphens or dots
+/// (`unused-import`, `pylint.errors`), or be all-uppercase category codes (`F`, `W`).
+/// This prevents legitimate lowercase English explanation words (e.g. `safe`, `transient`)
+/// from being erroneously swallowed as rule codes.
 fn is_rule_code_token(word: &str) -> bool {
-    let trimmed = word.trim_matches(|c: char| c == ',' || c == ';');
+    let trimmed = word.trim_matches(|character: char| character == ',' || character == ';');
     !trimmed.is_empty()
         && trimmed.split(',').all(|part| {
             let segment = part.trim();
-            !segment.is_empty()
-                && segment
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+            if segment.is_empty() {
+                return false;
+            }
+            let is_valid_chars = segment.chars().all(|character| {
+                character.is_ascii_alphanumeric()
+                    || character == '-'
+                    || character == '_'
+                    || character == '.'
+            });
+            if !is_valid_chars {
+                return false;
+            }
+            let has_digit = segment.chars().any(|character| character.is_ascii_digit());
+            let has_separator = segment.contains('-') || segment.contains('.');
+            let is_all_uppercase = segment
+                .chars()
+                .all(|character| character.is_ascii_uppercase() || character == '_');
+            has_digit || has_separator || is_all_uppercase
         })
 }
 
@@ -292,6 +311,10 @@ mod tests {
     #[case::noqa_with_comment("# noqa: SIM105 -- file may be removed", "file may be removed")]
     #[case::noqa_with_plain_explanation(
         "# noqa: SIM105 safe because transient",
+        "safe because transient"
+    )]
+    #[case::noqa_plain_words_without_code(
+        "# noqa: safe because transient",
         "safe because transient"
     )]
     #[case::noqa_multiple_codes_with_plain_explanation(
