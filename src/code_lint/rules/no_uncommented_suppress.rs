@@ -7,18 +7,29 @@
 use crate::code_lint::ast_python::{find_enclosing_with_item, find_enclosing_with_statement};
 use crate::code_lint::comments::CommentIndex;
 use crate::code_lint::{CodeRule, SourceDoc};
-use crate::core::{AstNode, Config, Rule, RuleName};
+use crate::core::{
+    AstNode, Config, DynamicRuleConfig, EnforcementConfig, EnforcementMode, LanguageDefaults, Rule,
+    RuleName,
+};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
+const DEFAULT_ENFORCEMENT: LanguageDefaults<EnforcementMode> = LanguageDefaults {
+    base: EnforcementMode::RequireExplanation,
+    overrides: &[],
+};
+
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Exception suppression must include an explanatory comment.",
     rationale: "Silently suppressing exceptions without documenting why the failure is benign obscures unexpected bugs and leaves future maintainers confused.",
     suggestion: "Add a comment directly above or inline with the `suppress(...)` statement explaining why ignoring this exception is safe.",
 };
+
+/// Dynamic configuration for `NoUncommentedSuppress`.
+pub type NoUncommentedSuppressConfig = DynamicRuleConfig<EnforcementConfig>;
 
 /// Rule struct.
 pub struct NoUncommentedSuppress;
@@ -46,8 +57,11 @@ impl CodeRule for NoUncommentedSuppress {
         &self,
         path: &Path,
         grep: &AstGrep<SourceDoc>,
-        _config: &Config,
+        config: &Config,
     ) -> Vec<Diagnostic> {
+        let rule_config: NoUncommentedSuppressConfig = config.get_rule_config(self.name().0);
+        let mode = rule_config.effective_mode_for_lang(*grep.lang(), &DEFAULT_ENFORCEMENT);
+
         let root = grep.root();
         let calls = root
             .find_all("suppress($$$ARGS)")
@@ -65,8 +79,14 @@ impl CodeRule for NoUncommentedSuppress {
                 continue;
             }
 
-            let index = comment_index.get_or_insert_with(|| CommentIndex::from_ast(grep));
-            if !is_suppression_documented(index, &with_stmt, &call) {
+            let is_documented = if mode == EnforcementMode::Ban {
+                false
+            } else {
+                let index = comment_index.get_or_insert_with(|| CommentIndex::from_ast(grep));
+                is_suppression_documented(index, &with_stmt, &call)
+            };
+
+            if !is_documented {
                 diagnostics.push(self.diagnostic_at_node(path, &call, &[]));
             }
         }
@@ -209,5 +229,31 @@ mod tests {
         let output =
             crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
         assert_eq!(output.trim(), expected);
+    }
+
+    #[test]
+    fn test_ban_mode_flags_even_documented_suppress() {
+        let source = indoc! {r#"
+            # Valid reason why suppress is safe
+            with suppress(FileNotFoundError):
+                os.remove("tmp.txt")
+        "#};
+
+        let config_toml = r#"
+            [rules.no-uncommented-suppress]
+            mode = "ban"
+        "#;
+        let config: Config = toml::from_str(config_toml).unwrap();
+
+        let output = crate::test_utils::assert_code_rule_snapshot_with_config(
+            &NoUncommentedSuppress,
+            source,
+            "test.py",
+            &config,
+        );
+        assert_eq!(
+            output.trim(),
+            "[no-uncommented-suppress] Line 2, Col 6: Exception suppression must include an explanatory comment."
+        );
     }
 }

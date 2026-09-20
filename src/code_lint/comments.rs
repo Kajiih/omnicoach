@@ -276,6 +276,17 @@ impl<'a> CommentIndex<'a> {
         parts.reverse();
         is_substantive_explanation(&parts.join(" "))
     }
+
+    /// Checks whether an AST node is accompanied by an explanatory comment:
+    /// 1. A contiguous standalone comment block directly above its start line.
+    /// 2. An inline comment on any line spanning the node.
+    #[must_use]
+    pub fn has_explanation_for_node(&self, node: &AstNode<'_>) -> bool {
+        let start_line = node.start_pos().line() + 1;
+        let end_line = node.end_pos().line() + 1;
+        self.has_adjacent_explanation(start_line)
+            || (start_line..=end_line).any(|target_line| self.has_inline_explanation(target_line))
+    }
 }
 
 #[cfg(test)]

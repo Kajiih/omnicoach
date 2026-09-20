@@ -152,6 +152,25 @@ pub struct AllowListConfig {
     pub banned: HashSet<String>,
 }
 
+/// Enforcement mode for rules targeting sensitive language constructs
+/// (e.g. `cast`, `suppress`, `getattr`, `except Exception`).
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum EnforcementMode {
+    /// Completely bans the construct from targeted files (only suppressible via `# omni:ignore`).
+    Ban,
+    /// Permits the construct only if accompanied by an explanatory comment.
+    RequireExplanation,
+}
+
+/// Configuration for rules that support configurable enforcement modes.
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EnforcementConfig {
+    /// The enforcement mode (`ban` or `require-explanation`).
+    #[serde(default)]
+    pub mode: Option<EnforcementMode>,
+}
+
 /// A generic configuration container that supports global settings across all
 /// supported languages, as well as dynamic per-language overrides.
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -301,6 +320,18 @@ impl DynamicRuleConfig<AllowListConfig> {
         }
 
         effective
+    }
+}
+
+impl DynamicRuleConfig<EnforcementConfig> {
+    /// Resolves the effective enforcement mode for `lang` against `defaults`.
+    #[must_use]
+    pub fn effective_mode_for_lang(
+        &self,
+        lang: SupportLang,
+        defaults: &LanguageDefaults<EnforcementMode>,
+    ) -> EnforcementMode {
+        self.resolve_with(lang, defaults, |config| config.mode)
     }
 }
 
