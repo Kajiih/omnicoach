@@ -59,8 +59,10 @@ pub enum Tag {
     Heuristic,
     /// Enforces team or architectural opinions beyond baseline bugs
     Opinionated,
-    /// Detects likely bugs, resource leaks, or semantic anti-patterns
-    Correctness,
+    /// Hidden global state, ambient dependencies, and other impurity-inducing side effects
+    #[serde(rename = "side-effects")]
+    #[strum(serialize = "side-effects")]
+    SideEffects,
 }
 
 impl Tag {

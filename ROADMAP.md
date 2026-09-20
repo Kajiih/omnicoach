@@ -62,3 +62,26 @@ This document serves as the single source of truth for architectural milestones,
 - **Automated Rule Test Verification**:
   - *Current*: Tests are validated via runtime registry loops.
   - *Target*: Compile-time or CI assertion ensuring that colocated test suites exist for every registered rule, preventing rules from being added without corresponding snapshot and unit test coverage.
+
+---
+
+## 5. Tags, Discovery & Documentation
+
+Prior analysis, candidate designs, and open questions: [docs/dev/tag_system_analysis.md](docs/dev/tag_system_analysis.md). Nothing in that document is decided; it is the starting point for the design work below, not a specification of it.
+
+- **Tag Taxonomy Design**:
+  - *Current*: The tag set grew ad-hoc, and at 17 rules there is not enough evidence to judge it. `Cli` has zero members, so `select = ["cli"]` silently matches nothing; `Workflow`, `Vcs`, and `JJ` resolve to the same singleton set; `Safety` covers one typing rule while documenting operational command restrictions.
+  - *Target*: Decide what a tag is for (selector, documentation, or both), then design the taxonomy that follows: whether axes are the right organising idea, what admission criteria a tag must meet, and how dispositions are defined. Apply the outcome to the concrete tag set and record it as an ADR in `decisions/`.
+  - *Trigger*: The first configuration need a tag cannot express, or `CODE_RULES` exceeding ~40 rules, whichever comes first.
+- **Tag Hierarchy Design**:
+  - *Current*: `has_tag` is flat set membership, so a rule must declare every ancestor tag it wants to be selectable by, and a specific tag can silently duplicate a general one.
+  - *Target*: Decide whether tags should nest at all, and if so choose a mechanism and the rule for when a parent link is legitimate. A `Tag::parent` function with a chain-walking `has_tag` is one candidate; declaring the parent on each rule plus a test assertion is another.
+  - *Trigger*: The first genuine parent/child pair with independent members — for example a Git rule joining the jj rule under `Vcs`.
+- **Rule Discovery**:
+  - *Current*: No way to ask the binary what rules exist. `Tag::description` and `Tag::as_str` are unused, and `test_tag_description` asserts a doc comment against a copy of itself.
+  - *Target*: Design how users discover rules — plausibly a `rules` subcommand listing names, languages, tags, target scope, and configuration keys. Settling this also settles whether tags are documentation, which the taxonomy design depends on.
+  - *Trigger*: The README rule list exceeding ~30 entries, or the first user outside this repository.
+- **Generated Rule Documentation**:
+  - *Current*: `README.md` hand-maintains a flat list of every rule, with no tags or languages, and nothing detects drift from `CODE_RULES`.
+  - *Target*: Decide whether rule documentation should be generated from the registry, and if so how drift is prevented.
+  - *Trigger*: With rule discovery, which would supply the rendering.

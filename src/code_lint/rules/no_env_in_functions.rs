@@ -74,7 +74,7 @@ impl Rule for NoEnvInFunctions {
     }
 
     fn tags(&self) -> &'static [Tag] {
-        &[Tag::Correctness, Tag::Opinionated]
+        &[Tag::SideEffects, Tag::Opinionated]
     }
 
     fn supported_languages(&self) -> &'static [SupportLang] {

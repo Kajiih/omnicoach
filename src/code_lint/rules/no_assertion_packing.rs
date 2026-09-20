@@ -31,7 +31,7 @@ impl Rule for NoAssertionPacking {
     }
 
     fn tags(&self) -> &'static [Tag] {
-        &[Tag::Testing, Tag::Opinionated, Tag::Correctness]
+        &[Tag::Testing, Tag::Opinionated]
     }
 
     fn supported_languages(&self) -> &'static [SupportLang] {
