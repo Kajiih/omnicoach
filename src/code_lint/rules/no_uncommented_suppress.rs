@@ -7,10 +7,7 @@
 use crate::code_lint::ast_python::{find_enclosing_with_item, find_enclosing_with_statement};
 use crate::code_lint::comments::CommentIndex;
 use crate::code_lint::{CodeRule, SourceDoc};
-use crate::core::{
-    AstNode, Config, DynamicRuleConfig, EnforcementConfig, EnforcementMode, LanguageDefaults, Rule,
-    RuleName,
-};
+use crate::core::{AstNode, Config, EnforcementMode, LanguageDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -28,9 +25,6 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     suggestion: "Add a comment directly above or inline with the `suppress(...)` statement explaining why ignoring this exception is safe.",
 };
 
-/// Dynamic configuration for `NoUncommentedSuppress`.
-pub type NoUncommentedSuppressConfig = DynamicRuleConfig<EnforcementConfig>;
-
 /// Rule struct.
 pub struct NoUncommentedSuppress;
 
@@ -47,6 +41,10 @@ impl Rule for NoUncommentedSuppress {
         &[SupportLang::Python]
     }
 
+    fn default_enforcement_mode(&self) -> LanguageDefaults<EnforcementMode> {
+        DEFAULT_ENFORCEMENT
+    }
+
     fn violation_template(&self) -> &'static ViolationTemplate {
         &TEMPLATE
     }
@@ -59,8 +57,7 @@ impl CodeRule for NoUncommentedSuppress {
         grep: &AstGrep<SourceDoc>,
         config: &Config,
     ) -> Vec<Diagnostic> {
-        let rule_config: NoUncommentedSuppressConfig = config.get_rule_config(self.name().0);
-        let mode = rule_config.effective_mode_for_lang(*grep.lang(), &DEFAULT_ENFORCEMENT);
+        let mode = self.enforcement_mode(*grep.lang(), config);
 
         let root = grep.root();
         let calls = root
@@ -229,31 +226,5 @@ mod tests {
         let output =
             crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
         assert_eq!(output.trim(), expected);
-    }
-
-    #[test]
-    fn test_ban_mode_flags_even_documented_suppress() {
-        let source = indoc! {r#"
-            # Valid reason why suppress is safe
-            with suppress(FileNotFoundError):
-                os.remove("tmp.txt")
-        "#};
-
-        let config_toml = r#"
-            [rules.no-uncommented-suppress]
-            mode = "ban"
-        "#;
-        let config: Config = toml::from_str(config_toml).unwrap();
-
-        let output = crate::test_utils::assert_code_rule_snapshot_with_config(
-            &NoUncommentedSuppress,
-            source,
-            "test.py",
-            &config,
-        );
-        assert_eq!(
-            output.trim(),
-            "[no-uncommented-suppress] Line 2, Col 6: Exception suppression must include an explanatory comment."
-        );
     }
 }

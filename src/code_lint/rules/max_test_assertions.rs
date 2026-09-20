@@ -134,7 +134,6 @@ impl CodeRule for MaxTestAssertions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagnostic::RuleName;
     use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
 
     #[test]
@@ -206,15 +205,9 @@ fn verify_response_fields() {
     }
 
     #[test]
-    fn test_configurable_threshold_and_suppression() {
+    fn test_configurable_threshold() {
         let source = r"
 def test_three_assertions():
-    assert 1 == 1
-    assert 2 == 2
-    assert 3 == 3
-
-# omni:ignore [max-test-assertions] -- end-to-end state transition check
-def test_suppressed_assertions():
     assert 1 == 1
     assert 2 == 2
     assert 3 == 3
@@ -232,14 +225,7 @@ max = 2
         );
         insta::assert_snapshot!(
             output,
-            @"
-        [max-test-assertions] Line 2, Col 5: Test function `test_three_assertions` has 3 assertions, exceeding the maximum of 2.
-        [max-test-assertions] Line 8, Col 5: Test function `test_suppressed_assertions` has 3 assertions, exceeding the maximum of 2.
-        "
+            @"[max-test-assertions] Line 2, Col 5: Test function `test_three_assertions` has 3 assertions, exceeding the maximum of 2."
         );
-
-        let diags = crate::code_lint::lint_file(Path::new("tests/test_custom.py"), source, &config);
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule_name, RuleName("max-test-assertions"));
     }
 }

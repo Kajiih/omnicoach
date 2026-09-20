@@ -368,6 +368,22 @@ pub trait Rule: Send + Sync {
                 .is_some_and(|lang| self.supported_languages().contains(&lang))
     }
 
+    /// Returns the default enforcement mode for this rule across languages.
+    /// Most rules default to `EnforcementMode::Ban`.
+    #[must_use]
+    fn default_enforcement_mode(&self) -> LanguageDefaults<EnforcementMode> {
+        LanguageDefaults {
+            base: EnforcementMode::Ban,
+            overrides: &[],
+        }
+    }
+
+    /// Resolves the effective enforcement mode for this rule given language and config.
+    #[must_use]
+    fn enforcement_mode(&self, lang: SupportLang, config: &Config) -> EnforcementMode {
+        config.get_rule_enforcement_mode(self.name().0, lang, &self.default_enforcement_mode())
+    }
+
     /// Constructs a `Diagnostic` with this rule's name.
     #[must_use]
     fn create_diagnostic(&self, message: ViolationMessage, location: SourceLocation) -> Diagnostic {
@@ -591,6 +607,18 @@ impl Config {
             .get(rule_name)
             .and_then(|val| serde_json::from_value(val.clone()).ok())
             .unwrap_or_default()
+    }
+
+    /// Resolves the effective enforcement mode for a rule and language against defaults.
+    #[must_use]
+    pub fn get_rule_enforcement_mode(
+        &self,
+        rule_name: &str,
+        lang: SupportLang,
+        defaults: &LanguageDefaults<EnforcementMode>,
+    ) -> EnforcementMode {
+        let rule_config: DynamicRuleConfig<EnforcementConfig> = self.get_rule_config(rule_name);
+        rule_config.effective_mode_for_lang(lang, defaults)
     }
 
     /// Loads configuration settings from the default `.omnilint.toml` in the current directory.

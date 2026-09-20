@@ -51,7 +51,12 @@ pub fn assert_code_rule_snapshot_with_config(
         _ => unreachable!("Unsupported extension in test file: {filename}"),
     };
     let grep = AstGrep::new(source, lang);
-    let diags = rule.check_file(path, &grep, config);
+    let mode = rule.enforcement_mode(lang, config);
+    let mut diags = rule.check_file(path, &grep, config);
+    if mode == crate::core::EnforcementMode::RequireExplanation {
+        let index = crate::code_lint::comments::CommentIndex::from_ast(&grep);
+        diags.retain(|diagnostic| !index.has_adjacent_explanation(diagnostic.location.line));
+    }
     format_diagnostics_for_test(&diags)
 }
 

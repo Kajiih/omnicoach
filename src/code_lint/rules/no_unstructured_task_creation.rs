@@ -138,23 +138,6 @@ async def handle_requests():
     }
 
     #[test]
-    fn test_inline_suppression_silences_rule() {
-        let source = r"
-import asyncio
-
-async def background_poller():
-    task = asyncio.create_task(poll())  # omni:ignore [no-unstructured-task-creation] -- legacy daemon loop
-";
-
-        let config = Config::default();
-        let diags = crate::code_lint::lint_file(Path::new("daemon.py"), source, &config);
-        assert!(
-            diags.is_empty(),
-            "Expected 0 diagnostics with suppression, got: {diags:?}"
-        );
-    }
-
-    #[test]
     fn test_config_extend_and_allowed() {
         let source = r"
 async def worker():

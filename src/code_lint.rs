@@ -218,12 +218,20 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
     };
     let has_inline_tests = !inline_test_ranges.is_empty();
     let mut raw_diagnostics = Vec::new();
+    let mut comment_index = None;
 
     for rule in crate::rules::CODE_RULES {
         if !should_evaluate_rule(*rule, path, lang, is_test, has_inline_tests, config) {
             continue;
         }
-        let rule_diagnostics = rule.check_file(path, &grep, config);
+        let mode = rule.enforcement_mode(lang, config);
+        let mut rule_diagnostics = rule.check_file(path, &grep, config);
+        if mode == crate::core::EnforcementMode::RequireExplanation {
+            let index =
+                comment_index.get_or_insert_with(|| comments::CommentIndex::from_ast(&grep));
+            rule_diagnostics
+                .retain(|diagnostic| !index.has_adjacent_explanation(diagnostic.location.line));
+        }
         raw_diagnostics.extend(filter_diagnostics_by_target(
             rule_diagnostics,
             rule.target(),
@@ -710,5 +718,50 @@ mod tests {
             false,
             &suppression_only_config
         ));
+    }
+
+    #[test]
+    fn test_framework_enforcement_mode_ban_default() {
+        let source_documented = indoc::indoc! {r"
+            # Valid explanation for type cast
+            x = cast(int, y)
+        "};
+        let source_uncommented = indoc::indoc! {r"
+            x = cast(int, y)
+        "};
+
+        let default_config = Config::default();
+        let diagnostics_banned_doc =
+            lint_file(Path::new("main.py"), source_documented, &default_config);
+        assert_eq!(diagnostics_banned_doc.len(), 1);
+
+        let diagnostics_banned_uncommented =
+            lint_file(Path::new("main.py"), source_uncommented, &default_config);
+        assert_eq!(diagnostics_banned_uncommented.len(), 1);
+    }
+
+    #[test]
+    fn test_framework_enforcement_mode_require_explanation() {
+        let source_documented = indoc::indoc! {r"
+            # Valid explanation for type cast
+            x = cast(int, y)
+        "};
+        let source_uncommented = indoc::indoc! {r"
+            x = cast(int, y)
+        "};
+
+        let config_toml = r#"
+            [rules.no-typing-cast]
+            mode = "require-explanation"
+        "#;
+        let req_doc_config: Config = toml::from_str(config_toml).unwrap();
+
+        let diagnostics_req_doc =
+            lint_file(Path::new("main.py"), source_documented, &req_doc_config);
+        assert!(diagnostics_req_doc.is_empty());
+
+        let diagnostics_req_uncommented =
+            lint_file(Path::new("main.py"), source_uncommented, &req_doc_config);
+        assert_eq!(diagnostics_req_uncommented.len(), 1);
     }
 }

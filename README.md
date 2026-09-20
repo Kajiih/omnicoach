@@ -1,195 +1,149 @@
-# Omni Lints: Custom Domain & VCS Linters
+# Omni Lints: Custom Domain & Code Style Linters
 
-Omni Lints is a lightweight, customizable linter suite designed to enforce domain-specific code style rules and Jujutsu (jj) VCS usage policies.
-
-It provides two binaries:
-1.  **`omni-code-lint`**: Scans codebase ASTs for styling and domain safety rules.
-2.  **`omni-command-lint`**: Intercepts shell commands to block bad VCS actions (e.g. editing already-described jj commits).
+Lightweight, high-signal static analysis engine designed to enforce domain-specific code style rules, architectural boundaries, and test hygiene across Python and Rust codebases.
 
 ---
 
-## 🛠️ Installation
+## 🚀 Quickstart
 
-### Option A: Install from Source (Recommended for Developers)
-Any developer with a Rust toolchain installed can clone this repository and install the binaries directly:
-
-```bash
-# Clone the repository
-git clone <repository-url>
-cd custom_lints
-
-# Install the binaries to ~/.cargo/bin/
-cargo install --path .
-```
-
-*Note: Ensure `~/.cargo/bin` is in your shell's `PATH`.*
-
-### Option B: Distribute Pre-Compiled Binaries
-You can compile optimized release binaries to share directly with developers on the same OS:
-
-```bash
-cargo build --release
-```
-The compiled binaries will be located at:
-- `target/release/omni-code-lint`
-- `target/release/omni-command-lint`
-
-You can package and upload these to your team's shared file store, or attach them as artifacts to your repository releases.
-
----
-
-## 🚀 Usage
-
-### Code Linter
-To scan your codebase for AST styling violations:
+Scan the entire repository:
 ```bash
 omni-code-lint .
 ```
 
-To scan specific files or directories:
-```bash
-omni-code-lint src/main.rs tests/
-```
-
-#### Differential Linting (VCS aware)
-You can run checks only on modified files and only report violations on newly changed lines using the `--diff` flag:
+Scan only modified lines/files (VCS aware):
 ```bash
 omni-code-lint --diff
 ```
-*   **Git**: Diffs working copy (staged & unstaged) changes against `HEAD` by default.
-*   **Jujutsu (jj)**: Diffs all mutable draft commits since the last immutable commit (`immutable()..`) by default.
 
-You can also specify a custom revision or range to compare against using the `--diff-rev` flag (which implicitly enables `--diff`):
+Validate an intercepted workflow command:
 ```bash
-# Git: Compare against main branch
-omni-code-lint --diff-rev main
-
-# Jujutsu: Compare against the parent commit
-omni-code-lint --diff-rev @-
-```
-
-### VCS Command Intercepter
-To lint specific Jujutsu command invocations:
-```bash
-omni-command-lint --cmd "jj edit 123"
+omni-command-lint --cmd "jj edit @"
 ```
 
 ---
 
 ## ⚙️ Configuration (`.omnilint.toml`)
 
-Create a `.omnilint.toml` file at the root of your project workspace to customize rule parameters, ignore rules, or run subset filters:
+Create a `.omnilint.toml` file at the root of your project workspace.
+
+### Framework Rule Design: Enforcement Modes
+
+Every rule in Omni is built on a unified enforcement framework:
+- **`mode = "ban"`** (default for most rules): Prohibits the pattern. Violations can only be bypassed using explicit `# omni:ignore[rule] -- <reason>` directives.
+- **`mode = "require-explanation"`**: Permits the pattern as long as it is accompanied by an adjacent or inline substantive explanatory comment.
+
+You can configure enforcement mode globally or per-language for any rule:
 
 ```toml
-# Select only specific tags or rule names (optional)
-select = ["Style", "no-logging-error-in-except"]
+[rules.no-typing-cast]
+mode = "ban" # default: strictly banned
 
-# Globally ignore specific rules (optional)
+[rules.no-sleep-in-tests]
+mode = "require-explanation" # permitted only when documented with an explanation comment
+
+# Language-specific mode overrides
+[rules.single-letter-variable-name.python]
+mode = "require-explanation"
+```
+
+### Global Selection & File Scoping
+
+```toml
+# Select only specific tags or rule names
+select = ["Testing", "no-typing-cast"]
+
+# Globally ignore specific rules
 ignore = ["single-letter-variable-name"]
 
 # Per-file rule ignores using glob patterns
 [per_file_ignores]
-"tests/**" = ["single-letter-variable-name", "heuristic"]
-
-# Rule-specific configuration parameters
-[rules.no-hungarian-notation]
-banned_suffixes = ["_list", "_arr", "_dict"]
+"tests/**" = ["single-letter-variable-name", "flat-scope-enforced"]
 ```
-
-### Supported Rules:
-*   **`no-unstructured-task-creation`**: Bans unstructured task creation (`asyncio.create_task`, `ensure_future`, `loop.create_task`).
-*   **`no-sleep-in-tests`**: Bans wall-clock and async `sleep` calls in Python and Rust test files.
-*   **`no-zero-sleep-in-tests`**: Bans zero-duration `sleep(0)` / `sleep(Duration::ZERO)` calls in Python and Rust test files (suggests explicit scheduler checkpoints or yields).
-*   **`max-test-assertions`**: Limits test functions to at most 4 assertions by default (configurable via `[rules.max-test-assertions] max = N`) across Python and Rust.
-*   **`no-assertion-packing`**: Bans compound boolean conditions (`&&`, `and`) and boolean tuple/collection equality packing in Python and Rust test assertions.
-*   **`single-letter-variable-name`**: Bans short single-letter variables except allowed exceptions.
-*   **`banned-abbreviations`**: Bans naming definitions using cryptic abbreviations (`ctx`, `cfg`, etc.).
-*   **`no-hungarian-notation`**: Bans Hungarian type suffixes (e.g., `user_list`, `value_int`).
-*   **`missing-suppression-reason`**: Enforces non-empty `-- <reason>` explanations on inline and file suppressions.
-*   **`unused-suppression`**: Flags stale suppression directives when no violation occurred on that line or file.
-*   **`unknown-suppression-rule`**: Flags suppression directives targeting unknown or invalid rules.
-*   **`blanket-suppression`**: Bans blanket suppression directives without explicit bracketed rule names.
-*   **`no-logging-error-in-except`**: Bans using `logging.error` inside Python except blocks (suggests `logging.exception`).
-*   **`no-uncommented-suppress`**: Bans using `contextlib.suppress(...)` without an adjacent explanatory comment.
-*   **`no-typing-cast`**: Bans unchecked type assertions using `cast()`, `typing.cast()`, or `typing_extensions.cast()` in production code (suggests runtime type narrowing, structural subtyping, or domain types).
-*   **`flat-scope-enforced`**: Bans nested function definitions in Python source files.
-*   **`no-identical-positional-types`**: Bans functions with `>= 3` positional parameters (configurable via `[rules.no-identical-positional-types] min_args = N`) where 2 or more share an identical type annotation (suggests keyword-only arguments via `*`).
-*   **`no-env-in-functions`**: Bans direct environment variable reads/writes (`os.getenv`, `os.environ[...]`, `std::env::var`, etc.) inside functions and methods outside of startup/config boundaries (`main`, `from_env`, `load_env`, or module/static scope).
-*   **`no-edits-on-described-commits`**: Discourages/blocks running `jj edit` on commits that already have descriptions.
 
 ---
 
-## 🔕 Suppressions & Hygiene
+## 📋 Rules Catalog
 
-Omni provides granular, review-accountable suppression comment directives directly in source code.
+All rules support the `mode = "ban" | "require-explanation"` configuration. Below are the rules and their domain-specific settings:
 
-### Syntax
+### Concurrency & Async
+* **`no-unstructured-task-creation`**: Bans fire-and-forget background task creation (`asyncio.create_task`, `ensure_future`, `loop.create_task`) in favor of structured concurrency (`asyncio.TaskGroup`). *(Python)*
 
-The token shown in brackets in any diagnostic `[rule-name]` is the exact token accepted in suppression directives. Every directive requires bracketed rule names and an explicit reason after `--`:
+### Testing Hygiene
+* **`no-sleep-in-tests`**: Bans arbitrary wall-clock and async sleep calls (`time.sleep`, `thread::sleep`, `tokio::time::sleep`) in test files. *(Python, Rust)*
+* **`no-zero-sleep-in-tests`**: Bans zero-duration scheduler yield hacks (`sleep(0)`, `sleep(Duration::ZERO)`) in test files. *(Python, Rust)*
+* **`max-test-assertions`**: Enforces a maximum assertion count per test function to prevent monolithic multi-concept tests. *(Python, Rust)*
+  ```toml
+  [rules.max-test-assertions]
+  max = 4 # default: 4
+  ```
+* **`no-assertion-packing`**: Bans compound boolean assertions (`and`, `&&`) and boolean collection equality packing designed to circumvent assertion limits. *(Python, Rust)*
 
-#### 1. Same-Line Suppression (`omni:ignore`)
-Suppresses rule violations occurring on the exact same line:
+### Naming & Vocabulary
+* **`single-letter-variable-name`**: Bans uncommunicative single-letter variable names outside of standard idioms (`i`, `j`, `k`, `x`, `y`, `z`, `_`). *(Python, Rust)*
+  ```toml
+  [rules.single-letter-variable-name]
+  extend_allowed = ["w", "h"]
+  ```
+* **`banned-abbreviations`**: Bans ambiguous abbreviations (`ctx`, `req`, `resp`, `mgr`, `cb`) in favor of full domain words. *(Python, Rust)*
+  ```toml
+  [rules.banned-abbreviations]
+  extend_banned = ["cfg", "idx"]
+  ```
+* **`no-hungarian-notation`**: Bans Hungarian type suffixes (`_list`, `_dict`, `_arr`) from identifier names. *(Python, Rust)*
+  ```toml
+  [rules.no-hungarian-notation]
+  banned_suffixes = ["_list", "_dict", "_map"]
+  ```
+
+### Typing & Signatures
+* **`no-typing-cast`**: Bans unchecked type assertions (`cast()`, `typing.cast()`, `typing_extensions.cast()`) in production code. *(Python)*
+* **`no-identical-positional-types`**: Bans functions with $\ge 3$ positional parameters where 2 or more share an identical type annotation (suggests keyword-only arguments or domain newtypes). *(Python, Rust)*
+  ```toml
+  [rules.no-identical-positional-types]
+  min_args = 3 # default: 3
+  ```
+
+### Architecture & Control Flow
+* **`no-env-in-functions`**: Bans reading/writing environment variables (`os.getenv`, `std::env::var`) inside functions and methods outside of configuration entrypoints. *(Python, Rust)*
+* **`flat-scope-enforced`**: Bans nested function and closure definitions in source files to prevent hidden state and encourage modular helpers. *(Python)*
+* **`no-logging-error-in-except`**: Bans using `logging.error` inside Python `except` blocks (suggests `logging.exception` to preserve stack traces). *(Python)*
+* **`no-uncommented-suppress`**: Enforces that `contextlib.suppress(...)` statements document why swallowing the exception is benign (defaults to `mode = "require-explanation"`). *(Python)*
+
+### VCS & Workflow Commands
+* **`no-edits-on-described-commits`**: Prohibits running `jj edit` on commits that already have descriptions to preserve review stability. *(JJ)*
+
+### Suppression Hygiene
+* **`missing-suppression-reason`**: Enforces non-empty `-- <reason>` justifications on all suppression comments.
+* **`unused-suppression`**: Flags stale suppression directives when no violation occurs on the target line or file.
+* **`unknown-suppression-rule`**: Flags directives referencing nonexistent or mistyped rule names.
+* **`blanket-suppression`**: Bans bare suppression directives that omit bracketed rule names.
+
+---
+
+## 🔕 Suppressions
+
+Suppression directives require explicit bracketed rule targets and a `-- <reason>` explanation:
+
+### Inline Suppression (`omni:ignore`)
+```python
+task = asyncio.create_task(loop())  # omni:ignore [no-unstructured-task-creation] -- top-level daemon lifecycle
+```
 ```rust
-let x = 1; // omni:ignore [single-letter-variable-name] -- mathematical coordinate in 2D vector
-```
-```python
-task = asyncio.create_task(loop())  # omni:ignore [no-unstructured-task-creation] -- top-level background daemon
+let x = 1; // omni:ignore [single-letter-variable-name] -- 2D vector coordinate
 ```
 
-#### 2. Preceding-Line Suppression (`omni:ignore`)
-A standalone directive comment on the line immediately preceding a declaration applies to that declaration, automatically skipping any contiguous decorators or attributes:
+### Preceding-Line Suppression (`omni:ignore`)
 ```python
-# omni:ignore [flat-scope-enforced] -- factory method requires localized closure
+# omni:ignore [flat-scope-enforced] -- factory requires localized closure
 @dataclass
 def make_handler():
     def helper(): pass
     return helper
 ```
-```rust
-// omni:ignore [banned-abbreviations] -- external C FFI struct definition
-#[repr(C)]
-struct ctx_t;
-```
 
-#### 3. File-Level Suppression (`omni:disable-file`)
-Placed anywhere in the file (conventionally at the top) to suppress specific rules for the entire file:
+### File-Level Suppression (`omni:disable-file`)
 ```python
-# omni:disable-file [flat-scope-enforced, single-letter-variable-name] -- generated protobuf schema
-```
-
-## 🤝 Sharing with the Team
-
-### 1. Git Pre-Commit Hook Integration
-To automate code checking before git commits, add the following script to your local repository's `.git/hooks/pre-commit` file:
-
-```bash
-#!/bin/bash
-echo "Running Omni Linter..."
-omni-code-lint .
-if [ $? -ne 0 ]; then
-    echo "Linter checks failed. Commit aborted."
-    exit 1
-fi
-```
-Make the hook executable:
-```bash
-chmod +x .git/hooks/pre-commit
-```
-
-### 2. CI/CD Pipeline Integration
-Add the linter checks as a step in your CI pipeline (e.g. GitHub Actions):
-
-```yaml
-name: Lint Check
-on: [push, pull_request]
-jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install Linter
-        run: cargo install --git https://github.com/your-org/custom_lints.git
-      - name: Run Linter
-        run: omni-code-lint .
+# omni:disable-file [flat-scope-enforced, single-letter-variable-name] -- generated schema
 ```
