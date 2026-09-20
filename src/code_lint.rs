@@ -462,23 +462,24 @@ fn collect_targets(options: &LintOptions) -> anyhow::Result<Vec<LintTarget>> {
             .map(|path| path.canonicalize().unwrap_or_else(|_| path.clone()))
             .collect();
 
-        let mut targets = Vec::new();
-        for (file_path, changed_lines) in changes {
-            let is_target = target_paths.iter().any(|target| {
-                if target.is_file() {
-                    target == &file_path
-                } else {
-                    file_path.starts_with(target)
-                }
-            });
-
-            if is_target && file_path.is_file() && detect_language(&file_path).is_some() {
-                targets.push(LintTarget {
-                    path: file_path,
-                    changed_lines: Some(changed_lines),
-                });
-            }
-        }
+        let targets = changes
+            .into_iter()
+            .filter(|(file_path, _)| {
+                file_path.is_file()
+                    && detect_language(file_path).is_some()
+                    && target_paths.iter().any(|target| {
+                        if target.is_file() {
+                            target == file_path
+                        } else {
+                            file_path.starts_with(target)
+                        }
+                    })
+            })
+            .map(|(file_path, changed_lines)| LintTarget {
+                path: file_path,
+                changed_lines: Some(changed_lines),
+            })
+            .collect();
         Ok(targets)
     } else {
         let mut targets = Vec::new();
@@ -491,7 +492,7 @@ fn collect_targets(options: &LintOptions) -> anyhow::Result<Vec<LintTarget>> {
                     });
                 }
             } else if path.is_dir() {
-                collect_directory_candidates(path, &mut targets);
+                targets.extend(collect_directory_candidates(path));
             } else {
                 anyhow::bail!("Path does not exist: {}", path.display());
             }
@@ -500,20 +501,18 @@ fn collect_targets(options: &LintOptions) -> anyhow::Result<Vec<LintTarget>> {
     }
 }
 
-fn collect_directory_candidates(dir: &Path, targets: &mut Vec<LintTarget>) {
-    for entry in ignore::WalkBuilder::new(dir)
+fn collect_directory_candidates(dir: &Path) -> impl Iterator<Item = LintTarget> {
+    ignore::WalkBuilder::new(dir)
         .require_git(false)
         .build()
         .flatten()
-    {
-        let path = entry.path();
-        if path.is_file() && detect_language(path).is_some() {
-            targets.push(LintTarget {
+        .filter_map(|entry| {
+            let path = entry.path();
+            (path.is_file() && detect_language(path).is_some()).then(|| LintTarget {
                 path: path.to_path_buf(),
                 changed_lines: None,
-            });
-        }
-    }
+            })
+        })
 }
 
 fn lint_single_file(
@@ -528,16 +527,16 @@ fn lint_single_file(
     let content = fs::read_to_string(path)
         .map_err(|error| anyhow::anyhow!("Failed to read file '{}': {}", path.display(), error))?;
 
-    let diags = lint_file(path, &content, config);
+    let diagnostics = lint_file(path, &content, config);
 
     if let Some(changed) = changed_lines {
-        let filtered = diags
+        let filtered = diagnostics
             .into_iter()
             .filter(|diagnostic| changed.contains(&diagnostic.location.line))
             .collect();
         Ok(filtered)
     } else {
-        Ok(diags)
+        Ok(diagnostics)
     }
 }
 
