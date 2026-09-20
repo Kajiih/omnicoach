@@ -287,6 +287,36 @@ pub fn has_override_decorator(func_node: &AstNode<'_>) -> bool {
     has_decorator(func_node, |terminal| terminal == "override")
 }
 
+/// Traverses upward from an expression to find if it is enclosed in a `with_item`.
+/// Transparently handles expressions wrapped in `parenthesized_expression`.
+#[must_use]
+pub fn find_enclosing_with_item<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
+    let mut curr = node.parent();
+    while let Some(parent) = curr {
+        match parent.kind().as_ref() {
+            "with_item" => return Some(parent),
+            "parenthesized_expression" => {
+                curr = parent.parent();
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Traverses upward from a node to find its nearest enclosing `with_statement`.
+#[must_use]
+pub fn find_enclosing_with_statement<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
+    let mut curr = node.parent();
+    while let Some(parent) = curr {
+        if parent.kind() == "with_statement" {
+            return Some(parent);
+        }
+        curr = parent.parent();
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,5 +396,25 @@ match val:
             .map(|node| node.text().to_string())
             .collect();
         assert_eq!(names, vec!["x", "z", "a", "b"]);
+    }
+
+    #[test]
+    fn test_find_enclosing_with_helpers() {
+        let source = r"
+with suppress(FileNotFoundError):
+    pass
+x = suppress(KeyError)
+        ";
+        let grep = AstGrep::new(source, SupportLang::Python);
+        let calls: Vec<_> = grep.root().find_all("suppress($$$ARGS)").collect();
+        assert_eq!(calls.len(), 2);
+
+        // First call is inside a with_statement
+        let with_item = find_enclosing_with_item(&calls[0]);
+        assert!(with_item.is_some());
+        assert!(find_enclosing_with_statement(&calls[0]).is_some());
+
+        // Second call is outside a with_statement
+        assert!(find_enclosing_with_item(&calls[1]).is_none());
     }
 }

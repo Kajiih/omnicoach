@@ -3,7 +3,7 @@
 pub(crate) mod ast_python;
 pub(crate) mod ast_rust;
 pub(crate) mod calls;
-pub mod comments;
+pub(crate) mod comments;
 pub(crate) mod rules;
 pub(crate) mod suppression;
 

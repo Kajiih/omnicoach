@@ -1,6 +1,6 @@
 //! Shared comment extraction and documentation explanation engine.
 //!
-//! Provides a zero-allocation `CommentIndex` for indexing comments by line number,
+//! Provides an allocation-free `CommentIndex` for indexing comments by line number,
 //! stripping standard linter/tooling directive prefixes, and verifying that sensitive
 //! operations (such as exception suppression) are accompanied by substantive explanation comments.
 
@@ -20,11 +20,55 @@ pub fn collect_comment_nodes<'a>(node: &AstNode<'a>, comments: &mut Vec<AstNode<
     }
 }
 
-/// Strips leading comment delimiters (`#`, `//`, `/*`, `*`, `*/`) and surrounding whitespace.
+/// Strips leading and trailing comment delimiters (`//`, `#`, `/* ... */`).
+///
+/// Returns `Some(stripped)` if delimiters were present, or `None` if the text
+/// does not start with standard comment delimiters.
 #[must_use]
-pub fn strip_comment_delimiters(text: &str) -> &str {
-    text.trim_start_matches(|c: char| c == '#' || c == '/' || c == '*' || c.is_whitespace())
-        .trim_end_matches(|c: char| c == '*' || c == '/' || c.is_whitespace())
+pub fn strip_comment_delimiters(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    trimmed
+        .strip_prefix("//")
+        .or_else(|| trimmed.strip_prefix('#'))
+        .map(str::trim_start)
+        .or_else(|| {
+            trimmed
+                .strip_prefix("/*")
+                .map(|body| body.trim_start().trim_end_matches("*/").trim_end())
+        })
+}
+
+const DIRECTIVE_PREFIXES: &[&str] = &[
+    "omni:ignore",
+    "omni:disable-file",
+    "ruff: noqa",
+    "ruff:noqa",
+    "type: ignore",
+    "type:ignore",
+    "pyright: ignore",
+    "pyright:ignore",
+    "pylint: disable",
+    "pylint:disable",
+    "noqa",
+];
+
+fn find_directive_prefix(text: &str) -> Option<usize> {
+    for &prefix in DIRECTIVE_PREFIXES {
+        if text
+            .get(..prefix.len())
+            .is_some_and(|sub| sub.eq_ignore_ascii_case(prefix))
+        {
+            let rest = &text[prefix.len()..];
+            if rest.is_empty()
+                || rest.starts_with(|c: char| {
+                    c.is_whitespace() || c == ':' || c == '=' || c == '[' || c == '-'
+                })
+            {
+                return Some(prefix.len());
+            }
+        }
+    }
+    None
 }
 
 /// Strips standard linter/tooling directives (`noqa`, `type: ignore`, `pyright`, `pylint`, `omni:ignore`).
@@ -34,41 +78,12 @@ pub fn strip_comment_delimiters(text: &str) -> &str {
 /// If the comment consists solely of directives and rule codes, `""` is returned.
 #[must_use]
 pub fn clean_explanation(text: &str) -> &str {
-    let stripped = strip_comment_delimiters(text);
+    let stripped = strip_comment_delimiters(text).unwrap_or_else(|| text.trim());
     if stripped.is_empty() {
         return "";
     }
 
-    let lower = stripped.to_ascii_lowercase();
-
-    // Check for directive prefixes
-    let directive_prefix_len = if lower.starts_with("omni:ignore") {
-        Some("omni:ignore".len())
-    } else if lower.starts_with("omni:disable-file") {
-        Some("omni:disable-file".len())
-    } else if lower.starts_with("noqa") {
-        Some("noqa".len())
-    } else if lower.starts_with("ruff: noqa") {
-        Some("ruff: noqa".len())
-    } else if lower.starts_with("ruff:noqa") {
-        Some("ruff:noqa".len())
-    } else if lower.starts_with("type: ignore") {
-        Some("type: ignore".len())
-    } else if lower.starts_with("type:ignore") {
-        Some("type:ignore".len())
-    } else if lower.starts_with("pyright: ignore") {
-        Some("pyright: ignore".len())
-    } else if lower.starts_with("pyright:ignore") {
-        Some("pyright:ignore".len())
-    } else if lower.starts_with("pylint: disable") {
-        Some("pylint: disable".len())
-    } else if lower.starts_with("pylint:disable") {
-        Some("pylint:disable".len())
-    } else {
-        None
-    };
-
-    let Some(prefix_len) = directive_prefix_len else {
+    let Some(prefix_len) = find_directive_prefix(stripped) else {
         return stripped.trim();
     };
 
@@ -90,18 +105,25 @@ pub fn clean_explanation(text: &str) -> &str {
         }
     } else if remainder.starts_with(':') || remainder.starts_with('=') {
         remainder = remainder[1..].trim_start();
-        // Skip rule code tokens (e.g. `SIM105`, `broad-except`, `W0718,unused-import`)
+        // Skip comma-separated rule code tokens. Once a token does not end with ',',
+        // the rule code list has ended and subsequent words form the explanation.
         while !remainder.is_empty() {
             let first_word = remainder.split_whitespace().next().unwrap_or("");
-            let is_rule_token = first_word.split(',').all(|part| {
-                let token_segment = part.trim();
-                !token_segment.is_empty()
-                    && token_segment
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-            });
+            let trimmed_word = first_word.trim_matches(|c: char| c == ',' || c == ';');
+            let is_rule_token = !trimmed_word.is_empty()
+                && trimmed_word.split(',').all(|part| {
+                    let segment = part.trim();
+                    !segment.is_empty()
+                        && segment
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+                });
             if is_rule_token {
+                let had_comma = first_word.ends_with(',');
                 remainder = remainder[first_word.len()..].trim_start();
+                if !had_comma {
+                    break;
+                }
             } else {
                 break;
             }
@@ -109,7 +131,7 @@ pub fn clean_explanation(text: &str) -> &str {
     }
 
     remainder
-        .trim_start_matches(|c: char| c == '-' || c == ':' || c.is_whitespace())
+        .trim_start_matches(|c: char| c == '-' || c == ':' || c == ';' || c.is_whitespace())
         .trim()
 }
 
@@ -123,31 +145,45 @@ pub fn is_substantive_explanation(text: &str) -> bool {
     }
 
     // Disallow bare TODO/FIXME notes without substantive explanation
-    let lower = text.to_ascii_lowercase();
-    if (lower.starts_with("todo") || lower.starts_with("fixme")) && words <= 3 {
+    let starts_with_todo = text
+        .get(..4)
+        .is_some_and(|sub| sub.eq_ignore_ascii_case("todo"));
+    let starts_with_fixme = text
+        .get(..5)
+        .is_some_and(|sub| sub.eq_ignore_ascii_case("fixme"));
+    if (starts_with_todo || starts_with_fixme) && words <= 3 {
         return false;
     }
 
     true
 }
 
-/// Index of source comments, mapping 1-indexed lines to comment text.
-#[derive(Debug, Default)]
-pub struct CommentIndex {
-    comments_by_line: HashMap<usize, String>,
+/// Index of source comments, mapping 1-indexed lines to comment AST nodes.
+#[derive(Default)]
+pub struct CommentIndex<'a> {
+    comments_by_line: HashMap<usize, (AstNode<'a>, bool)>,
 }
 
-impl CommentIndex {
+impl<'a> CommentIndex<'a> {
     /// Builds a `CommentIndex` from `AstGrep`.
     #[must_use]
-    pub fn from_ast(grep: &AstGrep<SourceDoc>) -> Self {
+    pub fn from_ast(grep: &'a AstGrep<SourceDoc>) -> Self {
+        let root = grep.root();
+        let root_text = root.text();
+        let source = root_text.as_ref();
         let mut comment_nodes = Vec::new();
-        collect_comment_nodes(&grep.root(), &mut comment_nodes);
+        collect_comment_nodes(&root, &mut comment_nodes);
 
         let mut comments_by_line = HashMap::with_capacity(comment_nodes.len());
         for node in comment_nodes {
-            let line = node.start_pos().line() + 1;
-            comments_by_line.insert(line, node.text().into_owned());
+            let start_line = node.start_pos().line() + 1;
+            let end_line = node.end_pos().line() + 1;
+            let node_offset = node.range().start;
+            let line_start_offset = source[..node_offset].rfind('\n').map_or(0, |idx| idx + 1);
+            let is_standalone = source[line_start_offset..node_offset].trim().is_empty();
+            for line in start_line..=end_line {
+                comments_by_line.insert(line, (node.clone(), is_standalone));
+            }
         }
 
         Self { comments_by_line }
@@ -155,8 +191,19 @@ impl CommentIndex {
 
     /// Returns the raw comment text on a specific 1-indexed line, if any.
     #[must_use]
-    pub fn comment_on_line(&self, line: usize) -> Option<&str> {
-        self.comments_by_line.get(&line).map(String::as_str)
+    pub fn comment_on_line(&self, line: usize) -> Option<std::borrow::Cow<'_, str>> {
+        self.comments_by_line
+            .get(&line)
+            .map(|(node, _)| node.text())
+    }
+
+    /// Checks whether a given 1-indexed line has an inline, substantive explanation.
+    #[must_use]
+    pub fn has_inline_explanation(&self, line: usize) -> bool {
+        self.comment_on_line(line).is_some_and(|text| {
+            let cleaned = clean_explanation(text.as_ref());
+            is_substantive_explanation(cleaned)
+        })
     }
 
     /// Verifies if a given line has an adjacent, substantive explanation comment.
@@ -167,22 +214,34 @@ impl CommentIndex {
     #[must_use]
     pub fn has_adjacent_explanation(&self, line: usize) -> bool {
         // 1. Inline comment on the same line
-        if let Some(inline_text) = self.comment_on_line(line) {
-            let cleaned = clean_explanation(inline_text);
-            if is_substantive_explanation(cleaned) {
-                return true;
-            }
+        if self.has_inline_explanation(line) {
+            return true;
         }
 
-        // 2. Contiguous comment block directly above `line`
+        // 2. Contiguous standalone comment block directly above `line`
         let mut curr_line = line.saturating_sub(1);
-        let mut block_parts = Vec::new();
+        let mut block = String::new();
+        let mut prev_range: Option<(usize, usize)> = None;
 
         while curr_line > 0 {
-            if let Some(comment_text) = self.comment_on_line(curr_line) {
-                let cleaned = clean_explanation(comment_text);
-                if !cleaned.is_empty() {
-                    block_parts.push(cleaned);
+            if let Some((node, is_standalone)) = self.comments_by_line.get(&curr_line) {
+                // Preceding comment blocks must consist exclusively of standalone comment lines.
+                // An inline comment on a preceding code line belongs to that line, not this block.
+                if !*is_standalone {
+                    break;
+                }
+
+                let range = (node.range().start, node.range().end);
+                if prev_range != Some(range) {
+                    prev_range = Some(range);
+                    let comment_text = node.text();
+                    let cleaned = clean_explanation(comment_text.as_ref());
+                    if !cleaned.is_empty() {
+                        if !block.is_empty() {
+                            block.insert(0, ' ');
+                        }
+                        block.insert_str(0, cleaned);
+                    }
                 }
                 curr_line = curr_line.saturating_sub(1);
             } else {
@@ -190,13 +249,7 @@ impl CommentIndex {
             }
         }
 
-        if block_parts.is_empty() {
-            return false;
-        }
-
-        block_parts.reverse();
-        let combined = block_parts.join(" ");
-        is_substantive_explanation(&combined)
+        is_substantive_explanation(&block)
     }
 }
 
@@ -211,12 +264,40 @@ mod tests {
     #[case::plain_comment("# Safe because cache is transient", "Safe because cache is transient")]
     #[case::noqa_bare("# noqa: SIM105", "")]
     #[case::noqa_with_comment("# noqa: SIM105 -- file may be removed", "file may be removed")]
+    #[case::noqa_with_plain_explanation(
+        "# noqa: SIM105 safe because transient",
+        "safe because transient"
+    )]
+    #[case::noqa_multiple_codes_with_plain_explanation(
+        "# noqa: SIM105, F401 safe because transient",
+        "safe because transient"
+    )]
     #[case::type_ignore("# type: ignore[import]", "")]
+    #[case::type_ignore_with_explanation(
+        "# type: ignore[import] third party library untyped",
+        "third party library untyped"
+    )]
     #[case::omni_ignore("# omni:ignore[rule-name] -- explanation", "explanation")]
     #[case::pylint_disable("# pylint: disable=broad-except", "")]
+    #[case::pylint_disable_with_explanation(
+        "# pylint: disable=broad-except file may be missing",
+        "file may be missing"
+    )]
     #[case::rust_safety_comment(
         "// SAFETY: pointer is non-null and aligned",
         "SAFETY: pointer is non-null and aligned"
+    )]
+    #[case::path_comment("# /usr/bin/env python", "/usr/bin/env python")]
+    #[case::deref_comment("// *ptr = 10", "*ptr = 10")]
+    #[case::c_block_comment("/* cleanup cache */", "cleanup cache")]
+    #[case::noqa_no_space_comma("# noqa: SIM105,F401,E501", "")]
+    #[case::noqa_no_space_comma_with_explanation(
+        "# noqa: SIM105,F401 explanation text here",
+        "explanation text here"
+    )]
+    #[case::utf8_accented_comment(
+        "# café au lait délicieux et nécessaire",
+        "café au lait délicieux et nécessaire"
     )]
     fn test_clean_explanation_directive_stripping(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(clean_explanation(input), expected);
@@ -225,6 +306,7 @@ mod tests {
     #[rstest]
     #[case::valid_long("Cache file may be removed concurrently", true)]
     #[case::valid_safety("Pointer is guaranteed non-null", true)]
+    #[case::utf8_valid("café au lait délicieux", true)]
     #[case::too_short_words("ignore", false)]
     #[case::todo_too_short("todo fix", false)]
     #[case::too_short_chars("ok", false)]
@@ -280,5 +362,19 @@ mod tests {
         let index = CommentIndex::from_ast(&grep);
 
         assert!(index.has_adjacent_explanation(3));
+    }
+
+    #[test]
+    fn test_preceding_inline_comment_on_code_not_counted() {
+        let source = indoc! {r"
+            x = calculate()  # unrelated inline comment here
+            with suppress(FileNotFoundError):
+                pass
+        "};
+        let grep = AstGrep::new(source, SupportLang::Python);
+        let index = CommentIndex::from_ast(&grep);
+
+        // Line 2 has no standalone comment preceding it; line 1 is code with inline comment
+        assert!(!index.has_adjacent_explanation(2));
     }
 }

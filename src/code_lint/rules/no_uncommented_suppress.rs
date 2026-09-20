@@ -4,8 +4,9 @@
 //! in Python `with` statements are accompanied by an adjacent explanatory comment
 //! documenting why ignoring the exception is benign.
 
+use crate::code_lint::ast_python::{find_enclosing_with_item, find_enclosing_with_statement};
 use crate::code_lint::comments::CommentIndex;
-use crate::code_lint::{AstNode, CodeRule, SourceDoc};
+use crate::code_lint::{CodeRule, SourceDoc};
 use crate::core::{Config, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
@@ -18,34 +19,6 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     rationale: "Silently suppressing exceptions without documenting why the failure is benign obscures unexpected bugs and leaves future maintainers confused.",
     suggestion: "Add a comment directly above or inline with the `suppress(...)` statement explaining why ignoring this exception is safe.",
 };
-
-/// Traverses upward from a call expression to find if it is enclosed in a `with_item`.
-/// Allows transparent traversal through `parenthesized_expression`.
-fn find_enclosing_with_item<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
-    let mut curr = node.parent();
-    while let Some(parent) = curr {
-        match parent.kind().as_ref() {
-            "with_item" => return Some(parent),
-            "parenthesized_expression" => {
-                curr = parent.parent();
-            }
-            _ => return None,
-        }
-    }
-    None
-}
-
-/// Traverses upward from a `with_item` to find the enclosing `with_statement`.
-fn find_enclosing_with_statement<'a>(with_item: &AstNode<'a>) -> Option<AstNode<'a>> {
-    let mut curr = with_item.parent();
-    while let Some(parent) = curr {
-        if parent.kind() == "with_statement" {
-            return Some(parent);
-        }
-        curr = parent.parent();
-    }
-    None
-}
 
 /// Rule struct.
 pub struct NoUncommentedSuppress;
@@ -90,17 +63,21 @@ impl CodeRule for NoUncommentedSuppress {
                 continue;
             };
 
-            let Some(with_stmt) = find_enclosing_with_statement(&with_item) else {
+            let Some(with_stmt) = find_enclosing_with_statement(&call) else {
                 continue;
             };
 
             let call_line = call.start_pos().line() + 1;
             let with_line = with_stmt.start_pos().line() + 1;
+            let end_line = with_item.end_pos().line() + 1;
 
-            // Dual-anchor check: accept comments adjacent to either the suppress call line
-            // or the enclosing with statement line
+            // Multi-anchor check: accept comments adjacent to:
+            // 1. Preceding comment block directly above with_stmt or suppress call
+            // 2. Inline comments on any line within the suppress call or with_item
             let has_explanation = comment_index.has_adjacent_explanation(call_line)
-                || comment_index.has_adjacent_explanation(with_line);
+                || comment_index.has_adjacent_explanation(with_line)
+                || (call_line..=end_line)
+                    .any(|target_line| comment_index.has_inline_explanation(target_line));
 
             if !has_explanation {
                 diagnostics.push(self.diagnostic_at_node(path, &call, &[]));
@@ -263,6 +240,46 @@ mod tests {
         let source = indoc! {r"
             # Suppress object passed as an argument or assigned
             mgr = suppress(FileNotFoundError)
+        "};
+
+        let output =
+            crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_multiline_suppress_with_trailing_inline_comment() {
+        let source = indoc! {r"
+            with suppress(
+                FileNotFoundError,
+            ):  # Safe if lock file was already deleted
+                pass
+        "};
+
+        let output =
+            crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_multiline_suppress_with_argument_comment() {
+        let source = indoc! {r"
+            with suppress(
+                FileNotFoundError,  # Lock file may already be removed by daemon
+            ):
+                pass
+        "};
+
+        let output =
+            crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_noqa_with_plain_words_explanation() {
+        let source = indoc! {r"
+            with suppress(FileNotFoundError):  # noqa: SIM105 safe because transient cache
+                pass
         "};
 
         let output =

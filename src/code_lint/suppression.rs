@@ -259,7 +259,7 @@ impl SuppressionTracker {
         coord: LineColumn,
         content: &str,
     ) -> Option<ParsedDirective> {
-        let stripped = strip_comment_delimiters(text)?;
+        let stripped = crate::code_lint::comments::strip_comment_delimiters(text)?;
         let (is_file, remainder) = parse_directive_prefix(stripped)?;
         let (target_rules, is_blanket, after_rules) = parse_bracketed_rules(remainder.trim_start());
 
@@ -339,20 +339,6 @@ impl SuppressionTracker {
         }
         diagnostics
     }
-}
-
-/// Strips leading and trailing comment delimiters (`//`, `#`, `/* ... */`).
-fn strip_comment_delimiters(text: &str) -> Option<&str> {
-    let trimmed = text.trim();
-    trimmed
-        .strip_prefix("//")
-        .or_else(|| trimmed.strip_prefix('#'))
-        .map(str::trim_start)
-        .or_else(|| {
-            trimmed
-                .strip_prefix("/*")
-                .map(|body| body.trim_start().trim_end_matches("*/").trim_end())
-        })
 }
 
 /// Parses the `omni:disable-file` or `omni:ignore` prefix and validates boundary delimiters.
