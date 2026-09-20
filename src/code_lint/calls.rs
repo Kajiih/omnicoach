@@ -48,30 +48,6 @@ fn call_argument_nodes<'a>(call_node: &AstNode<'a>) -> Vec<AstNode<'a>> {
     })
 }
 
-/// Recursively collects all call nodes whose callee text matches an entry in `literals`.
-fn collect_literal_call_matches<'a, S: std::hash::BuildHasher>(
-    node: &AstNode<'a>,
-    literals: &HashSet<&str, S>,
-    out: &mut Vec<CallMatch<'a>>,
-) {
-    if matches!(node.kind().as_ref(), "call_expression" | "call")
-        && let Some(function) = node.field("function")
-    {
-        let callee_text = function.text();
-        if literals.contains(callee_text.as_ref()) {
-            out.push(CallMatch {
-                node: node.clone(),
-                callee: callee_text.to_string(),
-                arguments: call_argument_nodes(node),
-            });
-        }
-    }
-
-    for child in node.children() {
-        collect_literal_call_matches(&child, literals, out);
-    }
-}
-
 /// Finds all call expressions in `grep` matching any of the `banned_callees` entries.
 ///
 /// Literal callee names are evaluated in a single-pass AST traversal with O(1) set lookups.
@@ -100,7 +76,21 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
     }
 
     if !literal_callees.is_empty() {
-        collect_literal_call_matches(&root, &literal_callees, &mut matches);
+        for node in root
+            .dfs()
+            .filter(|call_node| matches!(call_node.kind().as_ref(), "call_expression" | "call"))
+        {
+            if let Some(function) = node.field("function") {
+                let callee_text = function.text();
+                if literal_callees.contains(callee_text.as_ref()) {
+                    matches.push(CallMatch {
+                        node: node.clone(),
+                        callee: callee_text.to_string(),
+                        arguments: call_argument_nodes(&node),
+                    });
+                }
+            }
+        }
     }
 
     for entry in structural_entries {

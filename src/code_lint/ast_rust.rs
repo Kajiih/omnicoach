@@ -320,17 +320,19 @@ pub fn is_test_function(func_node: &AstNode<'_>) -> bool {
 
 /// Extracts the terminal macro identifier from a Rust `macro_invocation` node (e.g. `assert` from `std::assert!`).
 #[must_use]
-pub fn macro_terminal_name(macro_node: &AstNode<'_>) -> String {
+pub fn macro_terminal_name<'tree>(macro_node: &AstNode<'tree>) -> std::borrow::Cow<'tree, str> {
     let Some(macro_id) = macro_node.field("macro") else {
-        return String::new();
+        return std::borrow::Cow::Borrowed("");
     };
-    macro_id
-        .text()
-        .rsplit("::")
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_string()
+    let text = macro_id.text();
+    match text {
+        std::borrow::Cow::Borrowed(borrowed) => {
+            std::borrow::Cow::Borrowed(borrowed.rsplit("::").next().unwrap_or("").trim())
+        }
+        std::borrow::Cow::Owned(owned) => {
+            std::borrow::Cow::Owned(owned.rsplit("::").next().unwrap_or("").trim().to_string())
+        }
+    }
 }
 
 /// Returns true if a Rust `macro_invocation` node invokes an assertion macro

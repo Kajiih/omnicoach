@@ -406,6 +406,17 @@ impl<'de> Deserialize<'de> for Selector {
     }
 }
 
+impl Selector {
+    /// Returns true if this selector matches the given rule.
+    #[must_use]
+    pub fn matches_rule(&self, rule: &dyn Rule) -> bool {
+        match self {
+            Self::Name(name) => *name == rule.name(),
+            Self::Tag(tag) => rule.has_tag(*tag),
+        }
+    }
+}
+
 /// Configuration settings for path context detection (e.g. test paths).
 #[derive(Deserialize, Debug, Clone)]
 pub struct ContextConfig {
@@ -482,41 +493,35 @@ fn normalize_path_for_glob(path: &Path) -> String {
     stripped.to_string_lossy().replace('\\', "/")
 }
 
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    globset::GlobBuilder::new(pattern)
+        .literal_separator(false)
+        .build()
+        .is_ok_and(|glob| glob.compile_matcher().is_match(text))
+}
+
 impl Config {
     /// Returns true if the given path matches any configured test pattern.
     #[must_use]
     pub fn is_test_path(&self, path: &Path) -> bool {
         let normalized = normalize_path_for_glob(path);
-        for pattern in &self.context.test_patterns {
-            if let Ok(glob) = globset::GlobBuilder::new(pattern)
-                .literal_separator(false)
-                .build()
-                && glob.compile_matcher().is_match(&normalized)
-            {
-                return true;
-            }
-        }
-        false
+        self.context
+            .test_patterns
+            .iter()
+            .any(|pattern| glob_matches(pattern, &normalized))
     }
 
     /// Returns true if the given rule is enabled in this configuration.
     #[must_use]
     pub fn is_rule_enabled(&self, rule: &dyn Rule) -> bool {
-        let name = rule.name();
-
-        let matches_selector = |sel: &Selector| match sel {
-            Selector::Name(name_selector) => *name_selector == name,
-            Selector::Tag(tag_selector) => rule.has_tag(*tag_selector),
-        };
-
         if let Some(ref select) = self.select
-            && !select.iter().any(matches_selector)
+            && !select.iter().any(|selector| selector.matches_rule(rule))
         {
             return false;
         }
 
         if let Some(ref ignore) = self.ignore
-            && ignore.iter().any(matches_selector)
+            && ignore.iter().any(|selector| selector.matches_rule(rule))
         {
             return false;
         }
@@ -532,19 +537,10 @@ impl Config {
         }
 
         let normalized = normalize_path_for_glob(path);
-        let name = rule.name();
-
-        let matches_selector = |sel: &Selector| match sel {
-            Selector::Name(name_selector) => *name_selector == name,
-            Selector::Tag(tag_selector) => rule.has_tag(*tag_selector),
-        };
 
         for (pattern, selectors) in &self.per_file_ignores {
-            if let Ok(glob) = globset::GlobBuilder::new(pattern)
-                .literal_separator(false)
-                .build()
-                && glob.compile_matcher().is_match(&normalized)
-                && selectors.iter().any(matches_selector)
+            if glob_matches(pattern, &normalized)
+                && selectors.iter().any(|selector| selector.matches_rule(rule))
             {
                 return false;
             }

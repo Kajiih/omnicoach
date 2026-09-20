@@ -291,13 +291,10 @@ pub fn has_override_decorator(func_node: &AstNode<'_>) -> bool {
 /// Transparently handles expressions wrapped in `parenthesized_expression`.
 #[must_use]
 pub fn find_enclosing_with_item<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
-    let mut curr = node.parent();
-    while let Some(parent) = curr {
-        match parent.kind().as_ref() {
-            "with_item" => return Some(parent),
-            "parenthesized_expression" => {
-                curr = parent.parent();
-            }
+    for ancestor in node.ancestors() {
+        match ancestor.kind().as_ref() {
+            "with_item" => return Some(ancestor),
+            "parenthesized_expression" => {}
             _ => return None,
         }
     }
