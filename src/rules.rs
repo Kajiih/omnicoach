@@ -100,6 +100,7 @@ pub const CODE_RULES: &[&dyn crate::code_lint::CodeRule] = &[
     &crate::code_lint::rules::banned_abbreviations::BannedAbbreviations,
     &crate::code_lint::rules::no_hungarian_notation::NoHungarianNotation,
     &crate::code_lint::rules::no_identical_positional_types::NoIdenticalPositionalTypes,
+    &crate::code_lint::rules::no_env_in_functions::NoEnvInFunctions,
     &crate::code_lint::suppression::MissingSuppressionReason,
     &crate::code_lint::suppression::UnusedSuppression,
     &crate::code_lint::suppression::UnknownSuppressionRule,

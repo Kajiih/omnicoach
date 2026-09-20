@@ -112,6 +112,7 @@ banned_suffixes = ["_list", "_arr", "_dict"]
 *   **`no-logging-in-except`**: Bans using `logging.error` inside Python except blocks (suggests `logging.exception`).
 *   **`flat-scope-enforced`**: Bans nested function definitions in Python source files.
 *   **`no-identical-positional-types`**: Bans functions with `>= 3` positional parameters (configurable via `[rules.no-identical-positional-types] min_args = N`) where 2 or more share an identical type annotation (suggests keyword-only arguments via `*`).
+*   **`no-env-in-functions`**: Bans direct environment variable reads/writes (`os.getenv`, `os.environ[...]`, `std::env::var`, etc.) inside functions and methods outside of startup/config boundaries (`main`, `from_env`, `load_env`, or module/static scope).
 *   **`no-edits-on-described-commits`**: Discourages/blocks running `jj edit` on commits that already have descriptions.
 
 ---
