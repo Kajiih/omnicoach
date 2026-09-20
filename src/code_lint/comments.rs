@@ -1,6 +1,6 @@
 //! Shared comment extraction and documentation explanation engine.
 //!
-//! Provides an allocation-free `CommentIndex` for indexing comments by line number,
+//! Provides a fast `CommentIndex` for indexing comments by line number,
 //! stripping standard linter/tooling directive prefixes, and verifying that sensitive
 //! operations (such as exception suppression) are accompanied by substantive explanation comments.
 
@@ -234,8 +234,8 @@ impl<'a> CommentIndex<'a> {
 
         // 2. Contiguous standalone comment block directly above `line`
         let mut curr_line = line.saturating_sub(1);
-        let mut block = String::new();
         let mut prev_range: Option<(usize, usize)> = None;
+        let mut parts = Vec::new();
 
         while curr_line > 0 {
             if let Some(entry) = self.comments_by_line.get(&curr_line) {
@@ -251,10 +251,7 @@ impl<'a> CommentIndex<'a> {
                     let comment_text = entry.node.text();
                     let cleaned = clean_explanation(comment_text.as_ref());
                     if !cleaned.is_empty() {
-                        if !block.is_empty() {
-                            block.insert(0, ' ');
-                        }
-                        block.insert_str(0, cleaned);
+                        parts.push(cleaned.to_string());
                     }
                 }
                 curr_line = curr_line.saturating_sub(1);
@@ -263,7 +260,11 @@ impl<'a> CommentIndex<'a> {
             }
         }
 
-        is_substantive_explanation(&block)
+        if parts.is_empty() {
+            return false;
+        }
+        parts.reverse();
+        is_substantive_explanation(&parts.join(" "))
     }
 
     /// Checks whether an AST node is accompanied by an explanatory comment:

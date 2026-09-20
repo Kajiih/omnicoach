@@ -48,14 +48,18 @@ impl CodeRule for NoUncommentedSuppress {
         grep: &AstGrep<SourceDoc>,
         _config: &Config,
     ) -> Vec<Diagnostic> {
+        let root = grep.root();
+        let calls: Vec<_> = root
+            .find_all("suppress($$$ARGS)")
+            .chain(root.find_all("contextlib.suppress($$$ARGS)"))
+            .collect();
+
+        if calls.is_empty() {
+            return Vec::new();
+        }
+
         let comment_index = CommentIndex::from_ast(grep);
         let mut diagnostics = Vec::new();
-
-        // Match both `suppress(...)` and `contextlib.suppress(...)`
-        let root = grep.root();
-        let calls = root
-            .find_all("suppress($$$ARGS)")
-            .chain(root.find_all("contextlib.suppress($$$ARGS)"));
 
         for call in calls {
             // Verify that this call is actually used as a context manager expression in a with statement
@@ -69,9 +73,12 @@ impl CodeRule for NoUncommentedSuppress {
 
             // Check whether the suppress call, its with-item, or the enclosing with-statement
             // is documented by an adjacent explanatory comment.
+            // Note: with_stmt spans the entire with body; only preceding comments directly above
+            // with_stmt should be considered, to avoid arbitrary inline comments in the body
+            // erroneously silencing unannotated suppression.
             let is_documented = comment_index.has_explanation_for_node(&call)
                 || comment_index.has_explanation_for_node(&with_item)
-                || comment_index.has_explanation_for_node(&with_stmt);
+                || comment_index.has_adjacent_explanation(with_stmt.start_pos().line() + 1);
 
             if !is_documented {
                 diagnostics.push(self.diagnostic_at_node(path, &call, &[]));
@@ -279,5 +286,17 @@ mod tests {
         let output =
             crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_body_inline_comment_does_not_suppress_violation() {
+        let source = indoc! {r#"
+            with suppress(FileNotFoundError):
+                os.remove("tmp.txt")  # inline comment inside body
+        "#};
+
+        let output =
+            crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
+        insta::assert_snapshot!(output, @"[no-uncommented-suppress] Line 1, Col 6: Exception suppression must include an explanatory comment.");
     }
 }
