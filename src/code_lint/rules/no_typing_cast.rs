@@ -1,0 +1,128 @@
+//! Rule: `no-typing-cast`
+//!
+//! Flags calls to `typing.cast(...)`, `typing_extensions.cast(...)`, or `cast(...)` in Python production code.
+//! `cast()` bypasses static type verification without runtime validation, masking underlying type errors and bugs.
+//!
+//! Legitimate uses (such as untyped third-party libraries or subscripted generics across boundaries)
+//! should be justified via `# omni:ignore[no-typing-cast] -- <explanation>`.
+
+use crate::code_lint::{CodeRule, RuleTarget, SourceDoc};
+use crate::core::{Config, Rule, RuleName};
+use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
+use crate::rules::Tag;
+use ast_grep_core::AstGrep;
+use ast_grep_language::SupportLang;
+use std::path::Path;
+
+const TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Unchecked type assertion `{call_name}()` is discouraged.",
+    rationale: "`typing.cast()` performs an unchecked assertion that bypasses static type verification without runtime validation.",
+    suggestion: "Use structural subtyping (Protocols), runtime type narrowing (`isinstance()`), or domain types instead. If unavoidable, document why with `# omni:ignore[no-typing-cast] -- <reason>`.",
+};
+
+/// Rule struct.
+pub struct NoTypingCast;
+
+impl Rule for NoTypingCast {
+    fn name(&self) -> RuleName {
+        RuleName("no-typing-cast")
+    }
+
+    fn tags(&self) -> &'static [Tag] {
+        &[Tag::Typing]
+    }
+
+    fn supported_languages(&self) -> &'static [SupportLang] {
+        &[SupportLang::Python]
+    }
+
+    fn violation_template(&self) -> &'static ViolationTemplate {
+        &TEMPLATE
+    }
+}
+
+impl CodeRule for NoTypingCast {
+    fn target(&self) -> RuleTarget {
+        RuleTarget::SourceOnly
+    }
+
+    fn check_file(
+        &self,
+        path: &Path,
+        grep: &AstGrep<SourceDoc>,
+        _config: &Config,
+    ) -> Vec<Diagnostic> {
+        let root = grep.root();
+
+        let bare_casts = root.find_all("cast($$$ARGS)").map(|node| (node, "cast"));
+
+        let typing_casts = root
+            .find_all("typing.cast($$$ARGS)")
+            .map(|node| (node, "typing.cast"));
+
+        let typing_ext_casts = root
+            .find_all("typing_extensions.cast($$$ARGS)")
+            .map(|node| (node, "typing_extensions.cast"));
+
+        bare_casts
+            .chain(typing_casts)
+            .chain(typing_ext_casts)
+            .map(|(node, call_name)| {
+                self.diagnostic_at_node(path, &node, &[("call_name", call_name)])
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use indoc::indoc;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::bare_cast(
+        indoc! {r"
+            x = cast(int, y)
+        "},
+        "[no-typing-cast] Line 1, Col 5: Unchecked type assertion `cast()` is discouraged."
+    )]
+    #[case::typing_qualified_cast(
+        indoc! {r"
+            import typing
+            x = typing.cast(list[str], data)
+        "},
+        "[no-typing-cast] Line 2, Col 5: Unchecked type assertion `typing.cast()` is discouraged."
+    )]
+    #[case::typing_extensions_cast(
+        indoc! {r"
+            import typing_extensions
+            x = typing_extensions.cast(int, data)
+        "},
+        "[no-typing-cast] Line 2, Col 5: Unchecked type assertion `typing_extensions.cast()` is discouraged."
+    )]
+    fn test_typing_cast_flagged(#[case] source: &str, #[case] expected: &str) {
+        let output = crate::test_utils::assert_code_rule_snapshot(&NoTypingCast, source, "test.py");
+        assert_eq!(output.trim(), expected);
+    }
+
+    #[rstest]
+    #[case::polars_column_cast(indoc! {r"
+        df = df.select(pl.col('a').cast(pl.Int64))
+    "})]
+    #[case::custom_method_cast(indoc! {r"
+        result = obj.cast('param')
+    "})]
+    #[case::unrelated_call(indoc! {r"
+        print('hello world')
+    "})]
+    fn test_unrelated_calls_allowed(#[case] source: &str) {
+        let output = crate::test_utils::assert_code_rule_snapshot(&NoTypingCast, source, "test.py");
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_skipped_on_test_file() {
+        assert_eq!(NoTypingCast.target(), RuleTarget::SourceOnly);
+    }
+}
