@@ -71,6 +71,36 @@ fn find_directive_prefix(text: &str) -> Option<usize> {
     None
 }
 
+/// Checks if a whitespace-delimited word consists of rule codes (e.g. `SIM105`, `F401,`, `SIM105,F401`).
+fn is_rule_code_token(word: &str) -> bool {
+    let trimmed = word.trim_matches(|c: char| c == ',' || c == ';');
+    !trimmed.is_empty()
+        && trimmed.split(',').all(|part| {
+            let segment = part.trim();
+            !segment.is_empty()
+                && segment
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        })
+}
+
+fn strip_rule_codes(mut text: &str) -> &str {
+    text = text.trim_start();
+    while !text.is_empty() {
+        let first_word = text.split_whitespace().next().unwrap_or("");
+        if is_rule_code_token(first_word) {
+            let had_comma = first_word.ends_with(',');
+            text = text[first_word.len()..].trim_start();
+            if !had_comma {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    text
+}
+
 /// Strips standard linter/tooling directives (`noqa`, `type: ignore`, `pyright`, `pylint`, `omni:ignore`).
 ///
 /// If the comment contains an explanatory reason after a separator (e.g. `-- reason`),
@@ -104,30 +134,7 @@ pub fn clean_explanation(text: &str) -> &str {
             return "";
         }
     } else if remainder.starts_with(':') || remainder.starts_with('=') {
-        remainder = remainder[1..].trim_start();
-        // Skip comma-separated rule code tokens. Once a token does not end with ',',
-        // the rule code list has ended and subsequent words form the explanation.
-        while !remainder.is_empty() {
-            let first_word = remainder.split_whitespace().next().unwrap_or("");
-            let trimmed_word = first_word.trim_matches(|c: char| c == ',' || c == ';');
-            let is_rule_token = !trimmed_word.is_empty()
-                && trimmed_word.split(',').all(|part| {
-                    let segment = part.trim();
-                    !segment.is_empty()
-                        && segment
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-                });
-            if is_rule_token {
-                let had_comma = first_word.ends_with(',');
-                remainder = remainder[first_word.len()..].trim_start();
-                if !had_comma {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
+        remainder = strip_rule_codes(&remainder[1..]);
     }
 
     remainder
@@ -158,10 +165,16 @@ pub fn is_substantive_explanation(text: &str) -> bool {
     true
 }
 
+#[derive(Clone)]
+struct IndexedComment<'a> {
+    node: AstNode<'a>,
+    is_standalone: bool,
+}
+
 /// Index of source comments, mapping 1-indexed lines to comment AST nodes.
 #[derive(Default)]
 pub struct CommentIndex<'a> {
-    comments_by_line: HashMap<usize, (AstNode<'a>, bool)>,
+    comments_by_line: HashMap<usize, IndexedComment<'a>>,
 }
 
 impl<'a> CommentIndex<'a> {
@@ -182,7 +195,13 @@ impl<'a> CommentIndex<'a> {
             let line_start_offset = source[..node_offset].rfind('\n').map_or(0, |idx| idx + 1);
             let is_standalone = source[line_start_offset..node_offset].trim().is_empty();
             for line in start_line..=end_line {
-                comments_by_line.insert(line, (node.clone(), is_standalone));
+                comments_by_line.insert(
+                    line,
+                    IndexedComment {
+                        node: node.clone(),
+                        is_standalone,
+                    },
+                );
             }
         }
 
@@ -194,7 +213,7 @@ impl<'a> CommentIndex<'a> {
     pub fn comment_on_line(&self, line: usize) -> Option<std::borrow::Cow<'_, str>> {
         self.comments_by_line
             .get(&line)
-            .map(|(node, _)| node.text())
+            .map(|entry| entry.node.text())
     }
 
     /// Checks whether a given 1-indexed line has an inline, substantive explanation.
@@ -224,17 +243,17 @@ impl<'a> CommentIndex<'a> {
         let mut prev_range: Option<(usize, usize)> = None;
 
         while curr_line > 0 {
-            if let Some((node, is_standalone)) = self.comments_by_line.get(&curr_line) {
+            if let Some(entry) = self.comments_by_line.get(&curr_line) {
                 // Preceding comment blocks must consist exclusively of standalone comment lines.
                 // An inline comment on a preceding code line belongs to that line, not this block.
-                if !*is_standalone {
+                if !entry.is_standalone {
                     break;
                 }
 
-                let range = (node.range().start, node.range().end);
+                let range = (entry.node.range().start, entry.node.range().end);
                 if prev_range != Some(range) {
                     prev_range = Some(range);
-                    let comment_text = node.text();
+                    let comment_text = entry.node.text();
                     let cleaned = clean_explanation(comment_text.as_ref());
                     if !cleaned.is_empty() {
                         if !block.is_empty() {
@@ -250,6 +269,17 @@ impl<'a> CommentIndex<'a> {
         }
 
         is_substantive_explanation(&block)
+    }
+
+    /// Checks whether an AST node is accompanied by an explanatory comment:
+    /// 1. A contiguous standalone comment block directly above its start line.
+    /// 2. An inline comment on any line spanning the node.
+    #[must_use]
+    pub fn has_explanation_for_node(&self, node: &AstNode<'_>) -> bool {
+        let start_line = node.start_pos().line() + 1;
+        let end_line = node.end_pos().line() + 1;
+        self.has_adjacent_explanation(start_line)
+            || (start_line..=end_line).any(|target_line| self.has_inline_explanation(target_line))
     }
 }
 

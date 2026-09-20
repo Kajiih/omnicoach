@@ -67,19 +67,13 @@ impl CodeRule for NoUncommentedSuppress {
                 continue;
             };
 
-            let call_line = call.start_pos().line() + 1;
-            let with_line = with_stmt.start_pos().line() + 1;
-            let end_line = with_item.end_pos().line() + 1;
+            // Check whether the suppress call, its with-item, or the enclosing with-statement
+            // is documented by an adjacent explanatory comment.
+            let is_documented = comment_index.has_explanation_for_node(&call)
+                || comment_index.has_explanation_for_node(&with_item)
+                || comment_index.has_explanation_for_node(&with_stmt);
 
-            // Multi-anchor check: accept comments adjacent to:
-            // 1. Preceding comment block directly above with_stmt or suppress call
-            // 2. Inline comments on any line within the suppress call or with_item
-            let has_explanation = comment_index.has_adjacent_explanation(call_line)
-                || comment_index.has_adjacent_explanation(with_line)
-                || (call_line..=end_line)
-                    .any(|target_line| comment_index.has_inline_explanation(target_line));
-
-            if !has_explanation {
+            if !is_documented {
                 diagnostics.push(self.diagnostic_at_node(path, &call, &[]));
             }
         }
