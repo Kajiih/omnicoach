@@ -44,7 +44,6 @@ impl Rule for SingleLetterVariableName {
         &TEMPLATE
     }
 }
-// TODO: Is this fully language agnostic?
 impl CodeRule for SingleLetterVariableName {
     fn check_file(
         &self,
@@ -62,7 +61,9 @@ impl CodeRule for SingleLetterVariableName {
         let lang = *grep.lang();
 
         for node in bindings {
-            if crate::code_lint::is_unaliased_import_binding(&node, lang) {
+            if crate::code_lint::is_unaliased_import_binding(&node, lang)
+                || crate::code_lint::is_trait_impl_member(&node, lang)
+            {
                 continue;
             }
             let name = node.text();

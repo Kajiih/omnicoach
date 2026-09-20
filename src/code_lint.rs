@@ -274,36 +274,39 @@ pub fn is_structural_definition(node: &AstNode<'_>, lang: SupportLang) -> bool {
 }
 
 /// Returns true if the node is the name of a member defined inside a trait implementation
-/// (`impl Trait for Type`), i.e. a name mandated by the trait contract.
+/// (`impl Trait for Type` in Rust or `@override` method in Python), i.e. a name mandated by a contract.
 ///
 /// Such names cannot be changed without breaking the implementation, so naming rules that
 /// suggest renaming do not meaningfully apply to them. Only the member name itself qualifies;
-/// nested names the author does control, such as parameters and locals, do not.
+/// nested names the author does control, such as locals, do not.
 #[must_use]
 pub fn is_trait_impl_member(node: &AstNode<'_>, lang: SupportLang) -> bool {
-    if lang != SupportLang::Rust {
-        return false;
-    }
-    // The name must belong directly to an associated item ...
     let Some(item) = node.parent() else {
         return false;
     };
-    if !matches!(
-        item.kind().as_ref(),
-        "function_item" | "type_item" | "associated_type" | "const_item"
-    ) {
-        return false;
+    match lang {
+        SupportLang::Rust => {
+            if !matches!(
+                item.kind().as_ref(),
+                "function_item" | "type_item" | "associated_type" | "const_item"
+            ) {
+                return false;
+            }
+            let Some(body) = item.parent() else {
+                return false;
+            };
+            if body.kind().as_ref() != "declaration_list" {
+                return false;
+            }
+            let Some(impl_item) = body.parent() else {
+                return false;
+            };
+            impl_item.kind().as_ref() == "impl_item" && impl_item.field("trait").is_some()
+        }
+        SupportLang::Python => {
+            item.kind().as_ref() == "function_definition"
+                && ast_python::has_override_decorator(&item)
+        }
+        _ => false,
     }
-    // ... declared in the body of an `impl` block ...
-    let Some(body) = item.parent() else {
-        return false;
-    };
-    if body.kind().as_ref() != "declaration_list" {
-        return false;
-    }
-    // ... that names a trait.
-    let Some(impl_item) = body.parent() else {
-        return false;
-    };
-    impl_item.kind().as_ref() == "impl_item" && impl_item.field("trait").is_some()
 }

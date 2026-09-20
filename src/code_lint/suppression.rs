@@ -253,11 +253,7 @@ impl SuppressionTracker {
         for comment_node in comment_nodes {
             let text = comment_node.text();
             let span = SourceSpan::from_range(comment_node.range());
-            let start_pos = comment_node.start_pos();
-            let coord = LineColumn {
-                line: start_pos.line() + 1,
-                column: start_pos.column(&comment_node) + 1,
-            };
+            let coord = LineColumn::from_node(&comment_node);
 
             if let Some(directive) = Self::parse_comment_text(&text, span, coord, content) {
                 directives.push(directive);

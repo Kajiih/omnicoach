@@ -52,24 +52,9 @@ fn is_exempt_dunder(func_name: &str) -> bool {
 
 /// Returns true if `func_node` is decorated with `@override`, `@overload`, `@abstractmethod`, or `@fixture`.
 fn has_exempt_decorator(func_node: &AstNode<'_>) -> bool {
-    let Some(parent) = func_node.parent() else {
-        return false;
-    };
-    if parent.kind() != "decorated_definition" {
-        return false;
-    }
-    for child in parent.children() {
-        if child.kind() == "decorator" {
-            let text = child.text();
-            let trimmed = text.trim().trim_start_matches('@').trim();
-            let base_path = trimmed.split('(').next().unwrap_or("").trim();
-            let terminal = base_path.rsplit('.').next().unwrap_or("").trim();
-            if matches!(terminal, "override" | "overload" | "abstractmethod" | "fixture") {
-                return true;
-            }
-        }
-    }
-    false
+    crate::code_lint::ast_python::has_decorator(func_node, |terminal| {
+        matches!(terminal, "override" | "overload" | "abstractmethod" | "fixture")
+    })
 }
 
 /// Returns true if `param_node` marks the end of positional parameters (`*`, `*args`, or `**kwargs`).

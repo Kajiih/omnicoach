@@ -257,6 +257,36 @@ pub fn is_assertion_call(call_node: &AstNode<'_>) -> bool {
     }
 }
 
+/// Returns true if a Python `function_definition` or `class_definition` has a decorator whose
+/// terminal identifier satisfies `predicate`.
+#[must_use]
+pub fn has_decorator(node: &AstNode<'_>, predicate: fn(&str) -> bool) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    if parent.kind() != "decorated_definition" {
+        return false;
+    }
+    for child in parent.children() {
+        if child.kind() == "decorator" {
+            let text = child.text();
+            let trimmed = text.trim().trim_start_matches('@').trim();
+            let base_path = trimmed.split('(').next().unwrap_or("").trim();
+            let terminal = base_path.rsplit('.').next().unwrap_or("").trim();
+            if predicate(terminal) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Returns true if a Python `function_definition` is decorated with `@override`.
+#[must_use]
+pub fn has_override_decorator(func_node: &AstNode<'_>) -> bool {
+    has_decorator(func_node, |terminal| terminal == "override")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

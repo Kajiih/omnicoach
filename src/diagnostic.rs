@@ -259,13 +259,7 @@ impl SourceLocation {
     /// Creates a `SourceLocation` directly from a file path and an AST node.
     #[must_use]
     pub fn from_node(path: impl Into<PathBuf>, node: &crate::code_lint::AstNode<'_>) -> Self {
-        let start_pos = node.start_pos();
-        Self {
-            context: LocationContext::File(path.into()),
-            span: SourceSpan::from_range(node.range()),
-            line: start_pos.line() + 1,
-            column: start_pos.column(node) + 1,
-        }
+        Self::file_span(path, SourceSpan::from_range(node.range()), LineColumn::from_node(node))
     }
 
     /// Creates a `SourceLocation` for a file path, byte span, and resolved 1-indexed coordinate.
@@ -339,6 +333,15 @@ pub struct LineColumn {
     pub line: usize,
     /// 1-indexed column number.
     pub column: usize,
+}
+
+impl LineColumn {
+    /// Resolves the 1-indexed start `(line, column)` coordinate of an AST node.
+    #[must_use]
+    pub fn from_node(node: &crate::code_lint::AstNode<'_>) -> Self {
+        let start_pos = node.start_pos();
+        Self { line: start_pos.line() + 1, column: start_pos.column(node) + 1 }
+    }
 }
 
 /// Optimized index for mapping flat byte offsets to 1-indexed (line, column) positions.
