@@ -137,6 +137,68 @@ fn filter_diagnostics_by_target(
     }
 }
 
+/// Returns true if a code rule may produce diagnostics for the given path and language context
+/// prior to AST parsing.
+///
+/// For `RuleTarget::TestsOnly`, Python source files (`!is_test`) cannot produce diagnostics because
+/// Omni does not support inline Python tests. Rust source files, however, can declare inline test
+/// modules (`#[cfg(test)]`), so `TestsOnly` rules remain eligible until AST ranges are inspected.
+#[must_use]
+pub(crate) fn is_rule_candidate_for_path(
+    rule: &dyn CodeRule,
+    path: &Path,
+    lang: SupportLang,
+    is_test: bool,
+    config: &Config,
+) -> bool {
+    if rule.tags().contains(&crate::rules::Tag::Suppression) {
+        return false;
+    }
+    config.is_rule_enabled_for_path(rule, path)
+        && rule.supports_language(lang)
+        && match rule.target() {
+            RuleTarget::SourceOnly => !is_test,
+            RuleTarget::TestsOnly => is_test || lang == SupportLang::Rust,
+            RuleTarget::All => true,
+        }
+}
+
+/// Returns true if any active suppression hygiene rule is enabled and applicable to `path`,
+/// and the file content contains a suppression directive prefix (`"omni:"`).
+#[must_use]
+pub(crate) fn has_active_suppression_audit(
+    path: &Path,
+    lang: SupportLang,
+    content: &str,
+    config: &Config,
+) -> bool {
+    content.contains("omni:")
+        && crate::rules::CODE_RULES.iter().any(|rule| {
+            rule.tags().contains(&crate::rules::Tag::Suppression)
+                && config.is_rule_enabled_for_path(*rule, path)
+                && rule.supports_language(lang)
+        })
+}
+
+/// Determines whether AST parsing can be skipped entirely for a file.
+///
+/// Skips Tree-sitter parsing when neither standard code rules nor active suppression audit
+/// directives can produce findings for the file given its language, test-path status, and config.
+#[must_use]
+pub(crate) fn should_skip_ast_parse(
+    path: &Path,
+    lang: SupportLang,
+    content: &str,
+    is_test: bool,
+    config: &Config,
+) -> bool {
+    let has_code_rules = crate::rules::CODE_RULES
+        .iter()
+        .any(|rule| is_rule_candidate_for_path(*rule, path, lang, is_test, config));
+
+    !has_code_rules && !has_active_suppression_audit(path, lang, content, config)
+}
+
 /// Analyzes the structure of a file and returns diagnostic alerts.
 #[must_use]
 pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic> {
@@ -144,10 +206,13 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
         return Vec::new();
     };
 
+    let is_test = config.is_test_path(path);
+    if should_skip_ast_parse(path, lang, content, is_test, config) {
+        return Vec::new();
+    }
     let grep = AstGrep::new(content, lang);
     let mut tracker = suppression::SuppressionTracker::from_ast(&grep, content);
 
-    let is_test = config.is_test_path(path);
     let inline_test_ranges = if !is_test && lang == SupportLang::Rust {
         ast_rust::collect_inline_test_ranges(&grep.root())
     } else {
@@ -472,5 +537,193 @@ fn lint_single_file(
         Ok(filtered)
     } else {
         Ok(diags)
+    }
+}
+
+// TODO: Those test should be designed properly with parameterized, and if possible test more edge cases
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::Selector;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_is_rule_candidate_language_and_suppression() {
+        let config = Config::default();
+        let py_rule = &rules::no_logging_in_except::NoLoggingInExcept;
+        let suppression_rule = &suppression::BlanketSuppression;
+
+        // Python rule on Python file vs Rust file
+        assert!(is_rule_candidate_for_path(
+            py_rule,
+            Path::new("service.py"),
+            SupportLang::Python,
+            false,
+            &config
+        ));
+        assert!(!is_rule_candidate_for_path(
+            py_rule,
+            Path::new("service.rs"),
+            SupportLang::Rust,
+            false,
+            &config
+        ));
+
+        // Suppression rules are excluded from standard code rule evaluation
+        assert!(!is_rule_candidate_for_path(
+            suppression_rule,
+            Path::new("service.py"),
+            SupportLang::Python,
+            false,
+            &config
+        ));
+    }
+
+    #[test]
+    fn test_is_rule_candidate_target_scope() {
+        let config = Config::default();
+        let test_rule = &rules::no_sleep_in_tests::NoSleepInTests;
+
+        // Python tests vs Python non-test source files
+        assert!(is_rule_candidate_for_path(
+            test_rule,
+            Path::new("service.py"),
+            SupportLang::Python,
+            true,
+            &config
+        ));
+        assert!(!is_rule_candidate_for_path(
+            test_rule,
+            Path::new("service.py"),
+            SupportLang::Python,
+            false,
+            &config
+        ));
+
+        // Rust source files remain candidates because of potential inline #[cfg(test)]
+        assert!(is_rule_candidate_for_path(
+            test_rule,
+            Path::new("service.rs"),
+            SupportLang::Rust,
+            false,
+            &config
+        ));
+    }
+
+    #[test]
+    fn test_is_rule_candidate_source_only() {
+        let config = Config::default();
+        let source_rule = &rules::no_env_in_functions::NoEnvInFunctions;
+
+        // SourceOnly runs on production source files, but is skipped on test files
+        assert!(is_rule_candidate_for_path(
+            source_rule,
+            Path::new("service.rs"),
+            SupportLang::Rust,
+            false,
+            &config
+        ));
+        assert!(!is_rule_candidate_for_path(
+            source_rule,
+            Path::new("tests/test_service.rs"),
+            SupportLang::Rust,
+            true,
+            &config
+        ));
+    }
+
+    #[test]
+    fn test_has_active_suppression_audit() {
+        let config = Config::default();
+        let path = Path::new("main.py");
+
+        // Content with suppression directive prefix
+        let with_directive = "# omni:ignore[no-logging-in-except] -- reason\nprint('hi')";
+        assert!(has_active_suppression_audit(
+            path,
+            SupportLang::Python,
+            with_directive,
+            &config
+        ));
+
+        // Content without suppression directive prefix
+        let without_directive = "print('hello world')";
+        assert!(!has_active_suppression_audit(
+            path,
+            SupportLang::Python,
+            without_directive,
+            &config
+        ));
+
+        // When all suppression rules are ignored in config
+        let disabled_config = Config {
+            ignore: Some(HashSet::from([Selector::Tag(
+                crate::rules::Tag::Suppression,
+            )])),
+            ..Default::default()
+        };
+        assert!(!has_active_suppression_audit(
+            path,
+            SupportLang::Python,
+            with_directive,
+            &disabled_config
+        ));
+    }
+
+    #[test]
+    fn test_should_skip_ast_parse() {
+        let config = Config::default();
+        let py_path = Path::new("script.py");
+
+        // Normal file with default config: standard code rules are enabled, do NOT skip
+        assert!(!should_skip_ast_parse(
+            py_path,
+            SupportLang::Python,
+            "x = 1",
+            false,
+            &config
+        ));
+
+        // Config ignoring all rules on python files: should skip AST parse
+        let no_rules_config = Config {
+            ignore: Some(HashSet::from([
+                Selector::Tag(crate::rules::Tag::Python),
+                Selector::Tag(crate::rules::Tag::Suppression),
+            ])),
+            ..Default::default()
+        };
+        assert!(should_skip_ast_parse(
+            py_path,
+            SupportLang::Python,
+            "x = 1",
+            false,
+            &no_rules_config
+        ));
+
+        // When all general code rules are ignored, but suppression directives are present:
+        // do NOT skip so suppression hygiene can be audited
+        let suppression_only_config = Config {
+            select: Some(HashSet::from([Selector::Tag(
+                crate::rules::Tag::Suppression,
+            )])),
+            ..Default::default()
+        };
+        let code_with_comment = "# omni:ignore -- missing reason";
+        assert!(!should_skip_ast_parse(
+            py_path,
+            SupportLang::Python,
+            code_with_comment,
+            false,
+            &suppression_only_config
+        ));
+
+        // But if that same file has no suppression comments, skip AST parsing
+        assert!(should_skip_ast_parse(
+            py_path,
+            SupportLang::Python,
+            "x = 1",
+            false,
+            &suppression_only_config
+        ));
     }
 }

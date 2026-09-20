@@ -9,10 +9,10 @@ fn extract_from_pattern<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>)
         "identifier" => {
             // Exclude uppercase names (variants/constants like None, Ok, MAX)
             // which are type constructor references rather than variable bindings.
-            if let Some(first_char) = node.text().chars().next() {
-                if first_char.is_ascii_uppercase() {
-                    return;
-                }
+            if let Some(first_char) = node.text().chars().next()
+                && first_char.is_ascii_uppercase()
+            {
+                return;
             }
             if node.text() != "_" {
                 bindings.push(node.clone());
@@ -24,10 +24,10 @@ fn extract_from_pattern<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>)
         "struct_pattern" | "tuple_struct_pattern" => {
             let type_node = node.field("type");
             for child in node.children() {
-                if let Some(ref struct_type) = type_node {
-                    if struct_type.range() == child.range() {
-                        continue;
-                    }
+                if let Some(ref struct_type) = type_node
+                    && struct_type.range() == child.range()
+                {
+                    continue;
                 }
                 if child.kind() == "type_identifier" {
                     continue;
@@ -45,10 +45,10 @@ fn extract_from_pattern<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>)
         "match_pattern" => {
             let cond = node.field("condition");
             for child in node.children() {
-                if let Some(ref condition) = cond {
-                    if condition.range() == child.range() {
-                        continue;
-                    }
+                if let Some(ref condition) = cond
+                    && condition.range() == child.range()
+                {
+                    continue;
                 }
                 if child.kind() == "if" {
                     continue;
@@ -98,17 +98,17 @@ fn extract_from_use<'a>(
             }
         }
         "scoped_identifier" => {
-            if let Some(last_seg) = extract_last_segment(node) {
-                if last_seg.text() != "_" {
-                    bindings.push(last_seg);
-                }
+            if let Some(last_seg) = extract_last_segment(node)
+                && last_seg.text() != "_"
+            {
+                bindings.push(last_seg);
             }
         }
         "use_as_clause" => {
-            if let Some(alias) = node.field("alias") {
-                if alias.text() != "_" {
-                    bindings.push(alias);
-                }
+            if let Some(alias) = node.field("alias")
+                && alias.text() != "_"
+            {
+                bindings.push(alias);
             }
         }
         "scoped_use_list" => {
@@ -202,10 +202,10 @@ fn traverse_rust<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
                 bindings.push(name_node);
             }
             for child in node.children() {
-                if let Some(name_node) = node.field("name") {
-                    if child.range() == name_node.range() {
-                        continue;
-                    }
+                if let Some(name_node) = node.field("name")
+                    && child.range() == name_node.range()
+                {
+                    continue;
                 }
                 traverse_rust(&child, bindings);
             }

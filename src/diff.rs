@@ -209,10 +209,11 @@ fn commit_file_changes(
     is_deleted: bool,
     changed_lines: &mut ChangedLines,
 ) {
-    if let Some((path, lines)) = current_file.take() {
-        if !is_deleted && !lines.is_empty() {
-            changed_lines.insert(path, lines);
-        }
+    if let Some((path, lines)) = current_file.take()
+        && !is_deleted
+        && !lines.is_empty()
+    {
+        changed_lines.insert(path, lines);
     }
 }
 

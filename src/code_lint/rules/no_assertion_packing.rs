@@ -161,11 +161,11 @@ fn check_rust_assertion_macro(macro_node: &AstNode<'_>, path: &Path) -> Option<D
 
 /// Recursively inspects a Rust AST for packed assertion macros.
 fn check_rust_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: &Path) {
-    if node.kind() == "macro_invocation" {
-        if let Some(diagnostic) = check_rust_assertion_macro(node, path) {
-            diagnostics.push(diagnostic);
-            return;
-        }
+    if node.kind() == "macro_invocation"
+        && let Some(diagnostic) = check_rust_assertion_macro(node, path)
+    {
+        diagnostics.push(diagnostic);
+        return;
     }
 
     for child in node.children() {
@@ -208,11 +208,11 @@ fn check_python_assert_statement(assert_node: &AstNode<'_>, path: &Path) -> Opti
 
 /// Recursively inspects a Python AST for packed `assert` statements.
 fn check_python_node(node: &AstNode<'_>, diagnostics: &mut Vec<Diagnostic>, path: &Path) {
-    if node.kind() == "assert_statement" {
-        if let Some(diagnostic) = check_python_assert_statement(node, path) {
-            diagnostics.push(diagnostic);
-            return;
-        }
+    if node.kind() == "assert_statement"
+        && let Some(diagnostic) = check_python_assert_statement(node, path)
+    {
+        diagnostics.push(diagnostic);
+        return;
     }
 
     for child in node.children() {

@@ -475,10 +475,9 @@ impl Config {
             if let Ok(glob) = globset::GlobBuilder::new(pattern)
                 .literal_separator(false)
                 .build()
+                && glob.compile_matcher().is_match(&normalized)
             {
-                if glob.compile_matcher().is_match(&normalized) {
-                    return true;
-                }
+                return true;
             }
         }
         false
@@ -494,16 +493,16 @@ impl Config {
             Selector::Tag(tag_selector) => rule.has_tag(*tag_selector),
         };
 
-        if let Some(ref select) = self.select {
-            if !select.iter().any(matches_selector) {
-                return false;
-            }
+        if let Some(ref select) = self.select
+            && !select.iter().any(matches_selector)
+        {
+            return false;
         }
 
-        if let Some(ref ignore) = self.ignore {
-            if ignore.iter().any(matches_selector) {
-                return false;
-            }
+        if let Some(ref ignore) = self.ignore
+            && ignore.iter().any(matches_selector)
+        {
+            return false;
         }
 
         true
@@ -528,12 +527,10 @@ impl Config {
             if let Ok(glob) = globset::GlobBuilder::new(pattern)
                 .literal_separator(false)
                 .build()
+                && glob.compile_matcher().is_match(&normalized)
+                && selectors.iter().any(matches_selector)
             {
-                if glob.compile_matcher().is_match(&normalized)
-                    && selectors.iter().any(matches_selector)
-                {
-                    return false;
-                }
+                return false;
             }
         }
 

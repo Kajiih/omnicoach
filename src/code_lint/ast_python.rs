@@ -50,10 +50,10 @@ fn extract_from_pattern<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>)
         "typed_parameter" | "default_parameter" | "typed_default_parameter" => {
             if let Some(name_node) = node.field("name") {
                 extract_from_pattern(&name_node, bindings);
-            } else if let Some(first_child) = node.child(0) {
-                if first_child.kind() == "identifier" {
-                    extract_from_pattern(&first_child, bindings);
-                }
+            } else if let Some(first_child) = node.child(0)
+                && first_child.kind() == "identifier"
+            {
+                extract_from_pattern(&first_child, bindings);
             }
         }
         "as_pattern" => {
@@ -102,10 +102,10 @@ fn extract_from_import<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) 
             }
         }
         "aliased_import" => {
-            if let Some(alias) = node.field("alias") {
-                if alias.text() != "_" {
-                    bindings.push(alias);
-                }
+            if let Some(alias) = node.field("alias")
+                && alias.text() != "_"
+            {
+                bindings.push(alias);
             }
         }
         "dotted_name" | "identifier" => {
@@ -124,10 +124,10 @@ fn traverse_children_skipping<'a>(
     bindings: &mut Vec<AstNode<'a>>,
 ) {
     for child in node.children() {
-        if let Some(skip_node) = skip {
-            if child.range() == skip_node.range() {
-                continue;
-            }
+        if let Some(skip_node) = skip
+            && child.range() == skip_node.range()
+        {
+            continue;
         }
         traverse_python(&child, bindings);
     }

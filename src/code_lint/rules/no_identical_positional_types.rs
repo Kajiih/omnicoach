@@ -212,10 +212,10 @@ fn check_functions_recursive(
     min_args: usize,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    if node.kind() == "function_definition" {
-        if let Some(diagnostic) = check_function_definition(rule, node, path, min_args) {
-            diagnostics.push(diagnostic);
-        }
+    if node.kind() == "function_definition"
+        && let Some(diagnostic) = check_function_definition(rule, node, path, min_args)
+    {
+        diagnostics.push(diagnostic);
     }
 
     for child in node.children() {

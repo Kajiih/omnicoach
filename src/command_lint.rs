@@ -43,10 +43,10 @@ impl InterceptedCommand {
     }
 
     fn collect_commands(node: &AstNode<'_>, raw_string: &str, commands: &mut Vec<Self>) {
-        if node.kind() == "command" {
-            if let Some(cmd) = Self::parse_single(node, raw_string) {
-                commands.push(cmd);
-            }
+        if node.kind() == "command"
+            && let Some(cmd) = Self::parse_single(node, raw_string)
+        {
+            commands.push(cmd);
         }
         for child in node.children() {
             Self::collect_commands(&child, raw_string, commands);
@@ -195,11 +195,9 @@ impl<'a> ArgParser<'a> {
                     .args_iter
                     .peek()
                     .is_some_and(|next_val| !next_val.starts_with('-'));
-                if next_is_val {
-                    if let Some(val) = self.args_iter.next() {
-                        self.options.entry(flag).or_default().push(val.clone());
-                        break;
-                    }
+                if next_is_val && let Some(val) = self.args_iter.next() {
+                    self.options.entry(flag).or_default().push(val.clone());
+                    break;
                 }
             }
             self.options.entry(flag).or_default();

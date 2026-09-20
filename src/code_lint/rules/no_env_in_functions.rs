@@ -129,15 +129,15 @@ fn enclosing_non_exempt_function_name(node: &AstNode<'_>, lang: SupportLang) -> 
     let mut current = node.parent();
 
     while let Some(ancestor) = current {
-        if ancestor.kind() == func_kind {
-            if let Some(name_node) = ancestor.field("name") {
-                let func_name = name_node.text().to_string();
-                if is_exempt_boundary_function(&ancestor, &func_name) {
-                    return None;
-                }
-                if nearest_function_name.is_none() {
-                    nearest_function_name = Some(func_name);
-                }
+        if ancestor.kind() == func_kind
+            && let Some(name_node) = ancestor.field("name")
+        {
+            let func_name = name_node.text().to_string();
+            if is_exempt_boundary_function(&ancestor, &func_name) {
+                return None;
+            }
+            if nearest_function_name.is_none() {
+                nearest_function_name = Some(func_name);
             }
         }
         current = ancestor.parent();
