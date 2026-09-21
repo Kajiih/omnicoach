@@ -94,7 +94,12 @@ All rules support the `mode = "ban" | "require-explanation"` configuration. Belo
 * **`no-hungarian-notation`**: Bans Hungarian type suffixes (`_list`, `_dict`, `_arr`) from identifier names. *(Python, Rust)*
   ```toml
   [rules.no-hungarian-notation]
-  banned_suffixes = ["_list", "_dict", "_map"]
+  allowed = ["_str"]
+  ```
+* **`prefer-timedelta-over-seconds`**: Enforces strongly typed durations (`datetime.timedelta` / `std::time::Duration`) over numeric variables with raw time-unit suffixes (`_seconds`, `_secs`, `_ms`, `_millis`). *(Python, Rust)*
+  ```toml
+  [rules.prefer-timedelta-over-seconds]
+  allowed = ["_sec"]
   ```
 
 ### Typing & Signatures

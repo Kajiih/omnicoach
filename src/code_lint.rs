@@ -399,6 +399,74 @@ pub(crate) fn is_trait_impl_member(node: &AstNode<'_>, lang: SupportLang) -> boo
     }
 }
 
+/// A variable, constant, or parameter binding whose identifier ends with a matched suffix.
+pub(crate) struct SuffixedBindingMatch<'a> {
+    /// The matched identifier AST node.
+    pub node: AstNode<'a>,
+    /// Full identifier text (e.g. `timeout_seconds` or `user_list`).
+    pub name: String,
+    /// Matched suffix slice preserving the identifier's original case (e.g. `_seconds` or `_INT`).
+    pub actual_suffix: String,
+    /// Identifier stem preceding the matched suffix (e.g. `timeout` or `MY`).
+    pub base_name: String,
+}
+
+/// Finds all variable, constant, and parameter bindings in `grep` whose name ends
+/// (case-insensitively) with any suffix in `banned_suffixes`.
+///
+/// Automatically skips imports ([`is_import_binding`]), structural definitions
+/// ([`is_structural_definition`]: functions, classes, structs, enums, traits), and
+/// trait/override contract names ([`is_trait_impl_member`]).
+/// Suffixes are evaluated longest-first for deterministic matching.
+#[must_use]
+pub(crate) fn find_suffixed_bindings<'a, S: std::hash::BuildHasher>(
+    grep: &'a AstGrep<SourceDoc>,
+    banned_suffixes: &HashSet<String, S>,
+) -> Vec<SuffixedBindingMatch<'a>> {
+    if banned_suffixes.is_empty() {
+        return Vec::new();
+    }
+
+    let mut sorted_suffixes: Vec<&str> = banned_suffixes.iter().map(String::as_str).collect();
+    // Sort descending by length, then ascending lexicographically for deterministic tie-breaking
+    sorted_suffixes
+        .sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
+
+    let bindings = collect_bindings(grep);
+    let lang = *grep.lang();
+    let mut matches = Vec::new();
+
+    for node in bindings {
+        if is_import_binding(&node, lang)
+            || is_structural_definition(&node, lang)
+            || is_trait_impl_member(&node, lang)
+        {
+            continue;
+        }
+
+        let name = node.text();
+        let name_lower = name.to_lowercase();
+
+        for suffix in &sorted_suffixes {
+            let suffix_lower = suffix.to_lowercase();
+            if name.len() > suffix.len() && name_lower.ends_with(&suffix_lower) {
+                let base_name = &name[..name.len() - suffix.len()];
+                let actual_suffix = &name[name.len() - suffix.len()..];
+
+                matches.push(SuffixedBindingMatch {
+                    node,
+                    name: name.to_string(),
+                    actual_suffix: actual_suffix.to_string(),
+                    base_name: base_name.to_string(),
+                });
+                break;
+            }
+        }
+    }
+
+    matches
+}
+
 /// Configuration options for the codebase linting pipeline.
 #[derive(Debug, Clone, Default)]
 pub struct LintOptions {

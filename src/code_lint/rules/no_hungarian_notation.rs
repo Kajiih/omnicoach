@@ -59,43 +59,20 @@ impl CodeRule for NoHungarianNotation {
         let effective_banned =
             rule_config.effective_banned_for_lang(*grep.lang(), &DEFAULT_BANNED_SUFFIXES);
 
-        let mut diagnostics = Vec::new();
-
-        let bindings = crate::code_lint::collect_bindings(grep);
-
-        let lang = grep.lang();
-        for node in bindings {
-            // Check exemptions
-            if crate::code_lint::is_import_binding(&node, *lang)
-                || crate::code_lint::is_structural_definition(&node, *lang)
-            {
-                continue;
-            }
-
-            let name = node.text();
-            let name_lower = name.to_lowercase();
-
-            for suffix in &effective_banned {
-                let suffix_lower = suffix.to_lowercase();
-                if name_lower.ends_with(&suffix_lower) {
-                    let base_name = &name[..name.len() - suffix.len()];
-                    let actual_suffix = &name[name.len() - suffix.len()..];
-
-                    diagnostics.push(self.diagnostic_at_node(
-                        path,
-                        &node,
-                        &[
-                            ("name", &name),
-                            ("actual_suffix", actual_suffix),
-                            ("base_name", base_name),
-                        ],
-                    ));
-                    // Check only one suffix per node
-                    break;
-                }
-            }
-        }
-        diagnostics
+        crate::code_lint::find_suffixed_bindings(grep, &effective_banned)
+            .into_iter()
+            .map(|matched| {
+                self.diagnostic_at_node(
+                    path,
+                    &matched.node,
+                    &[
+                        ("name", &matched.name),
+                        ("actual_suffix", &matched.actual_suffix),
+                        ("base_name", &matched.base_name),
+                    ],
+                )
+            })
+            .collect()
     }
 }
 
