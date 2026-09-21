@@ -418,6 +418,108 @@ pub fn has_decorator(node: &AstNode<'_>, predicate: impl Fn(&str) -> bool) -> bo
     false
 }
 
+/// Represents a base class expression in a Python class definition.
+#[derive(Clone)]
+pub struct PythonBaseClass<'a> {
+    /// AST node for the base class expression.
+    pub node: AstNode<'a>,
+    /// Base class identifier or dotted path text (e.g. `"Protocol"`, `"abc.ABC"`).
+    pub name: String,
+}
+
+/// Structured representation of a Python class definition.
+#[derive(Clone)]
+pub struct PythonClassInfo<'a> {
+    /// The `class_definition` AST node (or enclosing `decorated_definition`).
+    pub node: AstNode<'a>,
+    /// Class name identifier text.
+    pub name: String,
+    /// Class name AST node.
+    pub name_node: AstNode<'a>,
+    /// Base classes from `class Foo(Base1, Base2):`.
+    pub bases: Vec<PythonBaseClass<'a>>,
+    /// Parsed decorators on this class definition.
+    pub decorators: Vec<DecoratorInfo<'a>>,
+    /// The class body `block` node.
+    pub body_node: Option<AstNode<'a>>,
+}
+
+impl PythonClassInfo<'_> {
+    /// Returns true if the class is decorated with `@dataclass` or `@dataclasses.dataclass`.
+    #[must_use]
+    pub fn is_dataclass(&self) -> bool {
+        self.decorators
+            .iter()
+            .any(|dec| matches!(dec.path.as_str(), "dataclass" | "dataclasses.dataclass"))
+    }
+
+    /// Returns true if the class inherits from any base whose terminal name matches `target`.
+    #[must_use]
+    pub fn inherits_from(&self, target: &str) -> bool {
+        self.bases.iter().any(|base| {
+            base.name == target
+                || base
+                    .name
+                    .strip_suffix(target)
+                    .is_some_and(|prefix| prefix.ends_with('.'))
+        })
+    }
+}
+
+/// Discovers and extracts all class definitions from a Python AST document.
+#[must_use]
+pub fn extract_classes<'a>(root: &AstNode<'a>) -> Vec<PythonClassInfo<'a>> {
+    let mut classes = Vec::new();
+
+    // Find all class_definition nodes
+    for class_node in root.dfs() {
+        if class_node.kind() != "class_definition" {
+            continue;
+        }
+
+        let Some(name_node) = class_node.field("name") else {
+            continue;
+        };
+        let name = name_node.text().to_string();
+
+        let mut bases = Vec::new();
+        if let Some(superclasses) = class_node.field("superclasses") {
+            for child in superclasses.children() {
+                let kind = child.kind();
+                if kind != "(" && kind != ")" && kind != "," && kind != "keyword_argument" {
+                    bases.push(PythonBaseClass {
+                        name: child.text().to_string(),
+                        node: child,
+                    });
+                }
+            }
+        }
+
+        let decorators = extract_decorators(&class_node);
+        let body_node = class_node.field("body");
+
+        // Use decorated_definition as node if present, otherwise class_node
+        let effective_node = if let Some(parent) = class_node.parent()
+            && parent.kind() == "decorated_definition"
+        {
+            parent
+        } else {
+            class_node
+        };
+
+        classes.push(PythonClassInfo {
+            node: effective_node,
+            name,
+            name_node,
+            bases,
+            decorators,
+            body_node,
+        });
+    }
+
+    classes
+}
+
 /// Returns true if a Python `function_definition` is decorated with `@override`.
 #[must_use]
 pub fn has_override_decorator(func_node: &AstNode<'_>) -> bool {
@@ -619,5 +721,52 @@ def foo():
         assert!(has_decorator(&func, |name| name == "parametrize"));
         assert!(has_decorator(&func, |path| path == "pytest.mark.parametrize"));
         assert!(!has_decorator(&func, |name| name == "override"));
+    }
+
+    #[test]
+    fn test_extract_classes_and_inheritance() {
+        let source = r"
+class FakeService(abc.ABC, Protocol):
+    pass
+        ";
+        let grep = AstGrep::new(source, SupportLang::Python);
+        let classes = extract_classes(&grep.root());
+        assert_eq!(classes.len(), 1);
+
+        let cls = &classes[0];
+        assert_eq!(cls.name, "FakeService");
+        assert!(cls.inherits_from("Protocol"));
+        assert!(cls.inherits_from("ABC"));
+    }
+
+    #[test]
+    fn test_extract_classes_bases_metadata() {
+        let source = r"
+class FakeService(abc.ABC, Protocol):
+    pass
+        ";
+        let grep = AstGrep::new(source, SupportLang::Python);
+        let classes = extract_classes(&grep.root());
+        let cls = &classes[0];
+        assert_eq!(cls.bases.len(), 2);
+        assert_eq!(cls.bases[0].name, "abc.ABC");
+        assert_eq!(cls.bases[1].name, "Protocol");
+    }
+
+    #[test]
+    fn test_extract_classes_dataclass() {
+        let source = r"
+@dataclass(frozen=True)
+class Config:
+    pass
+        ";
+        let grep = AstGrep::new(source, SupportLang::Python);
+        let classes = extract_classes(&grep.root());
+        assert_eq!(classes.len(), 1);
+
+        let cls = &classes[0];
+        assert_eq!(cls.name, "Config");
+        assert!(cls.is_dataclass());
+        assert!(!cls.inherits_from("Protocol"));
     }
 }
