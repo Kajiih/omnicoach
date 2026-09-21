@@ -3,6 +3,7 @@ pub mod banned_abbreviations;
 pub mod flat_scope_enforced;
 pub mod max_test_assertions;
 pub mod no_assertion_packing;
+pub mod no_dynamic_attribute_access;
 pub mod no_env_in_functions;
 pub mod no_hungarian_notation;
 pub mod no_identical_positional_types;

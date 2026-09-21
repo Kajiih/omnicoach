@@ -102,6 +102,7 @@ pub const CODE_RULES: &[&dyn crate::code_lint::CodeRule] = &[
     &crate::code_lint::rules::no_logging_error_in_except::NoLoggingErrorInExcept,
     &crate::code_lint::rules::no_uncommented_suppress::NoUncommentedSuppress,
     &crate::code_lint::rules::no_typing_cast::NoTypingCast,
+    &crate::code_lint::rules::no_dynamic_attribute_access::NoDynamicAttributeAccess,
     &crate::code_lint::rules::flat_scope_enforced::FlatScopeEnforced,
     &crate::code_lint::rules::single_letter_variable_name::SingleLetterVariableName,
     &crate::code_lint::rules::banned_abbreviations::BannedAbbreviations,

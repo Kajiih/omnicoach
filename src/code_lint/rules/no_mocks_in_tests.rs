@@ -68,11 +68,6 @@ const DEFAULT_BANNED_MOCKS: FilterListDefaults = FilterListDefaults {
         "monkeypatch.delattr",
         "monkeypatch.setitem",
         "monkeypatch.delitem",
-        // Manual attribute monkeypatching
-        "setattr",
-        "delattr",
-        "builtins.setattr",
-        "builtins.delattr",
     ],
     extend: &[],
     exempt: &[],
@@ -146,7 +141,6 @@ def test_user_update(mocker, monkeypatch, api_client):
     gateway = MagicMock()
     mocker.patch.object(gateway, "charge")
     monkeypatch.setattr(gateway, "timeout", 5)
-    setattr(gateway, "retries", 0)
     # Real HTTP PATCH calls must NOT be flagged:
     response = api_client.patch("/v1/users/42", json={"name": "Alice"})
     httpx.patch("https://example.com/api")
@@ -156,7 +150,6 @@ def test_user_update(mocker, monkeypatch, api_client):
         [no-mocks-in-tests] Line 6, Col 15: Dynamic mock or monkeypatch `MagicMock(...)` is prohibited in tests.
         [no-mocks-in-tests] Line 7, Col 5: Dynamic mock or monkeypatch `mocker.patch.object(...)` is prohibited in tests.
         [no-mocks-in-tests] Line 8, Col 5: Dynamic mock or monkeypatch `monkeypatch.setattr(...)` is prohibited in tests.
-        [no-mocks-in-tests] Line 9, Col 5: Dynamic mock or monkeypatch `setattr(...)` is prohibited in tests.
         ");
     }
 
