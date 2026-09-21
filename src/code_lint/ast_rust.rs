@@ -342,6 +342,129 @@ pub fn is_assertion_macro(macro_node: &AstNode<'_>) -> bool {
         || terminal.starts_with("debug_assert_")
 }
 
+/// Returns true if `token_tree` is immediately preceded by a `!` and a macro path matching
+/// `allowed_wrappers` (e.g. `indoc! { ... }` or `indoc::indoc! { ... }` inside `assert_eq!` or `#[case(...)]`).
+fn is_token_tree_wrapped_by_macro<S: std::hash::BuildHasher>(
+    token_tree: &AstNode<'_>,
+    allowed_wrappers: &std::collections::HashSet<String, S>,
+) -> bool {
+    let Some(bang) = token_tree.prev() else {
+        return false;
+    };
+    if bang.text() != "!" {
+        return false;
+    }
+    let Some(macro_ident) = bang.prev() else {
+        return false;
+    };
+    let terminal = macro_ident.text();
+    let trimmed_terminal = terminal.trim();
+    if allowed_wrappers.contains(trimmed_terminal) {
+        return true;
+    }
+    let mut full_path = trimmed_terminal.to_string();
+    let mut curr = macro_ident;
+    while let Some(colon_colon) = curr.prev() {
+        if colon_colon.text() == "::"
+            && let Some(prev_ident) = colon_colon.prev()
+        {
+            full_path = format!("{prev}::{full_path}", prev = prev_ident.text().trim());
+            curr = prev_ident;
+        } else {
+            break;
+        }
+    }
+    allowed_wrappers.contains(&full_path)
+}
+
+/// Returns true if a Rust multiline string literal is exempt (e.g., an `insta` `@"..."` snapshot,
+/// a `#[doc = "..."]` attribute, or enclosed in an allowed dedent macro such as `indoc!`).
+fn is_exempt_rust_multiline_string<S: std::hash::BuildHasher>(
+    node: &AstNode<'_>,
+    allowed_wrappers: &std::collections::HashSet<String, S>,
+) -> bool {
+    // Exempt `insta` inline snapshots (`@"..."` / `@r#"..."#`), which `insta` dedents automatically.
+    if node.prev().is_some_and(|prev| prev.text() == "@") {
+        return true;
+    }
+
+    for ancestor in node.ancestors() {
+        match ancestor.kind().as_ref() {
+            "function_item" | "closure_expression" => break,
+            "attribute_item" => {
+                if ancestor.text().trim_start().starts_with("#[doc") {
+                    return true;
+                }
+            }
+            "macro_invocation" => {
+                let terminal = macro_terminal_name(&ancestor);
+                let full_path = ancestor
+                    .field("macro")
+                    .map(|macro_id| macro_id.text().trim().to_string())
+                    .unwrap_or_default();
+                if allowed_wrappers.contains(terminal.as_ref())
+                    || allowed_wrappers.contains(&full_path)
+                {
+                    return true;
+                }
+            }
+            "token_tree" => {
+                if is_token_tree_wrapped_by_macro(&ancestor, allowed_wrappers) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    false
+}
+
+/// Returns true if a Rust string node spans multiple lines and contains runtime newlines.
+/// In standard string literals, a trailing `\` before a line break is a line continuation;
+/// if at least one intermediate line does not end with `\`, the string contains an actual newline.
+fn is_multiline_string(node: &AstNode<'_>) -> bool {
+    if node.end_pos().line() <= node.start_pos().line() {
+        return false;
+    }
+    let kind = node.kind();
+    if kind.starts_with("raw_") {
+        return true;
+    }
+    let text = node.text();
+    let lines: Vec<&str> = text.lines().collect();
+    lines
+        .iter()
+        .take(lines.len().saturating_sub(1))
+        .any(|line| !line.trim_end().ends_with('\\'))
+}
+
+/// Collects all Rust multiline string literals that are not wrapped in an allowed dedent macro
+/// (`allowed_wrappers`).
+#[must_use]
+pub fn collect_undented_multiline_strings<'a, S: std::hash::BuildHasher>(
+    root: &AstNode<'a>,
+    allowed_wrappers: &std::collections::HashSet<String, S>,
+) -> Vec<AstNode<'a>> {
+    root.dfs()
+        .filter(|node| {
+            let kind = node.kind();
+            let is_string = matches!(
+                kind.as_ref(),
+                "string_literal"
+                    | "raw_string_literal"
+                    | "byte_string_literal"
+                    | "raw_byte_string_literal"
+                    | "c_string_literal"
+                    | "raw_c_string_literal"
+            );
+            is_string
+                && is_multiline_string(node)
+                && !is_exempt_rust_multiline_string(node, allowed_wrappers)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,7 +473,7 @@ mod tests {
 
     #[test]
     fn test_collect_bindings_rust() {
-        let source = r"
+        let source = indoc::indoc! {r"
             use std;
             use std::collections::HashMap;
             use std::io::{self, Read};
@@ -382,7 +505,7 @@ mod tests {
             }
             const MY_CONST: i32 = 1;
             static MY_STATIC: i32 = 2;
-        ";
+        "};
         let grep = AstGrep::new(source, SupportLang::Rust);
         let bindings = collect_bindings(&grep.root());
         let names: Vec<String> = bindings

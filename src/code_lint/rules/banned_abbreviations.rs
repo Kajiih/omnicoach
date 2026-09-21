@@ -123,20 +123,20 @@ mod tests {
         let rule = BannedAbbreviations;
 
         // Banned variables, functions, and structs
-        let source = r"
+        let source = indoc::indoc! {r"
             use std::collections::HashMap as my_cfg;
             fn process_err() {
                 let ctx = 1;
                 let my_cfg_val = 2;
             }
             struct MyRes;
-        ";
+        "};
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @"
-        [banned-abbreviations] Line 2, Col 46: Definition name `my_cfg` contains banned abbreviation `cfg`.
-        [banned-abbreviations] Line 3, Col 16: Definition name `process_err` contains banned abbreviation `err`.
-        [banned-abbreviations] Line 4, Col 21: Definition name `ctx` contains banned abbreviation `ctx`.
-        [banned-abbreviations] Line 5, Col 21: Definition name `my_cfg_val` contains banned abbreviation `cfg`.
-        [banned-abbreviations] Line 7, Col 20: Definition name `MyRes` contains banned abbreviation `res`.
+        [banned-abbreviations] Line 1, Col 34: Definition name `my_cfg` contains banned abbreviation `cfg`.
+        [banned-abbreviations] Line 2, Col 4: Definition name `process_err` contains banned abbreviation `err`.
+        [banned-abbreviations] Line 3, Col 9: Definition name `ctx` contains banned abbreviation `ctx`.
+        [banned-abbreviations] Line 4, Col 9: Definition name `my_cfg_val` contains banned abbreviation `cfg`.
+        [banned-abbreviations] Line 6, Col 8: Definition name `MyRes` contains banned abbreviation `res`.
         ");
     }
 
@@ -144,17 +144,17 @@ mod tests {
     fn test_python_snapshots() {
         let rule = BannedAbbreviations;
 
-        let source = r#"
-import os as os_cfg
-def handle_msg(msg):
-    str_val = "hello"
-    pass
-        "#;
+        let source = indoc::indoc! {r#"
+            import os as os_cfg
+            def handle_msg(msg):
+                str_val = "hello"
+                pass
+        "#};
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @"
-        [banned-abbreviations] Line 2, Col 14: Definition name `os_cfg` contains banned abbreviation `cfg`.
-        [banned-abbreviations] Line 3, Col 5: Definition name `handle_msg` contains banned abbreviation `msg`.
-        [banned-abbreviations] Line 3, Col 16: Definition name `msg` contains banned abbreviation `msg`.
-        [banned-abbreviations] Line 4, Col 5: Definition name `str_val` contains banned abbreviation `str`.
+        [banned-abbreviations] Line 1, Col 14: Definition name `os_cfg` contains banned abbreviation `cfg`.
+        [banned-abbreviations] Line 2, Col 5: Definition name `handle_msg` contains banned abbreviation `msg`.
+        [banned-abbreviations] Line 2, Col 16: Definition name `msg` contains banned abbreviation `msg`.
+        [banned-abbreviations] Line 3, Col 5: Definition name `str_val` contains banned abbreviation `str`.
         ");
     }
 
@@ -162,12 +162,12 @@ def handle_msg(msg):
     fn test_rust_default_exempts_str_abbreviation() {
         let rule = BannedAbbreviations;
 
-        let rust_source = r"
+        let rust_source = indoc::indoc! {r"
             fn as_str() {}
             fn to_str() {}
             fn from_str() {}
             fn build_str_cache() { let str_buffer = 1; }
-        ";
+        "};
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, rust_source, "test.rs"), @"");
 
         // Python keeps the base ban, since `str` is a plain abbreviation there.
@@ -182,7 +182,7 @@ def handle_msg(msg):
         // `Err` and `from_ctx` are mandated by the trait contract and cannot be renamed, so
         // they are exempt. The exemption is scoped to the member name itself: the parameter
         // `msg` and the identical inherent method are the author's choice, so both are flagged.
-        let source = r"
+        let source = indoc::indoc! {r"
             impl Decoder for Wrapper {
                 type Err = ();
                 fn from_ctx(&self, msg: u8) {}
@@ -190,21 +190,21 @@ def handle_msg(msg):
             impl Wrapper {
                 fn from_ctx(&self) {}
             }
-        ";
+        "};
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @"
-        [banned-abbreviations] Line 4, Col 36: Definition name `msg` contains banned abbreviation `msg`.
-        [banned-abbreviations] Line 7, Col 20: Definition name `from_ctx` contains banned abbreviation `ctx`.
+        [banned-abbreviations] Line 3, Col 24: Definition name `msg` contains banned abbreviation `msg`.
+        [banned-abbreviations] Line 6, Col 8: Definition name `from_ctx` contains banned abbreviation `ctx`.
         ");
     }
 
     #[test]
     fn test_configuration_override() {
         let rule = BannedAbbreviations;
-        let config_toml = r#"
+        let config_toml = indoc::indoc! {r#"
             [rules.banned-abbreviations]
             allowed = ["err"]
             extend_banned = ["req"]
-        "#;
+        "#};
         let config: crate::core::Config = toml::from_str(config_toml).unwrap();
 
         let source = "fn main() { let err = 1; let my_req = 2; }";

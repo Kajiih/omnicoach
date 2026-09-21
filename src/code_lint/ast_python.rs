@@ -569,13 +569,13 @@ pub struct PythonParameterInfo<'a> {
 impl PythonParameterInfo<'_> {
     /// Returns true if the parameter is a standard positional or positional-or-keyword parameter.
     #[must_use]
-    pub fn is_positional(&self) -> bool {
-        self.kind == PythonParameterKind::Positional
+    pub const fn is_positional(&self) -> bool {
+        matches!(self.kind, PythonParameterKind::Positional)
     }
 
     /// Returns true if the parameter is a variadic (`*args` or `**kwargs`).
     #[must_use]
-    pub fn is_variadic(&self) -> bool {
+    pub const fn is_variadic(&self) -> bool {
         matches!(
             self.kind,
             PythonParameterKind::VarPositional | PythonParameterKind::VarKeyword
@@ -789,6 +789,62 @@ pub fn find_enclosing_with_statement<'a>(node: &AstNode<'a>) -> Option<AstNode<'
         .find(|parent| parent.kind() == "with_statement")
 }
 
+/// Returns true if a Python `string` node is triple-quoted (`"""` or `'''`).
+/// In Python's grammar, only triple-quoted strings can contain literal newlines.
+fn is_triple_quoted(node: &AstNode<'_>) -> bool {
+    let text = node.text();
+    let stripped = text.trim_start_matches(['r', 'R', 'f', 'F', 'b', 'B', 'u', 'U']);
+    stripped.starts_with("\"\"\"") || stripped.starts_with("'''")
+}
+
+/// Returns true if a Python `string` node is a standalone docstring statement.
+fn is_docstring(node: &AstNode<'_>) -> bool {
+    node.parent()
+        .is_some_and(|parent| parent.kind() == "expression_statement")
+}
+
+/// Returns true if `node` is enclosed in a Python `call` whose function matches `allowed_wrappers`.
+fn is_wrapped_in_allowed_call<S: std::hash::BuildHasher>(
+    node: &AstNode<'_>,
+    allowed_wrappers: &std::collections::HashSet<String, S>,
+) -> bool {
+    for ancestor in node.ancestors() {
+        match ancestor.kind().as_ref() {
+            "function_definition" | "class_definition" | "lambda" => break,
+            "call" => {
+                if let Some(func_node) = ancestor.field("function") {
+                    let func_text = func_node.text();
+                    let trimmed = func_text.trim();
+                    let terminal = trimmed.rsplit('.').next().unwrap_or(trimmed).trim();
+                    if allowed_wrappers.contains(trimmed) || allowed_wrappers.contains(terminal) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Collects all Python multiline string literals that are not docstrings and not wrapped in an
+/// allowed dedent helper (`allowed_wrappers`).
+#[must_use]
+pub fn collect_undented_multiline_strings<'a, S: std::hash::BuildHasher>(
+    root: &AstNode<'a>,
+    allowed_wrappers: &std::collections::HashSet<String, S>,
+) -> Vec<AstNode<'a>> {
+    root.dfs()
+        .filter(|node| {
+            node.kind() == "string"
+                && node.end_pos().line() > node.start_pos().line()
+                && is_triple_quoted(node)
+                && !is_docstring(node)
+                && !is_wrapped_in_allowed_call(node, allowed_wrappers)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -797,29 +853,29 @@ mod tests {
 
     #[test]
     fn test_collect_bindings_python() {
-        let source = r"
-import os
-import os.path
-import numpy as np
-from sys import stderr as err
-from os import path
-import sys, re
-from os import * # wildcard
-c = 2
-d, e = 3, 4
-for x in range(10): pass
-[y for y in range(10)]
-def foo(b: int = 1):
-    pass
-try:
-    pass
-except Exception as g:
-    pass
-(v := 1)
-class MyClass:
-    def my_method(self):
-        pass
-        ";
+        let source = indoc::indoc! {r"
+            import os
+            import os.path
+            import numpy as np
+            from sys import stderr as err
+            from os import path
+            import sys, re
+            from os import * # wildcard
+            c = 2
+            d, e = 3, 4
+            for x in range(10): pass
+            [y for y in range(10)]
+            def foo(b: int = 1):
+                pass
+            try:
+                pass
+            except Exception as g:
+                pass
+            (v := 1)
+            class MyClass:
+                def my_method(self):
+                    pass
+        "};
         let grep = AstGrep::new(source, SupportLang::Python);
         let bindings = collect_bindings(&grep.root());
         let names: Vec<String> = bindings
@@ -854,13 +910,13 @@ class MyClass:
 
     #[test]
     fn test_collect_bindings_python_match_case() {
-        let source = r"
-match val:
-    case Point(x, y=z):
-        pass
-    case [a, b]:
-        pass
-        ";
+        let source = indoc::indoc! {r"
+            match val:
+                case Point(x, y=z):
+                    pass
+                case [a, b]:
+                    pass
+        "};
         let grep = AstGrep::new(source, SupportLang::Python);
         let bindings = collect_bindings(&grep.root());
         let names: Vec<String> = bindings
@@ -872,11 +928,11 @@ match val:
 
     #[test]
     fn test_find_enclosing_with_helpers() {
-        let source = r"
-with suppress(FileNotFoundError):
-    pass
-x = suppress(KeyError)
-        ";
+        let source = indoc::indoc! {r"
+            with suppress(FileNotFoundError):
+                pass
+            x = suppress(KeyError)
+        "};
         let grep = AstGrep::new(source, SupportLang::Python);
         let calls: Vec<_> = grep.root().find_all("suppress($$$ARGS)").collect();
         assert_eq!(calls.len(), 2);
@@ -892,13 +948,13 @@ x = suppress(KeyError)
 
     #[test]
     fn test_extract_decorators_count() {
-        let source = r#"
-@dataclass(frozen=True, slots=False)
-@pytest.mark.parametrize("x", [1, 2])
-@custom
-def foo():
-    pass
-        "#;
+        let source = indoc::indoc! {r#"
+            @dataclass(frozen=True, slots=False)
+            @pytest.mark.parametrize("x", [1, 2])
+            @custom
+            def foo():
+                pass
+        "#};
         let grep = AstGrep::new(source, SupportLang::Python);
         let func = grep.root().find("def foo(): $$$BODY").unwrap();
         let decorators = extract_decorators(&func);
@@ -907,11 +963,11 @@ def foo():
 
     #[test]
     fn test_extract_decorator_keyword_args() {
-        let source = r"
-@dataclass(frozen=True, slots=False)
-def foo():
-    pass
-        ";
+        let source = indoc::indoc! {r"
+            @dataclass(frozen=True, slots=False)
+            def foo():
+                pass
+        "};
         let grep = AstGrep::new(source, SupportLang::Python);
         let func = grep.root().find("def foo(): $$$BODY").unwrap();
         let decorators = extract_decorators(&func);
@@ -931,12 +987,12 @@ def foo():
 
     #[test]
     fn test_extract_decorators_metadata_and_path() {
-        let source = r#"
-@pytest.mark.parametrize("x", [1, 2])
-@custom
-def foo():
-    pass
-        "#;
+        let source = indoc::indoc! {r#"
+            @pytest.mark.parametrize("x", [1, 2])
+            @custom
+            def foo():
+                pass
+        "#};
         let grep = AstGrep::new(source, SupportLang::Python);
         let func = grep.root().find("def foo(): $$$BODY").unwrap();
         let decorators = extract_decorators(&func);
@@ -952,11 +1008,11 @@ def foo():
 
     #[test]
     fn test_has_decorator_predicate_matching() {
-        let source = r#"
-@pytest.mark.parametrize("x", [1, 2])
-def foo():
-    pass
-        "#;
+        let source = indoc::indoc! {r#"
+            @pytest.mark.parametrize("x", [1, 2])
+            def foo():
+                pass
+        "#};
         let grep = AstGrep::new(source, SupportLang::Python);
         let func = grep.root().find("def foo(): $$$BODY").unwrap();
 
@@ -967,10 +1023,10 @@ def foo():
 
     #[test]
     fn test_extract_classes_and_inheritance() {
-        let source = r"
-class FakeService(abc.ABC, Protocol):
-    pass
-        ";
+        let source = indoc::indoc! {r"
+            class FakeService(abc.ABC, Protocol):
+                pass
+        "};
         let grep = AstGrep::new(source, SupportLang::Python);
         let classes = extract_classes(&grep.root());
         assert_eq!(classes.len(), 1);
@@ -983,10 +1039,10 @@ class FakeService(abc.ABC, Protocol):
 
     #[test]
     fn test_extract_classes_bases_metadata() {
-        let source = r"
-class FakeService(abc.ABC, Protocol):
-    pass
-        ";
+        let source = indoc::indoc! {r"
+            class FakeService(abc.ABC, Protocol):
+                pass
+        "};
         let grep = AstGrep::new(source, SupportLang::Python);
         let classes = extract_classes(&grep.root());
         let cls = &classes[0];
@@ -997,11 +1053,11 @@ class FakeService(abc.ABC, Protocol):
 
     #[test]
     fn test_extract_classes_dataclass() {
-        let source = r"
-@dataclass(frozen=True)
-class Config:
-    pass
-        ";
+        let source = indoc::indoc! {r"
+            @dataclass(frozen=True)
+            class Config:
+                pass
+        "};
         let grep = AstGrep::new(source, SupportLang::Python);
         let classes = extract_classes(&grep.root());
         assert_eq!(classes.len(), 1);
@@ -1014,10 +1070,10 @@ class Config:
 
     #[test]
     fn test_extract_parameters_kinds() {
-        let source = r"
-def handler(self, a: int, b: str = 'hello', *, c: bool, **kwargs):
-    pass
-        ";
+        let source = indoc::indoc! {r"
+            def handler(self, a: int, b: str = 'hello', *, c: bool, **kwargs):
+                pass
+        "};
         let grep = AstGrep::new(source, SupportLang::Python);
         let params = extract_parameters(&grep.root());
 
@@ -1029,10 +1085,10 @@ def handler(self, a: int, b: str = 'hello', *, c: bool, **kwargs):
 
     #[test]
     fn test_extract_parameters_type_annotations() {
-        let source = r"
-def handler(self, a: int, b: str = 'hello', *, c: bool, **kwargs):
-    pass
-        ";
+        let source = indoc::indoc! {r"
+            def handler(self, a: int, b: str = 'hello', *, c: bool, **kwargs):
+                pass
+        "};
         let grep = AstGrep::new(source, SupportLang::Python);
         let params = extract_parameters(&grep.root());
 

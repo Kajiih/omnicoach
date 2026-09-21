@@ -8,7 +8,10 @@ Items here represent design areas and technical directions to evaluate rather th
 
 ## Random
 - Add stmt to banned abrrev
-
+- Review the names of the rules, of the configuration, etc, to make them totally aligned on what the are, explicit and self explanatory, and coherent together.
+- Also review the violation message, so they correctly explain what is the issue and why it is one rather than just explaining what the code does, and that the suggestion correctly point to correct solutions, so the user (or agent) can fix it autonomously. They should push to a single direction, which is the pit of success, even if it seems pedantic. Use `ruff` documentation as a reference and improve on it.
+  - Write a **Violation Message Style Guide** and review all violation messages (`summary`, `rationale`, `suggestion`) so they concisely state the issue (`summary`), explain why it is harmful rather than just restating what the code does (`rationale`), and point to a single canonical "pit of success" solution so a user or agent can fix it autonomously (`suggestion`). Use `ruff` documentation as a reference and improve on it.
+- Review our architecure, component, abstraction, modules, etc names as well to align and have the explicit and self explanatory.
 ## Rule Engine & Declarative Rules
 
 - **Unified Single-Pass AST Visitor Dispatch**:

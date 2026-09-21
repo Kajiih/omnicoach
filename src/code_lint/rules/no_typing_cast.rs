@@ -76,9 +76,7 @@ mod tests {
 
     #[rstest]
     #[case::bare_cast(
-        indoc! {r"
-            x = cast(int, y)
-        "},
+        "x = cast(int, y)",
         "[no-typing-cast] Line 1, Col 5: Unchecked type assertion `cast()` is discouraged."
     )]
     #[case::typing_qualified_cast(
@@ -101,15 +99,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case::polars_column_cast(indoc! {r"
-        df = df.select(pl.col('a').cast(pl.Int64))
-    "})]
-    #[case::custom_method_cast(indoc! {r"
-        result = obj.cast('param')
-    "})]
-    #[case::unrelated_call(indoc! {r"
-        print('hello world')
-    "})]
+    #[case::polars_column_cast("df = df.select(pl.col('a').cast(pl.Int64))")]
+    #[case::custom_method_cast("result = obj.cast('param')")]
+    #[case::unrelated_call("print('hello world')")]
     fn test_unrelated_calls_allowed(#[case] source: &str) {
         let output = crate::test_utils::assert_code_rule_snapshot(&NoTypingCast, source, "test.py");
         assert!(output.is_empty());

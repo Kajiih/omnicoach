@@ -773,9 +773,7 @@ mod tests {
 
     #[test]
     fn test_selector_deserialization() {
-        let toml_content = r#"
-            select = ["logging", "no-edits-on-described-commits"]
-        "#;
+        let toml_content = r#"select = ["logging", "no-edits-on-described-commits"]"#;
         let config: Config = toml::from_str(toml_content).unwrap();
         let selectors = config.select.unwrap();
         assert_eq!(selectors.len(), 2);
@@ -812,7 +810,7 @@ mod tests {
             exempt: &[],
         };
 
-        let toml_content = r#"
+        let toml_content = indoc::indoc! {r#"
             allowed = ["common_ok"]
             extend_banned = ["global_bad"]
 
@@ -822,7 +820,7 @@ mod tests {
 
             [python]
             banned = ["py_only_bad"]
-        "#;
+        "#};
 
         let config: DynamicRuleConfig<DenyListConfig> = toml::from_str(toml_content).unwrap();
 
@@ -855,7 +853,7 @@ mod tests {
             exempt: &[],
         };
 
-        let toml_content = r#"
+        let toml_content = indoc::indoc! {r#"
             banned = ["revoked"]
             extend_allowed = ["global_allowed"]
 
@@ -865,7 +863,7 @@ mod tests {
 
             [python]
             allowed = ["py_only_allowed"]
-        "#;
+        "#};
 
         let config: DynamicRuleConfig<AllowListConfig> = toml::from_str(toml_content).unwrap();
 
@@ -915,10 +913,10 @@ mod tests {
 
     #[test]
     fn test_per_file_ignores() {
-        let toml_content = r#"
+        let toml_content = indoc::indoc! {r#"
             [per_file_ignores]
             "tests/**" = ["style"]
-        "#;
+        "#};
         let config: Config = toml::from_str(toml_content).unwrap();
 
         assert!(!config.is_rule_enabled_for_path(&STYLE_RULE, Path::new("tests/my_test.rs")));

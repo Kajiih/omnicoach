@@ -271,17 +271,18 @@ mod tests {
 
     #[test]
     fn test_parse_simple_diff() {
-        let diff = r"diff --git a/src/lib.rs b/src/lib.rs
-index 123456..789101 100644
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -1,3 +1,4 @@
- fn foo() {
--    let x = 1;
-+    let y = 2;
-+    let z = 3;
- }
-";
+        let diff = indoc::indoc! {r"
+            diff --git a/src/lib.rs b/src/lib.rs
+            index 123456..789101 100644
+            --- a/src/lib.rs
+            +++ b/src/lib.rs
+            @@ -1,3 +1,4 @@
+             fn foo() {
+            -    let x = 1;
+            +    let y = 2;
+            +    let z = 3;
+             }
+        "};
         let changed_lines = parse_git_diff(diff);
         let path = PathBuf::from("src/lib.rs");
         assert!(changed_lines.contains_key(&path));
@@ -293,14 +294,15 @@ index 123456..789101 100644
 
     #[test]
     fn test_parse_single_line_hunk() {
-        let diff = r"diff --git a/test.py b/test.py
-index 111..222 100644
---- a/test.py
-+++ b/test.py
-@@ -10 +10 @@
--old
-+new
-";
+        let diff = indoc::indoc! {r"
+            diff --git a/test.py b/test.py
+            index 111..222 100644
+            --- a/test.py
+            +++ b/test.py
+            @@ -10 +10 @@
+            -old
+            +new
+        "};
         let changed_lines = parse_git_diff(diff);
         let path = PathBuf::from("test.py");
         let lines = &changed_lines[&path];
@@ -310,26 +312,29 @@ index 111..222 100644
 
     #[test]
     fn test_parse_deleted_file() {
-        let diff = r"diff --git a/test.py b/test.py
-deleted file mode 100644
---- a/test.py
-+++ /dev/null
-@@ -1,2 +0,0 @@
--def foo():
--    pass
-";
+        let diff = indoc::indoc! {r"
+            diff --git a/test.py b/test.py
+            deleted file mode 100644
+            --- a/test.py
+            +++ /dev/null
+            @@ -1,2 +0,0 @@
+            -def foo():
+            -    pass
+        "};
         let changed_lines = parse_git_diff(diff);
         assert!(changed_lines.is_empty());
     }
 
     #[test]
     fn test_parse_quoted_paths_with_spaces() {
-        let diff = r#"diff --git a/"some file.rs" b/"some file.rs"
---- a/"some file.rs"
-+++ b/"some file.rs"
-@@ -1 +1,2 @@
-+// added comment
- "#;
+        let diff = indoc::indoc! {r#"
+            diff --git a/"some file.rs" b/"some file.rs"
+            --- a/"some file.rs"
+            +++ b/"some file.rs"
+            @@ -1 +1,2 @@
+            +// added comment
+             
+        "#};
         let changed_lines = parse_git_diff(diff);
         let path = PathBuf::from("some file.rs");
         assert!(changed_lines.contains_key(&path));
@@ -338,13 +343,15 @@ deleted file mode 100644
 
     #[test]
     fn test_parse_no_newline_warning() {
-        let diff = r"diff --git a/test.py b/test.py
---- a/test.py
-+++ b/test.py
-@@ -1 +1,2 @@
-+def foo(): pass
-\ No newline at end of file
- ";
+        let diff = indoc::indoc! {r"
+            diff --git a/test.py b/test.py
+            --- a/test.py
+            +++ b/test.py
+            @@ -1 +1,2 @@
+            +def foo(): pass
+            \ No newline at end of file
+             
+        "};
         let changed_lines = parse_git_diff(diff);
         let path = PathBuf::from("test.py");
         assert!(changed_lines[&path].contains(&1));
@@ -352,12 +359,14 @@ deleted file mode 100644
 
     #[test]
     fn test_parse_path_containing_b_slash() {
-        let diff = r"diff --git a/some b/file.rs b/some b/file.rs
---- a/some b/file.rs
-+++ b/some b/file.rs
-@@ -1 +1,2 @@
-+// comment
- ";
+        let diff = indoc::indoc! {r"
+            diff --git a/some b/file.rs b/some b/file.rs
+            --- a/some b/file.rs
+            +++ b/some b/file.rs
+            @@ -1 +1,2 @@
+            +// comment
+             
+        "};
         let changed_lines = parse_git_diff(diff);
         let path = PathBuf::from("some b/file.rs");
         assert!(changed_lines.contains_key(&path));
@@ -366,14 +375,15 @@ deleted file mode 100644
 
     #[test]
     fn test_parse_diff_with_added_line_starting_with_plus_plus() {
-        let diff = r"diff --git a/test.py b/test.py
---- a/test.py
-+++ b/test.py
-@@ -1,2 +1,3 @@
- def foo():
-    pass
-+++ this looks like a file header but is actually an added line starting with ++
-";
+        let diff = indoc::indoc! {r"
+            diff --git a/test.py b/test.py
+            --- a/test.py
+            +++ b/test.py
+            @@ -1,2 +1,3 @@
+             def foo():
+                pass
+            +++ this looks like a file header but is actually an added line starting with ++
+        "};
         let changed_lines = parse_git_diff(diff);
         let path = PathBuf::from("test.py");
         assert!(changed_lines.contains_key(&path));

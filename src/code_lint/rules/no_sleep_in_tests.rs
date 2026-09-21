@@ -165,66 +165,66 @@ mod tests {
 
     #[test]
     fn test_python_sleep_in_tests_flagged() {
-        let source = r"
-import asyncio
-import anyio
-import time
+        let source = indoc::indoc! {r"
+            import asyncio
+            import anyio
+            import time
 
-async def test_polling():
-    time.sleep(1)
-    await asyncio.sleep(0.5)
-    await anyio.sleep(2)
-    sleep(1)
-    await asyncio.sleep(0)
-    await fake_clock.sleep(10)
-    self.sleep(5)
-";
+            async def test_polling():
+                time.sleep(1)
+                await asyncio.sleep(0.5)
+                await anyio.sleep(2)
+                sleep(1)
+                await asyncio.sleep(0)
+                await fake_clock.sleep(10)
+                self.sleep(5)
+        "};
 
         insta::assert_snapshot!(
             assert_code_rule_snapshot(&NoSleepInTests, source, "tests/test_worker.py"),
             @"
-        [no-sleep-in-tests] Line 7, Col 5: Wall-clock or async sleep `time.sleep()` in test is discouraged.
-        [no-sleep-in-tests] Line 8, Col 11: Wall-clock or async sleep `asyncio.sleep()` in test is discouraged.
-        [no-sleep-in-tests] Line 9, Col 11: Wall-clock or async sleep `anyio.sleep()` in test is discouraged.
-        [no-sleep-in-tests] Line 10, Col 5: Wall-clock or async sleep `sleep()` in test is discouraged.
-        "
-        );
-
-        insta::assert_snapshot!(
-            assert_code_rule_snapshot(&NoZeroSleepInTests, source, "tests/test_worker.py"),
-            @"[no-zero-sleep-in-tests] Line 11, Col 11: Zero-duration sleep `asyncio.sleep(0)` in test is discouraged."
-        );
-    }
-
-    #[test]
-    fn test_rust_sleep_in_tests_flagged() {
-        let source = r"
-use std::time::Duration;
-
-#[tokio::test]
-async fn test_retry_backoff() {
-    std::thread::sleep(Duration::from_millis(50));
-    thread::sleep(Duration::from_secs(1));
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    sleep(Duration::from_millis(5));
-    tokio::time::sleep(Duration::ZERO).await;
-    fake_clock.sleep(Duration::from_secs(5)).await;
-}
-";
-
-        insta::assert_snapshot!(
-            assert_code_rule_snapshot(&NoSleepInTests, source, "tests/retry_test.rs"),
-            @"
-        [no-sleep-in-tests] Line 6, Col 5: Wall-clock or async sleep `std::thread::sleep()` in test is discouraged.
-        [no-sleep-in-tests] Line 7, Col 5: Wall-clock or async sleep `thread::sleep()` in test is discouraged.
-        [no-sleep-in-tests] Line 8, Col 5: Wall-clock or async sleep `tokio::time::sleep()` in test is discouraged.
+        [no-sleep-in-tests] Line 6, Col 5: Wall-clock or async sleep `time.sleep()` in test is discouraged.
+        [no-sleep-in-tests] Line 7, Col 11: Wall-clock or async sleep `asyncio.sleep()` in test is discouraged.
+        [no-sleep-in-tests] Line 8, Col 11: Wall-clock or async sleep `anyio.sleep()` in test is discouraged.
         [no-sleep-in-tests] Line 9, Col 5: Wall-clock or async sleep `sleep()` in test is discouraged.
         "
         );
 
         insta::assert_snapshot!(
+            assert_code_rule_snapshot(&NoZeroSleepInTests, source, "tests/test_worker.py"),
+            @"[no-zero-sleep-in-tests] Line 10, Col 11: Zero-duration sleep `asyncio.sleep(0)` in test is discouraged."
+        );
+    }
+
+    #[test]
+    fn test_rust_sleep_in_tests_flagged() {
+        let source = indoc::indoc! {r"
+            use std::time::Duration;
+
+            #[tokio::test]
+            async fn test_retry_backoff() {
+                std::thread::sleep(Duration::from_millis(50));
+                thread::sleep(Duration::from_secs(1));
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                sleep(Duration::from_millis(5));
+                tokio::time::sleep(Duration::ZERO).await;
+                fake_clock.sleep(Duration::from_secs(5)).await;
+            }
+        "};
+
+        insta::assert_snapshot!(
+            assert_code_rule_snapshot(&NoSleepInTests, source, "tests/retry_test.rs"),
+            @"
+        [no-sleep-in-tests] Line 5, Col 5: Wall-clock or async sleep `std::thread::sleep()` in test is discouraged.
+        [no-sleep-in-tests] Line 6, Col 5: Wall-clock or async sleep `thread::sleep()` in test is discouraged.
+        [no-sleep-in-tests] Line 7, Col 5: Wall-clock or async sleep `tokio::time::sleep()` in test is discouraged.
+        [no-sleep-in-tests] Line 8, Col 5: Wall-clock or async sleep `sleep()` in test is discouraged.
+        "
+        );
+
+        insta::assert_snapshot!(
             assert_code_rule_snapshot(&NoZeroSleepInTests, source, "tests/retry_test.rs"),
-            @"[no-zero-sleep-in-tests] Line 10, Col 5: Zero-duration sleep `tokio::time::sleep(Duration::ZERO)` in test is discouraged."
+            @"[no-zero-sleep-in-tests] Line 9, Col 5: Zero-duration sleep `tokio::time::sleep(Duration::ZERO)` in test is discouraged."
         );
     }
 }

@@ -15,5 +15,6 @@ pub mod no_sleep_in_tests;
 pub mod no_typing_cast;
 pub mod no_uncommented_suppress;
 pub mod no_unstructured_task_creation;
+pub mod prefer_dedent_for_multiline_strings;
 pub mod prefer_timedelta_over_seconds;
 pub mod single_letter_variable_name;

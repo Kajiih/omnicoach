@@ -640,9 +640,7 @@ mod tests {
     #[test]
     fn test_suppressing_supp_in_config() {
         let content = "clean_name = 1  # omni:ignore [single-letter-variable-name] -- intentional dormant suppression";
-        let toml_content = r#"
-            ignore = ["unused-suppression"]
-        "#;
+        let toml_content = r#"ignore = ["unused-suppression"]"#;
         let config: Config = toml::from_str(toml_content).unwrap();
         let diags = crate::code_lint::lint_file(Path::new("src/template.py"), content, &config);
 

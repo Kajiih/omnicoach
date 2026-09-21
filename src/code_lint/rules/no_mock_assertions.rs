@@ -81,18 +81,17 @@ mod tests {
     fn test_python_mock_assertions() {
         let rule = NoMockAssertions;
 
-        // TODO: Is it the idiomatic way to write multiline strings?
-        let source = r"
-def test_payment_flow(gateway, fake_repo):
-    gateway.charge.assert_called_once_with(100)
-    gateway.refund.assert_not_called()
-    gateway.async_send.assert_awaited_once()
-    assert fake_repo.balance == 100
-";
+        let source = indoc::indoc! {r"
+            def test_payment_flow(gateway, fake_repo):
+                gateway.charge.assert_called_once_with(100)
+                gateway.refund.assert_not_called()
+                gateway.async_send.assert_awaited_once()
+                assert fake_repo.balance == 100
+        "};
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test_pay.py"), @"
-        [no-mock-assertions] Line 3, Col 5: Mock interaction assertion `.assert_called_once_with(...)` is prohibited in tests.
-        [no-mock-assertions] Line 4, Col 5: Mock interaction assertion `.assert_not_called(...)` is prohibited in tests.
-        [no-mock-assertions] Line 5, Col 5: Mock interaction assertion `.assert_awaited_once(...)` is prohibited in tests.
+        [no-mock-assertions] Line 2, Col 5: Mock interaction assertion `.assert_called_once_with(...)` is prohibited in tests.
+        [no-mock-assertions] Line 3, Col 5: Mock interaction assertion `.assert_not_called(...)` is prohibited in tests.
+        [no-mock-assertions] Line 4, Col 5: Mock interaction assertion `.assert_awaited_once(...)` is prohibited in tests.
         ");
     }
 }

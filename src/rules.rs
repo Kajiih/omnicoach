@@ -111,6 +111,7 @@ pub const CODE_RULES: &[&dyn crate::code_lint::CodeRule] = &[
     &crate::code_lint::rules::no_identical_positional_types::NoIdenticalPositionalTypes,
     &crate::code_lint::rules::no_env_in_functions::NoEnvInFunctions,
     &crate::code_lint::rules::enforce_frozen_slots_dataclass::EnforceFrozenSlotsDataclass,
+    &crate::code_lint::rules::prefer_dedent_for_multiline_strings::PreferDedentForMultilineStrings,
     &crate::code_lint::suppression::MissingSuppressionReason,
     &crate::code_lint::suppression::UnusedSuppression,
     &crate::code_lint::suppression::UnknownSuppressionRule,

@@ -68,7 +68,7 @@ mod tests {
     fn test_rust_snapshots() {
         let rule = PreferTimedeltaOverSeconds;
 
-        let source = r"
+        let source = indoc::indoc! {r"
             use std::time::Duration as timeout_seconds; // OK (import alias)
             struct TimeoutSeconds; // OK (struct definition)
             fn calculate_seconds() { // OK (function name)
@@ -77,11 +77,11 @@ mod tests {
                 const MAX_WAIT_MINS: u64 = 5;
                 let timeout = std::time::Duration::from_secs(30); // OK
             }
-        ";
+        "};
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @"
-        [prefer-timedelta-over-seconds] Line 5, Col 21: Identifier `timeout_seconds` encodes a raw time unit suffix `_seconds`.
-        [prefer-timedelta-over-seconds] Line 6, Col 21: Identifier `retry_delay_ms` encodes a raw time unit suffix `_ms`.
-        [prefer-timedelta-over-seconds] Line 7, Col 23: Identifier `MAX_WAIT_MINS` encodes a raw time unit suffix `_MINS`.
+        [prefer-timedelta-over-seconds] Line 4, Col 9: Identifier `timeout_seconds` encodes a raw time unit suffix `_seconds`.
+        [prefer-timedelta-over-seconds] Line 5, Col 9: Identifier `retry_delay_ms` encodes a raw time unit suffix `_ms`.
+        [prefer-timedelta-over-seconds] Line 6, Col 11: Identifier `MAX_WAIT_MINS` encodes a raw time unit suffix `_MINS`.
         ");
     }
 
@@ -89,20 +89,20 @@ mod tests {
     fn test_python_snapshots() {
         let rule = PreferTimedeltaOverSeconds;
 
-        let source = r"
-import os_seconds # OK (import)
-from datetime import timedelta as delta_secs # OK (import alias)
-class DurationMinutes: # OK (class definition)
-    def parse_seconds(self): # OK (method definition)
-        timeout_secs = 10
-        delay_ms = 250
-        ttl_hours = 24
-        duration = timedelta(seconds=10) # OK
-        ";
+        let source = indoc::indoc! {r"
+            import os_seconds # OK (import)
+            from datetime import timedelta as delta_secs # OK (import alias)
+            class DurationMinutes: # OK (class definition)
+                def parse_seconds(self): # OK (method definition)
+                    timeout_secs = 10
+                    delay_ms = 250
+                    ttl_hours = 24
+                    duration = timedelta(seconds=10) # OK
+        "};
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @"
-        [prefer-timedelta-over-seconds] Line 6, Col 9: Identifier `timeout_secs` encodes a raw time unit suffix `_secs`.
-        [prefer-timedelta-over-seconds] Line 7, Col 9: Identifier `delay_ms` encodes a raw time unit suffix `_ms`.
-        [prefer-timedelta-over-seconds] Line 8, Col 9: Identifier `ttl_hours` encodes a raw time unit suffix `_hours`.
+        [prefer-timedelta-over-seconds] Line 5, Col 9: Identifier `timeout_secs` encodes a raw time unit suffix `_secs`.
+        [prefer-timedelta-over-seconds] Line 6, Col 9: Identifier `delay_ms` encodes a raw time unit suffix `_ms`.
+        [prefer-timedelta-over-seconds] Line 7, Col 9: Identifier `ttl_hours` encodes a raw time unit suffix `_hours`.
         ");
     }
 }

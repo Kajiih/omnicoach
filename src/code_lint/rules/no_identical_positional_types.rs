@@ -160,75 +160,75 @@ mod tests {
 
     #[test]
     fn test_identical_positional_types_flagged_and_exemptions() {
-        let source = r#"
-from typing import override, overload
+        let source = indoc::indoc! {r#"
+            from typing import override, overload
 
-# Flagged: 4 positional args, duplicate `str` and duplicate `int`
-def transfer(source_id: str, target_id: str, amount: int, fee: int) -> None:
-    pass
+            # Flagged: 4 positional args, duplicate `str` and duplicate `int`
+            def transfer(source_id: str, target_id: str, amount: int, fee: int) -> None:
+                pass
 
-# Flagged: non-adjacent duplicate types with >= 3 positional args
-def create_item(owner_id: str, weight: float, item_id: str = "default") -> None:
-    pass
+            # Flagged: non-adjacent duplicate types with >= 3 positional args
+            def create_item(owner_id: str, weight: float, item_id: str = "default") -> None:
+                pass
 
-# OK: only 2 positional args (< default min_args of 3)
-def add(a: int, b: int) -> int:
-    return a + b
+            # OK: only 2 positional args (< default min_args of 3)
+            def add(a: int, b: int) -> int:
+                return a + b
 
-# OK: separated by keyword-only `*`
-def safe_transfer(source_id: str, *, target_id: str, amount: int, fee: int) -> None:
-    pass
+            # OK: separated by keyword-only `*`
+            def safe_transfer(source_id: str, *, target_id: str, amount: int, fee: int) -> None:
+                pass
 
-# OK: args after `*args` are already keyword-only
-def vararg_fn(first: str, *args: int, second: str, third: str) -> None:
-    pass
+            # OK: args after `*args` are already keyword-only
+            def vararg_fn(first: str, *args: int, second: str, third: str) -> None:
+                pass
 
-class AccountService:
-    # Flagged: __init__ has 3 positional args (excluding `self`) with duplicate `str`
-    def __init__(self, host: str, port: int, api_key: str) -> None:
-        pass
+            class AccountService:
+                # Flagged: __init__ has 3 positional args (excluding `self`) with duplicate `str`
+                def __init__(self, host: str, port: int, api_key: str) -> None:
+                    pass
 
-    # OK: `self` excluded, so only 2 positional args (`a`, `b`)
-    def compute(self, a: int, b: int) -> int:
-        return a + b
+                # OK: `self` excluded, so only 2 positional args (`a`, `b`)
+                def compute(self, a: int, b: int) -> int:
+                    return a + b
 
-    # OK: runtime dunder method with fixed positional protocol
-    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
-        pass
+                # OK: runtime dunder method with fixed positional protocol
+                def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+                    pass
 
-    # OK: @override method constrained by parent signature
-    @override
-    def sync(self, primary: str, secondary: str, retries: int) -> None:
-        pass
+                # OK: @override method constrained by parent signature
+                @override
+                def sync(self, primary: str, secondary: str, retries: int) -> None:
+                    pass
 
-@overload
-def overloaded_fn(a: str, b: str, c: int) -> int: ...
-"#;
+            @overload
+            def overloaded_fn(a: str, b: str, c: int) -> int: ...
+        "#};
 
         insta::assert_snapshot!(
             assert_code_rule_snapshot(&NoIdenticalPositionalTypes, source, "src/service.py"),
             @"
-        [no-identical-positional-types] Line 5, Col 5: Function `transfer` has multiple positional parameters with identical types (`source_id, target_id: str`, `amount, fee: int`).
-        [no-identical-positional-types] Line 9, Col 5: Function `create_order` has multiple positional parameters with identical types (`owner_id, item_id: str`).
-        [no-identical-positional-types] Line 26, Col 9: Function `__init__` has multiple positional parameters with identical types (`host, api_key: str`).
+        [no-identical-positional-types] Line 4, Col 5: Function `transfer` has multiple positional parameters with identical types (`source_id, target_id: str`, `amount, fee: int`).
+        [no-identical-positional-types] Line 8, Col 5: Function `create_order` has multiple positional parameters with identical types (`owner_id, item_id: str`).
+        [no-identical-positional-types] Line 25, Col 9: Function `__init__` has multiple positional parameters with identical types (`host, api_key: str`).
         "
         );
     }
 
     #[test]
     fn test_custom_min_args_config() {
-        let source = r"
-def connect(host: str, token: str) -> None:
-    pass
-";
-        let config_toml = r"
-[rules.no-identical-positional-types]
-min_args = 2
-";
+        let source = indoc::indoc! {r"
+            def connect(host: str, token: str) -> None:
+                pass
+        "};
+        let config_toml = indoc::indoc! {r"
+            [rules.no-identical-positional-types]
+            min_args = 2
+        "};
         let config: Config = toml::from_str(config_toml).unwrap();
         insta::assert_snapshot!(
             assert_code_rule_snapshot_with_config(&NoIdenticalPositionalTypes, source, "src/net.py", &config),
-            @"[no-identical-positional-types] Line 2, Col 5: Function `connect` has multiple positional parameters with identical types (`host, token: str`)."
+            @"[no-identical-positional-types] Line 1, Col 5: Function `connect` has multiple positional parameters with identical types (`host, token: str`)."
         );
     }
 }

@@ -107,6 +107,11 @@ All rules support the `mode = "ban" | "require-explanation"` configuration. Belo
   [rules.prefer-timedelta-over-seconds]
   allowed = ["_sec"]
   ```
+* **`prefer-dedent-for-multiline-strings`**: Enforces wrapping multiline string literals in a dedent helper (`textwrap.dedent` / `inspect.cleandoc` in Python; `indoc!` / `formatdoc!` / `concat!` in Rust) across all scopes while exempting docstrings and `insta` `@"..."` inline snapshots. *(Python, Rust)*
+  ```toml
+  [rules.prefer-dedent-for-multiline-strings]
+  extend_allowed = ["custom_dedent"]
+  ```
 
 ### Typing & Signatures
 * **`no-typing-cast`**: Bans unchecked type assertions (`cast()`, `typing.cast()`, `typing_extensions.cast()`) in production code. *(Python)*

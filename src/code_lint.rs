@@ -525,14 +525,15 @@ pub(crate) fn find_suffixed_bindings<'a, S: std::hash::BuildHasher>(
         for suffix_lower in &sorted_suffixes {
             if name.len() > suffix_lower.len() && name_lower.ends_with(suffix_lower.as_str()) {
                 let split_idx = name.len() - suffix_lower.len();
-                let base_name = &name[..split_idx];
-                let actual_suffix = &name[split_idx..];
+                let Some((base_name, actual_suffix)) = name.split_at_checked(split_idx) else {
+                    continue;
+                };
 
                 matches.push(SuffixedBindingMatch {
                     node,
-                    name: name.into_owned(),
                     actual_suffix: actual_suffix.to_string(),
                     base_name: base_name.to_string(),
+                    name: name.into_owned(),
                 });
                 break;
             }
@@ -869,9 +870,7 @@ mod tests {
             # Valid explanation for type cast
             x = cast(int, y)
         "};
-        let source_uncommented = indoc::indoc! {r"
-            x = cast(int, y)
-        "};
+        let source_uncommented = "x = cast(int, y)";
 
         let default_config = Config::default();
         let diagnostics_banned_doc =
@@ -889,14 +888,12 @@ mod tests {
             # Valid explanation for type cast
             x = cast(int, y)
         "};
-        let source_uncommented = indoc::indoc! {r"
-            x = cast(int, y)
-        "};
+        let source_uncommented = "x = cast(int, y)";
 
-        let config_toml = r#"
+        let config_toml = indoc::indoc! {r#"
             [rules.no-typing-cast]
             mode = "require-explanation"
-        "#;
+        "#};
         let req_doc_config: Config = toml::from_str(config_toml).unwrap();
 
         let diagnostics_req_doc =

@@ -75,24 +75,24 @@ mod tests {
     fn test_dynamic_attribute_access_detection() {
         let rule = NoDynamicAttributeAccess;
 
-        let source = r#"
-value = getattr(service, "timeout", 10)
-if hasattr(record, field_name):
-    setattr(record, field_name, 42)
-delattr(record, "deprecated_key")
+        let source = indoc::indoc! {r#"
+            value = getattr(service, "timeout", 10)
+            if hasattr(record, field_name):
+                setattr(record, field_name, 42)
+            delattr(record, "deprecated_key")
 
-import builtins
-builtins.getattr(service, "name")
+            import builtins
+            builtins.getattr(service, "name")
 
-# Custom methods with matching names must NOT be flagged:
-registry.getattr("key")
-"#;
+            # Custom methods with matching names must NOT be flagged:
+            registry.getattr("key")
+        "#};
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "service.py"), @"
-        [no-dynamic-attribute-access] Line 2, Col 9: Dynamic reflection call `getattr()` bypasses static type checking.
-        [no-dynamic-attribute-access] Line 3, Col 4: Dynamic reflection call `hasattr()` bypasses static type checking.
-        [no-dynamic-attribute-access] Line 4, Col 5: Dynamic reflection call `setattr()` bypasses static type checking.
-        [no-dynamic-attribute-access] Line 5, Col 1: Dynamic reflection call `delattr()` bypasses static type checking.
-        [no-dynamic-attribute-access] Line 8, Col 1: Dynamic reflection call `builtins.getattr()` bypasses static type checking.
+        [no-dynamic-attribute-access] Line 1, Col 9: Dynamic reflection call `getattr()` bypasses static type checking.
+        [no-dynamic-attribute-access] Line 2, Col 4: Dynamic reflection call `hasattr()` bypasses static type checking.
+        [no-dynamic-attribute-access] Line 3, Col 5: Dynamic reflection call `setattr()` bypasses static type checking.
+        [no-dynamic-attribute-access] Line 4, Col 1: Dynamic reflection call `delattr()` bypasses static type checking.
+        [no-dynamic-attribute-access] Line 7, Col 1: Dynamic reflection call `builtins.getattr()` bypasses static type checking.
         ");
     }
 }

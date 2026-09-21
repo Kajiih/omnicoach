@@ -154,13 +154,13 @@ mod tests {
 
     #[test]
     fn test_python_call_matching_excludes_receiver_methods() {
-        let source = r"
-time.sleep(1)
-sleep(0)
-clock.sleep(1)
-self.sleep(1)
-asyncio.get_event_loop().create_task(work())
-";
+        let source = indoc::indoc! {r"
+            time.sleep(1)
+            sleep(0)
+            clock.sleep(1)
+            self.sleep(1)
+            asyncio.get_event_loop().create_task(work())
+        "};
         let grep = AstGrep::new(source, SupportLang::Python);
         let banned: HashSet<String> = ["sleep", "time.sleep", "$LOOP($$$LOOP_ARGS).create_task"]
             .into_iter()
@@ -185,14 +185,14 @@ asyncio.get_event_loop().create_task(work())
 
     #[test]
     fn test_rust_call_matching_excludes_receiver_methods() {
-        let source = r"
-fn test_case() {
-    std::thread::sleep(dur);
-    tokio::time::sleep(Duration::ZERO).await;
-    sleep(dur);
-    clock.sleep(dur).await;
-}
-";
+        let source = indoc::indoc! {r"
+            fn test_case() {
+                std::thread::sleep(dur);
+                tokio::time::sleep(Duration::ZERO).await;
+                sleep(dur);
+                clock.sleep(dur).await;
+            }
+        "};
         let grep = AstGrep::new(source, SupportLang::Rust);
         let banned: HashSet<String> = ["sleep", "std::thread::sleep", "tokio::time::sleep"]
             .into_iter()
@@ -212,12 +212,12 @@ fn test_case() {
 
     #[test]
     fn test_find_banned_calls_with_leading_dot_method_syntax() {
-        let source = r"
-mock_service.assert_called_once()
-gateway.charge.assert_called_once_with(100)
-assert_called_once()
-self.assertEqual(1, 1)
-";
+        let source = indoc::indoc! {r"
+            mock_service.assert_called_once()
+            gateway.charge.assert_called_once_with(100)
+            assert_called_once()
+            self.assertEqual(1, 1)
+        "};
         let grep = AstGrep::new(source, SupportLang::Python);
         let banned: HashSet<String> = [".assert_called_once", ".assert_called_once_with"]
             .into_iter()

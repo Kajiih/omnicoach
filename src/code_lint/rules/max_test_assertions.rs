@@ -134,84 +134,84 @@ mod tests {
 
     #[test]
     fn test_python_max_assertions_flagged() {
-        let source = r"
-import pytest
+        let source = indoc::indoc! {r"
+            import pytest
 
-def assert_helper(response):
-    assert response.status == 200
-    assert response.body is not None
-    assert response.headers
-    assert response.cookies
-    assert response.ok
+            def assert_helper(response):
+                assert response.status == 200
+                assert response.body is not None
+                assert response.headers
+                assert response.cookies
+                assert response.ok
 
-def test_focused_behavior():
-    assert 1 + 1 == 2
-    assert 2 + 2 == 4
-    with pytest.raises(ValueError):
-        int('bad')
-    assert True
+            def test_focused_behavior():
+                assert 1 + 1 == 2
+                assert 2 + 2 == 4
+                with pytest.raises(ValueError):
+                    int('bad')
+                assert True
 
-def test_kitchen_sink_endpoint(self, mock_service):
-    assert 1 == 1
-    self.assertEqual(2, 2)
-    mock_service.assert_called_once()
-    with pytest.raises(KeyError):
-        {}['missing']
-    assert 5 == 5
-";
+            def test_kitchen_sink_endpoint(self, mock_service):
+                assert 1 == 1
+                self.assertEqual(2, 2)
+                mock_service.assert_called_once()
+                with pytest.raises(KeyError):
+                    {}['missing']
+                assert 5 == 5
+        "};
 
         insta::assert_snapshot!(
             assert_code_rule_snapshot(&MaxTestAssertions, source, "tests/test_api.py"),
-            @"[max-test-assertions] Line 18, Col 5: Test function `test_kitchen_sink_endpoint` has 5 assertions, exceeding the maximum of 4."
+            @"[max-test-assertions] Line 17, Col 5: Test function `test_kitchen_sink_endpoint` has 5 assertions, exceeding the maximum of 4."
         );
     }
 
     #[test]
     fn test_rust_max_assertions_flagged() {
-        let source = r#"
-#[test]
-fn parses_valid_header() {
-    assert_eq!(1, 1);
-    assert_ne!(1, 2);
-    assert!(true);
-    debug_assert_eq!(3, 3);
-    insta::assert_snapshot!("ok");
-}
+        let source = indoc::indoc! {r#"
+            #[test]
+            fn parses_valid_header() {
+                assert_eq!(1, 1);
+                assert_ne!(1, 2);
+                assert!(true);
+                debug_assert_eq!(3, 3);
+                insta::assert_snapshot!("ok");
+            }
 
-#[tokio::test]
-async fn focused_async_check() {
-    assert_eq!(1, 1);
-    assert!(matches!(Some(1), Some(_)));
-}
+            #[tokio::test]
+            async fn focused_async_check() {
+                assert_eq!(1, 1);
+                assert!(matches!(Some(1), Some(_)));
+            }
 
-#[cfg(test)]
-fn verify_response_fields() {
-    assert_eq!(1, 1);
-    assert_eq!(2, 2);
-    assert_eq!(3, 3);
-    assert_eq!(4, 4);
-    assert_eq!(5, 5);
-}
-"#;
+            #[cfg(test)]
+            fn verify_response_fields() {
+                assert_eq!(1, 1);
+                assert_eq!(2, 2);
+                assert_eq!(3, 3);
+                assert_eq!(4, 4);
+                assert_eq!(5, 5);
+            }
+        "#};
 
         insta::assert_snapshot!(
             assert_code_rule_snapshot(&MaxTestAssertions, source, "tests/header_test.rs"),
-            @"[max-test-assertions] Line 3, Col 4: Test function `parses_valid_header` has 5 assertions, exceeding the maximum of 4."
+            @"[max-test-assertions] Line 2, Col 4: Test function `parses_valid_header` has 5 assertions, exceeding the maximum of 4."
         );
     }
 
     #[test]
     fn test_configurable_threshold() {
-        let source = r"
-def test_three_assertions():
-    assert 1 == 1
-    assert 2 == 2
-    assert 3 == 3
-";
-        let config_toml = r"
-[rules.max-test-assertions]
-max = 2
-";
+        let source = indoc::indoc! {r"
+            def test_three_assertions():
+                assert 1 == 1
+                assert 2 == 2
+                assert 3 == 3
+        "};
+        let config_toml = indoc::indoc! {r"
+            [rules.max-test-assertions]
+            max = 2
+        "};
         let config: Config = toml::from_str(config_toml).unwrap();
         let output = assert_code_rule_snapshot_with_config(
             &MaxTestAssertions,
@@ -221,7 +221,7 @@ max = 2
         );
         insta::assert_snapshot!(
             output,
-            @"[max-test-assertions] Line 2, Col 5: Test function `test_three_assertions` has 3 assertions, exceeding the maximum of 2."
+            @"[max-test-assertions] Line 1, Col 5: Test function `test_three_assertions` has 3 assertions, exceeding the maximum of 2."
         );
     }
 }

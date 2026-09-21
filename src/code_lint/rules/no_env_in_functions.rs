@@ -392,11 +392,11 @@ mod tests {
 
     #[test]
     fn test_config_extend_and_allowed() {
-        let config_toml = r#"
+        let config_toml = indoc! {r#"
             [rules.no-env-in-functions]
             extend_banned = ["dotenv.get_key"]
             allowed = ["getenv"]
-        "#;
+        "#};
         let config: Config = toml::from_str(config_toml).unwrap();
 
         let source = indoc! {r#"

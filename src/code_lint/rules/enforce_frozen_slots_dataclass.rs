@@ -91,50 +91,50 @@ mod tests {
     fn test_enforce_frozen_slots_dataclass_detection() {
         let rule = EnforceFrozenSlotsDataclass;
 
-        let source = r"
-from dataclasses import dataclass
-import dataclasses
+        let source = indoc::indoc! {r"
+            from dataclasses import dataclass
+            import dataclasses
 
-# Flagged: bare @dataclass missing both
-@dataclass
-class BareModel:
-    id: str
+            # Flagged: bare @dataclass missing both
+            @dataclass
+            class BareModel:
+                id: str
 
-# Flagged: only frozen=True provided, missing slots=True
-@dataclass(frozen=True)
-class MissingSlots:
-    id: str
+            # Flagged: only frozen=True provided, missing slots=True
+            @dataclass(frozen=True)
+            class MissingSlots:
+                id: str
 
-# Flagged: only slots=True provided, missing frozen=True
-@dataclasses.dataclass(slots=True)
-class MissingFrozen:
-    id: str
+            # Flagged: only slots=True provided, missing frozen=True
+            @dataclasses.dataclass(slots=True)
+            class MissingFrozen:
+                id: str
 
-# OK: both frozen=True and slots=True specified
-@dataclass(frozen=True, slots=True)
-class ValidModel:
-    id: str
+            # OK: both frozen=True and slots=True specified
+            @dataclass(frozen=True, slots=True)
+            class ValidModel:
+                id: str
 
-# OK: user explicitly specified frozen=False (intentional opt-out)
-@dataclass(frozen=False, slots=True)
-class ExplicitMutable:
-    id: str
+            # OK: user explicitly specified frozen=False (intentional opt-out)
+            @dataclass(frozen=False, slots=True)
+            class ExplicitMutable:
+                id: str
 
-# OK: user explicitly specified slots=False (intentional opt-out)
-@dataclass(frozen=True, slots=False)
-class ExplicitNoSlots:
-    id: str
+            # OK: user explicitly specified slots=False (intentional opt-out)
+            @dataclass(frozen=True, slots=False)
+            class ExplicitNoSlots:
+                id: str
 
-# OK: standard non-dataclass class
-class RegularClass:
-    def __init__(self, x: int) -> None:
-        self.x = x
-";
+            # OK: standard non-dataclass class
+            class RegularClass:
+                def __init__(self, x: int) -> None:
+                    self.x = x
+        "};
 
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "src/models.py"), @"
-        [enforce-frozen-slots-dataclass] Line 7, Col 7: Dataclass `BareModel` should be defined with `frozen=True and slots=True` to ensure immutability and memory efficiency.
-        [enforce-frozen-slots-dataclass] Line 12, Col 7: Dataclass `MissingSlots` should be defined with `slots=True` to ensure immutability and memory efficiency.
-        [enforce-frozen-slots-dataclass] Line 17, Col 7: Dataclass `MissingFrozen` should be defined with `frozen=True` to ensure immutability and memory efficiency.
+        [enforce-frozen-slots-dataclass] Line 6, Col 7: Dataclass `BareModel` should be defined with `frozen=True and slots=True` to ensure immutability and memory efficiency.
+        [enforce-frozen-slots-dataclass] Line 11, Col 7: Dataclass `MissingSlots` should be defined with `slots=True` to ensure immutability and memory efficiency.
+        [enforce-frozen-slots-dataclass] Line 16, Col 7: Dataclass `MissingFrozen` should be defined with `frozen=True` to ensure immutability and memory efficiency.
         ");
     }
 }

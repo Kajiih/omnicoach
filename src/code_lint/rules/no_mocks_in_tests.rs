@@ -121,23 +121,23 @@ mod tests {
     fn test_python_mock_detection_and_http_patch_exemption() {
         let rule = NoMocksInTests;
 
-        let source = r#"
-from unittest.mock import MagicMock, patch
+        let source = indoc::indoc! {r#"
+            from unittest.mock import MagicMock, patch
 
-@patch("service.auth.verify_token")
-def test_user_update(mocker, monkeypatch, api_client):
-    gateway = MagicMock()
-    mocker.patch.object(gateway, "charge")
-    monkeypatch.setattr(gateway, "timeout", 5)
-    # Real HTTP PATCH calls must NOT be flagged:
-    response = api_client.patch("/v1/users/42", json={"name": "Alice"})
-    httpx.patch("https://example.com/api")
-"#;
+            @patch("service.auth.verify_token")
+            def test_user_update(mocker, monkeypatch, api_client):
+                gateway = MagicMock()
+                mocker.patch.object(gateway, "charge")
+                monkeypatch.setattr(gateway, "timeout", 5)
+                # Real HTTP PATCH calls must NOT be flagged:
+                response = api_client.patch("/v1/users/42", json={"name": "Alice"})
+                httpx.patch("https://example.com/api")
+        "#};
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test_auth.py"), @"
-        [no-mocks-in-tests] Line 4, Col 2: Dynamic mock or monkeypatch `patch(...)` is prohibited in tests.
-        [no-mocks-in-tests] Line 6, Col 15: Dynamic mock or monkeypatch `MagicMock(...)` is prohibited in tests.
-        [no-mocks-in-tests] Line 7, Col 5: Dynamic mock or monkeypatch `mocker.patch.object(...)` is prohibited in tests.
-        [no-mocks-in-tests] Line 8, Col 5: Dynamic mock or monkeypatch `monkeypatch.setattr(...)` is prohibited in tests.
+        [no-mocks-in-tests] Line 3, Col 2: Dynamic mock or monkeypatch `patch(...)` is prohibited in tests.
+        [no-mocks-in-tests] Line 5, Col 15: Dynamic mock or monkeypatch `MagicMock(...)` is prohibited in tests.
+        [no-mocks-in-tests] Line 6, Col 5: Dynamic mock or monkeypatch `mocker.patch.object(...)` is prohibited in tests.
+        [no-mocks-in-tests] Line 7, Col 5: Dynamic mock or monkeypatch `monkeypatch.setattr(...)` is prohibited in tests.
         ");
     }
 }

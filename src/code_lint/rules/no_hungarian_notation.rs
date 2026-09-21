@@ -65,7 +65,7 @@ mod tests {
     fn test_rust_snapshots() {
         let rule = NoHungarianNotation;
 
-        let source = r#"
+        let source = indoc::indoc! {r#"
             use std::collections::VecDeque; // OK (import)
             use std::collections::HashMap as my_map; // OK (import alias)
             struct UserList; // OK (struct definition)
@@ -76,12 +76,12 @@ mod tests {
                 const MY_INT: i32 = 42;
                 let age = 30; // OK
             }
-        "#;
+        "#};
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @"
-        [no-hungarian-notation] Line 6, Col 21: Identifier `user_list` contains a banned type suffix `_list`.
-        [no-hungarian-notation] Line 7, Col 21: Identifier `id_set` contains a banned type suffix `_set`.
-        [no-hungarian-notation] Line 8, Col 21: Identifier `name_str` contains a banned type suffix `_str`.
-        [no-hungarian-notation] Line 9, Col 23: Identifier `MY_INT` contains a banned type suffix `_INT`.
+        [no-hungarian-notation] Line 5, Col 9: Identifier `user_list` contains a banned type suffix `_list`.
+        [no-hungarian-notation] Line 6, Col 9: Identifier `id_set` contains a banned type suffix `_set`.
+        [no-hungarian-notation] Line 7, Col 9: Identifier `name_str` contains a banned type suffix `_str`.
+        [no-hungarian-notation] Line 8, Col 11: Identifier `MY_INT` contains a banned type suffix `_INT`.
         ");
     }
 
@@ -89,31 +89,31 @@ mod tests {
     fn test_python_snapshots() {
         let rule = NoHungarianNotation;
 
-        let source = r"
-import os_path # OK (import)
-from sys import stderr as err_file # OK (import alias)
-class ItemsArr: # OK (class definition)
-    def handle_dict(self): # OK (method definition)
-        users_dict = {}
-        items_arr = []
-        value_int = 42
-        data = None # OK
-        ";
+        let source = indoc::indoc! {r"
+            import os_path # OK (import)
+            from sys import stderr as err_file # OK (import alias)
+            class ItemsArr: # OK (class definition)
+                def handle_dict(self): # OK (method definition)
+                    users_dict = {}
+                    items_arr = []
+                    value_int = 42
+                    data = None # OK
+        "};
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @"
-        [no-hungarian-notation] Line 6, Col 9: Identifier `users_dict` contains a banned type suffix `_dict`.
-        [no-hungarian-notation] Line 7, Col 9: Identifier `items_arr` contains a banned type suffix `_arr`.
-        [no-hungarian-notation] Line 8, Col 9: Identifier `value_int` contains a banned type suffix `_int`.
+        [no-hungarian-notation] Line 5, Col 9: Identifier `users_dict` contains a banned type suffix `_dict`.
+        [no-hungarian-notation] Line 6, Col 9: Identifier `items_arr` contains a banned type suffix `_arr`.
+        [no-hungarian-notation] Line 7, Col 9: Identifier `value_int` contains a banned type suffix `_int`.
         ");
     }
 
     #[test]
     fn test_configuration_override() {
         let rule = NoHungarianNotation;
-        let config_toml = r#"
+        let config_toml = indoc::indoc! {r#"
             [rules.no-hungarian-notation]
             allowed = ["_str"]
             extend_banned = ["_handle"]
-        "#;
+        "#};
         let config: crate::core::Config = toml::from_str(config_toml).unwrap();
 
         let source = "fn main() { let name_str = 1; let conn_handle = 2; }";

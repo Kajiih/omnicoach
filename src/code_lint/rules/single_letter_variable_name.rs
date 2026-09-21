@@ -149,11 +149,11 @@ mod tests {
     #[test]
     fn test_configuration_override() {
         let rule = SingleLetterVariableName;
-        let config_toml = r#"
+        let config_toml = indoc::indoc! {r#"
             [rules.single-letter-variable-name]
             allowed = ["y"]
             banned = ["i"]
-        "#;
+        "#};
         let config: crate::core::Config = toml::from_str(config_toml).unwrap();
 
         let source = "fn main() { let i = 1; let y = 2; }";
