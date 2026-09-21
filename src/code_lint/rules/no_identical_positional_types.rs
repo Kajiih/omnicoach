@@ -1,5 +1,6 @@
 //! Enforces keyword-only parameters when a function has multiple positional parameters of identical type (`no-identical-positional-types`).
 
+use crate::code_lint::ast_python::{PythonParameterInfo, extract_parameters, has_decorator};
 use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, DynamicRuleConfig, LanguageDefaults, Rule, RuleName, ThresholdConfig};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
@@ -52,7 +53,7 @@ fn is_exempt_dunder(func_name: &str) -> bool {
 
 /// Returns true if `func_node` is decorated with `@override`, `@overload`, `@abstractmethod`, or `@fixture`.
 fn has_exempt_decorator(func_node: &AstNode<'_>) -> bool {
-    crate::code_lint::ast_python::has_decorator(func_node, |terminal| {
+    has_decorator(func_node, |terminal| {
         matches!(
             terminal,
             "override" | "overload" | "abstractmethod" | "fixture"
@@ -60,93 +61,18 @@ fn has_exempt_decorator(func_node: &AstNode<'_>) -> bool {
     })
 }
 
-/// Returns true if `param_node` marks the end of positional parameters (`*`, `*args`, or `**kwargs`).
-fn is_keyword_or_variadic_boundary(param_node: &AstNode<'_>) -> bool {
-    let kind = param_node.kind();
-    if matches!(
-        kind.as_ref(),
-        "keyword_separator" | "list_splat_pattern" | "dictionary_splat_pattern"
-    ) {
-        return true;
-    }
-    kind == "typed_parameter"
-        && param_node.children().any(|sub| {
-            matches!(
-                sub.kind().as_ref(),
-                "list_splat_pattern" | "dictionary_splat_pattern"
-            )
-        })
-}
-
-/// Extracts `(parameter_name, optional_type_annotation)` from a single positional parameter AST node.
-fn extract_parameter_name_and_type(param_node: &AstNode<'_>) -> Option<(String, Option<String>)> {
-    match param_node.kind().as_ref() {
-        "identifier" => Some((param_node.text().to_string(), None)),
-        "default_parameter" => param_node
-            .field("name")
-            .map(|node| (node.text().to_string(), None)),
-        "typed_parameter" => {
-            let param_name = param_node
-                .field("name")
-                .or_else(|| param_node.children().find(|sub| sub.kind() == "identifier"))
-                .map(|node| node.text().to_string())?;
-            let type_annotation = param_node
-                .field("type")
-                .map(|type_node| type_node.text().to_string());
-            Some((param_name, type_annotation))
-        }
-        "typed_default_parameter" => {
-            let param_name = param_node.field("name")?.text().to_string();
-            let type_annotation = param_node
-                .field("type")
-                .map(|type_node| type_node.text().to_string());
-            Some((param_name, type_annotation))
-        }
-        _ => None,
-    }
-}
-
-/// Extracts positional parameters `(param_name, optional_type)` before `*` or `*args`, excluding `self`/`cls`.
-///
-/// Note: Types are compared by exact formatted annotation text (`type_node.text()`).
-/// Future improvement (tracked in `ROADMAP.md`): optionally match generic container base types
-/// (e.g. treating two `dict[...]` or `Mapping[...]` parameters as sharing a container type
-/// even when their inner type parameters differ).
-fn extract_positional_parameters(params_node: &AstNode<'_>) -> Vec<(String, Option<String>)> {
-    let mut positional = Vec::new();
-    let mut is_first_param = true;
-
-    for child in params_node.children() {
-        if is_keyword_or_variadic_boundary(&child) {
-            break;
-        }
-        if let Some((param_name, type_annotation)) = extract_parameter_name_and_type(&child) {
-            if is_first_param && matches!(param_name.as_str(), "self" | "cls") {
-                is_first_param = false;
-                continue;
-            }
-            is_first_param = false;
-            positional.push((param_name, type_annotation));
-        }
-    }
-
-    positional
-}
-
 /// Groups typed positional parameters by type annotation and returns groups with `>= 2` parameters.
-fn collect_duplicate_type_groups(
-    positional_params: Vec<(String, Option<String>)>,
-) -> Vec<(String, Vec<String>)> {
+fn collect_duplicate_type_groups(params: &[PythonParameterInfo<'_>]) -> Vec<(String, Vec<String>)> {
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
-    for (param_name, optional_type) in positional_params {
-        if let Some(type_annotation) = optional_type {
+    for param in params {
+        if let Some(ref type_annotation) = param.type_text {
             if let Some((_, existing)) = groups
                 .iter_mut()
-                .find(|(seen_type, _)| *seen_type == type_annotation)
+                .find(|(seen_type, _)| seen_type == type_annotation)
             {
-                existing.push(param_name);
+                existing.push(param.name.clone());
             } else {
-                groups.push((type_annotation, vec![param_name]));
+                groups.push((type_annotation.clone(), vec![param.name.clone()]));
             }
         }
     }
@@ -172,12 +98,17 @@ fn check_function_definition(
         return None;
     }
 
-    let positional_params = extract_positional_parameters(&params_node);
+    let all_params = extract_parameters(&params_node);
+    let positional_params: Vec<_> = all_params
+        .into_iter()
+        .filter(PythonParameterInfo::is_positional)
+        .collect();
+
     if positional_params.len() < min_args {
         return None;
     }
 
-    let duplicate_groups = collect_duplicate_type_groups(positional_params);
+    let duplicate_groups = collect_duplicate_type_groups(&positional_params);
     if duplicate_groups.is_empty() {
         return None;
     }

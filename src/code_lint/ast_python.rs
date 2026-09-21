@@ -520,6 +520,236 @@ pub fn extract_classes<'a>(root: &AstNode<'a>) -> Vec<PythonClassInfo<'a>> {
     classes
 }
 
+/// Parameter classification in a Python function signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PythonParameterKind {
+    /// Method receiver (`self` or `cls`).
+    Receiver,
+    /// Standard positional or positional-or-keyword parameter.
+    Positional,
+    /// Keyword-only parameter declared after `*` or `*args`.
+    KeywordOnly,
+    /// Positional variadic (`*args`).
+    VarPositional,
+    /// Keyword variadic (`**kwargs`).
+    VarKeyword,
+}
+
+/// Structured metadata for a Python parameter.
+#[derive(Clone)]
+pub struct PythonParameterInfo<'a> {
+    /// Full parameter AST node (`typed_parameter`, `default_parameter`, or `identifier`).
+    pub node: AstNode<'a>,
+    /// Parameter identifier name.
+    pub name: String,
+    /// Parameter identifier AST node.
+    pub name_node: AstNode<'a>,
+    /// Type annotation AST node if present (e.g. `list[str]`).
+    pub type_node: Option<AstNode<'a>>,
+    /// Formatted type annotation text.
+    pub type_text: Option<String>,
+    /// Default value expression AST node if present.
+    pub default_value_node: Option<AstNode<'a>>,
+    /// Parameter classification kind.
+    pub kind: PythonParameterKind,
+}
+
+impl PythonParameterInfo<'_> {
+    /// Returns true if the parameter is a standard positional or positional-or-keyword parameter.
+    #[must_use]
+    pub fn is_positional(&self) -> bool {
+        self.kind == PythonParameterKind::Positional
+    }
+
+    /// Returns true if the parameter is a variadic (`*args` or `**kwargs`).
+    #[must_use]
+    pub fn is_variadic(&self) -> bool {
+        matches!(
+            self.kind,
+            PythonParameterKind::VarPositional | PythonParameterKind::VarKeyword
+        )
+    }
+}
+
+/// Internal helper struct for extracted parameter parts.
+struct ParsedParamParts<'a> {
+    name_node: AstNode<'a>,
+    name: String,
+    type_node: Option<AstNode<'a>>,
+    type_text: Option<String>,
+    default_value_node: Option<AstNode<'a>>,
+}
+
+/// Extracts parameter name, name node, type annotation, and default value from a parameter node.
+fn parse_param_parts<'a>(node: &AstNode<'a>) -> Option<ParsedParamParts<'a>> {
+    match node.kind().as_ref() {
+        "identifier" => {
+            let name = node.text().to_string();
+            Some(ParsedParamParts {
+                name_node: node.clone(),
+                name,
+                type_node: None,
+                type_text: None,
+                default_value_node: None,
+            })
+        }
+        "default_parameter" => {
+            let name_node = node.field("name")?;
+            let name = name_node.text().to_string();
+            let default_val = node.field("value");
+            Some(ParsedParamParts {
+                name_node,
+                name,
+                type_node: None,
+                type_text: None,
+                default_value_node: default_val,
+            })
+        }
+        "typed_parameter" => {
+            let name_node = node.field("name").or_else(|| {
+                node.children().find_map(|child| {
+                    if child.kind() == "identifier" {
+                        Some(child)
+                    } else if child.kind() == "list_splat_pattern"
+                        || child.kind() == "dictionary_splat_pattern"
+                    {
+                        child.children().find(|sub| sub.kind() == "identifier")
+                    } else {
+                        None
+                    }
+                })
+            })?;
+            let name = name_node.text().to_string();
+            let type_node = node.field("type");
+            let type_text = type_node.as_ref().map(|type_n| type_n.text().to_string());
+            Some(ParsedParamParts {
+                name_node,
+                name,
+                type_node,
+                type_text,
+                default_value_node: None,
+            })
+        }
+        "typed_default_parameter" => {
+            let name_node = node.field("name")?;
+            let name = name_node.text().to_string();
+            let type_node = node.field("type");
+            let type_text = type_node.as_ref().map(|type_n| type_n.text().to_string());
+            let default_val = node.field("value");
+            Some(ParsedParamParts {
+                name_node,
+                name,
+                type_node,
+                type_text,
+                default_value_node: default_val,
+            })
+        }
+        "list_splat_pattern" => {
+            let name_node = node.children().find(|child| child.kind() == "identifier")?;
+            let name = name_node.text().to_string();
+            Some(ParsedParamParts {
+                name_node,
+                name,
+                type_node: None,
+                type_text: None,
+                default_value_node: None,
+            })
+        }
+        "dictionary_splat_pattern" => {
+            let name_node = node.children().find(|child| child.kind() == "identifier")?;
+            let name = name_node.text().to_string();
+            Some(ParsedParamParts {
+                name_node,
+                name,
+                type_node: None,
+                type_text: None,
+                default_value_node: None,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Extracts all parameters in order from a Python `parameters` or `function_definition` node.
+#[must_use]
+pub fn extract_parameters<'a>(func_or_params_node: &AstNode<'a>) -> Vec<PythonParameterInfo<'a>> {
+    let params_node = if func_or_params_node.kind() == "parameters" {
+        Some(func_or_params_node.clone())
+    } else if let Some(params) = func_or_params_node.field("parameters") {
+        Some(params)
+    } else {
+        func_or_params_node
+            .dfs()
+            .find(|target_node| target_node.kind() == "parameters")
+    };
+
+    let Some(params) = params_node else {
+        return Vec::new();
+    };
+
+    let mut result = Vec::new();
+    let mut seen_keyword_boundary = false;
+    let mut is_first_param = true;
+
+    for child in params.children() {
+        let child_kind = child.kind();
+        if child_kind == "(" || child_kind == ")" || child_kind == "," {
+            continue;
+        }
+
+        if child_kind == "keyword_separator" {
+            seen_keyword_boundary = true;
+            continue;
+        }
+
+        let is_var_positional = child_kind == "list_splat_pattern"
+            || (child_kind == "typed_parameter"
+                && child
+                    .children()
+                    .any(|child_node| child_node.kind() == "list_splat_pattern"));
+
+        let is_var_keyword = child_kind == "dictionary_splat_pattern"
+            || (child_kind == "typed_parameter"
+                && child
+                    .children()
+                    .any(|child_node| child_node.kind() == "dictionary_splat_pattern"));
+
+        let Some(parts) = parse_param_parts(&child) else {
+            continue;
+        };
+
+        let kind = if is_var_positional {
+            PythonParameterKind::VarPositional
+        } else if is_var_keyword {
+            PythonParameterKind::VarKeyword
+        } else if is_first_param && matches!(parts.name.as_str(), "self" | "cls") {
+            PythonParameterKind::Receiver
+        } else if seen_keyword_boundary {
+            PythonParameterKind::KeywordOnly
+        } else {
+            PythonParameterKind::Positional
+        };
+
+        if is_var_positional {
+            seen_keyword_boundary = true;
+        }
+
+        is_first_param = false;
+
+        result.push(PythonParameterInfo {
+            node: child,
+            name: parts.name,
+            name_node: parts.name_node,
+            type_node: parts.type_node,
+            type_text: parts.type_text,
+            default_value_node: parts.default_value_node,
+            kind,
+        });
+    }
+
+    result
+}
+
 /// Returns true if a Python `function_definition` is decorated with `@override`.
 #[must_use]
 pub fn has_override_decorator(func_node: &AstNode<'_>) -> bool {
@@ -768,5 +998,35 @@ class Config:
         assert_eq!(cls.name, "Config");
         assert!(cls.is_dataclass());
         assert!(!cls.inherits_from("Protocol"));
+    }
+
+    #[test]
+    fn test_extract_parameters_kinds() {
+        let source = r"
+def handler(self, a: int, b: str = 'hello', *, c: bool, **kwargs):
+    pass
+        ";
+        let grep = AstGrep::new(source, SupportLang::Python);
+        let params = extract_parameters(&grep.root());
+
+        assert_eq!(params[0].kind, PythonParameterKind::Receiver);
+        assert_eq!(params[1].kind, PythonParameterKind::Positional);
+        assert_eq!(params[3].kind, PythonParameterKind::KeywordOnly);
+        assert_eq!(params[4].kind, PythonParameterKind::VarKeyword);
+    }
+
+    #[test]
+    fn test_extract_parameters_type_annotations() {
+        let source = r"
+def handler(self, a: int, b: str = 'hello', *, c: bool, **kwargs):
+    pass
+        ";
+        let grep = AstGrep::new(source, SupportLang::Python);
+        let params = extract_parameters(&grep.root());
+
+        assert_eq!(params[1].name, "a");
+        assert_eq!(params[1].type_text.as_deref(), Some("int"));
+        assert_eq!(params[2].name, "b");
+        assert_eq!(params[2].type_text.as_deref(), Some("str"));
     }
 }
