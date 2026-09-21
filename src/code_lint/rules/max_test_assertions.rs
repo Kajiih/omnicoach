@@ -1,7 +1,7 @@
 //! Enforces a maximum number of assertions per test function (`max-test-assertions`).
 
 use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, DynamicRuleConfig, LanguageDefaults, Rule, RuleName, ThresholdConfig};
+use crate::core::{Config, LanguageDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -10,9 +10,6 @@ use std::path::Path;
 
 /// Default maximum assertions allowed per test function (`4`).
 const DEFAULT_MAX_ASSERTIONS: LanguageDefaults<usize> = LanguageDefaults::new(4, &[]);
-
-/// Configuration for the `MaxTestAssertions` rule.
-pub type MaxTestAssertionsConfig = DynamicRuleConfig<ThresholdConfig>;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Test function `{func}` has {count} assertions, exceeding the maximum of {max}.",
@@ -121,8 +118,7 @@ impl CodeRule for MaxTestAssertions {
         config: &Config,
     ) -> Vec<Diagnostic> {
         let lang = *grep.lang();
-        let rule_config: MaxTestAssertionsConfig = config.get_rule_config(self.name().0);
-        let max_allowed = rule_config.effective_max_for_lang(lang, &DEFAULT_MAX_ASSERTIONS);
+        let max_allowed = self.effective_max_threshold(lang, config, &DEFAULT_MAX_ASSERTIONS);
 
         crate::code_lint::collect_test_functions(&grep.root(), lang)
             .iter()

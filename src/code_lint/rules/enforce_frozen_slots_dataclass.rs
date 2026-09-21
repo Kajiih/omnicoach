@@ -38,48 +38,19 @@ impl Rule for EnforceFrozenSlotsDataclass {
 
 /// Evaluates whether a dataclass definition is missing `frozen=True` or `slots=True`.
 ///
-/// If the user explicitly wrote `frozen=False` or `slots=False`, this represents an
-/// intentional opt-out and is NOT flagged.
+/// If the user explicitly passed `frozen=...` or `slots=...` (including `frozen=False` or
+/// `slots=False`), this represents an intentional configuration or opt-out and is NOT flagged.
 fn check_dataclass_info(
     rule: &EnforceFrozenSlotsDataclass,
     cls: &PythonClassInfo<'_>,
     path: &Path,
 ) -> Option<Diagnostic> {
-    // Find the @dataclass decorator
-    let dataclass_dec = cls
-        .decorators
-        .iter()
-        .find(|dec| matches!(dec.path.as_str(), "dataclass" | "dataclasses.dataclass"))?;
-
-    let mut missing = Vec::new();
-
-    // Check frozen: required to be True unless explicitly opted out with frozen=False
-    let frozen_opt = dataclass_dec
-        .get_arg("frozen")
-        .and_then(crate::code_lint::ast_python::KeywordArg::as_bool);
-    match frozen_opt {
-        Some(true | false) => {} // Explicit true or opt-out false: intentional
-        None => {
-            // Either no frozen arg, or non-boolean literal expression
-            if dataclass_dec.get_arg("frozen").is_none() {
-                missing.push("frozen=True");
-            }
-        }
-    }
-
-    // Check slots: required to be True unless explicitly opted out with slots=False
-    let slots_opt = dataclass_dec
-        .get_arg("slots")
-        .and_then(crate::code_lint::ast_python::KeywordArg::as_bool);
-    match slots_opt {
-        Some(true | false) => {} // Explicit true or opt-out false: intentional
-        None => {
-            // Either no slots arg, or non-boolean literal expression
-            if dataclass_dec.get_arg("slots").is_none() {
-                missing.push("slots=True");
-            }
-        }
-    }
+    let dataclass_dec = cls.dataclass_decorator()?;
+    let missing: Vec<&str> = [("frozen", "frozen=True"), ("slots", "slots=True")]
+        .into_iter()
+        .filter(|(key, _)| !dataclass_dec.has_arg(key))
+        .map(|(_, label)| label)
+        .collect();
 
     if missing.is_empty() {
         return None;
@@ -104,10 +75,8 @@ impl CodeRule for EnforceFrozenSlotsDataclass {
         grep: &AstGrep<crate::code_lint::SourceDoc>,
         _config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        let classes = extract_classes(&grep.root());
-        classes
+        extract_classes(&grep.root())
             .into_iter()
-            .filter(PythonClassInfo::is_dataclass)
             .filter_map(|cls| check_dataclass_info(self, &cls, path))
             .collect()
     }

@@ -1,16 +1,12 @@
 //! Verifies that `logging.error` is not used inside python except blocks.
 
 use crate::code_lint::CodeRule;
-use crate::code_lint::calls::find_banned_calls;
-use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
+use crate::core::{Config, FilterListDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::path::Path;
-
-/// Configuration for the `NoLoggingErrorInExcept` rule.
-pub type NoLoggingErrorInExceptConfig = DynamicRuleConfig<DenyListConfig>;
 
 /// Static defaults for banned logging calls inside except blocks.
 const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
@@ -53,11 +49,7 @@ impl CodeRule for NoLoggingErrorInExcept {
         grep: &AstGrep<crate::code_lint::SourceDoc>,
         config: &Config,
     ) -> Vec<Diagnostic> {
-        let rule_config: NoLoggingErrorInExceptConfig = config.get_rule_config(self.name().0);
-        let effective_banned =
-            rule_config.effective_banned_for_lang(*grep.lang(), &DEFAULT_BANNED_CALLS);
-
-        find_banned_calls(grep, &effective_banned)
+        self.find_configured_banned_calls(grep, config, &DEFAULT_BANNED_CALLS)
             .into_iter()
             .filter(|matched| {
                 matched

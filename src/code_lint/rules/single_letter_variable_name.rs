@@ -1,7 +1,7 @@
 //! Declarations of generic rules targeting multiple languages.
 
 use crate::code_lint::CodeRule;
-use crate::core::{AllowListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
+use crate::core::{FilterListDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -20,9 +20,6 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     rationale: "Single-letter variable names are not descriptive and make code harder to read and maintain.",
     suggestion: "Choose a more descriptive name that reflects the variable's purpose.",
 };
-
-/// Configuration for the `SingleLetterVariableName` rule.
-pub type SingleLetterVariableNameConfig = DynamicRuleConfig<AllowListConfig>;
 
 /// Rule that bans single-letter variable names.
 pub struct SingleLetterVariableName;
@@ -51,21 +48,10 @@ impl CodeRule for SingleLetterVariableName {
         grep: &AstGrep<crate::code_lint::SourceDoc>,
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        let rule_config: SingleLetterVariableNameConfig = config.get_rule_config(self.name().0);
-        let effective_allowed =
-            rule_config.effective_allowed_for_lang(*grep.lang(), &DEFAULT_ALLOWED);
+        let effective_allowed = self.effective_allowed_set(*grep.lang(), config, &DEFAULT_ALLOWED);
 
         let mut diagnostics = Vec::new();
-
-        let bindings = crate::code_lint::collect_bindings(grep);
-        let lang = *grep.lang();
-
-        for node in bindings {
-            if crate::code_lint::is_unaliased_import_binding(&node, lang)
-                || crate::code_lint::is_trait_impl_member(&node, lang)
-            {
-                continue;
-            }
+        for node in crate::code_lint::collect_renameable_bindings(grep) {
             let name = node.text();
             if name.len() == 1 && name != "_" && !effective_allowed.contains(&*name) {
                 diagnostics.push(self.diagnostic_at_node(path, &node, &[("name", &name)]));

@@ -1,15 +1,12 @@
 //! Bans dynamic runtime attribute reflection (`getattr`, `hasattr`, `setattr`, `delattr`).
 
 use crate::code_lint::{CodeRule, RuleTarget};
-use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
+use crate::core::{FilterListDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::path::Path;
-
-/// Configuration for the `NoDynamicAttributeAccess` rule.
-pub type NoDynamicAttributeAccessConfig = DynamicRuleConfig<DenyListConfig>;
 
 /// Static defaults for banned dynamic reflection functions.
 const DEFAULT_BANNED_FUNCTIONS: FilterListDefaults = FilterListDefaults {
@@ -65,16 +62,7 @@ impl CodeRule for NoDynamicAttributeAccess {
         grep: &AstGrep<crate::code_lint::SourceDoc>,
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        let rule_config: NoDynamicAttributeAccessConfig = config.get_rule_config(self.name().0);
-        let effective_banned =
-            rule_config.effective_banned_for_lang(*grep.lang(), &DEFAULT_BANNED_FUNCTIONS);
-
-        crate::code_lint::calls::find_banned_calls(grep, &effective_banned)
-            .into_iter()
-            .map(|matched| {
-                self.diagnostic_at_node(path, &matched.node, &[("callee", &matched.callee)])
-            })
-            .collect()
+        self.check_banned_calls(path, grep, config, &DEFAULT_BANNED_FUNCTIONS)
     }
 }
 

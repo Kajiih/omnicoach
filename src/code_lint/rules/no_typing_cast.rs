@@ -8,17 +8,13 @@
 //! an adjacent explanatory comment.
 //! In all modes, legitimate uses can be justified via `# omni:ignore[no-typing-cast] -- <explanation>`.
 
-use crate::code_lint::calls::find_banned_calls;
 use crate::code_lint::{CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
+use crate::core::{Config, FilterListDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::path::Path;
-
-/// Configuration for the `NoTypingCast` rule.
-pub type NoTypingCastConfig = DynamicRuleConfig<DenyListConfig>;
 
 /// Static defaults for banned typing cast functions.
 const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
@@ -28,7 +24,7 @@ const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Unchecked type assertion `{call_name}()` is discouraged.",
+    summary: "Unchecked type assertion `{callee}()` is discouraged.",
     rationale: "`typing.cast()` performs an unchecked assertion that bypasses static type verification without runtime validation.",
     suggestion: "Use structural subtyping (Protocols), runtime type narrowing (`isinstance()`), or domain types instead. If unavoidable, document why with `# omni:ignore[no-typing-cast] -- <reason>`.",
 };
@@ -65,16 +61,7 @@ impl CodeRule for NoTypingCast {
         grep: &AstGrep<SourceDoc>,
         config: &Config,
     ) -> Vec<Diagnostic> {
-        let rule_config: NoTypingCastConfig = config.get_rule_config(self.name().0);
-        let effective_banned =
-            rule_config.effective_banned_for_lang(*grep.lang(), &DEFAULT_BANNED_CALLS);
-
-        find_banned_calls(grep, &effective_banned)
-            .into_iter()
-            .map(|matched| {
-                self.diagnostic_at_node(path, &matched.node, &[("call_name", &matched.callee)])
-            })
-            .collect()
+        self.check_banned_calls(path, grep, config, &DEFAULT_BANNED_CALLS)
     }
 }
 

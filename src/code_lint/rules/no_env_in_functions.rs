@@ -1,7 +1,7 @@
 //! Enforces that environment variables are only accessed at module/static scope or explicit configuration boundaries (`no-env-in-functions`).
 
 use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
+use crate::core::{Config, FilterListDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -51,9 +51,6 @@ const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
     ],
     exempt: &[],
 };
-
-/// Configuration for the `NoEnvInFunctions` rule.
-pub type NoEnvInFunctionsConfig = DynamicRuleConfig<DenyListConfig>;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Environment variable access `{expr}` inside function `{func_name}`.",
@@ -174,12 +171,9 @@ impl CodeRule for NoEnvInFunctions {
         config: &Config,
     ) -> Vec<Diagnostic> {
         let lang = *grep.lang();
-        let rule_config: NoEnvInFunctionsConfig = config.get_rule_config(self.name().0);
-        let effective_banned = rule_config.effective_banned_for_lang(lang, &DEFAULT_BANNED_CALLS);
-
         let mut diagnostics = Vec::new();
 
-        for call_match in crate::code_lint::calls::find_banned_calls(grep, &effective_banned) {
+        for call_match in self.find_configured_banned_calls(grep, config, &DEFAULT_BANNED_CALLS) {
             if let Some(func_name) = enclosing_non_exempt_function_name(&call_match.node, lang) {
                 let expr = format!("{}()", call_match.callee);
                 diagnostics.push(self.diagnostic_at_node(

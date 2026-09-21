@@ -2,7 +2,7 @@
 
 use crate::code_lint::ast_python::{PythonParameterInfo, extract_parameters, has_decorator};
 use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, DynamicRuleConfig, LanguageDefaults, Rule, RuleName, ThresholdConfig};
+use crate::core::{Config, LanguageDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -11,9 +11,6 @@ use std::path::Path;
 
 /// Default minimum number of positional parameters (excluding `self`/`cls`) before checking for duplicate types (`3`).
 const DEFAULT_MIN_ARGS: LanguageDefaults<usize> = LanguageDefaults::new(3, &[]);
-
-/// Configuration for the `NoIdenticalPositionalTypes` rule.
-pub type NoIdenticalPositionalTypesConfig = DynamicRuleConfig<ThresholdConfig>;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Function `{func}` has multiple positional parameters with identical types ({duplicates}).",
@@ -146,9 +143,7 @@ impl CodeRule for NoIdenticalPositionalTypes {
         grep: &AstGrep<SourceDoc>,
         config: &Config,
     ) -> Vec<Diagnostic> {
-        let lang = *grep.lang();
-        let rule_config: NoIdenticalPositionalTypesConfig = config.get_rule_config(self.name().0);
-        let min_args = rule_config.effective_min_for_lang(lang, &DEFAULT_MIN_ARGS);
+        let min_args = self.effective_min_threshold(*grep.lang(), config, &DEFAULT_MIN_ARGS);
 
         grep.root()
             .dfs()

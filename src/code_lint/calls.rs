@@ -95,21 +95,18 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
                 let mut matched_callee = None;
 
                 if literal_callees.contains(callee_text.as_ref()) {
-                    matched_callee = Some(callee_text.to_string());
+                    matched_callee = Some(callee_text.into_owned());
                 } else if !method_callees.is_empty() {
-                    let method_name = match function.kind().as_ref() {
-                        "attribute" => function
-                            .field("attribute")
-                            .map(|attr| attr.text().to_string()),
-                        "field_expression" => {
-                            function.field("field").map(|fld| fld.text().to_string())
-                        }
+                    let method_node = match function.kind().as_ref() {
+                        "attribute" => function.field("attribute"),
+                        "field_expression" => function.field("field"),
                         _ => None,
                     };
-                    if let Some(ref name) = method_name
-                        && method_callees.contains(name.as_str())
-                    {
-                        matched_callee = Some(name.clone());
+                    if let Some(method) = method_node {
+                        let name = method.text();
+                        if method_callees.contains(name.as_ref()) {
+                            matched_callee = Some(name.into_owned());
+                        }
                     }
                 }
 

@@ -329,6 +329,12 @@ impl<'a> DecoratorInfo<'a> {
     pub fn get_arg(&self, key: &str) -> Option<&KeywordArg<'a>> {
         self.keyword_args.iter().find(|kw| kw.name == key)
     }
+
+    /// Returns true if a keyword argument with `key` was explicitly passed.
+    #[must_use]
+    pub fn has_arg(&self, key: &str) -> bool {
+        self.get_arg(key).is_some()
+    }
 }
 
 /// Helper to resolve the dotted expression path and terminal identifier.
@@ -444,13 +450,19 @@ pub struct PythonClassInfo<'a> {
     pub body_node: Option<AstNode<'a>>,
 }
 
-impl PythonClassInfo<'_> {
+impl<'a> PythonClassInfo<'a> {
+    /// Returns the `@dataclass` or `@dataclasses.dataclass` decorator if present on this class.
+    #[must_use]
+    pub fn dataclass_decorator(&self) -> Option<&DecoratorInfo<'a>> {
+        self.decorators
+            .iter()
+            .find(|dec| matches!(dec.path.as_str(), "dataclass" | "dataclasses.dataclass"))
+    }
+
     /// Returns true if the class is decorated with `@dataclass` or `@dataclasses.dataclass`.
     #[must_use]
     pub fn is_dataclass(&self) -> bool {
-        self.decorators
-            .iter()
-            .any(|dec| matches!(dec.path.as_str(), "dataclass" | "dataclasses.dataclass"))
+        self.dataclass_decorator().is_some()
     }
 
     /// Returns true if the class inherits from any base whose terminal name matches `target`.

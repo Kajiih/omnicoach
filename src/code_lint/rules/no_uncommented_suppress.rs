@@ -5,21 +5,14 @@
 //! documenting why ignoring the exception is benign.
 
 use crate::code_lint::ast_python::{find_enclosing_with_item, find_enclosing_with_statement};
-use crate::code_lint::calls::find_banned_calls;
 use crate::code_lint::comments::CommentIndex;
 use crate::code_lint::{AstNode, CodeRule, SourceDoc};
-use crate::core::{
-    Config, DenyListConfig, DynamicRuleConfig, EnforcementMode, FilterListDefaults,
-    LanguageDefaults, Rule, RuleName,
-};
+use crate::core::{Config, EnforcementMode, FilterListDefaults, LanguageDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::path::Path;
-
-/// Configuration for the `NoUncommentedSuppress` rule.
-pub type NoUncommentedSuppressConfig = DynamicRuleConfig<DenyListConfig>;
 
 /// Static defaults for banned suppress functions.
 const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
@@ -72,10 +65,7 @@ impl CodeRule for NoUncommentedSuppress {
         config: &Config,
     ) -> Vec<Diagnostic> {
         let mode = self.enforcement_mode(*grep.lang(), config);
-        let rule_config: NoUncommentedSuppressConfig = config.get_rule_config(self.name().0);
-        let effective_banned =
-            rule_config.effective_banned_for_lang(*grep.lang(), &DEFAULT_BANNED_CALLS);
-        let calls = find_banned_calls(grep, &effective_banned);
+        let calls = self.find_configured_banned_calls(grep, config, &DEFAULT_BANNED_CALLS);
 
         let mut comment_index = None;
         let mut diagnostics = Vec::new();

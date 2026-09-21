@@ -1,7 +1,7 @@
 //! Flags unstructured task creation (`asyncio.create_task`, `ensure_future`, `loop.create_task`).
 
-use crate::code_lint::{CodeRule, RuleTarget, SourceDoc, calls};
-use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
+use crate::code_lint::{CodeRule, RuleTarget, SourceDoc};
+use crate::core::{Config, FilterListDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -27,13 +27,10 @@ const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Unstructured task creation `{call_name}()` is discouraged.",
+    summary: "Unstructured task creation `{callee}()` is discouraged.",
     rationale: "Unstructured background tasks can fail silently, leak upon cancellation, and introduce race conditions.",
     suggestion: "Use structured concurrency with AnyIO (`async with anyio.create_task_group() as tg: tg.start_soon(...)`) or Python 3.11+ TaskGroup (`async with asyncio.TaskGroup() as tg: tg.create_task(...)`).",
 };
-
-/// Configuration for the `NoUnstructuredTaskCreation` rule.
-pub type NoUnstructuredTaskCreationConfig = DynamicRuleConfig<DenyListConfig>;
 
 /// Rule that bans unstructured asyncio task creation.
 pub struct NoUnstructuredTaskCreation;
@@ -67,20 +64,7 @@ impl CodeRule for NoUnstructuredTaskCreation {
         grep: &AstGrep<SourceDoc>,
         config: &Config,
     ) -> Vec<Diagnostic> {
-        let rule_config: NoUnstructuredTaskCreationConfig = config.get_rule_config(self.name().0);
-        let effective_banned =
-            rule_config.effective_banned_for_lang(*grep.lang(), &DEFAULT_BANNED_CALLS);
-
-        calls::find_banned_calls(grep, &effective_banned)
-            .into_iter()
-            .map(|call_match| {
-                self.diagnostic_at_node(
-                    path,
-                    &call_match.node,
-                    &[("call_name", &call_match.callee)],
-                )
-            })
-            .collect()
+        self.check_banned_calls(path, grep, config, &DEFAULT_BANNED_CALLS)
     }
 }
 

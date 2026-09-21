@@ -1,8 +1,8 @@
 //! Flags wall-clock/async `sleep` calls (`no-sleep-in-tests`) and zero-duration sleeps (`no-zero-sleep-in-tests`) in test files.
 
-use crate::code_lint::calls::{self, CallMatch};
+use crate::code_lint::calls::CallMatch;
 use crate::code_lint::{CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
+use crate::core::{Config, FilterListDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
@@ -29,9 +29,6 @@ const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
     ],
     exempt: &[],
 };
-
-/// Configuration for the `NoSleepInTests` and `NoZeroSleepInTests` rules.
-pub type NoSleepInTestsConfig = DynamicRuleConfig<DenyListConfig>;
 
 const SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Wall-clock or async sleep `{call}()` in test is discouraged.",
@@ -126,11 +123,7 @@ impl CodeRule for NoSleepInTests {
         grep: &AstGrep<SourceDoc>,
         config: &Config,
     ) -> Vec<Diagnostic> {
-        let lang = *grep.lang();
-        let rule_config: NoSleepInTestsConfig = config.get_rule_config(self.name().0);
-        let effective_banned = rule_config.effective_banned_for_lang(lang, &DEFAULT_BANNED_CALLS);
-
-        calls::find_banned_calls(grep, &effective_banned)
+        self.find_configured_banned_calls(grep, config, &DEFAULT_BANNED_CALLS)
             .into_iter()
             .filter(|call_match| zero_duration_arg(call_match).is_none())
             .map(|call_match| {
@@ -151,11 +144,7 @@ impl CodeRule for NoZeroSleepInTests {
         grep: &AstGrep<SourceDoc>,
         config: &Config,
     ) -> Vec<Diagnostic> {
-        let lang = *grep.lang();
-        let rule_config: NoSleepInTestsConfig = config.get_rule_config(self.name().0);
-        let effective_banned = rule_config.effective_banned_for_lang(lang, &DEFAULT_BANNED_CALLS);
-
-        calls::find_banned_calls(grep, &effective_banned)
+        self.find_configured_banned_calls(grep, config, &DEFAULT_BANNED_CALLS)
             .into_iter()
             .filter_map(|call_match| {
                 let zero_arg = zero_duration_arg(&call_match)?;

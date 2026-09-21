@@ -63,6 +63,13 @@ fn has_rust_top_level_and(token_tree: &AstNode<'_>) -> bool {
     false
 }
 
+/// Extracts the child nodes of a sequence or macro token tree, excluding surrounding delimiters and commas.
+fn non_delimiter_children<'a>(node: &AstNode<'a>) -> Vec<AstNode<'a>> {
+    node.children()
+        .filter(|child| !matches!(child.kind().as_ref(), "(" | ")" | "[" | "]" | ","))
+        .collect()
+}
+
 /// Checks if a Rust node represents a tuple or array consisting solely of boolean literals (>= 2 elements).
 fn is_rust_boolean_tuple_or_array(node: &AstNode<'_>) -> bool {
     let kind = node.kind();
@@ -70,25 +77,13 @@ fn is_rust_boolean_tuple_or_array(node: &AstNode<'_>) -> bool {
         return false;
     }
 
-    let items: Vec<AstNode<'_>> = node
-        .children()
-        .filter(|child| {
-            let child_kind = child.kind();
-            child_kind != "("
-                && child_kind != ")"
-                && child_kind != "["
-                && child_kind != "]"
-                && child_kind != ","
-        })
-        .collect();
-
+    let items = non_delimiter_children(node);
     if items.len() < 2 {
         return false;
     }
 
     items.iter().all(|item| {
-        let item_kind = item.kind();
-        item_kind == "boolean_literal"
+        item.kind() == "boolean_literal"
             || item
                 .children()
                 .any(|child| child.kind() == "true" || child.kind() == "false")
@@ -97,10 +92,7 @@ fn is_rust_boolean_tuple_or_array(node: &AstNode<'_>) -> bool {
 
 /// Splits the arguments inside a Rust macro invocation's `token_tree`.
 fn extract_rust_macro_args<'a>(token_tree: &AstNode<'a>) -> Vec<AstNode<'a>> {
-    token_tree
-        .children()
-        .filter(|child| !matches!(child.kind().as_ref(), "(" | ")" | "[" | "]" | ","))
-        .collect()
+    non_delimiter_children(token_tree)
 }
 
 /// Checks if a Python node represents a tuple or list consisting solely of boolean literals (>= 2 elements).
@@ -110,11 +102,7 @@ fn is_python_boolean_sequence(node: &AstNode<'_>) -> bool {
         return false;
     }
 
-    let items: Vec<AstNode<'_>> = node
-        .children()
-        .filter(|child| !matches!(child.kind().as_ref(), "(" | ")" | "[" | "]" | ","))
-        .collect();
-
+    let items = non_delimiter_children(node);
     items.len() >= 2
         && items
             .iter()

@@ -1,15 +1,12 @@
 //! Bans mock interaction assertions (`assert_called_once`, etc.) in tests.
 
 use crate::code_lint::{CodeRule, RuleTarget};
-use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
+use crate::core::{FilterListDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::path::Path;
-
-/// Configuration for the `NoMockAssertions` rule.
-pub type NoMockAssertionsConfig = DynamicRuleConfig<DenyListConfig>;
 
 /// Static defaults for banned mock interaction assertion methods.
 const DEFAULT_BANNED_METHODS: FilterListDefaults = FilterListDefaults {
@@ -71,16 +68,7 @@ impl CodeRule for NoMockAssertions {
         grep: &AstGrep<crate::code_lint::SourceDoc>,
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        let rule_config: NoMockAssertionsConfig = config.get_rule_config(self.name().0);
-        let effective_banned =
-            rule_config.effective_banned_for_lang(*grep.lang(), &DEFAULT_BANNED_METHODS);
-
-        crate::code_lint::calls::find_banned_calls(grep, &effective_banned)
-            .into_iter()
-            .map(|matched| {
-                self.diagnostic_at_node(path, &matched.node, &[("callee", &matched.callee)])
-            })
-            .collect()
+        self.check_banned_calls(path, grep, config, &DEFAULT_BANNED_METHODS)
     }
 }
 

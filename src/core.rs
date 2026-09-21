@@ -384,6 +384,58 @@ pub trait Rule: Send + Sync {
         config.get_rule_enforcement_mode(self.name().0, lang, &self.default_enforcement_mode())
     }
 
+    /// Resolves the effective banned set for this rule given language, config, and defaults.
+    #[must_use]
+    fn effective_banned_set(
+        &self,
+        lang: SupportLang,
+        config: &Config,
+        defaults: &FilterListDefaults,
+    ) -> HashSet<String> {
+        config
+            .get_rule_config::<DynamicRuleConfig<DenyListConfig>>(self.name().0)
+            .effective_banned_for_lang(lang, defaults)
+    }
+
+    /// Resolves the effective allowed set for this rule given language, config, and defaults.
+    #[must_use]
+    fn effective_allowed_set(
+        &self,
+        lang: SupportLang,
+        config: &Config,
+        defaults: &FilterListDefaults,
+    ) -> HashSet<String> {
+        config
+            .get_rule_config::<DynamicRuleConfig<AllowListConfig>>(self.name().0)
+            .effective_allowed_for_lang(lang, defaults)
+    }
+
+    /// Resolves the effective `min` threshold for this rule given language, config, and defaults.
+    #[must_use]
+    fn effective_min_threshold(
+        &self,
+        lang: SupportLang,
+        config: &Config,
+        defaults: &LanguageDefaults<usize>,
+    ) -> usize {
+        config
+            .get_rule_config::<DynamicRuleConfig<ThresholdConfig>>(self.name().0)
+            .effective_min_for_lang(lang, defaults)
+    }
+
+    /// Resolves the effective `max` threshold for this rule given language, config, and defaults.
+    #[must_use]
+    fn effective_max_threshold(
+        &self,
+        lang: SupportLang,
+        config: &Config,
+        defaults: &LanguageDefaults<usize>,
+    ) -> usize {
+        config
+            .get_rule_config::<DynamicRuleConfig<ThresholdConfig>>(self.name().0)
+            .effective_max_for_lang(lang, defaults)
+    }
+
     /// Constructs a `Diagnostic` with this rule's name.
     #[must_use]
     fn create_diagnostic(&self, message: ViolationMessage, location: SourceLocation) -> Diagnostic {

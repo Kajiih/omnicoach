@@ -1,15 +1,12 @@
 //! Bans type suffixes (Hungarian notation) in variable names.
 
 use crate::code_lint::CodeRule;
-use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
+use crate::core::{FilterListDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::path::Path;
-
-/// Configuration for the `NoHungarianNotation` rule.
-pub type NoHungarianNotationConfig = DynamicRuleConfig<DenyListConfig>;
 
 /// Static defaults for banned type suffixes.
 const DEFAULT_BANNED_SUFFIXES: FilterListDefaults = FilterListDefaults {
@@ -55,24 +52,7 @@ impl CodeRule for NoHungarianNotation {
         grep: &AstGrep<crate::code_lint::SourceDoc>,
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        let rule_config: NoHungarianNotationConfig = config.get_rule_config(self.name().0);
-        let effective_banned =
-            rule_config.effective_banned_for_lang(*grep.lang(), &DEFAULT_BANNED_SUFFIXES);
-
-        crate::code_lint::find_suffixed_bindings(grep, &effective_banned)
-            .into_iter()
-            .map(|matched| {
-                self.diagnostic_at_node(
-                    path,
-                    &matched.node,
-                    &[
-                        ("name", &matched.name),
-                        ("actual_suffix", &matched.actual_suffix),
-                        ("base_name", &matched.base_name),
-                    ],
-                )
-            })
-            .collect()
+        self.check_banned_suffixes(path, grep, config, &DEFAULT_BANNED_SUFFIXES)
     }
 }
 

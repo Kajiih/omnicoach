@@ -1,15 +1,12 @@
 //! Rule targeting banned abbreviations in definitions across multiple languages.
 
 use crate::code_lint::CodeRule;
-use crate::core::{DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
+use crate::core::{FilterListDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::path::Path;
-
-/// Configuration for the `BannedAbbreviations` rule.
-pub type BannedAbbreviationsConfig = DynamicRuleConfig<DenyListConfig>;
 
 /// Static defaults for banned abbreviations.
 const DEFAULT_BANNED: FilterListDefaults = FilterListDefaults {
@@ -94,23 +91,12 @@ impl CodeRule for BannedAbbreviations {
         grep: &AstGrep<crate::code_lint::SourceDoc>,
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        let rule_config: BannedAbbreviationsConfig = config.get_rule_config(self.name().0);
-        let effective_banned = rule_config.effective_banned_for_lang(*grep.lang(), &DEFAULT_BANNED);
-
+        let effective_banned = self.effective_banned_set(*grep.lang(), config, &DEFAULT_BANNED);
         let mut diagnostics = Vec::new();
 
-        let bindings = crate::code_lint::collect_bindings(grep);
-        let lang = *grep.lang();
-
-        for node in bindings {
-            if crate::code_lint::is_unaliased_import_binding(&node, lang)
-                || crate::code_lint::is_trait_impl_member(&node, lang)
-            {
-                continue;
-            }
+        for node in crate::code_lint::collect_renameable_bindings(grep) {
             let name = node.text();
-            let segments = split_segments(&name);
-            for segment in segments {
+            for segment in split_segments(&name) {
                 if effective_banned.contains(&segment) {
                     diagnostics.push(self.diagnostic_at_node(
                         path,
@@ -122,6 +108,7 @@ impl CodeRule for BannedAbbreviations {
                 }
             }
         }
+
         diagnostics
     }
 }

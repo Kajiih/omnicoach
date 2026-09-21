@@ -59,6 +59,65 @@ pub trait CodeRule: crate::core::Rule {
         )
     }
 
+    /// Resolves this rule's banned call patterns against `defaults` for the file's language
+    /// and returns all matching call expressions in `grep`.
+    #[must_use]
+    fn find_configured_banned_calls<'a>(
+        &self,
+        grep: &'a AstGrep<SourceDoc>,
+        config: &Config,
+        defaults: &crate::core::FilterListDefaults,
+    ) -> Vec<calls::CallMatch<'a>> {
+        let effective_banned = self.effective_banned_set(*grep.lang(), config, defaults);
+        calls::find_banned_calls(grep, &effective_banned)
+    }
+
+    /// Evaluates `find_configured_banned_calls` and emits a diagnostic with `("callee", &matched.callee)`
+    /// for every matched call expression.
+    #[must_use]
+    fn check_banned_calls(
+        &self,
+        path: &Path,
+        grep: &AstGrep<SourceDoc>,
+        config: &Config,
+        defaults: &crate::core::FilterListDefaults,
+    ) -> Vec<Diagnostic> {
+        self.find_configured_banned_calls(grep, config, defaults)
+            .into_iter()
+            .map(|matched| {
+                self.diagnostic_at_node(path, &matched.node, &[("callee", &matched.callee)])
+            })
+            .collect()
+    }
+
+    /// Resolves this rule's banned identifier suffixes against `defaults` for the file's language
+    /// and emits a diagnostic with `("name", ...), ("actual_suffix", ...), ("base_name", ...)`
+    /// for every matching variable, constant, or parameter binding.
+    #[must_use]
+    fn check_banned_suffixes(
+        &self,
+        path: &Path,
+        grep: &AstGrep<SourceDoc>,
+        config: &Config,
+        defaults: &crate::core::FilterListDefaults,
+    ) -> Vec<Diagnostic> {
+        let effective_banned = self.effective_banned_set(*grep.lang(), config, defaults);
+        find_suffixed_bindings(grep, &effective_banned)
+            .into_iter()
+            .map(|matched| {
+                self.diagnostic_at_node(
+                    path,
+                    &matched.node,
+                    &[
+                        ("name", &matched.name),
+                        ("actual_suffix", &matched.actual_suffix),
+                        ("base_name", &matched.base_name),
+                    ],
+                )
+            })
+            .collect()
+    }
+
     /// Evaluates the file against this static analysis rule.
     ///
     /// Returned diagnostics may be in any order: ordering is owned by the reporting layer
@@ -399,6 +458,19 @@ pub(crate) fn is_trait_impl_member(node: &AstNode<'_>, lang: SupportLang) -> boo
     }
 }
 
+/// Collects all binding nodes in `grep` whose identifier names are locally authored and
+/// eligible for renaming (excluding unaliased imports and trait/override contract members).
+#[must_use]
+pub(crate) fn collect_renameable_bindings(grep: &AstGrep<SourceDoc>) -> Vec<AstNode<'_>> {
+    let lang = *grep.lang();
+    collect_bindings(grep)
+        .into_iter()
+        .filter(|node| {
+            !is_unaliased_import_binding(node, lang) && !is_trait_impl_member(node, lang)
+        })
+        .collect()
+}
+
 /// A variable, constant, or parameter binding whose identifier ends with a matched suffix.
 pub(crate) struct SuffixedBindingMatch<'a> {
     /// The matched identifier AST node.
@@ -427,7 +499,10 @@ pub(crate) fn find_suffixed_bindings<'a, S: std::hash::BuildHasher>(
         return Vec::new();
     }
 
-    let mut sorted_suffixes: Vec<&str> = banned_suffixes.iter().map(String::as_str).collect();
+    let mut sorted_suffixes: Vec<String> = banned_suffixes
+        .iter()
+        .map(|suffix| suffix.to_lowercase())
+        .collect();
     // Sort descending by length, then ascending lexicographically for deterministic tie-breaking
     sorted_suffixes
         .sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
@@ -447,15 +522,15 @@ pub(crate) fn find_suffixed_bindings<'a, S: std::hash::BuildHasher>(
         let name = node.text();
         let name_lower = name.to_lowercase();
 
-        for suffix in &sorted_suffixes {
-            let suffix_lower = suffix.to_lowercase();
-            if name.len() > suffix.len() && name_lower.ends_with(&suffix_lower) {
-                let base_name = &name[..name.len() - suffix.len()];
-                let actual_suffix = &name[name.len() - suffix.len()..];
+        for suffix_lower in &sorted_suffixes {
+            if name.len() > suffix_lower.len() && name_lower.ends_with(suffix_lower.as_str()) {
+                let split_idx = name.len() - suffix_lower.len();
+                let base_name = &name[..split_idx];
+                let actual_suffix = &name[split_idx..];
 
                 matches.push(SuffixedBindingMatch {
                     node,
-                    name: name.to_string(),
+                    name: name.into_owned(),
                     actual_suffix: actual_suffix.to_string(),
                     base_name: base_name.to_string(),
                 });
