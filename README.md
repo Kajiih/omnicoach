@@ -111,6 +111,7 @@ All rules support the `mode = "ban" | "require-explanation"` configuration. Belo
 ### Typing & Signatures
 * **`no-typing-cast`**: Bans unchecked type assertions (`cast()`, `typing.cast()`, `typing_extensions.cast()`) in production code. *(Python)*
 * **`no-dynamic-attribute-access`**: Bans runtime attribute reflection (`getattr`, `hasattr`, `setattr`, `delattr`, `builtins.*`) that erases types to `Any` and obscures symbol references. *(Python)*
+* **`enforce-frozen-slots-dataclass`**: Enforces that Python `@dataclass` classes specify `frozen=True` and `slots=True` to guarantee immutability and memory efficiency, unless explicitly opted out with `frozen=False` / `slots=False`. *(Python)*
 * **`no-identical-positional-types`**: Bans functions with $\ge 3$ positional parameters where 2 or more share an identical type annotation (suggests keyword-only arguments or domain newtypes). *(Python, Rust)*
   ```toml
   [rules.no-identical-positional-types]

@@ -1,5 +1,6 @@
 //! Submodules containing implementations of code validation rules.
 pub mod banned_abbreviations;
+pub mod enforce_frozen_slots_dataclass;
 pub mod flat_scope_enforced;
 pub mod max_test_assertions;
 pub mod no_assertion_packing;
