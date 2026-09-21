@@ -2,6 +2,100 @@
 
 use crate::code_lint::AstNode;
 
+/// Returns true for Rust node kinds that hold statements as direct children.
+///
+/// `source_file` is the file root, `block` is a braced body, and `declaration_list` is the
+/// body of an `impl`, `trait`, or inline `mod`.
+#[must_use]
+pub fn is_statement_container(kind: &str) -> bool {
+    matches!(kind, "source_file" | "block" | "declaration_list")
+}
+
+/// Returns true for Rust comment node kinds.
+///
+/// Rust distinguishes `//` from `/* */`. Doc comments are not separate kinds: `/// text`
+/// parses as a `line_comment` wrapping `outer_doc_comment_marker` and `doc_comment`, so
+/// matching only the outer kinds covers documentation without counting it twice.
+#[must_use]
+pub fn is_comment_kind(kind: &str) -> bool {
+    matches!(kind, "line_comment" | "block_comment")
+}
+
+/// Returns true if a Rust node of `parent_kind` makes a child identifier an import binding.
+#[must_use]
+pub fn is_import_binding_parent(parent_kind: &str) -> bool {
+    matches!(
+        parent_kind,
+        "use_declaration" | "use_list" | "use_as_clause" | "scoped_identifier"
+    )
+}
+
+/// Returns true if a Rust node of `parent_kind` makes a child identifier an import binding
+/// carrying no local alias.
+///
+/// `use_as_clause` is excluded precisely because it introduces one.
+#[must_use]
+pub fn is_unaliased_import_binding_parent(parent_kind: &str) -> bool {
+    matches!(
+        parent_kind,
+        "use_declaration" | "use_list" | "scoped_identifier"
+    )
+}
+
+/// Returns true if a Rust node of `parent_kind` declares a structural definition name.
+#[must_use]
+pub fn is_structural_definition_parent(parent_kind: &str) -> bool {
+    matches!(
+        parent_kind,
+        "struct_item"
+            | "enum_item"
+            | "trait_item"
+            | "type_item"
+            | "associated_type"
+            | "function_item"
+    )
+}
+
+/// Returns true if `kind` is a call expression in Rust.
+#[must_use]
+pub fn is_call_kind(kind: &str) -> bool {
+    kind == "call_expression"
+}
+
+/// If `function` is a method access (e.g. `obj.method`), returns the method identifier node.
+#[must_use]
+pub fn extract_method_call_target<'a>(function: &AstNode<'a>) -> Option<AstNode<'a>> {
+    if function.kind().as_ref() == "field_expression" {
+        function.field("field")
+    } else {
+        None
+    }
+}
+
+/// Returns true if `item`, the definition owning a name, has that name mandated by a contract.
+///
+/// The contract is an `impl Trait for Type` block: the member sits in the `declaration_list`
+/// of an `impl_item` that names a trait.
+#[must_use]
+pub fn is_trait_impl_member(item: &AstNode<'_>) -> bool {
+    if !matches!(
+        item.kind().as_ref(),
+        "function_item" | "type_item" | "associated_type" | "const_item"
+    ) {
+        return false;
+    }
+    let Some(body) = item.parent() else {
+        return false;
+    };
+    if body.kind().as_ref() != "declaration_list" {
+        return false;
+    }
+    let Some(impl_item) = body.parent() else {
+        return false;
+    };
+    impl_item.kind().as_ref() == "impl_item" && impl_item.field("trait").is_some()
+}
+
 /// Recursively extracts binding identifiers from a pattern node.
 fn extract_from_pattern<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
     let kind = node.kind();
@@ -229,39 +323,54 @@ pub fn collect_bindings<'a>(root: &AstNode<'a>) -> Vec<AstNode<'a>> {
     bindings
 }
 
-/// Returns true if an `attribute_item` text represents a Rust test attribute
-/// (`#[test]`, `#[tokio::test]`, `#[rstest]`, `#[test_case(...)]`).
-#[must_use]
-fn is_test_attribute(attr_text: &str) -> bool {
-    let trimmed = attr_text
-        .trim()
-        .trim_start_matches("#[")
-        .trim_end_matches(']');
-    let attr_path = trimmed.split(['(', '=']).next().unwrap_or("").trim();
-    let terminal = attr_path.rsplit("::").next().unwrap_or("").trim();
-    matches!(terminal, "test" | "rstest" | "test_case")
+/// Extracts the terminal identifier of the attribute path inside an `attribute_item` node
+/// (e.g. `Some("test")` for `#[test]` or `#[tokio::test]`, `Some("cfg")` for `#[cfg(test)]`).
+fn attribute_terminal_name<'a>(attr_item: &AstNode<'a>) -> Option<AstNode<'a>> {
+    let attr = attr_item
+        .children()
+        .find(|child| child.kind() == "attribute")?;
+    let path = attr
+        .children()
+        .find(|child| matches!(child.kind().as_ref(), "identifier" | "scoped_identifier"))?;
+    extract_last_segment(&path)
 }
 
-/// Returns true if an `attribute_item` text represents a `#[cfg(test)]` attribute.
+/// Returns true if an `attribute_item` AST node represents a Rust test attribute
+/// (`#[test]`, `#[tokio::test]`, `#[rstest]`, `#[test_case(...)]`).
 #[must_use]
-fn is_conditional_test_attribute(attr_text: &str) -> bool {
-    let trimmed = attr_text
-        .trim()
-        .trim_start_matches("#[")
-        .trim_end_matches(']')
-        .trim();
-    trimmed
-        .strip_prefix("cfg(")
-        .and_then(|inner| inner.strip_suffix(')'))
-        .is_some_and(|inner| {
-            inner
-                .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-                .any(|token| token == "test")
-        })
+fn is_test_attribute(attr_item: &AstNode<'_>) -> bool {
+    attribute_terminal_name(attr_item)
+        .is_some_and(|terminal| matches!(terminal.text().as_ref(), "test" | "rstest" | "test_case"))
+}
+
+/// Returns true if an `attribute_item` AST node represents a `#[cfg(test)]` attribute.
+#[must_use]
+fn is_conditional_test_attribute(attr_item: &AstNode<'_>) -> bool {
+    if attribute_terminal_name(attr_item).is_none_or(|terminal| terminal.text() != "cfg") {
+        return false;
+    }
+    let Some(attr) = attr_item
+        .children()
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+    let Some(token_tree) = attr.children().find(|child| child.kind() == "token_tree") else {
+        return false;
+    };
+    token_tree
+        .dfs()
+        .any(|tok| tok.kind() == "identifier" && tok.text() == "test")
+}
+
+/// Returns true if an `attribute_item` AST node represents a `#[doc = "..."]` attribute.
+#[must_use]
+pub fn is_doc_attribute(attr_item: &AstNode<'_>) -> bool {
+    attribute_terminal_name(attr_item).is_some_and(|terminal| terminal.text() == "doc")
 }
 
 /// Returns true if `node` is preceded by an `attribute_item` sibling matching `predicate`.
-fn has_matching_attribute(node: &AstNode<'_>, predicate: fn(&str) -> bool) -> bool {
+fn has_matching_attribute(node: &AstNode<'_>, predicate: fn(&AstNode<'_>) -> bool) -> bool {
     std::iter::successors(node.prev(), AstNode::prev)
         .take_while(|sibling| {
             matches!(
@@ -270,7 +379,7 @@ fn has_matching_attribute(node: &AstNode<'_>, predicate: fn(&str) -> bool) -> bo
             )
         })
         .filter(|sibling| sibling.kind() == "attribute_item")
-        .any(|sibling| predicate(&sibling.text()))
+        .any(|sibling| predicate(&sibling))
 }
 
 /// Returns true if a Rust item is preceded by a test attribute (`#[test]`, `#[tokio::test]`, `#[rstest]`, etc.).
@@ -314,6 +423,26 @@ pub fn is_test_function(func_node: &AstNode<'_>) -> bool {
     is_named_test || has_test_attribute(func_node)
 }
 
+/// Collects all outermost Rust test functions (`#[test]` / `#[rstest]` or `fn test` / `fn test_*`).
+#[must_use]
+pub fn collect_outer_test_functions<'a>(root: &AstNode<'a>) -> Vec<AstNode<'a>> {
+    let mut out = Vec::new();
+    collect_outer_test_functions_rec(root, &mut out);
+    out
+}
+
+fn collect_outer_test_functions_rec<'a>(node: &AstNode<'a>, out: &mut Vec<AstNode<'a>>) {
+    if node.kind() == "function_item" {
+        if is_test_function(node) {
+            out.push(node.clone());
+        }
+        return;
+    }
+    for child in node.children() {
+        collect_outer_test_functions_rec(&child, out);
+    }
+}
+
 /// Extracts the terminal macro identifier from a Rust `macro_invocation` node (e.g. `assert` from `std::assert!`).
 #[must_use]
 pub fn macro_terminal_name<'tree>(macro_node: &AstNode<'tree>) -> std::borrow::Cow<'tree, str> {
@@ -342,27 +471,73 @@ pub fn is_assertion_macro(macro_node: &AstNode<'_>) -> bool {
         || terminal.starts_with("debug_assert_")
 }
 
-/// Returns true if `token_tree` is immediately preceded by a `!` and a macro path matching
-/// `allowed_wrappers` (e.g. `indoc! { ... }` or `indoc::indoc! { ... }` inside `assert_eq!` or `#[case(...)]`).
-fn is_token_tree_wrapped_by_macro<S: std::hash::BuildHasher>(
-    token_tree: &AstNode<'_>,
-    allowed_wrappers: &std::collections::HashSet<String, S>,
-) -> bool {
-    let Some(bang) = token_tree.prev() else {
+/// Extracts the non-delimiter child nodes (`(`, `)`, `[`, `]`, `,`) of a token tree or sequence node.
+fn non_delimiter_children<'a>(node: &AstNode<'a>) -> Vec<AstNode<'a>> {
+    node.children()
+        .filter(|child| !matches!(child.kind().as_ref(), "(" | ")" | "[" | "]" | ","))
+        .collect()
+}
+
+/// Returns true if a Rust `macro_invocation`'s `token_tree` contains a top-level `&&` logical operator.
+#[must_use]
+pub fn has_top_level_logical_and(macro_node: &AstNode<'_>) -> bool {
+    let Some(token_tree) = macro_node
+        .children()
+        .find(|child| child.kind() == "token_tree")
+    else {
         return false;
     };
-    if bang.text() != "!" {
-        return false;
-    }
-    let Some(macro_ident) = bang.prev() else {
-        return false;
-    };
-    let terminal = macro_ident.text();
-    let trimmed_terminal = terminal.trim();
-    if allowed_wrappers.contains(trimmed_terminal) {
+    let meaningful: Vec<_> = token_tree
+        .children()
+        .filter(|child| child.kind() != "(" && child.kind() != ")")
+        .collect();
+
+    if meaningful.iter().any(|child| child.kind() == "&&") {
         return true;
     }
-    let mut full_path = trimmed_terminal.to_string();
+
+    meaningful.len() == 1
+        && meaningful[0].kind() == "token_tree"
+        && meaningful[0].children().any(|child| child.kind() == "&&")
+}
+
+/// Extracts the argument nodes inside a Rust `macro_invocation`'s `token_tree`.
+#[must_use]
+pub fn extract_macro_arguments<'a>(macro_node: &AstNode<'a>) -> Vec<AstNode<'a>> {
+    macro_node
+        .children()
+        .find(|child| child.kind() == "token_tree")
+        .map_or_else(Vec::new, |token_tree| non_delimiter_children(&token_tree))
+}
+
+/// Returns true if `node` is a Rust tuple, array, or parenthesized macro `token_tree` consisting
+/// solely of `>= 2` boolean literals (`true` / `false`).
+#[must_use]
+pub fn is_boolean_literal_collection(node: &AstNode<'_>) -> bool {
+    let kind = node.kind();
+    if !matches!(
+        kind.as_ref(),
+        "token_tree" | "array_expression" | "tuple_expression"
+    ) {
+        return false;
+    }
+    let items = non_delimiter_children(node);
+    items.len() >= 2
+        && items
+            .iter()
+            .all(|item| matches!(item.kind().as_ref(), "boolean_literal" | "true" | "false"))
+}
+
+/// Resolves `(full_path, terminal_name)` if `token_tree` is immediately preceded by `!` and a macro path
+/// (such as `indoc! { ... }` or `indoc::indoc! { ... }` inside an outer `token_tree`).
+fn resolve_preceding_macro_path(token_tree: &AstNode<'_>) -> Option<(String, String)> {
+    let bang = token_tree.prev()?;
+    if bang.text() != "!" {
+        return None;
+    }
+    let macro_ident = bang.prev()?;
+    let terminal = macro_ident.text().trim().to_string();
+    let mut full_path = terminal.clone();
     let mut curr = macro_ident;
     while let Some(colon_colon) = curr.prev() {
         if colon_colon.text() == "::"
@@ -374,60 +549,73 @@ fn is_token_tree_wrapped_by_macro<S: std::hash::BuildHasher>(
             break;
         }
     }
-    allowed_wrappers.contains(&full_path)
+    Some((full_path, terminal))
 }
 
-/// Returns true if a Rust multiline string literal is exempt (e.g., an `insta` `@"..."` snapshot,
-/// a `#[doc = "..."]` attribute, or enclosed in an allowed dedent macro such as `indoc!`).
-fn is_exempt_rust_multiline_string<S: std::hash::BuildHasher>(
-    node: &AstNode<'_>,
-    allowed_wrappers: &std::collections::HashSet<String, S>,
-) -> bool {
-    // Exempt `insta` inline snapshots (`@"..."` / `@r#"..."#`), which `insta` dedents automatically.
-    if node.prev().is_some_and(|prev| prev.text() == "@") {
-        return true;
-    }
+/// Returns true if `node` is preceded by `@` (an `insta` inline snapshot literal `@"..."`).
+#[must_use]
+pub fn is_insta_inline_snapshot(node: &AstNode<'_>) -> bool {
+    node.prev().is_some_and(|prev| prev.text() == "@")
+}
 
+/// Returns true if `node` is enclosed inside a `#[doc = "..."]` attribute.
+#[must_use]
+pub fn is_enclosed_in_doc_attribute(node: &AstNode<'_>) -> bool {
+    node.ancestors()
+        .any(|ancestor| ancestor.kind() == "attribute_item" && is_doc_attribute(&ancestor))
+}
+
+/// Returns true if `node` is enclosed in a Rust `macro_invocation` (or nested macro `token_tree`)
+/// within the current scope whose `(full_path, terminal_name)` satisfies `predicate`.
+#[must_use]
+pub fn is_enclosed_in_macro(node: &AstNode<'_>, predicate: impl Fn(&str, &str) -> bool) -> bool {
     for ancestor in node.ancestors() {
         match ancestor.kind().as_ref() {
             "function_item" | "closure_expression" => break,
-            "attribute_item" => {
-                if ancestor.text().trim_start().starts_with("#[doc") {
-                    return true;
-                }
-            }
             "macro_invocation" => {
                 let terminal = macro_terminal_name(&ancestor);
                 let full_path = ancestor
                     .field("macro")
                     .map(|macro_id| macro_id.text().trim().to_string())
                     .unwrap_or_default();
-                if allowed_wrappers.contains(terminal.as_ref())
-                    || allowed_wrappers.contains(&full_path)
-                {
+                if predicate(&full_path, terminal.as_ref()) {
                     return true;
                 }
             }
             "token_tree" => {
-                if is_token_tree_wrapped_by_macro(&ancestor, allowed_wrappers) {
+                if let Some((full_path, terminal)) = resolve_preceding_macro_path(&ancestor)
+                    && predicate(&full_path, &terminal)
+                {
                     return true;
                 }
             }
             _ => {}
         }
     }
-
     false
 }
 
-/// Returns true if a Rust string node spans multiple lines and contains runtime newlines.
-/// In standard string literals, a trailing `\` before a line break is a line continuation;
-/// if at least one intermediate line does not end with `\`, the string contains an actual newline.
-fn is_multiline_string(node: &AstNode<'_>) -> bool {
+/// Returns true if `node` is a Rust string literal node that spans multiple lines and contains
+/// runtime newlines (raw strings spanning lines, or standard strings with at least one intermediate
+/// line not ending in a `\` line continuation).
+#[must_use]
+pub fn is_multiline_string_literal(node: &AstNode<'_>) -> bool {
     if node.end_pos().line() <= node.start_pos().line() {
         return false;
     }
     let kind = node.kind();
+    let is_string = matches!(
+        kind.as_ref(),
+        "string_literal"
+            | "raw_string_literal"
+            | "byte_string_literal"
+            | "raw_byte_string_literal"
+            | "c_string_literal"
+            | "raw_c_string_literal"
+    );
+    if !is_string {
+        return false;
+    }
     if kind.starts_with("raw_") {
         return true;
     }
@@ -437,32 +625,6 @@ fn is_multiline_string(node: &AstNode<'_>) -> bool {
         .iter()
         .take(lines.len().saturating_sub(1))
         .any(|line| !line.trim_end().ends_with('\\'))
-}
-
-/// Collects all Rust multiline string literals that are not wrapped in an allowed dedent macro
-/// (`allowed_wrappers`).
-#[must_use]
-pub fn collect_undented_multiline_strings<'a, S: std::hash::BuildHasher>(
-    root: &AstNode<'a>,
-    allowed_wrappers: &std::collections::HashSet<String, S>,
-) -> Vec<AstNode<'a>> {
-    root.dfs()
-        .filter(|node| {
-            let kind = node.kind();
-            let is_string = matches!(
-                kind.as_ref(),
-                "string_literal"
-                    | "raw_string_literal"
-                    | "byte_string_literal"
-                    | "raw_byte_string_literal"
-                    | "c_string_literal"
-                    | "raw_c_string_literal"
-            );
-            is_string
-                && is_multiline_string(node)
-                && !is_exempt_rust_multiline_string(node, allowed_wrappers)
-        })
-        .collect()
 }
 
 #[cfg(test)]

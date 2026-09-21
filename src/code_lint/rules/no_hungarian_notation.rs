@@ -52,7 +52,13 @@ impl CodeRule for NoHungarianNotation {
         grep: &AstGrep<crate::code_lint::SourceDoc>,
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        self.check_banned_suffixes(path, grep, config, &DEFAULT_BANNED_SUFFIXES)
+        crate::code_lint::bindings::check_banned_suffixes(
+            self,
+            path,
+            grep,
+            config,
+            &DEFAULT_BANNED_SUFFIXES,
+        )
     }
 }
 

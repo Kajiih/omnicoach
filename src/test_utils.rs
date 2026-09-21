@@ -14,7 +14,7 @@ use std::path::Path;
 #[must_use]
 pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic]) -> String {
     let mut sorted_diags = diagnostics.to_vec();
-    sorted_diags.sort_by_key(|diagnostic| diagnostic.location.span.start);
+    sorted_diags.sort_unstable();
 
     let mut output = String::new();
     for diagnostic in &sorted_diags {
@@ -55,7 +55,14 @@ pub fn assert_code_rule_snapshot_with_config(
     let mut diags = rule.check_file(path, &grep, config);
     if mode == crate::core::EnforcementMode::RequireExplanation {
         let index = crate::code_lint::comments::CommentIndex::from_ast(&grep);
-        diags.retain(|diagnostic| !index.has_adjacent_explanation(diagnostic.location.line));
+        let root = grep.root();
+        diags.retain(|diagnostic| {
+            !index.has_explanation_for_span(
+                &root,
+                diagnostic.location.span,
+                diagnostic.location.line,
+            )
+        });
     }
     format_diagnostics_for_test(&diags)
 }

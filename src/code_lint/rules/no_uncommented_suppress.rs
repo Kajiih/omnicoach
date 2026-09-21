@@ -4,9 +4,8 @@
 //! in Python `with` statements are accompanied by an adjacent explanatory comment
 //! documenting why ignoring the exception is benign.
 
-use crate::code_lint::ast_python::{find_enclosing_with_item, find_enclosing_with_statement};
-use crate::code_lint::comments::CommentIndex;
-use crate::code_lint::{AstNode, CodeRule, SourceDoc};
+use crate::code_lint::ast_python::is_with_context_manager;
+use crate::code_lint::{CodeRule, SourceDoc};
 use crate::core::{Config, EnforcementMode, FilterListDefaults, LanguageDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
@@ -64,59 +63,12 @@ impl CodeRule for NoUncommentedSuppress {
         grep: &AstGrep<SourceDoc>,
         config: &Config,
     ) -> Vec<Diagnostic> {
-        let mode = self.enforcement_mode(*grep.lang(), config);
-        let calls = self.find_configured_banned_calls(grep, config, &DEFAULT_BANNED_CALLS);
-
-        let mut comment_index = None;
-        let mut diagnostics = Vec::new();
-
-        for call_match in calls {
-            let call = &call_match.node;
-            let Some(with_stmt) = find_enclosing_with_statement(call) else {
-                continue;
-            };
-            if find_enclosing_with_item(call).is_none() {
-                continue;
-            }
-
-            let is_documented = if mode == EnforcementMode::Ban {
-                false
-            } else {
-                let index = comment_index.get_or_insert_with(|| CommentIndex::from_ast(grep));
-                is_suppression_documented(index, &with_stmt, call)
-            };
-
-            if !is_documented {
-                diagnostics.push(self.diagnostic_at_node(path, call, &[]));
-            }
-        }
-
-        diagnostics
+        self.find_configured_banned_calls(grep, config, &DEFAULT_BANNED_CALLS)
+            .into_iter()
+            .filter(|matched| is_with_context_manager(&matched.node))
+            .map(|matched| self.diagnostic_at_node(path, &matched.node, &[]))
+            .collect()
     }
-}
-
-/// Determines if a `suppress(...)` context manager invocation is documented by an explanatory comment.
-///
-/// Documentation can be provided in two forms:
-/// 1. Standalone comment block directly preceding the `with` statement, or directly
-///    preceding the `suppress(...)` call within a multiline header.
-/// 2. Inline explanatory comment on any line of the `with` header (from `with` to `:`).
-fn is_suppression_documented(
-    comment_index: &CommentIndex<'_>,
-    with_stmt: &AstNode<'_>,
-    call: &AstNode<'_>,
-) -> bool {
-    let with_start_line = with_stmt.start_pos().line() + 1;
-    let call_start_line = call.start_pos().line() + 1;
-    let header_end_line = with_stmt.field("body").map_or_else(
-        || with_stmt.end_pos().line() + 1,
-        |body| body.start_pos().line(),
-    );
-
-    comment_index.has_adjacent_explanation(with_start_line)
-        || comment_index.has_adjacent_explanation(call_start_line)
-        || (with_start_line..=header_end_line)
-            .any(|line| comment_index.has_inline_explanation(line))
 }
 
 #[cfg(test)]

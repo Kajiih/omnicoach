@@ -45,7 +45,10 @@ fn check_dataclass_info(
     cls: &PythonClassInfo<'_>,
     path: &Path,
 ) -> Option<Diagnostic> {
-    let dataclass_dec = cls.dataclass_decorator()?;
+    let dataclass_dec = cls
+        .decorators
+        .iter()
+        .find(|dec| matches!(dec.path.as_str(), "dataclass" | "dataclasses.dataclass"))?;
     let missing: Vec<&str> = [("frozen", "frozen=True"), ("slots", "slots=True")]
         .into_iter()
         .filter(|(key, _)| !dataclass_dec.has_arg(key))

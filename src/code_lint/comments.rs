@@ -4,18 +4,28 @@
 //! stripping standard linter/tooling directive prefixes, and verifying that sensitive
 //! operations (such as exception suppression) are accompanied by substantive explanation comments.
 
-use crate::code_lint::{AstNode, SourceDoc};
+use crate::code_lint::{AstNode, SourceDoc, ast_python, ast_rust, statements};
 use ast_grep_core::AstGrep;
+use ast_grep_language::SupportLang;
 use std::collections::HashMap;
 
+/// Returns true for node kinds that represent comments in `lang`.
+fn is_comment_kind(kind: &str, lang: SupportLang) -> bool {
+    match lang {
+        SupportLang::Python => ast_python::is_comment_kind(kind),
+        SupportLang::Rust => ast_rust::is_comment_kind(kind),
+        _ => false,
+    }
+}
+
 /// Collects all Tree-sitter comment nodes in source order.
+///
+/// This matches on comment kinds rather than using `Node::is_extra`, which would also
+/// admit non-comment trivia such as Python's `line_continuation`.
 pub fn collect_comment_nodes<'a>(node: &AstNode<'a>) -> impl Iterator<Item = AstNode<'a>> {
-    node.dfs().filter(|curr| {
-        matches!(
-            curr.kind().as_ref(),
-            "comment" | "line_comment" | "block_comment"
-        )
-    })
+    let lang = *node.lang();
+    node.dfs()
+        .filter(move |curr| is_comment_kind(curr.kind().as_ref(), lang))
 }
 
 /// Strips leading and trailing comment delimiters (`//`, `#`, `/* ... */`).
@@ -276,6 +286,44 @@ impl<'a> CommentIndex<'a> {
         parts.reverse();
         is_substantive_explanation(&parts.join(" "))
     }
+
+    /// Verifies if a diagnostic at `span` (starting at 1-indexed `line`) has a substantive
+    /// explanation comment either directly adjacent to `line` or attached to the header of
+    /// its enclosing statement (such as a multiline `with (...)` header or multiline assignment).
+    ///
+    /// Comments inside the statement's body are deliberately excluded: they document the body,
+    /// not the statement that introduces it.
+    #[must_use]
+    pub fn has_explanation_for_span(
+        &self,
+        root: &AstNode<'_>,
+        span: crate::diagnostic::SourceSpan,
+        line: usize,
+    ) -> bool {
+        if self.has_adjacent_explanation(line) {
+            return true;
+        }
+
+        let Some(node) = root
+            .dfs()
+            .filter(|candidate| {
+                candidate.range().start <= span.start && candidate.range().end >= span.end
+            })
+            .min_by_key(|candidate| candidate.range().end - candidate.range().start)
+        else {
+            return false;
+        };
+
+        let Some(statement) = statements::find_enclosing_statement(&node) else {
+            return false;
+        };
+
+        let header_lines = statements::header_line_range(&statement);
+        self.has_adjacent_explanation(*header_lines.start())
+            || header_lines
+                .into_iter()
+                .any(|header_line| self.has_inline_explanation(header_line))
+    }
 }
 
 #[cfg(test)]
@@ -344,8 +392,12 @@ mod tests {
         assert_eq!(is_substantive_explanation(input), expected);
     }
 
-    #[test]
-    fn test_comment_index_inline_and_preceding() {
+    #[rstest]
+    #[case::preceding_standalone_comment(2, true)]
+    #[case::inline_explanation(5, true)]
+    #[case::linter_directive_only_not_substantive(9, false)]
+    #[case::uncommented(12, false)]
+    fn test_comment_index_adjacent_explanation(#[case] line: usize, #[case] expected: bool) {
         let source = indoc! {r"
             # Lock file is cleaned up by background daemon
             with suppress(FileNotFoundError):
@@ -364,18 +416,7 @@ mod tests {
 
         let grep = AstGrep::new(source, SupportLang::Python);
         let index = CommentIndex::from_ast(&grep);
-
-        // Line 2: `with suppress(FileNotFoundError):` has preceding comment on Line 1
-        assert!(index.has_adjacent_explanation(2));
-
-        // Line 5: `with suppress(KeyError):` has inline comment on Line 5
-        assert!(index.has_adjacent_explanation(5));
-
-        // Line 9: `with suppress(ValueError):` has directive only on Line 8
-        assert!(!index.has_adjacent_explanation(9));
-
-        // Line 12: `with suppress(OSError):` has no comment
-        assert!(!index.has_adjacent_explanation(12));
+        assert_eq!(index.has_adjacent_explanation(line), expected);
     }
 
     #[test]
@@ -405,5 +446,146 @@ mod tests {
 
         // Line 2 has no standalone comment preceding it; line 1 is code with inline comment
         assert!(!index.has_adjacent_explanation(2));
+    }
+
+    #[rstest]
+    #[case::multiline_with_preceding_comment(
+        indoc! {r#"
+            # Benign error ignored during cleanup
+            with (
+                open("file.txt"),
+                suppress(FileNotFoundError),
+            ):
+                pass
+        "#},
+        "suppress(FileNotFoundError)",
+        true
+    )]
+    #[case::singleline_with_trailing_inline_comment(
+        indoc! {r"
+            with (suppress(KeyError)): pass  # Inline explanation here
+        "},
+        "suppress(KeyError)",
+        true
+    )]
+    #[case::singleline_uncommented(
+        indoc! {r"
+            with (suppress(ValueError)): pass
+        "},
+        "suppress(ValueError)",
+        false
+    )]
+    #[case::multiline_with_inline_comment_on_header_line(
+        indoc! {r#"
+            with (
+                open("file.txt"),
+                suppress(KeyError),  # Config key is optional in legacy environments
+            ):
+                pass
+        "#},
+        "suppress(KeyError)",
+        true
+    )]
+    #[case::body_comment_not_counted_for_header(
+        indoc! {r"
+            with suppress(Exception):
+                # This comment is inside the body, not explaining the suppress
+                pass
+        "},
+        "suppress(Exception)",
+        false
+    )]
+    #[case::multiline_assignment_with_preceding_comment(
+        indoc! {r#"
+            # Fallback configuration when environment variable is missing
+            CONFIG = (
+                get_config("FALLBACK")
+            )
+        "#},
+        "get_config",
+        true
+    )]
+    #[case::annotated_assignment_colon_does_not_truncate_header(
+        indoc! {r#"
+            CONFIG: dict[str, str] = (
+                get_config(
+                    "FALLBACK",
+                )  # Environment variable is absent in local development
+            )
+        "#},
+        "get_config",
+        true
+    )]
+    #[case::multiline_if_with_preceding_comment(
+        indoc! {r"
+            # Legacy environments do not expose the config key
+            if (
+                suppress(KeyError)
+            ):
+                pass
+        "},
+        "suppress(KeyError)",
+        true
+    )]
+    #[case::multiline_while_with_preceding_comment(
+        indoc! {r"
+            # Retry transient failures until service becomes ready
+            while (
+                suppress(TimeoutError)
+            ):
+                pass
+        "},
+        "suppress(TimeoutError)",
+        true
+    )]
+    fn test_has_explanation_for_span(
+        #[case] source: &str,
+        #[case] target_call: &str,
+        #[case] expected: bool,
+    ) {
+        let grep = AstGrep::new(source, SupportLang::Python);
+        let index = CommentIndex::from_ast(&grep);
+        let root = grep.root();
+
+        let target_node = root
+            .dfs()
+            .find(|node| node.kind() == "call" && node.text().starts_with(target_call))
+            .expect("target node should exist in source snippet");
+
+        assert_eq!(
+            index.has_explanation_for_span(
+                &root,
+                crate::diagnostic::SourceSpan::from_range(target_node.range()),
+                target_node.start_pos().line() + 1,
+            ),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_has_explanation_for_span_rust_block_body_isolation() {
+        let source = indoc! {r"
+            fn f() {
+                let x = {
+                    foo(); // Unrelated note about foo and its quirks
+                    compute()
+                };
+            }
+        "};
+        let grep = AstGrep::new(source, SupportLang::Rust);
+        let index = CommentIndex::from_ast(&grep);
+        let root = grep.root();
+
+        let target_node = root
+            .dfs()
+            .find(|node| node.kind() == "call_expression" && node.text().starts_with("compute"))
+            .expect("compute call node should exist");
+
+        // The inline comment on foo() inside the block must NOT license compute()
+        assert!(!index.has_explanation_for_span(
+            &root,
+            crate::diagnostic::SourceSpan::from_range(target_node.range()),
+            target_node.start_pos().line() + 1,
+        ));
     }
 }
