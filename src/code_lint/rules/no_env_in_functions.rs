@@ -397,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn test_config_extend_and_test_scope_exemption() {
+    fn test_config_extend_and_allowed() {
         let config_toml = r#"
             [rules.no-env-in-functions]
             extend_banned = ["dotenv.get_key"]
@@ -424,13 +424,5 @@ mod tests {
             ),
             @"[no-env-in-functions] Line 6, Col 21: Environment variable access `dotenv.get_key()` inside function `load_secret`."
         );
-
-        // Test files are automatically skipped via RuleTarget::SourceOnly in lint_file
-        let test_diags = crate::code_lint::lint_file(
-            Path::new("tests/test_secret.py"),
-            source,
-            &Config::default(),
-        );
-        assert!(test_diags.is_empty());
     }
 }

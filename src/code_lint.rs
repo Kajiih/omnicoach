@@ -764,4 +764,60 @@ mod tests {
             lint_file(Path::new("main.py"), source_uncommented, &req_doc_config);
         assert_eq!(diagnostics_req_uncommented.len(), 1);
     }
+
+    #[test]
+    fn test_rule_target_tests_only_filtering() {
+        let source_prod = "import time\ndef run(): time.sleep(5)\n";
+        let default_config = Config::default();
+
+        let prod_diagnostics = lint_file(Path::new("src/daemon.py"), source_prod, &default_config);
+        assert!(prod_diagnostics.is_empty());
+
+        let test_diagnostics = lint_file(
+            Path::new("tests/test_daemon.py"),
+            source_prod,
+            &default_config,
+        );
+        assert_eq!(test_diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn test_rule_target_tests_only_rust_conditional_test() {
+        let source_rust = indoc::indoc! {r"
+            pub fn run_worker() {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+            #[cfg(test)]
+            mod tests {
+                #[test]
+                fn test_worker() {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        "};
+        let default_config = Config::default();
+        let diagnostics = lint_file(Path::new("src/worker.rs"), source_rust, &default_config);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].location.line, 8);
+    }
+
+    #[test]
+    fn test_rule_target_source_only_filtering() {
+        let source_py = indoc::indoc! {r#"
+            import os
+            def read_key():
+                return os.getenv("API_KEY")
+        "#};
+        let default_config = Config::default();
+
+        let src_diagnostics = lint_file(Path::new("src/service.py"), source_py, &default_config);
+        assert_eq!(src_diagnostics.len(), 1);
+
+        let test_diagnostics = lint_file(
+            Path::new("tests/test_service.py"),
+            source_py,
+            &default_config,
+        );
+        assert!(test_diagnostics.is_empty());
+    }
 }

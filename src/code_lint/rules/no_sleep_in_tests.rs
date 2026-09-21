@@ -238,46 +238,4 @@ async fn test_retry_backoff() {
             @"[no-zero-sleep-in-tests] Line 10, Col 5: Zero-duration sleep `tokio::time::sleep(Duration::ZERO)` in test is discouraged."
         );
     }
-
-    #[test]
-    fn test_production_files_skipped_by_tests_only_target() {
-        let source = r"
-import time
-
-def run_daemon():
-    time.sleep(5)
-";
-        let config = Config::default();
-        let prod_diags = crate::code_lint::lint_file(Path::new("src/daemon.py"), source, &config);
-        assert!(
-            prod_diags.is_empty(),
-            "Expected no-sleep-in-tests to skip production file, got: {prod_diags:?}"
-        );
-
-        let test_diags =
-            crate::code_lint::lint_file(Path::new("tests/test_daemon.py"), source, &config);
-        assert_eq!(test_diags.len(), 1);
-        assert_eq!(test_diags[0].rule_name, RuleName("no-sleep-in-tests"));
-    }
-
-    #[test]
-    fn test_rust_inline_conditional_test_scoped_in_source_file() {
-        let source = r"
-pub fn run_worker() {
-    std::thread::sleep(std::time::Duration::from_secs(1));
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_worker() {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-}
-";
-        let config = Config::default();
-        let diags = crate::code_lint::lint_file(Path::new("src/worker.rs"), source, &config);
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule_name, RuleName("no-sleep-in-tests"));
-    }
 }

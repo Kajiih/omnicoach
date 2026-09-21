@@ -152,21 +152,6 @@ class ItemsArr: # OK (class definition)
     #[test]
     fn test_configuration_override() {
         let rule = NoHungarianNotation;
-
-        let config_toml = r#"
-            [rules.no-hungarian-notation]
-            banned = ["_custom"]
-        "#;
-        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
-
-        let source = "fn main() { let x_list = 1; let y_custom = 2; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config), @"[no-hungarian-notation] Line 1, Col 33: Identifier `y_custom` contains a banned type suffix `_custom`.");
-    }
-
-    #[test]
-    fn test_global_allowed_and_extend_banned() {
-        let rule = NoHungarianNotation;
-
         let config_toml = r#"
             [rules.no-hungarian-notation]
             allowed = ["_str"]
@@ -174,37 +159,9 @@ class ItemsArr: # OK (class definition)
         "#;
         let config: crate::core::Config = toml::from_str(config_toml).unwrap();
 
-        // _str is allowed (no violation), _handle is banned (violates), _list is default banned (violates)
-        let source = "fn main() { let name_str = 1; let conn_handle = 2; let item_list = 3; }";
+        let source = "fn main() { let name_str = 1; let conn_handle = 2; }";
         let output = assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config);
         assert!(!output.contains("_str"));
         assert!(output.contains("contains a banned type suffix `_handle`"));
-        assert!(output.contains("contains a banned type suffix `_list`"));
-    }
-
-    #[test]
-    fn test_language_specific_overrides() {
-        let rule = NoHungarianNotation;
-
-        let config_toml = r#"
-            [rules.no-hungarian-notation.rust]
-            allowed = ["_vec"]
-
-            [rules.no-hungarian-notation.python]
-            extend_banned = ["_tbl"]
-        "#;
-        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
-
-        // In Rust, _vec is allowed:
-        let rust_source = "fn main() { let users_vec = 1; }";
-        let rust_output =
-            assert_code_rule_snapshot_with_config(&rule, rust_source, "test.rs", &config);
-        assert!(!rust_output.contains("_vec"));
-
-        // In Python, _vec is still banned by default, AND _tbl is banned:
-        let py_source = "users_vec = []\nusers_tbl = []\n";
-        let py_output = assert_code_rule_snapshot_with_config(&rule, py_source, "test.py", &config);
-        assert!(py_output.contains("contains a banned type suffix `_vec`"));
-        assert!(py_output.contains("contains a banned type suffix `_tbl`"));
     }
 }

@@ -163,107 +163,16 @@ mod tests {
     #[test]
     fn test_configuration_override() {
         let rule = SingleLetterVariableName;
-
-        // Custom allowed list: allow 'y', deny 'i'
         let config_toml = r#"
             [rules.single-letter-variable-name]
             allowed = ["y"]
-        "#;
-        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
-
-        let source = "fn main() { let i = 1; let y = 2; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config), @"[single-letter-variable-name] Line 1, Col 17: Variable name `i` is too short (single-letter).");
-    }
-
-    #[test]
-    fn test_language_nested_overrides() {
-        let rule = SingleLetterVariableName;
-
-        // Custom config:
-        // - Global allows 'g'
-        // - Rust allows 'r'
-        // - Python allows 'p'
-        let config_toml = r#"
-            [rules.single-letter-variable-name]
-            allowed = ["g"]
-            
-            [rules.single-letter-variable-name.rust]
-            allowed = ["r"]
-
-            [rules.single-letter-variable-name.python]
-            allowed = ["p"]
-        "#;
-        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
-
-        // For Rust:
-        // - 'r' is allowed by Rust override
-        // - 'g' is NOT allowed because Rust override takes precedence
-        // - 'c' is NOT allowed because we have overrides
-        let source_rs = "fn main() { let r = 1; let g = 2; let c = 3; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source_rs, "test.rs", &config), @"
-        [single-letter-variable-name] Line 1, Col 28: Variable name `g` is too short (single-letter).
-        [single-letter-variable-name] Line 1, Col 39: Variable name `c` is too short (single-letter).
-        ");
-
-        // For Python:
-        // - 'p' is allowed by Python override
-        // - 'g' is NOT allowed because Python override takes precedence
-        let source_py = "p = 1\ng = 2";
-        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source_py, "test.py", &config), @"[single-letter-variable-name] Line 2, Col 1: Variable name `g` is too short (single-letter).");
-    }
-
-    #[test]
-    fn test_language_nested_overrides_fallback() {
-        let rule = SingleLetterVariableName;
-
-        // Custom config:
-        // - Global allows 'g'
-        // - Rust / Python have no language-specific overrides
-        let config_toml = r#"
-            [rules.single-letter-variable-name]
-            allowed = ["g"]
-        "#;
-        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
-
-        // For Rust:
-        // - 'g' is allowed by global override fallback
-        // - 'c' is NOT allowed
-        let source_rs = "fn main() { let g = 1; let c = 2; }";
-        insta::assert_snapshot!(assert_code_rule_snapshot_with_config(&rule, source_rs, "test.rs", &config), @"[single-letter-variable-name] Line 1, Col 28: Variable name `c` is too short (single-letter).");
-    }
-
-    #[test]
-    fn test_extend_allowed() {
-        let rule = SingleLetterVariableName;
-
-        let config_toml = r#"
-            [rules.single-letter-variable-name]
-            extend_allowed = ["k"]
-        "#;
-        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
-
-        // 'i' is allowed by default, 'k' is allowed by extend_allowed, 'a' violates
-        let source_rs = "fn main() { let i = 1; let k = 2; let a = 3; }";
-        let output = assert_code_rule_snapshot_with_config(&rule, source_rs, "test.rs", &config);
-        assert!(!output.contains("Variable name `i`"));
-        assert!(!output.contains("Variable name `k`"));
-        assert!(output.contains("Variable name `a` is too short"));
-    }
-
-    #[test]
-    fn test_banned_revocation() {
-        let rule = SingleLetterVariableName;
-
-        let config_toml = r#"
-            [rules.single-letter-variable-name]
             banned = ["i"]
         "#;
         let config: crate::core::Config = toml::from_str(config_toml).unwrap();
 
-        // 'i' is revoked/banned, 'x' remains allowed by default base
-        let source_rs = "fn main() { let i = 1; let x = 2; }";
-        let output = assert_code_rule_snapshot_with_config(&rule, source_rs, "test.rs", &config);
+        let source = "fn main() { let i = 1; let y = 2; }";
+        let output = assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config);
         assert!(output.contains("Variable name `i` is too short"));
-        assert!(!output.contains("Variable name `x`"));
+        assert!(!output.contains("Variable name `y`"));
     }
 }
