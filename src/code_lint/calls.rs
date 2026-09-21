@@ -50,7 +50,8 @@ fn call_argument_nodes<'a>(call_node: &AstNode<'a>) -> Vec<AstNode<'a>> {
 
 /// Finds all call expressions in `grep` matching any of the `banned_callees` entries.
 ///
-/// Literal callee names are evaluated in a single-pass AST traversal with O(1) set lookups.
+/// Literal callee names (e.g. `"time.sleep"`) and any-receiver method names starting with a dot
+/// (e.g. `".assert_called_once"`) are evaluated in a single-pass AST traversal with O(1) set lookups.
 /// Entries containing metavariables (e.g. `"$LOOP($$$ARGS).create_task"`) or custom call
 /// signatures fall back to structural `ast-grep` pattern matching.
 ///
@@ -65,27 +66,57 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
     let mut matches: Vec<CallMatch<'a>> = Vec::new();
 
     let mut literal_callees: HashSet<&str> = HashSet::new();
+    let mut method_callees: HashSet<&str> = HashSet::new();
     let mut structural_entries: Vec<&str> = Vec::new();
 
     for entry in banned_callees {
-        if is_literal_callee(entry) {
-            literal_callees.insert(entry.as_str());
+        let trimmed = entry.trim();
+        if let Some(method_name) = trimmed.strip_prefix('.')
+            && !method_name.is_empty()
+            && is_literal_callee(method_name)
+        {
+            method_callees.insert(method_name);
+            continue;
+        }
+        if is_literal_callee(trimmed) {
+            literal_callees.insert(trimmed);
         } else {
-            structural_entries.push(entry.as_str());
+            structural_entries.push(trimmed);
         }
     }
 
-    if !literal_callees.is_empty() {
+    if !literal_callees.is_empty() || !method_callees.is_empty() {
         for node in root
             .dfs()
             .filter(|call_node| matches!(call_node.kind().as_ref(), "call_expression" | "call"))
         {
             if let Some(function) = node.field("function") {
                 let callee_text = function.text();
+                let mut matched_callee = None;
+
                 if literal_callees.contains(callee_text.as_ref()) {
+                    matched_callee = Some(callee_text.to_string());
+                } else if !method_callees.is_empty() {
+                    let method_name = match function.kind().as_ref() {
+                        "attribute" => function
+                            .field("attribute")
+                            .map(|attr| attr.text().to_string()),
+                        "field_expression" => {
+                            function.field("field").map(|fld| fld.text().to_string())
+                        }
+                        _ => None,
+                    };
+                    if let Some(ref name) = method_name
+                        && method_callees.contains(name.as_str())
+                    {
+                        matched_callee = Some(name.clone());
+                    }
+                }
+
+                if let Some(callee) = matched_callee {
                     matches.push(CallMatch {
                         node: node.clone(),
-                        callee: callee_text.to_string(),
+                        callee,
                         arguments: call_argument_nodes(&node),
                     });
                 }
@@ -116,50 +147,6 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
 
     matches.sort_by_key(|matched| (matched.node.range().start, matched.node.range().end));
     matches.dedup_by_key(|matched| (matched.node.range().start, matched.node.range().end));
-    matches
-}
-
-// TODO: Can't this be used across several other rules and generalized in the codebase?
-/// Finds all method call expressions in `grep` whose terminal method name matches
-/// any entry in `banned_methods` (e.g. `assert_called_once` in `mock.assert_called_once()`).
-///
-/// Evaluates in a single-pass O(N) AST traversal with O(1) set lookups.
-#[must_use]
-pub fn find_banned_method_calls<'a, S: std::hash::BuildHasher>(
-    grep: &'a AstGrep<SourceDoc>,
-    banned_methods: &HashSet<String, S>,
-) -> Vec<CallMatch<'a>> {
-    if banned_methods.is_empty() {
-        return Vec::new();
-    }
-
-    let root = grep.root();
-    let mut matches: Vec<CallMatch<'a>> = Vec::new();
-
-    for node in root
-        .dfs()
-        .filter(|call_node| matches!(call_node.kind().as_ref(), "call_expression" | "call"))
-    {
-        let Some(function) = node.field("function") else {
-            continue;
-        };
-        let method_node = match function.kind().as_ref() {
-            "attribute" => function.field("attribute"),
-            "field_expression" => function.field("field"),
-            _ => None,
-        };
-        if let Some(method) = method_node {
-            let method_name = method.text();
-            if banned_methods.contains(method_name.as_ref()) {
-                matches.push(CallMatch {
-                    node: node.clone(),
-                    callee: method_name.to_string(),
-                    arguments: call_argument_nodes(&node),
-                });
-            }
-        }
-    }
-
     matches
 }
 
@@ -227,7 +214,7 @@ fn test_case() {
     }
 
     #[test]
-    fn test_find_banned_method_calls() {
+    fn test_find_banned_calls_with_leading_dot_method_syntax() {
         let source = r"
 mock_service.assert_called_once()
 gateway.charge.assert_called_once_with(100)
@@ -235,12 +222,12 @@ assert_called_once()
 self.assertEqual(1, 1)
 ";
         let grep = AstGrep::new(source, SupportLang::Python);
-        let banned: HashSet<String> = ["assert_called_once", "assert_called_once_with"]
+        let banned: HashSet<String> = [".assert_called_once", ".assert_called_once_with"]
             .into_iter()
             .map(str::to_string)
             .collect();
 
-        let matched = find_banned_method_calls(&grep, &banned);
+        let matched = find_banned_calls(&grep, &banned);
         let callees: Vec<&str> = matched.iter().map(|item| item.callee.as_str()).collect();
 
         assert_eq!(

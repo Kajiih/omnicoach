@@ -8,13 +8,24 @@
 //! an adjacent explanatory comment.
 //! In all modes, legitimate uses can be justified via `# omni:ignore[no-typing-cast] -- <explanation>`.
 
+use crate::code_lint::calls::find_banned_calls;
 use crate::code_lint::{CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, Rule, RuleName};
+use crate::core::{Config, DenyListConfig, DynamicRuleConfig, FilterListDefaults, Rule, RuleName};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::path::Path;
+
+/// Configuration for the `NoTypingCast` rule.
+pub type NoTypingCastConfig = DynamicRuleConfig<DenyListConfig>;
+
+/// Static defaults for banned typing cast functions.
+const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
+    base: &["cast", "typing.cast", "typing_extensions.cast"],
+    extend: &[],
+    exempt: &[],
+};
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Unchecked type assertion `{call_name}()` is discouraged.",
@@ -52,25 +63,16 @@ impl CodeRule for NoTypingCast {
         &self,
         path: &Path,
         grep: &AstGrep<SourceDoc>,
-        _config: &Config,
+        config: &Config,
     ) -> Vec<Diagnostic> {
-        let root = grep.root();
+        let rule_config: NoTypingCastConfig = config.get_rule_config(self.name().0);
+        let effective_banned =
+            rule_config.effective_banned_for_lang(*grep.lang(), &DEFAULT_BANNED_CALLS);
 
-        let bare_casts = root.find_all("cast($$$ARGS)").map(|node| (node, "cast"));
-
-        let typing_casts = root
-            .find_all("typing.cast($$$ARGS)")
-            .map(|node| (node, "typing.cast"));
-
-        let typing_ext_casts = root
-            .find_all("typing_extensions.cast($$$ARGS)")
-            .map(|node| (node, "typing_extensions.cast"));
-
-        bare_casts
-            .chain(typing_casts)
-            .chain(typing_ext_casts)
-            .map(|(node, call_name)| {
-                self.diagnostic_at_node(path, &node, &[("call_name", call_name)])
+        find_banned_calls(grep, &effective_banned)
+            .into_iter()
+            .map(|matched| {
+                self.diagnostic_at_node(path, &matched.node, &[("call_name", &matched.callee)])
             })
             .collect()
     }

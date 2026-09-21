@@ -82,7 +82,7 @@ impl CodeRule for PreferTimedeltaOverSeconds {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
+    use crate::test_utils::assert_code_rule_snapshot;
 
     #[test]
     fn test_rust_snapshots() {
@@ -124,21 +124,5 @@ class DurationMinutes: # OK (class definition)
         [prefer-timedelta-over-seconds] Line 7, Col 9: Identifier `delay_ms` encodes a raw time unit suffix `_ms`.
         [prefer-timedelta-over-seconds] Line 8, Col 9: Identifier `ttl_hours` encodes a raw time unit suffix `_hours`.
         ");
-    }
-
-    #[test]
-    fn test_configuration_override() {
-        let rule = PreferTimedeltaOverSeconds;
-        let config_toml = r#"
-            [rules.prefer-timedelta-over-seconds]
-            allowed = ["_sec"]
-            extend_banned = ["_ticks"]
-        "#;
-        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
-
-        let source = "fn main() { let timeout_sec = 1; let cycle_ticks = 100; }";
-        let output = assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config);
-        assert!(!output.contains("_sec"));
-        assert!(output.contains("encodes a raw time unit suffix `_ticks`"));
     }
 }

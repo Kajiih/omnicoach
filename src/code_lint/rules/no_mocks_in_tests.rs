@@ -127,7 +127,7 @@ impl CodeRule for NoMocksInTests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
+    use crate::test_utils::assert_code_rule_snapshot;
 
     #[test]
     fn test_python_mock_detection_and_http_patch_exemption() {
@@ -151,26 +151,5 @@ def test_user_update(mocker, monkeypatch, api_client):
         [no-mocks-in-tests] Line 7, Col 5: Dynamic mock or monkeypatch `mocker.patch.object(...)` is prohibited in tests.
         [no-mocks-in-tests] Line 8, Col 5: Dynamic mock or monkeypatch `monkeypatch.setattr(...)` is prohibited in tests.
         ");
-    }
-
-    // TODO: Across the full codebase, I'm not sure we should test the configuration override here since it's not code actually from the rule.
-    #[test]
-    fn test_configuration_override() {
-        let rule = NoMocksInTests;
-        let config_toml = r#"
-            [rules.no-mocks-in-tests]
-            allowed = ["create_autospec"]
-            extend_banned = ["custom_mock"]
-        "#;
-        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
-
-        let source = "def test_case():
-    create_autospec(Service)
-    custom_mock(Service)
-";
-        let output =
-            assert_code_rule_snapshot_with_config(&rule, source, "test_service.py", &config);
-        assert!(!output.contains("create_autospec"));
-        assert!(output.contains("custom_mock(...)"));
     }
 }

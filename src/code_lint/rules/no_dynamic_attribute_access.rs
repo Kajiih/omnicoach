@@ -81,7 +81,7 @@ impl CodeRule for NoDynamicAttributeAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
+    use crate::test_utils::assert_code_rule_snapshot;
 
     #[test]
     fn test_dynamic_attribute_access_detection() {
@@ -106,24 +106,5 @@ registry.getattr("key")
         [no-dynamic-attribute-access] Line 5, Col 1: Dynamic reflection call `delattr()` bypasses static type checking.
         [no-dynamic-attribute-access] Line 8, Col 1: Dynamic reflection call `builtins.getattr()` bypasses static type checking.
         ");
-    }
-
-    #[test]
-    fn test_configuration_override() {
-        let rule = NoDynamicAttributeAccess;
-        let config_toml = r#"
-            [rules.no-dynamic-attribute-access]
-            allowed = ["hasattr"]
-            extend_banned = ["custom_getattr"]
-        "#;
-        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
-
-        let source = "def check(record):
-    hasattr(record, 'id')
-    custom_getattr(record, 'id')
-";
-        let output = assert_code_rule_snapshot_with_config(&rule, source, "service.py", &config);
-        assert!(!output.contains("hasattr"));
-        assert!(output.contains("custom_getattr()"));
     }
 }

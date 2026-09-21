@@ -5,14 +5,28 @@
 //! documenting why ignoring the exception is benign.
 
 use crate::code_lint::ast_python::{find_enclosing_with_item, find_enclosing_with_statement};
+use crate::code_lint::calls::find_banned_calls;
 use crate::code_lint::comments::CommentIndex;
 use crate::code_lint::{AstNode, CodeRule, SourceDoc};
-use crate::core::{Config, EnforcementMode, LanguageDefaults, Rule, RuleName};
+use crate::core::{
+    Config, DenyListConfig, DynamicRuleConfig, EnforcementMode, FilterListDefaults,
+    LanguageDefaults, Rule, RuleName,
+};
 use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
 use crate::rules::Tag;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::path::Path;
+
+/// Configuration for the `NoUncommentedSuppress` rule.
+pub type NoUncommentedSuppressConfig = DynamicRuleConfig<DenyListConfig>;
+
+/// Static defaults for banned suppress functions.
+const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
+    base: &["suppress", "contextlib.suppress"],
+    extend: &[],
+    exempt: &[],
+};
 
 const DEFAULT_ENFORCEMENT: LanguageDefaults<EnforcementMode> = LanguageDefaults {
     base: EnforcementMode::RequireExplanation,
@@ -58,19 +72,20 @@ impl CodeRule for NoUncommentedSuppress {
         config: &Config,
     ) -> Vec<Diagnostic> {
         let mode = self.enforcement_mode(*grep.lang(), config);
-        let root = grep.root();
-        let calls = root
-            .find_all("suppress($$$ARGS)")
-            .chain(root.find_all("contextlib.suppress($$$ARGS)"));
+        let rule_config: NoUncommentedSuppressConfig = config.get_rule_config(self.name().0);
+        let effective_banned =
+            rule_config.effective_banned_for_lang(*grep.lang(), &DEFAULT_BANNED_CALLS);
+        let calls = find_banned_calls(grep, &effective_banned);
 
         let mut comment_index = None;
         let mut diagnostics = Vec::new();
 
-        for call in calls {
-            let Some(with_stmt) = find_enclosing_with_statement(&call) else {
+        for call_match in calls {
+            let call = &call_match.node;
+            let Some(with_stmt) = find_enclosing_with_statement(call) else {
                 continue;
             };
-            if find_enclosing_with_item(&call).is_none() {
+            if find_enclosing_with_item(call).is_none() {
                 continue;
             }
 
@@ -78,11 +93,11 @@ impl CodeRule for NoUncommentedSuppress {
                 false
             } else {
                 let index = comment_index.get_or_insert_with(|| CommentIndex::from_ast(grep));
-                is_suppression_documented(index, &with_stmt, &call)
+                is_suppression_documented(index, &with_stmt, call)
             };
 
             if !is_documented {
-                diagnostics.push(self.diagnostic_at_node(path, &call, &[]));
+                diagnostics.push(self.diagnostic_at_node(path, call, &[]));
             }
         }
 
