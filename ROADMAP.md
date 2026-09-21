@@ -6,7 +6,10 @@ Items here represent design areas and technical directions to evaluate rather th
 
 ---
 
-## 1. Rule Engine & Declarative Rules
+## Random
+- Add stmt to banned abrrev
+
+## Rule Engine & Declarative Rules
 
 - **Unified Single-Pass AST Visitor Dispatch**:
   - *Context & Problem*: Today, each registered rule implements `check_file` independently and executes its own AST search or traversal over the file. At 16 rules on ~8k lines, rule passes take ~180ms total (~11ms/rule). However, this scales linearly as $O(\text{files} \times \text{rules})$: at 100+ rules, traversing the syntax tree 100 times per file becomes a multi-second bottleneck.
@@ -33,6 +36,16 @@ Items here represent design areas and technical directions to evaluate rather th
 - **Escaping Nested Scopes (`no-env-in-functions`)**:
   - *Current*: The boundary exemption (`main`, `from_env`, ...) is inherited by every scope declared inside it, which is correct for nested functions and closures but also exempts a class declared inside a boundary whose methods later escape (returned, registered as a callback).
   - *Target*: Treat a `class` / `impl` declared inside a boundary as a barrier that resets the exemption, once a real-world occurrence justifies the added language-specific complexity.
+- **Rule Definition Layering & Declarative Cleanliness (Separation of Policy vs. AST Plumbing)**:
+  - *Context & Problem*: Rule implementations currently risk leaking low-level Tree-sitter tree navigation (`node.ancestors()`, `child(0)`), AST line arithmetic (`start_pos().line() + 1`), and comment index instantiation (`CommentIndex::from_ast`) directly into rule definitions. Rule files should be the highest-level layer in the codebase, expressing declarative domain policy rather than compiler plumbing, while avoiding speculative over-engineering.
+  - *Target Architecture*:
+    - **Rule Definitions (`src/code_lint/rules/*.rs`)**: Express declarative policy only (`FilterListDefaults`, target scopes, violation templates, and high-level domain filters). Standard call-banning rules should be 1-line delegations to `self.check_banned_calls(...)`.
+    - **Language AST Helpers (`ast_python.rs`, `ast_rust.rs`)**: Encapsulate grammar and Tree-sitter traversal (e.g. `ast_python::is_with_context_manager(node)`), keeping direct `.kind()` and `.children()` checks out of rule files.
+    - **Framework Runner (`src/code_lint.rs`, `calls.rs`)**: Owns AST traversal orchestration, call matching, comment index lifecycle, and `EnforcementMode` (`Ban` vs `RequireExplanation`).
+  - *Trigger*: Audit and standardize rules (`no_uncommented_suppress`, `no_typing_cast`, `no_mock_assertions`) immediately after completing the current commit chain review.
+- **Framework-Level Multiline Explanation Awareness (`EnforcementMode::RequireExplanation`)**:
+  - *Context & Problem*: Centralized explanation checking in `lint_file` currently evaluates `index.has_adjacent_explanation(diagnostic.location.line)`. Because `diagnostic.location.line` points only to the start line of a matched call, multiline parenthesized expressions (or calls with trailing inline comments on closing parenthesis `)`) trigger false positives unless rules manually reimplement AST-aware comment scanning.
+  - *Target*: Move AST node/statement header span awareness into `CommentIndex::has_explanation_for_node` in the framework layer so multiline commented expressions are handled uniformly across all rules without per-rule comment inspection logic.
 
 ---
 
@@ -100,6 +113,9 @@ Items here represent design areas and technical directions to evaluate rather th
 - **Automated Rule Test Verification**:
   - *Current*: Tests are validated via runtime registry loops.
   - *Target*: Compile-time or CI assertion ensuring that colocated test suites exist for every registered rule, preventing rules from being added without corresponding snapshot and unit test coverage.
+- **Test Fixture Multiline String Standardization (`indoc!`)**:
+  - *Current*: Some rule tests use raw string literals (`r"..."`) with unindented blocks or leading newlines, while others use `indoc::indoc!`.
+  - *Target*: Standardize all test source code snippets on `indoc::indoc! {r"..."}` to prevent leading newline line-number offset errors and ensure consistent indentation and formatting across test fixtures.
 
 ---
 

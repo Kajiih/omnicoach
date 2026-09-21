@@ -7,6 +7,9 @@
 //! When configured with `mode = "require-explanation"`, `cast()` is permitted if accompanied by
 //! an adjacent explanatory comment.
 //! In all modes, legitimate uses can be justified via `# omni:ignore[no-typing-cast] -- <explanation>`.
+// TODO: Remove this case with legitimate uses from the documentation because it's the same thing for every rule. Generalize to the whole project.
+// TODO: Also remove the documentation of modes as it's the same for all rules
+// TODO: Also remove from every violation template, they should not suggest to ignore.
 
 use crate::code_lint::{CodeRule, RuleTarget, SourceDoc};
 use crate::core::{Config, FilterListDefaults, Rule, RuleName};
