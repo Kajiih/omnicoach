@@ -66,15 +66,13 @@ impl CodeRule for NoTypingCast {
             .find_all("typing_extensions.cast($$$ARGS)")
             .map(|node| (node, "typing_extensions.cast"));
 
-        let calls = bare_casts.chain(typing_casts).chain(typing_ext_casts);
-
-        let mut diagnostics = Vec::new();
-
-        for (node, call_name) in calls {
-            diagnostics.push(self.diagnostic_at_node(path, &node, &[("call_name", call_name)]));
-        }
-
-        diagnostics
+        bare_casts
+            .chain(typing_casts)
+            .chain(typing_ext_casts)
+            .map(|(node, call_name)| {
+                self.diagnostic_at_node(path, &node, &[("call_name", call_name)])
+            })
+            .collect()
     }
 }
 

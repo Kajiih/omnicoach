@@ -895,4 +895,40 @@ mod tests {
         };
         assert_eq!(config.effective_max_for_lang(lang, &DEFAULTS), expected);
     }
+
+    #[rstest::rstest]
+    #[case("", SupportLang::Python, EnforcementMode::Ban)]
+    #[case("", SupportLang::Rust, EnforcementMode::RequireExplanation)]
+    #[case("mode = \"ban\"", SupportLang::Rust, EnforcementMode::Ban)]
+    #[case(
+        "mode = \"require-explanation\"",
+        SupportLang::Python,
+        EnforcementMode::RequireExplanation
+    )]
+    #[case(
+        "mode = \"ban\"\n[python]\nmode = \"require-explanation\"",
+        SupportLang::Python,
+        EnforcementMode::RequireExplanation
+    )]
+    #[case(
+        "mode = \"ban\"\n[python]\nmode = \"require-explanation\"",
+        SupportLang::Rust,
+        EnforcementMode::Ban
+    )]
+    fn test_dynamic_enforcement_config(
+        #[case] toml_content: &str,
+        #[case] lang: SupportLang,
+        #[case] expected: EnforcementMode,
+    ) {
+        const DEFAULTS: LanguageDefaults<EnforcementMode> = LanguageDefaults::new(
+            EnforcementMode::Ban,
+            &[(SupportLang::Rust, EnforcementMode::RequireExplanation)],
+        );
+        let config: DynamicRuleConfig<EnforcementConfig> = if toml_content.is_empty() {
+            DynamicRuleConfig::default()
+        } else {
+            toml::from_str(toml_content).unwrap()
+        };
+        assert_eq!(config.effective_mode_for_lang(lang, &DEFAULTS), expected);
+    }
 }
