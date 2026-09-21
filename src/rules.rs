@@ -89,6 +89,7 @@ impl Tag {
     }
 }
 
+// TODO: Why do we have both rules listed here and in code_lint/rules.rs?
 /// Static list of all code linter rules.
 pub const CODE_RULES: &[&dyn crate::code_lint::CodeRule] = &[
     &crate::code_lint::rules::no_unstructured_task_creation::NoUnstructuredTaskCreation,
@@ -96,6 +97,7 @@ pub const CODE_RULES: &[&dyn crate::code_lint::CodeRule] = &[
     &crate::code_lint::rules::no_sleep_in_tests::NoZeroSleepInTests,
     &crate::code_lint::rules::max_test_assertions::MaxTestAssertions,
     &crate::code_lint::rules::no_assertion_packing::NoAssertionPacking,
+    &crate::code_lint::rules::no_mocks_in_tests::NoMocksInTests,
     &crate::code_lint::rules::no_logging_error_in_except::NoLoggingErrorInExcept,
     &crate::code_lint::rules::no_uncommented_suppress::NoUncommentedSuppress,
     &crate::code_lint::rules::no_typing_cast::NoTypingCast,

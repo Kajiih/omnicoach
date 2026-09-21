@@ -79,6 +79,11 @@ All rules support the `mode = "ban" | "require-explanation"` configuration. Belo
   max = 4 # default: 4
   ```
 * **`no-assertion-packing`**: Bans compound boolean assertions (`and`, `&&`) and boolean collection equality packing designed to circumvent assertion limits. *(Python, Rust)*
+* **`no-mocks-in-tests`**: Bans dynamic mocks and monkeypatching (`MagicMock`, `patch`, `mocker.*`, `monkeypatch.*`, `setattr`) in tests in favor of state-based in-memory Fakes. *(Python)*
+  ```toml
+  [rules.no-mocks-in-tests]
+  allowed = ["create_autospec"]
+  ```
 
 ### Naming & Vocabulary
 * **`single-letter-variable-name`**: Bans uncommunicative single-letter variable names outside of standard idioms (`i`, `j`, `k`, `x`, `y`, `z`, `_`). *(Python, Rust)*
