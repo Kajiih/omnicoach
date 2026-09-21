@@ -257,23 +257,160 @@ pub fn is_assertion_call(call_node: &AstNode<'_>) -> bool {
     }
 }
 
-/// Returns true if a Python `function_definition` or `class_definition` has a decorator whose
-/// terminal identifier satisfies `predicate`.
+/// Represents a keyword argument (`key=value`) in a Python call or argument list.
+#[derive(Clone)]
+pub struct KeywordArg<'a> {
+    /// The keyword parameter name.
+    pub name: String,
+    /// AST node for the argument identifier name.
+    pub name_node: AstNode<'a>,
+    /// AST node for the argument value expression.
+    pub value_node: AstNode<'a>,
+}
+
+impl KeywordArg<'_> {
+    /// Evaluates literal boolean arguments (`True` / `False`).
+    #[must_use]
+    pub fn as_bool(&self) -> Option<bool> {
+        match self.value_node.kind().as_ref() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        }
+    }
+}
+
+/// Extracts all keyword arguments from any Python `call` or `argument_list` node.
 #[must_use]
-pub fn has_decorator(node: &AstNode<'_>, predicate: fn(&str) -> bool) -> bool {
-    let Some(parent) = node.parent() else {
+pub fn extract_keyword_args<'a>(call_or_args_node: &AstNode<'a>) -> Vec<KeywordArg<'a>> {
+    let args_node = if call_or_args_node.kind() == "argument_list" {
+        Some(call_or_args_node.clone())
+    } else {
+        call_or_args_node.field("arguments")
+    };
+
+    let Some(args) = args_node else {
+        return Vec::new();
+    };
+
+    let mut result = Vec::new();
+    for child in args.children() {
+        if child.kind() == "keyword_argument"
+            && let (Some(name_n), Some(val_n)) = (child.field("name"), child.field("value"))
+        {
+            result.push(KeywordArg {
+                name: name_n.text().to_string(),
+                name_node: name_n,
+                value_node: val_n,
+            });
+        }
+    }
+    result
+}
+
+/// Structured metadata for a Python decorator.
+#[derive(Clone)]
+pub struct DecoratorInfo<'a> {
+    /// Full decorator AST node (including `@`).
+    pub node: AstNode<'a>,
+    /// Full path string (e.g. `"dataclasses.dataclass"`, `"pytest.mark.parametrize"`).
+    pub path: String,
+    /// Terminal identifier (e.g. `"dataclass"`, `"parametrize"`).
+    pub terminal_name: String,
+    /// Call node if the decorator was invoked with parentheses `@dec(...)`.
+    pub call_node: Option<AstNode<'a>>,
+    /// Parsed keyword arguments if invoked as a call.
+    pub keyword_args: Vec<KeywordArg<'a>>,
+}
+
+impl<'a> DecoratorInfo<'a> {
+    /// Looks up a keyword argument by name.
+    #[must_use]
+    pub fn get_arg(&self, key: &str) -> Option<&KeywordArg<'a>> {
+        self.keyword_args.iter().find(|kw| kw.name == key)
+    }
+}
+
+/// Helper to resolve the dotted expression path and terminal identifier.
+fn resolve_path_and_terminal(expr: &AstNode<'_>) -> (String, String) {
+    let path = expr.text().to_string();
+    let terminal = expr.field("attribute").map_or_else(
+        || path.rsplit('.').next().unwrap_or("").to_string(),
+        |attr| attr.text().to_string(),
+    );
+    (path, terminal)
+}
+
+/// Extracts all decorators from a `decorated_definition` or a definition node inside one.
+#[must_use]
+pub fn extract_decorators<'a>(node: &AstNode<'a>) -> Vec<DecoratorInfo<'a>> {
+    let parent = if node.kind() == "decorated_definition" {
+        Some(node.clone())
+    } else {
+        node.parent()
+    };
+
+    let Some(dec_def) = parent else {
+        return Vec::new();
+    };
+    if dec_def.kind() != "decorated_definition" {
+        return Vec::new();
+    }
+
+    let mut decorators = Vec::new();
+    for child in dec_def.children() {
+        if child.kind() == "decorator" {
+            // decorator children: "@" and expression (call or identifier/attribute)
+            let expr_node = child.children().find(|c| c.kind() != "@");
+            let Some(expr) = expr_node else {
+                continue;
+            };
+
+            let (call_node, target_expr, keyword_args) = if expr.kind() == "call" {
+                let call = expr.clone();
+                let func = call.field("function").unwrap_or_else(|| call.clone());
+                let kwargs = extract_keyword_args(&call);
+                (Some(call), func, kwargs)
+            } else {
+                (None, expr, Vec::new())
+            };
+
+            let (path, terminal_name) = resolve_path_and_terminal(&target_expr);
+
+            decorators.push(DecoratorInfo {
+                node: child,
+                path,
+                terminal_name,
+                call_node,
+                keyword_args,
+            });
+        }
+    }
+    decorators
+}
+
+/// Returns true if a Python `function_definition` or `class_definition` has a decorator whose
+/// terminal identifier or full path satisfies `predicate`.
+#[must_use]
+pub fn has_decorator(node: &AstNode<'_>, predicate: impl Fn(&str) -> bool) -> bool {
+    let parent = if node.kind() == "decorated_definition" {
+        Some(node.clone())
+    } else {
+        node.parent()
+    };
+    let Some(dec_def) = parent else {
         return false;
     };
-    if parent.kind() != "decorated_definition" {
+    if dec_def.kind() != "decorated_definition" {
         return false;
     }
-    for child in parent.children() {
+    for child in dec_def.children() {
         if child.kind() == "decorator" {
             let text = child.text();
             let trimmed = text.trim().trim_start_matches('@').trim();
             let base_path = trimmed.split('(').next().unwrap_or("").trim();
             let terminal = base_path.rsplit('.').next().unwrap_or("").trim();
-            if predicate(terminal) {
+            if predicate(terminal) || predicate(base_path) {
                 return true;
             }
         }
@@ -407,5 +544,80 @@ x = suppress(KeyError)
 
         // Second call is outside a with_statement
         assert!(find_enclosing_with_item(&calls[1]).is_none());
+    }
+
+    #[test]
+    fn test_extract_decorators_count() {
+        let source = r#"
+@dataclass(frozen=True, slots=False)
+@pytest.mark.parametrize("x", [1, 2])
+@custom
+def foo():
+    pass
+        "#;
+        let grep = AstGrep::new(source, SupportLang::Python);
+        let func = grep.root().find("def foo(): $$$BODY").unwrap();
+        let decorators = extract_decorators(&func);
+        assert_eq!(decorators.len(), 3);
+    }
+
+    #[test]
+    fn test_extract_decorator_keyword_args() {
+        let source = r"
+@dataclass(frozen=True, slots=False)
+def foo():
+    pass
+        ";
+        let grep = AstGrep::new(source, SupportLang::Python);
+        let func = grep.root().find("def foo(): $$$BODY").unwrap();
+        let decorators = extract_decorators(&func);
+
+        let dec0 = &decorators[0];
+        assert_eq!(dec0.terminal_name, "dataclass");
+        assert_eq!(
+            dec0.get_arg("frozen").and_then(KeywordArg::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            dec0.get_arg("slots").and_then(KeywordArg::as_bool),
+            Some(false)
+        );
+        assert!(dec0.get_arg("unknown").is_none());
+    }
+
+    #[test]
+    fn test_extract_decorators_metadata_and_path() {
+        let source = r#"
+@pytest.mark.parametrize("x", [1, 2])
+@custom
+def foo():
+    pass
+        "#;
+        let grep = AstGrep::new(source, SupportLang::Python);
+        let func = grep.root().find("def foo(): $$$BODY").unwrap();
+        let decorators = extract_decorators(&func);
+
+        let dec0 = &decorators[0];
+        assert_eq!(dec0.terminal_name, "parametrize");
+        assert_eq!(dec0.path, "pytest.mark.parametrize");
+
+        let dec1 = &decorators[1];
+        assert_eq!(dec1.terminal_name, "custom");
+        assert!(dec1.call_node.is_none());
+    }
+
+    #[test]
+    fn test_has_decorator_predicate_matching() {
+        let source = r#"
+@pytest.mark.parametrize("x", [1, 2])
+def foo():
+    pass
+        "#;
+        let grep = AstGrep::new(source, SupportLang::Python);
+        let func = grep.root().find("def foo(): $$$BODY").unwrap();
+
+        assert!(has_decorator(&func, |name| name == "parametrize"));
+        assert!(has_decorator(&func, |path| path == "pytest.mark.parametrize"));
+        assert!(!has_decorator(&func, |name| name == "override"));
     }
 }
