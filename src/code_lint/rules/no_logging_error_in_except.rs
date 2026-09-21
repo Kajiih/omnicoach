@@ -51,12 +51,7 @@ impl CodeRule for NoLoggingErrorInExcept {
     ) -> Vec<Diagnostic> {
         self.find_configured_banned_calls(grep, config, &DEFAULT_BANNED_CALLS)
             .into_iter()
-            .filter(|matched| {
-                matched
-                    .node
-                    .ancestors()
-                    .any(|ancestor| ancestor.kind() == "except_clause")
-            })
+            .filter(|matched| crate::code_lint::ast_python::is_inside_except_clause(&matched.node))
             .map(|matched| self.diagnostic_at_node(path, &matched.node, &[]))
             .collect()
     }

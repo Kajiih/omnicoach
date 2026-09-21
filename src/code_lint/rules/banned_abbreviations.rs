@@ -94,7 +94,7 @@ impl CodeRule for BannedAbbreviations {
         let effective_banned = self.effective_banned_set(*grep.lang(), config, &DEFAULT_BANNED);
         let mut diagnostics = Vec::new();
 
-        for node in crate::code_lint::collect_renameable_bindings(grep) {
+        for node in crate::code_lint::bindings::collect_renameable_bindings(grep) {
             let name = node.text();
             for segment in split_segments(&name) {
                 if effective_banned.contains(&segment) {

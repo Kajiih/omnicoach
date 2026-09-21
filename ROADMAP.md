@@ -7,10 +7,12 @@ Items here represent design areas and technical directions to evaluate rather th
 ---
 
 ## Random
-- Add stmt to banned abrrev
+- Add [stmt, ext] to banned abrrev
 - Review the names of the rules, of the configuration, etc, to make them totally aligned on what the are, explicit and self explanatory, and coherent together.
 - Also review the violation message, so they correctly explain what is the issue and why it is one rather than just explaining what the code does, and that the suggestion correctly point to correct solutions, so the user (or agent) can fix it autonomously. They should push to a single direction, which is the pit of success, even if it seems pedantic. Use `ruff` documentation as a reference and improve on it.
   - Write a **Violation Message Style Guide** and review all violation messages (`summary`, `rationale`, `suggestion`) so they concisely state the issue (`summary`), explain why it is harmful rather than just restating what the code does (`rationale`), and point to a single canonical "pit of success" solution so a user or agent can fix it autonomously (`suggestion`). Use `ruff` documentation as a reference and improve on it.
+  - Reviewed violation message that we can use as reference
+    - [prefer_dedent_for_multiline_strings.rs](/usr/local/google/home/paquerot/Documents/dev_projects/custom_lints/src/code_lint/rules/prefer_dedent_for_multiline_strings.rs)
 - Review our architecure, component, abstraction, modules, etc names as well to align and have the explicit and self explanatory.
 ## Rule Engine & Declarative Rules
 
@@ -49,6 +51,48 @@ Items here represent design areas and technical directions to evaluate rather th
 - **Framework-Level Multiline Explanation Awareness (`EnforcementMode::RequireExplanation`)**:
   - *Context & Problem*: Centralized explanation checking in `lint_file` currently evaluates `index.has_adjacent_explanation(diagnostic.location.line)`. Because `diagnostic.location.line` points only to the start line of a matched call, multiline parenthesized expressions (or calls with trailing inline comments on closing parenthesis `)`) trigger false positives unless rules manually reimplement AST-aware comment scanning.
   - *Target*: Move AST node/statement header span awareness into `CommentIndex::has_explanation_for_node` in the framework layer so multiline commented expressions are handled uniformly across all rules without per-rule comment inspection logic.
+
+---
+
+## Architecture: Abstraction Layers & Dependency Direction
+
+- **Explicit, Enforced Abstraction Levels**:
+  - *Context & Problem*: The intended layering is real but implicit, and two places contradict it. (1) `code_lint.rs` re-exports `AstNode` and `SourceDoc` from `core.rs`, so `ast_python.rs` and `ast_rust.rs` import `crate::code_lint::AstNode` — an *upward* import for a symbol that lives *below* them. The dependency is harmless at runtime but it inverts the module graph and makes the language modules look coupled to the cross-language layer they must stay independent of. (2) `code_lint.rs` straddles two levels: it defines the `CodeRule` contract that `code_lint/rules/*.rs` depend on, *and* it is the registry/runner that invokes those same rules. Rust's parent/child visibility lets this compile, but `code_lint.rs` ends up both below and above `rules/`, sandwiching them. Nothing currently detects either inversion, so both can silently spread.
+  - *Intended Layering* (low → high, each level may depend only on levels strictly below it):
+    | Level | Contents |
+    | :--- | :--- |
+    | L0 | `ast_grep_core`, `ast_grep_language` (external) |
+    | L1 | `core.rs` (`AstNode`, `SourceDoc`, `Rule`, `Config`, `FilterListDefaults`), `diagnostic.rs` |
+    | L2 | `code_lint/ast_python.rs`, `code_lint/ast_rust.rs` — grammar vocabulary; parallel siblings that must never depend on each other |
+    | L3 | `code_lint/{bindings,calls,comments,statements,suppression}.rs` — cross-language semantic engines |
+    | L4 | `CodeRule` trait, `RuleTarget`, `detect_language`, `collect_test_functions` |
+    | L5 | `code_lint/rules/*.rs` — declarative rule policy |
+    | L6 | Lint orchestration: `lint_file`, `run_code_lint`, `collect_targets` |
+    | L7 | `cli` / `main.rs` |
+
+    -> this is the current target and can evolve if we find a better structure.
+  - *Target*:
+    - Drop the `pub use crate::core::{AstNode, SourceDoc}` re-export (or keep it strictly as an external-facing API alias) so no in-crate module reaches upward for an L1 symbol; `ast_*.rs` then hold *zero* references to `crate::code_lint`.
+    - Split `code_lint.rs` along the L4/L6 seam — plausibly `code_lint/rule.rs` (contract) and `code_lint/runner.rs` (registry and orchestration) — so `rules/` sits above the contract and below the runner instead of inside a parent that is both.
+    - Declare the level of each module explicitly (module doc header, a manifest, or both) so the intended graph is stated rather than inferred.
+  - *Enforcement*: Architecture tests in CI asserting (a) no module imports from a level at or above its own, (b) no import cycles between modules, (c) `ast_python.rs` and `ast_rust.rs` import neither `crate::code_lint` nor each other, and (d) no Tree-sitter grammar kind literals appear outside `ast_*.rs`. Evaluate whether to hand-roll these as source-scanning tests, express them as dogfooded Omni rules, or adopt an existing crate before writing bespoke checks.
+  - *Note*: These four items are one piece of work — the re-export fix, the `code_lint.rs` split, the cycle ban, and making the levels explicit all describe the same graph, and enforcing it is what keeps any of them from regressing.
+- **Standardizing Per-Language Dispatch**:
+  - *Context & Problem*: Nine call sites (5 in `bindings.rs`, 2 in `calls.rs`, 1 each in `comments.rs`, `statements.rs`, and `code_lint.rs`) repeat the identical shape `match lang { Python => ast_python::f(..), Rust => ast_rust::f(..), _ => fallback }`. The pattern silently depends on an unwritten convention: both `ast_*` modules must expose identically named functions with identical signatures. Nothing enforces that convention, and adding a third language means finding and editing all nine sites.
+  - *Options to Evaluate*:
+    - A declarative `macro_rules!` (e.g. `dispatch_lang!(lang, f(args), fallback)`) — collapses each site to one line, makes the naming symmetry compiler-checked, and reduces a third language to a single edit; costs macro opacity and weaker IDE navigation.
+    - Per-module private helper functions — plainly readable, no magic, but leaves the convention unwritten and the nine sites intact.
+    - A closed internal `enum Language { Python, Rust }` converted once from `SupportLang`, removing every `_ => fallback` arm and making exhaustiveness a compile error when a language is added.
+    - A `LanguageSyntax` trait — rejected for now as a god-trait that bundles unrelated concerns (calls, comments, bindings, statements) and violates interface segregation at two languages.
+    - Survey how comparable multi-grammar linters solve this before committing to a bespoke mechanism.
+  - *Trigger*: Adding a third language, or the dispatch site count exceeding ~12.
+- **Universal Punctuation & Trivia Token Handling in Shared Engines**:
+  - *Context & Problem*: In `src/code_lint/calls.rs`, `call_argument_nodes` filters child nodes with `!matches!(child.kind().as_ref(), "(" | ")" | ",")`. While parentheses and commas happen to share identical anonymous token kinds across both Python and Rust Tree-sitter grammars, they are still Tree-sitter grammar kind string literals residing in an L3 cross-language engine module. An architecture test strictly banning grammar kind literals outside `ast_*.rs` will flag these.
+  - *Investigation & Design Questions*:
+    - Should syntactic punctuation/trivia tokens common to all supported C-style/ALGOL-derived grammars be granted an explicit exemption (e.g. via a centralized `is_syntax_punctuation` or `is_named` check), or does any kind literal in an L3 module represent an abstraction leak?
+    - Can argument node extraction be delegated down to `ast_python` / `ast_rust` entirely (e.g. `ast_*.rs` exposing `call_argument_nodes(call_node)`), ensuring L3 operates solely on semantic `AstNode` lists without inspecting token stream trivia?
+    - How do other AST frameworks (e.g. ast-grep's `is_named()` or node child filtering) differentiate semantic arguments from delimiter tokens?
+  - *Trigger*: When implementing the architecture enforcement tests for grammar kind isolation.
 
 ---
 
@@ -119,6 +163,9 @@ Items here represent design areas and technical directions to evaluate rather th
 - **Test Fixture Multiline String Standardization (`indoc!`)**:
   - *Current*: Some rule tests use raw string literals (`r"..."`) with unindented blocks or leading newlines, while others use `indoc::indoc!`.
   - *Target*: Standardize all test source code snippets on `indoc::indoc! {r"..."}` to prevent leading newline line-number offset errors and ensure consistent indentation and formatting across test fixtures.
+- **Decouple Rule Detection Tests from Static Template Prose (`test_utils.rs`)**:
+  - *Context & Problem*: `format_diagnostics_for_test` currently formats every violation as `[rule-name] Line X, Col Y: <full summary>`, and many rule tests pack 5–10 scenarios into a single 40-line source fixture asserted via `insta::assert_snapshot!`. This creates two problems: (1) editing static English prose in `TEMPLATE.summary` breaks every snapshot line even when zero AST detection logic changed, and (2) adding a test case near the top of a multi-scenario fixture shifts all subsequent `Line X` numbers.
+  - *Target*: Prefer focused `#[rstest]` parameterized cases (one construct per case) that assert behavioral outcomes (violation count, matched snippet, or dynamic `{placeholder}` values) rather than repeating static `[rule-name]` and `TEMPLATE.summary` strings across snapshots.
 
 ---
 

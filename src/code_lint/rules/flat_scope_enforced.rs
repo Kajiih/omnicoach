@@ -48,10 +48,7 @@ impl CodeRule for FlatScopeEnforced {
     ) -> Vec<Diagnostic> {
         grep.root()
             .find_all("def $NAME($$$ARGS): $$$BODY")
-            .filter(|func| {
-                func.ancestors()
-                    .any(|ancestor| ancestor.kind() == "function_definition")
-            })
+            .filter(|func| crate::code_lint::ast_python::is_nested_function(func))
             .map(|func| {
                 let func_name = func
                     .field("name")

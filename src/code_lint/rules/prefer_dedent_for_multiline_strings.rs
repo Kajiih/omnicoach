@@ -75,17 +75,26 @@ impl CodeRule for PreferDedentForMultilineStrings {
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
         let allowed = self.effective_allowed_set(*grep.lang(), config, &DEFAULT_ALLOWED_WRAPPERS);
-        let nodes = match *grep.lang() {
-            SupportLang::Python => {
-                ast_python::collect_undented_multiline_strings(&grep.root(), &allowed)
-            }
-            SupportLang::Rust => {
-                ast_rust::collect_undented_multiline_strings(&grep.root(), &allowed)
-            }
-            _ => Vec::new(),
-        };
-        nodes
-            .into_iter()
+        let root = grep.root();
+        root.dfs()
+            .filter(|node| match *grep.lang() {
+                SupportLang::Python => {
+                    ast_python::is_multiline_string_literal(node)
+                        && !ast_python::is_docstring(node)
+                        && !ast_python::is_enclosed_in_call(node, |full_path, terminal| {
+                            allowed.contains(full_path) || allowed.contains(terminal)
+                        })
+                }
+                SupportLang::Rust => {
+                    ast_rust::is_multiline_string_literal(node)
+                        && !ast_rust::is_insta_inline_snapshot(node)
+                        && !ast_rust::is_enclosed_in_doc_attribute(node)
+                        && !ast_rust::is_enclosed_in_macro(node, |full_path, terminal| {
+                            allowed.contains(full_path) || allowed.contains(terminal)
+                        })
+                }
+                _ => false,
+            })
             .map(|node| self.diagnostic_at_node(path, &node, &[]))
             .collect()
     }
@@ -98,88 +107,159 @@ mod tests {
     use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
     use rstest::rstest;
 
-    #[test]
-    fn test_python_multiline_strings_snapshot() {
-        let rule = PreferDedentForMultilineStrings;
-        let source = indoc::indoc! {r#"
-            """Module docstring is exempt."""
-
-            import inspect
-            import textwrap
-
+    #[rstest]
+    #[case::module_docstring_exempt(
+        indoc::indoc! {r#"
+            """Module docstring
+            spanning multiple lines."""
+            x = 1
+        "#},
+        false
+    )]
+    #[case::function_docstring_exempt(
+        indoc::indoc! {r#"
+            def render():
+                """Function docstring
+                spanning multiple lines."""
+                return 1
+        "#},
+        false
+    )]
+    #[case::global_raw_multiline_flagged(
+        indoc::indoc! {r#"
             GLOBAL_BAD = """
                 select *
                 from users
             """
-
-            def render_query(user_id: int) -> str:
-                """Function docstring is exempt."""
+        "#},
+        true
+    )]
+    #[case::local_raw_multiline_flagged(
+        indoc::indoc! {r#"
+            def render():
                 bad_local = """
                     line 1
                     line 2
                 """
-                bad_dedent = textwrap.dedent("""
-                    line 1
-                    line 2
-                """).strip()
-                good_cleandoc = inspect.cleandoc("""
-                    line 1
-                    line 2
-                """)
-                good_implicit_concat = (
-                    "line 1\n"
-                    "line 2\n"
-                )
-                good_backslash = "hello \
-                    world"
-                good_fstring_expr = f"value: {max(
-                    1,
-                    2,
-                )}"
                 return bad_local
-        "#};
-
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "service.py"), @"
-        [prefer-dedent-for-multiline-strings] Line 6, Col 14: Multiline string literal is not wrapped in a dedent helper.
-        [prefer-dedent-for-multiline-strings] Line 13, Col 17: Multiline string literal is not wrapped in a dedent helper.
-        [prefer-dedent-for-multiline-strings] Line 17, Col 34: Multiline string literal is not wrapped in a dedent helper.
-        ");
+        "#},
+        true
+    )]
+    #[case::textwrap_dedent_flagged_by_default(
+        indoc::indoc! {r#"
+            import textwrap
+            x = textwrap.dedent("""
+                line 1
+                line 2
+            """).strip()
+        "#},
+        true
+    )]
+    #[case::inspect_cleandoc_allowed(
+        indoc::indoc! {r#"
+            import inspect
+            x = inspect.cleandoc("""
+                line 1
+                line 2
+            """)
+        "#},
+        false
+    )]
+    #[case::implicit_adjacent_concat_allowed(
+        indoc::indoc! {r#"
+            x = (
+                "line 1\n"
+                "line 2\n"
+            )
+        "#},
+        false
+    )]
+    #[case::backslash_continuation_allowed(
+        indoc::indoc! {r#"
+            x = "hello \
+                world"
+        "#},
+        false
+    )]
+    #[case::fstring_multiline_interpolation_allowed(
+        indoc::indoc! {r#"
+            x = f"value: {max(
+                1,
+                2,
+            )}"
+        "#},
+        false
+    )]
+    fn test_python_multiline_strings(#[case] source: &str, #[case] expect_flagged: bool) {
+        let snapshot =
+            assert_code_rule_snapshot(&PreferDedentForMultilineStrings, source, "service.py");
+        assert_eq!(
+            !snapshot.is_empty(),
+            expect_flagged,
+            "unexpected result: {snapshot}"
+        );
     }
 
-    #[test]
-    fn test_rust_multiline_strings_snapshot() {
-        let rule = PreferDedentForMultilineStrings;
-        let source = indoc::indoc! {r#"
+    #[rstest]
+    #[case::const_multiline_flagged(
+        indoc::indoc! {r#"
             const BAD_SQL: &str = "
                 SELECT id
                 FROM accounts
             ";
-
-            fn build_fixture() {
+        "#},
+        true
+    )]
+    #[case::local_raw_multiline_flagged(
+        indoc::indoc! {r#"
+            fn build() {
                 let bad_raw = r"
                     alpha
                     beta
                 ";
-
-                let good_indoc = indoc::indoc! {r"
+            }
+        "#},
+        true
+    )]
+    #[case::indoc_macro_allowed(
+        indoc::indoc! {r#"
+            fn build() {
+                let good = indoc::indoc! {r"
                     alpha
                     beta
                 "};
-
-                let good_backslash = "hello \
+            }
+        "#},
+        false
+    )]
+    #[case::backslash_continuation_allowed(
+        indoc::indoc! {r#"
+            fn build() {
+                let good = "hello \
                     world";
-
-                insta::assert_snapshot!(good_indoc, @"
+            }
+        "#},
+        false
+    )]
+    #[case::insta_inline_snapshot_exempt(
+        indoc::indoc! {r#"
+            fn test_snap() {
+                insta::assert_snapshot!(val, @"
                     alpha
                     beta
                 ");
             }
-        "#};
-
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "lib.rs"), @"
-        [prefer-dedent-for-multiline-strings] Line 1, Col 23: Multiline string literal is not wrapped in a dedent helper.
-        [prefer-dedent-for-multiline-strings] Line 7, Col 19: Multiline string literal is not wrapped in a dedent helper.
-        ");
+        "#},
+        false
+    )]
+    fn test_rust_multiline_strings(#[case] source: &str, #[case] expect_flagged: bool) {
+        let snapshot =
+            assert_code_rule_snapshot(&PreferDedentForMultilineStrings, source, "lib.rs");
+        assert_eq!(
+            !snapshot.is_empty(),
+            expect_flagged,
+            "unexpected result: {snapshot}"
+        );
     }
 
     #[rstest]

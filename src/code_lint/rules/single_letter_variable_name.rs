@@ -51,7 +51,7 @@ impl CodeRule for SingleLetterVariableName {
         let effective_allowed = self.effective_allowed_set(*grep.lang(), config, &DEFAULT_ALLOWED);
 
         let mut diagnostics = Vec::new();
-        for node in crate::code_lint::collect_renameable_bindings(grep) {
+        for node in crate::code_lint::bindings::collect_renameable_bindings(grep) {
             let name = node.text();
             if name.len() == 1 && name != "_" && !effective_allowed.contains(&*name) {
                 diagnostics.push(self.diagnostic_at_node(path, &node, &[("name", &name)]));

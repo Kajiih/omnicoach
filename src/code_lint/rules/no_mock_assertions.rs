@@ -11,29 +11,29 @@ use std::path::Path;
 /// Static defaults for banned mock interaction assertion methods.
 const DEFAULT_BANNED_METHODS: FilterListDefaults = FilterListDefaults {
     base: &[
-        ".assert_called",
-        ".assert_called_once",
-        ".assert_called_with",
-        ".assert_called_once_with",
-        ".assert_any_call",
-        ".assert_has_calls",
-        ".assert_not_called",
-        ".assert_awaited",
-        ".assert_awaited_once",
-        ".assert_awaited_with",
-        ".assert_awaited_once_with",
-        ".assert_any_await",
-        ".assert_has_awaits",
-        ".assert_not_awaited",
+        "$OBJ.assert_called",
+        "$OBJ.assert_called_once",
+        "$OBJ.assert_called_with",
+        "$OBJ.assert_called_once_with",
+        "$OBJ.assert_any_call",
+        "$OBJ.assert_has_calls",
+        "$OBJ.assert_not_called",
+        "$OBJ.assert_awaited",
+        "$OBJ.assert_awaited_once",
+        "$OBJ.assert_awaited_with",
+        "$OBJ.assert_awaited_once_with",
+        "$OBJ.assert_any_await",
+        "$OBJ.assert_has_awaits",
+        "$OBJ.assert_not_awaited",
     ],
     extend: &[],
     exempt: &[],
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Mock interaction assertion `.{callee}(...)` is prohibited in tests.",
+    summary: "Mock interaction assertion `{callee}(...)` is prohibited in tests.",
     rationale: "Asserting that a mock method was invoked with specific arguments tests internal implementation details rather than observable outputs and state transitions.",
-    suggestion: "Assert on the returned value, state changes on an in-memory Fake, or observable domain outcomes instead of `.{callee}(...)`.",
+    suggestion: "Assert on the returned value, state changes on an in-memory Fake, or observable domain outcomes instead of `{callee}(...)`.",
 };
 
 /// Rule that bans mock interaction assertions in test files.
@@ -89,9 +89,9 @@ mod tests {
                 assert fake_repo.balance == 100
         "};
         insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test_pay.py"), @"
-        [no-mock-assertions] Line 2, Col 5: Mock interaction assertion `.assert_called_once_with(...)` is prohibited in tests.
-        [no-mock-assertions] Line 3, Col 5: Mock interaction assertion `.assert_not_called(...)` is prohibited in tests.
-        [no-mock-assertions] Line 4, Col 5: Mock interaction assertion `.assert_awaited_once(...)` is prohibited in tests.
+        [no-mock-assertions] Line 2, Col 5: Mock interaction assertion `gateway.charge.assert_called_once_with(...)` is prohibited in tests.
+        [no-mock-assertions] Line 3, Col 5: Mock interaction assertion `gateway.refund.assert_not_called(...)` is prohibited in tests.
+        [no-mock-assertions] Line 4, Col 5: Mock interaction assertion `gateway.async_send.assert_awaited_once(...)` is prohibited in tests.
         ");
     }
 }

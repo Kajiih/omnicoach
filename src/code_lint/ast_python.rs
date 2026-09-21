@@ -2,6 +2,74 @@
 
 use crate::code_lint::AstNode;
 
+/// Returns true for Python node kinds that hold statements as direct children.
+///
+/// `module` is the file root and `block` is an indented suite.
+#[must_use]
+pub fn is_statement_container(kind: &str) -> bool {
+    matches!(kind, "module" | "block")
+}
+
+/// Returns true for Python comment node kinds.
+///
+/// Python spells every comment `comment`, whether or not it is used as documentation.
+#[must_use]
+pub fn is_comment_kind(kind: &str) -> bool {
+    kind == "comment"
+}
+
+/// Returns true if a Python node of `parent_kind` makes a child identifier an import binding.
+#[must_use]
+pub fn is_import_binding_parent(parent_kind: &str) -> bool {
+    matches!(
+        parent_kind,
+        "import_statement" | "import_from_statement" | "aliased_import" | "dotted_name"
+    )
+}
+
+/// Returns true if a Python node of `parent_kind` makes a child identifier an import binding
+/// carrying no local alias.
+///
+/// `aliased_import` is excluded precisely because it introduces one.
+#[must_use]
+pub fn is_unaliased_import_binding_parent(parent_kind: &str) -> bool {
+    matches!(
+        parent_kind,
+        "import_statement" | "import_from_statement" | "dotted_name"
+    )
+}
+
+/// Returns true if a Python node of `parent_kind` declares a structural definition name.
+#[must_use]
+pub fn is_structural_definition_parent(parent_kind: &str) -> bool {
+    matches!(parent_kind, "class_definition" | "function_definition")
+}
+
+/// Returns true if `kind` is a call expression in Python.
+#[must_use]
+pub fn is_call_kind(kind: &str) -> bool {
+    kind == "call"
+}
+
+/// If `function` is a method access (e.g. `obj.method`), returns the method identifier node.
+#[must_use]
+pub fn extract_method_call_target<'a>(function: &AstNode<'a>) -> Option<AstNode<'a>> {
+    if function.kind().as_ref() == "attribute" {
+        function.field("attribute")
+    } else {
+        None
+    }
+}
+
+/// Returns true if `item`, the definition owning a name, has that name mandated by a contract.
+///
+/// Python has no structural trait implementations, so the contract is an explicit
+/// `@override` decorator on a method.
+#[must_use]
+pub fn is_trait_impl_member(item: &AstNode<'_>) -> bool {
+    item.kind().as_ref() == "function_definition" && has_override_decorator(item)
+}
+
 /// Recursively extracts binding identifiers from a pattern node.
 fn extract_from_pattern<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
     let kind = node.kind();
@@ -399,29 +467,9 @@ pub fn extract_decorators<'a>(node: &AstNode<'a>) -> Vec<DecoratorInfo<'a>> {
 /// terminal identifier or full path satisfies `predicate`.
 #[must_use]
 pub fn has_decorator(node: &AstNode<'_>, predicate: impl Fn(&str) -> bool) -> bool {
-    let parent = if node.kind() == "decorated_definition" {
-        Some(node.clone())
-    } else {
-        node.parent()
-    };
-    let Some(dec_def) = parent else {
-        return false;
-    };
-    if dec_def.kind() != "decorated_definition" {
-        return false;
-    }
-    for child in dec_def.children() {
-        if child.kind() == "decorator" {
-            let text = child.text();
-            let trimmed = text.trim().trim_start_matches('@').trim();
-            let base_path = trimmed.split('(').next().unwrap_or("").trim();
-            let terminal = base_path.rsplit('.').next().unwrap_or("").trim();
-            if predicate(terminal) || predicate(base_path) {
-                return true;
-            }
-        }
-    }
-    false
+    extract_decorators(node)
+        .into_iter()
+        .any(|dec| predicate(&dec.terminal_name) || predicate(&dec.path))
 }
 
 /// Represents a base class expression in a Python class definition.
@@ -450,21 +498,7 @@ pub struct PythonClassInfo<'a> {
     pub body_node: Option<AstNode<'a>>,
 }
 
-impl<'a> PythonClassInfo<'a> {
-    /// Returns the `@dataclass` or `@dataclasses.dataclass` decorator if present on this class.
-    #[must_use]
-    pub fn dataclass_decorator(&self) -> Option<&DecoratorInfo<'a>> {
-        self.decorators
-            .iter()
-            .find(|dec| matches!(dec.path.as_str(), "dataclass" | "dataclasses.dataclass"))
-    }
-
-    /// Returns true if the class is decorated with `@dataclass` or `@dataclasses.dataclass`.
-    #[must_use]
-    pub fn is_dataclass(&self) -> bool {
-        self.dataclass_decorator().is_some()
-    }
-
+impl PythonClassInfo<'_> {
     /// Returns true if the class inherits from any base whose terminal name matches `target`.
     #[must_use]
     pub fn inherits_from(&self, target: &str) -> bool {
@@ -789,6 +823,64 @@ pub fn find_enclosing_with_statement<'a>(node: &AstNode<'a>) -> Option<AstNode<'
         .find(|parent| parent.kind() == "with_statement")
 }
 
+/// Returns true if `node` is invoked as a context manager inside a Python `with` statement header.
+#[must_use]
+pub fn is_with_context_manager(node: &AstNode<'_>) -> bool {
+    find_enclosing_with_item(node).is_some() && find_enclosing_with_statement(node).is_some()
+}
+
+/// Returns true if a Python `function_definition` is nested inside another `function_definition`.
+#[must_use]
+pub fn is_nested_function(func_node: &AstNode<'_>) -> bool {
+    func_node
+        .ancestors()
+        .any(|ancestor| ancestor.kind() == "function_definition")
+}
+
+/// Returns true if `node` is enclosed inside an `except_clause` block.
+#[must_use]
+pub fn is_inside_except_clause(node: &AstNode<'_>) -> bool {
+    node.ancestors()
+        .any(|ancestor| ancestor.kind() == "except_clause")
+}
+
+/// Returns true if `node` is a Python `tuple` or `list` consisting solely of `>= 2` boolean literals (`True` / `False`).
+#[must_use]
+pub fn is_boolean_literal_collection(node: &AstNode<'_>) -> bool {
+    let kind = node.kind();
+    if kind != "tuple" && kind != "list" {
+        return false;
+    }
+    let items: Vec<_> = node
+        .children()
+        .filter(|child| !matches!(child.kind().as_ref(), "(" | ")" | "[" | "]" | ","))
+        .collect();
+    items.len() >= 2
+        && items
+            .iter()
+            .all(|item| matches!(item.kind().as_ref(), "true" | "false"))
+}
+
+/// Collects all outermost Python test function definitions (`def test` or `def test_*`).
+#[must_use]
+pub fn collect_outer_test_functions<'a>(root: &AstNode<'a>) -> Vec<AstNode<'a>> {
+    let mut out = Vec::new();
+    collect_outer_test_functions_rec(root, &mut out);
+    out
+}
+
+fn collect_outer_test_functions_rec<'a>(node: &AstNode<'a>, out: &mut Vec<AstNode<'a>>) {
+    if node.kind() == "function_definition" {
+        if is_test_function(node) {
+            out.push(node.clone());
+        }
+        return;
+    }
+    for child in node.children() {
+        collect_outer_test_functions_rec(&child, out);
+    }
+}
+
 /// Returns true if a Python `string` node is triple-quoted (`"""` or `'''`).
 /// In Python's grammar, only triple-quoted strings can contain literal newlines.
 fn is_triple_quoted(node: &AstNode<'_>) -> bool {
@@ -797,26 +889,32 @@ fn is_triple_quoted(node: &AstNode<'_>) -> bool {
     stripped.starts_with("\"\"\"") || stripped.starts_with("'''")
 }
 
+/// Returns true if `node` is a Python multiline triple-quoted string literal.
+#[must_use]
+pub fn is_multiline_string_literal(node: &AstNode<'_>) -> bool {
+    node.kind() == "string"
+        && node.end_pos().line() > node.start_pos().line()
+        && is_triple_quoted(node)
+}
+
 /// Returns true if a Python `string` node is a standalone docstring statement.
-fn is_docstring(node: &AstNode<'_>) -> bool {
+#[must_use]
+pub fn is_docstring(node: &AstNode<'_>) -> bool {
     node.parent()
         .is_some_and(|parent| parent.kind() == "expression_statement")
 }
 
-/// Returns true if `node` is enclosed in a Python `call` whose function matches `allowed_wrappers`.
-fn is_wrapped_in_allowed_call<S: std::hash::BuildHasher>(
-    node: &AstNode<'_>,
-    allowed_wrappers: &std::collections::HashSet<String, S>,
-) -> bool {
+/// Returns true if `node` is enclosed in a Python `call` within the current scope whose
+/// `(full_path, terminal_name)` satisfies `predicate`.
+#[must_use]
+pub fn is_enclosed_in_call(node: &AstNode<'_>, predicate: impl Fn(&str, &str) -> bool) -> bool {
     for ancestor in node.ancestors() {
         match ancestor.kind().as_ref() {
             "function_definition" | "class_definition" | "lambda" => break,
             "call" => {
                 if let Some(func_node) = ancestor.field("function") {
-                    let func_text = func_node.text();
-                    let trimmed = func_text.trim();
-                    let terminal = trimmed.rsplit('.').next().unwrap_or(trimmed).trim();
-                    if allowed_wrappers.contains(trimmed) || allowed_wrappers.contains(terminal) {
+                    let (path, terminal) = resolve_path_and_terminal(&func_node);
+                    if predicate(&path, &terminal) {
                         return true;
                     }
                 }
@@ -825,24 +923,6 @@ fn is_wrapped_in_allowed_call<S: std::hash::BuildHasher>(
         }
     }
     false
-}
-
-/// Collects all Python multiline string literals that are not docstrings and not wrapped in an
-/// allowed dedent helper (`allowed_wrappers`).
-#[must_use]
-pub fn collect_undented_multiline_strings<'a, S: std::hash::BuildHasher>(
-    root: &AstNode<'a>,
-    allowed_wrappers: &std::collections::HashSet<String, S>,
-) -> Vec<AstNode<'a>> {
-    root.dfs()
-        .filter(|node| {
-            node.kind() == "string"
-                && node.end_pos().line() > node.start_pos().line()
-                && is_triple_quoted(node)
-                && !is_docstring(node)
-                && !is_wrapped_in_allowed_call(node, allowed_wrappers)
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -1064,7 +1144,7 @@ mod tests {
 
         let cls = &classes[0];
         assert_eq!(cls.name, "Config");
-        assert!(cls.is_dataclass());
+        assert_eq!(cls.decorators[0].terminal_name, "dataclass");
         assert!(!cls.inherits_from("Protocol"));
     }
 

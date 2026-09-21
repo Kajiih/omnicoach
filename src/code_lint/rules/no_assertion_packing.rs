@@ -43,80 +43,13 @@ impl Rule for NoAssertionPacking {
     }
 }
 
-/// Checks if a Rust `token_tree` contains a top-level `&&` operator.
-fn has_rust_top_level_and(token_tree: &AstNode<'_>) -> bool {
-    let meaningful_children: Vec<_> = token_tree
-        .children()
-        .filter(|c| c.kind() != "(" && c.kind() != ")")
-        .collect();
-
-    // Direct top-level: assert!(a && b)
-    if meaningful_children.iter().any(|c| c.kind() == "&&") {
-        return true;
-    }
-
-    // Outer paren wrapped: assert!((a && b)) where the only child is a paren token_tree
-    if meaningful_children.len() == 1 && meaningful_children[0].kind() == "token_tree" {
-        return meaningful_children[0].children().any(|c| c.kind() == "&&");
-    }
-
-    false
-}
-
-/// Extracts the child nodes of a sequence or macro token tree, excluding surrounding delimiters and commas.
-fn non_delimiter_children<'a>(node: &AstNode<'a>) -> Vec<AstNode<'a>> {
-    node.children()
-        .filter(|child| !matches!(child.kind().as_ref(), "(" | ")" | "[" | "]" | ","))
-        .collect()
-}
-
-/// Checks if a Rust node represents a tuple or array consisting solely of boolean literals (>= 2 elements).
-fn is_rust_boolean_tuple_or_array(node: &AstNode<'_>) -> bool {
-    let kind = node.kind();
-    if kind != "token_tree" && kind != "array_expression" && kind != "tuple_expression" {
-        return false;
-    }
-
-    let items = non_delimiter_children(node);
-    if items.len() < 2 {
-        return false;
-    }
-
-    items.iter().all(|item| {
-        item.kind() == "boolean_literal"
-            || item
-                .children()
-                .any(|child| child.kind() == "true" || child.kind() == "false")
-    })
-}
-
-/// Splits the arguments inside a Rust macro invocation's `token_tree`.
-fn extract_rust_macro_args<'a>(token_tree: &AstNode<'a>) -> Vec<AstNode<'a>> {
-    non_delimiter_children(token_tree)
-}
-
-/// Checks if a Python node represents a tuple or list consisting solely of boolean literals (>= 2 elements).
-fn is_python_boolean_sequence(node: &AstNode<'_>) -> bool {
-    let kind = node.kind();
-    if kind != "tuple" && kind != "list" {
-        return false;
-    }
-
-    let items = non_delimiter_children(node);
-    items.len() >= 2
-        && items
-            .iter()
-            .all(|item| matches!(item.kind().as_ref(), "true" | "false"))
-}
-
 /// Evaluates a single Rust assertion `macro_invocation` node for packed conditions.
 fn check_rust_assertion_macro(macro_node: &AstNode<'_>, path: &Path) -> Option<Diagnostic> {
     let macro_name = crate::code_lint::ast_rust::macro_terminal_name(macro_node);
-    let token_tree = macro_node.children().find(|c| c.kind() == "token_tree")?;
 
     // 1. Compound boolean condition: assert!(a && b)
     if (macro_name == "assert" || macro_name == "debug_assert")
-        && has_rust_top_level_and(&token_tree)
+        && crate::code_lint::ast_rust::has_top_level_logical_and(macro_node)
     {
         return Some(NoAssertionPacking.diagnostic_at_node(
             path,
@@ -130,9 +63,9 @@ fn check_rust_assertion_macro(macro_node: &AstNode<'_>, path: &Path) -> Option<D
 
     // 2. Boolean tuple/array equality packing: assert_eq!((a, b), (true, true))
     if (macro_name.starts_with("assert_") || macro_name.starts_with("debug_assert_"))
-        && extract_rust_macro_args(&token_tree)
+        && crate::code_lint::ast_rust::extract_macro_arguments(macro_node)
             .iter()
-            .any(is_rust_boolean_tuple_or_array)
+            .any(crate::code_lint::ast_rust::is_boolean_literal_collection)
     {
         return Some(NoAssertionPacking.diagnostic_at_node(
             path,
@@ -168,7 +101,7 @@ fn check_python_assert_statement(assert_node: &AstNode<'_>, path: &Path) -> Opti
         .find(|c| c.kind() == "comparison_operator")?;
     if comparison
         .children()
-        .any(|c| is_python_boolean_sequence(&c))
+        .any(|c| crate::code_lint::ast_python::is_boolean_literal_collection(&c))
     {
         return Some(NoAssertionPacking.diagnostic_at_node(
             path,
@@ -237,6 +170,7 @@ mod tests {
                 assert_eq!(coords, (10, 20));
                 assert_eq!(flag, true);
                 assert!(check_connection(ready && connected));
+                assert_eq!([compute(true), compute(false)], expected);
             }
         "};
 

@@ -2,9 +2,11 @@
 
 pub mod ast_python;
 pub(crate) mod ast_rust;
+pub(crate) mod bindings;
 pub(crate) mod calls;
 pub(crate) mod comments;
 pub(crate) mod rules;
+pub(crate) mod statements;
 pub(crate) mod suppression;
 
 use crate::core::Config;
@@ -86,34 +88,6 @@ pub trait CodeRule: crate::core::Rule {
             .into_iter()
             .map(|matched| {
                 self.diagnostic_at_node(path, &matched.node, &[("callee", &matched.callee)])
-            })
-            .collect()
-    }
-
-    /// Resolves this rule's banned identifier suffixes against `defaults` for the file's language
-    /// and emits a diagnostic with `("name", ...), ("actual_suffix", ...), ("base_name", ...)`
-    /// for every matching variable, constant, or parameter binding.
-    #[must_use]
-    fn check_banned_suffixes(
-        &self,
-        path: &Path,
-        grep: &AstGrep<SourceDoc>,
-        config: &Config,
-        defaults: &crate::core::FilterListDefaults,
-    ) -> Vec<Diagnostic> {
-        let effective_banned = self.effective_banned_set(*grep.lang(), config, defaults);
-        find_suffixed_bindings(grep, &effective_banned)
-            .into_iter()
-            .map(|matched| {
-                self.diagnostic_at_node(
-                    path,
-                    &matched.node,
-                    &[
-                        ("name", &matched.name),
-                        ("actual_suffix", &matched.actual_suffix),
-                        ("base_name", &matched.base_name),
-                    ],
-                )
             })
             .collect()
     }
@@ -288,8 +262,14 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
         if mode == crate::core::EnforcementMode::RequireExplanation {
             let index =
                 comment_index.get_or_insert_with(|| comments::CommentIndex::from_ast(&grep));
-            rule_diagnostics
-                .retain(|diagnostic| !index.has_adjacent_explanation(diagnostic.location.line));
+            let root = grep.root();
+            rule_diagnostics.retain(|diagnostic| {
+                !index.has_explanation_for_span(
+                    &root,
+                    diagnostic.location.span,
+                    diagnostic.location.line,
+                )
+            });
         }
         raw_diagnostics.extend(filter_diagnostics_by_target(
             rule_diagnostics,
@@ -310,237 +290,11 @@ pub(crate) fn collect_test_functions<'a>(
     root: &AstNode<'a>,
     lang: SupportLang,
 ) -> Vec<AstNode<'a>> {
-    let mut functions = Vec::new();
-    collect_outer_test_functions(root, lang, &mut functions);
-    functions
-}
-
-fn collect_outer_test_functions<'a>(
-    node: &AstNode<'a>,
-    lang: SupportLang,
-    out: &mut Vec<AstNode<'a>>,
-) {
-    let target_kind = match lang {
-        SupportLang::Rust => "function_item",
-        _ => "function_definition",
-    };
-    if node.kind() == target_kind {
-        let is_test = match lang {
-            SupportLang::Rust => ast_rust::is_test_function(node),
-            SupportLang::Python => ast_python::is_test_function(node),
-            _ => false,
-        };
-        if is_test {
-            out.push(node.clone());
-        }
-        return;
-    }
-    for child in node.children() {
-        collect_outer_test_functions(&child, lang, out);
-    }
-}
-
-/// Helper to collect binding definition nodes from a parsed AST grep document.
-#[must_use]
-pub(crate) fn collect_bindings(grep: &AstGrep<SourceDoc>) -> Vec<AstNode<'_>> {
-    match grep.lang() {
-        SupportLang::Rust => ast_rust::collect_bindings(&grep.root()),
-        SupportLang::Python => ast_python::collect_bindings(&grep.root()),
+    match lang {
+        SupportLang::Rust => ast_rust::collect_outer_test_functions(root),
+        SupportLang::Python => ast_python::collect_outer_test_functions(root),
         _ => Vec::new(),
     }
-}
-
-/// Returns true if the node represents an import binding.
-#[must_use]
-pub(crate) fn is_import_binding(node: &AstNode<'_>, lang: SupportLang) -> bool {
-    let Some(parent) = node.parent() else {
-        return false;
-    };
-    let parent_kind = parent.kind();
-    match lang {
-        SupportLang::Rust => matches!(
-            parent_kind.as_ref(),
-            "use_declaration" | "use_list" | "use_as_clause" | "scoped_identifier"
-        ),
-        SupportLang::Python => matches!(
-            parent_kind.as_ref(),
-            "import_statement" | "import_from_statement" | "aliased_import" | "dotted_name"
-        ),
-        _ => false,
-    }
-}
-
-/// Returns true if the node represents an unaliased import binding (an external symbol
-/// imported directly without a local `as` alias).
-#[must_use]
-pub(crate) fn is_unaliased_import_binding(node: &AstNode<'_>, lang: SupportLang) -> bool {
-    let Some(parent) = node.parent() else {
-        return false;
-    };
-    let parent_kind = parent.kind();
-    match lang {
-        SupportLang::Rust => {
-            matches!(
-                parent_kind.as_ref(),
-                "use_declaration" | "use_list" | "scoped_identifier"
-            )
-        }
-        SupportLang::Python => matches!(
-            parent_kind.as_ref(),
-            "import_statement" | "import_from_statement" | "dotted_name"
-        ),
-        _ => false,
-    }
-}
-
-/// Returns true if the node represents a structural type, class, or function definition name.
-#[must_use]
-pub(crate) fn is_structural_definition(node: &AstNode<'_>, lang: SupportLang) -> bool {
-    let Some(parent) = node.parent() else {
-        return false;
-    };
-    let parent_kind = parent.kind();
-    match lang {
-        SupportLang::Rust => matches!(
-            parent_kind.as_ref(),
-            "struct_item"
-                | "enum_item"
-                | "trait_item"
-                | "type_item"
-                | "associated_type"
-                | "function_item"
-        ),
-        SupportLang::Python => {
-            matches!(
-                parent_kind.as_ref(),
-                "class_definition" | "function_definition"
-            )
-        }
-        _ => false,
-    }
-}
-
-/// Returns true if the node is the name of a member defined inside a trait implementation
-/// (`impl Trait for Type` in Rust or `@override` method in Python), i.e. a name mandated by a contract.
-///
-/// Such names cannot be changed without breaking the implementation, so naming rules that
-/// suggest renaming do not meaningfully apply to them. Only the member name itself qualifies;
-/// nested names the author does control, such as locals, do not.
-#[must_use]
-pub(crate) fn is_trait_impl_member(node: &AstNode<'_>, lang: SupportLang) -> bool {
-    let Some(item) = node.parent() else {
-        return false;
-    };
-    match lang {
-        SupportLang::Rust => {
-            if !matches!(
-                item.kind().as_ref(),
-                "function_item" | "type_item" | "associated_type" | "const_item"
-            ) {
-                return false;
-            }
-            let Some(body) = item.parent() else {
-                return false;
-            };
-            if body.kind().as_ref() != "declaration_list" {
-                return false;
-            }
-            let Some(impl_item) = body.parent() else {
-                return false;
-            };
-            impl_item.kind().as_ref() == "impl_item" && impl_item.field("trait").is_some()
-        }
-        SupportLang::Python => {
-            item.kind().as_ref() == "function_definition"
-                && ast_python::has_override_decorator(&item)
-        }
-        _ => false,
-    }
-}
-
-/// Collects all binding nodes in `grep` whose identifier names are locally authored and
-/// eligible for renaming (excluding unaliased imports and trait/override contract members).
-#[must_use]
-pub(crate) fn collect_renameable_bindings(grep: &AstGrep<SourceDoc>) -> Vec<AstNode<'_>> {
-    let lang = *grep.lang();
-    collect_bindings(grep)
-        .into_iter()
-        .filter(|node| {
-            !is_unaliased_import_binding(node, lang) && !is_trait_impl_member(node, lang)
-        })
-        .collect()
-}
-
-/// A variable, constant, or parameter binding whose identifier ends with a matched suffix.
-pub(crate) struct SuffixedBindingMatch<'a> {
-    /// The matched identifier AST node.
-    pub node: AstNode<'a>,
-    /// Full identifier text (e.g. `timeout_seconds` or `user_list`).
-    pub name: String,
-    /// Matched suffix slice preserving the identifier's original case (e.g. `_seconds` or `_INT`).
-    pub actual_suffix: String,
-    /// Identifier stem preceding the matched suffix (e.g. `timeout` or `MY`).
-    pub base_name: String,
-}
-
-/// Finds all variable, constant, and parameter bindings in `grep` whose name ends
-/// (case-insensitively) with any suffix in `banned_suffixes`.
-///
-/// Automatically skips imports ([`is_import_binding`]), structural definitions
-/// ([`is_structural_definition`]: functions, classes, structs, enums, traits), and
-/// trait/override contract names ([`is_trait_impl_member`]).
-/// Suffixes are evaluated longest-first for deterministic matching.
-#[must_use]
-pub(crate) fn find_suffixed_bindings<'a, S: std::hash::BuildHasher>(
-    grep: &'a AstGrep<SourceDoc>,
-    banned_suffixes: &HashSet<String, S>,
-) -> Vec<SuffixedBindingMatch<'a>> {
-    if banned_suffixes.is_empty() {
-        return Vec::new();
-    }
-
-    let mut sorted_suffixes: Vec<String> = banned_suffixes
-        .iter()
-        .map(|suffix| suffix.to_lowercase())
-        .collect();
-    // Sort descending by length, then ascending lexicographically for deterministic tie-breaking
-    sorted_suffixes
-        .sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
-
-    let bindings = collect_bindings(grep);
-    let lang = *grep.lang();
-    let mut matches = Vec::new();
-
-    for node in bindings {
-        if is_import_binding(&node, lang)
-            || is_structural_definition(&node, lang)
-            || is_trait_impl_member(&node, lang)
-        {
-            continue;
-        }
-
-        let name = node.text();
-        let name_lower = name.to_lowercase();
-
-        for suffix_lower in &sorted_suffixes {
-            if name.len() > suffix_lower.len() && name_lower.ends_with(suffix_lower.as_str()) {
-                let split_idx = name.len() - suffix_lower.len();
-                let Some((base_name, actual_suffix)) = name.split_at_checked(split_idx) else {
-                    continue;
-                };
-
-                matches.push(SuffixedBindingMatch {
-                    node,
-                    actual_suffix: actual_suffix.to_string(),
-                    base_name: base_name.to_string(),
-                    name: name.into_owned(),
-                });
-                break;
-            }
-        }
-    }
-
-    matches
 }
 
 /// Configuration options for the codebase linting pipeline.

@@ -5,8 +5,9 @@
 //! Each callee entry (e.g. `"time.sleep"`, `"tokio::time::sleep"`, `"$LOOP($$$LOOP_ARGS).create_task"`)
 //! is normalized into a `<callee>($$$ARGS)` pattern and matched structurally against the AST.
 
-use crate::code_lint::{AstNode, SourceDoc};
+use crate::code_lint::{AstNode, SourceDoc, ast_python, ast_rust};
 use ast_grep_core::AstGrep;
+use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 
 /// A matched call expression together with its resolved callee string and argument nodes.
@@ -48,11 +49,36 @@ fn call_argument_nodes<'a>(call_node: &AstNode<'a>) -> Vec<AstNode<'a>> {
     })
 }
 
+/// Returns true for node kinds that represent call expressions in `lang`.
+///
+/// Unsupported languages report no calls, which leaves callers matching nothing rather than
+/// testing against another grammar's vocabulary.
+fn is_call_kind(kind: &str, lang: SupportLang) -> bool {
+    match lang {
+        SupportLang::Python => ast_python::is_call_kind(kind),
+        SupportLang::Rust => ast_rust::is_call_kind(kind),
+        _ => false,
+    }
+}
+
+/// Returns the invoked method name node of a call's callee expression in `lang`, if the callee
+/// is a method access rather than a plain function reference.
+fn extract_method_call_target<'a>(
+    function: &AstNode<'a>,
+    lang: SupportLang,
+) -> Option<AstNode<'a>> {
+    match lang {
+        SupportLang::Python => ast_python::extract_method_call_target(function),
+        SupportLang::Rust => ast_rust::extract_method_call_target(function),
+        _ => None,
+    }
+}
+
 /// Finds all call expressions in `grep` matching any of the `banned_callees` entries.
 ///
-/// Literal callee names (e.g. `"time.sleep"`) and any-receiver method names starting with a dot
-/// (e.g. `".assert_called_once"`) are evaluated in a single-pass AST traversal with O(1) set lookups.
-/// Entries containing metavariables (e.g. `"$LOOP($$$ARGS).create_task"`) or custom call
+/// Literal callee names (e.g. `"time.sleep"`) and any-receiver method patterns starting with `$OBJ.`
+/// (e.g. `"$OBJ.assert_called_once"`) are evaluated in a single-pass AST traversal with O(1) set lookups.
+/// Entries containing general metavariables (e.g. `"$LOOP($$$ARGS).create_task"`) or custom call
 /// signatures fall back to structural `ast-grep` pattern matching.
 ///
 /// Matches are sorted by byte span `(start, end)` and deduplicated so that overlapping
@@ -71,7 +97,7 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
 
     for entry in banned_callees {
         let trimmed = entry.trim();
-        if let Some(method_name) = trimmed.strip_prefix('.')
+        if let Some(method_name) = trimmed.strip_prefix("$OBJ.")
             && !method_name.is_empty()
             && is_literal_callee(method_name)
         {
@@ -86,9 +112,11 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
     }
 
     if !literal_callees.is_empty() || !method_callees.is_empty() {
+        let lang = *grep.lang();
+
         for node in root
             .dfs()
-            .filter(|call_node| matches!(call_node.kind().as_ref(), "call_expression" | "call"))
+            .filter(|call_node| is_call_kind(call_node.kind().as_ref(), lang))
         {
             if let Some(function) = node.field("function") {
                 let callee_text = function.text();
@@ -97,15 +125,11 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
                 if literal_callees.contains(callee_text.as_ref()) {
                     matched_callee = Some(callee_text.into_owned());
                 } else if !method_callees.is_empty() {
-                    let method_node = match function.kind().as_ref() {
-                        "attribute" => function.field("attribute"),
-                        "field_expression" => function.field("field"),
-                        _ => None,
-                    };
-                    if let Some(method) = method_node {
+                    let method_target = extract_method_call_target(&function, lang);
+                    if let Some(method) = method_target {
                         let name = method.text();
                         if method_callees.contains(name.as_ref()) {
-                            matched_callee = Some(name.into_owned());
+                            matched_callee = Some(callee_text.into_owned());
                         }
                     }
                 }
@@ -211,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_banned_calls_with_leading_dot_method_syntax() {
+    fn test_find_banned_calls_with_obj_method_syntax() {
         let source = indoc::indoc! {r"
             mock_service.assert_called_once()
             gateway.charge.assert_called_once_with(100)
@@ -219,7 +243,7 @@ mod tests {
             self.assertEqual(1, 1)
         "};
         let grep = AstGrep::new(source, SupportLang::Python);
-        let banned: HashSet<String> = [".assert_called_once", ".assert_called_once_with"]
+        let banned: HashSet<String> = ["$OBJ.assert_called_once", "$OBJ.assert_called_once_with"]
             .into_iter()
             .map(str::to_string)
             .collect();
@@ -229,7 +253,10 @@ mod tests {
 
         assert_eq!(
             callees,
-            vec!["assert_called_once", "assert_called_once_with"]
+            vec![
+                "mock_service.assert_called_once",
+                "gateway.charge.assert_called_once_with"
+            ]
         );
         assert_eq!(matched[1].arguments.len(), 1);
         assert_eq!(matched[1].arguments[0].text(), "100");
