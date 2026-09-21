@@ -84,6 +84,7 @@ All rules support the `mode = "ban" | "require-explanation"` configuration. Belo
   [rules.no-mocks-in-tests]
   allowed = ["create_autospec"]
   ```
+* **`no-mock-assertions`**: Bans interaction-based mock assertion methods (`assert_called_once`, `assert_called_with`, `assert_awaited`, etc.) in tests in favor of asserting on returned values or observable state changes. *(Python)*
 
 ### Naming & Vocabulary
 * **`single-letter-variable-name`**: Bans uncommunicative single-letter variable names outside of standard idioms (`i`, `j`, `k`, `x`, `y`, `z`, `_`). *(Python, Rust)*

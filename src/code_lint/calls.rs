@@ -119,6 +119,50 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
     matches
 }
 
+// TODO: Can't this be used across several other rules and generalized in the codebase?
+/// Finds all method call expressions in `grep` whose terminal method name matches
+/// any entry in `banned_methods` (e.g. `assert_called_once` in `mock.assert_called_once()`).
+///
+/// Evaluates in a single-pass O(N) AST traversal with O(1) set lookups.
+#[must_use]
+pub fn find_banned_method_calls<'a, S: std::hash::BuildHasher>(
+    grep: &'a AstGrep<SourceDoc>,
+    banned_methods: &HashSet<String, S>,
+) -> Vec<CallMatch<'a>> {
+    if banned_methods.is_empty() {
+        return Vec::new();
+    }
+
+    let root = grep.root();
+    let mut matches: Vec<CallMatch<'a>> = Vec::new();
+
+    for node in root
+        .dfs()
+        .filter(|call_node| matches!(call_node.kind().as_ref(), "call_expression" | "call"))
+    {
+        let Some(function) = node.field("function") else {
+            continue;
+        };
+        let method_node = match function.kind().as_ref() {
+            "attribute" => function.field("attribute"),
+            "field_expression" => function.field("field"),
+            _ => None,
+        };
+        if let Some(method) = method_node {
+            let method_name = method.text();
+            if banned_methods.contains(method_name.as_ref()) {
+                matches.push(CallMatch {
+                    node: node.clone(),
+                    callee: method_name.to_string(),
+                    arguments: call_argument_nodes(&node),
+                });
+            }
+        }
+    }
+
+    matches
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +224,30 @@ fn test_case() {
         );
         assert_eq!(matched[1].arguments.len(), 1);
         assert_eq!(matched[1].arguments[0].text(), "Duration::ZERO");
+    }
+
+    #[test]
+    fn test_find_banned_method_calls() {
+        let source = r"
+mock_service.assert_called_once()
+gateway.charge.assert_called_once_with(100)
+assert_called_once()
+self.assertEqual(1, 1)
+";
+        let grep = AstGrep::new(source, SupportLang::Python);
+        let banned: HashSet<String> = ["assert_called_once", "assert_called_once_with"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+
+        let matched = find_banned_method_calls(&grep, &banned);
+        let callees: Vec<&str> = matched.iter().map(|item| item.callee.as_str()).collect();
+
+        assert_eq!(
+            callees,
+            vec!["assert_called_once", "assert_called_once_with"]
+        );
+        assert_eq!(matched[1].arguments.len(), 1);
+        assert_eq!(matched[1].arguments[0].text(), "100");
     }
 }

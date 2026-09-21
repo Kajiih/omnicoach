@@ -7,6 +7,7 @@ pub mod no_env_in_functions;
 pub mod no_hungarian_notation;
 pub mod no_identical_positional_types;
 pub mod no_logging_error_in_except;
+pub mod no_mock_assertions;
 pub mod no_mocks_in_tests;
 pub mod no_sleep_in_tests;
 pub mod no_typing_cast;

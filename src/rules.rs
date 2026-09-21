@@ -98,6 +98,7 @@ pub const CODE_RULES: &[&dyn crate::code_lint::CodeRule] = &[
     &crate::code_lint::rules::max_test_assertions::MaxTestAssertions,
     &crate::code_lint::rules::no_assertion_packing::NoAssertionPacking,
     &crate::code_lint::rules::no_mocks_in_tests::NoMocksInTests,
+    &crate::code_lint::rules::no_mock_assertions::NoMockAssertions,
     &crate::code_lint::rules::no_logging_error_in_except::NoLoggingErrorInExcept,
     &crate::code_lint::rules::no_uncommented_suppress::NoUncommentedSuppress,
     &crate::code_lint::rules::no_typing_cast::NoTypingCast,
