@@ -157,15 +157,12 @@ Items here represent design areas and technical directions to evaluate rather th
 
 ## 5. Testing & Verification
 
-- **Automated Rule Test Verification**:
-  - *Current*: Tests are validated via runtime registry loops.
-  - *Target*: Compile-time or CI assertion ensuring that colocated test suites exist for every registered rule, preventing rules from being added without corresponding snapshot and unit test coverage.
+- **Migrate Remaining Legacy Rule Tests to `rule_test!` (`src/test_utils.rs`)**:
+  - *Current*: `rule_test!` declarative macro is implemented in `src/test_utils.rs` (enforcing language completeness across `supported_languages()` and mandatory AST span slice matching), and `test_migrated_rule_files_use_rule_test` in `src/rules.rs` blocks `assert_code_rule_snapshot` in migrated/new rules. `prefer_dedent_for_multiline_strings.rs` is migrated as the reference implementation.
+  - *Target*: Migrate the remaining 18 rule files listed in `UNMIGRATED_RULE_FILES` (`src/rules.rs`) to `rule_test!`, shrinking the allowlist to zero and deleting `assert_code_rule_snapshot` once all unit tests are migrated.
 - **Test Fixture Multiline String Standardization (`indoc!`)**:
-  - *Current*: Some rule tests use raw string literals (`r"..."`) with unindented blocks or leading newlines, while others use `indoc::indoc!`.
-  - *Target*: Standardize all test source code snippets on `indoc::indoc! {r"..."}` to prevent leading newline line-number offset errors and ensure consistent indentation and formatting across test fixtures.
-- **Decouple Rule Detection Tests from Static Template Prose (`test_utils.rs`)**:
-  - *Context & Problem*: `format_diagnostics_for_test` currently formats every violation as `[rule-name] Line X, Col Y: <full summary>`, and many rule tests pack 5–10 scenarios into a single 40-line source fixture asserted via `insta::assert_snapshot!`. This creates two problems: (1) editing static English prose in `TEMPLATE.summary` breaks every snapshot line even when zero AST detection logic changed, and (2) adding a test case near the top of a multi-scenario fixture shifts all subsequent `Line X` numbers.
-  - *Target*: Prefer focused `#[rstest]` parameterized cases (one construct per case) that assert behavioral outcomes (violation count, matched snippet, or dynamic `{placeholder}` values) rather than repeating static `[rule-name]` and `TEMPLATE.summary` strings across snapshots.
+  - *Current*: `prefer-dedent-for-multiline-strings` is enforced across the repository (`test_self_dogfooding_code_lint`), ensuring multiline strings in Rust and Python use `indoc::indoc!` / `inspect.cleandoc`.
+  - *Target*: As legacy `insta::assert_snapshot!` blocks in `UNMIGRATED_RULE_FILES` are converted to `rule_test!`, replace remaining inline `@"..."` snapshot blocks with `indoc::indoc!` test cases.
 
 ---
 

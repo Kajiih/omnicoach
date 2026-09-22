@@ -1,6 +1,6 @@
 //! End-to-end command-line interface integration tests.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use assert_cmd::Command;
 use indoc::indoc;

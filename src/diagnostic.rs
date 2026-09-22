@@ -541,30 +541,30 @@ mod tests {
     fn test_source_location_from_node() {
         let source = "fn main() {\n    let value = 42;\n}\n";
         let grep = ast_grep_core::AstGrep::new(source, SupportLang::Rust);
-        let let_node = grep.root().find("let $VAR = $VAL");
-        assert!(let_node.is_some());
-        if let Some(matched) = let_node {
-            let loc = SourceLocation::from_node("src/main.rs", &matched);
-            assert_eq!(
-                loc,
-                SourceLocation {
-                    context: LocationContext::File(PathBuf::from("src/main.rs")),
-                    span: SourceSpan::new(16, 31),
-                    line: 2,
-                    column: 5,
-                }
-            );
-            assert_eq!(loc.format_header(), "src/main.rs:2:5");
-            assert_eq!(
-                serde_json::to_value(&loc).ok(),
-                Some(serde_json::json!({
-                    "context": "src/main.rs",
-                    "span": { "start": 16, "end": 31 },
-                    "line": 2,
-                    "column": 5,
-                }))
-            );
-        }
+        let matched = grep
+            .root()
+            .find("let $VAR = $VAL")
+            .expect("let statement node should match pattern");
+        let loc = SourceLocation::from_node("src/main.rs", &matched);
+        assert_eq!(
+            loc,
+            SourceLocation {
+                context: LocationContext::File(PathBuf::from("src/main.rs")),
+                span: SourceSpan::new(16, 31),
+                line: 2,
+                column: 5,
+            }
+        );
+        assert_eq!(loc.format_header(), "src/main.rs:2:5");
+        assert_eq!(
+            serde_json::to_value(&loc).ok(),
+            Some(serde_json::json!({
+                "context": "src/main.rs",
+                "span": { "start": 16, "end": 31 },
+                "line": 2,
+                "column": 5,
+            }))
+        );
     }
 
     #[test]

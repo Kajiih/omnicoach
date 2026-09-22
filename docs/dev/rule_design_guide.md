@@ -18,9 +18,9 @@ A lint rule is not a broad category (e.g. avoid rules like `async-hygiene` or `t
 A diagnostic that only says "X is banned" causes frustration. Developers need to understand the harm and the idiomatic path forward.
 
 Every rule diagnostic must answer three questions:
-1. **What**: The specific construct flagged in the user's code.
-2. **Why (Rationale)**: The tangible harm (flakiness, hidden exceptions, cognitive overhead, data races). Never cite "team convention" or "linter policy" as the rationale.
-3. **How (Suggestion)**: The idiomatic alternative. Always provide a constructive replacement pattern (e.g., replace `logging.error` with `logging.exception`; replace `sleep` with deterministic event synchronization).
+1. **What (`summary`)**: State the defect concisely (e.g., `"Multiline string literal is not wrapped in a dedent helper."`), rather than merely restating the syntax or naming the rule.
+2. **Why (`rationale`)**: Explain the tangible failure modes (flakiness, hidden exceptions, corrupted runtime values, broken visual hierarchy). Never cite "team convention" or "linter policy" as the rationale.
+3. **How (`suggestion`)**: Point to a **single canonical pit-of-success solution** per language so a developer or AI agent can fix the violation autonomously without guesswork (e.g., recommend `inspect.cleandoc(...)` in Python rather than listing multiple competing helpers with different edge cases).
 
 ---
 
@@ -45,3 +45,20 @@ Static rules should establish sane defaults while respecting domain vocabulary.
 
 * **Allowlists & Denylists**: Name-checking rules (abbreviations, type suffixes) must support extension and exemption. Certain terms may be primitive keywords in one language or valid domain acronyms in a specific codebase (e.g., `str` is a primitive in Rust, not an abbreviation).
 * **Thresholds**: Numeric bounds (e.g., maximum assertions per test) must be configurable so teams can adjust the strictness without disabling the rule entirely.
+
+---
+
+## 6. Rule Testing Standards (`rule_test!`)
+All rule unit tests in `src/code_lint/rules/*.rs` must use `crate::rule_test!`.
+
+* **Never Snapshot Static Prose in Unit Tests**: `insta::assert_snapshot!` and `assert_code_rule_snapshot` are reserved for end-to-end CLI output tests (`tests/cli.rs`). Unit tests must never assert on rendered static `TEMPLATE` text (`summary`, `rationale`, `suggestion`), as `src/rules.rs` validates template integrity globally.
+* **Declarative Suites with `rule_test!`**: Every rule file invokes `#[cfg(test)] crate::rule_test!(RuleName, { Language => { pass: [...], fail: [...] } })` at the bottom of the file. Bespoke `#[test]` or `#[rstest]` functions are strictly forbidden in rule files and enforced by CI.
+* **Language Completeness**: The generated `language_completeness` test verifies at test execution time that every `SupportLang` declared in `rule.supported_languages()` is covered in `rule_test!`.
+* **Mandatory AST Span Verification**:
+  * Omit `=> [...]` when the entire test snippet is the flagged AST node: `case_name => "typing.cast(int, x)"`.
+  * Add `=> [r#"..."#]` when the flagged construct is an inner AST slice inside setup syntax: `case_name => r#"fn build() { let bad = "..."; }"# => [r#""...""#]`.
+  * Leading block indentation is normalized automatically across lines `2..N`, so expected inner snippets can always be written with clean `indoc!`-dedented multiline strings.
+* **Minimum Required Cases**:
+  1. **Core Antipattern (`fail`)**: The primary construct the rule flags.
+  2. **Canonical Fix & Syntactic Exemptions (`pass`)**: The recommended pit-of-success replacement (e.g. `inspect.cleandoc`, `indoc::indoc!`, docstrings) to prove the suggested fix passes the rule.
+  3. **Do Not Re-Test Framework Config Plumbing**: `FilterListDefaults` and `ThresholdDefaults` resolution are tested centrally in `src/core.rs`. Individual rule tests must not re-test framework configuration parsing.

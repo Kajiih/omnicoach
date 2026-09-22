@@ -26,6 +26,8 @@ const DEFAULT_ALLOWED_WRAPPERS: FilterListDefaults = FilterListDefaults {
                 "indoc::printdoc",
                 "eprintdoc",
                 "indoc::eprintdoc",
+                "rule_test",
+                "crate::rule_test",
             ],
         ),
     ],
@@ -101,202 +103,136 @@ impl CodeRule for PreferDedentForMultilineStrings {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::Config;
-    use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
-    use rstest::rstest;
-
-    #[rstest]
-    #[case::module_docstring_exempt(
-        indoc::indoc! {r#"
-            """Module docstring
-            spanning multiple lines."""
-            x = 1
-        "#},
-        false
-    )]
-    #[case::function_docstring_exempt(
-        indoc::indoc! {r#"
-            def render():
-                """Function docstring
-                spanning multiple lines."""
-                return 1
-        "#},
-        false
-    )]
-    #[case::global_raw_multiline_flagged(
-        indoc::indoc! {r#"
-            GLOBAL_BAD = """
-                select *
-                from users
-            """
-        "#},
-        true
-    )]
-    #[case::local_raw_multiline_flagged(
-        indoc::indoc! {r#"
-            def render():
-                bad_local = """
-                    line 1
-                    line 2
-                """
-                return bad_local
-        "#},
-        true
-    )]
-    #[case::textwrap_dedent_flagged_by_default(
-        indoc::indoc! {r#"
-            import textwrap
-            x = textwrap.dedent("""
-                line 1
-                line 2
-            """).strip()
-        "#},
-        true
-    )]
-    #[case::inspect_cleandoc_allowed(
-        indoc::indoc! {r#"
-            import inspect
-            x = inspect.cleandoc("""
-                line 1
-                line 2
-            """)
-        "#},
-        false
-    )]
-    #[case::implicit_adjacent_concat_allowed(
-        indoc::indoc! {r#"
-            x = (
-                "line 1\n"
-                "line 2\n"
-            )
-        "#},
-        false
-    )]
-    #[case::backslash_continuation_allowed(
-        indoc::indoc! {r#"
-            x = "hello \
-                world"
-        "#},
-        false
-    )]
-    #[case::fstring_multiline_interpolation_allowed(
-        indoc::indoc! {r#"
-            x = f"value: {max(
-                1,
-                2,
-            )}"
-        "#},
-        false
-    )]
-    fn test_python_multiline_strings(#[case] source: &str, #[case] expect_flagged: bool) {
-        let snapshot =
-            assert_code_rule_snapshot(&PreferDedentForMultilineStrings, source, "service.py");
-        assert_eq!(
-            !snapshot.is_empty(),
-            expect_flagged,
-            "unexpected result: {snapshot}"
-        );
+crate::rule_test!(
+    PreferDedentForMultilineStrings,
+    {
+        Python => {
+            pass: [
+                module_docstring_exempt => r#"
+                    """Module docstring
+                    spanning multiple lines."""
+                    x = 1
+                "#,
+                function_docstring_exempt => r#"
+                    def render():
+                        """Function docstring
+                        spanning multiple lines."""
+                        return 1
+                "#,
+                inspect_cleandoc_allowed => r#"
+                    import inspect
+                    x = inspect.cleandoc("""
+                        line 1
+                        line 2
+                    """)
+                "#,
+                implicit_adjacent_concat_allowed => r#"
+                    x = (
+                        "line 1\n"
+                        "line 2\n"
+                    )
+                "#,
+                backslash_continuation_allowed => r#"
+                    x = "hello \
+                        world"
+                "#,
+                fstring_multiline_interpolation_allowed => r#"
+                    x = f"value: {max(
+                        1,
+                        2,
+                    )}"
+                "#,
+            ],
+            fail: [
+                global_un_dedented_multiline => r#"
+                    GLOBAL_BAD = """
+                        select *
+                        from users
+                    """
+                "# => [r#"
+                    """
+                        select *
+                        from users
+                    """
+                "#],
+                local_un_dedented_multiline => r#"
+                    def render():
+                        bad_local = """
+                            line 1
+                            line 2
+                        """
+                        return bad_local
+                "# => [r#"
+                    """
+                        line 1
+                        line 2
+                    """
+                "#],
+                textwrap_dedent_flagged_by_default => r#"
+                    import textwrap
+                    x = textwrap.dedent("""
+                        line 1
+                        line 2
+                    """).strip()
+                "# => [r#"
+                    """
+                        line 1
+                        line 2
+                    """
+                "#],
+            ],
+        },
+        Rust => {
+            pass: [
+                indoc_macro_allowed => r#"
+                    fn build() {
+                        let good = indoc::indoc! {r"
+                            alpha
+                            beta
+                        "};
+                    }
+                "#,
+                backslash_continuation_allowed => r#"
+                    fn build() {
+                        let good = "hello \
+                            world";
+                    }
+                "#,
+                insta_inline_snapshot_exempt => r#"
+                    fn test_snap() {
+                        insta::assert_snapshot!(val, @"
+                            alpha
+                            beta
+                        ");
+                    }
+                "#,
+            ],
+            fail: [
+                const_multiline_flagged => r#"
+                    const BAD_SQL: &str = "
+                        SELECT id
+                        FROM accounts
+                    ";
+                "# => [r#"
+                    "
+                        SELECT id
+                        FROM accounts
+                    "
+                "#],
+                local_raw_multiline_flagged => r#"
+                    fn build() {
+                        let bad_raw = r"
+                            alpha
+                            beta
+                        ";
+                    }
+                "# => [r#"
+                    r"
+                        alpha
+                        beta
+                    "
+                "#],
+            ],
+        },
     }
-
-    #[rstest]
-    #[case::const_multiline_flagged(
-        indoc::indoc! {r#"
-            const BAD_SQL: &str = "
-                SELECT id
-                FROM accounts
-            ";
-        "#},
-        true
-    )]
-    #[case::local_raw_multiline_flagged(
-        indoc::indoc! {r#"
-            fn build() {
-                let bad_raw = r"
-                    alpha
-                    beta
-                ";
-            }
-        "#},
-        true
-    )]
-    #[case::indoc_macro_allowed(
-        indoc::indoc! {r#"
-            fn build() {
-                let good = indoc::indoc! {r"
-                    alpha
-                    beta
-                "};
-            }
-        "#},
-        false
-    )]
-    #[case::backslash_continuation_allowed(
-        indoc::indoc! {r#"
-            fn build() {
-                let good = "hello \
-                    world";
-            }
-        "#},
-        false
-    )]
-    #[case::insta_inline_snapshot_exempt(
-        indoc::indoc! {r#"
-            fn test_snap() {
-                insta::assert_snapshot!(val, @"
-                    alpha
-                    beta
-                ");
-            }
-        "#},
-        false
-    )]
-    fn test_rust_multiline_strings(#[case] source: &str, #[case] expect_flagged: bool) {
-        let snapshot =
-            assert_code_rule_snapshot(&PreferDedentForMultilineStrings, source, "lib.rs");
-        assert_eq!(
-            !snapshot.is_empty(),
-            expect_flagged,
-            "unexpected result: {snapshot}"
-        );
-    }
-
-    #[rstest]
-    #[case::custom_extend_allowed(
-        indoc::indoc! {r#"
-            [rules.prefer-dedent-for-multiline-strings]
-            extend_allowed = ["custom_dedent"]
-        "#},
-        indoc::indoc! {r#"
-            x = custom_dedent("""
-                hello
-                world
-            """)
-        "#},
-        true
-    )]
-    #[case::custom_banned_revokes_default(
-        indoc::indoc! {r#"
-            [rules.prefer-dedent-for-multiline-strings]
-            banned = ["cleandoc", "inspect.cleandoc"]
-        "#},
-        indoc::indoc! {r#"
-            x = inspect.cleandoc("""
-                hello
-                world
-            """)
-        "#},
-        false
-    )]
-    fn test_config_allowlist_customization(
-        #[case] config_toml: &str,
-        #[case] source: &str,
-        #[case] expect_clean: bool,
-    ) {
-        let rule = PreferDedentForMultilineStrings;
-        let config: Config = toml::from_str(config_toml).unwrap();
-        let snapshot = assert_code_rule_snapshot_with_config(&rule, source, "service.py", &config);
-        assert_eq!(snapshot.is_empty(), expect_clean);
-    }
-}
+);
