@@ -1,2 +1,7 @@
 # Coexists as v2 (strum, rstest) and v3 (serde, clap, thiserror) during ecosystem migration
 allowed-duplicate-crates = ["syn"]
+
+# In tests, panicking is the expected failure mechanism.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

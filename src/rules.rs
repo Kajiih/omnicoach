@@ -269,6 +269,7 @@ mod tests {
         let rule_sources = std::fs::read_dir(rules_dir)
             .expect("rule directory must be readable")
             .map(|entry| entry.expect("rule directory entry must be readable").path())
+            .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("rs"))
             .chain(std::iter::once(std::path::PathBuf::from(suppression)));
 
         for path in rule_sources {
@@ -278,6 +279,96 @@ mod tests {
                 "{} sorts its output; diagnostic ordering belongs to the reporting layer",
                 path.display()
             );
+        }
+    }
+
+    const UNMIGRATED_RULE_FILES: &[&str] = &[
+        "banned_abbreviations.rs",
+        "enforce_frozen_slots_dataclass.rs",
+        "flat_scope_enforced.rs",
+        "max_test_assertions.rs",
+        "no_assertion_packing.rs",
+        "no_dynamic_attribute_access.rs",
+        "no_env_in_functions.rs",
+        "no_hungarian_notation.rs",
+        "no_identical_positional_types.rs",
+        "no_logging_error_in_except.rs",
+        "no_mock_assertions.rs",
+        "no_mocks_in_tests.rs",
+        "no_sleep_in_tests.rs",
+        "no_typing_cast.rs",
+        "no_uncommented_suppress.rs",
+        "no_unstructured_task_creation.rs",
+        "prefer_timedelta_over_seconds.rs",
+        "single_letter_variable_name.rs",
+    ];
+
+    /// Returns the reason why `source` violates the [`crate::rule_test!`] convention, if any.
+    ///
+    /// `#[test]`/`#[rstest]` attributes are matched on exact trimmed lines before the macro
+    /// invocation, since rule sources legitimately embed those tokens inside violation messages
+    /// and inside `rule_test!` fixture snippets.
+    fn rule_test_convention_violation(source: &str) -> Option<&'static str> {
+        if !source.contains("rule_test!(") {
+            return Some("must use crate::rule_test!(...) for its test suite");
+        }
+        if source.contains("mod tests") {
+            return Some(
+                "must not define a bespoke mod tests block; rule_test!(...) generates it automatically",
+            );
+        }
+        if source.contains("assert_code_rule_snapshot") {
+            return Some("must not use assert_code_rule_snapshot; use rule_test!(...) instead");
+        }
+        let pre_macro = source.split("rule_test!(").next().unwrap_or(source);
+        if pre_macro.lines().any(|line| {
+            let trimmed = line.trim();
+            trimmed == "#[test]" || trimmed == "#[rstest]" || trimmed.starts_with("#[rstest(")
+        }) {
+            return Some("must not define bespoke #[test] functions outside rule_test!(...)");
+        }
+        None
+    }
+
+    /// Ensures that files in `UNMIGRATED_RULE_FILES` are removed as soon as they are migrated.
+    #[test]
+    fn test_unmigrated_rule_files_status() {
+        let rules_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/code_lint/rules");
+
+        for filename in UNMIGRATED_RULE_FILES {
+            let path = std::path::Path::new(rules_dir).join(filename);
+            let source = std::fs::read_to_string(&path).expect("rule source must be readable");
+            assert!(
+                rule_test_convention_violation(&source).is_some(),
+                "{filename} has been migrated to rule_test!; remove it from UNMIGRATED_RULE_FILES in src/rules.rs"
+            );
+        }
+    }
+
+    /// Enforces that all migrated rule test modules use [`crate::rule_test!`] and never define
+    /// bespoke `#[test]`, `#[rstest]`, or `assert_code_rule_snapshot` tests.
+    #[test]
+    fn test_migrated_rule_files_use_rule_test() {
+        let rules_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/code_lint/rules");
+        let entries = std::fs::read_dir(rules_dir).expect("rule directory must be readable");
+
+        for entry in entries {
+            let path = entry.expect("rule directory entry must be readable").path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+                continue;
+            }
+            let filename = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("valid filename");
+            if UNMIGRATED_RULE_FILES.contains(&filename) {
+                continue;
+            }
+
+            let source = std::fs::read_to_string(&path).expect("rule source must be readable");
+            if let Some(reason) = rule_test_convention_violation(&source) {
+                panic!("{filename} {reason}");
+            }
         }
     }
 }
