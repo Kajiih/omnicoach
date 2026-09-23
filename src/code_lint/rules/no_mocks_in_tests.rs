@@ -71,9 +71,9 @@ const DEFAULT_BANNED_MOCKS: FilterListDefaults = FilterListDefaults {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Dynamic mock or monkeypatch `{callee}(...)` is prohibited in tests.",
-    rationale: "Dynamic mocks and monkeypatching couple tests to internal implementation details, mask interface design flaws, and break during refactoring.",
-    suggestion: "Replace `{callee}` with a state-based in-memory Fake (e.g. `FakeRepository`, `FakeHttpClient`) that explicitly implements the target Protocol or interface.",
+    summary: "Dynamic mock or monkeypatch call `{callee}(...)` in test.",
+    rationale: "Dynamic mocks and monkeypatching (`unittest.mock`, `MagicMock`, `patch`, `monkeypatch`) couple tests to internal call wiring and continue passing even when real dependency signatures or contracts change.",
+    suggestion: "Inject a lightweight in-memory Fake (e.g., `FakeRepository`, `FakeHttpClient`) implementing the target `Protocol`.",
 };
 
 /// Rule that bans dynamic mocks and monkeypatching in test files.
@@ -113,31 +113,53 @@ impl CodeRule for NoMocksInTests {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::assert_code_rule_snapshot;
+crate::rule_test!(
+    NoMocksInTests,
+    {
+        Python => {
+            pass: [
+                state_based_fake_repository => r#"
+                    class FakeUserRepository:
+                        def __init__(self):
+                            self.users = {}
 
-    #[test]
-    fn test_python_mock_detection_and_http_patch_exemption() {
-        let rule = NoMocksInTests;
+                        def save(self, user):
+                            self.users[user.id] = user
 
-        let source = indoc::indoc! {r#"
-            from unittest.mock import MagicMock, patch
+                    def test_register_user():
+                        repo = FakeUserRepository()
+                        register_user(repo, "alice@example.com")
+                        assert "alice@example.com" in repo.users
+                "#,
+                http_client_patch_method => r#"
+                    def test_http_patch_request(http_client):
+                        response = http_client.patch("/users/1", json={"active": True})
+                        assert response.status_code == 200
+                "#,
+            ],
+            fail: [
+                magic_mock_instantiation => r#"
+                    from unittest.mock import MagicMock
 
-            @patch("service.auth.verify_token")
-            def test_user_update(mocker, monkeypatch, api_client):
-                gateway = MagicMock()
-                mocker.patch.object(gateway, "charge")
-                monkeypatch.setattr(gateway, "timeout", 5)
-                # Real HTTP PATCH calls must NOT be flagged:
-                response = api_client.patch("/v1/users/42", json={"name": "Alice"})
-                httpx.patch("https://example.com/api")
-        "#};
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test_auth.py"), @"
-        [no-mocks-in-tests] Line 3, Col 2: Dynamic mock or monkeypatch `patch(...)` is prohibited in tests.
-        [no-mocks-in-tests] Line 5, Col 15: Dynamic mock or monkeypatch `MagicMock(...)` is prohibited in tests.
-        [no-mocks-in-tests] Line 6, Col 5: Dynamic mock or monkeypatch `mocker.patch.object(...)` is prohibited in tests.
-        [no-mocks-in-tests] Line 7, Col 5: Dynamic mock or monkeypatch `monkeypatch.setattr(...)` is prohibited in tests.
-        ");
+                    def test_service():
+                        client = MagicMock()
+                "# => ["MagicMock()"],
+                unittest_mock_patch_context => r#"
+                    from unittest.mock import patch
+
+                    def test_fetch():
+                        with patch("app.service.fetch_data") as mock_fetch:
+                            pass
+                "# => [r#"patch("app.service.fetch_data")"#],
+                pytest_mocker_patch_object => r#"
+                    def test_notify(mocker):
+                        mocker.patch.object(Notifier, "send")
+                "# => [r#"mocker.patch.object(Notifier, "send")"#],
+                pytest_monkeypatch_setattr => r#"
+                    def test_env_override(monkeypatch):
+                        monkeypatch.setattr(settings, "DEBUG", True)
+                "# => [r#"monkeypatch.setattr(settings, "DEBUG", True)"#],
+            ],
+        },
     }
-}
+);

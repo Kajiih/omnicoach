@@ -276,7 +276,7 @@ fn test_code_lint_diff_complex_revset_jj() {
         Some(repo_path),
         &[repo_path],
     );
-    assert!(output.contains("Nested function definition `inner`"));
+    assert!(output.contains("Function `inner` is defined inside another function."));
 }
 
 #[test]
@@ -298,7 +298,7 @@ fn test_code_lint_diff_range_revset_jj() {
         Some(repo_path),
         &[repo_path],
     );
-    assert!(output.contains("Nested function definition `inner`"));
+    assert!(output.contains("Function `inner` is defined inside another function."));
 }
 
 #[test]

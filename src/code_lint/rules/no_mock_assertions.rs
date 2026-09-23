@@ -31,9 +31,9 @@ const DEFAULT_BANNED_METHODS: FilterListDefaults = FilterListDefaults {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Mock interaction assertion `{callee}(...)` is prohibited in tests.",
-    rationale: "Asserting that a mock method was invoked with specific arguments tests internal implementation details rather than observable outputs and state transitions.",
-    suggestion: "Assert on the returned value, state changes on an in-memory Fake, or observable domain outcomes instead of `{callee}(...)`.",
+    summary: "Mock interaction assertion `{callee}(...)` in test.",
+    rationale: "Asserting on mock call counts or argument lists (`assert_called*`) couples tests to internal implementation wiring rather than observable behavior.",
+    suggestion: "Assert on returned values or observable state transitions on an in-memory Fake.",
 };
 
 /// Rule that bans mock interaction assertions in test files.
@@ -73,25 +73,55 @@ impl CodeRule for NoMockAssertions {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::assert_code_rule_snapshot;
-
-    #[test]
-    fn test_python_mock_assertions() {
-        let rule = NoMockAssertions;
-
-        let source = indoc::indoc! {r"
-            def test_payment_flow(gateway, fake_repo):
-                gateway.charge.assert_called_once_with(100)
-                gateway.refund.assert_not_called()
-                gateway.async_send.assert_awaited_once()
-                assert fake_repo.balance == 100
-        "};
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test_pay.py"), @"
-        [no-mock-assertions] Line 2, Col 5: Mock interaction assertion `gateway.charge.assert_called_once_with(...)` is prohibited in tests.
-        [no-mock-assertions] Line 3, Col 5: Mock interaction assertion `gateway.refund.assert_not_called(...)` is prohibited in tests.
-        [no-mock-assertions] Line 4, Col 5: Mock interaction assertion `gateway.async_send.assert_awaited_once(...)` is prohibited in tests.
-        ");
+crate::rule_test!(
+    NoMockAssertions,
+    {
+        Python => {
+            pass: [
+                state_assertion_on_fake => r#"
+                    def test_payment_flow(fake_gateway, fake_repo):
+                        fake_gateway.charge(100)
+                        assert fake_repo.balance == 100
+                "#,
+                return_value_assertion => r#"
+                    def test_calculation():
+                        result = compute_total([10, 20])
+                        assert result == 30
+                "#,
+                unrelated_method_call => r#"
+                    def test_custom_assertion(verifier):
+                        verifier.assert_valid_state()
+                "#,
+            ],
+            fail: [
+                assert_called_once_with => r#"
+                    def test_charge(gateway):
+                        gateway.charge.assert_called_once_with(100)
+                "# => [r#"gateway.charge.assert_called_once_with(100)"#],
+                assert_not_called => r#"
+                    def test_refund(gateway):
+                        gateway.refund.assert_not_called()
+                "# => [r#"gateway.refund.assert_not_called()"#],
+                assert_awaited_once => r#"
+                    async def test_async_send(gateway):
+                        gateway.async_send.assert_awaited_once()
+                "# => [r#"gateway.async_send.assert_awaited_once()"#],
+                assert_has_calls => r#"
+                    def test_calls(mock_obj):
+                        mock_obj.assert_has_calls([])
+                "# => [r#"mock_obj.assert_has_calls([])"#],
+                multiple_mock_assertions => r#"
+                    def test_payment_flow(gateway, fake_repo):
+                        gateway.charge.assert_called_once_with(100)
+                        gateway.refund.assert_not_called()
+                        gateway.async_send.assert_awaited_once()
+                        assert fake_repo.balance == 100
+                "# => [
+                    r#"gateway.charge.assert_called_once_with(100)"#,
+                    r#"gateway.refund.assert_not_called()"#,
+                    r#"gateway.async_send.assert_awaited_once()"#,
+                ],
+            ],
+        },
     }
-}
+);

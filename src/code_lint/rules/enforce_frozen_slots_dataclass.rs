@@ -10,9 +10,9 @@ use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Dataclass `{class}` should be defined with `{missing}` to ensure immutability and memory efficiency.",
-    rationale: "Default Python dataclasses are mutable and retain dynamic `__dict__` overhead. Defining `frozen=True` enforces immutability and thread-safety, while `slots=True` eliminates per-instance dictionary memory overhead and speeds up attribute access.",
-    suggestion: "Add `{missing}` to the `@dataclass(...)` decorator. If mutability or dynamic attributes are strictly required, explicitly specify `frozen=False` or `slots=False` to document the design choice.",
+    summary: "Dataclass `{class}` is defined without `{missing}`.",
+    rationale: "Default Python dataclasses are mutable and backed by a dynamic `__dict__`, allowing accidental state mutation and incurring unnecessary per-instance memory overhead.",
+    suggestion: "Add `{missing}` to the `@dataclass` decorator (or explicitly pass `frozen=False` / `slots=False` when mutability or dynamic attributes are required).",
 };
 
 /// Rule that enforces `@dataclass(frozen=True, slots=True)` in Python files.
@@ -86,58 +86,98 @@ impl CodeRule for EnforceFrozenSlotsDataclass {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::assert_code_rule_snapshot;
+crate::rule_test!(
+    EnforceFrozenSlotsDataclass,
+    {
+        Python => {
+            pass: [
+                both_frozen_and_slots => r#"
+                    from dataclasses import dataclass
 
-    #[test]
-    fn test_enforce_frozen_slots_dataclass_detection() {
-        let rule = EnforceFrozenSlotsDataclass;
+                    @dataclass(frozen=True, slots=True)
+                    class ValidModel:
+                        id: str
+                "#,
+                module_qualified_both_specified => r#"
+                    import dataclasses
 
-        let source = indoc::indoc! {r"
-            from dataclasses import dataclass
-            import dataclasses
+                    @dataclasses.dataclass(frozen=True, slots=True)
+                    class ValidQualifiedModel:
+                        id: str
+                "#,
+                explicit_mutable_opt_out => r#"
+                    from dataclasses import dataclass
 
-            # Flagged: bare @dataclass missing both
-            @dataclass
-            class BareModel:
-                id: str
+                    @dataclass(frozen=False, slots=True)
+                    class ExplicitMutable:
+                        id: str
+                "#,
+                explicit_no_slots_opt_out => r#"
+                    from dataclasses import dataclass
 
-            # Flagged: only frozen=True provided, missing slots=True
-            @dataclass(frozen=True)
-            class MissingSlots:
-                id: str
+                    @dataclass(frozen=True, slots=False)
+                    class ExplicitNoSlots:
+                        id: str
+                "#,
+                explicit_both_opt_out => r#"
+                    from dataclasses import dataclass
 
-            # Flagged: only slots=True provided, missing frozen=True
-            @dataclasses.dataclass(slots=True)
-            class MissingFrozen:
-                id: str
+                    @dataclass(frozen=False, slots=False)
+                    class ExplicitBoth:
+                        id: str
+                "#,
+                regular_non_dataclass_class => r#"
+                    class RegularClass:
+                        def __init__(self, x: int) -> None:
+                            self.x = x
+                "#,
+                unrelated_decorator => r#"
+                    @other_decorator
+                    class AnotherClass:
+                        pass
+                "#,
+            ],
+            fail: [
+                bare_dataclass_missing_both => r#"
+                    from dataclasses import dataclass
 
-            # OK: both frozen=True and slots=True specified
-            @dataclass(frozen=True, slots=True)
-            class ValidModel:
-                id: str
+                    @dataclass
+                    class BareModel:
+                        id: str
+                "# => ["BareModel"],
+                module_qualified_bare_dataclass => r#"
+                    import dataclasses
 
-            # OK: user explicitly specified frozen=False (intentional opt-out)
-            @dataclass(frozen=False, slots=True)
-            class ExplicitMutable:
-                id: str
+                    @dataclasses.dataclass
+                    class QualifiedBareModel:
+                        id: str
+                "# => ["QualifiedBareModel"],
+                dataclass_missing_slots => r#"
+                    from dataclasses import dataclass
 
-            # OK: user explicitly specified slots=False (intentional opt-out)
-            @dataclass(frozen=True, slots=False)
-            class ExplicitNoSlots:
-                id: str
+                    @dataclass(frozen=True)
+                    class MissingSlots:
+                        id: str
+                "# => ["MissingSlots"],
+                dataclass_missing_frozen => r#"
+                    import dataclasses
 
-            # OK: standard non-dataclass class
-            class RegularClass:
-                def __init__(self, x: int) -> None:
-                    self.x = x
-        "};
+                    @dataclasses.dataclass(slots=True)
+                    class MissingFrozen:
+                        id: str
+                "# => ["MissingFrozen"],
+                multiple_dataclasses_flagged => r#"
+                    from dataclasses import dataclass
 
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "src/models.py"), @"
-        [enforce-frozen-slots-dataclass] Line 6, Col 7: Dataclass `BareModel` should be defined with `frozen=True and slots=True` to ensure immutability and memory efficiency.
-        [enforce-frozen-slots-dataclass] Line 11, Col 7: Dataclass `MissingSlots` should be defined with `slots=True` to ensure immutability and memory efficiency.
-        [enforce-frozen-slots-dataclass] Line 16, Col 7: Dataclass `MissingFrozen` should be defined with `frozen=True` to ensure immutability and memory efficiency.
-        ");
+                    @dataclass
+                    class FirstModel:
+                        a: int
+
+                    @dataclass(frozen=True)
+                    class SecondModel:
+                        b: str
+                "# => ["FirstModel", "SecondModel"],
+            ],
+        },
     }
-}
+);

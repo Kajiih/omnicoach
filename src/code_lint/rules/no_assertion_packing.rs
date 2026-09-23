@@ -14,11 +14,11 @@ const TEMPLATE: ViolationTemplate = violation_template! {
         Python => "{construct} in `assert` statement.",
         Rust => "{construct} in `{macro_name}!` assertion.",
     },
-    rationale: "Packing multiple conditions or synthesized boolean tuples into a single assertion obscures which check failed, yields unhelpful diffs, and circumvents assertion limits.",
+    rationale: "Packing multiple independent checks into a single assertion obscures which condition failed and produces unhelpful failure diffs.",
     suggestion: {
-        base: "Split into separate atomic assertions or assert directly on domain objects/collections.",
-        Python => "Split into separate atomic assertions (e.g. `assert a\\nassert b`) or assert directly on the domain model (`assert actual == expected`).",
-        Rust => "Split into separate atomic assertions (`assert!(...); assert!(...);`) or assert directly on the domain model (`assert_eq!(actual, expected)`).",
+        base: "Split into separate atomic assertions or compare a single domain struct/object directly.",
+        Python => "Split into separate `assert` statements or compare a single domain object directly.",
+        Rust => "Split into separate `assert!` / `assert_eq!` macros or compare a single domain struct directly.",
     },
 };
 
@@ -142,80 +142,116 @@ impl CodeRule for NoAssertionPacking {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::assert_code_rule_snapshot;
-    use indoc::indoc;
-
-    #[test]
-    fn test_rust_assertion_packing_flagged() {
-        let source = indoc! {r"
-            fn assert_helper_packed(ready: bool, connected: bool) {
-                assert!(ready && connected);
-            }
-
-            #[test]
-            fn test_packed_assertions() {
-                assert!(ready && connected);
-                assert_eq!((valid, active), (true, true));
-                assert_eq!((status, ready), (false, true));
-                assert_eq!([first, second], [true, true]);
-            }
-
-            #[test]
-            fn test_valid_assertions() {
-                assert!(ready);
-                assert!(connected);
-                assert_eq!(count, 10);
-                assert_eq!(coords, (10, 20));
-                assert_eq!(flag, true);
-                assert!(check_connection(ready && connected));
-                assert_eq!([compute(true), compute(false)], expected);
-            }
-        "};
-
-        insta::assert_snapshot!(
-            assert_code_rule_snapshot(&NoAssertionPacking, source, "tests/test_packing.rs"),
-            @"
-        [no-assertion-packing] Line 2, Col 5: Compound boolean condition (`&&`) in `assert!` assertion.
-        [no-assertion-packing] Line 7, Col 5: Compound boolean condition (`&&`) in `assert!` assertion.
-        [no-assertion-packing] Line 8, Col 5: Boolean tuple/collection equality in `assert_eq!` assertion.
-        [no-assertion-packing] Line 9, Col 5: Boolean tuple/collection equality in `assert_eq!` assertion.
-        [no-assertion-packing] Line 10, Col 5: Boolean tuple/collection equality in `assert_eq!` assertion.
-        "
-        );
+crate::rule_test!(
+    NoAssertionPacking,
+    {
+        Python => {
+            pass: [
+                single_atomic_assertions => r#"
+                    def test_atomic():
+                        assert ready
+                        assert connected
+                        assert count == 10
+                        assert coords == (10, 20)
+                        assert flag == True
+                "#,
+                logical_and_inside_function_call => r#"
+                    def test_nested_call():
+                        assert check_connection(ready and connected)
+                "#,
+                domain_model_equality => r#"
+                    def test_domain_model():
+                        assert actual == expected
+                "#,
+                non_boolean_sequence_equality => r#"
+                    def test_tuple_values():
+                        assert (width, height) == (1920, 1080)
+                        assert [first, second] == [1, 2]
+                "#,
+            ],
+            fail: [
+                compound_and_in_assert => r#"
+                    def test_example():
+                        assert a == 1 and b == 2
+                "# => [r#"assert a == 1 and b == 2"#],
+                boolean_tuple_equality => r#"
+                    def test_example():
+                        assert (valid, active) == (True, True)
+                "# => [r#"assert (valid, active) == (True, True)"#],
+                boolean_tuple_mixed_equality => r#"
+                    def test_example():
+                        assert (status, ready) == (False, True)
+                "# => [r#"assert (status, ready) == (False, True)"#],
+                boolean_list_equality => r#"
+                    def test_example():
+                        assert [first, second] == [True, True]
+                "# => [r#"assert [first, second] == [True, True]"#],
+            ],
+        },
+        Rust => {
+            pass: [
+                single_atomic_assertions => r#"
+                    #[test]
+                    fn test_atomic() {
+                        assert!(ready);
+                        assert!(connected);
+                        assert_eq!(count, 10);
+                        assert_eq!(coords, (10, 20));
+                        assert_eq!(flag, true);
+                    }
+                "#,
+                logical_and_inside_function_call => r#"
+                    #[test]
+                    fn test_nested_call() {
+                        assert!(check_connection(ready && connected));
+                    }
+                "#,
+                domain_model_equality => r#"
+                    #[test]
+                    fn test_domain_model() {
+                        assert_eq!(actual, expected);
+                    }
+                "#,
+                non_boolean_collection_equality => r#"
+                    #[test]
+                    fn test_tuple_values() {
+                        assert_eq!((width, height), (1920, 1080));
+                        assert_eq!([compute(true), compute(false)], expected);
+                    }
+                "#,
+            ],
+            fail: [
+                compound_and_in_assert => r#"
+                    #[test]
+                    fn test_example() {
+                        assert!(a == 1 && b == 2);
+                    }
+                "# => [r#"assert!(a == 1 && b == 2)"#],
+                compound_and_in_debug_assert => r#"
+                    #[test]
+                    fn test_example() {
+                        debug_assert!(ready && connected);
+                    }
+                "# => [r#"debug_assert!(ready && connected)"#],
+                boolean_tuple_equality => r#"
+                    #[test]
+                    fn test_example() {
+                        assert_eq!((valid, active), (true, true));
+                    }
+                "# => [r#"assert_eq!((valid, active), (true, true))"#],
+                boolean_tuple_mixed_equality => r#"
+                    #[test]
+                    fn test_example() {
+                        assert_eq!((status, ready), (false, true));
+                    }
+                "# => [r#"assert_eq!((status, ready), (false, true))"#],
+                boolean_array_equality => r#"
+                    #[test]
+                    fn test_example() {
+                        assert_eq!([first, second], [true, true]);
+                    }
+                "# => [r#"assert_eq!([first, second], [true, true])"#],
+            ],
+        },
     }
-
-    #[test]
-    fn test_python_assertion_packing_flagged() {
-        let source = indoc! {r"
-            def check_helper_packed(ready: bool, connected: bool) -> None:
-                assert ready and connected
-
-            def test_packed():
-                assert ready and connected
-                assert (valid, active) == (True, True)
-                assert (status, ready) == (False, True)
-                assert [first, second] == [True, True]
-
-            def test_valid():
-                assert ready
-                assert connected
-                assert count == 10
-                assert coords == (10, 20)
-                assert flag == True
-                assert check_connection(ready and connected)
-        "};
-
-        insta::assert_snapshot!(
-            assert_code_rule_snapshot(&NoAssertionPacking, source, "tests/test_packing.py"),
-            @"
-        [no-assertion-packing] Line 2, Col 5: Compound boolean condition (`and`) in `assert` statement.
-        [no-assertion-packing] Line 5, Col 5: Compound boolean condition (`and`) in `assert` statement.
-        [no-assertion-packing] Line 6, Col 5: Boolean tuple/collection equality in `assert` statement.
-        [no-assertion-packing] Line 7, Col 5: Boolean tuple/collection equality in `assert` statement.
-        [no-assertion-packing] Line 8, Col 5: Boolean tuple/collection equality in `assert` statement.
-        "
-        );
-    }
-}
+);

@@ -7,7 +7,6 @@ Items here represent design areas and technical directions to evaluate rather th
 ---
 
 ## Random
-- Add [stmt, ext] to banned abrrev
 - Review the names of the rules, of the configuration, etc, to make them totally aligned on what the are, explicit and self explanatory, and coherent together.
 - Also review the violation message, so they correctly explain what is the issue and why it is one rather than just explaining what the code does, and that the suggestion correctly point to correct solutions, so the user (or agent) can fix it autonomously. They should push to a single direction, which is the pit of success, even if it seems pedantic. Use `ruff` documentation as a reference and improve on it.
   - Write a **Violation Message Style Guide** and review all violation messages (`summary`, `rationale`, `suggestion`) so they concisely state the issue (`summary`), explain why it is harmful rather than just restating what the code does (`rationale`), and point to a single canonical "pit of success" solution so a user or agent can fix it autonomously (`suggestion`). Use `ruff` documentation as a reference and improve on it.
@@ -155,18 +154,7 @@ Items here represent design areas and technical directions to evaluate rather th
 
 ---
 
-## 5. Testing & Verification
-
-- **Migrate Remaining Legacy Rule Tests to `rule_test!` (`src/test_utils.rs`)**:
-  - *Current*: `rule_test!` declarative macro is implemented in `src/test_utils.rs` (enforcing language completeness across `supported_languages()` and mandatory AST span slice matching), and `test_migrated_rule_files_use_rule_test` in `src/rules.rs` blocks `assert_code_rule_snapshot` in migrated/new rules. `prefer_dedent_for_multiline_strings.rs` is migrated as the reference implementation.
-  - *Target*: Migrate the remaining 18 rule files listed in `UNMIGRATED_RULE_FILES` (`src/rules.rs`) to `rule_test!`, shrinking the allowlist to zero and deleting `assert_code_rule_snapshot` once all unit tests are migrated.
-- **Test Fixture Multiline String Standardization (`indoc!`)**:
-  - *Current*: `prefer-dedent-for-multiline-strings` is enforced across the repository (`test_self_dogfooding_code_lint`), ensuring multiline strings in Rust and Python use `indoc::indoc!` / `inspect.cleandoc`.
-  - *Target*: As legacy `insta::assert_snapshot!` blocks in `UNMIGRATED_RULE_FILES` are converted to `rule_test!`, replace remaining inline `@"..."` snapshot blocks with `indoc::indoc!` test cases.
-
----
-
-## 6. Tags, Discovery & Documentation
+## 5. Tags, Discovery & Documentation
 
 Prior analysis, candidate designs, and open questions: [docs/dev/tag_system_analysis.md](docs/dev/tag_system_analysis.md). Nothing in that document is decided; it is the starting point for the design work below, not a specification of it.
 

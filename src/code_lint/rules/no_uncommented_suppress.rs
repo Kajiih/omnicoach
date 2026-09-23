@@ -26,9 +26,9 @@ const DEFAULT_ENFORCEMENT: LanguageDefaults<EnforcementMode> = LanguageDefaults 
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Exception suppression must include an explanatory comment.",
-    rationale: "Silently suppressing exceptions without documenting why the failure is benign obscures unexpected bugs and leaves future maintainers confused.",
-    suggestion: "Add a comment directly above or inline with the `suppress(...)` statement explaining why ignoring this exception is safe.",
+    summary: "Exception suppression `suppress(...)` has no explanatory comment.",
+    rationale: "Silently swallowing exceptions without documenting why the failure is benign hides unexpected bugs and leaves maintainers unable to distinguish intentional ignoring from accidental masking.",
+    suggestion: "Add an inline or directly preceding `# comment` explaining why the suppressed exception is safe to ignore.",
 };
 
 /// Rule struct.
@@ -72,78 +72,61 @@ impl CodeRule for NoUncommentedSuppress {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use indoc::indoc;
-    use rstest::rstest;
-
-    #[rstest]
-    #[case::single_line_inline(indoc! {r#"
-        with suppress(FileNotFoundError):  # Safe to ignore if temp file was already deleted
-            os.remove("tmp.txt")
-    "#})]
-    #[case::preceding_comment_block(indoc! {r#"
-        # The background worker cleans up stale lock files,
-        # so ignoring FileNotFoundError is safe here.
-        with suppress(FileNotFoundError):
-            os.remove("lock.txt")
-    "#})]
-    #[case::multiline_parenthesized_with_inline(indoc! {r#"
-        with (
-            open("log.txt") as log,
-            suppress(KeyError),  # Config key is optional in legacy environments
-        ):
-            process(log)
-    "#})]
-    #[case::multiline_parenthesized_with_preceding(indoc! {r"
-        # Optional cleanup of lock file if created
-        with (
-            suppress(FileNotFoundError),
-        ):
-            pass
-    "})]
-    #[case::multiline_header_trailing_comment(indoc! {r"
-        with (
-            open('log.txt'),
-            suppress(FileNotFoundError),
-        ):  # Safe if lock file was already deleted
-            pass
-    "})]
-    #[case::suppress_call_outside_with_ignored(indoc! {r"
-        # Suppress object passed as an argument or assigned
-        mgr = suppress(FileNotFoundError)
-    "})]
-    fn test_valid_suppressions_allowed(#[case] source: &str) {
-        let output =
-            crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
-        assert!(output.is_empty());
+crate::rule_test!(
+    NoUncommentedSuppress,
+    {
+        Python => {
+            pass: [
+                single_line_inline => r#"
+                    with suppress(FileNotFoundError):  # Safe to ignore if temp file was already deleted
+                        os.remove("tmp.txt")
+                "#,
+                preceding_comment_block => r#"
+                    # The background worker cleans up stale lock files,
+                    # so ignoring FileNotFoundError is safe here.
+                    with suppress(FileNotFoundError):
+                        os.remove("lock.txt")
+                "#,
+                multiline_parenthesized_with_inline => r#"
+                    with (
+                        open("log.txt") as log,
+                        suppress(KeyError),  # Config key is optional in legacy environments
+                    ):
+                        process(log)
+                "#,
+                multiline_parenthesized_with_preceding => r#"
+                    # Optional cleanup of lock file if created
+                    with (
+                        suppress(FileNotFoundError),
+                    ):
+                        pass
+                "#,
+                multiline_header_trailing_comment => r#"
+                    with (
+                        open("log.txt"),
+                        suppress(FileNotFoundError),
+                    ):  # Safe if lock file was already deleted
+                        pass
+                "#,
+                suppress_call_outside_with_ignored => r#"
+                    # Suppress object passed as an argument or assigned
+                    mgr = suppress(FileNotFoundError)
+                "#,
+            ],
+            fail: [
+                bare_suppress => r#"
+                    with suppress(FileNotFoundError):
+                        os.remove("tmp.txt")
+                "# => ["suppress(FileNotFoundError)"],
+                contextlib_qualified => r#"
+                    with contextlib.suppress(KeyError):
+                        data = cache["missing"]
+                "# => ["contextlib.suppress(KeyError)"],
+                body_inline_comment_does_not_mask => r#"
+                    with suppress(FileNotFoundError):
+                        os.remove("tmp.txt")  # inline comment inside body
+                "# => ["suppress(FileNotFoundError)"],
+            ],
+        },
     }
-
-    #[rstest]
-    #[case::bare_suppress(
-        indoc! {r#"
-            with suppress(FileNotFoundError):
-                os.remove("tmp.txt")
-        "#},
-        "[no-uncommented-suppress] Line 1, Col 6: Exception suppression must include an explanatory comment."
-    )]
-    #[case::contextlib_qualified(
-        indoc! {r#"
-            with contextlib.suppress(KeyError):
-                data = cache["missing"]
-        "#},
-        "[no-uncommented-suppress] Line 1, Col 6: Exception suppression must include an explanatory comment."
-    )]
-    #[case::body_inline_comment_does_not_mask(
-        indoc! {r#"
-            with suppress(FileNotFoundError):
-                os.remove("tmp.txt")  # inline comment inside body
-        "#},
-        "[no-uncommented-suppress] Line 1, Col 6: Exception suppression must include an explanatory comment."
-    )]
-    fn test_uncommented_suppress_flagged(#[case] source: &str, #[case] expected: &str) {
-        let output =
-            crate::test_utils::assert_code_rule_snapshot(&NoUncommentedSuppress, source, "test.py");
-        assert_eq!(output.trim(), expected);
-    }
-}
+);

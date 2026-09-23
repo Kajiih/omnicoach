@@ -16,9 +16,9 @@ const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Banned use of `logging.error` inside except block.",
-    rationale: "Logging errors inside except blocks using logging.error does not capture exception context automatically, which can hide root causes.",
-    suggestion: "Use `logging.exception` instead of `logging.error` inside except blocks.",
+    summary: "Call to `{call}(...)` inside an `except` block.",
+    rationale: "Logging inside an `except` block without exception context drops the active traceback, obscuring the root cause during debugging.",
+    suggestion: "Replace with `logging.exception(...)` to capture and attach the active exception traceback automatically.",
 };
 
 /// Rule struct.
@@ -52,43 +52,61 @@ impl CodeRule for NoLoggingErrorInExcept {
         self.find_configured_banned_calls(grep, config, &DEFAULT_BANNED_CALLS)
             .into_iter()
             .filter(|matched| crate::code_lint::ast_python::is_inside_except_clause(&matched.node))
-            .map(|matched| self.diagnostic_at_node(path, &matched.node, &[]))
+            .map(|matched| {
+                self.diagnostic_at_node(path, &matched.node, &[("call", &matched.callee)])
+            })
             .collect()
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use indoc::indoc;
+crate::rule_test!(
+    NoLoggingErrorInExcept,
+    {
+        Python => {
+            pass: [
+                logging_exception_in_except => r#"
+                    import logging
 
-    #[test]
-    fn test_no_logging_error_in_except_rule() {
-        let source_violating = indoc! {r#"
-            try:
-                x = 1 / 0
-            except Exception as e:
-                logging.error("division failed")
-        "#};
-        let source_ok = indoc! {r#"
-            try:
-                x = 1 / 0
-            except Exception as e:
-                logging.exception("division failed")
-        "#};
+                    try:
+                        run_job()
+                    except RuntimeError:
+                        logging.exception("failed")
+                "#,
+                logging_error_outside_except => r#"
+                    import logging
 
-        let output_violating = crate::test_utils::assert_code_rule_snapshot(
-            &NoLoggingErrorInExcept,
-            source_violating,
-            "test.py",
-        );
-        insta::assert_snapshot!(output_violating, @"[no-logging-error-in-except] Line 4, Col 5: Banned use of `logging.error` inside except block.");
+                    logging.error("failed")
+                "#,
+                logging_error_in_else_block => r#"
+                    import logging
 
-        let output_ok = crate::test_utils::assert_code_rule_snapshot(
-            &NoLoggingErrorInExcept,
-            source_ok,
-            "test.py",
-        );
-        assert!(output_ok.is_empty());
+                    try:
+                        run_job()
+                    except RuntimeError:
+                        pass
+                    else:
+                        logging.error("unexpected state")
+                "#,
+            ],
+            fail: [
+                logging_error_in_bare_except => r#"
+                    import logging
+
+                    try:
+                        run_job()
+                    except:
+                        logging.error("failed")
+                "# => [r#"logging.error("failed")"#],
+                logging_error_in_typed_except => r#"
+                    import logging
+
+                    try:
+                        run_job()
+                    except ValueError as err:
+                        logging.error("invalid value: %s", err)
+                "# => [r#"logging.error("invalid value: %s", err)"#],
+            ],
+        },
     }
-}
+);

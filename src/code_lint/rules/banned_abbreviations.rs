@@ -11,7 +11,8 @@ use std::path::Path;
 /// Static defaults for banned abbreviations.
 const DEFAULT_BANNED: FilterListDefaults = FilterListDefaults {
     base: &[
-        "err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag", "ty",
+        "err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag", "ty", "cat",
+        "stmt", "ext",
     ],
     extend: &[],
     // In Rust, `str` is a primitive type keyword rather than an abbreviation, and it is
@@ -21,9 +22,9 @@ const DEFAULT_BANNED: FilterListDefaults = FilterListDefaults {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Definition name `{name}` contains banned abbreviation `{segment}`.",
-    rationale: "Banned abbreviations make identifier names less clear, harder to read, and difficult to search for.",
-    suggestion: "Rename the identifier using full words or a non-banned term.",
+    summary: "Identifier `{name}` contains abbreviated token `{token}`.",
+    rationale: "Ambiguous shorthand tokens (`ctx`, `mgr`, `val`, `cfg`) force readers to guess domain vocabulary and fragment codebase searchability.",
+    suggestion: "Rename `{name}` using full, self-explanatory domain words (e.g., `context`, `manager`, `value`, `config`).",
 };
 
 /// Helper to split identifiers into sub-word segments.
@@ -101,7 +102,7 @@ impl CodeRule for BannedAbbreviations {
                     diagnostics.push(self.diagnostic_at_node(
                         path,
                         &node,
-                        &[("name", &name), ("segment", &segment)],
+                        &[("name", &name), ("token", &segment), ("segment", &segment)],
                     ));
                     // Flag each node at most once
                     break;
@@ -114,102 +115,96 @@ impl CodeRule for BannedAbbreviations {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
-
-    #[test]
-    fn test_rust_snapshots() {
-        let rule = BannedAbbreviations;
-
-        // Banned variables, functions, and structs
-        let source = indoc::indoc! {r"
-            use std::collections::HashMap as my_cfg;
-            fn process_err() {
-                let ctx = 1;
-                let my_cfg_val = 2;
-            }
-            struct MyRes;
-        "};
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @"
-        [banned-abbreviations] Line 1, Col 34: Definition name `my_cfg` contains banned abbreviation `cfg`.
-        [banned-abbreviations] Line 2, Col 4: Definition name `process_err` contains banned abbreviation `err`.
-        [banned-abbreviations] Line 3, Col 9: Definition name `ctx` contains banned abbreviation `ctx`.
-        [banned-abbreviations] Line 4, Col 9: Definition name `my_cfg_val` contains banned abbreviation `cfg`.
-        [banned-abbreviations] Line 6, Col 8: Definition name `MyRes` contains banned abbreviation `res`.
-        ");
+crate::rule_test!(
+    BannedAbbreviations,
+    {
+        Python => {
+            pass: [
+                full_domain_words => r#"
+                    def handle_message(context):
+                        manager = "active"
+                        configuration = 42
+                        result = "ok"
+                "#,
+                unaliased_imports_exempt => r#"
+                    import os
+                    import sys
+                    from os import path
+                "#,
+            ],
+            fail: [
+                aliased_import_abbreviation => r#"
+                    import os as os_cfg
+                "# => ["os_cfg"],
+                function_and_parameter_abbreviations => r#"
+                    def handle_msg(msg):
+                        pass
+                "# => ["handle_msg", "msg"],
+                variable_abbreviation => r#"
+                    def run():
+                        req_ctx = "request"
+                "# => ["req_ctx"],
+                string_abbreviation_in_python => r#"
+                    def to_str():
+                        pass
+                "# => ["to_str"],
+                class_abbreviation => r#"
+                    class TaskRes:
+                        pass
+                "# => ["TaskRes"],
+            ],
+        },
+        Rust => {
+            pass: [
+                full_domain_words => r#"
+                    fn handle_context(manager: &str) {
+                        let configuration = 1;
+                        let result = 2;
+                    }
+                "#,
+                str_keyword_and_conversions_exempt => r#"
+                    fn as_str() {}
+                    fn to_str() {}
+                    fn from_str() {}
+                    fn build_str_cache() {
+                        let str_buffer = 1;
+                    }
+                "#,
+                unaliased_imports_exempt => r#"
+                    use std::fmt::Result;
+                    use std::error::Error;
+                "#,
+                trait_impl_contract_members_exempt => r#"
+                    impl Decoder for Wrapper {
+                        type Err = ();
+                        fn from_ctx(&self) {}
+                    }
+                "#,
+            ],
+            fail: [
+                aliased_import_abbreviation => r#"
+                    use std::collections::HashMap as my_cfg;
+                "# => ["my_cfg"],
+                function_and_local_bindings => r#"
+                    fn process_err() {
+                        let ctx = 1;
+                        let my_cfg_val = 2;
+                    }
+                "# => ["process_err", "ctx", "my_cfg_val"],
+                struct_abbreviation => r#"
+                    struct MyRes;
+                "# => ["MyRes"],
+                trait_impl_parameter_not_exempt => r#"
+                    impl Decoder for Wrapper {
+                        fn from_ctx(&self, msg: u8) {}
+                    }
+                "# => ["msg"],
+                inherent_method_not_exempt => r#"
+                    impl Wrapper {
+                        fn from_ctx(&self) {}
+                    }
+                "# => ["from_ctx"],
+            ],
+        },
     }
-
-    #[test]
-    fn test_python_snapshots() {
-        let rule = BannedAbbreviations;
-
-        let source = indoc::indoc! {r#"
-            import os as os_cfg
-            def handle_msg(msg):
-                str_val = "hello"
-                pass
-        "#};
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @"
-        [banned-abbreviations] Line 1, Col 14: Definition name `os_cfg` contains banned abbreviation `cfg`.
-        [banned-abbreviations] Line 2, Col 5: Definition name `handle_msg` contains banned abbreviation `msg`.
-        [banned-abbreviations] Line 2, Col 16: Definition name `msg` contains banned abbreviation `msg`.
-        [banned-abbreviations] Line 3, Col 5: Definition name `str_val` contains banned abbreviation `str`.
-        ");
-    }
-
-    #[test]
-    fn test_rust_default_exempts_str_abbreviation() {
-        let rule = BannedAbbreviations;
-
-        let rust_source = indoc::indoc! {r"
-            fn as_str() {}
-            fn to_str() {}
-            fn from_str() {}
-            fn build_str_cache() { let str_buffer = 1; }
-        "};
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, rust_source, "test.rs"), @"");
-
-        // Python keeps the base ban, since `str` is a plain abbreviation there.
-        let py_source = "def to_str():\n    pass\n";
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, py_source, "test.py"), @"[banned-abbreviations] Line 1, Col 5: Definition name `to_str` contains banned abbreviation `str`.");
-    }
-
-    #[test]
-    fn test_rust_trait_impl_members_are_exempt() {
-        let rule = BannedAbbreviations;
-
-        // `Err` and `from_ctx` are mandated by the trait contract and cannot be renamed, so
-        // they are exempt. The exemption is scoped to the member name itself: the parameter
-        // `msg` and the identical inherent method are the author's choice, so both are flagged.
-        let source = indoc::indoc! {r"
-            impl Decoder for Wrapper {
-                type Err = ();
-                fn from_ctx(&self, msg: u8) {}
-            }
-            impl Wrapper {
-                fn from_ctx(&self) {}
-            }
-        "};
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @"
-        [banned-abbreviations] Line 3, Col 24: Definition name `msg` contains banned abbreviation `msg`.
-        [banned-abbreviations] Line 6, Col 8: Definition name `from_ctx` contains banned abbreviation `ctx`.
-        ");
-    }
-
-    #[test]
-    fn test_configuration_override() {
-        let rule = BannedAbbreviations;
-        let config_toml = indoc::indoc! {r#"
-            [rules.banned-abbreviations]
-            allowed = ["err"]
-            extend_banned = ["req"]
-        "#};
-        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
-
-        let source = "fn main() { let err = 1; let my_req = 2; }";
-        let output = assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config);
-        assert!(!output.contains("err"));
-        assert!(output.contains("contains banned abbreviation `req`"));
-    }
-}
+);

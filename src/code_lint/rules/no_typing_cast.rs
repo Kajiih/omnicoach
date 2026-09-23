@@ -27,9 +27,9 @@ const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Unchecked type assertion `{callee}()` is discouraged.",
-    rationale: "`typing.cast()` performs an unchecked assertion that bypasses static type verification without runtime validation.",
-    suggestion: "Use structural subtyping (Protocols), runtime type narrowing (`isinstance()`), or domain types instead. If unavoidable, document why with `# omni:ignore[no-typing-cast] -- <reason>`.",
+    summary: "Type cast call `{callee}()`.",
+    rationale: "`typing.cast()` forces the type checker to accept a target type without runtime validation, silently masking type mismatches and upstream bugs.",
+    suggestion: "Narrow the type at runtime with `isinstance()` or a `TypeGuard` function, or model the contract with a `Protocol`.",
 };
 
 /// Rule struct.
@@ -69,46 +69,45 @@ impl CodeRule for NoTypingCast {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use indoc::indoc;
-    use rstest::rstest;
-
-    #[rstest]
-    #[case::bare_cast(
-        "x = cast(int, y)",
-        "[no-typing-cast] Line 1, Col 5: Unchecked type assertion `cast()` is discouraged."
-    )]
-    #[case::typing_qualified_cast(
-        indoc! {r"
-            import typing
-            x = typing.cast(list[str], data)
-        "},
-        "[no-typing-cast] Line 2, Col 5: Unchecked type assertion `typing.cast()` is discouraged."
-    )]
-    #[case::typing_extensions_cast(
-        indoc! {r"
-            import typing_extensions
-            x = typing_extensions.cast(int, data)
-        "},
-        "[no-typing-cast] Line 2, Col 5: Unchecked type assertion `typing_extensions.cast()` is discouraged."
-    )]
-    fn test_typing_cast_flagged_by_default(#[case] source: &str, #[case] expected: &str) {
-        let output = crate::test_utils::assert_code_rule_snapshot(&NoTypingCast, source, "test.py");
-        assert_eq!(output.trim(), expected);
+crate::rule_test!(
+    NoTypingCast,
+    {
+        Python => {
+            pass: [
+                polars_column_cast => r#"
+                    df = df.select(pl.col("a").cast(pl.Int64))
+                "#,
+                custom_method_cast => r#"
+                    result = obj.cast("param")
+                "#,
+                unrelated_call => r#"
+                    print("hello world")
+                "#,
+                isinstance_narrowing => r#"
+                    if isinstance(val, int):
+                        x = val
+                "#,
+            ],
+            fail: [
+                bare_cast => r#"
+                    x = cast(int, y)
+                "# => [r#"cast(int, y)"#],
+                typing_qualified_cast => r#"
+                    import typing
+                    x = typing.cast(list[str], data)
+                "# => [r#"typing.cast(list[str], data)"#],
+                typing_extensions_cast => r#"
+                    import typing_extensions
+                    x = typing_extensions.cast(int, data)
+                "# => [r#"typing_extensions.cast(int, data)"#],
+                multiple_uncommented_casts => r#"
+                    a = cast(int, x)
+                    b = typing.cast(str, y)
+                "# => [
+                    r#"cast(int, x)"#,
+                    r#"typing.cast(str, y)"#,
+                ],
+            ],
+        },
     }
-
-    #[rstest]
-    #[case::polars_column_cast("df = df.select(pl.col('a').cast(pl.Int64))")]
-    #[case::custom_method_cast("result = obj.cast('param')")]
-    #[case::unrelated_call("print('hello world')")]
-    fn test_unrelated_calls_allowed(#[case] source: &str) {
-        let output = crate::test_utils::assert_code_rule_snapshot(&NoTypingCast, source, "test.py");
-        assert!(output.is_empty());
-    }
-
-    #[test]
-    fn test_skipped_on_test_file() {
-        assert_eq!(NoTypingCast.target(), RuleTarget::SourceOnly);
-    }
-}
+);
