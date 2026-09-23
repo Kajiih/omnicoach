@@ -282,27 +282,6 @@ mod tests {
         }
     }
 
-    const UNMIGRATED_RULE_FILES: &[&str] = &[
-        "banned_abbreviations.rs",
-        "enforce_frozen_slots_dataclass.rs",
-        "flat_scope_enforced.rs",
-        "max_test_assertions.rs",
-        "no_assertion_packing.rs",
-        "no_dynamic_attribute_access.rs",
-        "no_env_in_functions.rs",
-        "no_hungarian_notation.rs",
-        "no_identical_positional_types.rs",
-        "no_logging_error_in_except.rs",
-        "no_mock_assertions.rs",
-        "no_mocks_in_tests.rs",
-        "no_sleep_in_tests.rs",
-        "no_typing_cast.rs",
-        "no_uncommented_suppress.rs",
-        "no_unstructured_task_creation.rs",
-        "prefer_timedelta_over_seconds.rs",
-        "single_letter_variable_name.rs",
-    ];
-
     /// Returns the reason why `source` violates the [`crate::rule_test!`] convention, if any.
     ///
     /// `#[test]`/`#[rstest]` attributes are matched on exact trimmed lines before the macro
@@ -330,25 +309,10 @@ mod tests {
         None
     }
 
-    /// Ensures that files in `UNMIGRATED_RULE_FILES` are removed as soon as they are migrated.
-    #[test]
-    fn test_unmigrated_rule_files_status() {
-        let rules_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/code_lint/rules");
-
-        for filename in UNMIGRATED_RULE_FILES {
-            let path = std::path::Path::new(rules_dir).join(filename);
-            let source = std::fs::read_to_string(&path).expect("rule source must be readable");
-            assert!(
-                rule_test_convention_violation(&source).is_some(),
-                "{filename} has been migrated to rule_test!; remove it from UNMIGRATED_RULE_FILES in src/rules.rs"
-            );
-        }
-    }
-
-    /// Enforces that all migrated rule test modules use [`crate::rule_test!`] and never define
+    /// Enforces that all rule test modules use [`crate::rule_test!`] and never define
     /// bespoke `#[test]`, `#[rstest]`, or `assert_code_rule_snapshot` tests.
     #[test]
-    fn test_migrated_rule_files_use_rule_test() {
+    fn test_rule_files_use_rule_test() {
         let rules_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/code_lint/rules");
         let entries = std::fs::read_dir(rules_dir).expect("rule directory must be readable");
 
@@ -361,9 +325,6 @@ mod tests {
                 .file_name()
                 .and_then(|name| name.to_str())
                 .expect("valid filename");
-            if UNMIGRATED_RULE_FILES.contains(&filename) {
-                continue;
-            }
 
             let source = std::fs::read_to_string(&path).expect("rule source must be readable");
             if let Some(reason) = rule_test_convention_violation(&source) {

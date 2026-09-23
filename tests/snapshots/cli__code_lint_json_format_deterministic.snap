@@ -9,9 +9,9 @@ expression: output
   {
     "rule_name": "flat-scope-enforced",
     "message": {
-      "summary": "Nested function definition `inner` is discouraged.",
-      "rationale": "Nested functions increase cognitive complexity and reduce testability.",
-      "suggestion": "Move `inner` to the module level or convert to a private helper."
+      "summary": "Function `inner` is defined inside another function.",
+      "rationale": "Nested named functions bloat enclosing scopes and capture ambient state implicitly, increasing cognitive complexity and preventing isolated unit testing.",
+      "suggestion": "Extract `inner` to a module-level private function (`_inner`) or use an inline `lambda` for trivial callbacks."
     },
     "location": {
       "context": "[TEMP_PATH]",

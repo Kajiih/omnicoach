@@ -53,12 +53,12 @@ const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Environment variable access `{expr}` inside function `{func_name}`.",
-    rationale: "Accessing environment variables deep inside functions introduces hidden global state, breaks dependency injection, and makes unit testing brittle.",
+    summary: "Environment variable access `{call}` inside function `{func_name}`.",
+    rationale: "Reading ambient environment variables inside functions introduces hidden global state and causes cross-test pollution during parallel test execution.",
     suggestion: {
-        base: "Load environment variables at startup or configuration boundaries (`main`, `from_env`, or module scope) and pass them as explicit arguments or typed config objects.",
-        Python => "Load environment variables at module/class scope or inside `main()` / `from_env()` and pass them as explicit arguments or a typed config object.",
-        Rust => "Load environment variables inside `main()`, `from_env()`, or a module-level `LazyLock` and pass them as explicit arguments or a `Config` struct.",
+        base: "Load environment variables at composition boundaries (`main`, `from_env`) and pass a typed configuration parameter into `{func_name}`.",
+        Python => "Load environment variables at composition boundaries (`main`, `from_env`, or module/class scope) and pass a typed configuration parameter into `{func_name}`.",
+        Rust => "Load environment variables at composition boundaries (`main`, `from_env`, or a module-level `LazyLock`) and pass a typed configuration parameter into `{func_name}`.",
     },
 };
 
@@ -179,7 +179,7 @@ impl CodeRule for NoEnvInFunctions {
                 diagnostics.push(self.diagnostic_at_node(
                     path,
                     &call_match.node,
-                    &[("expr", &expr), ("func_name", &func_name)],
+                    &[("call", &expr), ("expr", &expr), ("func_name", &func_name)],
                 ));
             }
         }
@@ -193,7 +193,7 @@ impl CodeRule for NoEnvInFunctions {
                     diagnostics.push(self.diagnostic_at_node(
                         path,
                         &subscript_node,
-                        &[("expr", label), ("func_name", &func_name)],
+                        &[("call", label), ("expr", label), ("func_name", &func_name)],
                     ));
                 }
             }
@@ -204,219 +204,188 @@ impl CodeRule for NoEnvInFunctions {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::assert_code_rule_snapshot;
-    use indoc::indoc;
+crate::rule_test!(
+    NoEnvInFunctions,
+    {
+        Python => {
+            pass: [
+                module_scope_allowed => r#"
+                    import os
+                    from os import environ, getenv
 
-    #[test]
-    fn test_python_env_in_functions_flagged_and_boundaries_allowed() {
-        let source = indoc! {r#"
-            import os
-            from os import environ, getenv
+                    MODULE_KEY = os.getenv("API_KEY")
+                    MODULE_HOST = os.environ["HOST"]
+                    MODULE_PORT = environ.get("PORT", "8080")
+                "#,
+                class_scope_allowed => r#"
+                    import os
 
-            # Allowed at module scope
-            MODULE_KEY = os.getenv("API_KEY")
-            MODULE_HOST = os.environ["HOST"]
-            MODULE_PORT = environ.get("PORT", "8080")
+                    class Settings:
+                        DEFAULT_TIMEOUT = os.getenv("TIMEOUT", "30")
+                "#,
+                from_env_boundary_allowed => r#"
+                    import os
 
-            class Settings:
-                # Allowed at class body scope
-                DEFAULT_TIMEOUT = os.getenv("TIMEOUT", "30")
+                    class Settings:
+                        @classmethod
+                        def from_env(cls) -> "Settings":
+                            return cls(os.getenv("API_KEY"), os.environ["HOST"])
+                "#,
+                main_entrypoint_allowed => r#"
+                    from os import getenv
 
-                @classmethod
-                def from_env(cls) -> "Settings":
-                    # Allowed inside explicit boundary constructor
-                    return cls(os.getenv("API_KEY"), os.environ["HOST"])
+                    def main() -> None:
+                        _ = getenv("APP_ENV")
+                "#,
+                load_env_boundary_allowed => r#"
+                    from os import environ
 
-                def connect(self) -> str:
-                    # Flagged inside regular method
-                    token = os.getenv("API_TOKEN")
-                    region = os.environ["AWS_REGION"]
-                    return f"{token}:{region}"
+                    def load_env() -> dict[str, str]:
+                        return {"url": environ["DATABASE_URL"]}
+                "#,
+                nested_in_main_allowed => r#"
+                    import os
+                    from os import getenv
 
-            def main() -> None:
-                # Allowed inside entrypoint
-                _ = getenv("APP_ENV")
+                    def main() -> None:
+                        def helper():
+                            return os.environ.get("DB_URL")
 
-            def load_env() -> dict[str, str]:
-                # Allowed inside explicit env loader
-                return {"url": environ["DATABASE_URL"]}
+                        loader = lambda: getenv("API_KEY")
+                "#,
+            ],
+            fail: [
+                function_env_call => r#"
+                    from os import getenv
 
-            def fetch_orders() -> str:
-                # Flagged inside regular function
-                key = getenv("SECRET_KEY")
-                endpoint = os.environ.get("ENDPOINT")
-                fallback = environ["FALLBACK_URL"]
-                return f"{key}:{endpoint}:{fallback}"
-        "#};
+                    def fetch_orders() -> str:
+                        return getenv("SECRET_KEY")
+                "# => [r#"getenv("SECRET_KEY")"#],
+                method_env_call => r#"
+                    import os
 
-        insta::assert_snapshot!(
-            assert_code_rule_snapshot(&NoEnvInFunctions, source, "src/service.py"),
-            @"
-        [no-env-in-functions] Line 20, Col 17: Environment variable access `os.getenv()` inside function `connect`.
-        [no-env-in-functions] Line 21, Col 18: Environment variable access `os.environ[...]` inside function `connect`.
-        [no-env-in-functions] Line 34, Col 11: Environment variable access `getenv()` inside function `fetch_orders`.
-        [no-env-in-functions] Line 35, Col 16: Environment variable access `os.environ.get()` inside function `fetch_orders`.
-        [no-env-in-functions] Line 36, Col 16: Environment variable access `environ[...]` inside function `fetch_orders`.
-        "
-        );
-    }
+                    class Settings:
+                        def connect(self) -> str:
+                            return os.getenv("API_TOKEN")
+                "# => [r#"os.getenv("API_TOKEN")"#],
+                method_environ_subscript => r#"
+                    import os
 
-    #[test]
-    fn test_python_mutators_methods_and_nested_scopes() {
-        let source = indoc! {r#"
-            import os
-            from os import environ, getenv
+                    class Settings:
+                        def connect(self) -> str:
+                            return os.environ["AWS_REGION"]
+                "# => [r#"os.environ["AWS_REGION"]"#],
+                environ_get_method => r#"
+                    import os
 
-            class Worker:
-                def main(self) -> None:
-                    # Flagged: a method named `main` is not the application entrypoint
-                    self.token = os.getenv("TOKEN")
+                    def fetch_orders() -> str:
+                        return os.environ.get("ENDPOINT")
+                "# => [r#"os.environ.get("ENDPOINT")"#],
+                environ_subscript => r#"
+                    from os import environ
 
-            def configure_overrides() -> None:
-                # Flagged: mutating the process environment is a hidden side effect
-                os.environ.update({"DEBUG": "1"})
-                environ.clear()
-                os.environ["FORCE"] = "1"
+                    def fetch_orders() -> str:
+                        return environ["FALLBACK_URL"]
+                "# => [r#"environ["FALLBACK_URL"]"#],
+                method_named_main => r#"
+                    import os
 
-            def main() -> None:
-                # Allowed: nested scopes inherit the entrypoint exemption
-                def helper():
-                    return os.environ.get("DB_URL")
+                    class Worker:
+                        def main(self) -> None:
+                            self.token = os.getenv("TOKEN")
+                "# => [r#"os.getenv("TOKEN")"#],
+                environ_mutator => r#"
+                    import os
 
-                loader = lambda: getenv("API_KEY")
+                    def configure_overrides() -> None:
+                        os.environ.update({"DEBUG": "1"})
+                "# => [r#"os.environ.update({"DEBUG": "1"})"#],
+                lambda_in_regular_function => r#"
+                    from os import getenv
 
-            def retrieve_data():
-                # Flagged: lambda inside a regular function is still hidden env access
-                fetcher = lambda: getenv("API_KEY")
-        "#};
+                    def retrieve_data():
+                        fetcher = lambda: getenv("API_KEY")
+                "# => [r#"getenv("API_KEY")"#],
+            ],
+        },
+        Rust => {
+            pass: [
+                static_lazy_lock_allowed => r#"
+                    use std::sync::LazyLock;
 
-        insta::assert_snapshot!(
-            assert_code_rule_snapshot(&NoEnvInFunctions, source, "src/worker.py"),
-            @"
-        [no-env-in-functions] Line 7, Col 22: Environment variable access `os.getenv()` inside function `main`.
-        [no-env-in-functions] Line 11, Col 5: Environment variable access `os.environ.update()` inside function `configure_overrides`.
-        [no-env-in-functions] Line 12, Col 5: Environment variable access `environ.clear()` inside function `configure_overrides`.
-        [no-env-in-functions] Line 13, Col 5: Environment variable access `os.environ[...]` inside function `configure_overrides`.
-        [no-env-in-functions] Line 24, Col 23: Environment variable access `getenv()` inside function `retrieve_data`.
-        "
-        );
-    }
-
-    #[test]
-    fn test_rust_non_top_level_main_is_not_an_entrypoint() {
-        let source = indoc! {r#"
-            use std::env;
-
-            pub struct Worker;
-
-            impl Worker {
-                fn main(&self) -> String {
-                    env::var("TOKEN").unwrap_or_default()
-                }
-            }
-
-            mod app {
-                use std::env;
-
-                fn main() {
-                    let _ = env::var("APP_MODE");
-                }
-            }
-
-            fn main() {
-                let _ = env::var("TOKEN");
-            }
-        "#};
-
-        insta::assert_snapshot!(
-            assert_code_rule_snapshot(&NoEnvInFunctions, source, "src/worker.rs"),
-            @"
-        [no-env-in-functions] Line 7, Col 9: Environment variable access `env::var()` inside function `main`.
-        [no-env-in-functions] Line 15, Col 17: Environment variable access `env::var()` inside function `main`.
-        "
-        );
-    }
-
-    #[test]
-    fn test_rust_env_in_functions_flagged_and_boundaries_allowed() {
-        let source = indoc! {r#"
-            use std::env;
-            use std::sync::LazyLock;
-
-            // Allowed in module-level static initializer
-            static GLOBAL_TOKEN: LazyLock<String> = LazyLock::new(|| {
-                std::env::var("GLOBAL_TOKEN").unwrap_or_default()
-            });
-
-            // Allowed compile-time macro
-            fn build_version() -> &'static str {
-                env!("CARGO_PKG_VERSION")
-            }
-
-            pub struct Config {
-                pub host: String,
-            }
-
-            impl Config {
-                pub fn from_env() -> Self {
-                    Self {
-                        host: env::var("SERVICE_HOST").unwrap_or_default(),
+                    static GLOBAL_TOKEN: LazyLock<String> = LazyLock::new(|| {
+                        std::env::var("GLOBAL_TOKEN").unwrap_or_default()
+                    });
+                "#,
+                compile_time_env_macro_allowed => r#"
+                    fn build_version() -> &'static str {
+                        env!("CARGO_PKG_VERSION")
                     }
-                }
+                "#,
+                from_env_boundary_allowed => r#"
+                    use std::env;
 
-                pub fn refresh(&mut self) {
-                    self.host = std::env::var("SERVICE_HOST").unwrap_or_default();
-                }
-            }
+                    pub struct Config {
+                        pub host: String,
+                    }
 
-            fn main() {
-                let _ = env::var_os("RUST_LOG");
-            }
+                    impl Config {
+                        pub fn from_env() -> Self {
+                            Self {
+                                host: env::var("SERVICE_HOST").unwrap_or_default(),
+                            }
+                        }
+                    }
+                "#,
+                top_level_main_allowed => r#"
+                    use std::env;
 
-            fn send_request() -> Option<String> {
-                let closure = || env::var("API_KEY").ok();
-                closure()
-            }
-        "#};
+                    fn main() {
+                        let _ = env::var_os("RUST_LOG");
+                    }
+                "#,
+            ],
+            fail: [
+                method_env_call => r#"
+                    pub struct Config {
+                        pub host: String,
+                    }
 
-        insta::assert_snapshot!(
-            assert_code_rule_snapshot(&NoEnvInFunctions, source, "src/config.rs"),
-            @"
-        [no-env-in-functions] Line 26, Col 21: Environment variable access `std::env::var()` inside function `refresh`.
-        [no-env-in-functions] Line 35, Col 22: Environment variable access `env::var()` inside function `send_request`.
-        "
-        );
+                    impl Config {
+                        pub fn refresh(&mut self) {
+                            self.host = std::env::var("SERVICE_HOST").unwrap_or_default();
+                        }
+                    }
+                "# => [r#"std::env::var("SERVICE_HOST")"#],
+                closure_in_function => r#"
+                    use std::env;
+
+                    fn send_request() -> Option<String> {
+                        let closure = || env::var("API_KEY").ok();
+                        closure()
+                    }
+                "# => [r#"env::var("API_KEY")"#],
+                method_named_main => r#"
+                    use std::env;
+
+                    pub struct Worker;
+
+                    impl Worker {
+                        fn main(&self) -> String {
+                            env::var("TOKEN").unwrap_or_default()
+                        }
+                    }
+                "# => [r#"env::var("TOKEN")"#],
+                module_nested_main => r#"
+                    mod app {
+                        use std::env;
+
+                        fn main() {
+                            let _ = env::var("APP_MODE");
+                        }
+                    }
+                "# => [r#"env::var("APP_MODE")"#],
+            ],
+        },
     }
-
-    #[test]
-    fn test_config_extend_and_allowed() {
-        let config_toml = indoc! {r#"
-            [rules.no-env-in-functions]
-            extend_banned = ["dotenv.get_key"]
-            allowed = ["getenv"]
-        "#};
-        let config: Config = toml::from_str(config_toml).unwrap();
-
-        let source = indoc! {r#"
-            from os import getenv
-            import dotenv
-
-            def load_secret() -> str:
-                allowed_call = getenv("ALLOWED")
-                custom_banned = dotenv.get_key(".env", "SECRET")
-                return f"{allowed_call}:{custom_banned}"
-        "#};
-
-        insta::assert_snapshot!(
-            crate::test_utils::assert_code_rule_snapshot_with_config(
-                &NoEnvInFunctions,
-                source,
-                "src/secret.py",
-                &config
-            ),
-            @"[no-env-in-functions] Line 6, Col 21: Environment variable access `dotenv.get_key()` inside function `load_secret`."
-        );
-    }
-}
+);

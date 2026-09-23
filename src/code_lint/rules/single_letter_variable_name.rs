@@ -16,9 +16,9 @@ const DEFAULT_ALLOWED: FilterListDefaults = FilterListDefaults {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Variable name `{name}` is too short (single-letter).",
-    rationale: "Single-letter variable names are not descriptive and make code harder to read and maintain.",
-    suggestion: "Choose a more descriptive name that reflects the variable's purpose.",
+    summary: "Variable name `{name}` is a single-letter.",
+    rationale: "Single-letter variable names obscure domain intent, reduce code readability, and break grep/searchability by matching common characters indiscriminately across the codebase.",
+    suggestion: "Rename `{name}` to a descriptive noun representing its domain role in an explicit and self explanatory way.",
 };
 
 /// Rule that bans single-letter variable names.
@@ -62,103 +62,147 @@ impl CodeRule for SingleLetterVariableName {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
-    use rstest::rstest;
-
-    #[rstest]
-    #[case::let_binding(
-        "fn main() { let a = 1; }",
-        "[single-letter-variable-name] Line 1, Col 17: Variable name `a` is too short (single-letter)."
-    )]
-    #[case::let_reference(
-        "fn main() { let a = b; }",
-        "[single-letter-variable-name] Line 1, Col 17: Variable name `a` is too short (single-letter)."
-    )]
-    #[case::mutable_binding(
-        "fn main() { let mut b = 2; }",
-        "[single-letter-variable-name] Line 1, Col 21: Variable name `b` is too short (single-letter)."
-    )]
-    #[case::tuple_destructuring(
-        "fn main() { let (c, d) = (1, 2); }",
-        "[single-letter-variable-name] Line 1, Col 21: Variable name `d` is too short (single-letter)."
-    )]
-    #[case::struct_destructuring_explicit(
-        "fn main() { let Point { x: e, y: _ } = p; }",
-        "[single-letter-variable-name] Line 1, Col 28: Variable name `e` is too short (single-letter)."
-    )]
-    #[case::struct_destructuring_shorthand(
-        "fn main() { let Point { f, g } = p; }",
-        "[single-letter-variable-name] Line 1, Col 28: Variable name `g` is too short (single-letter)."
-    )]
-    #[case::loop_target(
-        "fn main() { for h in 0..10 {} }",
-        "[single-letter-variable-name] Line 1, Col 17: Variable name `h` is too short (single-letter)."
-    )]
-    #[case::closure_parameter_allowed("fn main() { let f = |x: i32| x + 1; }", "")]
-    #[case::fn_parameter_allowed("fn test(i: i32, j: i32) {}", "")]
-    #[case::match_pattern_variants(
-        "fn main() { match val { Some(k) => {}, None => {} } }",
-        "[single-letter-variable-name] Line 1, Col 30: Variable name `k` is too short (single-letter)."
-    )]
-    #[case::if_let_and_while_let(
-        "fn main() { if let Some(x) = y {} while let Some(z) = y {} }",
-        "[single-letter-variable-name] Line 1, Col 50: Variable name `z` is too short (single-letter)."
-    )]
-    #[case::match_pattern_guard(
-        "fn main() { match val { Some(z) if z > 0 => {} } }",
-        "[single-letter-variable-name] Line 1, Col 30: Variable name `z` is too short (single-letter)."
-    )]
-    #[case::wildcard_ignored("fn main() { let _ = 1; }", "")]
-    fn test_rust_bindings(#[case] source: &str, #[case] expected: &str) {
-        let output = assert_code_rule_snapshot(&SingleLetterVariableName, source, "test.rs");
-        assert_eq!(output.trim(), expected);
+crate::rule_test!(
+    SingleLetterVariableName,
+    {
+        Python => {
+            pass: [
+                allowed_names => r#"
+                    x = 1
+                    i = 0
+                    j = 0
+                    f = open("file.txt")
+                "#,
+                descriptive_variable_names => r#"
+                    index = 0
+                    item = "data"
+                    user = "alice"
+                    error = None
+                "#,
+                parameter_allowed => r#"
+                    def foo(i: int = 1):
+                        pass
+                "#,
+                wildcard_ignored => r#"
+                    _ = 1
+                "#,
+            ],
+            fail: [
+                assignment => r#"
+                    c = 2
+                "# => ["c"],
+                parameter_annotation => r#"
+                    def foo(b: int = 1):
+                        pass
+                "# => ["b"],
+                multi_assignment => r#"
+                    d, e = 3, 4
+                "# => ["d", "e"],
+                comprehension => r#"
+                    [y for y in range(10)]
+                "# => ["y"],
+                exception_alias => r#"
+                    try:
+                        pass
+                    except Exception as g:
+                        pass
+                "# => ["g"],
+                walrus_expression => r#"
+                    (v := 1)
+                "# => ["v"],
+            ],
+        },
+        Rust => {
+            pass: [
+                allowed_bindings => r#"
+                    fn main() {
+                        let i = 0;
+                        let j = 0;
+                        let x = 1;
+                        let f = 2;
+                        let c = 'a';
+                    }
+                "#,
+                descriptive_variable_names => r#"
+                    fn main() {
+                        let index = 0;
+                        let item = "data";
+                        let user = "alice";
+                        let error = None::<()>;
+                    }
+                "#,
+                closure_parameter_allowed => r#"
+                    fn main() {
+                        let f = |x: i32| x + 1;
+                    }
+                "#,
+                fn_parameter_allowed => r#"
+                    fn test(i: i32, j: i32) {}
+                "#,
+                wildcard_ignored => r#"
+                    fn main() {
+                        let _ = 1;
+                    }
+                "#,
+            ],
+            fail: [
+                let_binding => r#"
+                    fn main() {
+                        let a = 1;
+                    }
+                "# => ["a"],
+                let_reference => r#"
+                    fn main() {
+                        let a = b;
+                    }
+                "# => ["a"],
+                mutable_binding => r#"
+                    fn main() {
+                        let mut b = 2;
+                    }
+                "# => ["b"],
+                tuple_destructuring => r#"
+                    fn main() {
+                        let (c, d) = (1, 2);
+                    }
+                "# => ["d"],
+                struct_destructuring_explicit => r#"
+                    fn main() {
+                        let Point { x: e, y: _ } = p;
+                    }
+                "# => ["e"],
+                struct_destructuring_shorthand => r#"
+                    fn main() {
+                        let Point { f, g } = p;
+                    }
+                "# => ["g"],
+                loop_target => r#"
+                    fn main() {
+                        for h in 0..10 {}
+                    }
+                "# => ["h"],
+                match_pattern_variants => r#"
+                    fn main() {
+                        match val {
+                            Some(k) => {}
+                            None => {}
+                        }
+                    }
+                "# => ["k"],
+                if_let_and_while_let => r#"
+                    fn main() {
+                        if let Some(x) = y {}
+                        while let Some(z) = y {}
+                    }
+                "# => ["z"],
+                match_pattern_guard => r#"
+                    fn main() {
+                        match val {
+                            Some(z) if z > 0 => {}
+                        }
+                    }
+                "# => ["z"],
+            ],
+        },
     }
-
-    #[rstest]
-    #[case::parameter_annotations(
-        "def foo(i: int = 1, b: int = 1): pass",
-        "[single-letter-variable-name] Line 1, Col 21: Variable name `b` is too short (single-letter)."
-    )]
-    #[case::assignment(
-        "c = 2",
-        "[single-letter-variable-name] Line 1, Col 1: Variable name `c` is too short (single-letter)."
-    )]
-    #[case::multi_assignment(
-        "d, e = 3, 4",
-        "[single-letter-variable-name] Line 1, Col 1: Variable name `d` is too short (single-letter).\n[single-letter-variable-name] Line 1, Col 4: Variable name `e` is too short (single-letter)."
-    )]
-    #[case::comprehension(
-        "[y for y in range(10)]",
-        "[single-letter-variable-name] Line 1, Col 8: Variable name `y` is too short (single-letter)."
-    )]
-    #[case::exception_alias(
-        "try:\n    pass\nexcept Exception as g:\n    pass",
-        "[single-letter-variable-name] Line 3, Col 21: Variable name `g` is too short (single-letter)."
-    )]
-    #[case::walrus_expression(
-        "(v := 1)",
-        "[single-letter-variable-name] Line 1, Col 2: Variable name `v` is too short (single-letter)."
-    )]
-    fn test_python_bindings(#[case] source: &str, #[case] expected: &str) {
-        let output = assert_code_rule_snapshot(&SingleLetterVariableName, source, "test.py");
-        assert_eq!(output.trim(), expected);
-    }
-
-    #[test]
-    fn test_configuration_override() {
-        let rule = SingleLetterVariableName;
-        let config_toml = indoc::indoc! {r#"
-            [rules.single-letter-variable-name]
-            allowed = ["y"]
-            banned = ["i"]
-        "#};
-        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
-
-        let source = "fn main() { let i = 1; let y = 2; }";
-        let output = assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config);
-        assert!(output.contains("Variable name `i` is too short"));
-        assert!(!output.contains("Variable name `y`"));
-    }
-}
+);

@@ -11,13 +11,14 @@ use std::path::Path;
 /// Default maximum assertions allowed per test function (`4`).
 const DEFAULT_MAX_ASSERTIONS: LanguageDefaults<usize> = LanguageDefaults::new(4, &[]);
 
+// TODO: In cases like this where the python and rust versions are almost the same, could we factorize this?
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Test function `{func}` has {count} assertions, exceeding the maximum of {max}.",
-    rationale: "Tests with too many assertions often verify multiple unrelated behaviors. Obscuring them with ad-hoc helper closures, filtering loops, or artificial compression hurts readability and makes failures harder to diagnose.",
+    summary: "Test function `{func}` contains {count} assertions (maximum allowed is {max}).",
+    rationale: "Tests with excessive assertions verify multiple unrelated behaviors at once and halt at the first failure, masking subsequent checks and complicating diagnosis.",
     suggestion: {
-        base: "Refactor `{func}` by choosing the appropriate pattern: (1) Split distinct steps or behaviors into separate focused test functions, (2) Snapshot formatted output or compare whole domain models directly, or (3) Parameterize test variations. Do NOT add accidental complexity with ad-hoc assertion helpers, extraction closures, filtering loops, or boolean tuples solely to reduce assertion count.",
-        Python => "Refactor `{func}` by choosing the appropriate pattern: (1) Split distinct steps or behaviors into separate focused `test_*` functions, (2) Snapshot formatted output or compare whole domain models directly, or (3) Parameterize variations with `@pytest.mark.parametrize`. Do NOT add accidental complexity with ad-hoc assertion helpers, extraction closures, filtering loops, or boolean tuples solely to reduce assertion count.",
-        Rust => "Refactor `{func}` by choosing the appropriate pattern: (1) Split distinct steps or behaviors into separate focused `#[test]` functions, (2) Snapshot formatted output (`insta::assert_snapshot!`) or compare whole domain models directly, or (3) Parameterize test cases with `#[rstest]` and `#[case(...)]`. Do NOT add accidental complexity with ad-hoc assertion helpers, extraction closures, filtering loops, or boolean tuples solely to reduce assertion count.",
+        base: "Assert on a single expected struct/value, split distinct scenarios into separate focused test functions, or parameterize test variations.",
+        Python => "Assert on a single expected object/value, split distinct scenarios into separate `test_*` functions, or parameterize variations with `@pytest.mark.parametrize`.",
+        Rust => "Assert on a single expected struct/value, split distinct scenarios into separate `#[test]` functions, or parameterize cases with `#[rstest]`.",
     },
 };
 
@@ -128,100 +129,105 @@ impl CodeRule for MaxTestAssertions {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
+crate::rule_test!(
+    MaxTestAssertions,
+    {
+        Python => {
+            pass: [
+                helper_function_exempt => r#"
+                    def assert_helper(response):
+                        assert response.status == 200
+                        assert response.body is not None
+                        assert response.headers
+                        assert response.cookies
+                        assert response.ok
+                "#,
+                focused_test_within_threshold => r#"
+                    import pytest
 
-    #[test]
-    fn test_python_max_assertions_flagged() {
-        let source = indoc::indoc! {r"
-            import pytest
+                    def test_focused():
+                        assert 1 + 1 == 2
+                        assert 2 + 2 == 4
+                        with pytest.raises(ValueError):
+                            int("bad")
+                        assert True
+                "#,
+                single_assertion_allowed => r#"
+                    def test_single():
+                        assert 1 == 1
+                "#,
+            ],
+            fail: [
+                single_test_too_many_assertions => r#"
+                    def test_too_many():
+                        assert 1 == 1
+                        assert 2 == 2
+                        assert 3 == 3
+                        assert 4 == 4
+                        assert 5 == 5
+                "# => ["test_too_many"],
+                mixed_tests_only_flags_exceeding => r#"
+                    def test_ok():
+                        assert 1 == 1
 
-            def assert_helper(response):
-                assert response.status == 200
-                assert response.body is not None
-                assert response.headers
-                assert response.cookies
-                assert response.ok
-
-            def test_focused_behavior():
-                assert 1 + 1 == 2
-                assert 2 + 2 == 4
-                with pytest.raises(ValueError):
-                    int('bad')
-                assert True
-
-            def test_kitchen_sink_endpoint(self, mock_service):
-                assert 1 == 1
-                self.assertEqual(2, 2)
-                mock_service.assert_called_once()
-                with pytest.raises(KeyError):
-                    {}['missing']
-                assert 5 == 5
-        "};
-
-        insta::assert_snapshot!(
-            assert_code_rule_snapshot(&MaxTestAssertions, source, "tests/test_api.py"),
-            @"[max-test-assertions] Line 17, Col 5: Test function `test_kitchen_sink_endpoint` has 5 assertions, exceeding the maximum of 4."
-        );
+                    def test_kitchen_sink():
+                        assert 1 == 1
+                        assert 2 == 2
+                        assert 3 == 3
+                        assert 4 == 4
+                        assert 5 == 5
+                "# => ["test_kitchen_sink"],
+            ],
+        },
+        Rust => {
+            pass: [
+                helper_function_exempt => r#"
+                    fn assert_helper() {
+                        assert_eq!(1, 1);
+                        assert_eq!(2, 2);
+                        assert_eq!(3, 3);
+                        assert_eq!(4, 4);
+                        assert_eq!(5, 5);
+                    }
+                "#,
+                focused_test_within_threshold => r#"
+                    #[test]
+                    fn parses_valid_header() {
+                        assert_eq!(1, 1);
+                        assert_ne!(1, 2);
+                        assert!(true);
+                        debug_assert_eq!(3, 3);
+                    }
+                "#,
+                tokio_test_within_threshold => r#"
+                    #[tokio::test]
+                    async fn focused_async_check() {
+                        assert_eq!(1, 1);
+                        assert!(matches!(Some(1), Some(_)));
+                    }
+                "#,
+            ],
+            fail: [
+                attributed_test_too_many_assertions => r#"
+                    #[test]
+                    fn test_too_many() {
+                        assert_eq!(1, 1);
+                        assert_eq!(2, 2);
+                        assert_eq!(3, 3);
+                        assert_eq!(4, 4);
+                        assert_eq!(5, 5);
+                    }
+                "# => ["test_too_many"],
+                unattributed_test_too_many_assertions => r#"
+                    fn test_unattributed() {
+                        assert_eq!(1, 1);
+                        assert_eq!(2, 2);
+                        assert_eq!(3, 3);
+                        assert_eq!(4, 4);
+                        assert_eq!(5, 5);
+                    }
+                "# => ["test_unattributed"],
+            ],
+        },
     }
-
-    #[test]
-    fn test_rust_max_assertions_flagged() {
-        let source = indoc::indoc! {r#"
-            #[test]
-            fn parses_valid_header() {
-                assert_eq!(1, 1);
-                assert_ne!(1, 2);
-                assert!(true);
-                debug_assert_eq!(3, 3);
-                insta::assert_snapshot!("ok");
-            }
-
-            #[tokio::test]
-            async fn focused_async_check() {
-                assert_eq!(1, 1);
-                assert!(matches!(Some(1), Some(_)));
-            }
-
-            #[cfg(test)]
-            fn verify_response_fields() {
-                assert_eq!(1, 1);
-                assert_eq!(2, 2);
-                assert_eq!(3, 3);
-                assert_eq!(4, 4);
-                assert_eq!(5, 5);
-            }
-        "#};
-
-        insta::assert_snapshot!(
-            assert_code_rule_snapshot(&MaxTestAssertions, source, "tests/header_test.rs"),
-            @"[max-test-assertions] Line 2, Col 4: Test function `parses_valid_header` has 5 assertions, exceeding the maximum of 4."
-        );
-    }
-
-    #[test]
-    fn test_configurable_threshold() {
-        let source = indoc::indoc! {r"
-            def test_three_assertions():
-                assert 1 == 1
-                assert 2 == 2
-                assert 3 == 3
-        "};
-        let config_toml = indoc::indoc! {r"
-            [rules.max-test-assertions]
-            max = 2
-        "};
-        let config: Config = toml::from_str(config_toml).unwrap();
-        let output = assert_code_rule_snapshot_with_config(
-            &MaxTestAssertions,
-            source,
-            "tests/test_custom.py",
-            &config,
-        );
-        insta::assert_snapshot!(
-            output,
-            @"[max-test-assertions] Line 1, Col 5: Test function `test_three_assertions` has 3 assertions, exceeding the maximum of 2."
-        );
-    }
-}
+);

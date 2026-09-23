@@ -110,7 +110,7 @@ pub trait CodeRule: crate::core::Rule {
 pub fn detect_language(path: &Path) -> Option<SupportLang> {
     path.extension()
         .and_then(std::ffi::OsStr::to_str)
-        .and_then(|ext| match ext {
+        .and_then(|extension| match extension {
             "py" => Some(SupportLang::Python),
             "rs" => Some(SupportLang::Rust),
             _ => None,

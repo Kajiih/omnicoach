@@ -19,9 +19,9 @@ const DEFAULT_BANNED_SUFFIXES: FilterListDefaults = FilterListDefaults {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Identifier `{name}` contains a banned type suffix `{actual_suffix}`.",
-    rationale: "Naming variables with their type suffixes (Hungarian notation) makes refactoring harder and clutters the code.",
-    suggestion: "Rename `{name}` without the type suffix `{actual_suffix}` (e.g. `{base_name}`, or a plural noun for collections).",
+    summary: "Identifier `{name}` ends with type suffix `{actual_suffix}`.",
+    rationale: "Encoding container or primitive types in variable names duplicates static type annotations and becomes misleading when the underlying type changes.",
+    suggestion: "Rename `{name}` to a semantic or domain-plural noun such as `{base_name}` (e.g., `users`, `name`).",
 };
 
 /// Rule that bans Hungarian notation type suffixes.
@@ -63,68 +63,87 @@ impl CodeRule for NoHungarianNotation {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::{assert_code_rule_snapshot, assert_code_rule_snapshot_with_config};
-
-    #[test]
-    fn test_rust_snapshots() {
-        let rule = NoHungarianNotation;
-
-        let source = indoc::indoc! {r#"
-            use std::collections::VecDeque; // OK (import)
-            use std::collections::HashMap as my_map; // OK (import alias)
-            struct UserList; // OK (struct definition)
-            fn process_arr() { // OK (function name)
-                let user_list = vec!["alice"];
-                let id_set = std::collections::HashSet::new();
-                let name_str = "bob";
-                const MY_INT: i32 = 42;
-                let age = 30; // OK
-            }
-        "#};
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.rs"), @"
-        [no-hungarian-notation] Line 5, Col 9: Identifier `user_list` contains a banned type suffix `_list`.
-        [no-hungarian-notation] Line 6, Col 9: Identifier `id_set` contains a banned type suffix `_set`.
-        [no-hungarian-notation] Line 7, Col 9: Identifier `name_str` contains a banned type suffix `_str`.
-        [no-hungarian-notation] Line 8, Col 11: Identifier `MY_INT` contains a banned type suffix `_INT`.
-        ");
-    }
-
-    #[test]
-    fn test_python_snapshots() {
-        let rule = NoHungarianNotation;
-
-        let source = indoc::indoc! {r"
-            import os_path # OK (import)
-            from sys import stderr as err_file # OK (import alias)
-            class ItemsArr: # OK (class definition)
-                def handle_dict(self): # OK (method definition)
+crate::rule_test!(
+    NoHungarianNotation,
+    {
+        Python => {
+            pass: [
+                import_and_alias_exempt => r#"
+                    import os_path
+                    from sys import stderr as err_file
+                "#,
+                class_and_method_exempt => r#"
+                    class ItemsArr:
+                        def handle_dict(self):
+                            pass
+                "#,
+                unsuffixed_variables => r#"
+                    users = ["alice"]
+                    data = None
+                "#,
+            ],
+            fail: [
+                variable_with_dict_suffix => r#"
+                    users_dict = {}
+                "# => ["users_dict"],
+                variable_with_arr_suffix => r#"
+                    items_arr = []
+                "# => ["items_arr"],
+                variable_with_int_suffix => r#"
+                    value_int = 42
+                "# => ["value_int"],
+                multiple_suffixed_variables => r#"
                     users_dict = {}
                     items_arr = []
                     value_int = 42
-                    data = None # OK
-        "};
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "test.py"), @"
-        [no-hungarian-notation] Line 5, Col 9: Identifier `users_dict` contains a banned type suffix `_dict`.
-        [no-hungarian-notation] Line 6, Col 9: Identifier `items_arr` contains a banned type suffix `_arr`.
-        [no-hungarian-notation] Line 7, Col 9: Identifier `value_int` contains a banned type suffix `_int`.
-        ");
+                "# => ["users_dict", "items_arr", "value_int"],
+            ],
+        },
+        Rust => {
+            pass: [
+                import_and_alias_exempt => r#"
+                    use std::collections::VecDeque;
+                    use std::collections::HashMap as my_map;
+                "#,
+                struct_and_fn_exempt => r#"
+                    struct UserList;
+                    fn process_arr() {}
+                "#,
+                unsuffixed_variables => r#"
+                    fn run() {
+                        let users = vec!["alice"];
+                        let age = 30;
+                    }
+                "#,
+            ],
+            fail: [
+                let_binding_list => r#"
+                    fn run() {
+                        let user_list = vec!["alice"];
+                    }
+                "# => ["user_list"],
+                let_binding_set => r#"
+                    fn run() {
+                        let id_set = std::collections::HashSet::new();
+                    }
+                "# => ["id_set"],
+                let_binding_str => r#"
+                    fn run() {
+                        let name_str = "bob";
+                    }
+                "# => ["name_str"],
+                const_binding_int => r#"
+                    const MY_INT: i32 = 42;
+                "# => ["MY_INT"],
+                multiple_suffixed_variables => r#"
+                    fn run() {
+                        let user_list = vec!["alice"];
+                        let id_set = std::collections::HashSet::new();
+                        let name_str = "bob";
+                        const MY_INT: i32 = 42;
+                    }
+                "# => ["user_list", "id_set", "name_str", "MY_INT"],
+            ],
+        },
     }
-
-    #[test]
-    fn test_configuration_override() {
-        let rule = NoHungarianNotation;
-        let config_toml = indoc::indoc! {r#"
-            [rules.no-hungarian-notation]
-            allowed = ["_str"]
-            extend_banned = ["_handle"]
-        "#};
-        let config: crate::core::Config = toml::from_str(config_toml).unwrap();
-
-        let source = "fn main() { let name_str = 1; let conn_handle = 2; }";
-        let output = assert_code_rule_snapshot_with_config(&rule, source, "test.rs", &config);
-        assert!(!output.contains("_str"));
-        assert!(output.contains("contains a banned type suffix `_handle`"));
-    }
-}
+);

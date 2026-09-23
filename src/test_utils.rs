@@ -30,12 +30,6 @@ pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic]) -> String {
     output
 }
 
-/// Helper to execute `check_file` on a `CodeRule` and return its formatted diagnostics snapshot.
-#[must_use]
-pub fn assert_code_rule_snapshot(rule: &impl CodeRule, source: &str, filename: &str) -> String {
-    assert_code_rule_snapshot_with_config(rule, source, filename, &Config::default())
-}
-
 /// Executes `check_file` on a `CodeRule` (including `RequireExplanation` filtering).
 #[must_use]
 pub fn run_code_rule(
@@ -65,18 +59,6 @@ pub fn run_code_rule(
         });
     }
     diags
-}
-
-/// Helper to execute `check_file` on a `CodeRule` with custom configuration and return its formatted diagnostics snapshot.
-#[must_use]
-pub fn assert_code_rule_snapshot_with_config(
-    rule: &impl CodeRule,
-    source: &str,
-    filename: &str,
-    config: &Config,
-) -> String {
-    let diags = run_code_rule(rule, source, filename, config);
-    format_diagnostics_for_test(&diags)
 }
 
 /// Helper to execute `check_command` on a `CommandRule` and return its formatted diagnostics snapshot.
@@ -232,8 +214,11 @@ fn dummy_filename(lang: SupportLang) -> &'static str {
 /// and generates a `language_completeness` test verifying all `supported_languages()`.
 #[macro_export]
 macro_rules! rule_test {
+    ($rule:expr, { $($body:tt)* }) => {
+        $crate::rule_test!(tests: $rule, { $($body)* });
+    };
     (
-        $rule:expr,
+        $mod_name:ident : $rule:expr,
         {
             $(
                 $lang:ident => {
@@ -247,7 +232,7 @@ macro_rules! rule_test {
             ),+ $(,)?
         }
     ) => {
-        mod tests {
+        mod $mod_name {
             use super::*;
 
             #[test]

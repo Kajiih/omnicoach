@@ -5,13 +5,13 @@ expression: output_full
 --- exit code ---
 1
 --- stdout ---
-test.py:2:5: [flat-scope-enforced] Nested function definition `inner` is discouraged.
-  Rationale: Nested functions increase cognitive complexity and reduce testability.
-  Suggestion: Move `inner` to the module level or convert to a private helper.
+test.py:2:5: [flat-scope-enforced] Function `inner` is defined inside another function.
+  Rationale: Nested named functions bloat enclosing scopes and capture ambient state implicitly, increasing cognitive complexity and preventing isolated unit testing.
+  Suggestion: Extract `inner` to a module-level private function (`_inner`) or use an inline `lambda` for trivial callbacks.
 
-test.py:5:5: [flat-scope-enforced] Nested function definition `world` is discouraged.
-  Rationale: Nested functions increase cognitive complexity and reduce testability.
-  Suggestion: Move `world` to the module level or convert to a private helper.
+test.py:5:5: [flat-scope-enforced] Function `world` is defined inside another function.
+  Rationale: Nested named functions bloat enclosing scopes and capture ambient state implicitly, increasing cognitive complexity and preventing isolated unit testing.
+  Suggestion: Extract `world` to a module-level private function (`_world`) or use an inline `lambda` for trivial callbacks.
 
 
 --- stderr ---

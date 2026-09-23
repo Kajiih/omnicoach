@@ -31,22 +31,22 @@ const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
 };
 
 const SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Wall-clock or async sleep `{call}()` in test is discouraged.",
-    rationale: "Sleeping in tests slows down the test suite and introduces timing-dependent flakiness under load.",
+    summary: "Wall-clock or async sleep call `{call}()` in test.",
+    rationale: "Sleeping for fixed durations slows down test execution and introduces timing-dependent flakiness under load.",
     suggestion: {
-        base: "Synchronize on deterministic signals or primitives (events, channels, conditions) or inject a virtual/fake clock (`clock.sleep(...)`).",
-        Python => "Synchronize on deterministic signals (`anyio.Event`, `asyncio.Event`, or a queue/condition) or inject a virtual/fake clock (`clock.sleep(...)`).",
-        Rust => "Synchronize on deterministic primitives (`tokio::sync::Notify`, channels, `Condvar`) or use virtual time (`tokio::time::pause()`) or an injected clock (`clock.sleep(...)`).",
+        base: "Synchronize on deterministic primitives (events, channels, conditions) or advance an injected virtual clock (`clock.sleep(...)`).",
+        Python => "Synchronize on deterministic signals (`anyio.Event`, `asyncio.Event`, or a queue) or advance an injected virtual clock (`clock.sleep(...)`).",
+        Rust => "Synchronize on deterministic primitives (`tokio::sync::Notify`, channels, `Condvar`) or pause time with `tokio::time::pause()`.",
     },
 };
 
 const ZERO_SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Zero-duration sleep `{call}({arg})` in test is discouraged.",
-    rationale: "Zero-duration sleep is an indirect way to yield execution to the scheduler and obscures intent.",
+    summary: "Zero-duration sleep call `{call}({arg})` in test.",
+    rationale: "Using a zero-duration sleep to yield execution to the scheduler obscures intent and relies on side effects of the timer subsystem.",
     suggestion: {
-        base: "To yield control to the scheduler or runtime without delaying, use an explicit yield or checkpoint primitive.",
-        Python => "To yield control to the event loop without delaying, use `await anyio.lowlevel.checkpoint()`.",
-        Rust => "To yield control to the executor without delaying, use `tokio::task::yield_now().await`.",
+        base: "Use an explicit scheduler yield or checkpoint primitive.",
+        Python => "Use `await anyio.lowlevel.checkpoint()` to yield control to the event loop explicitly.",
+        Rust => "Use `tokio::task::yield_now().await` to yield control to the async executor explicitly.",
     },
 };
 
@@ -159,72 +159,156 @@ impl CodeRule for NoZeroSleepInTests {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::assert_code_rule_snapshot;
+crate::rule_test!(tests_no_sleep: NoSleepInTests, {
+    Python => {
+        pass: [
+            zero_duration_sleep_handled_separately => r"
+                import asyncio
 
-    #[test]
-    fn test_python_sleep_in_tests_flagged() {
-        let source = indoc::indoc! {r"
-            import asyncio
-            import anyio
-            import time
+                async def test_yield():
+                    await asyncio.sleep(0)
+            ",
+            injected_fake_clock_sleep => r"
+                async def test_timeout(fake_clock):
+                    await fake_clock.sleep(10)
+            ",
+            custom_receiver_method => r"
+                def test_worker(worker):
+                    worker.sleep(5)
+            ",
+        ],
+        fail: [
+            time_sleep => r"
+                import time
 
-            async def test_polling():
-                time.sleep(1)
-                await asyncio.sleep(0.5)
-                await anyio.sleep(2)
-                sleep(1)
-                await asyncio.sleep(0)
-                await fake_clock.sleep(10)
-                self.sleep(5)
-        "};
+                def test_polling():
+                    time.sleep(1)
+            " => ["time.sleep(1)"],
+            asyncio_sleep => r"
+                import asyncio
 
-        insta::assert_snapshot!(
-            assert_code_rule_snapshot(&NoSleepInTests, source, "tests/test_worker.py"),
-            @"
-        [no-sleep-in-tests] Line 6, Col 5: Wall-clock or async sleep `time.sleep()` in test is discouraged.
-        [no-sleep-in-tests] Line 7, Col 11: Wall-clock or async sleep `asyncio.sleep()` in test is discouraged.
-        [no-sleep-in-tests] Line 8, Col 11: Wall-clock or async sleep `anyio.sleep()` in test is discouraged.
-        [no-sleep-in-tests] Line 9, Col 5: Wall-clock or async sleep `sleep()` in test is discouraged.
-        "
-        );
+                async def test_polling():
+                    await asyncio.sleep(0.5)
+            " => ["asyncio.sleep(0.5)"],
+            anyio_and_unqualified_sleep => r"
+                import anyio
 
-        insta::assert_snapshot!(
-            assert_code_rule_snapshot(&NoZeroSleepInTests, source, "tests/test_worker.py"),
-            @"[no-zero-sleep-in-tests] Line 10, Col 11: Zero-duration sleep `asyncio.sleep(0)` in test is discouraged."
-        );
-    }
+                async def test_polling():
+                    await anyio.sleep(2)
+                    sleep(1)
+            " => ["anyio.sleep(2)", "sleep(1)"],
+        ],
+    },
+    Rust => {
+        pass: [
+            zero_duration_sleep_handled_separately => r"
+                use std::time::Duration;
 
-    #[test]
-    fn test_rust_sleep_in_tests_flagged() {
-        let source = indoc::indoc! {r"
-            use std::time::Duration;
+                #[tokio::test]
+                async fn test_yield() {
+                    tokio::time::sleep(Duration::ZERO).await;
+                }
+            ",
+            injected_fake_clock_method => r"
+                use std::time::Duration;
 
-            #[tokio::test]
-            async fn test_retry_backoff() {
-                std::thread::sleep(Duration::from_millis(50));
-                thread::sleep(Duration::from_secs(1));
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                sleep(Duration::from_millis(5));
-                tokio::time::sleep(Duration::ZERO).await;
-                fake_clock.sleep(Duration::from_secs(5)).await;
-            }
-        "};
+                #[tokio::test]
+                async fn test_backoff() {
+                    fake_clock.sleep(Duration::from_secs(5)).await;
+                }
+            ",
+        ],
+        fail: [
+            std_thread_sleep => r"
+                use std::time::Duration;
 
-        insta::assert_snapshot!(
-            assert_code_rule_snapshot(&NoSleepInTests, source, "tests/retry_test.rs"),
-            @"
-        [no-sleep-in-tests] Line 5, Col 5: Wall-clock or async sleep `std::thread::sleep()` in test is discouraged.
-        [no-sleep-in-tests] Line 6, Col 5: Wall-clock or async sleep `thread::sleep()` in test is discouraged.
-        [no-sleep-in-tests] Line 7, Col 5: Wall-clock or async sleep `tokio::time::sleep()` in test is discouraged.
-        [no-sleep-in-tests] Line 8, Col 5: Wall-clock or async sleep `sleep()` in test is discouraged.
-        "
-        );
+                #[test]
+                fn test_retry() {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            " => ["std::thread::sleep(Duration::from_millis(50))"],
+            tokio_and_unqualified_sleep => r"
+                use std::time::Duration;
 
-        insta::assert_snapshot!(
-            assert_code_rule_snapshot(&NoZeroSleepInTests, source, "tests/retry_test.rs"),
-            @"[no-zero-sleep-in-tests] Line 9, Col 5: Zero-duration sleep `tokio::time::sleep(Duration::ZERO)` in test is discouraged."
-        );
-    }
-}
+                #[tokio::test]
+                async fn test_retry() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    sleep(Duration::from_millis(5));
+                }
+            " => [
+                "tokio::time::sleep(Duration::from_millis(10))",
+                "sleep(Duration::from_millis(5))",
+            ],
+        ],
+    },
+});
+
+#[cfg(test)]
+crate::rule_test!(tests_no_zero_sleep: NoZeroSleepInTests, {
+    Python => {
+        pass: [
+            non_zero_sleep => r"
+                import asyncio
+
+                async def test_wait():
+                    await asyncio.sleep(1)
+            ",
+            anyio_checkpoint => r"
+                import anyio.lowlevel
+
+                async def test_yield():
+                    await anyio.lowlevel.checkpoint()
+            ",
+        ],
+        fail: [
+            asyncio_sleep_zero => r"
+                import asyncio
+
+                async def test_yield():
+                    await asyncio.sleep(0)
+            " => ["asyncio.sleep(0)"],
+            anyio_sleep_zero_float => r"
+                import anyio
+
+                async def test_yield():
+                    await anyio.sleep(0.0)
+            " => ["anyio.sleep(0.0)"],
+        ],
+    },
+    Rust => {
+        pass: [
+            non_zero_sleep => r"
+                use std::time::Duration;
+
+                #[tokio::test]
+                async fn test_wait() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            ",
+            tokio_yield_now => r"
+                #[tokio::test]
+                async fn test_yield() {
+                    tokio::task::yield_now().await;
+                }
+            ",
+        ],
+        fail: [
+            tokio_sleep_duration_zero => r"
+                use std::time::Duration;
+
+                #[tokio::test]
+                async fn test_yield() {
+                    tokio::time::sleep(Duration::ZERO).await;
+                }
+            " => ["tokio::time::sleep(Duration::ZERO)"],
+            thread_sleep_from_secs_zero => r"
+                use std::time::Duration;
+
+                #[test]
+                fn test_yield() {
+                    std::thread::sleep(Duration::from_secs(0));
+                }
+            " => ["std::thread::sleep(Duration::from_secs(0))"],
+        ],
+    },
+});

@@ -5,9 +5,9 @@ expression: output
 --- exit code ---
 1
 --- stdout ---
-[TEMP_PATH]:2:5: [flat-scope-enforced] Nested function definition `inner` is discouraged.
-  Rationale: Nested functions increase cognitive complexity and reduce testability.
-  Suggestion: Move `inner` to the module level or convert to a private helper.
+[TEMP_PATH]:2:5: [flat-scope-enforced] Function `inner` is defined inside another function.
+  Rationale: Nested named functions bloat enclosing scopes and capture ambient state implicitly, increasing cognitive complexity and preventing isolated unit testing.
+  Suggestion: Extract `inner` to a module-level private function (`_inner`) or use an inline `lambda` for trivial callbacks.
 
 
 --- stderr ---

@@ -5,9 +5,9 @@ expression: output
 --- exit code ---
 1
 --- stdout ---
-VCS_Context:1:1: [no-edits-on-described-commits] Running `jj edit @` on a described commit is discouraged.
-  Rationale: Editing described commits breaks atomicity and review stability.
-  Suggestion: Create a new change with `jj new @` instead of editing this commit directly.
+VCS_Context:1:1: [no-edits-on-described-commits] Command `jj edit @` targets a non-empty described commit.
+  Rationale: Directly mutating an already-described commit rewrites reviewed history in place and risks tangling unrelated work into an existing change.
+  Suggestion: Create a child change on top with `jj new @` and squash intentional fixes selectively via `jj squash`.
 
 
 --- stderr ---

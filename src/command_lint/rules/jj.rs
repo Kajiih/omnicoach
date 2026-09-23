@@ -1,4 +1,5 @@
 //! Validation checks for the `jj edit` command.
+// TODO: Consider if we should replace this rule with a no edit on bookmarked commit?
 
 use crate::command_lint::InterceptedCommand;
 use crate::command_lint::vcs::JjClient;
@@ -42,9 +43,9 @@ fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
 }
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Running `jj edit {revision}` on a described commit is discouraged.",
-    rationale: "Editing described commits breaks atomicity and review stability.",
-    suggestion: "Create a new change with `jj new {revision}` instead of editing this commit directly.",
+    summary: "Command `jj edit {revision}` targets a non-empty described commit.",
+    rationale: "Directly mutating an already-described commit rewrites reviewed history in place and risks tangling unrelated work into an existing change.",
+    suggestion: "Create a child change on top with `jj new {revision}` and squash intentional fixes selectively via `jj squash`.",
 };
 
 /// Blocks running `jj edit <revision>` if the target revision has a non-empty description.
@@ -130,7 +131,7 @@ mod tests {
             &jj_client,
             &config,
         );
-        insta::assert_snapshot!(output, @"[no-edits-on-described-commits] Line 1, Col 1: Running `jj edit d123` on a described commit is discouraged.");
+        insta::assert_snapshot!(output, @"[no-edits-on-described-commits] Line 1, Col 1: Command `jj edit d123` targets a non-empty described commit.");
 
         // Allow empty/anonymous commit edit
         let output_allowed = crate::test_utils::assert_command_rule_snapshot(

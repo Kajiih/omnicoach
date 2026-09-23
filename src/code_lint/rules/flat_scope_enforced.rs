@@ -9,12 +9,12 @@ use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Nested function definition `{func_name}` is discouraged.",
-    rationale: "Nested functions increase cognitive complexity and reduce testability.",
-    suggestion: "Move `{func_name}` to the module level or convert to a private helper.",
+    summary: "Function `{func_name}` is defined inside another function.",
+    rationale: "Nested named functions bloat enclosing scopes and capture ambient state implicitly, increasing cognitive complexity and preventing isolated unit testing.",
+    suggestion: "Extract `{func_name}` to a module-level private function (`_{func_name}`) or use an inline `lambda` for trivial callbacks.",
 };
 
-/// Rule struct.
+/// Rule enforcing flat function definitions (no nested named functions).
 pub struct FlatScopeEnforced;
 
 impl Rule for FlatScopeEnforced {
@@ -61,50 +61,75 @@ impl CodeRule for FlatScopeEnforced {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use indoc::indoc;
-
-    #[test]
-    fn test_flat_scope_enforced_rule() {
-        let source_violating = indoc! {r"
-            def outer():
-                def inner():
-                    pass
-        "};
-        let source_ok = indoc! {r"
-            def first():
-                pass
-
-            def second():
-                pass
-        "};
-
-        let output_violating = crate::test_utils::assert_code_rule_snapshot(
-            &FlatScopeEnforced,
-            source_violating,
-            "test.py",
-        );
-        insta::assert_snapshot!(output_violating, @"[flat-scope-enforced] Line 2, Col 5: Nested function definition `inner` is discouraged.");
-
-        let output_ok =
-            crate::test_utils::assert_code_rule_snapshot(&FlatScopeEnforced, source_ok, "test.py");
-        assert!(output_ok.is_empty());
-    }
-
-    #[test]
-    fn test_flat_scope_multiple_nested() {
-        let source = indoc! {r"
-            def outer():
-                def inner1():
-                    def inner2():
+crate::rule_test!(
+    FlatScopeEnforced,
+    {
+        Python => {
+            pass: [
+                top_level_functions_allowed => r#"
+                    def first():
                         pass
-        "};
-        let output =
-            crate::test_utils::assert_code_rule_snapshot(&FlatScopeEnforced, source, "test.py");
-        insta::assert_snapshot!(output, @"
-        [flat-scope-enforced] Line 2, Col 5: Nested function definition `inner1` is discouraged.
-        [flat-scope-enforced] Line 3, Col 9: Nested function definition `inner2` is discouraged.
-        ");
+
+                    def second():
+                        pass
+                "#,
+                class_methods_allowed => r#"
+                    class Greeter:
+                        def greet(self):
+                            return "hello"
+                "#,
+                lambda_callbacks_allowed => r#"
+                    def sort_items(items):
+                        return sorted(items, key=lambda item: item.id)
+                "#,
+                module_level_private_helper_allowed => r#"
+                    def _compute_checksum(payload):
+                        return len(payload)
+
+                    def process(payload):
+                        return _compute_checksum(payload)
+                "#,
+            ],
+            fail: [
+                nested_function_in_function => r#"
+                    def outer():
+                        def inner():
+                            return 1
+                        return inner()
+                "# => [r#"
+                    def inner():
+                        return 1
+                "#],
+                nested_function_in_method => r#"
+                    class Processor:
+                        def run(self, data):
+                            def transform(item):
+                                return item * 2
+                            return [transform(val) for val in data]
+                "# => [r#"
+                    def transform(item):
+                        return item * 2
+                "#],
+                multiple_nested_functions => r#"
+                    def pipeline(value):
+                        def step_one(input_val):
+                            return input_val + 1
+
+                        def step_two(input_val):
+                            return input_val * 2
+
+                        return step_two(step_one(value))
+                "# => [
+                    r#"
+                        def step_one(input_val):
+                            return input_val + 1
+                    "#,
+                    r#"
+                        def step_two(input_val):
+                            return input_val * 2
+                    "#,
+                ],
+            ],
+        },
     }
-}
+);

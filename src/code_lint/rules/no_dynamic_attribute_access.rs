@@ -25,9 +25,9 @@ const DEFAULT_BANNED_FUNCTIONS: FilterListDefaults = FilterListDefaults {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Dynamic reflection call `{callee}()` bypasses static type checking.",
-    rationale: "Runtime attribute reflection (`getattr`, `hasattr`, `setattr`, `delattr`) defeats static type analysis by erasing attribute types to `Any`, obscures symbol references during refactoring, and `hasattr` can silently mask unexpected property exceptions.",
-    suggestion: "Use direct attribute access, a `Protocol` / `TypedDict` interface, `isinstance()` narrowing, or an explicit `dict` lookup instead of `{callee}()`.",
+    summary: "Dynamic attribute reflection call `{callee}()`.",
+    rationale: "Runtime attribute reflection erases static attribute types to `Any`, hides symbol references from refactoring tools, and `hasattr` can silently swallow unexpected property exceptions.",
+    suggestion: "Access attributes directly on a typed object, use a `Mapping` lookup (`dict.get`), or define a structural `Protocol`.",
 };
 
 /// Rule that bans dynamic attribute reflection in Python files.
@@ -67,32 +67,51 @@ impl CodeRule for NoDynamicAttributeAccess {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::assert_code_rule_snapshot;
-
-    #[test]
-    fn test_dynamic_attribute_access_detection() {
-        let rule = NoDynamicAttributeAccess;
-
-        let source = indoc::indoc! {r#"
-            value = getattr(service, "timeout", 10)
-            if hasattr(record, field_name):
-                setattr(record, field_name, 42)
-            delattr(record, "deprecated_key")
-
-            import builtins
-            builtins.getattr(service, "name")
-
-            # Custom methods with matching names must NOT be flagged:
-            registry.getattr("key")
-        "#};
-        insta::assert_snapshot!(assert_code_rule_snapshot(&rule, source, "service.py"), @"
-        [no-dynamic-attribute-access] Line 1, Col 9: Dynamic reflection call `getattr()` bypasses static type checking.
-        [no-dynamic-attribute-access] Line 2, Col 4: Dynamic reflection call `hasattr()` bypasses static type checking.
-        [no-dynamic-attribute-access] Line 3, Col 5: Dynamic reflection call `setattr()` bypasses static type checking.
-        [no-dynamic-attribute-access] Line 4, Col 1: Dynamic reflection call `delattr()` bypasses static type checking.
-        [no-dynamic-attribute-access] Line 7, Col 1: Dynamic reflection call `builtins.getattr()` bypasses static type checking.
-        ");
+crate::rule_test!(
+    NoDynamicAttributeAccess,
+    {
+        Python => {
+            pass: [
+                direct_attribute_access => r#"
+                    value = service.timeout
+                "#,
+                dict_get_lookup => r#"
+                    value = data.get("email")
+                "#,
+                custom_object_method => r#"
+                    registry.getattr("key")
+                "#,
+            ],
+            fail: [
+                getattr_with_assignment => r#"
+                    val = getattr(user, "email")
+                "# => [r#"getattr(user, "email")"#],
+                getattr_with_default => r#"
+                    val = getattr(service, "timeout", 10)
+                "# => [r#"getattr(service, "timeout", 10)"#],
+                hasattr_in_if => r#"
+                    if hasattr(record, field_name):
+                        pass
+                "# => [r#"hasattr(record, field_name)"#],
+                setattr_call => r#"
+                    setattr(record, field_name, 42)
+                "#,
+                delattr_call => r#"
+                    delattr(record, "deprecated_key")
+                "#,
+                builtins_getattr => r#"
+                    builtins.getattr(service, "name")
+                "#,
+                builtins_hasattr => r#"
+                    builtins.hasattr(service, "name")
+                "#,
+                builtins_setattr => r#"
+                    builtins.setattr(service, "name", "new_name")
+                "#,
+                builtins_delattr => r#"
+                    builtins.delattr(service, "name")
+                "#,
+            ],
+        },
     }
-}
+);
