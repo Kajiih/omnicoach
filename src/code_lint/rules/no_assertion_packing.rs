@@ -147,25 +147,29 @@ crate::rule_test!(
     {
         Python => {
             pass: [
-                single_atomic_assertions => r#"
+                atomic_assertion => r#"
                     def test_atomic():
                         assert ready
-                        assert connected
-                        assert count == 10
-                        assert coords == (10, 20)
-                        assert flag == True
+                        assert actual == expected
+                "#,
+                disjunctive_or_condition => r#"
+                    def test_disjunction():
+                        assert a == 1 or b == 2
+                "#,
+                single_element_boolean_tuple => r#"
+                    def test_single_element():
+                        assert (flag,) == (True,)
                 "#,
                 logical_and_inside_function_call => r#"
                     def test_nested_call():
                         assert check_connection(ready and connected)
                 "#,
-                domain_model_equality => r#"
-                    def test_domain_model():
-                        assert actual == expected
-                "#,
-                non_boolean_sequence_equality => r#"
+                non_boolean_tuple_equality => r#"
                     def test_tuple_values():
                         assert (width, height) == (1920, 1080)
+                "#,
+                non_boolean_list_equality => r#"
+                    def test_list_values():
                         assert [first, second] == [1, 2]
                 "#,
             ],
@@ -173,31 +177,36 @@ crate::rule_test!(
                 compound_and_in_assert => r#"
                     def test_example():
                         assert a == 1 and b == 2
-                "# => [r#"assert a == 1 and b == 2"#],
+                "# => r#"assert a == 1 and b == 2"#,
                 boolean_tuple_equality => r#"
                     def test_example():
-                        assert (valid, active) == (True, True)
-                "# => [r#"assert (valid, active) == (True, True)"#],
-                boolean_tuple_mixed_equality => r#"
-                    def test_example():
-                        assert (status, ready) == (False, True)
-                "# => [r#"assert (status, ready) == (False, True)"#],
+                        assert (valid, active) == (True, False)
+                "# => r#"assert (valid, active) == (True, False)"#,
                 boolean_list_equality => r#"
                     def test_example():
                         assert [first, second] == [True, True]
-                "# => [r#"assert [first, second] == [True, True]"#],
+                "# => r#"assert [first, second] == [True, True]"#,
             ],
         },
         Rust => {
             pass: [
-                single_atomic_assertions => r#"
+                atomic_assertion => r#"
                     #[test]
                     fn test_atomic() {
                         assert!(ready);
-                        assert!(connected);
-                        assert_eq!(count, 10);
-                        assert_eq!(coords, (10, 20));
-                        assert_eq!(flag, true);
+                        assert_eq!(actual, expected);
+                    }
+                "#,
+                disjunctive_or_condition => r#"
+                    #[test]
+                    fn test_disjunction() {
+                        assert!(a == 1 || b == 2);
+                    }
+                "#,
+                single_element_boolean_tuple => r#"
+                    #[test]
+                    fn test_single_tuple() {
+                        assert_eq!((flag,), (true,));
                     }
                 "#,
                 logical_and_inside_function_call => r#"
@@ -206,16 +215,15 @@ crate::rule_test!(
                         assert!(check_connection(ready && connected));
                     }
                 "#,
-                domain_model_equality => r#"
-                    #[test]
-                    fn test_domain_model() {
-                        assert_eq!(actual, expected);
-                    }
-                "#,
-                non_boolean_collection_equality => r#"
+                non_boolean_tuple_equality => r#"
                     #[test]
                     fn test_tuple_values() {
                         assert_eq!((width, height), (1920, 1080));
+                    }
+                "#,
+                non_boolean_array_equality => r#"
+                    #[test]
+                    fn test_array_values() {
                         assert_eq!([compute(true), compute(false)], expected);
                     }
                 "#,
@@ -226,31 +234,25 @@ crate::rule_test!(
                     fn test_example() {
                         assert!(a == 1 && b == 2);
                     }
-                "# => [r#"assert!(a == 1 && b == 2)"#],
+                "# => r#"assert!(a == 1 && b == 2)"#,
                 compound_and_in_debug_assert => r#"
                     #[test]
                     fn test_example() {
                         debug_assert!(ready && connected);
                     }
-                "# => [r#"debug_assert!(ready && connected)"#],
+                "# => r#"debug_assert!(ready && connected)"#,
                 boolean_tuple_equality => r#"
                     #[test]
                     fn test_example() {
-                        assert_eq!((valid, active), (true, true));
+                        assert_eq!((valid, active), (true, false));
                     }
-                "# => [r#"assert_eq!((valid, active), (true, true))"#],
-                boolean_tuple_mixed_equality => r#"
-                    #[test]
-                    fn test_example() {
-                        assert_eq!((status, ready), (false, true));
-                    }
-                "# => [r#"assert_eq!((status, ready), (false, true))"#],
+                "# => r#"assert_eq!((valid, active), (true, false))"#,
                 boolean_array_equality => r#"
                     #[test]
                     fn test_example() {
-                        assert_eq!([first, second], [true, true]);
+                        debug_assert_ne!([first, second], [true, true]);
                     }
-                "# => [r#"assert_eq!([first, second], [true, true])"#],
+                "# => r#"debug_assert_ne!([first, second], [true, true])"#,
             ],
         },
     }

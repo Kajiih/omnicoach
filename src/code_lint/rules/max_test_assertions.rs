@@ -142,7 +142,7 @@ crate::rule_test!(
                         assert response.cookies
                         assert response.ok
                 "#,
-                focused_test_within_threshold => r#"
+                exact_threshold_of_four_allowed => r#"
                     import pytest
 
                     def test_focused():
@@ -152,31 +152,95 @@ crate::rule_test!(
                             int("bad")
                         assert True
                 "#,
-                single_assertion_allowed => r#"
-                    def test_single():
+                nested_function_assertions_not_counted => r#"
+                    def test_with_nested_function():
+                        def inner_verifier(item):
+                            assert item > 0
+                            assert item < 100
+
                         assert 1 == 1
+                        assert 2 == 2
+                        assert 3 == 3
+                        assert 4 == 4
+                "#,
+                nested_class_assertions_not_counted => r#"
+                    def test_with_nested_class():
+                        class LocalCheck:
+                            def verify(self):
+                                assert True
+
+                        assert 1 == 1
+                        assert 2 == 2
+                        assert 3 == 3
+                        assert 4 == 4
                 "#,
             ],
             fail: [
-                single_test_too_many_assertions => r#"
+                assert_statements_exceeding_threshold => r#"
+                    def test_ok():
+                        assert 1 == 1
+
                     def test_too_many():
                         assert 1 == 1
                         assert 2 == 2
                         assert 3 == 3
                         assert 4 == 4
                         assert 5 == 5
-                "# => ["test_too_many"],
-                mixed_tests_only_flags_exceeding => r#"
-                    def test_ok():
-                        assert 1 == 1
+                "# => "test_too_many",
+                unittest_assertions_exceeding_threshold => r#"
+                    class OrderTest:
+                        def test_order_lifecycle(self):
+                            self.assertEqual(1, 1)
+                            self.assertTrue(True)
+                            self.assertIsNotNone("ok")
+                            self.assertIn("a", "abc")
+                            self.fail("unreachable")
+                "# => "test_order_lifecycle",
+                pytest_raises_calls_exceeding_threshold => r#"
+                    import pytest
 
-                    def test_kitchen_sink():
-                        assert 1 == 1
-                        assert 2 == 2
-                        assert 3 == 3
-                        assert 4 == 4
-                        assert 5 == 5
-                "# => ["test_kitchen_sink"],
+                    def test_raises_lifecycle():
+                        with pytest.raises(ValueError):
+                            int("1")
+                        with pytest.raises(ValueError):
+                            int("2")
+                        with pytest.raises(ValueError):
+                            int("3")
+                        with pytest.raises(ValueError):
+                            int("4")
+                        with pytest.raises(ValueError):
+                            int("5")
+                "# => "test_raises_lifecycle",
+                bare_raises_calls_exceeding_threshold => r#"
+                    from pytest import raises
+
+                    def test_bare_raises():
+                        with raises(ValueError):
+                            int("1")
+                        with raises(ValueError):
+                            int("2")
+                        with raises(ValueError):
+                            int("3")
+                        with raises(ValueError):
+                            int("4")
+                        with raises(ValueError):
+                            int("5")
+                "# => "test_bare_raises",
+                pytest_warns_calls_exceeding_threshold => r#"
+                    import pytest
+
+                    def test_warns_lifecycle():
+                        with pytest.warns(UserWarning):
+                            pass
+                        with pytest.warns(UserWarning):
+                            pass
+                        with pytest.warns(UserWarning):
+                            pass
+                        with pytest.warns(UserWarning):
+                            pass
+                        with pytest.warns(UserWarning):
+                            pass
+                "# => "test_warns_lifecycle",
             ],
         },
         Rust => {
@@ -190,7 +254,7 @@ crate::rule_test!(
                         assert_eq!(5, 5);
                     }
                 "#,
-                focused_test_within_threshold => r#"
+                exact_threshold_of_four_allowed => r#"
                     #[test]
                     fn parses_valid_header() {
                         assert_eq!(1, 1);
@@ -199,26 +263,32 @@ crate::rule_test!(
                         debug_assert_eq!(3, 3);
                     }
                 "#,
-                tokio_test_within_threshold => r#"
-                    #[tokio::test]
-                    async fn focused_async_check() {
+                nested_function_assertions_not_counted => r#"
+                    #[test]
+                    fn test_with_nested_function() {
+                        fn inner_check() {
+                            assert_eq!(10, 10);
+                            assert_eq!(20, 20);
+                        }
                         assert_eq!(1, 1);
-                        assert!(matches!(Some(1), Some(_)));
+                        assert_eq!(2, 2);
+                        assert_eq!(3, 3);
+                        assert_eq!(4, 4);
                     }
                 "#,
             ],
             fail: [
-                attributed_test_too_many_assertions => r#"
-                    #[test]
-                    fn test_too_many() {
+                attributed_test_function_exceeding_threshold => r#"
+                    #[tokio::test]
+                    async fn attributed_check() {
                         assert_eq!(1, 1);
                         assert_eq!(2, 2);
                         assert_eq!(3, 3);
                         assert_eq!(4, 4);
                         assert_eq!(5, 5);
                     }
-                "# => ["test_too_many"],
-                unattributed_test_too_many_assertions => r#"
+                "# => "attributed_check",
+                unattributed_test_function_exceeding_threshold => r#"
                     fn test_unattributed() {
                         assert_eq!(1, 1);
                         assert_eq!(2, 2);
@@ -226,7 +296,7 @@ crate::rule_test!(
                         assert_eq!(4, 4);
                         assert_eq!(5, 5);
                     }
-                "# => ["test_unattributed"],
+                "# => "test_unattributed",
             ],
         },
     }

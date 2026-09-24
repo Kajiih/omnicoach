@@ -95,23 +95,39 @@ crate::rule_test!(
 
                     async def handle():
                         asyncio.create_task(background_sync())
-                "# => ["asyncio.create_task(background_sync())"],
-                bare_create_task_and_ensure_future => r#"
-                    from asyncio import create_task, ensure_future
+                "# => "asyncio.create_task(background_sync())",
+                asyncio_ensure_future => r#"
+                    import asyncio
+
+                    async def handle():
+                        asyncio.ensure_future(legacy_job())
+                "# => "asyncio.ensure_future(legacy_job())",
+                bare_create_task => r#"
+                    from asyncio import create_task
 
                     async def handle():
                         create_task(background_sync())
+                "# => "create_task(background_sync())",
+                bare_ensure_future => r#"
+                    from asyncio import ensure_future
+
+                    async def handle():
                         ensure_future(legacy_job())
-                "# => [
-                    "create_task(background_sync())",
-                    "ensure_future(legacy_job())",
-                ],
+                "# => "ensure_future(legacy_job())",
+                loop_create_task => r#"
+                    async def handle(loop):
+                        loop.create_task(worker())
+                "# => "loop.create_task(worker())",
+                event_loop_create_task => r#"
+                    async def handle(event_loop):
+                        event_loop.create_task(worker())
+                "# => "event_loop.create_task(worker())",
                 get_running_loop_create_task => r#"
                     import asyncio
 
                     async def handle():
                         asyncio.get_running_loop().create_task(worker())
-                "# => ["asyncio.get_running_loop().create_task(worker())"],
+                "# => "asyncio.get_running_loop().create_task(worker())",
             ],
         },
     }

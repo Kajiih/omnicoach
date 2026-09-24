@@ -117,15 +117,19 @@ crate::rule_test!(
                 bare_suppress => r#"
                     with suppress(FileNotFoundError):
                         os.remove("tmp.txt")
-                "# => ["suppress(FileNotFoundError)"],
+                "# => "suppress(FileNotFoundError)",
                 contextlib_qualified => r#"
                     with contextlib.suppress(KeyError):
                         data = cache["missing"]
-                "# => ["contextlib.suppress(KeyError)"],
+                "# => "contextlib.suppress(KeyError)",
                 body_inline_comment_does_not_mask => r#"
                     with suppress(FileNotFoundError):
                         os.remove("tmp.txt")  # inline comment inside body
-                "# => ["suppress(FileNotFoundError)"],
+                "# => "suppress(FileNotFoundError)",
+                directive_only_comment_does_not_mask => r#"
+                    with suppress(FileNotFoundError):  # noqa: SIM105
+                        os.remove("tmp.txt")
+                "# => "suppress(FileNotFoundError)",
             ],
         },
     }

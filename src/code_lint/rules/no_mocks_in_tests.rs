@@ -143,22 +143,41 @@ crate::rule_test!(
 
                     def test_service():
                         client = MagicMock()
-                "# => ["MagicMock()"],
-                unittest_mock_patch_context => r#"
+                "# => "MagicMock()",
+                unittest_mock_patch_decorator => r#"
+                    from unittest.mock import patch
+
+                    @patch("app.service.load_config")
+                    def test_fetch(mock_config):
+                        pass
+                "# => r#"patch("app.service.load_config")"#,
+                unittest_mock_patch_context_manager => r#"
                     from unittest.mock import patch
 
                     def test_fetch():
                         with patch("app.service.fetch_data") as mock_fetch:
                             pass
-                "# => [r#"patch("app.service.fetch_data")"#],
+                "# => r#"patch("app.service.fetch_data")"#,
                 pytest_mocker_patch_object => r#"
-                    def test_notify(mocker):
+                    def test_overrides(mocker):
                         mocker.patch.object(Notifier, "send")
-                "# => [r#"mocker.patch.object(Notifier, "send")"#],
+                "# => r#"mocker.patch.object(Notifier, "send")"#,
                 pytest_monkeypatch_setattr => r#"
-                    def test_env_override(monkeypatch):
+                    def test_overrides(monkeypatch):
                         monkeypatch.setattr(settings, "DEBUG", True)
-                "# => [r#"monkeypatch.setattr(settings, "DEBUG", True)"#],
+                "# => r#"monkeypatch.setattr(settings, "DEBUG", True)"#,
+                qualified_unittest_mock => r#"
+                    import unittest.mock
+
+                    def test_service():
+                        client = unittest.mock.Mock()
+                "# => r#"unittest.mock.Mock()"#,
+                qualified_mock => r#"
+                    import mock
+
+                    def test_service():
+                        client = mock.Mock()
+                "# => r#"mock.Mock()"#,
             ],
         },
     }

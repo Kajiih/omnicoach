@@ -149,12 +149,12 @@ crate::rule_test!(
                         select *
                         from users
                     """
-                "# => [r#"
+                "# => r#"
                     """
                         select *
                         from users
                     """
-                "#],
+                "#,
                 local_un_dedented_multiline => r#"
                     def render():
                         bad_local = """
@@ -162,24 +162,35 @@ crate::rule_test!(
                             line 2
                         """
                         return bad_local
-                "# => [r#"
+                "# => r#"
                     """
                         line 1
                         line 2
                     """
-                "#],
+                "#,
+                flushed_column_zero_inside_indented_function => r#"
+def render():
+    bad = """line 1
+line 2
+"""
+    return bad
+"# => r#"
+"""line 1
+line 2
+"""
+"#,
                 textwrap_dedent_flagged_by_default => r#"
                     import textwrap
                     x = textwrap.dedent("""
                         line 1
                         line 2
                     """).strip()
-                "# => [r#"
+                "# => r#"
                     """
                         line 1
                         line 2
                     """
-                "#],
+                "#,
             ],
         },
         Rust => {
@@ -206,6 +217,11 @@ crate::rule_test!(
                         ");
                     }
                 "#,
+                doc_attribute_exempt => r#"
+                    #[doc = "line 1
+                    line 2"]
+                    fn documented() {}
+                "#,
             ],
             fail: [
                 const_multiline_flagged => r#"
@@ -213,12 +229,12 @@ crate::rule_test!(
                         SELECT id
                         FROM accounts
                     ";
-                "# => [r#"
+                "# => r#"
                     "
                         SELECT id
                         FROM accounts
                     "
-                "#],
+                "#,
                 local_raw_multiline_flagged => r#"
                     fn build() {
                         let bad_raw = r"
@@ -226,12 +242,12 @@ crate::rule_test!(
                             beta
                         ";
                     }
-                "# => [r#"
+                "# => r#"
                     r"
                         alpha
                         beta
                     "
-                "#],
+                "#,
             ],
         },
     }

@@ -95,32 +95,25 @@ crate::rule_test!(
             ],
             fail: [
                 assert_called_once_with => r#"
-                    def test_charge(gateway):
+                    def test_payment_flow(gateway):
                         gateway.charge.assert_called_once_with(100)
-                "# => [r#"gateway.charge.assert_called_once_with(100)"#],
+                "# => r#"gateway.charge.assert_called_once_with(100)"#,
                 assert_not_called => r#"
-                    def test_refund(gateway):
+                    def test_payment_flow(gateway):
                         gateway.refund.assert_not_called()
-                "# => [r#"gateway.refund.assert_not_called()"#],
+                "# => r#"gateway.refund.assert_not_called()"#,
+                assert_has_calls => r#"
+                    def test_payment_flow(mock_obj):
+                        mock_obj.assert_has_calls([])
+                "# => r#"mock_obj.assert_has_calls([])"#,
                 assert_awaited_once => r#"
                     async def test_async_send(gateway):
                         gateway.async_send.assert_awaited_once()
-                "# => [r#"gateway.async_send.assert_awaited_once()"#],
-                assert_has_calls => r#"
-                    def test_calls(mock_obj):
-                        mock_obj.assert_has_calls([])
-                "# => [r#"mock_obj.assert_has_calls([])"#],
-                multiple_mock_assertions => r#"
-                    def test_payment_flow(gateway, fake_repo):
-                        gateway.charge.assert_called_once_with(100)
-                        gateway.refund.assert_not_called()
-                        gateway.async_send.assert_awaited_once()
-                        assert fake_repo.balance == 100
-                "# => [
-                    r#"gateway.charge.assert_called_once_with(100)"#,
-                    r#"gateway.refund.assert_not_called()"#,
-                    r#"gateway.async_send.assert_awaited_once()"#,
-                ],
+                "# => r#"gateway.async_send.assert_awaited_once()"#,
+                assert_not_awaited => r#"
+                    async def test_async_send(gateway):
+                        gateway.fallback.assert_not_awaited()
+                "# => r#"gateway.fallback.assert_not_awaited()"#,
             ],
         },
     }

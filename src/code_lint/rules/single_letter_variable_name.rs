@@ -88,28 +88,28 @@ crate::rule_test!(
                 "#,
             ],
             fail: [
-                assignment => r#"
+                rust_only_allowed_char_flagged_in_python => r#"
                     c = 2
-                "# => ["c"],
+                "# => "c",
                 parameter_annotation => r#"
                     def foo(b: int = 1):
                         pass
-                "# => ["b"],
+                "# => "b",
                 multi_assignment => r#"
-                    d, e = 3, 4
-                "# => ["d", "e"],
+                    x, d = 3, 4
+                "# => "d",
                 comprehension => r#"
                     [y for y in range(10)]
-                "# => ["y"],
+                "# => "y",
                 exception_alias => r#"
                     try:
                         pass
                     except Exception as g:
                         pass
-                "# => ["g"],
+                "# => "g",
                 walrus_expression => r#"
                     (v := 1)
-                "# => ["v"],
+                "# => "v",
             ],
         },
         Rust => {
@@ -144,43 +144,43 @@ crate::rule_test!(
                         let _ = 1;
                     }
                 "#,
+                single_letter_reference_not_flagged => r#"
+                    fn main() {
+                        let total = q + 1;
+                    }
+                "#,
             ],
             fail: [
                 let_binding => r#"
                     fn main() {
                         let a = 1;
                     }
-                "# => ["a"],
-                let_reference => r#"
-                    fn main() {
-                        let a = b;
-                    }
-                "# => ["a"],
+                "# => "a",
                 mutable_binding => r#"
                     fn main() {
                         let mut b = 2;
                     }
-                "# => ["b"],
+                "# => "b",
                 tuple_destructuring => r#"
                     fn main() {
                         let (c, d) = (1, 2);
                     }
-                "# => ["d"],
+                "# => "d",
                 struct_destructuring_explicit => r#"
                     fn main() {
                         let Point { x: e, y: _ } = p;
                     }
-                "# => ["e"],
+                "# => "e",
                 struct_destructuring_shorthand => r#"
                     fn main() {
                         let Point { f, g } = p;
                     }
-                "# => ["g"],
+                "# => "g",
                 loop_target => r#"
                     fn main() {
                         for h in 0..10 {}
                     }
-                "# => ["h"],
+                "# => "h",
                 match_pattern_variants => r#"
                     fn main() {
                         match val {
@@ -188,20 +188,24 @@ crate::rule_test!(
                             None => {}
                         }
                     }
-                "# => ["k"],
-                if_let_and_while_let => r#"
+                "# => "k",
+                if_let_pattern => r#"
                     fn main() {
-                        if let Some(x) = y {}
+                        if let Some(a) = y {}
+                    }
+                "# => "a",
+                while_let_pattern => r#"
+                    fn main() {
                         while let Some(z) = y {}
                     }
-                "# => ["z"],
+                "# => "z",
                 match_pattern_guard => r#"
                     fn main() {
                         match val {
                             Some(z) if z > 0 => {}
                         }
                     }
-                "# => ["z"],
+                "# => "z",
             ],
         },
     }

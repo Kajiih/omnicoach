@@ -183,20 +183,33 @@ crate::rule_test!(tests_no_sleep: NoSleepInTests, {
 
                 def test_polling():
                     time.sleep(1)
-            " => ["time.sleep(1)"],
+            " => "time.sleep(1)",
             asyncio_sleep => r"
                 import asyncio
 
                 async def test_polling():
                     await asyncio.sleep(0.5)
-            " => ["asyncio.sleep(0.5)"],
-            anyio_and_unqualified_sleep => r"
+            " => "asyncio.sleep(0.5)",
+            anyio_sleep => r"
                 import anyio
 
                 async def test_polling():
                     await anyio.sleep(2)
+            " => "anyio.sleep(2)",
+            trio_sleep => r"
+                import trio
+
+                async def test_polling():
+                    await trio.sleep(1)
+            " => "trio.sleep(1)",
+            unqualified_sleep => r"
+                def test_polling():
                     sleep(1)
-            " => ["anyio.sleep(2)", "sleep(1)"],
+            " => "sleep(1)",
+            multi_arg_sleep_not_exempt => r#"
+                def test_polling():
+                    sleep(0, "custom_tag")
+            "# => r#"sleep(0, "custom_tag")"#,
         ],
     },
     Rust => {
@@ -219,6 +232,14 @@ crate::rule_test!(tests_no_sleep: NoSleepInTests, {
             ",
         ],
         fail: [
+            thread_sleep => r"
+                use std::time::Duration;
+
+                #[test]
+                fn test_retry() {
+                    thread::sleep(Duration::from_millis(50));
+                }
+            " => "thread::sleep(Duration::from_millis(50))",
             std_thread_sleep => r"
                 use std::time::Duration;
 
@@ -226,19 +247,32 @@ crate::rule_test!(tests_no_sleep: NoSleepInTests, {
                 fn test_retry() {
                     std::thread::sleep(Duration::from_millis(50));
                 }
-            " => ["std::thread::sleep(Duration::from_millis(50))"],
-            tokio_and_unqualified_sleep => r"
+            " => "std::thread::sleep(Duration::from_millis(50))",
+            tokio_time_sleep => r"
                 use std::time::Duration;
 
                 #[tokio::test]
                 async fn test_retry() {
                     tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            " => "tokio::time::sleep(Duration::from_millis(10))",
+            time_sleep => r"
+                use std::time::Duration;
+                use tokio::time;
+
+                #[tokio::test]
+                async fn test_retry() {
+                    time::sleep(Duration::from_millis(20)).await;
+                }
+            " => "time::sleep(Duration::from_millis(20))",
+            unqualified_sleep => r"
+                use std::time::Duration;
+
+                #[test]
+                fn test_retry() {
                     sleep(Duration::from_millis(5));
                 }
-            " => [
-                "tokio::time::sleep(Duration::from_millis(10))",
-                "sleep(Duration::from_millis(5))",
-            ],
+            " => "sleep(Duration::from_millis(5))",
         ],
     },
 });
@@ -253,6 +287,10 @@ crate::rule_test!(tests_no_zero_sleep: NoZeroSleepInTests, {
                 async def test_wait():
                     await asyncio.sleep(1)
             ",
+            multi_arg_sleep => r#"
+                def test_wait():
+                    sleep(0, "custom_tag")
+            "#,
             anyio_checkpoint => r"
                 import anyio.lowlevel
 
@@ -261,18 +299,22 @@ crate::rule_test!(tests_no_zero_sleep: NoZeroSleepInTests, {
             ",
         ],
         fail: [
-            asyncio_sleep_zero => r"
+            sleep_zero_integer => r"
                 import asyncio
 
                 async def test_yield():
                     await asyncio.sleep(0)
-            " => ["asyncio.sleep(0)"],
-            anyio_sleep_zero_float => r"
+            " => "asyncio.sleep(0)",
+            sleep_zero_float => r"
                 import anyio
 
                 async def test_yield():
                     await anyio.sleep(0.0)
-            " => ["anyio.sleep(0.0)"],
+            " => "anyio.sleep(0.0)",
+            sleep_zero_trailing_dot => r"
+                def test_yield():
+                    sleep(0.)
+            " => "sleep(0.)",
         ],
     },
     Rust => {
@@ -293,22 +335,42 @@ crate::rule_test!(tests_no_zero_sleep: NoZeroSleepInTests, {
             ",
         ],
         fail: [
-            tokio_sleep_duration_zero => r"
+            duration_zero => r"
                 use std::time::Duration;
 
                 #[tokio::test]
                 async fn test_yield() {
                     tokio::time::sleep(Duration::ZERO).await;
                 }
-            " => ["tokio::time::sleep(Duration::ZERO)"],
-            thread_sleep_from_secs_zero => r"
+            " => "tokio::time::sleep(Duration::ZERO)",
+            std_time_duration_zero => r"
+                #[tokio::test]
+                async fn test_yield() {
+                    tokio::time::sleep(std::time::Duration::ZERO).await;
+                }
+            " => "tokio::time::sleep(std::time::Duration::ZERO)",
+            tokio_time_duration_zero => r"
+                #[tokio::test]
+                async fn test_yield() {
+                    tokio::time::sleep(tokio::time::Duration::ZERO).await;
+                }
+            " => "tokio::time::sleep(tokio::time::Duration::ZERO)",
+            duration_from_secs_zero => r"
                 use std::time::Duration;
 
                 #[test]
                 fn test_yield() {
                     std::thread::sleep(Duration::from_secs(0));
                 }
-            " => ["std::thread::sleep(Duration::from_secs(0))"],
+            " => "std::thread::sleep(Duration::from_secs(0))",
+            duration_from_millis_zero => r"
+                use std::time::Duration;
+
+                #[test]
+                fn test_yield() {
+                    std::thread::sleep(Duration::from_millis(0));
+                }
+            " => "std::thread::sleep(Duration::from_millis(0))",
         ],
     },
 });
