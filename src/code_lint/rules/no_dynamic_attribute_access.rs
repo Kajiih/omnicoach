@@ -75,42 +75,48 @@ crate::rule_test!(
                 direct_attribute_access => r#"
                     value = service.timeout
                 "#,
-                dict_get_lookup => r#"
-                    value = data.get("email")
+                dict_lookup => r#"
+                    email = data.get("email")
                 "#,
-                custom_object_method => r#"
+                custom_receiver_getattr => r#"
                     registry.getattr("key")
+                "#,
+                custom_receiver_setattr => r#"
+                    registry.setattr("key", 1)
+                "#,
+                custom_receiver_hasattr => r#"
+                    registry.hasattr("key")
+                "#,
+                custom_receiver_delattr => r#"
+                    registry.delattr("key")
                 "#,
             ],
             fail: [
-                getattr_with_assignment => r#"
-                    val = getattr(user, "email")
-                "# => [r#"getattr(user, "email")"#],
-                getattr_with_default => r#"
+                unqualified_getattr => r#"
                     val = getattr(service, "timeout", 10)
-                "# => [r#"getattr(service, "timeout", 10)"#],
-                hasattr_in_if => r#"
+                "# => r#"getattr(service, "timeout", 10)"#,
+                unqualified_hasattr => r#"
                     if hasattr(record, field_name):
                         pass
-                "# => [r#"hasattr(record, field_name)"#],
-                setattr_call => r#"
+                "# => r#"hasattr(record, field_name)"#,
+                unqualified_setattr => r#"
                     setattr(record, field_name, 42)
-                "#,
-                delattr_call => r#"
+                "# => r#"setattr(record, field_name, 42)"#,
+                unqualified_delattr => r#"
                     delattr(record, "deprecated_key")
-                "#,
-                builtins_getattr => r#"
+                "# => r#"delattr(record, "deprecated_key")"#,
+                builtins_qualified_getattr => r#"
                     builtins.getattr(service, "name")
-                "#,
-                builtins_hasattr => r#"
+                "# => r#"builtins.getattr(service, "name")"#,
+                builtins_qualified_hasattr => r#"
                     builtins.hasattr(service, "name")
-                "#,
-                builtins_setattr => r#"
+                "# => r#"builtins.hasattr(service, "name")"#,
+                builtins_qualified_setattr => r#"
                     builtins.setattr(service, "name", "new_name")
-                "#,
-                builtins_delattr => r#"
+                "# => r#"builtins.setattr(service, "name", "new_name")"#,
+                builtins_qualified_delattr => r#"
                     builtins.delattr(service, "name")
-                "#,
+                "# => r#"builtins.delattr(service, "name")"#,
             ],
         },
     }

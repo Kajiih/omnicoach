@@ -68,81 +68,90 @@ crate::rule_test!(
     {
         Python => {
             pass: [
-                import_and_alias_exempt => r#"
+                unaliased_import_exempt => r#"
                     import os_path
+                "#,
+                aliased_import_exempt => r#"
                     from sys import stderr as err_file
                 "#,
-                class_and_method_exempt => r#"
+                class_exempt => r#"
                     class ItemsArr:
-                        def handle_dict(self):
-                            pass
+                        pass
                 "#,
-                unsuffixed_variables => r#"
+                method_exempt => r#"
+                    def handle_dict(self):
+                        pass
+                "#,
+                unsuffixed_variable => r#"
                     users = ["alice"]
                     data = None
                 "#,
+                exact_suffix_exempt => r#"
+                    _list = []
+                "#,
             ],
             fail: [
-                variable_with_dict_suffix => r#"
+                assignment_binding => r#"
                     users_dict = {}
-                "# => ["users_dict"],
-                variable_with_arr_suffix => r#"
-                    items_arr = []
-                "# => ["items_arr"],
-                variable_with_int_suffix => r#"
-                    value_int = 42
-                "# => ["value_int"],
-                multiple_suffixed_variables => r#"
-                    users_dict = {}
-                    items_arr = []
-                    value_int = 42
-                "# => ["users_dict", "items_arr", "value_int"],
+                "# => "users_dict",
+                parameter_binding => r#"
+                    def process(user_list: list[str]) -> None:
+                        pass
+                "# => "user_list",
+                loop_target_binding => r#"
+                    for item_str in user_list:
+                        pass
+                "# => "item_str",
             ],
         },
         Rust => {
             pass: [
-                import_and_alias_exempt => r#"
+                unaliased_import_exempt => r#"
                     use std::collections::VecDeque;
+                "#,
+                aliased_import_exempt => r#"
                     use std::collections::HashMap as my_map;
                 "#,
-                struct_and_fn_exempt => r#"
+                struct_exempt => r#"
                     struct UserList;
+                "#,
+                fn_exempt => r#"
                     fn process_arr() {}
                 "#,
-                unsuffixed_variables => r#"
+                unsuffixed_variable => r#"
                     fn run() {
                         let users = vec!["alice"];
                         let age = 30;
                     }
                 "#,
+                exact_suffix_exempt => r#"
+                    fn run() {
+                        let _list = vec![1];
+                    }
+                "#,
+                trait_impl_const_exempt => r#"
+                    impl ExternalTrait for MyStruct {
+                        const DEFAULT_INT: i32 = 42;
+                    }
+                "#,
             ],
             fail: [
-                let_binding_list => r#"
-                    fn run() {
-                        let user_list = vec!["alice"];
-                    }
-                "# => ["user_list"],
-                let_binding_set => r#"
-                    fn run() {
-                        let id_set = std::collections::HashSet::new();
-                    }
-                "# => ["id_set"],
-                let_binding_str => r#"
-                    fn run() {
-                        let name_str = "bob";
-                    }
-                "# => ["name_str"],
-                const_binding_int => r#"
+                const_binding => r#"
                     const MY_INT: i32 = 42;
-                "# => ["MY_INT"],
-                multiple_suffixed_variables => r#"
+                "# => "MY_INT",
+                parameter_binding => r#"
+                    fn run(account_map: std::collections::HashMap<String, i32>) {}
+                "# => "account_map",
+                let_binding => r#"
                     fn run() {
                         let user_list = vec!["alice"];
-                        let id_set = std::collections::HashSet::new();
-                        let name_str = "bob";
-                        const MY_INT: i32 = 42;
                     }
-                "# => ["user_list", "id_set", "name_str", "MY_INT"],
+                "# => "user_list",
+                loop_target_binding => r#"
+                    fn run() {
+                        for item_str in items {}
+                    }
+                "# => "item_str",
             ],
         },
     }

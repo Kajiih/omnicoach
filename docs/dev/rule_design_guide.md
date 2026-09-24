@@ -55,10 +55,13 @@ All rule unit tests in `src/code_lint/rules/*.rs` must use `crate::rule_test!`.
 * **Declarative Suites with `rule_test!`**: Every rule file invokes `#[cfg(test)] crate::rule_test!(RuleName, { Language => { pass: [...], fail: [...] } })` at the bottom of the file. Bespoke `#[test]` or `#[rstest]` functions are strictly forbidden in rule files and enforced by CI.
 * **Language Completeness**: The generated `language_completeness` test verifies at test execution time that every `SupportLang` declared in `rule.supported_languages()` is covered in `rule_test!`.
 * **Mandatory AST Span Verification**:
-  * Omit `=> [...]` when the entire test snippet is the flagged AST node: `case_name => "typing.cast(int, x)"`.
-  * Add `=> [r#"..."#]` when the flagged construct is an inner AST slice inside setup syntax: `case_name => r#"fn build() { let bad = "..."; }"# => [r#""...""#]`.
+  * Omit `=> r#"..."#` when the entire test snippet is the flagged AST node: `case_name => "typing.cast(int, x)"`.
+  * Add `=> r#"..."#` when the flagged construct is an inner AST slice inside setup syntax: `case_name => r#"fn build() { let bad = "..."; }"# => r#""...""#`.
   * Leading block indentation is normalized automatically across lines `2..N`, so expected inner snippets can always be written with clean `indoc!`-dedented multiline strings.
+  * Each `fail` case is also run with its code repeated twice in one file and must report both occurrences, so a rule that stops after its first match (`find` instead of `find_all`, early `return`, stray `break`) fails.
+  * A `fail` case asserts exactly one diagnostic; multi-node cases are not supported. Known cases that would need them if revisited: flagged constructs nested inside flagged constructs (a `def` inside a nested `def` in `flat-scope-enforced`), rules reporting every occurrence inside one node (the legacy linter `QuoteWrappedPlaceholderRule`, `DocstringOptionalArgRule`, `BannedTypeAnnotationsRule`), and rules aggregating per file or scope, which would need an opt-out from the repeated-occurrence check (the legacy linter `IndexingInsteadOfUnpackingRule`).
 * **Minimum Required Cases**:
   1. **Core Antipattern (`fail`)**: The primary construct the rule flags.
   2. **Canonical Fix & Syntactic Exemptions (`pass`)**: The recommended pit-of-success replacement (e.g. `inspect.cleandoc`, `indoc::indoc!`, docstrings) to prove the suggested fix passes the rule.
   3. **Do Not Re-Test Framework Config Plumbing**: `FilterListDefaults` and `ThresholdDefaults` resolution are tested centrally in `src/core.rs`. Individual rule tests must not re-test framework configuration parsing.
+* **One Behavior per Case**: Each `pass`/`fail` case exercises exactly one code path (one banned pattern, one exemption, one AST construct) and is named after it, so a failing case name pinpoints the regression.

@@ -88,16 +88,27 @@ crate::rule_test!(
                     else:
                         logging.error("unexpected state")
                 "#,
-            ],
-            fail: [
-                logging_error_in_bare_except => r#"
+                logging_error_in_finally_block => r#"
                     import logging
 
                     try:
                         run_job()
-                    except:
-                        logging.error("failed")
-                "# => [r#"logging.error("failed")"#],
+                    except RuntimeError:
+                        pass
+                    finally:
+                        logging.error("cleanup failed")
+                "#,
+                logger_instance_error_not_in_banned_calls => r#"
+                    import logging
+
+                    logger = logging.getLogger(__name__)
+                    try:
+                        run_job()
+                    except RuntimeError:
+                        logger.error("failed")
+                "#,
+            ],
+            fail: [
                 logging_error_in_typed_except => r#"
                     import logging
 
@@ -105,7 +116,32 @@ crate::rule_test!(
                         run_job()
                     except ValueError as err:
                         logging.error("invalid value: %s", err)
-                "# => [r#"logging.error("invalid value: %s", err)"#],
+                "# => r#"logging.error("invalid value: %s", err)"#,
+                logging_error_in_bare_except => r#"
+                    import logging
+
+                    try:
+                        run_job()
+                    except:
+                        logging.error("failed")
+                "# => r#"logging.error("failed")"#,
+                logging_error_in_nested_block_inside_except => r#"
+                    import logging
+
+                    try:
+                        run_job()
+                    except ValueError as err:
+                        if err.args:
+                            logging.error("invalid value: %s", err)
+                "# => r#"logging.error("invalid value: %s", err)"#,
+                logging_error_with_exc_info_in_except => r#"
+                    import logging
+
+                    try:
+                        run_job()
+                    except RuntimeError:
+                        logging.error("failed", exc_info=True)
+                "# => r#"logging.error("failed", exc_info=True)"#,
             ],
         },
     }

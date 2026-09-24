@@ -120,53 +120,81 @@ crate::rule_test!(
     {
         Python => {
             pass: [
-                full_domain_words => r#"
-                    def handle_message(context):
+                full_domain_words_allowed => r#"
+                    def handle_message(context, error_message):
                         manager = "active"
                         configuration = 42
-                        result = "ok"
                 "#,
-                unaliased_imports_exempt => r#"
+                substring_containing_banned_token_allowed => r#"
+                    def process(strategy, category):
+                        pass
+                "#,
+                unaliased_import_statement_exempt => r#"
                     import os
-                    import sys
+                "#,
+                unaliased_from_import_exempt => r#"
                     from os import path
+                "#,
+                override_method_contract_exempt => r#"
+                    from typing import override
+
+                    class CustomDecoder(BaseDecoder):
+                        @override
+                        def from_ctx(self, data: bytes) -> None:
+                            pass
                 "#,
             ],
             fail: [
                 aliased_import_abbreviation => r#"
                     import os as os_cfg
-                "# => ["os_cfg"],
-                function_and_parameter_abbreviations => r#"
-                    def handle_msg(msg):
-                        pass
-                "# => ["handle_msg", "msg"],
-                variable_abbreviation => r#"
-                    def run():
-                        req_ctx = "request"
-                "# => ["req_ctx"],
-                string_abbreviation_in_python => r#"
-                    def to_str():
-                        pass
-                "# => ["to_str"],
-                class_abbreviation => r#"
+                "# => "os_cfg",
+                camel_case_class_name => r#"
                     class TaskRes:
                         pass
-                "# => ["TaskRes"],
+                "# => "TaskRes",
+                snake_case_function_name => r#"
+                    def handle_msg():
+                        pass
+                "# => "handle_msg",
+                parameter_name => r#"
+                    def process(req_ctx):
+                        pass
+                "# => "req_ctx",
+                digit_to_uppercase_split => r#"
+                    def process(v2Ctx):
+                        pass
+                "# => "v2Ctx",
+                single_diagnostic_when_multiple_tokens_banned => r#"
+                    err_msg = "failed"
+                "# => "err_msg",
+                str_banned_in_python => r#"
+                    def to_str():
+                        pass
+                "# => "to_str",
+                unannotated_method_flagged => r#"
+                    class CustomDecoder:
+                        def from_ctx(self, data: bytes) -> None:
+                            pass
+                "# => "from_ctx",
             ],
         },
         Rust => {
             pass: [
-                full_domain_words => r#"
-                    fn handle_context(manager: &str) {
+                full_domain_words_allowed => r#"
+                    fn handle_context(error_message: &str) {
                         let configuration = 1;
-                        let result = 2;
                     }
                 "#,
-                str_keyword_and_conversions_exempt => r#"
+                substring_containing_banned_token_allowed => r#"
+                    fn process(strategy: usize) {}
+                "#,
+                str_conversion_functions_exempt => r#"
                     fn as_str() {}
                     fn to_str() {}
                     fn from_str() {}
-                    fn build_str_cache() {
+                "#,
+                str_prefix_binding_exempt => r#"
+                    fn run() {
                         let str_buffer = 1;
                     }
                 "#,
@@ -174,9 +202,13 @@ crate::rule_test!(
                     use std::fmt::Result;
                     use std::error::Error;
                 "#,
-                trait_impl_contract_members_exempt => r#"
+                trait_impl_associated_type_exempt => r#"
                     impl Decoder for Wrapper {
                         type Err = ();
+                    }
+                "#,
+                trait_impl_method_exempt => r#"
+                    impl Decoder for Wrapper {
                         fn from_ctx(&self) {}
                     }
                 "#,
@@ -184,26 +216,33 @@ crate::rule_test!(
             fail: [
                 aliased_import_abbreviation => r#"
                     use std::collections::HashMap as my_cfg;
-                "# => ["my_cfg"],
-                function_and_local_bindings => r#"
-                    fn process_err() {
-                        let ctx = 1;
-                        let my_cfg_val = 2;
-                    }
-                "# => ["process_err", "ctx", "my_cfg_val"],
-                struct_abbreviation => r#"
+                "# => "my_cfg",
+                camel_case_struct_name => r#"
                     struct MyRes;
-                "# => ["MyRes"],
-                trait_impl_parameter_not_exempt => r#"
+                "# => "MyRes",
+                snake_case_function_name => r#"
+                    fn process_err() {}
+                "# => "process_err",
+                digit_to_uppercase_split => r#"
+                    fn main() {
+                        let v2Ctx = 2;
+                    }
+                "# => "v2Ctx",
+                single_diagnostic_when_multiple_tokens_banned => r#"
+                    fn main() {
+                        let err_msg = 1;
+                    }
+                "# => "err_msg",
+                trait_impl_parameter_flagged => r#"
                     impl Decoder for Wrapper {
                         fn from_ctx(&self, msg: u8) {}
                     }
-                "# => ["msg"],
-                inherent_method_not_exempt => r#"
+                "# => "msg",
+                inherent_method_flagged => r#"
                     impl Wrapper {
                         fn from_ctx(&self) {}
                     }
-                "# => ["from_ctx"],
+                "# => "from_ctx",
             ],
         },
     }

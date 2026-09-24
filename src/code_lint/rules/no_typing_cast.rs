@@ -80,9 +80,6 @@ crate::rule_test!(
                 custom_method_cast => r#"
                     result = obj.cast("param")
                 "#,
-                unrelated_call => r#"
-                    print("hello world")
-                "#,
                 isinstance_narrowing => r#"
                     if isinstance(val, int):
                         x = val
@@ -91,22 +88,15 @@ crate::rule_test!(
             fail: [
                 bare_cast => r#"
                     x = cast(int, y)
-                "# => [r#"cast(int, y)"#],
+                "# => r#"cast(int, y)"#,
                 typing_qualified_cast => r#"
                     import typing
                     x = typing.cast(list[str], data)
-                "# => [r#"typing.cast(list[str], data)"#],
+                "# => r#"typing.cast(list[str], data)"#,
                 typing_extensions_cast => r#"
                     import typing_extensions
                     x = typing_extensions.cast(int, data)
-                "# => [r#"typing_extensions.cast(int, data)"#],
-                multiple_uncommented_casts => r#"
-                    a = cast(int, x)
-                    b = typing.cast(str, y)
-                "# => [
-                    r#"cast(int, x)"#,
-                    r#"typing.cast(str, y)"#,
-                ],
+                "# => r#"typing_extensions.cast(int, data)"#,
             ],
         },
     }

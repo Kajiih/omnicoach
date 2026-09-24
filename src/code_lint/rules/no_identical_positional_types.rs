@@ -182,12 +182,39 @@ crate::rule_test!(
                         def compute(self, a: int, b: int) -> int:
                             return a + b
                 "#,
+                classmethod_cls_excluded_below_min => r#"
+                    class AccountService:
+                        @classmethod
+                        def from_pair(cls, a: int, b: int) -> "AccountService":
+                            return cls()
+                "#,
+                var_keyword_excluded => r#"
+                    def dispatch(channel: str, retries: int, delay: float, **metadata: str) -> None:
+                        pass
+                "#,
+                untyped_parameters_not_grouped => r#"
+                    def process(raw_a, raw_b, user_id: str, count: int) -> None:
+                        pass
+                "#,
                 dunder_method_exempt => r#"
                     class AccountService:
                         def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
                             pass
                 "#,
-                override_decorator_exempt => r#"
+                decorator_overload_exempt => r#"
+                    from typing import overload
+
+                    @overload
+                    def overloaded_fn(a: str, b: str, c: int) -> int: ...
+                "#,
+                decorator_fixture_exempt => r#"
+                    import pytest
+
+                    @pytest.fixture
+                    def sample_orders(first: str, second: str, third: int) -> None:
+                        pass
+                "#,
+                decorator_override_exempt => r#"
                     from typing import override
 
                     class AccountService:
@@ -195,11 +222,13 @@ crate::rule_test!(
                         def sync(self, primary: str, secondary: str, retries: int) -> None:
                             pass
                 "#,
-                overload_decorator_exempt => r#"
-                    from typing import overload
+                decorator_abstractmethod_exempt => r#"
+                    from abc import abstractmethod
 
-                    @overload
-                    def overloaded_fn(a: str, b: str, c: int) -> int: ...
+                    class AccountService:
+                        @abstractmethod
+                        def reconcile(self, source: str, target: str, limit: int) -> None:
+                            pass
                 "#,
                 distinct_positional_types => r#"
                     def process(user_id: str, count: int, ratio: float) -> None:
@@ -207,19 +236,28 @@ crate::rule_test!(
                 "#,
             ],
             fail: [
+                single_duplicate_type_group => r#"
+                    def transfer(source_id: str, target_id: str, amount: int) -> None:
+                        pass
+                "# => "transfer",
                 multiple_duplicate_type_groups => r#"
                     def transfer(source_id: str, target_id: str, amount: int, fee: int) -> None:
                         pass
-                "# => ["transfer"],
-                non_adjacent_duplicate_types => r#"
+                "# => "transfer",
+                non_adjacent_duplicate_types_with_default => r#"
                     def create_item(owner_id: str, weight: float, item_id: str = "default") -> None:
                         pass
-                "# => ["create_order"],
-                init_method_with_duplicates => r#"
+                "# => "create_item",
+                new_dunder_flagged => r#"
+                    class AccountService:
+                        def __new__(cls, host: str, port: int, api_key: str):
+                            return super().__new__(cls)
+                "# => "__new__",
+                init_dunder_flagged => r#"
                     class AccountService:
                         def __init__(self, host: str, port: int, api_key: str) -> None:
                             pass
-                "# => ["__init__"],
+                "# => "__init__",
             ],
         },
     }

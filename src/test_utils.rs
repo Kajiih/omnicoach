@@ -118,56 +118,78 @@ pub fn assert_rule_pass(rule: &impl CodeRule, lang: SupportLang, case_name: &str
     );
 }
 
-/// Asserts that a `fail` test case produces diagnostics whose AST spans match `expected_snippets`
-/// (or `code.trim()` when `expected_snippets` is empty).
+/// Asserts that a `fail` test case produces exactly one diagnostic whose AST span matches
+/// `expected_snippet` (or `code.trim()` when `expected_snippet` is `None`), and that the same
+/// span is reported in both copies when `code` is repeated twice in one file.
 ///
 /// # Panics
-/// Panics if diagnostic count, `rule_name`, or normalized AST span slice does not match.
+/// Panics if diagnostic count, `rule_name`, normalized AST span slice, or repeated-occurrence
+/// spans do not match.
 #[track_caller]
 pub fn assert_rule_fail(
     rule: &impl CodeRule,
     lang: SupportLang,
     case_name: &str,
     code: &str,
-    expected_snippets: &[&str],
+    expected_snippet: Option<&str>,
 ) {
     let rule_name = rule.name().0;
     let filename = dummy_filename(lang);
     let diags = run_code_rule(rule, code, filename, &Config::default());
+    let expected_slice = expected_snippet.unwrap_or(code).trim();
 
-    let expected_slices: Vec<&str> = if expected_snippets.is_empty() {
-        vec![code.trim()]
-    } else {
-        expected_snippets
-            .iter()
-            .map(|snippet| snippet.trim())
-            .collect()
+    let [diagnostic] = diags.as_slice() else {
+        panic!(
+            "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}' diagnostic count mismatch:\nExpected exactly 1 diagnostic, got {}:\n{}\nSource:\n{code}",
+            diags.len(),
+            format_diagnostics_for_test(&diags),
+        );
     };
 
     assert_eq!(
-        diags.len(),
-        expected_slices.len(),
-        "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}' diagnostic count mismatch:\nExpected {} diagnostic(s), got {}:\n{}\nSource:\n{code}",
-        expected_slices.len(),
-        diags.len(),
-        format_diagnostics_for_test(&diags),
+        diagnostic.rule_name.0, rule_name,
+        "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': diagnostic rule_name '{}' does not match rule name.",
+        diagnostic.rule_name.0
     );
 
-    for (diagnostic, expected_slice) in diags.iter().zip(&expected_slices) {
-        assert_eq!(
-            diagnostic.rule_name.0, rule_name,
-            "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': diagnostic rule_name '{}' does not match rule name.",
-            diagnostic.rule_name.0
-        );
+    let raw_slice = &code[diagnostic.location.span.start..diagnostic.location.span.end];
+    let actual_slice = normalize_span_indentation(code, diagnostic.location.span.start, raw_slice);
+    assert_eq!(
+        actual_slice, expected_slice,
+        "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}' flagged span mismatch:\nExpected flagged slice:\n{expected_slice}\nActual flagged slice:\n{actual_slice}\n(Tip: if the flagged AST node is a sub-expression of the test code, add `=> r#\"...\"#` to specify the inner slice.)",
+    );
 
-        let raw_slice = &code[diagnostic.location.span.start..diagnostic.location.span.end];
-        let actual_slice =
-            normalize_span_indentation(code, diagnostic.location.span.start, raw_slice);
-        assert_eq!(
-            actual_slice, *expected_slice,
-            "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}' flagged span mismatch:\nExpected flagged slice:\n{expected_slice}\nActual flagged slice:\n{actual_slice}\n(Tip: if the flagged AST node is a sub-expression of the test code, add `=> [r#\"...\"#]` to specify the inner slice.)",
-        );
-    }
+    let span = diagnostic.location.span.start..diagnostic.location.span.end;
+    assert_every_occurrence_reported(rule, lang, case_name, code, span);
+}
+
+/// Repeats `code` twice in one file and asserts the rule flags the same span in both copies,
+/// so a rule that stops after its first match cannot pass.
+#[track_caller]
+fn assert_every_occurrence_reported(
+    rule: &impl CodeRule,
+    lang: SupportLang,
+    case_name: &str,
+    code: &str,
+    span: std::ops::Range<usize>,
+) {
+    let rule_name = rule.name().0;
+    let repeated = format!("{code}\n{code}");
+    let offset = code.len() + 1;
+    let diags = run_code_rule(rule, &repeated, dummy_filename(lang), &Config::default());
+
+    let mut actual: Vec<_> = diags
+        .iter()
+        .map(|diagnostic| diagnostic.location.span.start..diagnostic.location.span.end)
+        .collect();
+    actual.sort_unstable_by_key(|range| (range.start, range.end));
+    let expected = vec![span.clone(), span.start + offset..span.end + offset];
+    assert_eq!(
+        actual,
+        expected,
+        "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}' did not report every occurrence when the code is repeated twice in one file:\n{}\nSource:\n{repeated}",
+        format_diagnostics_for_test(&diags),
+    );
 }
 
 /// Strips the enclosing line's leading indentation from lines `2..N` of a multiline AST slice
@@ -212,6 +234,9 @@ fn dummy_filename(lang: SupportLang) -> &'static str {
 ///
 /// Expands every `pass` and `fail` entry into an independent `#[rstest::rstest]` `#[case]`
 /// and generates a `language_completeness` test verifying all `supported_languages()`.
+///
+/// Each `fail` entry accepts at most one expected snippet (`=> r#"..."#`) and must produce
+/// exactly one diagnostic, so every case exercises a single flagged node.
 #[macro_export]
 macro_rules! rule_test {
     ($rule:expr, { $($body:tt)* }) => {
@@ -226,7 +251,7 @@ macro_rules! rule_test {
                         $( $pass_name:ident => $pass_code:expr ),+ $(,)?
                     ],
                     fail: [
-                        $( $fail_name:ident => $fail_code:expr $( => [ $( $snippet:expr ),+ $(,)? ] )? ),+ $(,)?
+                        $( $fail_name:ident => $fail_code:expr $( => $snippet:expr )? ),+ $(,)?
                     ] $(,)?
                 }
             ),+ $(,)?
@@ -268,7 +293,7 @@ macro_rules! rule_test {
                         $crate::test_utils::MacroSupportLang::$lang,
                         stringify!($fail_name),
                         indoc::indoc! { $fail_code },
-                        &[ $( $( indoc::indoc! { $snippet } ),+ )? ],
+                        None $( .or(Some(indoc::indoc! { $snippet })) )?,
                     )]
                 )+
             )+
@@ -276,14 +301,14 @@ macro_rules! rule_test {
                 #[case] lang: $crate::test_utils::MacroSupportLang,
                 #[case] case_name: &str,
                 #[case] code: &str,
-                #[case] expected_snippets: &[&str],
+                #[case] expected_snippet: Option<&str>,
             ) {
                 $crate::test_utils::assert_rule_fail(
                     &$rule,
                     lang,
                     case_name,
                     code,
-                    expected_snippets,
+                    expected_snippet,
                 );
             }
         }

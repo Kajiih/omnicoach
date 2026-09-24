@@ -91,92 +91,88 @@ crate::rule_test!(
     {
         Python => {
             pass: [
-                both_frozen_and_slots => r#"
+                unqualified_frozen_slots_allowed => r#"
                     from dataclasses import dataclass
 
                     @dataclass(frozen=True, slots=True)
                     class ValidModel:
                         id: str
                 "#,
-                module_qualified_both_specified => r#"
+                qualified_frozen_slots_allowed => r#"
                     import dataclasses
 
                     @dataclasses.dataclass(frozen=True, slots=True)
                     class ValidQualifiedModel:
                         id: str
                 "#,
-                explicit_mutable_opt_out => r#"
+                explicit_mutable_opt_out_allowed => r#"
                     from dataclasses import dataclass
 
                     @dataclass(frozen=False, slots=True)
                     class ExplicitMutable:
                         id: str
                 "#,
-                explicit_no_slots_opt_out => r#"
+                explicit_no_slots_opt_out_allowed => r#"
                     from dataclasses import dataclass
 
                     @dataclass(frozen=True, slots=False)
                     class ExplicitNoSlots:
                         id: str
                 "#,
-                explicit_both_opt_out => r#"
+                explicit_both_false_opt_out_allowed => r#"
                     from dataclasses import dataclass
 
                     @dataclass(frozen=False, slots=False)
-                    class ExplicitBoth:
+                    class ExplicitBothFalse:
                         id: str
                 "#,
-                regular_non_dataclass_class => r#"
+                undecorated_class_exempt => r#"
                     class RegularClass:
-                        def __init__(self, x: int) -> None:
-                            self.x = x
+                        pass
                 "#,
-                unrelated_decorator => r#"
+                other_decorator_class_exempt => r#"
                     @other_decorator
-                    class AnotherClass:
+                    class DecoratedClass:
                         pass
                 "#,
             ],
             fail: [
-                bare_dataclass_missing_both => r#"
+                bare_unqualified_dataclass => r#"
                     from dataclasses import dataclass
 
                     @dataclass
                     class BareModel:
                         id: str
-                "# => ["BareModel"],
-                module_qualified_bare_dataclass => r#"
+                "# => "BareModel",
+                empty_parens_qualified_dataclass => r#"
                     import dataclasses
 
-                    @dataclasses.dataclass
-                    class QualifiedBareModel:
+                    @dataclasses.dataclass()
+                    class EmptyParensModel:
                         id: str
-                "# => ["QualifiedBareModel"],
-                dataclass_missing_slots => r#"
+                "# => "EmptyParensModel",
+                missing_slots_argument => r#"
                     from dataclasses import dataclass
 
                     @dataclass(frozen=True)
                     class MissingSlots:
                         id: str
-                "# => ["MissingSlots"],
-                dataclass_missing_frozen => r#"
-                    import dataclasses
-
-                    @dataclasses.dataclass(slots=True)
-                    class MissingFrozen:
-                        id: str
-                "# => ["MissingFrozen"],
-                multiple_dataclasses_flagged => r#"
+                "# => "MissingSlots",
+                missing_frozen_argument => r#"
                     from dataclasses import dataclass
 
-                    @dataclass
-                    class FirstModel:
-                        a: int
+                    @dataclass(slots=True)
+                    class MissingFrozen:
+                        id: str
+                "# => "MissingFrozen",
+                stacked_decorators_with_dataclass => r#"
+                    from dataclasses import dataclass
 
-                    @dataclass(frozen=True)
-                    class SecondModel:
-                        b: str
-                "# => ["FirstModel", "SecondModel"],
+                    @other_decorator
+                    @dataclass
+                    class StackedModel:
+                        id: str
+                "# => "StackedModel",
             ],
         },
     }

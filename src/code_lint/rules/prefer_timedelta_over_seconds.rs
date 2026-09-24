@@ -86,19 +86,21 @@ crate::rule_test!(
                     timeout = timedelta(seconds=10)
                     delay = 500
                 "#,
+                exact_suffix_without_prefix_exempt => r#"
+                    _ms = 10
+                "#,
             ],
             fail: [
                 variable_with_seconds_suffix => r#"
                     timeout_secs = 10
-                "# => ["timeout_secs"],
+                "# => "timeout_secs",
                 variable_with_millis_suffix => r#"
                     delay_ms = 250
-                "# => ["delay_ms"],
-                multiple_suffixed_variables => r#"
-                    timeout_secs = 10
-                    delay_ms = 250
-                    ttl_hours = 24
-                "# => ["timeout_secs", "delay_ms", "ttl_hours"],
+                "# => "delay_ms",
+                function_parameter_suffix => r#"
+                    def wait(timeout_secs):
+                        pass
+                "# => "timeout_secs",
             ],
         },
         Rust => {
@@ -116,25 +118,29 @@ crate::rule_test!(
                         let retry_delay = 500;
                     }
                 "#,
+                exact_suffix_without_prefix_exempt => r#"
+                    fn run() {
+                        let _secs = 5;
+                    }
+                "#,
             ],
             fail: [
                 let_binding_seconds => r#"
                     fn run() {
                         let timeout_seconds = 30;
                     }
-                "# => ["timeout_seconds"],
+                "# => "timeout_seconds",
                 let_binding_millis => r#"
                     fn run() {
                         let retry_delay_ms = 500;
                     }
-                "# => ["retry_delay_ms"],
-                const_and_multiple_bindings => r#"
-                    fn run() {
-                        let timeout_seconds = 30;
-                        let retry_delay_ms = 500;
-                        const MAX_WAIT_MINS: u64 = 5;
-                    }
-                "# => ["timeout_seconds", "retry_delay_ms", "MAX_WAIT_MINS"],
+                "# => "retry_delay_ms",
+                const_binding_mins => r#"
+                    const MAX_WAIT_MINS: u64 = 5;
+                "# => "MAX_WAIT_MINS",
+                function_parameter_suffix => r#"
+                    fn wait(timeout_seconds: u64) {}
+                "# => "timeout_seconds",
             ],
         },
     }

@@ -67,11 +67,11 @@ crate::rule_test!(
         Python => {
             pass: [
                 top_level_functions_allowed => r#"
-                    def first():
-                        pass
+                    def _compute_checksum(payload):
+                        return len(payload)
 
-                    def second():
-                        pass
+                    def process(payload):
+                        return _compute_checksum(payload)
                 "#,
                 class_methods_allowed => r#"
                     class Greeter:
@@ -82,53 +82,27 @@ crate::rule_test!(
                     def sort_items(items):
                         return sorted(items, key=lambda item: item.id)
                 "#,
-                module_level_private_helper_allowed => r#"
-                    def _compute_checksum(payload):
-                        return len(payload)
-
-                    def process(payload):
-                        return _compute_checksum(payload)
-                "#,
             ],
             fail: [
-                nested_function_in_function => r#"
+                nested_in_function => r#"
                     def outer():
                         def inner():
                             return 1
                         return inner()
-                "# => [r#"
+                "# => r#"
                     def inner():
                         return 1
-                "#],
-                nested_function_in_method => r#"
+                "#,
+                nested_in_class_method => r#"
                     class Processor:
                         def run(self, data):
                             def transform(item):
                                 return item * 2
                             return [transform(val) for val in data]
-                "# => [r#"
+                "# => r#"
                     def transform(item):
                         return item * 2
-                "#],
-                multiple_nested_functions => r#"
-                    def pipeline(value):
-                        def step_one(input_val):
-                            return input_val + 1
-
-                        def step_two(input_val):
-                            return input_val * 2
-
-                        return step_two(step_one(value))
-                "# => [
-                    r#"
-                        def step_one(input_val):
-                            return input_val + 1
-                    "#,
-                    r#"
-                        def step_two(input_val):
-                            return input_val * 2
-                    "#,
-                ],
+                "#,
             ],
         },
     }

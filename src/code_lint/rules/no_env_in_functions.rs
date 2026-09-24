@@ -209,15 +209,19 @@ crate::rule_test!(
     {
         Python => {
             pass: [
-                module_scope_allowed => r#"
+                module_scope_call_allowed => r#"
                     import os
-                    from os import environ, getenv
+                    from os import getenv
 
                     MODULE_KEY = os.getenv("API_KEY")
-                    MODULE_HOST = os.environ["HOST"]
-                    MODULE_PORT = environ.get("PORT", "8080")
+                    MODULE_PORT = getenv("PORT", "8080")
                 "#,
-                class_scope_allowed => r#"
+                module_scope_subscript_allowed => r#"
+                    import os
+
+                    MODULE_HOST = os.environ["HOST"]
+                "#,
+                class_scope_call_allowed => r#"
                     import os
 
                     class Settings:
@@ -231,11 +235,11 @@ crate::rule_test!(
                         def from_env(cls) -> "Settings":
                             return cls(os.getenv("API_KEY"), os.environ["HOST"])
                 "#,
-                main_entrypoint_allowed => r#"
-                    from os import getenv
+                from_environ_boundary_allowed => r#"
+                    from os import environ
 
-                    def main() -> None:
-                        _ = getenv("APP_ENV")
+                    def from_environ() -> dict[str, str]:
+                        return {"token": environ["TOKEN"]}
                 "#,
                 load_env_boundary_allowed => r#"
                     from os import environ
@@ -243,69 +247,93 @@ crate::rule_test!(
                     def load_env() -> dict[str, str]:
                         return {"url": environ["DATABASE_URL"]}
                 "#,
-                nested_in_main_allowed => r#"
-                    import os
+                main_entrypoint_allowed => r#"
                     from os import getenv
+
+                    def main() -> None:
+                        _ = getenv("APP_ENV")
+                "#,
+                nested_fn_in_main_exempt => r#"
+                    import os
 
                     def main() -> None:
                         def helper():
                             return os.environ.get("DB_URL")
+                "#,
+                lambda_in_main_exempt => r#"
+                    from os import getenv
 
+                    def main() -> None:
                         loader = lambda: getenv("API_KEY")
+                "#,
+                dict_subscript_allowed => r#"
+                    def fetch_orders(config: dict[str, str]) -> str:
+                        return config["HOST"]
+                "#,
+                non_os_environ_subscript_allowed => r#"
+                    def fetch_orders(client) -> str:
+                        return client.environ["PORT"]
                 "#,
             ],
             fail: [
-                function_env_call => r#"
+                env_call_in_function_flagged => r#"
                     from os import getenv
 
                     def fetch_orders() -> str:
                         return getenv("SECRET_KEY")
-                "# => [r#"getenv("SECRET_KEY")"#],
-                method_env_call => r#"
+                "# => r#"getenv("SECRET_KEY")"#,
+                environ_mutation_call_in_function_flagged => r#"
+                    import os
+
+                    def fetch_orders() -> None:
+                        os.environ.update({"DEBUG": "1"})
+                "# => r#"os.environ.update({"DEBUG": "1"})"#,
+                environ_get_call_in_function_flagged => r#"
+                    import os
+
+                    def fetch_orders() -> str:
+                        return os.environ.get("ENDPOINT")
+                "# => r#"os.environ.get("ENDPOINT")"#,
+                env_call_in_method_flagged => r#"
                     import os
 
                     class Settings:
                         def connect(self) -> str:
                             return os.getenv("API_TOKEN")
-                "# => [r#"os.getenv("API_TOKEN")"#],
-                method_environ_subscript => r#"
+                "# => r#"os.getenv("API_TOKEN")"#,
+                bare_environ_subscript_in_function_flagged => r#"
+                    from os import environ
+
+                    def fetch_orders() -> str:
+                        return environ["FALLBACK_URL"]
+                "# => r#"environ["FALLBACK_URL"]"#,
+                environ_subscript_in_method_flagged => r#"
                     import os
 
                     class Settings:
                         def connect(self) -> str:
                             return os.environ["AWS_REGION"]
-                "# => [r#"os.environ["AWS_REGION"]"#],
-                environ_get_method => r#"
-                    import os
-
-                    def fetch_orders() -> str:
-                        return os.environ.get("ENDPOINT")
-                "# => [r#"os.environ.get("ENDPOINT")"#],
-                environ_subscript => r#"
-                    from os import environ
-
-                    def fetch_orders() -> str:
-                        return environ["FALLBACK_URL"]
-                "# => [r#"environ["FALLBACK_URL"]"#],
-                method_named_main => r#"
+                "# => r#"os.environ["AWS_REGION"]"#,
+                method_named_main_not_exempt => r#"
                     import os
 
                     class Worker:
                         def main(self) -> None:
                             self.token = os.getenv("TOKEN")
-                "# => [r#"os.getenv("TOKEN")"#],
-                environ_mutator => r#"
-                    import os
-
-                    def configure_overrides() -> None:
-                        os.environ.update({"DEBUG": "1"})
-                "# => [r#"os.environ.update({"DEBUG": "1"})"#],
-                lambda_in_regular_function => r#"
+                "# => r#"os.getenv("TOKEN")"#,
+                lambda_in_function_flagged => r#"
                     from os import getenv
 
                     def retrieve_data():
                         fetcher = lambda: getenv("API_KEY")
-                "# => [r#"getenv("API_KEY")"#],
+                "# => r#"getenv("API_KEY")"#,
+                nested_fn_in_function_flagged => r#"
+                    from os import getenv
+
+                    def retrieve_data():
+                        def helper():
+                            return getenv("API_KEY")
+                "# => r#"getenv("API_KEY")"#,
             ],
         },
         Rust => {
@@ -337,16 +365,63 @@ crate::rule_test!(
                         }
                     }
                 "#,
+                from_environ_boundary_allowed => r#"
+                    use std::env;
+
+                    pub struct Config {
+                        pub host: String,
+                    }
+
+                    impl Config {
+                        pub fn from_environ() -> Self {
+                            Self {
+                                host: env::var("SERVICE_HOST").unwrap_or_default(),
+                            }
+                        }
+                    }
+                "#,
+                load_env_boundary_allowed => r#"
+                    use std::env;
+
+                    fn load_env() -> Result<String, env::VarError> {
+                        env::var("DATABASE_URL")
+                    }
+                "#,
                 top_level_main_allowed => r#"
                     use std::env;
 
                     fn main() {
-                        let _ = env::var_os("RUST_LOG");
+                        let _ = env::var("PORT");
+                    }
+                "#,
+                nested_fn_in_main_exempt => r#"
+                    use std::env;
+
+                    fn main() {
+                        fn read_log() -> Option<std::ffi::OsString> {
+                            env::var_os("RUST_LOG")
+                        }
+                        let _ = read_log();
+                    }
+                "#,
+                closure_in_main_exempt => r#"
+                    use std::env;
+
+                    fn main() {
+                        let loader = || env::var("PORT").ok();
+                        let _ = loader();
                     }
                 "#,
             ],
             fail: [
-                method_env_call => r#"
+                env_call_in_function_flagged => r#"
+                    use std::env;
+
+                    fn fetch_host() -> String {
+                        env::var("SERVICE_HOST").unwrap_or_default()
+                    }
+                "# => r#"env::var("SERVICE_HOST")"#,
+                method_env_call_flagged => r#"
                     pub struct Config {
                         pub host: String,
                     }
@@ -356,16 +431,26 @@ crate::rule_test!(
                             self.host = std::env::var("SERVICE_HOST").unwrap_or_default();
                         }
                     }
-                "# => [r#"std::env::var("SERVICE_HOST")"#],
-                closure_in_function => r#"
+                "# => r#"std::env::var("SERVICE_HOST")"#,
+                closure_in_function_flagged => r#"
                     use std::env;
 
                     fn send_request() -> Option<String> {
                         let closure = || env::var("API_KEY").ok();
                         closure()
                     }
-                "# => [r#"env::var("API_KEY")"#],
-                method_named_main => r#"
+                "# => r#"env::var("API_KEY")"#,
+                nested_fn_in_function_flagged => r#"
+                    use std::env;
+
+                    fn send_request() -> Option<String> {
+                        fn helper() -> Option<String> {
+                            env::var("API_KEY").ok()
+                        }
+                        helper()
+                    }
+                "# => r#"env::var("API_KEY")"#,
+                method_named_main_not_exempt => r#"
                     use std::env;
 
                     pub struct Worker;
@@ -375,8 +460,8 @@ crate::rule_test!(
                             env::var("TOKEN").unwrap_or_default()
                         }
                     }
-                "# => [r#"env::var("TOKEN")"#],
-                module_nested_main => r#"
+                "# => r#"env::var("TOKEN")"#,
+                mod_scoped_main_not_exempt => r#"
                     mod app {
                         use std::env;
 
@@ -384,7 +469,7 @@ crate::rule_test!(
                             let _ = env::var("APP_MODE");
                         }
                     }
-                "# => [r#"env::var("APP_MODE")"#],
+                "# => r#"env::var("APP_MODE")"#,
             ],
         },
     }
