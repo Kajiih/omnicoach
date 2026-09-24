@@ -1,12 +1,12 @@
-//! AST helper predicates for structural traversal in Python.
+//! AST helper predicates and structural extractors for Python.
 
-use crate::code_lint::AstNode;
+use crate::code_lint::ast::{AstNode, ParsedFile, RawNode};
 
 /// Returns true for Python node kinds that hold statements as direct children.
 ///
 /// `module` is the file root and `block` is an indented suite.
 #[must_use]
-pub fn is_statement_container(kind: &str) -> bool {
+pub(super) fn is_statement_container(kind: &str) -> bool {
     matches!(kind, "module" | "block")
 }
 
@@ -14,13 +14,13 @@ pub fn is_statement_container(kind: &str) -> bool {
 ///
 /// Python spells every comment `comment`, whether or not it is used as documentation.
 #[must_use]
-pub fn is_comment_kind(kind: &str) -> bool {
+pub(super) fn is_comment_kind(kind: &str) -> bool {
     kind == "comment"
 }
 
 /// Returns true if a Python node of `parent_kind` makes a child identifier an import binding.
 #[must_use]
-pub fn is_import_binding_parent(parent_kind: &str) -> bool {
+pub(super) fn is_import_binding_parent(parent_kind: &str) -> bool {
     matches!(
         parent_kind,
         "import_statement" | "import_from_statement" | "aliased_import" | "dotted_name"
@@ -32,7 +32,7 @@ pub fn is_import_binding_parent(parent_kind: &str) -> bool {
 ///
 /// `aliased_import` is excluded precisely because it introduces one.
 #[must_use]
-pub fn is_unaliased_import_binding_parent(parent_kind: &str) -> bool {
+pub(super) fn is_unaliased_import_binding_parent(parent_kind: &str) -> bool {
     matches!(
         parent_kind,
         "import_statement" | "import_from_statement" | "dotted_name"
@@ -41,19 +41,19 @@ pub fn is_unaliased_import_binding_parent(parent_kind: &str) -> bool {
 
 /// Returns true if a Python node of `parent_kind` declares a structural definition name.
 #[must_use]
-pub fn is_structural_definition_parent(parent_kind: &str) -> bool {
+pub(super) fn is_structural_definition_parent(parent_kind: &str) -> bool {
     matches!(parent_kind, "class_definition" | "function_definition")
 }
 
 /// Returns true if `kind` is a call expression in Python.
 #[must_use]
-pub fn is_call_kind(kind: &str) -> bool {
+pub(super) fn is_call_kind(kind: &str) -> bool {
     kind == "call"
 }
 
 /// If `function` is a method access (e.g. `obj.method`), returns the method identifier node.
 #[must_use]
-pub fn extract_method_call_target<'a>(function: &AstNode<'a>) -> Option<AstNode<'a>> {
+pub(super) fn extract_method_call_target<'a>(function: &RawNode<'a>) -> Option<RawNode<'a>> {
     if function.kind().as_ref() == "attribute" {
         function.field("attribute")
     } else {
@@ -67,16 +67,16 @@ pub fn extract_method_call_target<'a>(function: &AstNode<'a>) -> Option<AstNode<
 /// `@override` decorator on a method.
 #[must_use]
 pub fn is_trait_impl_member(item: &AstNode<'_>) -> bool {
-    item.kind().as_ref() == "function_definition" && has_override_decorator(item)
+    item.raw.kind().as_ref() == "function_definition" && has_override_decorator(item)
 }
 
 /// Recursively extracts binding identifiers from a pattern node.
-fn extract_from_pattern<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
+fn extract_from_pattern<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
     let kind = node.kind();
     match kind.as_ref() {
         "identifier" => {
             if node.text() != "_" {
-                bindings.push(node.clone());
+                bindings.push(AstNode::from_raw(node.clone()));
             }
         }
         "dotted_name" => {
@@ -138,12 +138,12 @@ fn extract_from_pattern<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>)
 }
 
 /// Helper to extract the first segment from a dotted name.
-fn extract_first_segment<'a>(node: &AstNode<'a>) -> AstNode<'a> {
+fn extract_first_segment<'a>(node: &RawNode<'a>) -> RawNode<'a> {
     node.child(0).unwrap_or_else(|| node.clone())
 }
 
 /// Extracts bindings from Python import statements.
-fn extract_from_import<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
+fn extract_from_import<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
     match node.kind().as_ref() {
         "import_statement" => {
             for child in node.children() {
@@ -173,13 +173,13 @@ fn extract_from_import<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) 
             if let Some(alias) = node.field("alias")
                 && alias.text() != "_"
             {
-                bindings.push(alias);
+                bindings.push(AstNode::from_raw(alias));
             }
         }
         "dotted_name" | "identifier" => {
             let first_seg = extract_first_segment(node);
             if first_seg.text() != "_" {
-                bindings.push(first_seg);
+                bindings.push(AstNode::from_raw(first_seg));
             }
         }
         _ => {}
@@ -187,8 +187,8 @@ fn extract_from_import<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) 
 }
 
 fn traverse_children_skipping<'a>(
-    node: &AstNode<'a>,
-    skip: Option<&AstNode<'a>>,
+    node: &RawNode<'a>,
+    skip: Option<&RawNode<'a>>,
     bindings: &mut Vec<AstNode<'a>>,
 ) {
     for child in node.children() {
@@ -201,7 +201,7 @@ fn traverse_children_skipping<'a>(
     }
 }
 
-fn traverse_python<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
+fn traverse_python<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
     let kind = node.kind();
     match kind.as_ref() {
         "assignment" => {
@@ -265,7 +265,7 @@ fn traverse_python<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
         "function_definition" | "class_definition" => {
             let name_node = node.field("name");
             if let Some(ref name) = name_node {
-                bindings.push(name.clone());
+                bindings.push(AstNode::from_raw(name.clone()));
             }
             traverse_children_skipping(node, name_node.as_ref(), bindings);
         }
@@ -280,17 +280,16 @@ fn traverse_python<'a>(node: &AstNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
     }
 }
 
-/// Collects all binding definitions (variables, functions, classes, etc.) within a node.
+/// Collects all binding definitions (variables, functions, classes, etc.) within a Python file.
 #[must_use]
-pub fn collect_bindings<'a>(root: &AstNode<'a>) -> Vec<AstNode<'a>> {
+pub fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
     let mut bindings = Vec::new();
-    traverse_python(root, &mut bindings);
+    traverse_python(&file.grep.root(), &mut bindings);
     bindings
 }
 
 /// Returns true if a Python `function_definition` node is a test function (`test` or `test_*`).
-#[must_use]
-pub fn is_test_function(func_node: &AstNode<'_>) -> bool {
+fn is_test_function_raw(func_node: &RawNode<'_>) -> bool {
     func_node.field("name").is_some_and(|name_node| {
         let func_name = name_node.text();
         func_name == "test" || func_name.starts_with("test_")
@@ -299,8 +298,7 @@ pub fn is_test_function(func_node: &AstNode<'_>) -> bool {
 
 /// Returns true if a Python `call` node is a test assertion call
 /// (`self.assert*()`, `pytest.raises(...)`, `raises(...)`, `pytest.warns(...)`, `self.fail(...)`).
-#[must_use]
-pub fn is_assertion_call(call_node: &AstNode<'_>) -> bool {
+fn is_assertion_call_raw(call_node: &RawNode<'_>) -> bool {
     let Some(func) = call_node.field("function") else {
         return false;
     };
@@ -340,7 +338,7 @@ impl KeywordArg<'_> {
     /// Evaluates literal boolean arguments (`True` / `False`).
     #[must_use]
     pub fn as_bool(&self) -> Option<bool> {
-        match self.value_node.kind().as_ref() {
+        match self.value_node.raw.kind().as_ref() {
             "true" => Some(true),
             "false" => Some(false),
             _ => None,
@@ -349,8 +347,7 @@ impl KeywordArg<'_> {
 }
 
 /// Extracts all keyword arguments from any Python `call` or `argument_list` node.
-#[must_use]
-pub fn extract_keyword_args<'a>(call_or_args_node: &AstNode<'a>) -> Vec<KeywordArg<'a>> {
+fn extract_keyword_args_raw<'a>(call_or_args_node: &RawNode<'a>) -> Vec<KeywordArg<'a>> {
     let args_node = if call_or_args_node.kind() == "argument_list" {
         Some(call_or_args_node.clone())
     } else {
@@ -368,8 +365,8 @@ pub fn extract_keyword_args<'a>(call_or_args_node: &AstNode<'a>) -> Vec<KeywordA
         {
             result.push(KeywordArg {
                 name: name_n.text().to_string(),
-                name_node: name_n,
-                value_node: val_n,
+                name_node: AstNode::from_raw(name_n),
+                value_node: AstNode::from_raw(val_n),
             });
         }
     }
@@ -406,7 +403,7 @@ impl<'a> DecoratorInfo<'a> {
 }
 
 /// Helper to resolve the dotted expression path and terminal identifier.
-fn resolve_path_and_terminal(expr: &AstNode<'_>) -> (String, String) {
+fn resolve_path_and_terminal_raw(expr: &RawNode<'_>) -> (String, String) {
     let path = expr.text().to_string();
     let terminal = expr.field("attribute").map_or_else(
         || path.rsplit('.').next().unwrap_or("").to_string(),
@@ -416,8 +413,7 @@ fn resolve_path_and_terminal(expr: &AstNode<'_>) -> (String, String) {
 }
 
 /// Extracts all decorators from a `decorated_definition` or a definition node inside one.
-#[must_use]
-pub fn extract_decorators<'a>(node: &AstNode<'a>) -> Vec<DecoratorInfo<'a>> {
+fn extract_decorators_raw<'a>(node: &RawNode<'a>) -> Vec<DecoratorInfo<'a>> {
     let parent = if node.kind() == "decorated_definition" {
         Some(node.clone())
     } else {
@@ -443,16 +439,16 @@ pub fn extract_decorators<'a>(node: &AstNode<'a>) -> Vec<DecoratorInfo<'a>> {
             let (call_node, target_expr, keyword_args) = if expr.kind() == "call" {
                 let call = expr.clone();
                 let func = call.field("function").unwrap_or_else(|| call.clone());
-                let kwargs = extract_keyword_args(&call);
-                (Some(call), func, kwargs)
+                let kwargs = extract_keyword_args_raw(&call);
+                (Some(AstNode::from_raw(call)), func, kwargs)
             } else {
                 (None, expr, Vec::new())
             };
 
-            let (path, terminal_name) = resolve_path_and_terminal(&target_expr);
+            let (path, terminal_name) = resolve_path_and_terminal_raw(&target_expr);
 
             decorators.push(DecoratorInfo {
-                node: child,
+                node: AstNode::from_raw(child),
                 path,
                 terminal_name,
                 call_node,
@@ -461,6 +457,12 @@ pub fn extract_decorators<'a>(node: &AstNode<'a>) -> Vec<DecoratorInfo<'a>> {
         }
     }
     decorators
+}
+
+/// Extracts all decorators from a `decorated_definition` or a definition node inside one.
+#[must_use]
+pub fn extract_decorators<'a>(node: &AstNode<'a>) -> Vec<DecoratorInfo<'a>> {
+    extract_decorators_raw(&node.raw)
 }
 
 /// Returns true if a Python `function_definition` or `class_definition` has a decorator whose
@@ -512,13 +514,13 @@ impl PythonClassInfo<'_> {
     }
 }
 
-/// Discovers and extracts all class definitions from a Python AST document.
+/// Discovers and extracts all class definitions from a Python file.
 #[must_use]
-pub fn extract_classes<'a>(root: &AstNode<'a>) -> Vec<PythonClassInfo<'a>> {
+pub fn extract_classes(file: &ParsedFile) -> Vec<PythonClassInfo<'_>> {
     let mut classes = Vec::new();
 
     // Find all class_definition nodes
-    for class_node in root.dfs() {
+    for class_node in file.grep.root().dfs() {
         if class_node.kind() != "class_definition" {
             continue;
         }
@@ -535,14 +537,14 @@ pub fn extract_classes<'a>(root: &AstNode<'a>) -> Vec<PythonClassInfo<'a>> {
                 if kind != "(" && kind != ")" && kind != "," && kind != "keyword_argument" {
                     bases.push(PythonBaseClass {
                         name: child.text().to_string(),
-                        node: child,
+                        node: AstNode::from_raw(child),
                     });
                 }
             }
         }
 
-        let decorators = extract_decorators(&class_node);
-        let body_node = class_node.field("body");
+        let decorators = extract_decorators_raw(&class_node);
+        let body_node = class_node.field("body").map(AstNode::from_raw);
 
         // Use decorated_definition as node if present, otherwise class_node
         let effective_node = if let Some(parent) = class_node.parent()
@@ -554,9 +556,9 @@ pub fn extract_classes<'a>(root: &AstNode<'a>) -> Vec<PythonClassInfo<'a>> {
         };
 
         classes.push(PythonClassInfo {
-            node: effective_node,
+            node: AstNode::from_raw(effective_node),
             name,
-            name_node,
+            name_node: AstNode::from_raw(name_node),
             bases,
             decorators,
             body_node,
@@ -617,6 +619,19 @@ impl PythonParameterInfo<'_> {
     }
 }
 
+/// Structured representation of a Python function signature.
+#[derive(Clone)]
+pub struct PythonFunctionSignature<'a> {
+    /// The `function_definition` AST node.
+    pub node: AstNode<'a>,
+    /// Function identifier AST node.
+    pub name_node: AstNode<'a>,
+    /// Function identifier name.
+    pub name: String,
+    /// Parsed parameters in declaration order.
+    pub parameters: Vec<PythonParameterInfo<'a>>,
+}
+
 /// Internal helper struct for extracted parameter parts.
 struct ParsedParamParts<'a> {
     name_node: AstNode<'a>,
@@ -627,12 +642,12 @@ struct ParsedParamParts<'a> {
 }
 
 /// Extracts parameter name, name node, type annotation, and default value from a parameter node.
-fn parse_param_parts<'a>(node: &AstNode<'a>) -> Option<ParsedParamParts<'a>> {
+fn parse_param_parts<'a>(node: &RawNode<'a>) -> Option<ParsedParamParts<'a>> {
     match node.kind().as_ref() {
         "identifier" => {
             let name = node.text().to_string();
             Some(ParsedParamParts {
-                name_node: node.clone(),
+                name_node: AstNode::from_raw(node.clone()),
                 name,
                 type_node: None,
                 type_text: None,
@@ -642,9 +657,9 @@ fn parse_param_parts<'a>(node: &AstNode<'a>) -> Option<ParsedParamParts<'a>> {
         "default_parameter" => {
             let name_node = node.field("name")?;
             let name = name_node.text().to_string();
-            let default_val = node.field("value");
+            let default_val = node.field("value").map(AstNode::from_raw);
             Some(ParsedParamParts {
-                name_node,
+                name_node: AstNode::from_raw(name_node),
                 name,
                 type_node: None,
                 type_text: None,
@@ -669,9 +684,9 @@ fn parse_param_parts<'a>(node: &AstNode<'a>) -> Option<ParsedParamParts<'a>> {
             let type_node = node.field("type");
             let type_text = type_node.as_ref().map(|type_n| type_n.text().to_string());
             Some(ParsedParamParts {
-                name_node,
+                name_node: AstNode::from_raw(name_node),
                 name,
-                type_node,
+                type_node: type_node.map(AstNode::from_raw),
                 type_text,
                 default_value_node: None,
             })
@@ -681,11 +696,11 @@ fn parse_param_parts<'a>(node: &AstNode<'a>) -> Option<ParsedParamParts<'a>> {
             let name = name_node.text().to_string();
             let type_node = node.field("type");
             let type_text = type_node.as_ref().map(|type_n| type_n.text().to_string());
-            let default_val = node.field("value");
+            let default_val = node.field("value").map(AstNode::from_raw);
             Some(ParsedParamParts {
-                name_node,
+                name_node: AstNode::from_raw(name_node),
                 name,
-                type_node,
+                type_node: type_node.map(AstNode::from_raw),
                 type_text,
                 default_value_node: default_val,
             })
@@ -694,7 +709,7 @@ fn parse_param_parts<'a>(node: &AstNode<'a>) -> Option<ParsedParamParts<'a>> {
             let name_node = node.children().find(|child| child.kind() == "identifier")?;
             let name = name_node.text().to_string();
             Some(ParsedParamParts {
-                name_node,
+                name_node: AstNode::from_raw(name_node),
                 name,
                 type_node: None,
                 type_text: None,
@@ -705,7 +720,7 @@ fn parse_param_parts<'a>(node: &AstNode<'a>) -> Option<ParsedParamParts<'a>> {
             let name_node = node.children().find(|child| child.kind() == "identifier")?;
             let name = name_node.text().to_string();
             Some(ParsedParamParts {
-                name_node,
+                name_node: AstNode::from_raw(name_node),
                 name,
                 type_node: None,
                 type_text: None,
@@ -717,8 +732,7 @@ fn parse_param_parts<'a>(node: &AstNode<'a>) -> Option<ParsedParamParts<'a>> {
 }
 
 /// Extracts all parameters in order from a Python `parameters` or `function_definition` node.
-#[must_use]
-pub fn extract_parameters<'a>(func_or_params_node: &AstNode<'a>) -> Vec<PythonParameterInfo<'a>> {
+fn extract_parameters_raw<'a>(func_or_params_node: &RawNode<'a>) -> Vec<PythonParameterInfo<'a>> {
     let params_node = if func_or_params_node.kind() == "parameters" {
         Some(func_or_params_node.clone())
     } else if let Some(params) = func_or_params_node.field("parameters") {
@@ -783,7 +797,7 @@ pub fn extract_parameters<'a>(func_or_params_node: &AstNode<'a>) -> Vec<PythonPa
         is_first_param = false;
 
         result.push(PythonParameterInfo {
-            node: child,
+            node: AstNode::from_raw(child),
             name: parts.name,
             name_node: parts.name_node,
             type_node: parts.type_node,
@@ -796,6 +810,38 @@ pub fn extract_parameters<'a>(func_or_params_node: &AstNode<'a>) -> Vec<PythonPa
     result
 }
 
+/// Extracts all parameters in order from a Python `parameters` or `function_definition` node.
+#[must_use]
+pub fn extract_parameters<'a>(func_or_params_node: &AstNode<'a>) -> Vec<PythonParameterInfo<'a>> {
+    extract_parameters_raw(&func_or_params_node.raw)
+}
+
+/// Discovers and extracts all function signatures from a Python file.
+#[must_use]
+pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSignature<'_>> {
+    let mut signatures = Vec::new();
+    for node in file.grep.root().dfs() {
+        if node.kind() != "function_definition" {
+            continue;
+        }
+        let Some(name_node) = node.field("name") else {
+            continue;
+        };
+        let Some(params_node) = node.field("parameters") else {
+            continue;
+        };
+        let name = name_node.text().to_string();
+        let parameters = extract_parameters_raw(&params_node);
+        signatures.push(PythonFunctionSignature {
+            node: AstNode::from_raw(node),
+            name_node: AstNode::from_raw(name_node),
+            name,
+            parameters,
+        });
+    }
+    signatures
+}
+
 /// Returns true if a Python `function_definition` is decorated with `@override`.
 #[must_use]
 pub fn has_override_decorator(func_node: &AstNode<'_>) -> bool {
@@ -806,9 +852,9 @@ pub fn has_override_decorator(func_node: &AstNode<'_>) -> bool {
 /// Transparently handles expressions wrapped in `parenthesized_expression`.
 #[must_use]
 pub fn find_enclosing_with_item<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
-    for ancestor in node.ancestors() {
+    for ancestor in node.raw.ancestors() {
         match ancestor.kind().as_ref() {
-            "with_item" => return Some(ancestor),
+            "with_item" => return Some(AstNode::from_raw(ancestor)),
             "parenthesized_expression" => {}
             _ => return None,
         }
@@ -819,8 +865,10 @@ pub fn find_enclosing_with_item<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
 /// Traverses upward from a node to find its nearest enclosing `with_statement`.
 #[must_use]
 pub fn find_enclosing_with_statement<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
-    node.ancestors()
+    node.raw
+        .ancestors()
         .find(|parent| parent.kind() == "with_statement")
+        .map(AstNode::from_raw)
 }
 
 /// Returns true if `node` is invoked as a context manager inside a Python `with` statement header.
@@ -830,23 +878,40 @@ pub fn is_with_context_manager(node: &AstNode<'_>) -> bool {
 }
 
 /// Returns true if a Python `function_definition` is nested inside another `function_definition`.
-#[must_use]
-pub fn is_nested_function(func_node: &AstNode<'_>) -> bool {
+fn is_nested_function_raw(func_node: &RawNode<'_>) -> bool {
     func_node
         .ancestors()
         .any(|ancestor| ancestor.kind() == "function_definition")
 }
 
+/// Finds all nested Python function definitions (`def ...` inside another `def ...`) and returns
+/// `(function_node, function_name)` pairs.
+#[must_use]
+pub fn find_nested_functions(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
+    file.grep
+        .root()
+        .find_all("def $NAME($$$ARGS): $$$BODY")
+        .filter(|func| is_nested_function_raw(func))
+        .map(|func| {
+            let func_name = func
+                .field("name")
+                .map(|name_node| name_node.text().to_string())
+                .unwrap_or_default();
+            (AstNode::from_raw(func.get_node().clone()), func_name)
+        })
+        .collect()
+}
+
 /// Returns true if `node` is enclosed inside an `except_clause` block.
 #[must_use]
 pub fn is_inside_except_clause(node: &AstNode<'_>) -> bool {
-    node.ancestors()
+    node.raw
+        .ancestors()
         .any(|ancestor| ancestor.kind() == "except_clause")
 }
 
 /// Returns true if `node` is a Python `tuple` or `list` consisting solely of `>= 2` boolean literals (`True` / `False`).
-#[must_use]
-pub fn is_boolean_literal_collection(node: &AstNode<'_>) -> bool {
+fn is_boolean_literal_collection_raw(node: &RawNode<'_>) -> bool {
     let kind = node.kind();
     if kind != "tuple" && kind != "list" {
         return false;
@@ -861,18 +926,51 @@ pub fn is_boolean_literal_collection(node: &AstNode<'_>) -> bool {
             .all(|item| matches!(item.kind().as_ref(), "true" | "false"))
 }
 
+/// Collects all Python `assert_statement` nodes in `file`.
+#[must_use]
+pub fn collect_assert_statements(file: &ParsedFile) -> Vec<AstNode<'_>> {
+    file.grep
+        .root()
+        .dfs()
+        .filter(|node| node.kind() == "assert_statement")
+        .map(AstNode::from_raw)
+        .collect()
+}
+
+/// Returns true if a Python `assert_statement` node has a top-level `and` boolean operator.
+#[must_use]
+pub fn has_top_level_logical_and(assert_node: &AstNode<'_>) -> bool {
+    assert_node
+        .raw
+        .children()
+        .any(|c| c.kind() == "boolean_operator" && c.children().any(|op| op.kind() == "and"))
+}
+
+/// Returns true if a Python `assert_statement` node compares against a boolean literal tuple/list.
+#[must_use]
+pub fn has_boolean_literal_comparison(assert_node: &AstNode<'_>) -> bool {
+    assert_node
+        .raw
+        .children()
+        .find(|c| c.kind() == "comparison_operator")
+        .is_some_and(|comp| {
+            comp.children()
+                .any(|c| is_boolean_literal_collection_raw(&c))
+        })
+}
+
 /// Collects all outermost Python test function definitions (`def test` or `def test_*`).
 #[must_use]
-pub fn collect_outer_test_functions<'a>(root: &AstNode<'a>) -> Vec<AstNode<'a>> {
+pub fn collect_outer_test_functions(file: &ParsedFile) -> Vec<AstNode<'_>> {
     let mut out = Vec::new();
-    collect_outer_test_functions_rec(root, &mut out);
+    collect_outer_test_functions_rec(&file.grep.root(), &mut out);
     out
 }
 
-fn collect_outer_test_functions_rec<'a>(node: &AstNode<'a>, out: &mut Vec<AstNode<'a>>) {
+fn collect_outer_test_functions_rec<'a>(node: &RawNode<'a>, out: &mut Vec<AstNode<'a>>) {
     if node.kind() == "function_definition" {
-        if is_test_function(node) {
-            out.push(node.clone());
+        if is_test_function_raw(node) {
+            out.push(AstNode::from_raw(node.clone()));
         }
         return;
     }
@@ -881,39 +979,113 @@ fn collect_outer_test_functions_rec<'a>(node: &AstNode<'a>, out: &mut Vec<AstNod
     }
 }
 
+/// Recursively counts top-level assertion constructs in a Python test function body.
+fn count_python_assertions(node: &RawNode<'_>) -> usize {
+    let kind = node.kind();
+    if matches!(kind.as_ref(), "function_definition" | "class_definition") {
+        return 0;
+    }
+    if kind == "assert_statement" || (kind == "call" && is_assertion_call_raw(node)) {
+        return 1;
+    }
+    node.children()
+        .map(|child| count_python_assertions(&child))
+        .sum()
+}
+
+/// Collects all outermost Python test functions along with their identifier node, name, and assertion count.
+#[must_use]
+pub fn collect_test_function_assertion_counts(
+    file: &ParsedFile,
+) -> Vec<(AstNode<'_>, String, usize)> {
+    collect_outer_test_functions(file)
+        .into_iter()
+        .filter_map(|func_node| {
+            let name_node = func_node.raw.field("name")?;
+            let body_node = func_node.raw.field("body")?;
+            let func_name = name_node.text().to_string();
+            let count = count_python_assertions(&body_node);
+            Some((AstNode::from_raw(name_node), func_name, count))
+        })
+        .collect()
+}
+
+/// If `node` is a Python `function_definition`, returns its name and whether it is declared at top-level `module` scope.
+#[must_use]
+pub(super) fn function_name_and_is_top_level<'a>(
+    node: &RawNode<'a>,
+) -> Option<(std::borrow::Cow<'a, str>, bool)> {
+    if node.kind() != "function_definition" {
+        return None;
+    }
+    let name_node = node.field("name")?;
+    let is_top_level = node
+        .parent()
+        .is_some_and(|parent| parent.kind() == "module");
+    Some((name_node.text(), is_top_level))
+}
+
+/// Returns the formatted subscript label (`"os.environ[...]"` or `"environ[...]"`) if `node`
+/// indexes into Python's `os.environ` or `environ` mapping.
+fn python_environ_subscript_label(node: &RawNode<'_>) -> Option<&'static str> {
+    if node.kind() != "subscript" {
+        return None;
+    }
+    let value = node.field("value")?;
+    match value.kind().as_ref() {
+        "identifier" if value.text() == "environ" => Some("environ[...]"),
+        "attribute" => {
+            let obj = value.field("object")?;
+            let attr = value.field("attribute")?;
+            (obj.text() == "os" && attr.text() == "environ").then_some("os.environ[...]")
+        }
+        _ => None,
+    }
+}
+
+/// Collects all Python subscript expressions indexing into `os.environ` or `environ`.
+#[must_use]
+pub fn collect_environ_subscripts(file: &ParsedFile) -> Vec<(AstNode<'_>, &'static str)> {
+    file.grep
+        .root()
+        .dfs()
+        .filter_map(|node| {
+            let label = python_environ_subscript_label(&node)?;
+            Some((AstNode::from_raw(node), label))
+        })
+        .collect()
+}
+
 /// Returns true if a Python `string` node is triple-quoted (`"""` or `'''`).
 /// In Python's grammar, only triple-quoted strings can contain literal newlines.
-fn is_triple_quoted(node: &AstNode<'_>) -> bool {
+fn is_triple_quoted(node: &RawNode<'_>) -> bool {
     let text = node.text();
     let stripped = text.trim_start_matches(['r', 'R', 'f', 'F', 'b', 'B', 'u', 'U']);
     stripped.starts_with("\"\"\"") || stripped.starts_with("'''")
 }
 
 /// Returns true if `node` is a Python multiline triple-quoted string literal.
-#[must_use]
-pub fn is_multiline_string_literal(node: &AstNode<'_>) -> bool {
+fn is_multiline_string_literal_raw(node: &RawNode<'_>) -> bool {
     node.kind() == "string"
         && node.end_pos().line() > node.start_pos().line()
         && is_triple_quoted(node)
 }
 
 /// Returns true if a Python `string` node is a standalone docstring statement.
-#[must_use]
-pub fn is_docstring(node: &AstNode<'_>) -> bool {
+fn is_docstring_raw(node: &RawNode<'_>) -> bool {
     node.parent()
         .is_some_and(|parent| parent.kind() == "expression_statement")
 }
 
 /// Returns true if `node` is enclosed in a Python `call` within the current scope whose
 /// `(full_path, terminal_name)` satisfies `predicate`.
-#[must_use]
-pub fn is_enclosed_in_call(node: &AstNode<'_>, predicate: impl Fn(&str, &str) -> bool) -> bool {
+fn is_enclosed_in_call_raw(node: &RawNode<'_>, predicate: impl Fn(&str, &str) -> bool) -> bool {
     for ancestor in node.ancestors() {
         match ancestor.kind().as_ref() {
             "function_definition" | "class_definition" | "lambda" => break,
             "call" => {
                 if let Some(func_node) = ancestor.field("function") {
-                    let (path, terminal) = resolve_path_and_terminal(&func_node);
+                    let (path, terminal) = resolve_path_and_terminal_raw(&func_node);
                     if predicate(&path, &terminal) {
                         return true;
                     }
@@ -925,10 +1097,28 @@ pub fn is_enclosed_in_call(node: &AstNode<'_>, predicate: impl Fn(&str, &str) ->
     false
 }
 
+/// Finds all multiline string literals in a Python file that are not docstrings
+/// and not wrapped in an allowed call.
+#[must_use]
+pub fn find_unwrapped_multiline_strings(
+    file: &ParsedFile,
+    is_allowed_wrapper: impl Fn(&str, &str) -> bool,
+) -> Vec<AstNode<'_>> {
+    file.grep
+        .root()
+        .dfs()
+        .filter(|node| {
+            is_multiline_string_literal_raw(node)
+                && !is_docstring_raw(node)
+                && !is_enclosed_in_call_raw(node, &is_allowed_wrapper)
+        })
+        .map(AstNode::from_raw)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ast_grep_core::AstGrep;
     use ast_grep_language::SupportLang;
 
     #[test]
@@ -956,8 +1146,8 @@ mod tests {
                 def my_method(self):
                     pass
         "};
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let bindings = collect_bindings(&grep.root());
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let bindings = collect_bindings(&file);
         let names: Vec<String> = bindings
             .iter()
             .map(|node| node.text().to_string())
@@ -997,8 +1187,8 @@ mod tests {
                 case [a, b]:
                     pass
         "};
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let bindings = collect_bindings(&grep.root());
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let bindings = collect_bindings(&file);
         let names: Vec<String> = bindings
             .iter()
             .map(|node| node.text().to_string())
@@ -1013,8 +1203,13 @@ mod tests {
                 pass
             x = suppress(KeyError)
         "};
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let calls: Vec<_> = grep.root().find_all("suppress($$$ARGS)").collect();
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let calls: Vec<_> = file
+            .grep
+            .root()
+            .find_all("suppress($$$ARGS)")
+            .map(|matched| AstNode::from_raw(matched.get_node().clone()))
+            .collect();
         assert_eq!(calls.len(), 2);
 
         // First call is inside a with_statement
@@ -1035,8 +1230,15 @@ mod tests {
             def foo():
                 pass
         "#};
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let func = grep.root().find("def foo(): $$$BODY").unwrap();
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let func = AstNode::from_raw(
+            file.grep
+                .root()
+                .find("def foo(): $$$BODY")
+                .unwrap()
+                .get_node()
+                .clone(),
+        );
         let decorators = extract_decorators(&func);
         assert_eq!(decorators.len(), 3);
     }
@@ -1048,8 +1250,15 @@ mod tests {
             def foo():
                 pass
         "};
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let func = grep.root().find("def foo(): $$$BODY").unwrap();
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let func = AstNode::from_raw(
+            file.grep
+                .root()
+                .find("def foo(): $$$BODY")
+                .unwrap()
+                .get_node()
+                .clone(),
+        );
         let decorators = extract_decorators(&func);
 
         let dec0 = &decorators[0];
@@ -1073,8 +1282,15 @@ mod tests {
             def foo():
                 pass
         "#};
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let func = grep.root().find("def foo(): $$$BODY").unwrap();
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let func = AstNode::from_raw(
+            file.grep
+                .root()
+                .find("def foo(): $$$BODY")
+                .unwrap()
+                .get_node()
+                .clone(),
+        );
         let decorators = extract_decorators(&func);
 
         let dec0 = &decorators[0];
@@ -1093,8 +1309,15 @@ mod tests {
             def foo():
                 pass
         "#};
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let func = grep.root().find("def foo(): $$$BODY").unwrap();
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let func = AstNode::from_raw(
+            file.grep
+                .root()
+                .find("def foo(): $$$BODY")
+                .unwrap()
+                .get_node()
+                .clone(),
+        );
 
         assert!(has_decorator(&func, |name| name == "parametrize"));
         assert!(has_decorator(&func, |path| path == "pytest.mark.parametrize"));
@@ -1107,8 +1330,8 @@ mod tests {
             class FakeService(abc.ABC, Protocol):
                 pass
         "};
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let classes = extract_classes(&grep.root());
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let classes = extract_classes(&file);
         assert_eq!(classes.len(), 1);
 
         let cls = &classes[0];
@@ -1123,8 +1346,8 @@ mod tests {
             class FakeService(abc.ABC, Protocol):
                 pass
         "};
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let classes = extract_classes(&grep.root());
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let classes = extract_classes(&file);
         let cls = &classes[0];
         assert_eq!(cls.bases.len(), 2);
         assert_eq!(cls.bases[0].name, "abc.ABC");
@@ -1138,8 +1361,8 @@ mod tests {
             class Config:
                 pass
         "};
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let classes = extract_classes(&grep.root());
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let classes = extract_classes(&file);
         assert_eq!(classes.len(), 1);
 
         let cls = &classes[0];
@@ -1154,8 +1377,9 @@ mod tests {
             def handler(self, a: int, b: str = 'hello', *, c: bool, **kwargs):
                 pass
         "};
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let params = extract_parameters(&grep.root());
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let root = AstNode::from_raw(file.grep.root());
+        let params = extract_parameters(&root);
 
         assert_eq!(params[0].kind, PythonParameterKind::Receiver);
         assert_eq!(params[1].kind, PythonParameterKind::Positional);
@@ -1169,8 +1393,9 @@ mod tests {
             def handler(self, a: int, b: str = 'hello', *, c: bool, **kwargs):
                 pass
         "};
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let params = extract_parameters(&grep.root());
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let root = AstNode::from_raw(file.grep.root());
+        let params = extract_parameters(&root);
 
         assert_eq!(params[1].name, "a");
         assert_eq!(params[1].type_text.as_deref(), Some("int"));

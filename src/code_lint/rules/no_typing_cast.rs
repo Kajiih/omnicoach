@@ -11,11 +11,10 @@
 // TODO: Also remove the documentation of modes as it's the same for all rules
 // TODO: Also remove from every violation template, they should not suggest to ignore.
 
-use crate::code_lint::{CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, FilterListDefaults, Rule, RuleName};
-use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
-use crate::rules::Tag;
-use ast_grep_core::AstGrep;
+use crate::code_lint::ast::ParsedFile;
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{Config, FilterListDefaults, Rule, Tag};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -58,18 +57,13 @@ impl CodeRule for NoTypingCast {
         RuleTarget::SourceOnly
     }
 
-    fn check_file(
-        &self,
-        path: &Path,
-        grep: &AstGrep<SourceDoc>,
-        config: &Config,
-    ) -> Vec<Diagnostic> {
-        self.check_banned_calls(path, grep, config, &DEFAULT_BANNED_CALLS)
+    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
+        self.check_banned_calls(path, file, config, &DEFAULT_BANNED_CALLS)
     }
 }
 
 #[cfg(test)]
-crate::rule_test!(
+crate::test_utils::rule_test!(
     NoTypingCast,
     {
         Python => {

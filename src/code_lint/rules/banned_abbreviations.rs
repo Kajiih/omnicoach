@@ -1,10 +1,9 @@
 //! Rule targeting banned abbreviations in definitions across multiple languages.
 
-use crate::code_lint::CodeRule;
-use crate::core::{FilterListDefaults, Rule, RuleName};
-use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
-use crate::rules::Tag;
-use ast_grep_core::AstGrep;
+use crate::code_lint::ast::ParsedFile;
+use crate::code_lint::rule::CodeRule;
+use crate::core::{FilterListDefaults, Rule, Tag};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -12,7 +11,7 @@ use std::path::Path;
 const DEFAULT_BANNED: FilterListDefaults = FilterListDefaults {
     base: &[
         "err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag", "ty", "cat",
-        "stmt", "ext",
+        "stmt", "ext", "fmt", "arch",
     ],
     extend: &[],
     // In Rust, `str` is a primitive type keyword rather than an abbreviation, and it is
@@ -89,13 +88,13 @@ impl CodeRule for BannedAbbreviations {
     fn check_file(
         &self,
         path: &Path,
-        grep: &AstGrep<crate::code_lint::SourceDoc>,
+        file: &ParsedFile,
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        let effective_banned = self.effective_banned_set(*grep.lang(), config, &DEFAULT_BANNED);
+        let effective_banned = self.effective_banned_set(file.lang(), config, &DEFAULT_BANNED);
         let mut diagnostics = Vec::new();
 
-        for node in crate::code_lint::bindings::collect_renameable_bindings(grep) {
+        for node in crate::code_lint::bindings::collect_renameable_bindings(file) {
             let name = node.text();
             for segment in split_segments(&name) {
                 if effective_banned.contains(&segment) {
@@ -115,7 +114,7 @@ impl CodeRule for BannedAbbreviations {
 }
 
 #[cfg(test)]
-crate::rule_test!(
+crate::test_utils::rule_test!(
     BannedAbbreviations,
     {
         Python => {

@@ -1,6 +1,6 @@
 //! Command execution safety and workflow context linter binary.
 
-use omni::command_lint::{InterceptedCommand, JjCliClient};
+use omni::command_lint::runner::run_command_lint;
 use omni::core::Config;
 use omni::diagnostic::print_diagnostics;
 
@@ -25,7 +25,6 @@ struct Cli {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Load configuration
     let config = match Config::load() {
         Ok(loaded_config) => loaded_config,
         Err(error) => {
@@ -34,23 +33,8 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    let mut all_diagnostics = Vec::new();
+    let all_diagnostics = run_command_lint(&cli.cmd, &config);
 
-    // Parse the intercepted command calls
-    let commands = InterceptedCommand::parse_all(&cli.cmd);
-
-    let jj_client = JjCliClient;
-
-    // Evaluate guard rules in registry matching the context for each command invocation
-    for cmd in &commands {
-        for rule in omni::rules::COMMAND_RULES {
-            if config.is_rule_enabled(*rule) {
-                all_diagnostics.extend(rule.check_command(cmd, &jj_client, &config));
-            }
-        }
-    }
-
-    // Print diagnostics according to format
     if !all_diagnostics.is_empty() {
         print_diagnostics(&all_diagnostics, &cli.format)?;
         std::process::exit(1);

@@ -5,9 +5,10 @@
 //! header (the part preceding its body).
 //!
 //! The traversal is language-agnostic; the grammar vocabulary it relies on is not, and
-//! lives in [`ast_python`] and [`ast_rust`].
+//! lives in [`crate::code_lint::ast::python`] and [`crate::code_lint::ast::rust`].
 
-use crate::code_lint::{AstNode, ast_python, ast_rust};
+use crate::code_lint::ast::{ParsedFile, RawNode, dispatch_lang};
+use crate::diagnostic::SourceSpan;
 use ast_grep_language::SupportLang;
 use std::ops::RangeInclusive;
 
@@ -16,11 +17,7 @@ use std::ops::RangeInclusive;
 /// Unsupported languages report no containers, which makes callers behave as though no
 /// enclosing statement exists rather than guessing with another grammar's vocabulary.
 fn is_statement_container(kind: &str, lang: SupportLang) -> bool {
-    match lang {
-        SupportLang::Python => ast_python::is_statement_container(kind),
-        SupportLang::Rust => ast_rust::is_statement_container(kind),
-        _ => false,
-    }
+    dispatch_lang!(lang, is_statement_container(kind), false)
 }
 
 /// Returns the innermost statement enclosing `node`.
@@ -29,7 +26,7 @@ fn is_statement_container(kind: &str, lang: SupportLang) -> bool {
 /// `node` itself or its closest such ancestor. Deriving it from the container relation
 /// rather than from a list of statement kinds keeps every grammar construct covered.
 #[must_use]
-pub fn find_enclosing_statement<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
+pub(super) fn find_enclosing_statement<'a>(node: &RawNode<'a>) -> Option<RawNode<'a>> {
     let lang = *node.lang();
     std::iter::once(node.clone())
         .chain(node.ancestors())
@@ -55,7 +52,7 @@ pub fn find_enclosing_statement<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
 /// Anything after the header belongs to the body and must not be read as documentation of
 /// the statement itself.
 #[must_use]
-pub fn header_line_range(statement: &AstNode<'_>) -> RangeInclusive<usize> {
+pub(super) fn header_line_range(statement: &RawNode<'_>) -> RangeInclusive<usize> {
     let lang = *statement.lang();
     let start_line = statement.start_pos().line() + 1;
     let mut header_end_line = start_line;
@@ -68,6 +65,25 @@ pub fn header_line_range(statement: &AstNode<'_>) -> RangeInclusive<usize> {
         }
     }
     start_line..=statement.end_pos().line() + 1
+}
+
+/// Resolves the 1-indexed inclusive header line range of the innermost statement enclosing `span`.
+#[must_use]
+pub fn enclosing_statement_header_range(
+    file: &ParsedFile,
+    span: SourceSpan,
+) -> Option<RangeInclusive<usize>> {
+    let node = file
+        .grep
+        .root()
+        .dfs()
+        .filter(|candidate| {
+            candidate.range().start <= span.start && candidate.range().end >= span.end
+        })
+        .min_by_key(|candidate| candidate.range().end - candidate.range().start)?;
+
+    let statement = find_enclosing_statement(&node)?;
+    Some(header_line_range(&statement))
 }
 
 #[cfg(test)]

@@ -1,27 +1,110 @@
 //! Shared core module of the Omni linter toolkit.
 
-use crate::diagnostic::{Diagnostic, SourceLocation, ViolationMessage, ViolationTemplate};
+use crate::diagnostic::{
+    Diagnostic, RuleName, SourceLocation, ViolationMessage, ViolationTemplate,
+};
 use ast_grep_language::SupportLang;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
+use strum::{Display, EnumIter, EnumMessage, EnumString, IntoStaticStr};
 
-/// Strongly-typed static rule identifier name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
-#[serde(transparent)]
-pub struct RuleName(pub &'static str);
+/// Metadata tags used to categorize rules.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    Display,
+    EnumString,
+    EnumIter,
+    IntoStaticStr,
+    EnumMessage,
+)]
+#[strum(ascii_case_insensitive)]
+pub enum Tag {
+    /// Checks targeting Python source code ASTs
+    Python,
+    /// Checks targeting Rust source code ASTs
+    Rust,
 
-impl std::fmt::Display for RuleName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+    /// Identifier conventions, abbreviations, suffixes
+    Naming,
+    /// Asynchronous execution and structured concurrency
+    Async,
+    /// Test files, assertions, and mock hygiene
+    Testing,
+    /// Type annotations, dataclasses, and protocols
+    Typing,
+    /// Scope nesting, function length, and complexity
+    Complexity,
+    /// Checks related to logging configurations and invocations
+    Logging,
+    /// Checks targeting exception handling structures
+    Exceptions,
+    /// Inline and file-level suppression comment hygiene
+    Suppression,
+    /// Code style and formatting conventions
+    Style,
+    /// Safety guidelines and command restrictions
+    Safety,
+    /// Command-line syntax checks
+    Cli,
+    /// Workflow execution rules
+    Workflow,
+    /// Version control systems integrations
+    Vcs,
+    /// JJ version control system
+    JJ,
+
+    /// Rule relies on heuristics and may trigger edge-case false positives
+    Heuristic,
+    /// Enforces team or architectural opinions beyond baseline bugs
+    Opinionated,
+    /// Hidden global state, ambient dependencies, and other impurity-inducing side effects
+    #[serde(rename = "side-effects")]
+    #[strum(serialize = "side-effects")]
+    SideEffects,
+}
+
+impl Tag {
+    /// Returns the tag name as a static string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        (*self).into()
+    }
+
+    /// Returns a human-readable description of the tag's purpose.
+    #[must_use]
+    pub fn description(&self) -> &'static str {
+        self.get_documentation().unwrap_or_default().trim()
+    }
+
+    /// Returns the corresponding ast-grep `SupportLang` if this tag represents a language.
+    #[must_use]
+    pub const fn to_support_lang(self) -> Option<SupportLang> {
+        match self {
+            Self::Python => Some(SupportLang::Python),
+            Self::Rust => Some(SupportLang::Rust),
+            _ => None,
+        }
     }
 }
 
-/// Concrete document type used across Omni AST analysis.
-pub type SourceDoc = ast_grep_core::tree_sitter::StrDoc<SupportLang>;
-
-/// Concrete AST node type used across Omni AST analysis.
-pub type AstNode<'a> = ast_grep_core::Node<'a, SourceDoc>;
+/// Returns true if `name` is a non-empty `kebab-case` identifier (`[a-z0-9]+(-[a-z0-9]+)*`).
+#[must_use]
+pub fn is_kebab_case(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && name.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
+}
 
 /// Compile-time static descriptor for default filter lists (both allowlists and denylists).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,20 +118,6 @@ pub struct FilterListDefaults {
 }
 
 impl FilterListDefaults {
-    /// Creates a new static default filter list descriptor.
-    #[must_use]
-    pub const fn new(
-        base: &'static [&'static str],
-        extend: &'static [(SupportLang, &'static [&'static str])],
-        exempt: &'static [(SupportLang, &'static [&'static str])],
-    ) -> Self {
-        Self {
-            base,
-            extend,
-            exempt,
-        }
-    }
-
     /// Resolves the default set of strings for a specific language.
     #[must_use]
     pub fn resolve_default_for_lang(&self, lang: SupportLang) -> HashSet<String> {
@@ -346,7 +415,7 @@ pub trait Rule: Send + Sync {
 
     /// Returns the domain tags of the rule (language tags are derived from `supported_languages`).
     #[must_use]
-    fn tags(&self) -> &'static [crate::rules::Tag];
+    fn tags(&self) -> &'static [Tag];
 
     /// Returns the single violation template for this rule (`1 Rule = 1 Template`).
     #[must_use]
@@ -361,7 +430,7 @@ pub trait Rule: Send + Sync {
     /// Returns true if the rule carries the given tag, including language tags
     /// derived from `supported_languages`.
     #[must_use]
-    fn has_tag(&self, tag: crate::rules::Tag) -> bool {
+    fn has_tag(&self, tag: Tag) -> bool {
         self.tags().contains(&tag)
             || tag
                 .to_support_lang()
@@ -467,9 +536,10 @@ pub trait Rule: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Selector {
     /// Matches a specific rule name.
-    Name(RuleName),
+    // TODO: Why String and not RuleName?
+    Name(String),
     /// Matches all rules under a category tag.
-    Tag(crate::rules::Tag),
+    Tag(Tag),
 }
 
 impl<'de> Deserialize<'de> for Selector {
@@ -482,21 +552,13 @@ impl<'de> Deserialize<'de> for Selector {
         // TODO(roadmap): Avoid coupling selector deserialization directly to static registries.
         // This prevents dynamic/declarative rules from being loaded via configurations.
         // 1. Try to parse as Tag
-        if let Ok(tag) = selector_input.parse::<crate::rules::Tag>() {
+        if let Ok(tag) = selector_input.parse::<Tag>() {
             return Ok(Self::Tag(tag));
         }
 
-        // 2. Try to parse as Name from registries
-        for rule in crate::rules::CODE_RULES {
-            if rule.name().0 == selector_input {
-                return Ok(Self::Name(rule.name()));
-            }
-        }
-
-        for rule in crate::rules::COMMAND_RULES {
-            if rule.name().0 == selector_input {
-                return Ok(Self::Name(rule.name()));
-            }
+        // 2. Try to parse as kebab-case RuleName
+        if is_kebab_case(&selector_input) {
+            return Ok(Self::Name(selector_input));
         }
 
         Err(serde::de::Error::custom(format!(
@@ -510,7 +572,7 @@ impl Selector {
     #[must_use]
     pub fn matches_rule(&self, rule: &dyn Rule) -> bool {
         match self {
-            Self::Name(name) => *name == rule.name(),
+            Self::Name(name) => name == rule.name().0,
             Self::Tag(tag) => rule.has_tag(*tag),
         }
     }
@@ -697,7 +759,6 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::Tag;
 
     struct MockRule {
         name: &'static str,
@@ -778,7 +839,7 @@ mod tests {
         let selectors = config.select.unwrap();
         assert_eq!(selectors.len(), 2);
         assert!(selectors.contains(&Selector::Tag(Tag::Logging)));
-        assert!(selectors.contains(&Selector::Name(RuleName("no-edits-on-described-commits"))));
+        assert!(selectors.contains(&Selector::Name("no-edits-on-described-commits".to_string())));
     }
 
     #[test]

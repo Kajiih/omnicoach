@@ -4,29 +4,8 @@
 //! stripping standard linter/tooling directive prefixes, and verifying that sensitive
 //! operations (such as exception suppression) are accompanied by substantive explanation comments.
 
-use crate::code_lint::{AstNode, SourceDoc, ast_python, ast_rust, statements};
-use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
+use crate::code_lint::ast::{self, AstNode, ParsedFile, statements};
 use std::collections::HashMap;
-
-/// Returns true for node kinds that represent comments in `lang`.
-fn is_comment_kind(kind: &str, lang: SupportLang) -> bool {
-    match lang {
-        SupportLang::Python => ast_python::is_comment_kind(kind),
-        SupportLang::Rust => ast_rust::is_comment_kind(kind),
-        _ => false,
-    }
-}
-
-/// Collects all Tree-sitter comment nodes in source order.
-///
-/// This matches on comment kinds rather than using `Node::is_extra`, which would also
-/// admit non-comment trivia such as Python's `line_continuation`.
-pub fn collect_comment_nodes<'a>(node: &AstNode<'a>) -> impl Iterator<Item = AstNode<'a>> {
-    let lang = *node.lang();
-    node.dfs()
-        .filter(move |curr| is_comment_kind(curr.kind().as_ref(), lang))
-}
 
 /// Strips leading and trailing comment delimiters (`//`, `#`, `/* ... */`).
 ///
@@ -196,17 +175,16 @@ pub struct CommentIndex<'a> {
 }
 
 impl<'a> CommentIndex<'a> {
-    /// Builds a `CommentIndex` from `AstGrep`.
+    /// Builds a `CommentIndex` from a parsed file.
     #[must_use]
-    pub fn from_ast(grep: &'a AstGrep<SourceDoc>) -> Self {
-        let root = grep.root();
-        let root_text = root.text();
-        let source = root_text.as_ref();
+    pub fn from_file(file: &'a ParsedFile) -> Self {
+        let source_text = file.source_text();
+        let source = source_text.as_ref();
         let mut comments_by_line = HashMap::new();
-        for node in collect_comment_nodes(&root) {
-            let start_line = node.start_pos().line() + 1;
-            let end_line = node.end_pos().line() + 1;
-            let node_offset = node.range().start;
+        for node in ast::collect_comment_nodes(file) {
+            let start_line = node.start_line();
+            let end_line = node.end_line();
+            let node_offset = node.span().start;
             let line_start_offset = source[..node_offset].rfind('\n').map_or(0, |idx| idx + 1);
             let is_standalone = source[line_start_offset..node_offset].trim().is_empty();
             for line in start_line..=end_line {
@@ -254,7 +232,7 @@ impl<'a> CommentIndex<'a> {
 
         // 2. Contiguous standalone comment block directly above `line`
         let mut curr_line = line.saturating_sub(1);
-        let mut prev_range: Option<(usize, usize)> = None;
+        let mut prev_range: Option<crate::diagnostic::SourceSpan> = None;
         let mut parts = Vec::new();
 
         while curr_line > 0 {
@@ -265,7 +243,7 @@ impl<'a> CommentIndex<'a> {
                     break;
                 }
 
-                let range = (entry.node.range().start, entry.node.range().end);
+                let range = entry.node.span();
                 if prev_range != Some(range) {
                     prev_range = Some(range);
                     let comment_text = entry.node.text();
@@ -296,7 +274,7 @@ impl<'a> CommentIndex<'a> {
     #[must_use]
     pub fn has_explanation_for_span(
         &self,
-        root: &AstNode<'_>,
+        file: &ParsedFile,
         span: crate::diagnostic::SourceSpan,
         line: usize,
     ) -> bool {
@@ -304,21 +282,10 @@ impl<'a> CommentIndex<'a> {
             return true;
         }
 
-        let Some(node) = root
-            .dfs()
-            .filter(|candidate| {
-                candidate.range().start <= span.start && candidate.range().end >= span.end
-            })
-            .min_by_key(|candidate| candidate.range().end - candidate.range().start)
-        else {
+        let Some(header_lines) = statements::enclosing_statement_header_range(file, span) else {
             return false;
         };
 
-        let Some(statement) = statements::find_enclosing_statement(&node) else {
-            return false;
-        };
-
-        let header_lines = statements::header_line_range(&statement);
         self.has_adjacent_explanation(*header_lines.start())
             || header_lines
                 .into_iter()
@@ -329,9 +296,19 @@ impl<'a> CommentIndex<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostic::SourceSpan;
     use ast_grep_language::SupportLang;
     use indoc::indoc;
     use rstest::rstest;
+
+    /// Returns the span and 1-indexed line of the first occurrence of `target` in `source`.
+    fn span_of(source: &str, target: &str) -> (SourceSpan, usize) {
+        let start = source
+            .find(target)
+            .expect("target should exist in source snippet");
+        let line = source[..start].matches('\n').count() + 1;
+        (SourceSpan::new(start, start + target.len()), line)
+    }
 
     #[rstest]
     #[case::plain_comment("# Safe because cache is transient", "Safe because cache is transient")]
@@ -414,8 +391,8 @@ mod tests {
                 pass
         "};
 
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let index = CommentIndex::from_ast(&grep);
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let index = CommentIndex::from_file(&file);
         assert_eq!(index.has_adjacent_explanation(line), expected);
     }
 
@@ -428,8 +405,8 @@ mod tests {
                 pass
         "};
 
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let index = CommentIndex::from_ast(&grep);
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let index = CommentIndex::from_file(&file);
 
         assert!(index.has_adjacent_explanation(3));
     }
@@ -441,8 +418,8 @@ mod tests {
             with suppress(FileNotFoundError):
                 pass
         "};
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let index = CommentIndex::from_ast(&grep);
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let index = CommentIndex::from_file(&file);
 
         // Line 2 has no standalone comment preceding it; line 1 is code with inline comment
         assert!(!index.has_adjacent_explanation(2));
@@ -543,23 +520,11 @@ mod tests {
         #[case] target_call: &str,
         #[case] expected: bool,
     ) {
-        let grep = AstGrep::new(source, SupportLang::Python);
-        let index = CommentIndex::from_ast(&grep);
-        let root = grep.root();
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let index = CommentIndex::from_file(&file);
+        let (span, line) = span_of(source, target_call);
 
-        let target_node = root
-            .dfs()
-            .find(|node| node.kind() == "call" && node.text().starts_with(target_call))
-            .expect("target node should exist in source snippet");
-
-        assert_eq!(
-            index.has_explanation_for_span(
-                &root,
-                crate::diagnostic::SourceSpan::from_range(target_node.range()),
-                target_node.start_pos().line() + 1,
-            ),
-            expected
-        );
+        assert_eq!(index.has_explanation_for_span(&file, span, line), expected);
     }
 
     #[test]
@@ -572,20 +537,11 @@ mod tests {
                 };
             }
         "};
-        let grep = AstGrep::new(source, SupportLang::Rust);
-        let index = CommentIndex::from_ast(&grep);
-        let root = grep.root();
-
-        let target_node = root
-            .dfs()
-            .find(|node| node.kind() == "call_expression" && node.text().starts_with("compute"))
-            .expect("compute call node should exist");
+        let file = ParsedFile::new(source, SupportLang::Rust);
+        let index = CommentIndex::from_file(&file);
+        let (span, line) = span_of(source, "compute()");
 
         // The inline comment on foo() inside the block must NOT license compute()
-        assert!(!index.has_explanation_for_span(
-            &root,
-            crate::diagnostic::SourceSpan::from_range(target_node.range()),
-            target_node.start_pos().line() + 1,
-        ));
+        assert!(!index.has_explanation_for_span(&file, span, line));
     }
 }

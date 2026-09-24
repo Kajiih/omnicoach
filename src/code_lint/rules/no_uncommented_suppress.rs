@@ -4,12 +4,11 @@
 //! in Python `with` statements are accompanied by an adjacent explanatory comment
 //! documenting why ignoring the exception is benign.
 
-use crate::code_lint::ast_python::is_with_context_manager;
-use crate::code_lint::{CodeRule, SourceDoc};
-use crate::core::{Config, EnforcementMode, FilterListDefaults, LanguageDefaults, Rule, RuleName};
-use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
-use crate::rules::Tag;
-use ast_grep_core::AstGrep;
+use crate::code_lint::ast::ParsedFile;
+use crate::code_lint::ast::python::is_with_context_manager;
+use crate::code_lint::rule::CodeRule;
+use crate::core::{Config, EnforcementMode, FilterListDefaults, LanguageDefaults, Rule, Tag};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -57,13 +56,8 @@ impl Rule for NoUncommentedSuppress {
 }
 
 impl CodeRule for NoUncommentedSuppress {
-    fn check_file(
-        &self,
-        path: &Path,
-        grep: &AstGrep<SourceDoc>,
-        config: &Config,
-    ) -> Vec<Diagnostic> {
-        self.find_configured_banned_calls(grep, config, &DEFAULT_BANNED_CALLS)
+    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
+        self.find_configured_banned_calls(file, config, &DEFAULT_BANNED_CALLS)
             .into_iter()
             .filter(|matched| is_with_context_manager(&matched.node))
             .map(|matched| self.diagnostic_at_node(path, &matched.node, &[]))
@@ -72,7 +66,7 @@ impl CodeRule for NoUncommentedSuppress {
 }
 
 #[cfg(test)]
-crate::rule_test!(
+crate::test_utils::rule_test!(
     NoUncommentedSuppress,
     {
         Python => {

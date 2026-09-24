@@ -21,7 +21,7 @@ graph TD
     A[CONFIG_FILE_NAME: .omnilint.toml] --> B(Config Parser)
     B --> C[core::Config]
     C -->|HashMap rules| D[GEN001 Rule Engine]
-    E[code_lint::lint_file] -->|config: &Config| D
+    E[code_lint::runner::lint_file] -->|config: &Config| D
     D -->|traverse AST| F[AST Helper Module: ast.rs]
     F -->|is_python_variable_binding| D
     F -->|is_rust_variable_binding| D
@@ -115,7 +115,7 @@ To prevent cross-language rule leakage (e.g. running Python-specific analysis on
        }
    }
 
-   fn rule_supports_language(rule: &dyn crate::code_lint::CodeRule, lang: SupportLang) -> bool {
+   fn rule_supports_language(rule: &dyn crate::code_lint::rule::CodeRule, lang: SupportLang) -> bool {
        lang_to_tag(lang)
            .map(|tag| rule.tags().contains(&tag))
            .unwrap_or(false)
@@ -337,7 +337,7 @@ We will integrate the rule and align existing rules to the new config-enabled si
    fn check_file(
        &self,
        path: &Path,
-       grep: &AstGrep<ast_grep_core::source::StrDoc<SupportLang>>,
+       file: &crate::code_lint::ast::ParsedFile,
        _config: &crate::core::Config,
    ) -> Vec<Diagnostic>
    ```

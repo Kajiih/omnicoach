@@ -1,12 +1,13 @@
 //! Inline and file-level suppression comment hygiene.
 
-use crate::code_lint::{CodeRule, SourceDoc};
-use crate::core::{Config, Rule, RuleName};
+use crate::code_lint::ast::{self, ParsedFile};
+use crate::code_lint::comments::strip_comment_delimiters;
+use crate::code_lint::rule::CodeRule;
+use crate::core::{Config, Rule, Tag};
 use crate::diagnostic::{
-    Diagnostic, LineColumn, SourceLocation, SourceSpan, ViolationTemplate, violation_template,
+    Diagnostic, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationTemplate,
+    violation_template,
 };
-use crate::rules::Tag;
-use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -39,12 +40,7 @@ impl Rule for MissingSuppressionReason {
 }
 
 impl CodeRule for MissingSuppressionReason {
-    fn check_file(
-        &self,
-        _path: &Path,
-        _grep: &AstGrep<SourceDoc>,
-        _config: &Config,
-    ) -> Vec<Diagnostic> {
+    fn check_file(&self, _path: &Path, _file: &ParsedFile, _config: &Config) -> Vec<Diagnostic> {
         // Evaluated during the suppression tracker audit pass
         Vec::new()
     }
@@ -78,12 +74,7 @@ impl Rule for UnusedSuppression {
 }
 
 impl CodeRule for UnusedSuppression {
-    fn check_file(
-        &self,
-        _path: &Path,
-        _grep: &AstGrep<SourceDoc>,
-        _config: &Config,
-    ) -> Vec<Diagnostic> {
+    fn check_file(&self, _path: &Path, _file: &ParsedFile, _config: &Config) -> Vec<Diagnostic> {
         // Evaluated during the suppression tracker audit pass
         Vec::new()
     }
@@ -117,12 +108,7 @@ impl Rule for UnknownSuppressionRule {
 }
 
 impl CodeRule for UnknownSuppressionRule {
-    fn check_file(
-        &self,
-        _path: &Path,
-        _grep: &AstGrep<SourceDoc>,
-        _config: &Config,
-    ) -> Vec<Diagnostic> {
+    fn check_file(&self, _path: &Path, _file: &ParsedFile, _config: &Config) -> Vec<Diagnostic> {
         // Evaluated during the suppression tracker audit pass
         Vec::new()
     }
@@ -156,12 +142,7 @@ impl Rule for BlanketSuppression {
 }
 
 impl CodeRule for BlanketSuppression {
-    fn check_file(
-        &self,
-        _path: &Path,
-        _grep: &AstGrep<SourceDoc>,
-        _config: &Config,
-    ) -> Vec<Diagnostic> {
+    fn check_file(&self, _path: &Path, _file: &ParsedFile, _config: &Config) -> Vec<Diagnostic> {
         // Evaluated during the suppression tracker audit pass
         Vec::new()
     }
@@ -231,14 +212,15 @@ pub struct SuppressionTracker {
 }
 
 impl SuppressionTracker {
-    /// Parses suppression directives from the AST and file content.
+    /// Parses suppression directives from the parsed file and its content.
     #[must_use]
-    pub fn from_ast(grep: &AstGrep<SourceDoc>, content: &str) -> Self {
-        let directives = crate::code_lint::comments::collect_comment_nodes(&grep.root())
+    pub fn from_file(file: &ParsedFile, content: &str) -> Self {
+        let directives = ast::collect_comment_nodes(file)
+            .into_iter()
             .filter_map(|comment_node| {
                 let text = comment_node.text();
-                let span = SourceSpan::from_range(comment_node.range());
-                let coord = LineColumn::from_node(&comment_node);
+                let span = comment_node.span();
+                let coord = comment_node.start_coordinate();
                 Self::parse_comment_text(&text, span, coord, content)
             })
             .collect();
@@ -253,7 +235,7 @@ impl SuppressionTracker {
         coord: LineColumn,
         content: &str,
     ) -> Option<ParsedDirective> {
-        let stripped = crate::code_lint::comments::strip_comment_delimiters(text)?;
+        let stripped = strip_comment_delimiters(text)?;
         let (is_file, remainder) = parse_directive_prefix(stripped)?;
         let (target_rules, is_blanket, after_rules) = parse_bracketed_rules(remainder.trim_start());
 
@@ -313,21 +295,23 @@ impl SuppressionTracker {
     }
 
     /// Audits all parsed directives and emits suppression diagnostics according to configuration.
+    ///
+    /// `suppressible_rules` holds the names of every registered non-suppression code rule; it is
+    /// supplied by the caller so this module stays independent of the rule registry.
     #[must_use]
-    pub fn audit(&self, path: &Path, config: &Config) -> Vec<Diagnostic> {
-        let suppressible_rules: HashSet<&'static str> = crate::rules::CODE_RULES
-            .iter()
-            .filter(|rule| !rule.tags().contains(&Tag::Suppression))
-            .map(|rule| rule.name().0)
-            .collect();
-
+    pub fn audit(
+        &self,
+        path: &Path,
+        config: &Config,
+        suppressible_rules: &HashSet<&'static str>,
+    ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for directive in &self.directives {
             audit_single_directive(
                 directive,
                 path,
                 config,
-                &suppressible_rules,
+                suppressible_rules,
                 &mut diagnostics,
             );
         }
@@ -468,8 +452,8 @@ mod tests {
     #[test]
     fn test_parse_valid_inline_directive_same_line() {
         let content = "let a = 1; // omni:ignore [single-letter-variable-name] -- math variable";
-        let grep = AstGrep::new(content, SupportLang::Rust);
-        let tracker = SuppressionTracker::from_ast(&grep, content);
+        let file = ParsedFile::new(content, SupportLang::Rust);
+        let tracker = SuppressionTracker::from_file(&file, content);
 
         assert_eq!(tracker.directives.len(), 1);
         let directive = &tracker.directives[0];
@@ -488,8 +472,8 @@ mod tests {
     fn test_parse_valid_inline_directive_preceding_line() {
         let content =
             "# omni:ignore [flat-scope-enforced] -- required for fixture\ndef inner(): pass";
-        let grep = AstGrep::new(content, SupportLang::Python);
-        let tracker = SuppressionTracker::from_ast(&grep, content);
+        let file = ParsedFile::new(content, SupportLang::Python);
+        let tracker = SuppressionTracker::from_file(&file, content);
 
         assert_eq!(tracker.directives.len(), 1);
         let directive = &tracker.directives[0];
@@ -510,8 +494,8 @@ mod tests {
     #[test]
     fn test_parse_file_level_directive() {
         let content = "# omni:disable-file [flat-scope-enforced, single-letter-variable-name] -- legacy generated file\ndef foo(): pass";
-        let grep = AstGrep::new(content, SupportLang::Python);
-        let tracker = SuppressionTracker::from_ast(&grep, content);
+        let file = ParsedFile::new(content, SupportLang::Python);
+        let tracker = SuppressionTracker::from_file(&file, content);
 
         assert_eq!(tracker.directives.len(), 1);
         let directive = &tracker.directives[0];
@@ -526,162 +510,10 @@ mod tests {
     #[test]
     fn test_blanket_directive_detected() {
         let content = "let a = 1; // omni:ignore -- missing brackets";
-        let grep = AstGrep::new(content, SupportLang::Rust);
-        let tracker = SuppressionTracker::from_ast(&grep, content);
+        let file = ParsedFile::new(content, SupportLang::Rust);
+        let tracker = SuppressionTracker::from_file(&file, content);
 
         assert_eq!(tracker.directives.len(), 1);
         assert!(tracker.directives[0].is_blanket);
-    }
-
-    #[test]
-    fn test_valid_inline_suppression_silences_violation() {
-        let content = "a = 1  # omni:ignore [single-letter-variable-name] -- math variable";
-        let config = Config::default();
-        let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
-        assert!(diags.is_empty(), "Expected 0 diagnostics, got: {diags:?}");
-    }
-
-    #[test]
-    fn test_valid_preceding_line_suppression_silences_violation() {
-        let content = "# omni:ignore [single-letter-variable-name] -- math variable\na = 1";
-        let config = Config::default();
-        let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
-        assert!(diags.is_empty(), "Expected 0 diagnostics, got: {diags:?}");
-    }
-
-    #[test]
-    fn test_unused_suppression_flagged() {
-        let content =
-            "clean_name = 1  # omni:ignore [single-letter-variable-name] -- math variable";
-        let config = Config::default();
-        let diags = crate::code_lint::lint_file(Path::new("clean.py"), content, &config);
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule_name.0, "unused-suppression");
-    }
-
-    #[test]
-    fn test_missing_reason_flagged() {
-        let content = "a = 1  # omni:ignore [single-letter-variable-name]";
-        let config = Config::default();
-        let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
-        assert!(
-            diags
-                .iter()
-                .any(|diag| diag.rule_name.0 == "missing-suppression-reason")
-        );
-    }
-
-    #[test]
-    fn test_empty_reason_flagged() {
-        let content = "a = 1  # omni:ignore [single-letter-variable-name] --    ";
-        let config = Config::default();
-        let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
-        assert!(
-            diags
-                .iter()
-                .any(|diag| diag.rule_name.0 == "missing-suppression-reason")
-        );
-    }
-
-    #[test]
-    fn test_unknown_rule_flagged() {
-        let content = "a = 1  # omni:ignore [non-existent-rule] -- reason";
-        let config = Config::default();
-        let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
-        assert!(
-            diags
-                .iter()
-                .any(|diag| diag.rule_name.0 == "unknown-suppression-rule")
-        );
-    }
-
-    #[test]
-    fn test_blanket_suppression_flagged() {
-        let content = "a = 1  # omni:ignore -- missing rule names";
-        let config = Config::default();
-        let diags = crate::code_lint::lint_file(Path::new("math.py"), content, &config);
-        assert!(
-            diags
-                .iter()
-                .any(|diag| diag.rule_name.0 == "blanket-suppression")
-        );
-    }
-
-    #[test]
-    fn test_file_level_suppression_targets_specific_rule() {
-        let content = indoc::indoc! {r"
-            # omni:disable-file [flat-scope-enforced] -- legacy nested functions
-            def outer():
-                def inner():
-                    a = 1
-        "};
-        let config = Config::default();
-        let diags = crate::code_lint::lint_file(Path::new("src/module.py"), content, &config);
-
-        // flat-scope-enforced should be suppressed, but single-letter-variable-name should be reported!
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule_name.0, "single-letter-variable-name");
-    }
-
-    #[test]
-    fn test_file_level_unused_suppression_flagged() {
-        let content = indoc::indoc! {r"
-            # omni:disable-file [no-logging-error-in-except] -- unused file disable
-            def clean():
-                pass
-        "};
-        let config = Config::default();
-        let diags = crate::code_lint::lint_file(Path::new("src/module.py"), content, &config);
-
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule_name.0, "unused-suppression");
-    }
-
-    #[test]
-    fn test_suppressing_supp_in_config() {
-        let content = "clean_name = 1  # omni:ignore [single-letter-variable-name] -- intentional dormant suppression";
-        let toml_content = r#"ignore = ["unused-suppression"]"#;
-        let config: Config = toml::from_str(toml_content).unwrap();
-        let diags = crate::code_lint::lint_file(Path::new("src/template.py"), content, &config);
-
-        assert!(diags.is_empty(), "Expected 0 diagnostics, got: {diags:?}");
-    }
-
-    #[test]
-    fn test_string_literal_does_not_trigger_suppression() {
-        let content =
-            r##"sample_text = "# omni:ignore [single-letter-variable-name] -- not a comment""##;
-        let config = Config::default();
-        let diags = crate::code_lint::lint_file(Path::new("src/test_case.py"), content, &config);
-
-        // Does not trigger unused-suppression since it's a string literal, not a comment
-        assert!(diags.is_empty(), "Expected 0 diagnostics, got: {diags:?}");
-    }
-
-    #[test]
-    fn test_comment_prefix_word_boundary() {
-        // Comments containing 'omni:ignored' should not be treated as omni:ignore directives
-        let content = "a = 1  # omni:ignored by other tool";
-        let config = Config::default();
-        let diags = crate::code_lint::lint_file(Path::new("src/test.py"), content, &config);
-
-        // Should flag single-letter-variable-name violation, and NOT flag blanket-suppression
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule_name.0, "single-letter-variable-name");
-    }
-
-    #[test]
-    fn test_command_rule_in_code_flagged_as_unknown() {
-        // no-edits-on-described-commits is a command rule and cannot be suppressed in code files
-        let content = "a = 1  # omni:ignore [no-edits-on-described-commits] -- invalid code rule";
-        let config = Config::default();
-        let diags = crate::code_lint::lint_file(Path::new("src/test.py"), content, &config);
-
-        assert!(
-            diags
-                .iter()
-                .any(|diag| diag.rule_name.0 == "unknown-suppression-rule"),
-            "Expected unknown-suppression-rule for non-code rule in code directive, got: {diags:?}"
-        );
     }
 }

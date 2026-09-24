@@ -1,10 +1,19 @@
 //! Diagnostic representation, serialization, and reporting.
 
-use crate::core::AstNode;
-pub use crate::core::RuleName;
 use ast_grep_language::SupportLang;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+/// Strongly-typed static rule identifier name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+#[serde(transparent)]
+pub struct RuleName(pub &'static str);
+
+impl std::fmt::Display for RuleName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 /// Detailed explanation and description of a rule violation.
 #[derive(Debug, Serialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -169,7 +178,6 @@ impl ViolationTemplate {
 ///     },
 /// }
 /// ```
-#[macro_export]
 macro_rules! violation_template {
     // Internal arm: field with language overrides
     (@text { base: $base:expr, $($lang:ident => $text:expr),+ $(,)? }) => {
@@ -189,14 +197,14 @@ macro_rules! violation_template {
         suggestion: $suggestion:tt $(,)?
     ) => {
         $crate::diagnostic::ViolationTemplate::new(
-            $crate::violation_template!(@text $summary),
-            $crate::violation_template!(@text $rationale),
-            $crate::violation_template!(@text $suggestion),
+            $crate::diagnostic::violation_template!(@text $summary),
+            $crate::diagnostic::violation_template!(@text $rationale),
+            $crate::diagnostic::violation_template!(@text $suggestion),
         )
     };
 }
 
-pub use crate::violation_template;
+pub(crate) use violation_template;
 
 /// The default virtual location context name for VCS changes.
 pub const VCS_CONTEXT_NAME: &str = "VCS_Context";
@@ -272,16 +280,6 @@ pub struct SourceLocation {
 }
 
 impl SourceLocation {
-    /// Creates a `SourceLocation` directly from a file path and an AST node.
-    #[must_use]
-    pub fn from_node(path: impl Into<PathBuf>, node: &AstNode<'_>) -> Self {
-        Self::file_span(
-            path,
-            SourceSpan::from_range(node.range()),
-            LineColumn::from_node(node),
-        )
-    }
-
     /// Creates a `SourceLocation` for a file path, byte span, and resolved 1-indexed coordinate.
     #[must_use]
     pub fn file_span(path: impl Into<PathBuf>, span: SourceSpan, coord: LineColumn) -> Self {
@@ -361,18 +359,6 @@ pub struct LineColumn {
     pub line: usize,
     /// 1-indexed column number.
     pub column: usize,
-}
-
-impl LineColumn {
-    /// Resolves the 1-indexed start `(line, column)` coordinate of an AST node.
-    #[must_use]
-    pub fn from_node(node: &AstNode<'_>) -> Self {
-        let start_pos = node.start_pos();
-        Self {
-            line: start_pos.line() + 1,
-            column: start_pos.column(node) + 1,
-        }
-    }
 }
 
 /// Optimized index for mapping flat byte offsets to 1-indexed (line, column) positions.
@@ -538,14 +524,12 @@ mod tests {
     }
 
     #[test]
-    fn test_source_location_from_node() {
-        let source = "fn main() {\n    let value = 42;\n}\n";
-        let grep = ast_grep_core::AstGrep::new(source, SupportLang::Rust);
-        let matched = grep
-            .root()
-            .find("let $VAR = $VAL")
-            .expect("let statement node should match pattern");
-        let loc = SourceLocation::from_node("src/main.rs", &matched);
+    fn test_source_location_file_span() {
+        let loc = SourceLocation::file_span(
+            "src/main.rs",
+            SourceSpan::new(16, 31),
+            LineColumn { line: 2, column: 5 },
+        );
         assert_eq!(
             loc,
             SourceLocation {

@@ -1,10 +1,9 @@
 //! Enforces a maximum number of assertions per test function (`max-test-assertions`).
 
-use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, LanguageDefaults, Rule, RuleName};
-use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
-use crate::rules::Tag;
-use ast_grep_core::AstGrep;
+use crate::code_lint::ast::{self, ParsedFile};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{Config, LanguageDefaults, Rule, Tag};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -43,93 +42,37 @@ impl Rule for MaxTestAssertions {
     }
 }
 
-/// Recursively counts top-level assertion constructs in a Python test function body.
-fn count_python_assertions(node: &AstNode<'_>) -> usize {
-    let kind = node.kind();
-    if matches!(kind.as_ref(), "function_definition" | "class_definition") {
-        return 0;
-    }
-    if kind == "assert_statement"
-        || (kind == "call" && crate::code_lint::ast_python::is_assertion_call(node))
-    {
-        return 1;
-    }
-    node.children()
-        .map(|child| count_python_assertions(&child))
-        .sum()
-}
-
-/// Recursively counts top-level assertion macro invocations in a Rust test function body.
-fn count_rust_assertions(node: &AstNode<'_>) -> usize {
-    let kind = node.kind();
-    if kind == "function_item" {
-        return 0;
-    }
-    if kind == "macro_invocation" && crate::code_lint::ast_rust::is_assertion_macro(node) {
-        return 1;
-    }
-    node.children()
-        .map(|child| count_rust_assertions(&child))
-        .sum()
-}
-
-/// Evaluates a single test function against `max_allowed` assertions.
-fn check_test_function(
-    rule: &MaxTestAssertions,
-    func_node: &AstNode<'_>,
-    lang: SupportLang,
-    path: &Path,
-    max_allowed: usize,
-) -> Option<Diagnostic> {
-    let name_node = func_node.field("name")?;
-    let body_node = func_node.field("body")?;
-    let func_name = name_node.text();
-
-    let assertion_count = match lang {
-        SupportLang::Rust => count_rust_assertions(&body_node),
-        _ => count_python_assertions(&body_node),
-    };
-
-    if assertion_count <= max_allowed {
-        return None;
-    }
-
-    let formatted_count = assertion_count.to_string();
-    let formatted_max = max_allowed.to_string();
-    Some(rule.diagnostic_at_node(
-        path,
-        &name_node,
-        &[
-            ("func", &func_name),
-            ("count", &formatted_count),
-            ("max", &formatted_max),
-        ],
-    ))
-}
-
 impl CodeRule for MaxTestAssertions {
     fn target(&self) -> RuleTarget {
         RuleTarget::TestsOnly
     }
 
-    fn check_file(
-        &self,
-        path: &Path,
-        grep: &AstGrep<SourceDoc>,
-        config: &Config,
-    ) -> Vec<Diagnostic> {
-        let lang = *grep.lang();
-        let max_allowed = self.effective_max_threshold(lang, config, &DEFAULT_MAX_ASSERTIONS);
+    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
+        let max_allowed =
+            self.effective_max_threshold(file.lang(), config, &DEFAULT_MAX_ASSERTIONS);
 
-        crate::code_lint::collect_test_functions(&grep.root(), lang)
-            .iter()
-            .filter_map(|func_node| check_test_function(self, func_node, lang, path, max_allowed))
+        ast::collect_test_function_assertion_counts(file)
+            .into_iter()
+            .filter(|(_, _, assertion_count)| *assertion_count > max_allowed)
+            .map(|(name_node, func_name, assertion_count)| {
+                let formatted_count = assertion_count.to_string();
+                let formatted_max = max_allowed.to_string();
+                self.diagnostic_at_node(
+                    path,
+                    &name_node,
+                    &[
+                        ("func", &func_name),
+                        ("count", &formatted_count),
+                        ("max", &formatted_max),
+                    ],
+                )
+            })
             .collect()
     }
 }
 
 #[cfg(test)]
-crate::rule_test!(
+crate::test_utils::rule_test!(
     MaxTestAssertions,
     {
         Python => {

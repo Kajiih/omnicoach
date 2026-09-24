@@ -1,10 +1,9 @@
 //! Declarations of generic rules targeting multiple languages.
 
-use crate::code_lint::CodeRule;
-use crate::core::{FilterListDefaults, Rule, RuleName};
-use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
-use crate::rules::Tag;
-use ast_grep_core::AstGrep;
+use crate::code_lint::ast::ParsedFile;
+use crate::code_lint::rule::CodeRule;
+use crate::core::{FilterListDefaults, Rule, Tag};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -45,13 +44,13 @@ impl CodeRule for SingleLetterVariableName {
     fn check_file(
         &self,
         path: &Path,
-        grep: &AstGrep<crate::code_lint::SourceDoc>,
+        file: &ParsedFile,
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        let effective_allowed = self.effective_allowed_set(*grep.lang(), config, &DEFAULT_ALLOWED);
+        let effective_allowed = self.effective_allowed_set(file.lang(), config, &DEFAULT_ALLOWED);
 
         let mut diagnostics = Vec::new();
-        for node in crate::code_lint::bindings::collect_renameable_bindings(grep) {
+        for node in crate::code_lint::bindings::collect_renameable_bindings(file) {
             let name = node.text();
             if name.len() == 1 && name != "_" && !effective_allowed.contains(&*name) {
                 diagnostics.push(self.diagnostic_at_node(path, &node, &[("name", &name)]));
@@ -62,7 +61,7 @@ impl CodeRule for SingleLetterVariableName {
 }
 
 #[cfg(test)]
-crate::rule_test!(
+crate::test_utils::rule_test!(
     SingleLetterVariableName,
     {
         Python => {

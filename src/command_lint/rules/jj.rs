@@ -1,15 +1,12 @@
 //! Validation checks for the `jj edit` command.
 // TODO: Consider if we should replace this rule with a no edit on bookmarked commit?
 
-use crate::command_lint::InterceptedCommand;
+use crate::command_lint::rule::{InterceptedCommand, ProgramCliSchema};
 use crate::command_lint::vcs::JjClient;
-use crate::core::{Config, Rule, RuleName};
+use crate::core::{Config, Rule, Tag};
 use crate::diagnostic::{
-    Diagnostic, SourceLocation, SourceSpan, ViolationTemplate, violation_template,
+    Diagnostic, RuleName, SourceLocation, SourceSpan, ViolationTemplate, violation_template,
 };
-use crate::rules::Tag;
-
-use crate::command_lint::ProgramCliSchema;
 
 /// CLI schema definition for Jujutsu commands.
 const JJ_CLI_SCHEMA: ProgramCliSchema = ProgramCliSchema {
@@ -65,7 +62,7 @@ impl Rule for NoJJEditOnDescribedCommits {
     }
 }
 
-impl crate::command_lint::CommandRule for NoJJEditOnDescribedCommits {
+impl crate::command_lint::rule::CommandRule for NoJJEditOnDescribedCommits {
     fn check_command(
         &self,
         cmd: &InterceptedCommand,

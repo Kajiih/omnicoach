@@ -1,10 +1,9 @@
 //! Enforces that environment variables are only accessed at module/static scope or explicit configuration boundaries (`no-env-in-functions`).
 
-use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, FilterListDefaults, Rule, RuleName};
-use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
-use crate::rules::Tag;
-use ast_grep_core::AstGrep;
+use crate::code_lint::ast::{self, ParsedFile};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{Config, FilterListDefaults, Rule, Tag};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -83,79 +82,26 @@ impl Rule for NoEnvInFunctions {
     }
 }
 
-/// Returns true if `func_node` is declared directly at file scope, rather than nested inside a
-/// `class`, `impl`, `trait`, `mod`, another function, or a conditional block.
-fn is_top_level_function(func_node: &AstNode<'_>) -> bool {
-    func_node
-        .parent()
-        .is_some_and(|parent| matches!(parent.kind().as_ref(), "source_file" | "module"))
-}
-
-/// Returns true if `func_node` is an entrypoint or configuration boundary allowed to access env vars.
+/// Returns true if a function named `name` is an entrypoint or configuration boundary allowed to
+/// access env vars.
 ///
 /// `from_env` / `from_environ` / `load_env` are idiomatic loader constructors and are exempt
-/// anywhere, but `main` is only an entrypoint at file scope: a `main` nested in a class, `impl`,
-/// or `mod` is ordinary business logic and stays subject to the rule.
-// TODO: Should we make those hardcoded values constants/configurable?
-fn is_exempt_boundary_function(func_node: &AstNode<'_>, name: &str) -> bool {
-    match name {
-        "from_env" | "from_environ" | "load_env" => true,
-        "main" => is_top_level_function(func_node),
-        _ => false,
-    }
-}
-
-/// Returns the nearest enclosing function name if `node` is inside a function and no enclosing
-/// function is an exempt configuration boundary (`main`, `from_env`, `from_environ`, `load_env`).
+/// anywhere, but `main` is only an entrypoint at file scope (`is_top_level`): a `main` nested in a
+/// class, `impl`, or `mod` is ordinary business logic and stays subject to the rule.
 ///
-/// The exemption is *inherited*: a nested function, closure, or lambda declared inside a boundary
-/// is part of that boundary's implementation and cannot be called or substituted from the outside,
-/// so the testability rationale behind this rule does not apply to it. The reported name is
-/// deliberately the *nearest* enclosing function, so the diagnostic points at the innermost context
-/// even though the exemption considers every ancestor.
+/// The exemption is *inherited* by nested functions, closures, and lambdas (see
+/// [`ast::enclosing_non_exempt_function_name`]): they are part of the boundary's implementation
+/// and cannot be called or substituted from the outside, so the testability rationale behind this
+/// rule does not apply to them.
 ///
 /// Known limitation: a class declared inside a boundary whose methods escape (returned, registered)
 /// also inherits the exemption.
-fn enclosing_non_exempt_function_name(node: &AstNode<'_>, lang: SupportLang) -> Option<String> {
-    let func_kind = match lang {
-        SupportLang::Rust => "function_item",
-        _ => "function_definition",
-    };
-
-    let mut nearest_function_name: Option<String> = None;
-
-    for ancestor in node.ancestors() {
-        if ancestor.kind() == func_kind
-            && let Some(name_node) = ancestor.field("name")
-        {
-            let func_name = name_node.text().to_string();
-            if is_exempt_boundary_function(&ancestor, &func_name) {
-                return None;
-            }
-            if nearest_function_name.is_none() {
-                nearest_function_name = Some(func_name);
-            }
-        }
-    }
-
-    nearest_function_name
-}
-
-/// Returns the formatted subscript label (`"os.environ[...]"` or `"environ[...]"`) if `node`
-/// indexes into Python's `os.environ` or `environ` mapping.
-fn python_environ_subscript_label(node: &AstNode<'_>) -> Option<&'static str> {
-    if node.kind() != "subscript" {
-        return None;
-    }
-    let value = node.field("value")?;
-    match value.kind().as_ref() {
-        "identifier" if value.text() == "environ" => Some("environ[...]"),
-        "attribute" => {
-            let obj = value.field("object")?;
-            let attr = value.field("attribute")?;
-            (obj.text() == "os" && attr.text() == "environ").then_some("os.environ[...]")
-        }
-        _ => None,
+// TODO: Should we make those hardcoded values constants/configurable?
+fn is_exempt_boundary_function(name: &str, is_top_level: bool) -> bool {
+    match name {
+        "from_env" | "from_environ" | "load_env" => true,
+        "main" => is_top_level,
+        _ => false,
     }
 }
 
@@ -164,17 +110,16 @@ impl CodeRule for NoEnvInFunctions {
         RuleTarget::SourceOnly
     }
 
-    fn check_file(
-        &self,
-        path: &Path,
-        grep: &AstGrep<SourceDoc>,
-        config: &Config,
-    ) -> Vec<Diagnostic> {
-        let lang = *grep.lang();
+    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
+        let lang = file.lang();
         let mut diagnostics = Vec::new();
 
-        for call_match in self.find_configured_banned_calls(grep, config, &DEFAULT_BANNED_CALLS) {
-            if let Some(func_name) = enclosing_non_exempt_function_name(&call_match.node, lang) {
+        for call_match in self.find_configured_banned_calls(file, config, &DEFAULT_BANNED_CALLS) {
+            if let Some(func_name) = ast::enclosing_non_exempt_function_name(
+                &call_match.node,
+                lang,
+                is_exempt_boundary_function,
+            ) {
                 let expr = format!("{}()", call_match.callee);
                 diagnostics.push(self.diagnostic_at_node(
                     path,
@@ -185,11 +130,12 @@ impl CodeRule for NoEnvInFunctions {
         }
 
         if lang == SupportLang::Python {
-            for subscript_node in grep.root().dfs().filter(|node| node.kind() == "subscript") {
-                if let Some(label) = python_environ_subscript_label(&subscript_node)
-                    && let Some(func_name) =
-                        enclosing_non_exempt_function_name(&subscript_node, lang)
-                {
+            for (subscript_node, label) in ast::python::collect_environ_subscripts(file) {
+                if let Some(func_name) = ast::enclosing_non_exempt_function_name(
+                    &subscript_node,
+                    lang,
+                    is_exempt_boundary_function,
+                ) {
                     diagnostics.push(self.diagnostic_at_node(
                         path,
                         &subscript_node,
@@ -204,7 +150,7 @@ impl CodeRule for NoEnvInFunctions {
 }
 
 #[cfg(test)]
-crate::rule_test!(
+crate::test_utils::rule_test!(
     NoEnvInFunctions,
     {
         Python => {

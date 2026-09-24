@@ -1,10 +1,9 @@
 //! Bans mock interaction assertions (`assert_called_once`, etc.) in tests.
 
-use crate::code_lint::{CodeRule, RuleTarget};
-use crate::core::{FilterListDefaults, Rule, RuleName};
-use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
-use crate::rules::Tag;
-use ast_grep_core::AstGrep;
+use crate::code_lint::ast::ParsedFile;
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{FilterListDefaults, Rule, Tag};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -65,15 +64,15 @@ impl CodeRule for NoMockAssertions {
     fn check_file(
         &self,
         path: &Path,
-        grep: &AstGrep<crate::code_lint::SourceDoc>,
+        file: &ParsedFile,
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        self.check_banned_calls(path, grep, config, &DEFAULT_BANNED_METHODS)
+        self.check_banned_calls(path, file, config, &DEFAULT_BANNED_METHODS)
     }
 }
 
 #[cfg(test)]
-crate::rule_test!(
+crate::test_utils::rule_test!(
     NoMockAssertions,
     {
         Python => {
