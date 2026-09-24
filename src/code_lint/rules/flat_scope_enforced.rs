@@ -1,10 +1,9 @@
 //! Verifies that python functions are flat (no nested defs).
 
-use crate::code_lint::CodeRule;
-use crate::core::{Rule, RuleName};
-use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
-use crate::rules::Tag;
-use ast_grep_core::AstGrep;
+use crate::code_lint::ast::{self, ParsedFile};
+use crate::code_lint::rule::CodeRule;
+use crate::core::{Rule, Tag};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -36,24 +35,19 @@ impl Rule for FlatScopeEnforced {
 }
 
 impl CodeRule for FlatScopeEnforced {
-    fn target(&self) -> crate::code_lint::RuleTarget {
-        crate::code_lint::RuleTarget::SourceOnly
+    fn target(&self) -> crate::code_lint::rule::RuleTarget {
+        crate::code_lint::rule::RuleTarget::SourceOnly
     }
 
     fn check_file(
         &self,
         path: &Path,
-        grep: &AstGrep<crate::code_lint::SourceDoc>,
+        file: &ParsedFile,
         _config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        grep.root()
-            .find_all("def $NAME($$$ARGS): $$$BODY")
-            .filter(|func| crate::code_lint::ast_python::is_nested_function(func))
-            .map(|func| {
-                let func_name = func
-                    .field("name")
-                    .map(|name_node| name_node.text())
-                    .unwrap_or_default();
+        ast::python::find_nested_functions(file)
+            .into_iter()
+            .map(|(func, func_name)| {
                 self.diagnostic_at_node(path, &func, &[("func_name", &func_name)])
             })
             .collect()
@@ -61,7 +55,7 @@ impl CodeRule for FlatScopeEnforced {
 }
 
 #[cfg(test)]
-crate::rule_test!(
+crate::test_utils::rule_test!(
     FlatScopeEnforced,
     {
         Python => {

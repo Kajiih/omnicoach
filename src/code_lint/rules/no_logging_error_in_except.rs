@@ -1,10 +1,9 @@
 //! Verifies that `logging.error` is not used inside python except blocks.
 
-use crate::code_lint::CodeRule;
-use crate::core::{Config, FilterListDefaults, Rule, RuleName};
-use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
-use crate::rules::Tag;
-use ast_grep_core::AstGrep;
+use crate::code_lint::ast::ParsedFile;
+use crate::code_lint::rule::CodeRule;
+use crate::core::{Config, FilterListDefaults, Rule, Tag};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -43,15 +42,10 @@ impl Rule for NoLoggingErrorInExcept {
 }
 
 impl CodeRule for NoLoggingErrorInExcept {
-    fn check_file(
-        &self,
-        path: &Path,
-        grep: &AstGrep<crate::code_lint::SourceDoc>,
-        config: &Config,
-    ) -> Vec<Diagnostic> {
-        self.find_configured_banned_calls(grep, config, &DEFAULT_BANNED_CALLS)
+    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
+        self.find_configured_banned_calls(file, config, &DEFAULT_BANNED_CALLS)
             .into_iter()
-            .filter(|matched| crate::code_lint::ast_python::is_inside_except_clause(&matched.node))
+            .filter(|matched| crate::code_lint::ast::python::is_inside_except_clause(&matched.node))
             .map(|matched| {
                 self.diagnostic_at_node(path, &matched.node, &[("call", &matched.callee)])
             })
@@ -60,7 +54,7 @@ impl CodeRule for NoLoggingErrorInExcept {
 }
 
 #[cfg(test)]
-crate::rule_test!(
+crate::test_utils::rule_test!(
     NoLoggingErrorInExcept,
     {
         Python => {

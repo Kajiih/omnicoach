@@ -1,10 +1,9 @@
 //! Flags compound boolean conditions (`&&`, `and`) and boolean tuple equality packing in test assertions (`no-assertion-packing`).
 
-use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, Rule, RuleName};
-use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
-use crate::rules::Tag;
-use ast_grep_core::AstGrep;
+use crate::code_lint::ast::{self, AstNode, ParsedFile};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{Config, Rule, Tag};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -43,13 +42,13 @@ impl Rule for NoAssertionPacking {
     }
 }
 
-/// Evaluates a single Rust assertion `macro_invocation` node for packed conditions.
+/// Evaluates a single Rust assertion macro invocation node for packed conditions.
 fn check_rust_assertion_macro(macro_node: &AstNode<'_>, path: &Path) -> Option<Diagnostic> {
-    let macro_name = crate::code_lint::ast_rust::macro_terminal_name(macro_node);
+    let macro_name = ast::rust::macro_terminal_name(macro_node);
 
     // 1. Compound boolean condition: assert!(a && b)
     if (macro_name == "assert" || macro_name == "debug_assert")
-        && crate::code_lint::ast_rust::has_top_level_logical_and(macro_node)
+        && ast::rust::has_top_level_logical_and(macro_node)
     {
         return Some(NoAssertionPacking.diagnostic_at_node(
             path,
@@ -63,9 +62,9 @@ fn check_rust_assertion_macro(macro_node: &AstNode<'_>, path: &Path) -> Option<D
 
     // 2. Boolean tuple/array equality packing: assert_eq!((a, b), (true, true))
     if (macro_name.starts_with("assert_") || macro_name.starts_with("debug_assert_"))
-        && crate::code_lint::ast_rust::extract_macro_arguments(macro_node)
+        && ast::rust::extract_macro_arguments(macro_node)
             .iter()
-            .any(crate::code_lint::ast_rust::is_boolean_literal_collection)
+            .any(ast::rust::is_boolean_literal_collection)
     {
         return Some(NoAssertionPacking.diagnostic_at_node(
             path,
@@ -80,14 +79,10 @@ fn check_rust_assertion_macro(macro_node: &AstNode<'_>, path: &Path) -> Option<D
     None
 }
 
-/// Evaluates a single Python `assert_statement` node for packed conditions.
+/// Evaluates a single Python `assert` statement node for packed conditions.
 fn check_python_assert_statement(assert_node: &AstNode<'_>, path: &Path) -> Option<Diagnostic> {
     // 1. Compound boolean condition: assert a and b
-    let has_and = assert_node
-        .children()
-        .any(|c| c.kind() == "boolean_operator" && c.children().any(|op| op.kind() == "and"));
-
-    if has_and {
+    if ast::python::has_top_level_logical_and(assert_node) {
         return Some(NoAssertionPacking.diagnostic_at_node(
             path,
             assert_node,
@@ -96,13 +91,7 @@ fn check_python_assert_statement(assert_node: &AstNode<'_>, path: &Path) -> Opti
     }
 
     // 2. Boolean tuple/list equality: assert (a, b) == (True, True)
-    let comparison = assert_node
-        .children()
-        .find(|c| c.kind() == "comparison_operator")?;
-    if comparison
-        .children()
-        .any(|c| crate::code_lint::ast_python::is_boolean_literal_collection(&c))
-    {
+    if ast::python::has_boolean_literal_comparison(assert_node) {
         return Some(NoAssertionPacking.diagnostic_at_node(
             path,
             assert_node,
@@ -118,31 +107,22 @@ impl CodeRule for NoAssertionPacking {
         RuleTarget::TestsOnly
     }
 
-    fn check_file(
-        &self,
-        path: &Path,
-        grep: &AstGrep<SourceDoc>,
-        _config: &Config,
-    ) -> Vec<Diagnostic> {
-        match grep.lang() {
-            SupportLang::Rust => grep
-                .root()
-                .dfs()
-                .filter(|node| node.kind() == "macro_invocation")
-                .filter_map(|node| check_rust_assertion_macro(&node, path))
+    fn check_file(&self, path: &Path, file: &ParsedFile, _config: &Config) -> Vec<Diagnostic> {
+        match file.lang() {
+            SupportLang::Rust => ast::rust::collect_macro_invocations(file)
+                .iter()
+                .filter_map(|node| check_rust_assertion_macro(node, path))
                 .collect(),
-            _ => grep
-                .root()
-                .dfs()
-                .filter(|node| node.kind() == "assert_statement")
-                .filter_map(|node| check_python_assert_statement(&node, path))
+            _ => ast::python::collect_assert_statements(file)
+                .iter()
+                .filter_map(|node| check_python_assert_statement(node, path))
                 .collect(),
         }
     }
 }
 
 #[cfg(test)]
-crate::rule_test!(
+crate::test_utils::rule_test!(
     NoAssertionPacking,
     {
         Python => {

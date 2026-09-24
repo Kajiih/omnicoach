@@ -2,8 +2,10 @@
 //! A utility to dump concrete syntax trees for Rust and Python constructs.
 
 use ast_grep_core::AstGrep;
+use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_language::SupportLang;
-use omni::core::AstNode;
+
+type AstNode<'a> = ast_grep_core::Node<'a, StrDoc<SupportLang>>;
 
 fn print_tree(node: &AstNode<'_>, depth: usize) {
     let indent = "  ".repeat(depth);

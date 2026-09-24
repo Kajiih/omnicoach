@@ -1,11 +1,12 @@
 //! Enforces keyword-only parameters when a function has multiple positional parameters of identical type (`no-identical-positional-types`).
 
-use crate::code_lint::ast_python::{PythonParameterInfo, extract_parameters, has_decorator};
-use crate::code_lint::{AstNode, CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, LanguageDefaults, Rule, RuleName};
-use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
-use crate::rules::Tag;
-use ast_grep_core::AstGrep;
+use crate::code_lint::ast::python::{
+    PythonFunctionSignature, PythonParameterInfo, extract_function_signatures, has_decorator,
+};
+use crate::code_lint::ast::{AstNode, ParsedFile};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{Config, LanguageDefaults, Rule, Tag};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -80,25 +81,24 @@ fn collect_duplicate_type_groups(params: &[PythonParameterInfo<'_>]) -> Vec<(Str
         .collect()
 }
 
-/// Evaluates a single Python `"function_definition"` node and returns a consolidated diagnostic if violated.
-fn check_function_definition(
+/// Evaluates a single Python function signature and returns a consolidated diagnostic if violated.
+fn check_function_signature(
     rule: &NoIdenticalPositionalTypes,
-    func_node: &AstNode<'_>,
+    signature: &PythonFunctionSignature<'_>,
     path: &Path,
     min_args: usize,
 ) -> Option<Diagnostic> {
-    let name_node = func_node.field("name")?;
-    let params_node = func_node.field("parameters")?;
-    let func_name = name_node.text();
+    let func_name = signature.name.as_str();
 
-    if is_exempt_dunder(&func_name) || has_exempt_decorator(func_node) {
+    if is_exempt_dunder(func_name) || has_exempt_decorator(&signature.node) {
         return None;
     }
 
-    let all_params = extract_parameters(&params_node);
-    let positional_params: Vec<_> = all_params
-        .into_iter()
-        .filter(PythonParameterInfo::is_positional)
+    let positional_params: Vec<_> = signature
+        .parameters
+        .iter()
+        .filter(|param| param.is_positional())
+        .cloned()
         .collect();
 
     if positional_params.len() < min_args {
@@ -126,10 +126,10 @@ fn check_function_definition(
 
     Some(rule.diagnostic_at_node(
         path,
-        &name_node,
+        &signature.name_node,
         &[
-            ("func", &func_name),
-            ("func_name", &func_name),
+            ("func", func_name),
+            ("func_name", func_name),
             ("count", &formatted_count),
             ("min_args", &formatted_min_args),
             ("duplicates", &duplicates),
@@ -143,24 +143,18 @@ impl CodeRule for NoIdenticalPositionalTypes {
         RuleTarget::SourceOnly
     }
 
-    fn check_file(
-        &self,
-        path: &Path,
-        grep: &AstGrep<SourceDoc>,
-        config: &Config,
-    ) -> Vec<Diagnostic> {
-        let min_args = self.effective_min_threshold(*grep.lang(), config, &DEFAULT_MIN_ARGS);
+    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
+        let min_args = self.effective_min_threshold(file.lang(), config, &DEFAULT_MIN_ARGS);
 
-        grep.root()
-            .dfs()
-            .filter(|node| node.kind() == "function_definition")
-            .filter_map(|node| check_function_definition(self, &node, path, min_args))
+        extract_function_signatures(file)
+            .iter()
+            .filter_map(|signature| check_function_signature(self, signature, path, min_args))
             .collect()
     }
 }
 
 #[cfg(test)]
-crate::rule_test!(
+crate::test_utils::rule_test!(
     NoIdenticalPositionalTypes,
     {
         Python => {

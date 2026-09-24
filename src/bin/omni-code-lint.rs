@@ -1,6 +1,6 @@
 //! Static analysis codebase linter binary.
 
-use omni::code_lint::{LintOptions, run_code_lint};
+use omni::code_lint::runner::{LintOptions, run_code_lint};
 use omni::core::Config;
 use omni::diagnostic::print_diagnostics;
 use std::path::PathBuf;

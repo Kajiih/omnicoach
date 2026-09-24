@@ -1,11 +1,10 @@
 //! Flags wall-clock/async `sleep` calls (`no-sleep-in-tests`) and zero-duration sleeps (`no-zero-sleep-in-tests`) in test files.
 
+use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::calls::CallMatch;
-use crate::code_lint::{CodeRule, RuleTarget, SourceDoc};
-use crate::core::{Config, FilterListDefaults, Rule, RuleName};
-use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
-use crate::rules::Tag;
-use ast_grep_core::AstGrep;
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{Config, FilterListDefaults, Rule, Tag};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -117,13 +116,8 @@ impl CodeRule for NoSleepInTests {
         RuleTarget::TestsOnly
     }
 
-    fn check_file(
-        &self,
-        path: &Path,
-        grep: &AstGrep<SourceDoc>,
-        config: &Config,
-    ) -> Vec<Diagnostic> {
-        self.find_configured_banned_calls(grep, config, &DEFAULT_BANNED_CALLS)
+    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
+        self.find_configured_banned_calls(file, config, &DEFAULT_BANNED_CALLS)
             .into_iter()
             .filter(|call_match| zero_duration_arg(call_match).is_none())
             .map(|call_match| {
@@ -138,13 +132,8 @@ impl CodeRule for NoZeroSleepInTests {
         RuleTarget::TestsOnly
     }
 
-    fn check_file(
-        &self,
-        path: &Path,
-        grep: &AstGrep<SourceDoc>,
-        config: &Config,
-    ) -> Vec<Diagnostic> {
-        self.find_configured_banned_calls(grep, config, &DEFAULT_BANNED_CALLS)
+    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
+        self.find_configured_banned_calls(file, config, &DEFAULT_BANNED_CALLS)
             .into_iter()
             .filter_map(|call_match| {
                 let zero_arg = zero_duration_arg(&call_match)?;
@@ -159,7 +148,7 @@ impl CodeRule for NoZeroSleepInTests {
 }
 
 #[cfg(test)]
-crate::rule_test!(tests_no_sleep: NoSleepInTests, {
+crate::test_utils::rule_test!(tests_no_sleep: NoSleepInTests, {
     Python => {
         pass: [
             zero_duration_sleep_handled_separately => r"
@@ -278,7 +267,7 @@ crate::rule_test!(tests_no_sleep: NoSleepInTests, {
 });
 
 #[cfg(test)]
-crate::rule_test!(tests_no_zero_sleep: NoZeroSleepInTests, {
+crate::test_utils::rule_test!(tests_no_zero_sleep: NoZeroSleepInTests, {
     Python => {
         pass: [
             non_zero_sleep => r"

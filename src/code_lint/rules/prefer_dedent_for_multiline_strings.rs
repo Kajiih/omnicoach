@@ -1,10 +1,9 @@
 //! Enforces wrapping multiline string literals in a dedent helper (`textwrap.dedent`, `indoc!`, etc.).
 
-use crate::code_lint::{CodeRule, RuleTarget, ast_python, ast_rust};
-use crate::core::{FilterListDefaults, Rule, RuleName};
-use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
-use crate::rules::Tag;
-use ast_grep_core::AstGrep;
+use crate::code_lint::ast::{self, ParsedFile};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{FilterListDefaults, Rule, Tag};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -73,37 +72,21 @@ impl CodeRule for PreferDedentForMultilineStrings {
     fn check_file(
         &self,
         path: &Path,
-        grep: &AstGrep<crate::code_lint::SourceDoc>,
+        file: &ParsedFile,
         config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        let allowed = self.effective_allowed_set(*grep.lang(), config, &DEFAULT_ALLOWED_WRAPPERS);
-        let root = grep.root();
-        root.dfs()
-            .filter(|node| match *grep.lang() {
-                SupportLang::Python => {
-                    ast_python::is_multiline_string_literal(node)
-                        && !ast_python::is_docstring(node)
-                        && !ast_python::is_enclosed_in_call(node, |full_path, terminal| {
-                            allowed.contains(full_path) || allowed.contains(terminal)
-                        })
-                }
-                SupportLang::Rust => {
-                    ast_rust::is_multiline_string_literal(node)
-                        && !ast_rust::is_insta_inline_snapshot(node)
-                        && !ast_rust::is_enclosed_in_doc_attribute(node)
-                        && !ast_rust::is_enclosed_in_macro(node, |full_path, terminal| {
-                            allowed.contains(full_path) || allowed.contains(terminal)
-                        })
-                }
-                _ => false,
-            })
-            .map(|node| self.diagnostic_at_node(path, &node, &[]))
-            .collect()
+        let allowed = self.effective_allowed_set(file.lang(), config, &DEFAULT_ALLOWED_WRAPPERS);
+        ast::find_unwrapped_multiline_strings(file, |full_path, terminal| {
+            allowed.contains(full_path) || allowed.contains(terminal)
+        })
+        .iter()
+        .map(|node| self.diagnostic_at_node(path, node, &[]))
+        .collect()
     }
 }
 
 #[cfg(test)]
-crate::rule_test!(
+crate::test_utils::rule_test!(
     PreferDedentForMultilineStrings,
     {
         Python => {

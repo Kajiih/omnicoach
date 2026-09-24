@@ -1,11 +1,12 @@
 //! Test utilities and helpers for snapshot testing.
 
-use crate::code_lint::CodeRule;
-use crate::command_lint::CommandRule;
+use crate::code_lint::ast::ParsedFile;
+use crate::code_lint::comments::CommentIndex;
+use crate::code_lint::rule::CodeRule;
+use crate::command_lint::rule::CommandRule;
 use crate::command_lint::vcs::JjClient;
 use crate::core::Config;
 use crate::diagnostic::Diagnostic;
-use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use std::fmt::Write;
 use std::path::Path;
@@ -31,6 +32,9 @@ pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic]) -> String {
 }
 
 /// Executes `check_file` on a `CodeRule` (including `RequireExplanation` filtering).
+///
+/// # Panics
+/// Panics if `filename` does not have a recognized file extension (`.py` or `.rs`).
 #[must_use]
 pub fn run_code_rule(
     rule: &impl CodeRule,
@@ -44,15 +48,14 @@ pub fn run_code_rule(
         Some("rs") => SupportLang::Rust,
         _ => panic!("run_code_rule: unsupported extension in test file '{filename}'"),
     };
-    let grep = AstGrep::new(source, lang);
+    let file = ParsedFile::new(source, lang);
     let mode = rule.enforcement_mode(lang, config);
-    let mut diags = rule.check_file(path, &grep, config);
+    let mut diags = rule.check_file(path, &file, config);
     if mode == crate::core::EnforcementMode::RequireExplanation {
-        let index = crate::code_lint::comments::CommentIndex::from_ast(&grep);
-        let root = grep.root();
+        let index = CommentIndex::from_file(&file);
         diags.retain(|diagnostic| {
             !index.has_explanation_for_span(
-                &root,
+                &file,
                 diagnostic.location.span,
                 diagnostic.location.line,
             )
@@ -69,13 +72,10 @@ pub fn assert_command_rule_snapshot(
     client: &dyn JjClient,
     config: &Config,
 ) -> String {
-    let cmd = crate::command_lint::InterceptedCommand::parse_all(command_input).remove(0);
+    let cmd = crate::command_lint::rule::InterceptedCommand::parse_all(command_input).remove(0);
     let diags = rule.check_command(&cmd, client, config);
     format_diagnostics_for_test(&diags)
 }
-
-/// Re-export `SupportLang` for `rule_test!` macro expansion.
-pub use ast_grep_language::SupportLang as MacroSupportLang;
 
 /// Validates that the languages tested in `rule_test!` exactly match `rule.supported_languages()`.
 ///
@@ -118,9 +118,11 @@ pub fn assert_rule_pass(rule: &impl CodeRule, lang: SupportLang, case_name: &str
     );
 }
 
-/// Asserts that a `fail` test case produces exactly one diagnostic whose AST span matches
-/// `expected_snippet` (or `code.trim()` when `expected_snippet` is `None`), and that the same
-/// span is reported in both copies when `code` is repeated twice in one file.
+/// Asserts that a `fail` test case produces exactly one matching diagnostic.
+///
+/// Asserts that the produced diagnostic AST span matches `expected_snippet` (or `code.trim()` when
+/// `expected_snippet` is `None`), and that the same span is reported in both copies when `code` is
+/// repeated twice in one file.
 ///
 /// # Panics
 /// Panics if diagnostic count, `rule_name`, normalized AST span slice, or repeated-occurrence
@@ -237,10 +239,9 @@ fn dummy_filename(lang: SupportLang) -> &'static str {
 ///
 /// Each `fail` entry accepts at most one expected snippet (`=> r#"..."#`) and must produce
 /// exactly one diagnostic, so every case exercises a single flagged node.
-#[macro_export]
 macro_rules! rule_test {
     ($rule:expr, { $($body:tt)* }) => {
-        $crate::rule_test!(tests: $rule, { $($body)* });
+        $crate::test_utils::rule_test!(tests: $rule, { $($body)* });
     };
     (
         $mod_name:ident : $rule:expr,
@@ -264,7 +265,7 @@ macro_rules! rule_test {
             fn language_completeness() {
                 $crate::test_utils::assert_language_completeness(
                     &$rule,
-                    &[$( $crate::test_utils::MacroSupportLang::$lang ),+],
+                    &[$( ::ast_grep_language::SupportLang::$lang ),+],
                 );
             }
 
@@ -272,14 +273,14 @@ macro_rules! rule_test {
             $(
                 $(
                     #[case::$pass_name(
-                        $crate::test_utils::MacroSupportLang::$lang,
+                        ::ast_grep_language::SupportLang::$lang,
                         stringify!($pass_name),
                         indoc::indoc! { $pass_code },
                     )]
                 )+
             )+
             fn pass(
-                #[case] lang: $crate::test_utils::MacroSupportLang,
+                #[case] lang: ::ast_grep_language::SupportLang,
                 #[case] case_name: &str,
                 #[case] code: &str,
             ) {
@@ -290,7 +291,7 @@ macro_rules! rule_test {
             $(
                 $(
                     #[case::$fail_name(
-                        $crate::test_utils::MacroSupportLang::$lang,
+                        ::ast_grep_language::SupportLang::$lang,
                         stringify!($fail_name),
                         indoc::indoc! { $fail_code },
                         None $( .or(Some(indoc::indoc! { $snippet })) )?,
@@ -298,7 +299,7 @@ macro_rules! rule_test {
                 )+
             )+
             fn fail(
-                #[case] lang: $crate::test_utils::MacroSupportLang,
+                #[case] lang: ::ast_grep_language::SupportLang,
                 #[case] case_name: &str,
                 #[case] code: &str,
                 #[case] expected_snippet: Option<&str>,
@@ -314,3 +315,4 @@ macro_rules! rule_test {
         }
     };
 }
+pub(crate) use rule_test;

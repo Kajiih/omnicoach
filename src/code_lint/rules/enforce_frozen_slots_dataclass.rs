@@ -1,11 +1,10 @@
 //! Enforces that Python `@dataclass` classes specify `frozen=True` and `slots=True`.
 
-use crate::code_lint::ast_python::{PythonClassInfo, extract_classes};
-use crate::code_lint::{CodeRule, RuleTarget};
-use crate::core::{Rule, RuleName};
-use crate::diagnostic::{Diagnostic, ViolationTemplate, violation_template};
-use crate::rules::Tag;
-use ast_grep_core::AstGrep;
+use crate::code_lint::ast::ParsedFile;
+use crate::code_lint::ast::python::{PythonClassInfo, extract_classes};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{Rule, Tag};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -75,10 +74,10 @@ impl CodeRule for EnforceFrozenSlotsDataclass {
     fn check_file(
         &self,
         path: &Path,
-        grep: &AstGrep<crate::code_lint::SourceDoc>,
+        file: &ParsedFile,
         _config: &crate::core::Config,
     ) -> Vec<Diagnostic> {
-        extract_classes(&grep.root())
+        extract_classes(file)
             .into_iter()
             .filter_map(|cls| check_dataclass_info(self, &cls, path))
             .collect()
@@ -86,7 +85,7 @@ impl CodeRule for EnforceFrozenSlotsDataclass {
 }
 
 #[cfg(test)]
-crate::rule_test!(
+crate::test_utils::rule_test!(
     EnforceFrozenSlotsDataclass,
     {
         Python => {

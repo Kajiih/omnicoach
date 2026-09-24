@@ -1,13 +1,11 @@
-//! Shared helpers for matching call expressions declaratively via `ast-grep-core`.
+//! Shared helpers for matching banned call expressions declaratively.
 //!
 //! Rules that flag banned function or method invocations
 //! specify their targets via [`crate::core::FilterListDefaults`] and [`crate::core::DenyListConfig`].
 //! Each callee entry (e.g. `"time.sleep"`, `"tokio::time::sleep"`, `"$LOOP($$$LOOP_ARGS).create_task"`)
-//! is normalized into a `<callee>($$$ARGS)` pattern and matched structurally against the AST.
+//! is either matched by callee text or normalized into a `<callee>($$$ARGS)` structural pattern.
 
-use crate::code_lint::{AstNode, SourceDoc, ast_python, ast_rust};
-use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
+use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use std::collections::HashSet;
 
 /// A matched call expression together with its resolved callee string and argument nodes.
@@ -16,7 +14,7 @@ pub struct CallMatch<'a> {
     pub node: AstNode<'a>,
     /// The source text of the invoked function/callee node (e.g. `time.sleep` or `asyncio.get_event_loop().create_task`).
     pub callee: String,
-    /// The argument nodes captured by `$$$ARGS` (excluding punctuation).
+    /// The semantic argument nodes (excluding punctuation and comments).
     pub arguments: Vec<AstNode<'a>>,
 }
 
@@ -40,41 +38,7 @@ fn is_literal_callee(entry: &str) -> bool {
     !trimmed.contains('$') && !trimmed.ends_with(')')
 }
 
-/// Returns the argument nodes of a call expression, excluding surrounding parens and separators.
-fn call_argument_nodes<'a>(call_node: &AstNode<'a>) -> Vec<AstNode<'a>> {
-    call_node.field("arguments").map_or_else(Vec::new, |args| {
-        args.children()
-            .filter(|child| !matches!(child.kind().as_ref(), "(" | ")" | ","))
-            .collect()
-    })
-}
-
-/// Returns true for node kinds that represent call expressions in `lang`.
-///
-/// Unsupported languages report no calls, which leaves callers matching nothing rather than
-/// testing against another grammar's vocabulary.
-fn is_call_kind(kind: &str, lang: SupportLang) -> bool {
-    match lang {
-        SupportLang::Python => ast_python::is_call_kind(kind),
-        SupportLang::Rust => ast_rust::is_call_kind(kind),
-        _ => false,
-    }
-}
-
-/// Returns the invoked method name node of a call's callee expression in `lang`, if the callee
-/// is a method access rather than a plain function reference.
-fn extract_method_call_target<'a>(
-    function: &AstNode<'a>,
-    lang: SupportLang,
-) -> Option<AstNode<'a>> {
-    match lang {
-        SupportLang::Python => ast_python::extract_method_call_target(function),
-        SupportLang::Rust => ast_rust::extract_method_call_target(function),
-        _ => None,
-    }
-}
-
-/// Finds all call expressions in `grep` matching any of the `banned_callees` entries.
+/// Finds all call expressions in `file` matching any of the `banned_callees` entries.
 ///
 /// Literal callee names (e.g. `"time.sleep"`) and any-receiver method patterns starting with `$OBJ.`
 /// (e.g. `"$OBJ.assert_called_once"`) are evaluated in a single-pass AST traversal with O(1) set lookups.
@@ -85,10 +49,9 @@ fn extract_method_call_target<'a>(
 /// patterns or `HashSet` iteration order never produce non-deterministic or duplicate matches.
 #[must_use]
 pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
-    grep: &'a AstGrep<SourceDoc>,
+    file: &'a ParsedFile,
     banned_callees: &HashSet<String, S>,
 ) -> Vec<CallMatch<'a>> {
-    let root = grep.root();
     let mut matches: Vec<CallMatch<'a>> = Vec::new();
 
     let mut literal_callees: HashSet<&str> = HashSet::new();
@@ -112,52 +75,25 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
     }
 
     if !literal_callees.is_empty() || !method_callees.is_empty() {
-        let lang = *grep.lang();
-
-        for node in root
-            .dfs()
-            .filter(|call_node| is_call_kind(call_node.kind().as_ref(), lang))
-        {
-            if let Some(function) = node.field("function") {
-                let callee_text = function.text();
-                let mut matched_callee = None;
-
-                if literal_callees.contains(callee_text.as_ref()) {
-                    matched_callee = Some(callee_text.into_owned());
-                } else if !method_callees.is_empty() {
-                    let method_target = extract_method_call_target(&function, lang);
-                    if let Some(method) = method_target {
-                        let name = method.text();
-                        if method_callees.contains(name.as_ref()) {
-                            matched_callee = Some(callee_text.into_owned());
-                        }
-                    }
-                }
-
-                if let Some(callee) = matched_callee {
-                    matches.push(CallMatch {
-                        node: node.clone(),
-                        callee,
-                        arguments: call_argument_nodes(&node),
-                    });
-                }
+        for candidate in ast::collect_call_candidates(file) {
+            let is_banned = literal_callees.contains(candidate.callee.as_str())
+                || candidate
+                    .method_name
+                    .as_deref()
+                    .is_some_and(|method| method_callees.contains(method));
+            if is_banned {
+                matches.push(CallMatch {
+                    node: candidate.node,
+                    callee: candidate.callee,
+                    arguments: candidate.arguments,
+                });
             }
         }
     }
 
     for entry in structural_entries {
         let pattern = to_call_pattern(entry);
-        for matched in root.find_all(pattern.as_str()) {
-            let node: AstNode<'a> = matched.get_node().clone();
-            let callee = node
-                .field("function")
-                .map_or_else(|| entry.to_string(), |func| func.text().to_string());
-            let arguments = matched
-                .get_env()
-                .get_multiple_matches("ARGS")
-                .into_iter()
-                .collect();
-
+        for (node, callee, arguments) in ast::find_pattern_calls(file, &pattern, entry) {
             matches.push(CallMatch {
                 node,
                 callee,
@@ -166,8 +102,8 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
         }
     }
 
-    matches.sort_by_key(|matched| (matched.node.range().start, matched.node.range().end));
-    matches.dedup_by_key(|matched| (matched.node.range().start, matched.node.range().end));
+    matches.sort_by_key(|matched| matched.node.span());
+    matches.dedup_by_key(|matched| matched.node.span());
     matches
 }
 
@@ -185,13 +121,13 @@ mod tests {
             self.sleep(1)
             asyncio.get_event_loop().create_task(work())
         "};
-        let grep = AstGrep::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, SupportLang::Python);
         let banned: HashSet<String> = ["sleep", "time.sleep", "$LOOP($$$LOOP_ARGS).create_task"]
             .into_iter()
             .map(str::to_string)
             .collect();
 
-        let matched = find_banned_calls(&grep, &banned);
+        let matched = find_banned_calls(&file, &banned);
         let callees: Vec<&str> = matched.iter().map(|item| item.callee.as_str()).collect();
 
         assert_eq!(
@@ -217,13 +153,13 @@ mod tests {
                 clock.sleep(dur).await;
             }
         "};
-        let grep = AstGrep::new(source, SupportLang::Rust);
+        let file = ParsedFile::new(source, SupportLang::Rust);
         let banned: HashSet<String> = ["sleep", "std::thread::sleep", "tokio::time::sleep"]
             .into_iter()
             .map(str::to_string)
             .collect();
 
-        let matched = find_banned_calls(&grep, &banned);
+        let matched = find_banned_calls(&file, &banned);
         let callees: Vec<&str> = matched.iter().map(|item| item.callee.as_str()).collect();
 
         assert_eq!(
@@ -242,13 +178,13 @@ mod tests {
             assert_called_once()
             self.assertEqual(1, 1)
         "};
-        let grep = AstGrep::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, SupportLang::Python);
         let banned: HashSet<String> = ["$OBJ.assert_called_once", "$OBJ.assert_called_once_with"]
             .into_iter()
             .map(str::to_string)
             .collect();
 
-        let matched = find_banned_calls(&grep, &banned);
+        let matched = find_banned_calls(&file, &banned);
         let callees: Vec<&str> = matched.iter().map(|item| item.callee.as_str()).collect();
 
         assert_eq!(
