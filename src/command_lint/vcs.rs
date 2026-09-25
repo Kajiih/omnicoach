@@ -1,5 +1,7 @@
 //! VCS context abstractions and client implementations for Jujutsu (jj).
 
+architecture_component!(CommandVcsAdapters);
+
 /// Interface representing a client to query Jujutsu repository details.
 pub trait JjClient {
     /// Queries the description of the given revision.

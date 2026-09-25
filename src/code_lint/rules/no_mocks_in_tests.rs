@@ -1,5 +1,7 @@
 //! Bans dynamic mocks and monkeypatching in tests in favor of state-based Fakes.
 
+architecture_component!(CodeLintRules);
+
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::core::{FilterListDefaults, Rule, Tag};

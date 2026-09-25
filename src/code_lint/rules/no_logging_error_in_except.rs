@@ -1,5 +1,7 @@
 //! Verifies that `logging.error` is not used inside python except blocks.
 
+architecture_component!(CodeLintRules);
+
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeRule;
 use crate::core::{Config, FilterListDefaults, Rule, Tag};

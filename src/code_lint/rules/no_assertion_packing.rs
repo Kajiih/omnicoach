@@ -1,5 +1,7 @@
 //! Flags compound boolean conditions (`&&`, `and`) and boolean tuple equality packing in test assertions (`no-assertion-packing`).
 
+architecture_component!(CodeLintRules);
+
 use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::core::{Config, Rule, Tag};

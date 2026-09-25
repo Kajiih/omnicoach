@@ -1,5 +1,7 @@
 //! Diagnostic representation, serialization, and reporting.
 
+architecture_component!(FoundationPrimitives);
+
 use ast_grep_language::SupportLang;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

@@ -7,6 +7,8 @@
 //! The traversal is language-agnostic; the grammar vocabulary it relies on is not, and
 //! lives in [`crate::code_lint::ast::python`] and [`crate::code_lint::ast::rust`].
 
+architecture_component!(CodeSyntaxAdapters);
+
 use crate::code_lint::ast::{ParsedFile, RawNode, dispatch_lang};
 use crate::diagnostic::SourceSpan;
 use ast_grep_language::SupportLang;

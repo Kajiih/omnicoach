@@ -1,5 +1,7 @@
 //! Enforces strongly typed durations over numeric variables with time-unit suffixes.
 
+architecture_component!(CodeLintRules);
+
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeRule;
 use crate::core::{FilterListDefaults, Rule, Tag};

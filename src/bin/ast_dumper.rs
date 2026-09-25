@@ -1,6 +1,8 @@
 //! AST Dumper
 //! A utility to dump concrete syntax trees for Rust and Python constructs.
 
+omni::architecture_component!(ApplicationBinaries);
+
 use ast_grep_core::AstGrep;
 use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_language::SupportLang;

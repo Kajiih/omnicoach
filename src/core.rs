@@ -1,5 +1,7 @@
 //! Shared core module of the Omni linter toolkit.
 
+architecture_component!(CoreVocabulary);
+
 use crate::diagnostic::{
     Diagnostic, RuleName, SourceLocation, ViolationMessage, ViolationTemplate,
 };

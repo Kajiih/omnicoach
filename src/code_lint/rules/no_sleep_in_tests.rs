@@ -1,5 +1,7 @@
 //! Flags wall-clock/async `sleep` calls (`no-sleep-in-tests`) and zero-duration sleeps (`no-zero-sleep-in-tests`) in test files.
 
+architecture_component!(CodeLintRules);
+
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::calls::CallMatch;
 use crate::code_lint::rule::{CodeRule, RuleTarget};

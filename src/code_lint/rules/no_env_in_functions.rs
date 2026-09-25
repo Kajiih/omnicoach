@@ -1,5 +1,7 @@
 //! Enforces that environment variables are only accessed at module/static scope or explicit configuration boundaries (`no-env-in-functions`).
 
+architecture_component!(CodeLintRules);
+
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::core::{Config, FilterListDefaults, Rule, Tag};

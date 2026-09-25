@@ -5,6 +5,8 @@
 //! No module outside `crate::code_lint::ast` imports `ast_grep_core` or accesses raw Tree-sitter
 //! node kinds, field names, or traversal iterators.
 
+architecture_component!(CodeSyntaxAdapters);
+
 /// Dispatches `$func(args...)` to `ast::python` or `ast::rust` by `$lang`, evaluating
 /// `$fallback` for any other language.
 macro_rules! dispatch_lang {
@@ -53,6 +55,12 @@ impl ParsedFile {
         Self {
             grep: AstGrep::new(source, lang),
         }
+    }
+
+    /// Parses `source` into a Rust syntax tree.
+    #[must_use]
+    pub fn rust(source: &str) -> Self {
+        Self::new(source, SupportLang::Rust)
     }
 
     /// Returns the programming language of this parsed file.

@@ -4,6 +4,8 @@
 //! stripping standard linter/tooling directive prefixes, and verifying that sensitive
 //! operations (such as exception suppression) are accompanied by substantive explanation comments.
 
+architecture_component!(CodeSemanticEngines);
+
 use crate::code_lint::ast::{self, AstNode, ParsedFile, statements};
 use std::collections::HashMap;
 

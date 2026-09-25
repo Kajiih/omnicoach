@@ -7,6 +7,8 @@
 //! When configured with `mode = "require-explanation"`, `cast()` is permitted if accompanied by
 //! an adjacent explanatory comment.
 //! In all modes, legitimate uses can be justified via `# omni:ignore[no-typing-cast] -- <explanation>`.
+architecture_component!(CodeLintRules);
+
 // TODO: Remove this case with legitimate uses from the documentation because it's the same thing for every rule. Generalize to the whole project.
 // TODO: Also remove the documentation of modes as it's the same for all rules
 // TODO: Also remove from every violation template, they should not suggest to ignore.

@@ -1,5 +1,7 @@
 //! Enforces keyword-only parameters when a function has multiple positional parameters of identical type (`no-identical-positional-types`).
 
+architecture_component!(CodeLintRules);
+
 use crate::code_lint::ast::python::{
     PythonFunctionSignature, PythonParameterInfo, extract_function_signatures, has_decorator,
 };

@@ -13,6 +13,20 @@ Items here represent design areas and technical directions to evaluate rather th
   - Reviewed violation message that we can use as reference
     - [prefer_dedent_for_multiline_strings.rs](/usr/local/google/home/paquerot/Documents/dev_projects/custom_lints/src/code_lint/rules/prefer_dedent_for_multiline_strings.rs)
 - Review our architecure, component, abstraction, modules, etc names as well to align and have the explicit and self explanatory.
+- **Deriving Module Organization from the Architectural Graph**:
+  - *Context*: Today, `tests/architecture.rs` discovers module-to-component mappings from colocated `architecture_component!(...)` declarations in `src/` and checks them against `ARCHITECTURE_GRAPH`. Some components span multiple sibling modules (`FoundationPrimitives` $\to$ `diagnostic`, `diff`; `CodeSemanticEngines` $\to$ `bindings`, `calls`, `comments`), while `pub mod` trees in `src/lib.rs`, `src/code_lint.rs`, and `src/command_lint.rs` are maintained separately.
+  - *Investigation*:
+    - Evaluate restructuring `src/` into a 1-to-1 isomorphism between `ArchitectureComponent` variants and module namespaces (e.g., grouping `diagnostic` and `diff` under `src/primitives/`, and `bindings`, `calls`, `comments` under `src/code_lint/semantics/`).
+    - Investigate whether the `pub mod` / `pub(crate) mod` declarations in `src/` can be generated directly from the architectural graph macro so module organization and visibility boundaries derive from the graph definition.
+    - Find a representation where not every file must declare `architecture_component!(...)` (currently required per file, see `decisions/006_architectural_dag_and_conformance.md` §2.2). If module namespaces map 1-to-1 to components, or the module tree is generated from the graph, a file's component follows from its path and per-file declarations become redundant.
+- **Subtree-Level Isolation for `(no_internal_dependencies)`**:
+  - *Current*: `tests/architecture.rs` isolates the leaf **files** of a component from each other. Every rule, semantic engine, and binary is a single file today, so leaves and units coincide.
+  - *Target*: Isolate the direct child **subtrees** of each component root instead, so a unit split into `foo.rs` + `foo/sub.rs` is treated as one unit (internal imports allowed, imports from sibling units forbidden).
+  - *Trigger*: The first multi-file rule, semantic engine, or binary.
+- **Architecture Conformance Watch List** (hypothetical gaps, no occurrence today):
+  - These gaps are recorded because they would **bypass the DAG checks silently** rather than fail loudly. Neither pattern exists in `src/` today.
+  - *Inline `super::` paths*: `test_no_relative_imports_in_production_code` only inspects `use` declarations, and `rust_arkitect` does not resolve inline `super::sibling::item()` expression or type paths, so such a dependency escapes both checks. *Trigger*: The first inline `super::` path in production code, or any evidence of it in review.
+  - *Code in root barrel files*: `src/lib.rs`, `src/code_lint.rs`, and `src/command_lint.rs` declare no `ArchitectureComponent`, so no dependency rule has them as subject. They contain only `mod` declarations today; a function or `use` added there would be unconstrained. A candidate check is asserting that these files contain only `mod` items (plus `#[macro_export]` macros in `src/lib.rs`). *Trigger*: The first non-`mod` item added to a root barrel file.
 ## Rule Engine & Declarative Rules
 
 - **Unified Single-Pass AST Visitor Dispatch**:
@@ -67,6 +81,10 @@ Items here represent design areas and technical directions to evaluate rather th
 - **VCS Error Propagation**:
   - *Current*: VCS client query errors in command rules are swallowed to avoid blocking users on query failures.
   - *Target*: Propagate structured errors or display user warnings when the underlying VCS client fails unexpectedly, distinguishing clean working copies from failed CLI calls.
+- **Architecture Test Parse Caching (`tests/architecture.rs`)**:
+  - *Context*: `tests/architecture.rs` is the slowest test binary (~3.9s) because each test re-reads and re-parses every file in `src/`; only `discover_module_components()` is cached via `OnceLock`.
+  - *Constraint*: `rust_arkitect::RustFile` wraps a `syn::File`, which is `!Sync` and cannot be stored in a `static OnceLock`. Caching the source text or test-stripped source is possible; caching the parsed tree is not without re-parsing per thread.
+  - *Trigger*: When `tests/architecture.rs` becomes the dominant cost of `cargo test`.
 
 ---
 

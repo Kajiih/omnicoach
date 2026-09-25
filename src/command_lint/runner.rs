@@ -1,5 +1,7 @@
 //! Orchestration runner for command lint evaluation.
 
+architecture_component!(CommandLintRunner);
+
 use crate::command_lint::rule::InterceptedCommand;
 use crate::command_lint::rules::COMMAND_RULES;
 use crate::command_lint::vcs::JjCliClient;

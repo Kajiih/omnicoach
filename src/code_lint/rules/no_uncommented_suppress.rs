@@ -4,6 +4,8 @@
 //! in Python `with` statements are accompanied by an adjacent explanatory comment
 //! documenting why ignoring the exception is benign.
 
+architecture_component!(CodeLintRules);
+
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::is_with_context_manager;
 use crate::code_lint::rule::CodeRule;

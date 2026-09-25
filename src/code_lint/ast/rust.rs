@@ -1,5 +1,7 @@
 //! AST helper predicates for structural traversal in Rust.
 
+architecture_component!(CodeSyntaxAdapters);
+
 use crate::code_lint::ast::{AstNode, ParsedFile, RawNode};
 
 /// Returns true for Rust node kinds that hold statements as direct children.
@@ -359,9 +361,8 @@ fn is_conditional_test_attribute(attr_item: &RawNode<'_>) -> bool {
     let Some(token_tree) = attr.children().find(|child| child.kind() == "token_tree") else {
         return false;
     };
-    token_tree
-        .dfs()
-        .any(|tok| tok.kind() == "identifier" && tok.text() == "test")
+    let arguments = non_delimiter_children(&token_tree);
+    arguments.len() == 1 && arguments[0].kind() == "identifier" && arguments[0].text() == "test"
 }
 
 /// Returns true if an `attribute_item` AST node represents a `#[doc = "..."]` attribute.
@@ -370,9 +371,15 @@ fn is_doc_attribute(attr_item: &RawNode<'_>) -> bool {
     attribute_terminal_name(attr_item).is_some_and(|terminal| terminal.text() == "doc")
 }
 
-/// Returns true if `node` is preceded by an `attribute_item` sibling matching `predicate`.
-fn has_matching_attribute(node: &RawNode<'_>, predicate: fn(&RawNode<'_>) -> bool) -> bool {
-    std::iter::successors(node.prev(), RawNode::prev)
+/// Yields the contiguous preceding `attribute_item` siblings attached to a non-trivia `node`.
+fn preceding_attributes<'a>(node: &RawNode<'a>) -> impl Iterator<Item = RawNode<'a>> {
+    let first = (!matches!(
+        node.kind().as_ref(),
+        "attribute_item" | "line_comment" | "block_comment"
+    ))
+    .then(|| node.prev())
+    .flatten();
+    std::iter::successors(first, RawNode::prev)
         .take_while(|sibling| {
             matches!(
                 sibling.kind().as_ref(),
@@ -380,7 +387,11 @@ fn has_matching_attribute(node: &RawNode<'_>, predicate: fn(&RawNode<'_>) -> boo
             )
         })
         .filter(|sibling| sibling.kind() == "attribute_item")
-        .any(|sibling| predicate(&sibling))
+}
+
+/// Returns true if `node` is preceded by an `attribute_item` sibling matching `predicate`.
+fn has_matching_attribute(node: &RawNode<'_>, predicate: fn(&RawNode<'_>) -> bool) -> bool {
+    preceding_attributes(node).any(|sibling| predicate(&sibling))
 }
 
 /// Returns true if a Rust item is preceded by a test attribute (`#[test]`, `#[tokio::test]`, `#[rstest]`, etc.).
@@ -406,7 +417,10 @@ pub fn collect_inline_test_ranges(file: &ParsedFile) -> Vec<std::ops::Range<usiz
 
 fn collect_inline_test_ranges_rec(node: &RawNode<'_>, ranges: &mut Vec<std::ops::Range<usize>>) {
     if has_conditional_test_attribute(node) || has_test_attribute(node) {
-        ranges.push(node.range());
+        let start = preceding_attributes(node)
+            .last()
+            .map_or_else(|| node.range().start, |attribute| attribute.range().start);
+        ranges.push(start..node.range().end);
         return;
     }
     for child in node.children() {
@@ -709,6 +723,59 @@ pub(super) fn function_name_and_is_top_level<'a>(
         .parent()
         .is_some_and(|parent| parent.kind() == "source_file");
     Some((name, is_top_level))
+}
+
+/// Collects all CST nodes in `file` that introduce a second path to an item:
+/// - `#[macro_export]` attributes (`attribute_item`)
+/// - Visible `use` declarations (`pub use`, `pub(crate) use`, etc.), except `pub(crate) use <name>;`
+///   for a `macro_rules! <name>` defined in the same `file`.
+#[must_use]
+pub fn collect_second_path_declarations(file: &ParsedFile) -> Vec<AstNode<'_>> {
+    let defined_macros: std::collections::HashSet<String> = file
+        .grep
+        .root()
+        .dfs()
+        .filter(|node| node.kind() == "macro_definition")
+        .filter_map(|node| Some(node.field("name")?.text().into_owned()))
+        .collect();
+
+    file.grep
+        .root()
+        .dfs()
+        .filter(|node| match node.kind().as_ref() {
+            "attribute_item" => attribute_terminal_name(node)
+                .is_some_and(|terminal| terminal.text() == "macro_export"),
+            "use_declaration" => {
+                let Some(visibility) = node
+                    .children()
+                    .find(|child| child.kind() == "visibility_modifier")
+                else {
+                    return false;
+                };
+                let is_own_macro_path = visibility.text().trim() == "pub(crate)"
+                    && node.field("argument").is_some_and(|argument| {
+                        argument.kind() == "identifier"
+                            && defined_macros.contains(argument.text().as_ref())
+                    });
+                !is_own_macro_path
+            }
+            _ => false,
+        })
+        .map(AstNode::from_raw)
+        .collect()
+}
+
+/// Collects all `use_declaration` CST nodes in `file` that import via a relative `super` path segment.
+#[must_use]
+pub fn collect_relative_use_declarations(file: &ParsedFile) -> Vec<AstNode<'_>> {
+    file.grep
+        .root()
+        .dfs()
+        .filter(|node| {
+            node.kind() == "use_declaration" && node.dfs().any(|child| child.kind() == "super")
+        })
+        .map(AstNode::from_raw)
+        .collect()
 }
 
 #[cfg(test)]

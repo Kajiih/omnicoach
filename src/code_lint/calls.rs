@@ -5,6 +5,8 @@
 //! Each callee entry (e.g. `"time.sleep"`, `"tokio::time::sleep"`, `"$LOOP($$$LOOP_ARGS).create_task"`)
 //! is either matched by callee text or normalized into a `<callee>($$$ARGS)` structural pattern.
 
+architecture_component!(CodeSemanticEngines);
+
 use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use std::collections::HashSet;
 

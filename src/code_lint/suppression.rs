@@ -1,5 +1,7 @@
 //! Inline and file-level suppression comment hygiene.
 
+architecture_component!(CodeSuppressionEngine);
+
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::comments::strip_comment_delimiters;
 use crate::code_lint::rule::CodeRule;

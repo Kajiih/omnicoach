@@ -1,4 +1,6 @@
 //! Validation checks for the `jj edit` command.
+architecture_component!(CommandLintRules);
+
 // TODO: Consider if we should replace this rule with a no edit on bookmarked commit?
 
 use crate::command_lint::rule::{InterceptedCommand, ProgramCliSchema};

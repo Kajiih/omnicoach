@@ -1,5 +1,7 @@
 //! Code lint runner: language detection, per-file rule orchestration, and parallel target linting.
 
+architecture_component!(CodeLintRunner);
+
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::comments::CommentIndex;
 use crate::code_lint::rule::{CodeRule, RuleTarget};
