@@ -1,5 +1,7 @@
 //! Differential VCS diff parsing and filtering utilities.
 
+architecture_component!(FoundationPrimitives);
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -1,5 +1,7 @@
 //! Rule targeting banned abbreviations in definitions across multiple languages.
 
+architecture_component!(CodeLintRules);
+
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeRule;
 use crate::core::{FilterListDefaults, Rule, Tag};
@@ -11,7 +13,7 @@ use std::path::Path;
 const DEFAULT_BANNED: FilterListDefaults = FilterListDefaults {
     base: &[
         "err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag", "ty", "cat",
-        "stmt", "ext", "fmt", "arch",
+        "stmt", "ext", "fmt", "arch", "vis",
     ],
     extend: &[],
     // In Rust, `str` is a primitive type keyword rather than an abbreviation, and it is

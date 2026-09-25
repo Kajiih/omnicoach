@@ -1,5 +1,7 @@
 //! Static analysis codebase linter binary.
 
+omni::architecture_component!(ApplicationBinaries);
+
 use omni::code_lint::runner::{LintOptions, run_code_lint};
 use omni::core::Config;
 use omni::diagnostic::print_diagnostics;

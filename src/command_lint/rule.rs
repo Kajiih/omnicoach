@@ -1,5 +1,7 @@
 //! Command rule contract ([`CommandRule`]) and the intercepted command parser it consumes.
 
+architecture_component!(CommandRuleContracts);
+
 use crate::command_lint::vcs::JjClient;
 use crate::core::Config;
 use crate::diagnostic::Diagnostic;

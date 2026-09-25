@@ -1,5 +1,7 @@
 //! Verifies that python functions are flat (no nested defs).
 
+architecture_component!(CodeLintRules);
+
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::CodeRule;
 use crate::core::{Rule, Tag};

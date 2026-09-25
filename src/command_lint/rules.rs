@@ -1,4 +1,6 @@
 //! Submodules containing implementations of command validation rules.
+architecture_component!(CommandLintRules);
+
 pub mod jj;
 
 /// Static list of all command linter rules.

@@ -1,5 +1,7 @@
 //! Test utilities and helpers for snapshot testing.
 
+architecture_component!(TestingHarness);
+
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::comments::CommentIndex;
 use crate::code_lint::rule::CodeRule;

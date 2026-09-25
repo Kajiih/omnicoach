@@ -2,6 +2,8 @@
 //!
 //! Used to inspect locally authored bindings across supported languages while exempting external imports and trait/override contracts.
 
+architecture_component!(CodeSemanticEngines);
+
 use crate::code_lint::ast::{
     self, AstNode, ParsedFile, is_import_binding, is_structural_definition, is_trait_impl_member,
     is_unaliased_import_binding,

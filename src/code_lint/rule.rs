@@ -1,5 +1,7 @@
 //! Code rule contract ([`CodeRule`], [`RuleTarget`]) and shared diagnostic helpers.
 
+architecture_component!(CodeRuleContracts);
+
 use crate::code_lint::ast::{AstNode, ParsedFile};
 use crate::code_lint::{bindings, calls};
 use crate::core::{Config, FilterListDefaults, Rule};

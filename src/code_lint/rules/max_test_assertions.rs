@@ -1,5 +1,7 @@
 //! Enforces a maximum number of assertions per test function (`max-test-assertions`).
 
+architecture_component!(CodeLintRules);
+
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::core::{Config, LanguageDefaults, Rule, Tag};

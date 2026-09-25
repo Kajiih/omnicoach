@@ -1,5 +1,7 @@
 //! Enforces that Python `@dataclass` classes specify `frozen=True` and `slots=True`.
 
+architecture_component!(CodeLintRules);
+
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{PythonClassInfo, extract_classes};
 use crate::code_lint::rule::{CodeRule, RuleTarget};

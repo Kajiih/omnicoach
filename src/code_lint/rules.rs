@@ -1,4 +1,6 @@
 //! Submodules containing implementations of code validation rules.
+architecture_component!(CodeLintRules);
+
 pub mod banned_abbreviations;
 pub mod enforce_frozen_slots_dataclass;
 pub mod flat_scope_enforced;
