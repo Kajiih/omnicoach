@@ -1,7 +1,5 @@
 //! AST helper predicates and structural extractors for Python.
 
-architecture_component!(CodeSyntaxAdapters);
-
 use crate::code_lint::ast::{AstNode, ParsedFile, RawNode};
 
 /// Returns true for Python node kinds that hold statements as direct children.

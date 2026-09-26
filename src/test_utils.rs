@@ -3,8 +3,8 @@
 architecture_component!(TestingHarness);
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::comments::CommentIndex;
 use crate::code_lint::rule::CodeRule;
+use crate::code_lint::semantic::comments::CommentIndex;
 use crate::command_lint::rule::CommandRule;
 use crate::command_lint::vcs::JjClient;
 use crate::core::Config;

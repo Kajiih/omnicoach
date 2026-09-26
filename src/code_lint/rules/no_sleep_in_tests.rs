@@ -1,10 +1,8 @@
 //! Flags wall-clock/async `sleep` calls (`no-sleep-in-tests`) and zero-duration sleeps (`no-zero-sleep-in-tests`) in test files.
 
-architecture_component!(CodeLintRules);
-
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::calls::CallMatch;
 use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::code_lint::semantic::calls::CallMatch;
 use crate::core::{Config, FilterListDefaults, Rule, Tag};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use ast_grep_language::SupportLang;
@@ -95,10 +93,10 @@ impl Rule for NoZeroSleepInTests {
 
 /// Returns the trimmed argument string if the call is a zero-duration sleep (e.g. `sleep(0)`, `sleep(Duration::ZERO)`).
 fn zero_duration_arg(call_match: &CallMatch<'_>) -> Option<String> {
-    if call_match.arguments.len() != 1 {
+    let [argument] = call_match.arguments.as_slice() else {
         return None;
-    }
-    let arg_text = call_match.arguments[0].text();
+    };
+    let arg_text = argument.text();
     let trimmed = arg_text.trim();
     matches!(
         trimmed,

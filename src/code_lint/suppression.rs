@@ -3,8 +3,8 @@
 architecture_component!(CodeSuppressionEngine);
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::comments::strip_comment_delimiters;
 use crate::code_lint::rule::CodeRule;
+use crate::code_lint::semantic::comments::strip_comment_delimiters;
 use crate::core::{Config, Rule, Tag};
 use crate::diagnostic::{
     Diagnostic, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationTemplate,

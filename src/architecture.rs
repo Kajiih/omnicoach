@@ -15,27 +15,18 @@ pub struct ComponentDefinition<Component: 'static = ArchitectureComponent> {
     pub component: Component,
     /// Directly permitted dependency components (transitive dependencies are computed automatically).
     pub depends_on: &'static [Component],
-    /// Whether sibling leaf modules within this component are permitted to depend on each other.
-    pub allow_internal_dependencies: bool,
 }
 
 /// Builds a `&[ComponentDefinition<Component>]` graph slice from `node => [deps]` edges.
 macro_rules! architecture_graph {
-    (@internal_deps) => {
-        true
-    };
-    (@internal_deps no_internal_dependencies) => {
-        false
-    };
     ($(
-        $node:expr => [ $( $dep:expr ),* $(,)? ] $( ($modifier:ident) )?
+        $node:expr => [ $( $dep:expr ),* $(,)? ]
     ),* $(,)?) => {
         &[
             $(
                 ComponentDefinition {
                     component: $node,
                     depends_on: &[ $( $dep ),* ],
-                    allow_internal_dependencies: architecture_graph!(@internal_deps $($modifier)?),
                 },
             )*
         ]
@@ -47,7 +38,7 @@ macro_rules! architecture_graph {
 macro_rules! define_architecture {
     ($(
         $(#[$meta:meta])*
-        $node:ident => [ $( $dep:ident ),* $(,)? ] $( ($modifier:ident) )?
+        $node:ident => [ $( $dep:ident ),* $(,)? ]
     ),* $(,)?) => {
         /// Architectural components representing bounded functional units across the codebase.
         #[derive(
@@ -76,7 +67,7 @@ macro_rules! define_architecture {
         pub const ARCHITECTURE_GRAPH: &[ComponentDefinition<ArchitectureComponent>] =
             architecture_graph! {
                 $(
-                    ArchitectureComponent::$node => [ $( ArchitectureComponent::$dep ),* ] $( ($modifier) )?
+                    ArchitectureComponent::$node => [ $( ArchitectureComponent::$dep ),* ]
                 ),*
             };
     };
@@ -92,14 +83,14 @@ define_architecture! {
     // --- Static Code Analysis Domain (`code_lint`) ---
     /// Encapsulated AST syntax adapters and language parsers (`code_lint::ast`).
     CodeSyntaxAdapters    => [FoundationPrimitives],
-    /// Semantic analysis engines (`bindings`, `calls`, `comments`).
-    CodeSemanticEngines   => [CodeSyntaxAdapters] (no_internal_dependencies),
+    /// Semantic analysis engines (`code_lint::semantic`).
+    CodeSemanticEngines   => [CodeSyntaxAdapters],
     /// Contract traits and execution interfaces for code linting (`code_lint::rule`).
     CodeRuleContracts     => [CoreVocabulary, CodeSemanticEngines, CodeSyntaxAdapters],
     /// Inline comment suppression tracker and directive policies (`code_lint::suppression`).
     CodeSuppressionEngine => [CodeRuleContracts, CodeSemanticEngines],
     /// Concrete static analysis linter rules (`code_lint::rules`).
-    CodeLintRules         => [CodeRuleContracts, CodeSuppressionEngine] (no_internal_dependencies),
+    CodeLintRules         => [CodeRuleContracts, CodeSuppressionEngine],
     /// Static code linting multi-file orchestration runner (`code_lint::runner`).
     CodeLintRunner        => [CodeLintRules],
 
@@ -109,7 +100,7 @@ define_architecture! {
     /// Contract traits and intercepted command schemas (`command_lint::rule`).
     CommandRuleContracts  => [CoreVocabulary, CommandVcsAdapters],
     /// Concrete command safety linting rules (`command_lint::rules`).
-    CommandLintRules      => [CommandRuleContracts] (no_internal_dependencies),
+    CommandLintRules      => [CommandRuleContracts],
     /// Command linting orchestration and interception runner (`command_lint::runner`).
     CommandLintRunner     => [CommandLintRules],
 
@@ -117,7 +108,7 @@ define_architecture! {
     /// Test harness and snapshot fixtures (`test_utils`).
     TestingHarness        => [CodeRuleContracts, CommandRuleContracts],
     /// CLI application entrypoint binaries (`src/bin/*`).
-    ApplicationBinaries   => [CodeLintRunner, CommandLintRunner, CoreVocabulary] (no_internal_dependencies),
+    ApplicationBinaries   => [CodeLintRunner, CommandLintRunner, CoreVocabulary],
 }
 
 impl ArchitectureComponent {

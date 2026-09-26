@@ -1,7 +1,5 @@
 //! AST helper predicates for structural traversal in Rust.
 
-architecture_component!(CodeSyntaxAdapters);
-
 use crate::code_lint::ast::{AstNode, ParsedFile, RawNode};
 
 /// Returns true for Rust node kinds that hold statements as direct children.
@@ -773,6 +771,47 @@ pub fn collect_relative_use_declarations(file: &ParsedFile) -> Vec<AstNode<'_>> 
         .dfs()
         .filter(|node| {
             node.kind() == "use_declaration" && node.dfs().any(|child| child.kind() == "super")
+        })
+        .map(AstNode::from_raw)
+        .collect()
+}
+
+/// Collects all top-level external `mod <name>;` declarations (excluding inline `mod <name> { ... }` blocks).
+#[must_use]
+pub fn collect_external_mod_declarations(file: &ParsedFile) -> Vec<AstNode<'_>> {
+    file.grep
+        .root()
+        .children()
+        .filter(|child| child.kind() == "mod_item" && child.field("body").is_none())
+        .map(AstNode::from_raw)
+        .collect()
+}
+
+/// Collects all top-level CST items in `file` that are not external `mod <name>;` declarations
+/// (or `macro_rules!` definitions when `allow_macro_definitions` is true).
+#[must_use]
+pub fn collect_non_namespace_items(
+    file: &ParsedFile,
+    allow_macro_definitions: bool,
+) -> Vec<AstNode<'_>> {
+    file.grep
+        .root()
+        .children()
+        .filter(|child| {
+            let kind = child.kind();
+            if child.is_extra()
+                || is_comment_kind(kind.as_ref())
+                || matches!(kind.as_ref(), "attribute_item" | "inner_attribute_item")
+            {
+                return false;
+            }
+            if kind == "mod_item" && child.field("body").is_none() {
+                return false;
+            }
+            if allow_macro_definitions && kind == "macro_definition" {
+                return false;
+            }
+            true
         })
         .map(AstNode::from_raw)
         .collect()

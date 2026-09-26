@@ -1,7 +1,5 @@
 //! Rule targeting banned abbreviations in definitions across multiple languages.
 
-architecture_component!(CodeLintRules);
-
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeRule;
 use crate::core::{FilterListDefaults, Rule, Tag};
@@ -96,7 +94,7 @@ impl CodeRule for BannedAbbreviations {
         let effective_banned = self.effective_banned_set(file.lang(), config, &DEFAULT_BANNED);
         let mut diagnostics = Vec::new();
 
-        for node in crate::code_lint::bindings::collect_renameable_bindings(file) {
+        for node in crate::code_lint::semantic::bindings::collect_renameable_bindings(file) {
             let name = node.text();
             for segment in split_segments(&name) {
                 if effective_banned.contains(&segment) {

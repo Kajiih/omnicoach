@@ -151,11 +151,11 @@ fn extract_architecture_components(source: &str) -> Vec<String> {
         .collect()
 }
 
-/// Discovers the `ArchitectureComponent` declared via `architecture_component!(...)` for each module in `src/`.
-fn discover_module_components() -> &'static BTreeMap<String, ArchitectureComponent> {
-    static MODULE_COMPONENTS: std::sync::OnceLock<BTreeMap<String, ArchitectureComponent>> =
+/// Discovers the `ArchitectureComponent` declared via `architecture_component!(...)` in component root files under `src/`.
+fn discover_declared_components() -> &'static BTreeMap<String, ArchitectureComponent> {
+    static DECLARED_COMPONENTS: std::sync::OnceLock<BTreeMap<String, ArchitectureComponent>> =
         std::sync::OnceLock::new();
-    MODULE_COMPONENTS.get_or_init(|| {
+    DECLARED_COMPONENTS.get_or_init(|| {
         let mut map = BTreeMap::new();
         for path in rust_files(&src_dir()) {
             let source = std::fs::read_to_string(&path).expect("source files should be readable");
@@ -169,31 +169,45 @@ fn discover_module_components() -> &'static BTreeMap<String, ArchitectureCompone
     })
 }
 
-/// Computes the root modules for each `ArchitectureComponent`.
-///
-/// A module `M` assigned to component `C` is a root module of `C` if and only if
-/// its parent module does not also belong to `C`.
+/// Resolves the `ArchitectureComponent` for `module` by climbing up its module path to the
+/// nearest ancestor (or self) that declares `architecture_component!(...)`.
+fn resolve_inherited_component(
+    module: &str,
+    declared_components: &BTreeMap<String, ArchitectureComponent>,
+) -> Option<ArchitectureComponent> {
+    let mut current = module;
+    loop {
+        if let Some(&component) = declared_components.get(current) {
+            return Some(component);
+        }
+        if let Some((parent, _)) = current.rsplit_once("::") {
+            current = parent;
+        } else {
+            return None;
+        }
+    }
+}
+
+/// Groups declared component root modules by `ArchitectureComponent`.
 fn discover_component_roots(
-    module_components: &BTreeMap<String, ArchitectureComponent>,
+    declared_components: &BTreeMap<String, ArchitectureComponent>,
 ) -> BTreeMap<ArchitectureComponent, Vec<String>> {
     let mut roots: BTreeMap<ArchitectureComponent, Vec<String>> = BTreeMap::new();
-    for (module, &component) in module_components {
-        let parent_component = module
-            .rsplit_once("::")
-            .and_then(|(parent, _)| module_components.get(parent))
-            .copied();
-        if parent_component != Some(component) {
-            roots.entry(component).or_default().push(module.clone());
-        }
+    for (module, &component) in declared_components {
+        roots.entry(component).or_default().push(module.clone());
     }
     roots
 }
 
 /// Constructs `rust_arkitect` verification rules derived directly from `ARCHITECTURE_GRAPH`
-/// and the colocated `architecture_component!(...)` declarations in `src/`.
+/// and the component root `architecture_component!(...)` declarations in `src/`.
 fn architecture_conformance_rules() -> Vec<Box<dyn Rule>> {
-    let module_components = discover_module_components();
-    let component_roots = discover_component_roots(module_components);
+    let declared_components = discover_declared_components();
+    let component_roots = discover_component_roots(declared_components);
+    let all_modules: Vec<String> = rust_files(&src_dir())
+        .iter()
+        .map(|path| module_path_for_file(path))
+        .collect();
     let mut rules: Vec<Box<dyn Rule>> = Vec::new();
 
     // 1. Cross-component DAG dependency rules
@@ -222,35 +236,43 @@ fn architecture_conformance_rules() -> Vec<Box<dyn Rule>> {
         }
     }
 
-    // 2. Intra-component leaf isolation for components with allow_internal_dependencies = false
+    // 2. Universal intra-component sibling subtree isolation
     for definition in ARCHITECTURE_GRAPH {
-        if definition.allow_internal_dependencies {
+        let Some(roots) = component_roots.get(&definition.component) else {
             continue;
+        };
+
+        // 2a. Multi-root sibling isolation (e.g. `FoundationPrimitives`, `ApplicationBinaries`)
+        if roots.len() > 1 {
+            for root in roots {
+                let siblings = roots
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|&other| other != root);
+                rules.push(Box::new(must_not_depend_on(root, siblings)));
+            }
         }
 
-        let component_modules: Vec<&str> = module_components
-            .iter()
-            .filter_map(|(module, &component)| {
-                (component == definition.component).then_some(module.as_str())
-            })
-            .collect();
-
-        let leaf_modules: Vec<&str> = component_modules
-            .iter()
-            .copied()
-            .filter(|&module| {
-                !component_modules.iter().any(|other| {
-                    other
+        // 2b. Direct-child subtree isolation under each component root
+        for root in roots {
+            let direct_children: Vec<&str> = all_modules
+                .iter()
+                .map(String::as_str)
+                .filter(|module| {
+                    module
                         .rsplit_once("::")
-                        .is_some_and(|(parent, _)| parent == module)
+                        .is_some_and(|(parent, _)| parent == root)
                 })
-            })
-            .collect();
+                .collect();
 
-        if leaf_modules.len() > 1 {
-            for &leaf in &leaf_modules {
-                let siblings = leaf_modules.iter().copied().filter(|&other| other != leaf);
-                rules.push(Box::new(must_not_depend_on(leaf, siblings)));
+            if direct_children.len() > 1 {
+                for &child in &direct_children {
+                    let siblings = direct_children
+                        .iter()
+                        .copied()
+                        .filter(|&other| other != child);
+                    rules.push(Box::new(must_not_depend_on(child, siblings)));
+                }
             }
         }
     }
@@ -343,31 +365,40 @@ fn assert_src_complies_with(rules: &[Box<dyn Rule>]) {
     );
 }
 
+/// Returns all top-level external `mod <name>;` declarations in the production code of `source`.
+fn external_mod_declarations(source: &str) -> Vec<String> {
+    let parsed = omni::code_lint::ast::ParsedFile::rust(source);
+    let test_ranges = omni::code_lint::ast::rust::collect_inline_test_ranges(&parsed);
+    omni::code_lint::ast::rust::collect_external_mod_declarations(&parsed)
+        .into_iter()
+        .filter(|node| is_in_production_code(node, &test_ranges))
+        .map(|node| node.text().trim().to_string())
+        .collect()
+}
+
+/// Returns `(line_number, item_text)` for all top-level items in the production code of `source`
+/// that are not external `mod <name>;` declarations (or `macro_rules!` when `allow_macro_definitions` is true).
+fn non_namespace_items(source: &str, allow_macro_definitions: bool) -> Vec<(usize, String)> {
+    let parsed = omni::code_lint::ast::ParsedFile::rust(source);
+    let test_ranges = omni::code_lint::ast::rust::collect_inline_test_ranges(&parsed);
+    omni::code_lint::ast::rust::collect_non_namespace_items(&parsed, allow_macro_definitions)
+        .into_iter()
+        .filter(|node| is_in_production_code(node, &test_ranges))
+        .map(|node| (node.start_line(), node.text().trim().to_string()))
+        .collect()
+}
+
 #[test]
 fn test_all_source_files_declare_architecture_component() {
-    let exempt_root_files: HashSet<PathBuf> = [
-        src_dir().join("lib.rs"),
-        src_dir().join("code_lint.rs"),
-        src_dir().join("command_lint.rs"),
-    ]
-    .into_iter()
-    .collect();
-
+    let crate_root = src_dir().join("lib.rs");
     let all_files = rust_files(&src_dir());
-    let mut missing_declarations = Vec::new();
     let mut invalid_declarations = Vec::new();
-    let mut module_components = BTreeMap::new();
+    let mut declared_components = BTreeMap::new();
 
-    for path in all_files {
-        if exempt_root_files.contains(&path) {
-            continue;
-        }
-
-        let source = std::fs::read_to_string(&path).expect("source files should be readable");
+    for path in &all_files {
+        let source = std::fs::read_to_string(path).expect("source files should be readable");
         match extract_architecture_components(&source).as_slice() {
-            [] => {
-                missing_declarations.push(path.display().to_string());
-            }
+            [] => {}
             [component_name] => match component_name.parse::<ArchitectureComponent>() {
                 Err(_) => {
                     invalid_declarations.push(format!(
@@ -376,7 +407,7 @@ fn test_all_source_files_declare_architecture_component() {
                     ));
                 }
                 Ok(component) => {
-                    module_components.insert(module_path_for_file(&path), component);
+                    declared_components.insert(module_path_for_file(path), component);
                 }
             },
             multiple => {
@@ -389,23 +420,47 @@ fn test_all_source_files_declare_architecture_component() {
         }
     }
 
-    let mut mismatched_submodules = Vec::new();
-    for (module, &component) in &module_components {
-        if let Some((parent, _)) = module.rsplit_once("::")
-            && let Some(&parent_component) = module_components.get(parent)
-            && component != parent_component
-        {
-            mismatched_submodules.push(format!(
-                "{module}: declared as '{component}', but parent module '{parent}' belongs to '{parent_component}'"
-            ));
+    let mut redundant_declarations = Vec::new();
+    for (module, &component) in &declared_components {
+        let mut current = module.as_str();
+        while let Some((parent, _)) = current.rsplit_once("::") {
+            if let Some(&ancestor_component) = declared_components.get(parent) {
+                redundant_declarations.push(format!(
+                    "{module}: declares '{component}', but ancestor '{parent}' already declares '{ancestor_component}' (child modules inherit their ancestor's component automatically)"
+                ));
+                break;
+            }
+            current = parent;
         }
     }
 
-    assert!(
-        missing_declarations.is_empty(),
-        "The following source files are missing 'architecture_component!(<Variant>);':\n{}",
-        missing_declarations.join("\n")
-    );
+    let mut unmapped_or_impure_files = Vec::new();
+
+    for path in &all_files {
+        let module = module_path_for_file(path);
+        if resolve_inherited_component(&module, &declared_components).is_some() {
+            continue;
+        }
+
+        let source = std::fs::read_to_string(path).expect("source files should be readable");
+        let is_crate_root = path == &crate_root;
+        let mod_declarations = external_mod_declarations(&source);
+        let disallowed_items = non_namespace_items(&source, is_crate_root);
+
+        if mod_declarations.is_empty() {
+            unmapped_or_impure_files.push(format!(
+                "{}: missing 'architecture_component!(<Variant>);' (and not a pure namespace module)",
+                path.display()
+            ));
+        } else {
+            for (line, item) in disallowed_items {
+                unmapped_or_impure_files.push(format!(
+                    "{}:{line}: pure namespace module without 'architecture_component!' may only contain 'mod' declarations, found: {item}",
+                    path.display()
+                ));
+            }
+        }
+    }
 
     assert!(
         invalid_declarations.is_empty(),
@@ -414,18 +469,24 @@ fn test_all_source_files_declare_architecture_component() {
     );
 
     assert!(
-        mismatched_submodules.is_empty(),
-        "The following submodules conflict with their parent module's component:\n{}",
-        mismatched_submodules.join("\n")
+        redundant_declarations.is_empty(),
+        "The following child modules redundantly or conflictually declare 'architecture_component!(...)' inside an already-declared component subtree:\n{}",
+        redundant_declarations.join("\n")
     );
 
-    let component_roots = discover_component_roots(&module_components);
+    assert!(
+        unmapped_or_impure_files.is_empty(),
+        "The following source files do not belong to any component subtree or violate pure namespace rules:\n{}",
+        unmapped_or_impure_files.join("\n")
+    );
+
+    let component_roots = discover_component_roots(&declared_components);
     for component in ArchitectureComponent::VARIANTS {
         assert!(
             component_roots
                 .get(component)
                 .is_some_and(|roots| !roots.is_empty()),
-            "Component '{component}' has no source files declaring it in src/"
+            "Component '{component}' has no root source files declaring it in src/"
         );
     }
 }
@@ -574,7 +635,7 @@ fn test_structural_extractors_ignore_strings_and_catch_after_conditional_test() 
 }
 
 /// Guards against vacuous passes: upward dependencies, cross-domain dependencies, and
-/// sibling-leaf imports within `no_internal_dependencies` components must all be caught.
+/// sibling-unit imports (both direct-child subtrees and multi-root siblings) must all be caught.
 #[test]
 fn test_architecture_rules_detect_forbidden_dependencies() {
     let rules = architecture_conformance_rules();
@@ -605,17 +666,96 @@ fn test_architecture_rules_detect_forbidden_dependencies() {
         "Expected cross-domain dependency violation, got: {cross_domain_violations:?}"
     );
 
-    let sibling_leaf = RustFile::from_content(
-        "src/code_lint/bindings.rs",
-        &logical_path("code_lint::bindings"),
-        "use crate::code_lint::calls;\n",
+    let sibling_child = RustFile::from_content(
+        "src/code_lint/semantic/bindings.rs",
+        &logical_path("code_lint::semantic::bindings"),
+        "use crate::code_lint::semantic::calls;\n",
     );
-    let sibling_violations = violations_in(&[sibling_leaf], &rules);
+    let sibling_violations = violations_in(&[sibling_child], &rules);
     assert!(
         sibling_violations
             .iter()
-            .any(|violation| violation.contains("code_lint::calls")),
-        "Expected sibling-leaf isolation violation, got: {sibling_violations:?}"
+            .any(|violation| violation.contains("code_lint::semantic::calls")),
+        "Expected direct-child sibling isolation violation, got: {sibling_violations:?}"
+    );
+
+    let multi_root_sibling = RustFile::from_content(
+        "src/diff.rs",
+        &logical_path("diff"),
+        "use crate::diagnostic::Violation;\n",
+    );
+    let multi_root_violations = violations_in(&[multi_root_sibling], &rules);
+    assert!(
+        multi_root_violations
+            .iter()
+            .any(|violation| violation.contains("diagnostic")),
+        "Expected multi-root sibling isolation violation, got: {multi_root_violations:?}"
+    );
+}
+
+#[test]
+fn test_subtree_inheritance_resolves_leaf_modules_and_rejects_namespace_routers() {
+    let declared = discover_declared_components();
+    let queries = [
+        "code_lint::rules::banned_abbreviations",
+        "code_lint::ast::rust",
+        "code_lint::semantic::bindings",
+        "command_lint::rules::jj",
+        "code_lint",
+        "command_lint",
+    ];
+    let resolved: Vec<Option<ArchitectureComponent>> = queries
+        .into_iter()
+        .map(|module| resolve_inherited_component(module, declared))
+        .collect();
+
+    assert_eq!(
+        resolved,
+        vec![
+            Some(ArchitectureComponent::CodeLintRules),
+            Some(ArchitectureComponent::CodeSyntaxAdapters),
+            Some(ArchitectureComponent::CodeSemanticEngines),
+            Some(ArchitectureComponent::CommandLintRules),
+            None,
+            None,
+        ]
+    );
+}
+
+#[test]
+fn test_namespace_validator_accepts_pure_routers_and_rejects_code_or_imports() {
+    let pure_router = indoc::indoc! {r"
+        //! Pure domain namespace router.
+
+        pub mod ast;
+        pub(crate) mod semantic;
+
+        #[cfg(test)]
+        mod tests {
+            fn allowed_in_test() {}
+        }
+    "};
+    assert_eq!(
+        external_mod_declarations(pure_router),
+        vec!["pub mod ast;", "pub(crate) mod semantic;"]
+    );
+    assert!(non_namespace_items(pure_router, false).is_empty());
+
+    let impure_router = indoc::indoc! {r"
+        pub mod ast;
+        use crate::core::Config;
+        pub const SNEAKY: usize = 1;
+        pub fn helper() {}
+        mod inline_module {}
+    "};
+    assert_eq!(
+        non_namespace_items(impure_router, false),
+        vec![
+            (2, "use crate::core::Config;".to_string()),
+            (3, "pub const SNEAKY: usize = 1;".to_string()),
+            (4, "pub fn helper() {}".to_string()),
+            (5, "mod inline_module {}".to_string()),
+        ]
     );
 }
 
