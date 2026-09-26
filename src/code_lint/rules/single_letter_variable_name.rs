@@ -1,7 +1,5 @@
 //! Declarations of generic rules targeting multiple languages.
 
-architecture_component!(CodeLintRules);
-
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeRule;
 use crate::core::{FilterListDefaults, Rule, Tag};
@@ -52,7 +50,7 @@ impl CodeRule for SingleLetterVariableName {
         let effective_allowed = self.effective_allowed_set(file.lang(), config, &DEFAULT_ALLOWED);
 
         let mut diagnostics = Vec::new();
-        for node in crate::code_lint::bindings::collect_renameable_bindings(file) {
+        for node in crate::code_lint::semantic::bindings::collect_renameable_bindings(file) {
             let name = node.text();
             if name.len() == 1 && name != "_" && !effective_allowed.contains(&*name) {
                 diagnostics.push(self.diagnostic_at_node(path, &node, &[("name", &name)]));

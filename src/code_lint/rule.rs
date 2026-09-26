@@ -3,7 +3,7 @@
 architecture_component!(CodeRuleContracts);
 
 use crate::code_lint::ast::{AstNode, ParsedFile};
-use crate::code_lint::{bindings, calls};
+use crate::code_lint::semantic::{bindings, calls};
 use crate::core::{Config, FilterListDefaults, Rule};
 use crate::diagnostic::Diagnostic;
 use ast_grep_language::SupportLang;

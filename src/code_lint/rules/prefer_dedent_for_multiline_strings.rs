@@ -1,7 +1,5 @@
 //! Enforces wrapping multiline string literals in a dedent helper (`textwrap.dedent`, `indoc!`, etc.).
 
-architecture_component!(CodeLintRules);
-
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::core::{FilterListDefaults, Rule, Tag};

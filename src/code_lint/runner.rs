@@ -3,8 +3,8 @@
 architecture_component!(CodeLintRunner);
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::comments::CommentIndex;
 use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::code_lint::semantic::comments::CommentIndex;
 use crate::code_lint::suppression::SuppressionTracker;
 use crate::core::{Config, Tag};
 use crate::diagnostic::Diagnostic;

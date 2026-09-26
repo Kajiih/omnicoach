@@ -1,7 +1,5 @@
 //! Flags unstructured task creation (`asyncio.create_task`, `ensure_future`, `loop.create_task`).
 
-architecture_component!(CodeLintRules);
-
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::core::{Config, FilterListDefaults, Rule, Tag};

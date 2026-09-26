@@ -1,7 +1,5 @@
 //! Bans mock interaction assertions (`assert_called_once`, etc.) in tests.
 
-architecture_component!(CodeLintRules);
-
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::core::{FilterListDefaults, Rule, Tag};
