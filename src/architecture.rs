@@ -2,7 +2,7 @@
 //!
 //! Defines [`ArchitectureComponent`], [`ComponentDefinition`], and [`ARCHITECTURE_GRAPH`],
 //! providing compile-time validation for [`crate::architecture_component!`] declarations
-//! across the codebase and the canonical topology for `tests/architecture.rs`.
+//! across the codebase and the canonical topology for `tests/architecture_conformance.rs`.
 
 architecture_component!(FoundationPrimitives);
 
@@ -19,8 +19,31 @@ pub struct ComponentDefinition<Component: 'static = ArchitectureComponent> {
     pub allow_internal_dependencies: bool,
 }
 
+/// Builds a `&[ComponentDefinition<Component>]` graph slice from `node => [deps]` edges.
+macro_rules! architecture_graph {
+    (@internal_deps) => {
+        true
+    };
+    (@internal_deps no_internal_dependencies) => {
+        false
+    };
+    ($(
+        $node:expr => [ $( $dep:expr ),* $(,)? ] $( ($modifier:ident) )?
+    ),* $(,)?) => {
+        &[
+            $(
+                ComponentDefinition {
+                    component: $node,
+                    depends_on: &[ $( $dep ),* ],
+                    allow_internal_dependencies: architecture_graph!(@internal_deps $($modifier)?),
+                },
+            )*
+        ]
+    };
+}
+
 /// Defines `pub enum ArchitectureComponent` and `pub const ARCHITECTURE_GRAPH`
-/// by delegating graph slice construction to [`crate::architecture_graph!`].
+/// by delegating graph slice construction to `architecture_graph!`.
 macro_rules! define_architecture {
     ($(
         $(#[$meta:meta])*
@@ -51,7 +74,7 @@ macro_rules! define_architecture {
 
         /// The canonical architectural Directed Acyclic Graph (DAG) specification.
         pub const ARCHITECTURE_GRAPH: &[ComponentDefinition<ArchitectureComponent>] =
-            $crate::architecture_graph! {
+            architecture_graph! {
                 $(
                     ArchitectureComponent::$node => [ $( ArchitectureComponent::$dep ),* ] $( ($modifier) )?
                 ),*
@@ -187,7 +210,7 @@ mod tests {
 
     #[test]
     fn test_cycle_detector_identifies_cycles() {
-        let cyclic_graph = crate::architecture_graph! {
+        let cyclic_graph = architecture_graph! {
             "alpha" => ["beta"],
             "beta"  => ["alpha"],
         };

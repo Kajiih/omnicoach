@@ -9,38 +9,13 @@ extern crate pretty_assertions;
 /// Declares the [`crate::architecture::ArchitectureComponent`] that the enclosing source file belongs to.
 ///
 /// Validated at compile time by `rustc` (rejecting unknown variants and duplicate declarations
-/// within the same module) and inspected by `tests/architecture.rs` to enforce the DAG.
+/// within the same module) and inspected by `tests/architecture_conformance.rs` to enforce the DAG.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! architecture_component {
     ($component:ident) => {
         const _ARCHITECTURE_COMPONENT: $crate::architecture::ArchitectureComponent =
             $crate::architecture::ArchitectureComponent::$component;
-    };
-}
-
-/// Builds a `&[ComponentDefinition<Component>]` graph slice from `node => [deps]` edges.
-#[doc(hidden)]
-#[macro_export]
-macro_rules! architecture_graph {
-    (@internal_deps) => {
-        true
-    };
-    (@internal_deps no_internal_dependencies) => {
-        false
-    };
-    ($(
-        $node:expr => [ $( $dep:expr ),* $(,)? ] $( ($modifier:ident) )?
-    ),* $(,)?) => {
-        &[
-            $(
-                $crate::architecture::ComponentDefinition {
-                    component: $node,
-                    depends_on: &[ $( $dep ),* ],
-                    allow_internal_dependencies: $crate::architecture_graph!(@internal_deps $($modifier)?),
-                },
-            )*
-        ]
     };
 }
 

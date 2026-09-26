@@ -47,7 +47,7 @@ This gives immediate compile-time validation by `rustc` (catching misspelled var
 **Per-file declarations over module-root inheritance**: Every file declares its component, rather than only component root files with submodules inheriting it. Opening any file shows its component without inspecting parent modules, and `test_all_source_files_declare_architecture_component` rejects a submodule whose component differs from its parent's, so the repetition cannot drift. Removing the need for per-file declarations is tracked in `ROADMAP.md` under *Deriving Module Organization from the Architectural Graph*.
 
 ### 2.3. The Composable `define_architecture!` and `architecture_graph!` Macros
-In `src/architecture.rs` (`FoundationPrimitives`), `define_architecture!` generates both the `strum`-derived `ArchitectureComponent` enum (attaching the `///` doc comments to each variant) and the `ARCHITECTURE_GRAPH` constant by delegating slice construction to `architecture_graph!`:
+In `src/architecture.rs` (`FoundationPrimitives`), `define_architecture!` generates both the `strum`-derived `ArchitectureComponent` enum (attaching the `///` doc comments to each variant) and the `ARCHITECTURE_GRAPH` constant by delegating slice construction to `architecture_graph!`. Both macros are local to `src/architecture.rs` (not `#[macro_export]`): `architecture_graph!` is also reused by the cycle-detector unit test to build synthetic graphs. Only `architecture_component!` is exported from `src/lib.rs`, because binary crates invoke it as `omni::architecture_component!`:
 ```rust
 define_architecture! {
     // --- Shared Foundations ---
@@ -89,7 +89,7 @@ define_architecture! {
 ```
 
 ### 2.4. Automatic Discovery, Transitive Reachability & Leaf Isolation
-- **Automatic Module Discovery**: Component roots and leaf submodules are discovered directly from the colocated `architecture_component!(...)` declarations in `src/` via `omni::code_lint::ast` CST inspection, avoiding any hardcoded module-path tables in `tests/architecture.rs`.
+- **Automatic Module Discovery**: Component roots and leaf submodules are discovered directly from the colocated `architecture_component!(...)` declarations in `src/` via `omni::code_lint::ast` CST inspection, avoiding any hardcoded module-path tables in `tests/architecture_conformance.rs`.
 - **Transitive Reachability ($\to^+$)**: An allowed import is computed via reachability on the DAG. For example, `CodeLintRules` depends directly on `[CodeRuleContracts, CodeSuppressionEngine]`, transitively granting access to `CodeSemanticEngines`, `CodeSyntaxAdapters`, `CoreVocabulary`, and `FoundationPrimitives` without manual configuration.
 - **Leaf Isolation (`(no_internal_dependencies)`)**: Components flagged with `(no_internal_dependencies)` (`allow_internal_dependencies = false`) forbid leaf modules within the component from depending on each other. Concrete linter rules cannot import other linter rules; semantic engines cannot import other semantic engines; binaries cannot import other binaries.
 - **Domain Hermeticity**: `code_lint` and `command_lint` have disjoint graph paths. A command rule attempting to import code ASTs or vice versa is immediately blocked.
@@ -105,7 +105,7 @@ Tests are split by what they check: the graph definition itself is unit-tested n
 2. `test_cycle_detector_identifies_cycles`: Guards against vacuous cycle detection using `architecture_graph!`.
 3. `test_all_architecture_components_have_descriptions`: Ensures every `ArchitectureComponent` variant has a non-empty doc comment accessible via `strum::EnumMessage`.
 
-`tests/architecture.rs` enforces conformance of the source tree:
+`tests/architecture_conformance.rs` enforces conformance of the source tree:
 1. `test_all_source_files_declare_architecture_component`: Ensures 100% of non-root files declare exactly one valid component, submodules are coherent with their parent module's component, and every component variant is backed by source files.
 2. `test_architecture_conformance`: Verifies all source files comply with the DAG reachability and leaf-isolation rules.
 3. `test_architecture_rules_detect_forbidden_dependencies`: Guards against vacuous conformance passes by injecting upward, cross-domain, and sibling-leaf dependencies.
