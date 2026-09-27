@@ -31,45 +31,40 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
     - Can we establish a rule interest declaration (e.g. target node kinds) early in the trait lifecycle without breaking existing rule independence?
     - How do we handle rules that need multi-stage context (like `no_env_in_functions` traversing upward or `max_test_assertions` counting inner blocks) within a unified traversal?
   - *Trigger*: When the code rule registry approaches ~30–40 rules, or when rule evaluation time exceeds parse time.
-- **Dynamic Selector Deserialization**:
-  - *Current*: `Selector` deserialization directly scans static `CODE_RULES` and `COMMAND_RULES` registries.
-  - *Target*: Decouple selector resolution from static arrays to allow dynamically registered and external declarative rules loaded from configuration files (`.omnilint.toml`).
 - **Rule Naming Canonicalization (`heck`)**:
   - *Target*: Support case-insensitive and format-tolerant rule selection (matching `SingleLetterVariableName`, `single-letter-variable-name`, and `single_letter_variable_name` interchangeably).
   - *Trigger*: When adding declarative AST rule files or multi-rule alias configurations.
 - **Rule Autofix Engine (`diffy` / `similar`)**:
   - *Target*: Extend `CodeRule` and `CommandRule` with optional auto-fix transformations. Support `--fix` and `--fix --dry-run` with in-memory unified diff previews before writing changes to disk.
   - *Trigger*: When implementing the first batch of auto-fixable rules (e.g., replacing `logging.error` with `logging.exception`).
-- **Decorator & Attribute Span Awareness for `disable-next-line`**:
-  - *Current*: `disable-next-line` matches diagnostics anchored on `comment_line + 1`, which misses function-level diagnostics anchored on `def` / `fn` when `@decorator` or `#[attribute]` lines appear in between.
-  - *Target*: Propagate decorated/attributed span boundaries to the suppression resolver so `disable-next-line` placed above a decorator/attribute block suppresses diagnostics on the decorated declaration.
+- **Multiline Decorator & Attribute Span Awareness for `omni:ignore`**:
+  - *Current*: `compute_effective_target_line` in `src/code_lint/suppression.rs` advances `end_target_line` across contiguous lines starting with `@`, `#[`, `//`, or `#`, handling single-line decorators and attributes. However, multiline decorators or attributes whose continuation lines do not start with `@` or `#[` stop the line scan early.
+  - *Target*: Use AST decorated/attributed node spans in the suppression resolver so `omni:ignore` placed above a multiline decorator/attribute block suppresses diagnostics on the underlying declaration.
 - **Generic Container Base-Type Matching (`no-identical-positional-types`)**:
   - *Current*: Positional parameter types are compared by exact formatted annotation string (`dict[str, int]` != `dict[str, float]`).
   - *Target*: Optionally normalize or group generic collection/mapping containers (`dict[...]`, `Mapping[...]`, `list[...]`, `Sequence[...]`) so multiple positional mappings or sequences are flagged even when their inner type arguments differ.
 - **Escaping Nested Scopes (`no-env-in-functions`)**:
   - *Current*: The boundary exemption (`main`, `from_env`, ...) is inherited by every scope declared inside it, which is correct for nested functions and closures but also exempts a class declared inside a boundary whose methods later escape (returned, registered as a callback).
   - *Target*: Treat a `class` / `impl` declared inside a boundary as a barrier that resets the exemption, once a real-world occurrence justifies the added language-specific complexity.
-- **Framework-Level Multiline Explanation Awareness (`EnforcementMode::RequireExplanation`)**:
-  - *Context & Problem*: Centralized explanation checking in `lint_file` currently evaluates `index.has_adjacent_explanation(diagnostic.location.line)`. Because `diagnostic.location.line` points only to the start line of a matched call, multiline parenthesized expressions (or calls with trailing inline comments on closing parenthesis `)`) trigger false positives unless rules manually reimplement AST-aware comment scanning.
-  - *Target*: Move AST node/statement header span awareness into `CommentIndex::has_explanation_for_node` in the framework layer so multiline commented expressions are handled uniformly across all rules without per-rule comment inspection logic.
 
 ---
 
 ## 2. Performance & Concurrency Architecture
 
-- **Concurrent File-Level Analysis**:
-  - *Context & Problem*: Analysis is currently single-threaded. On multi-core development workstations, scanning 31 files (~8,200 lines) sequentially takes ~400ms in release mode. The work is embarrassingly parallel across files.
-  - *Investigation & Design Questions*:
-    - Evaluate using `ignore::WalkParallel` (already present in the dependency tree) vs. collecting files and scheduling via `rayon`.
-    - Ensure output determinism: `print_diagnostics` already groups findings into a `BTreeMap` by location context and sorts by byte span for text output, but JSON formatting must also preserve deterministic ordering across runs.
-    - Measure overhead on small repositories to ensure thread-pool initialization does not degrade latency for micro-runs or pre-commit hooks.
-  - *Target*: Bring full-workspace cold-cache execution down to ~50–80ms on multi-core systems.
-- **Parse & Pipeline Floor Profiling**:
-  - *Context*: Disabling all rules via tag exclusion shows that the shared per-file pipeline (walking files, reading from disk, tree-sitter parsing via `ast-grep`, and comment suppression scanning) accounts for ~228ms (56% of total runtime on ~8k lines).
+- **Remaining Per-File Caching & Fast-Path Cleanups**:
+  - *Default Filter-Set Caching (`src/core.rs`)*: Avoid rebuilding default `HashSet<String>` filter sets in `effective_banned_set` / `effective_allowed_set` (`FilterListDefaults::resolve_default_for_lang`) on every file across 14 rules when no rule-level configuration overrides exist in `.omnilint.toml`.
+  - *Suppression Fast-Path (`src/code_lint/suppression.rs`)*: Short-circuit `SuppressionTracker::from_file` before running the full-CST `ast::collect_comment_nodes(file)` traversal when `!content.contains("omni:")`.
+  - *Path Normalization & `per_file_ignores` Glob Caching (`src/core.rs`)*: Cache `std::env::current_dir()` in `normalize_path_for_glob` instead of invoking a syscall per absolute path, and pre-compile `per_file_ignores` glob matchers when non-empty instead of calling `GlobBuilder::new(pattern)` per `(file, rule)` pair.
+- **Directory Discovery Parallelism & Micro-Run Overhead**:
+  - *Current*: File-level analysis runs in parallel via `rayon` (`targets.into_par_iter()`) with deterministic sorting across both plain-text and JSON output, while directory traversal in `collect_directory_candidates` runs single-threaded via `ignore::WalkBuilder::build()`.
   - *Investigation*:
-    - Filter files before I/O: currently `lint_single_file` reads files to a string before checking `detect_language` (reading snapshots and ignored extensions unnecessarily).
-    - Investigate the parse cost breakdown: how much of the ~228ms is Tree-sitter parser initialization / tree building vs. `SuppressionTracker::from_file` traversing comment nodes?
-    - Determine whether suppression comments can be scanned more cheaply or parsed concurrently with AST visitation.
+    - Evaluate whether `ignore::WalkParallel` improves directory discovery on large repositories compared to single-threaded collection + `rayon`.
+    - Measure `rayon` thread-pool initialization overhead on small repositories to ensure micro-runs and pre-commit hooks are not penalized.
+- **Parse & Pipeline Floor Profiling**:
+  - *Context*: Disabling all rules via tag exclusion shows that the shared per-file pipeline (walking files, reading from disk, tree-sitter parsing via `ast-grep`, and comment suppression scanning) accounts for ~228ms (56% of total runtime on ~8k lines). Pre-I/O `detect_language` filtering is now in place.
+  - *Investigation*:
+    - Investigate the remaining parse cost breakdown: how much is Tree-sitter parser initialization / tree building vs. `SuppressionTracker::from_file` traversing comment nodes?
+    - Determine whether suppression comments can be scanned more cheaply (e.g., via the `!content.contains("omni:")` fast-path) or parsed concurrently with AST visitation.
 - **Subprocess Batching & Caching (`EnvContext`)**:
   - *Current*: Command rules spawn individual `jj` or `git` CLI calls per evaluation.
   - *Target*: Introduce a shared `EnvContext` struct that pre-fetches and caches repository state (e.g., batching queries into a single `jj log --json` or `git status` invocation) to ensure sub-10ms execution across multiple rules.
