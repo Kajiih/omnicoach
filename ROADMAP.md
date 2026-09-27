@@ -46,9 +46,6 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
 - **Escaping Nested Scopes (`no-env-in-functions`)**:
   - *Current*: The boundary exemption (`main`, `from_env`, ...) is inherited by every scope declared inside it, which is correct for nested functions and closures but also exempts a class declared inside a boundary whose methods later escape (returned, registered as a callback).
   - *Target*: Treat a `class` / `impl` declared inside a boundary as a barrier that resets the exemption, once a real-world occurrence justifies the added language-specific complexity.
-- **Rule-Specific Threshold Aliases (`ThresholdConfig`)**:
-  - *Current*: The `min_args` serde alias on `ThresholdConfig::min` (`src/core.rs`), added for `no-identical-positional-types`, is accepted by every threshold rule (`[rules.prefer-tuple-unpacking] min_args = 3` silently sets the position count).
-  - *Target*: Scope the alias to `no-identical-positional-types` (or drop it), so each rule only accepts keys that mean something for it.
 
 ## Candidate Rules
 
@@ -124,9 +121,6 @@ Source: Python Tip of the Week #069 "Prefer constants over wild values" (go/pyth
   - *Target*: Add an optional Cargo feature (`features = ["miette"]`) that enables rich, syntax-highlighted source snippets with colored squiggly underlines and clickable rule documentation URLs, while keeping the default pre-commit hook binary lightweight and fast.
 - **Polished Diagnostic Summaries (`pluralizer` / Native Helper)**:
   - *Target*: Clean grammatical inflection ("1 violation" vs "3 violations") in terminal summary footers, JSON reports, and future JUnit/SARIF export formats.
-- **Single-Pass Placeholder Tokenizer / Interpolator (`LanguageText`)**:
-  - *Current*: `LanguageText::interpolate` performs sequential string replacement (`result.replace("{key}", val)`).
-  - *Target*: Replace sequential search-and-replace with a single-pass scanner/tokenizer (or regex) to avoid potential secondary replacement issues when interpolated values contain curly braces (`{}`) matching other parameter names.
 
 ---
 

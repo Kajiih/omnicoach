@@ -56,7 +56,7 @@ select = ["Testing", "no-typing-cast"]
 # Globally ignore specific rules
 ignore = ["single-letter-variable-name"]
 
-# Per-file rule ignores using glob patterns
+# Per-file rule ignores using glob patterns (invalid patterns fail at config load)
 [per_file_ignores]
 "tests/**" = ["single-letter-variable-name", "flat-scope-enforced"]
 ```
@@ -120,7 +120,7 @@ All rules support the `mode = "ban" | "require-explanation"` configuration. Belo
 * **`no-identical-positional-types`**: Bans functions with $\ge 3$ positional parameters where 2 or more share an identical type annotation (suggests keyword-only arguments or domain newtypes). *(Python, Rust)*
   ```toml
   [rules.no-identical-positional-types]
-  min_args = 3 # default: 3
+  min = 3 # minimum positional parameter count; default: 3
   ```
 
 ### Architecture & Control Flow

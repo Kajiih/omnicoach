@@ -172,8 +172,8 @@ impl<T: Copy + 'static> LanguageDefaults<T> {
 /// Configuration for rules controlled by numeric `min` or `max` thresholds (e.g., `max-test-assertions`, `no-identical-positional-types`).
 #[derive(Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ThresholdConfig {
-    /// Optional override for the minimum threshold (also accepts `min_args`).
-    #[serde(default, alias = "min_args")]
+    /// Optional override for the minimum threshold.
+    #[serde(default)]
     pub min: Option<usize>,
 
     /// Optional override for the maximum threshold.
@@ -1066,6 +1066,13 @@ mod tests {
             toml::from_str(toml_content).unwrap()
         };
         assert_eq!(config.effective_max_for_lang(lang, &DEFAULTS), expected);
+    }
+
+    #[test]
+    fn test_threshold_config_rejects_rule_specific_min_args_key() {
+        // Every threshold rule shares `ThresholdConfig`, so a rule-specific key would leak to all.
+        let config: ThresholdConfig = toml::from_str("min_args = 5").unwrap();
+        assert_eq!(config.min, None);
     }
 
     #[rstest::rstest]
