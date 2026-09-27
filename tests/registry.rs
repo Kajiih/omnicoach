@@ -1,5 +1,8 @@
 //! Centralized registry integrity and uniqueness validation tests.
 
+// Workaround for rust-lang/rust-clippy#13981 so clippy.toml `allow-*-in-tests` applies to the whole file.
+#![cfg(test)]
+
 use omni::code_lint::rules::CODE_RULES;
 use omni::command_lint::rules::COMMAND_RULES;
 use omni::core::{Tag, is_kebab_case};
@@ -127,20 +130,34 @@ where
     }
 }
 
+static RULE_SOURCES: std::sync::LazyLock<Vec<(std::path::PathBuf, String)>> =
+    std::sync::LazyLock::new(|| {
+        let rules_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/code_lint/rules");
+        let entries = std::fs::read_dir(rules_dir).expect("rule directory must be readable");
+        let mut sources: Vec<_> = entries
+            .map(|entry| entry.expect("rule directory entry must be readable").path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "rs"))
+            .map(|path| {
+                let source = std::fs::read_to_string(&path).expect("rule source must be readable");
+                (path, source)
+            })
+            .collect();
+        sources.sort_by(|(left, _), (right, _)| left.cmp(right));
+        sources
+    });
+
 /// Diagnostic ordering is owned by the reporting layer, so a rule sorting its own output is dead work.
 #[test]
 fn test_rule_sources_do_not_sort_diagnostics() {
-    let rules_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/code_lint/rules");
-    let suppression = concat!(env!("CARGO_MANIFEST_DIR"), "/src/code_lint/suppression.rs");
+    let suppression_path = std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/code_lint/suppression.rs"
+    ));
+    let suppression_source =
+        std::fs::read_to_string(&suppression_path).expect("suppression source must be readable");
+    let suppression_entry = (suppression_path, suppression_source);
 
-    let rule_sources = std::fs::read_dir(rules_dir)
-        .expect("rule directory must be readable")
-        .map(|entry| entry.expect("rule directory entry must be readable").path())
-        .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("rs"))
-        .chain(std::iter::once(std::path::PathBuf::from(suppression)));
-
-    for path in rule_sources {
-        let source = std::fs::read_to_string(&path).expect("rule source must be readable");
+    for (path, source) in RULE_SOURCES.iter().chain([&suppression_entry]) {
         assert!(
             !source.contains(".sort"),
             "{} sorts its output; diagnostic ordering belongs to the reporting layer",
@@ -174,21 +191,13 @@ fn rule_test_convention_violation(source: &str) -> Option<&'static str> {
 /// Enforces that all rule test modules use `rule_test!` and never define bespoke tests.
 #[test]
 fn test_rule_files_use_rule_test() {
-    let rules_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/code_lint/rules");
-    let entries = std::fs::read_dir(rules_dir).expect("rule directory must be readable");
-
-    for entry in entries {
-        let path = entry.expect("rule directory entry must be readable").path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
-            continue;
-        }
+    for (path, source) in &*RULE_SOURCES {
         let filename = path
             .file_name()
             .and_then(|name| name.to_str())
             .expect("valid filename");
 
-        let source = std::fs::read_to_string(&path).expect("rule source must be readable");
-        if let Some(reason) = rule_test_convention_violation(&source) {
+        if let Some(reason) = rule_test_convention_violation(source) {
             panic!("{filename} {reason}");
         }
     }

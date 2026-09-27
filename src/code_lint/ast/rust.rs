@@ -293,13 +293,13 @@ fn traverse_rust<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
         }
         "const_item" | "static_item" | "function_item" | "struct_item" | "enum_item"
         | "trait_item" | "type_item" | "associated_type" => {
-            if let Some(name_node) = node.field("name") {
+            let name_range = node.field("name").map(|name_node| {
+                let range = name_node.range();
                 bindings.push(AstNode::from_raw(name_node));
-            }
+                range
+            });
             for child in node.children() {
-                if let Some(name_node) = node.field("name")
-                    && child.range() == name_node.range()
-                {
+                if name_range.as_ref() == Some(&child.range()) {
                     continue;
                 }
                 traverse_rust(&child, bindings);
@@ -644,11 +644,9 @@ fn is_enclosed_in_macro(node: &RawNode<'_>, predicate: &impl Fn(&str, &str) -> b
             "function_item" | "closure_expression" => break,
             "macro_invocation" => {
                 let terminal = macro_terminal_name_raw(&ancestor);
-                let full_path = ancestor
-                    .field("macro")
-                    .map(|macro_id| macro_id.text().trim().to_string())
-                    .unwrap_or_default();
-                if predicate(&full_path, terminal.as_ref()) {
+                let full_text = ancestor.field("macro").map(|macro_id| macro_id.text());
+                let full_path = full_text.as_deref().map_or("", str::trim);
+                if predicate(full_path, terminal.as_ref()) {
                     return true;
                 }
             }
@@ -690,11 +688,9 @@ fn is_multiline_string_literal(node: &RawNode<'_>) -> bool {
         return true;
     }
     let text = node.text();
-    let lines: Vec<&str> = text.lines().collect();
-    lines
-        .iter()
-        .take(lines.len().saturating_sub(1))
-        .any(|line| !line.trim_end().ends_with('\\'))
+    let mut lines = text.lines();
+    lines.next_back();
+    lines.any(|line| !line.trim_end().ends_with('\\'))
 }
 
 /// Collects all Rust multiline string literal nodes in `file` that are not doc attributes,

@@ -2,7 +2,8 @@
 //!
 //! See `decisions/006_architectural_dag_and_conformance.md` for architectural design rationale.
 
-#![allow(clippy::expect_used)]
+// Workaround for rust-lang/rust-clippy#13981 so clippy.toml `allow-*-in-tests` applies to the whole file.
+#![cfg(test)]
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};

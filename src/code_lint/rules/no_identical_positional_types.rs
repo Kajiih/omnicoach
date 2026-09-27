@@ -60,7 +60,9 @@ fn has_exempt_decorator(func_node: &AstNode<'_>) -> bool {
 }
 
 /// Groups typed positional parameters by type annotation and returns groups with `>= 2` parameters.
-fn collect_duplicate_type_groups(params: &[PythonParameterInfo<'_>]) -> Vec<(String, Vec<String>)> {
+fn collect_duplicate_type_groups(
+    params: &[&PythonParameterInfo<'_>],
+) -> Vec<(String, Vec<String>)> {
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     for param in params {
         if let Some(ref type_annotation) = param.type_text {
@@ -98,7 +100,6 @@ fn check_function_signature(
         .parameters
         .iter()
         .filter(|param| param.is_positional())
-        .cloned()
         .collect();
 
     if positional_params.len() < min_args {
