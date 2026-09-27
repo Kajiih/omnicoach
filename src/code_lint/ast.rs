@@ -32,6 +32,7 @@ use crate::diagnostic::{LineColumn, SourceLocation, SourceSpan};
 use ast_grep_core::AstGrep;
 use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_language::SupportLang;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// Type alias for an in-memory source document parsed by `ast-grep`.
@@ -220,6 +221,39 @@ pub fn collect_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> {
         }
     }
     out
+}
+
+/// A read of one positional element through an integer literal: `receiver[1]` or
+/// `receiver[-1]` in Python, `receiver.1` in Rust.
+pub struct PositionalRead<'a> {
+    /// The whole indexing expression (`point[0]`, `span.0`).
+    pub node: AstNode<'a>,
+    /// Source text of the indexed value (`point`, `self.pair`, `rows[i]`).
+    pub receiver: String,
+    /// The literal position; negative for Python end-relative indices.
+    pub position: i64,
+}
+
+/// Positional reads of one scope (a function body, or the Python module top level), in source
+/// order.
+#[derive(Default)]
+pub struct ScopePositionalReads<'a> {
+    /// Literal-position reads whose receiver contains no call.
+    pub reads: Vec<PositionalRead<'a>>,
+    /// Receivers for which unpacking would not be equivalent. Python: receivers the scope writes
+    /// to or uses as a collection (iterated, sized, indexed by a non-literal, sliced, mutated).
+    /// Rust: receivers with a field assigned or mutably borrowed.
+    pub exempt_receivers: HashSet<String>,
+}
+
+/// Collects positional reads in `file` grouped by scope.
+///
+/// There is one group per function body, plus the Python module top level. Python lambdas and
+/// class bodies, and Rust items outside functions, are not collected; Rust closures belong to
+/// their enclosing function.
+#[must_use]
+pub fn collect_positional_reads(file: &ParsedFile) -> Vec<ScopePositionalReads<'_>> {
+    dispatch_lang!(file.lang(), collect_positional_reads(file), Vec::new())
 }
 
 /// Matches an `ast-grep` call pattern containing `$ARGS` (e.g. `$LOOP($$$LOOP_ARGS).create_task($$$ARGS)`)

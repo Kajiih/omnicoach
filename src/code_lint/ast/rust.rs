@@ -1,6 +1,6 @@
 //! AST helper predicates for structural traversal in Rust.
 
-use crate::code_lint::ast::{AstNode, ParsedFile, RawNode};
+use crate::code_lint::ast::{AstNode, ParsedFile, PositionalRead, RawNode, ScopePositionalReads};
 
 /// Returns true for Rust node kinds that hold statements as direct children.
 ///
@@ -1077,6 +1077,96 @@ pub fn summarize_rust_file(file: &ParsedFile) -> RustFileSummary {
     }
 
     summary
+}
+
+/// Returns true if `receiver` names a stable value: a name, `self` or field chain with no call
+/// inside, so that identical text means the same value.
+fn is_stable_receiver(receiver: &RawNode<'_>) -> bool {
+    matches!(
+        receiver.kind().as_ref(),
+        "identifier" | "self" | "field_expression"
+    ) && !receiver.dfs().any(|node| node.kind() == "call_expression")
+}
+
+/// Returns true if `node` is assigned to (`t.0 = x`, `t.0 += x`, `(t.0, t.1) = (b, a)`) or
+/// mutably borrowed (`&mut t.0`).
+fn is_mutated(node: &RawNode<'_>) -> bool {
+    let mut place = node.clone();
+    while let Some(parent) = place.parent() {
+        match parent.kind().as_ref() {
+            "tuple_expression" | "parenthesized_expression" => place = parent,
+            "assignment_expression" | "compound_assignment_expr" => {
+                return parent
+                    .field("left")
+                    .is_some_and(|left| left.range() == place.range());
+            }
+            "reference_expression" => {
+                return parent
+                    .children()
+                    .any(|child| child.kind() == "mutable_specifier");
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Records a tuple-field access (`span.0`) as a positional read, or its receiver as an exempt
+/// receiver when the field is mutated.
+fn record_field_expression<'a>(node: &RawNode<'a>, scope: &mut ScopePositionalReads<'a>) {
+    let (Some(receiver), Some(field)) = (node.field("value"), node.field("field")) else {
+        return;
+    };
+    if field.kind() != "integer_literal" {
+        return;
+    }
+    if is_mutated(node) {
+        scope.exempt_receivers.insert(receiver.text().into_owned());
+    } else if is_stable_receiver(&receiver)
+        && let Ok(position) = field.text().parse()
+    {
+        scope.reads.push(PositionalRead {
+            node: AstNode::from_raw(node.clone()),
+            receiver: receiver.text().into_owned(),
+            position,
+        });
+    }
+}
+
+/// Walks `node`, recording reads and mutations into the enclosing function's `scope` (none
+/// outside functions; closures belong to it) and pushing each finished function scope to `out`.
+fn collect_positional_reads_rec<'a>(
+    node: &RawNode<'a>,
+    mut scope: Option<&mut ScopePositionalReads<'a>>,
+    out: &mut Vec<ScopePositionalReads<'a>>,
+) {
+    match node.kind().as_ref() {
+        "function_item" => {
+            let mut function_scope = ScopePositionalReads::default();
+            for child in node.children() {
+                collect_positional_reads_rec(&child, Some(&mut function_scope), out);
+            }
+            out.push(function_scope);
+            return;
+        }
+        "field_expression" => {
+            if let Some(scope) = scope.as_deref_mut() {
+                record_field_expression(node, scope);
+            }
+        }
+        _ => {}
+    }
+    for child in node.children() {
+        collect_positional_reads_rec(&child, scope.as_deref_mut(), out);
+    }
+}
+
+/// Collects Rust tuple-field reads grouped by function (see [`super::collect_positional_reads`]).
+#[must_use]
+pub fn collect_positional_reads(file: &ParsedFile) -> Vec<ScopePositionalReads<'_>> {
+    let mut out = Vec::new();
+    collect_positional_reads_rec(&file.grep.root(), None, &mut out);
+    out
 }
 
 #[cfg(test)]
