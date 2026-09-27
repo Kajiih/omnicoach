@@ -95,12 +95,30 @@ impl LanguageText {
         Self::interpolate(self.resolve_for_lang(lang), params)
     }
 
+    /// Replaces each known `{key}` in one left-to-right pass, so substituted values are never
+    /// re-scanned; unknown placeholders and unmatched braces are kept verbatim.
     fn interpolate(template: &str, params: &[(&str, &str)]) -> String {
-        let mut result = template.to_string();
-        for &(placeholder, replacement) in params {
-            let pattern = format!("{{{placeholder}}}");
-            result = result.replace(&pattern, replacement);
+        let mut result = String::with_capacity(template.len());
+        let mut rest = template;
+        while let Some(open) = rest.find('{') {
+            result.push_str(&rest[..open]);
+            let after_open = &rest[open + 1..];
+            let substitution = after_open.find('}').and_then(|close| {
+                let key = &after_open[..close];
+                params
+                    .iter()
+                    .find(|&&(placeholder, _)| placeholder == key)
+                    .map(|&(_, replacement)| (replacement, close))
+            });
+            if let Some((replacement, close)) = substitution {
+                result.push_str(replacement);
+                rest = &after_open[close + 1..];
+            } else {
+                result.push('{');
+                rest = after_open;
+            }
         }
+        result.push_str(rest);
         result
     }
 }
@@ -453,6 +471,18 @@ mod tests {
             ADVICE.render(&[("func", "test_math")]),
             "Parameterize variations for test_math"
         );
+    }
+
+    #[rstest::rstest]
+    #[case::value_not_rescanned("{a} {b}", &[("a", "{b}"), ("b", "X")], "{b} X")]
+    #[case::unknown_placeholder_kept("{a} {missing}", &[("a", "X")], "X {missing}")]
+    #[case::unclosed_brace_kept("{a} {", &[("a", "X")], "X {")]
+    fn test_language_text_interpolation(
+        #[case] template: &'static str,
+        #[case] params: &[(&str, &str)],
+        #[case] expected: &str,
+    ) {
+        assert_eq!(LanguageText::from_static(template).render(params), expected);
     }
 
     #[test]

@@ -8,6 +8,7 @@ This document records **Phase 7 (Learn)** for the `LazyLock` and per-file alloca
 
 1. **Fast-Path `LazyLock` Caching Beats Custom Deserialization State**:
    - Pre-compiling default glob patterns into a `static DEFAULT_TEST_MATCHER: LazyLock<GlobSet>` and checking `if self.per_file_ignores.is_empty()` captures the hot-path speedup without polluting `Config` or `ContextConfig` with custom `Deserialize` implementations or cached struct fields.
+   - *Superseded*: benchmarking a non-empty `per_file_ignores` showed per-`(file, rule)` glob compilation made runs ~1.5× slower. `Config` now compiles `test_patterns` and `per_file_ignores` once during deserialization (`deserialize_with`), which also removed `DEFAULT_TEST_MATCHER` and turned invalid globs into config errors. Lesson: measure the non-default configuration too before choosing the simpler shape.
 
 2. **Self-Dogfooding Catches Hungarian Type Suffixes on Statics**:
    - Our `no-hungarian-notation` rule checks `const` and `static` identifiers for banned collection/type suffixes like `_SET` (`DEFAULT_TEST_GLOB_SET` → `DEFAULT_TEST_MATCHER`). Naming statics by their domain role (`MATCHER`, `RULES`, `SOURCES`) is both more idiomatic and compliant with our own lint suite.
