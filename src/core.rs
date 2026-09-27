@@ -551,8 +551,6 @@ impl<'de> Deserialize<'de> for Selector {
     {
         let selector_input = String::deserialize(deserializer)?;
 
-        // TODO(roadmap): Avoid coupling selector deserialization directly to static registries.
-        // This prevents dynamic/declarative rules from being loaded via configurations.
         // 1. Try to parse as Tag
         if let Ok(tag) = selector_input.parse::<Tag>() {
             return Ok(Self::Tag(tag));
