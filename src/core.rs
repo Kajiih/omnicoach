@@ -588,34 +588,61 @@ const DEFAULT_TEST_PATTERNS: &[&str] = &[
     "**/tests.rs",
 ];
 
-static DEFAULT_TEST_MATCHER: std::sync::LazyLock<globset::GlobSet> =
-    std::sync::LazyLock::new(|| {
-        let mut builder = globset::GlobSetBuilder::new();
-        for &pattern in DEFAULT_TEST_PATTERNS {
-            if let Ok(glob) = globset::GlobBuilder::new(pattern)
-                .literal_separator(false)
-                .build()
-            {
-                builder.add(glob);
-            }
-        }
-        builder.build().unwrap_or_default()
-    });
+/// Compiles `pattern` with `*` matching across `/`, as all config globs do.
+fn compile_glob(pattern: &str) -> Result<globset::Glob, globset::Error> {
+    globset::GlobBuilder::new(pattern)
+        .literal_separator(false)
+        .build()
+}
+
+fn compile_glob_set<'a>(
+    patterns: impl IntoIterator<Item = &'a str>,
+) -> Result<globset::GlobSet, globset::Error> {
+    let mut builder = globset::GlobSetBuilder::new();
+    for pattern in patterns {
+        builder.add(compile_glob(pattern)?);
+    }
+    builder.build()
+}
+
+fn default_test_patterns() -> globset::GlobSet {
+    // The defaults are constants covered by `test_context_test_path_detection`.
+    compile_glob_set(DEFAULT_TEST_PATTERNS.iter().copied()).unwrap_or_default()
+}
+
+fn deserialize_test_patterns<'de, D>(deserializer: D) -> Result<globset::GlobSet, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let patterns = Vec::<String>::deserialize(deserializer)?;
+    compile_glob_set(patterns.iter().map(String::as_str)).map_err(serde::de::Error::custom)
+}
+
+fn deserialize_per_file_ignores<'de, D>(
+    deserializer: D,
+) -> Result<Vec<(globset::GlobMatcher, HashSet<Selector>)>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    std::collections::HashMap::<String, HashSet<Selector>>::deserialize(deserializer)?
+        .into_iter()
+        .map(|(pattern, selectors)| {
+            compile_glob(&pattern)
+                .map(|glob| (glob.compile_matcher(), selectors))
+                .map_err(serde::de::Error::custom)
+        })
+        .collect()
+}
 
 /// Configuration settings for path context detection (e.g. test paths).
 #[derive(Deserialize, Debug, Clone)]
 pub struct ContextConfig {
-    /// Glob patterns used to identify test files.
-    #[serde(default = "default_test_patterns")]
-    pub test_patterns: Vec<String>,
-}
-
-fn default_test_patterns() -> Vec<String> {
-    DEFAULT_TEST_PATTERNS
-        .iter()
-        .copied()
-        .map(str::to_owned)
-        .collect()
+    /// Glob patterns used to identify test files, compiled at load.
+    #[serde(
+        default = "default_test_patterns",
+        deserialize_with = "deserialize_test_patterns"
+    )]
+    pub test_patterns: globset::GlobSet,
 }
 
 impl Default for ContextConfig {
@@ -639,9 +666,9 @@ pub struct Config {
     /// Path context classifier settings.
     #[serde(default)]
     pub context: ContextConfig,
-    /// Per-file rule ignores mapping glob patterns to rule selectors.
-    #[serde(default)]
-    pub per_file_ignores: std::collections::HashMap<String, HashSet<Selector>>,
+    /// Per-file rule ignores: glob patterns (compiled at load) paired with rule selectors.
+    #[serde(default, deserialize_with = "deserialize_per_file_ignores")]
+    pub per_file_ignores: Vec<(globset::GlobMatcher, HashSet<Selector>)>,
 }
 
 /// Errors encountered during configuration loading and parsing.
@@ -676,25 +703,13 @@ fn normalize_path_for_glob(path: &Path) -> String {
     stripped.to_string_lossy().replace('\\', "/")
 }
 
-fn glob_matches(pattern: &str, text: &str) -> bool {
-    globset::GlobBuilder::new(pattern)
-        .literal_separator(false)
-        .build()
-        .is_ok_and(|glob| glob.compile_matcher().is_match(text))
-}
-
 impl Config {
     /// Returns true if the given path matches any configured test pattern.
     #[must_use]
     pub fn is_test_path(&self, path: &Path) -> bool {
-        let normalized = normalize_path_for_glob(path);
-        if self.context.test_patterns == DEFAULT_TEST_PATTERNS {
-            return DEFAULT_TEST_MATCHER.is_match(&normalized);
-        }
         self.context
             .test_patterns
-            .iter()
-            .any(|pattern| glob_matches(pattern, &normalized))
+            .is_match(normalize_path_for_glob(path))
     }
 
     /// Returns true if the given rule is enabled in this configuration.
@@ -727,8 +742,8 @@ impl Config {
 
         let normalized = normalize_path_for_glob(path);
 
-        for (pattern, selectors) in &self.per_file_ignores {
-            if glob_matches(pattern, &normalized)
+        for (matcher, selectors) in &self.per_file_ignores {
+            if matcher.is_match(&normalized)
                 && selectors.iter().any(|selector| selector.matches_rule(rule))
             {
                 return false;
@@ -1011,6 +1026,26 @@ mod tests {
         assert!(!config.is_rule_enabled_for_path(&STYLE_RULE, Path::new("tests/my_test.rs")));
         assert!(config.is_rule_enabled_for_path(&STYLE_RULE, Path::new("src/lib.rs")));
         assert!(config.is_rule_enabled_for_path(&LOGGING_RULE, Path::new("tests/my_test.rs")));
+    }
+
+    #[test]
+    fn test_custom_test_patterns_replace_defaults() {
+        let toml_content = indoc::indoc! {r#"
+            [context]
+            test_patterns = ["**/spec/**"]
+        "#};
+        let config: Config = toml::from_str(toml_content).unwrap();
+
+        assert!(config.is_test_path(Path::new("app/spec/model.py")));
+        assert!(!config.is_test_path(Path::new("tests/foo.rs")));
+    }
+
+    #[rstest::rstest]
+    #[case::per_file_ignores("[per_file_ignores]\n\"src/[\" = [\"style\"]")]
+    #[case::test_patterns("[context]\ntest_patterns = [\"src/[\"]")]
+    fn test_invalid_glob_is_config_error(#[case] toml_content: &str) {
+        let error = toml::from_str::<Config>(toml_content).unwrap_err();
+        assert!(error.to_string().contains("src/["), "{error}");
     }
 
     #[rstest::rstest]
