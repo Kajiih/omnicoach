@@ -705,18 +705,7 @@ fn parse_param_parts<'a>(node: &RawNode<'a>) -> Option<ParsedParamParts<'a>> {
                 default_value_node: default_val,
             })
         }
-        "list_splat_pattern" => {
-            let name_node = node.children().find(|child| child.kind() == "identifier")?;
-            let name = name_node.text().to_string();
-            Some(ParsedParamParts {
-                name_node: AstNode::from_raw(name_node),
-                name,
-                type_node: None,
-                type_text: None,
-                default_value_node: None,
-            })
-        }
-        "dictionary_splat_pattern" => {
+        "list_splat_pattern" | "dictionary_splat_pattern" => {
             let name_node = node.children().find(|child| child.kind() == "identifier")?;
             let name = name_node.text().to_string();
             Some(ParsedParamParts {

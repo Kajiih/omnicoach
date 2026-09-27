@@ -433,9 +433,7 @@ fn audit_single_directive(
                 && directive
                     .matched_count
                     .get(target_rule)
-                    .copied()
-                    .unwrap_or(0)
-                    == 0
+                    .is_none_or(|&count| count == 0)
             {
                 diagnostics.push(
                     UnusedSuppression

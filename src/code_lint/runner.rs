@@ -139,6 +139,15 @@ fn should_skip_ast_parse(
     !has_code_rules && !has_active_suppression_audit(path, lang, content, config)
 }
 
+static SUPPRESSIBLE_RULES: std::sync::LazyLock<HashSet<&'static str>> =
+    std::sync::LazyLock::new(|| {
+        crate::code_lint::rules::CODE_RULES
+            .iter()
+            .filter(|rule| !rule.tags().contains(&Tag::Suppression))
+            .map(|rule| rule.name().0)
+            .collect()
+    });
+
 /// Analyzes the structure of a file and returns diagnostic alerts.
 #[must_use]
 pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic> {
@@ -186,14 +195,8 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
         ));
     }
 
-    let suppressible_rules: HashSet<&'static str> = crate::code_lint::rules::CODE_RULES
-        .iter()
-        .filter(|rule| !rule.tags().contains(&Tag::Suppression))
-        .map(|rule| rule.name().0)
-        .collect();
-
     let mut diagnostics = tracker.filter_diagnostics(raw_diagnostics);
-    diagnostics.extend(tracker.audit(path, config, &suppressible_rules));
+    diagnostics.extend(tracker.audit(path, config, &SUPPRESSIBLE_RULES));
     diagnostics
 }
 

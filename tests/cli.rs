@@ -1,6 +1,7 @@
 //! End-to-end command-line interface integration tests.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// Workaround for rust-lang/rust-clippy#13981 so clippy.toml `allow-*-in-tests` applies to the whole file.
+#![cfg(test)]
 
 use assert_cmd::Command;
 use indoc::indoc;

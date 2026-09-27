@@ -76,15 +76,6 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
 - **VCS Error Propagation**:
   - *Current*: VCS client query errors in command rules are swallowed to avoid blocking users on query failures.
   - *Target*: Propagate structured errors or display user warnings when the underlying VCS client fails unexpectedly, distinguishing clean working copies from failed CLI calls.
-- **Idiomatic `LazyLock` Caching & Per-File Allocation Cleanups**:
-  - *`SUPPRESSIBLE_RULES` `LazyLock` (`src/code_lint/runner.rs`)*: Replace per-file `CODE_RULES.iter().filter(...).collect::<HashSet<_>>()` in `lint_file` with a module-level `static SUPPRESSIBLE_RULES: LazyLock<HashSet<&'static str>>` (and short-circuit `tracker.audit` when `directives.is_empty()`).
-  - *Pre-compiled `GlobSet` & Fast-Path `per_file_ignores` (`src/core.rs`)*: Short-circuit `Config::is_rule_enabled_for_path` before calling `normalize_path_for_glob` (which invokes `std::env::current_dir()`) when `per_file_ignores` is empty, and pre-compile glob patterns into `globset::GlobSet` instead of compiling `GlobMatcher` on every file × rule check.
-  - *In-place `serde_json::Value` Deserialization & Default Filter Caching (`src/core.rs`, `src/code_lint/semantic/bindings.rs`)*: Use `T::deserialize(val)` instead of `serde_json::from_value(val.clone())` in `Config::get_rule_config`, and avoid rebuilding default `HashSet<String>` filter sets (`effective_banned_set` / `effective_allowed_set`) on every file when no rule-level config overrides exist.
-  - *Zero-Allocation AST & Rule Traversals (`src/code_lint/ast/rust.rs`, `src/code_lint/ast/python.rs`, `src/code_lint/rules/no_identical_positional_types.rs`, `tests/registry.rs`)*:
-    - Use `DoubleEndedIterator::next_back` on `text.lines()` instead of collecting `Vec<&str>` in `is_multiline_string_literal`; borrow `Cow<str>` in `is_enclosed_in_macro`; hoist `node.field("name")` out of the child loop in `traverse_rust`.
-    - Merge duplicate `"list_splat_pattern" | "dictionary_splat_pattern"` arms in `src/code_lint/ast/python.rs`.
-    - Keep borrowed `&PythonParameterInfo` references in `no_identical_positional_types.rs` instead of `.cloned().collect()` before the `min_args` threshold check.
-    - Use `is_none_or` in `src/code_lint/suppression.rs`, `Vec<PathBuf>` in `src/bin/omni-code-lint.rs`, and a shared `LazyLock` rule-source cache in `tests/registry.rs`.
 
 ---
 

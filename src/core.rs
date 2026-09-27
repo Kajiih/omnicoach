@@ -580,6 +580,28 @@ impl Selector {
     }
 }
 
+const DEFAULT_TEST_PATTERNS: &[&str] = &[
+    "**/tests/**",
+    "**/test_*.py",
+    "**/*_test.py",
+    "**/*_test.rs",
+    "**/tests.rs",
+];
+
+static DEFAULT_TEST_MATCHER: std::sync::LazyLock<globset::GlobSet> =
+    std::sync::LazyLock::new(|| {
+        let mut builder = globset::GlobSetBuilder::new();
+        for &pattern in DEFAULT_TEST_PATTERNS {
+            if let Ok(glob) = globset::GlobBuilder::new(pattern)
+                .literal_separator(false)
+                .build()
+            {
+                builder.add(glob);
+            }
+        }
+        builder.build().unwrap_or_default()
+    });
+
 /// Configuration settings for path context detection (e.g. test paths).
 #[derive(Deserialize, Debug, Clone)]
 pub struct ContextConfig {
@@ -589,13 +611,11 @@ pub struct ContextConfig {
 }
 
 fn default_test_patterns() -> Vec<String> {
-    vec![
-        "**/tests/**".to_string(),
-        "**/test_*.py".to_string(),
-        "**/*_test.py".to_string(),
-        "**/*_test.rs".to_string(),
-        "**/tests.rs".to_string(),
-    ]
+    DEFAULT_TEST_PATTERNS
+        .iter()
+        .copied()
+        .map(str::to_owned)
+        .collect()
 }
 
 impl Default for ContextConfig {
@@ -668,6 +688,9 @@ impl Config {
     #[must_use]
     pub fn is_test_path(&self, path: &Path) -> bool {
         let normalized = normalize_path_for_glob(path);
+        if self.context.test_patterns == DEFAULT_TEST_PATTERNS {
+            return DEFAULT_TEST_MATCHER.is_match(&normalized);
+        }
         self.context
             .test_patterns
             .iter()
@@ -698,6 +721,9 @@ impl Config {
         if !self.is_rule_enabled(rule) {
             return false;
         }
+        if self.per_file_ignores.is_empty() {
+            return true;
+        }
 
         let normalized = normalize_path_for_glob(path);
 
@@ -721,7 +747,7 @@ impl Config {
     {
         self.rules
             .get(rule_name)
-            .and_then(|val| serde_json::from_value(val.clone()).ok())
+            .and_then(|val| T::deserialize(val).ok())
             .unwrap_or_default()
     }
 

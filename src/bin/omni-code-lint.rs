@@ -18,7 +18,7 @@ use clap::Parser;
 struct Cli {
     /// Paths to inspect
     #[arg(default_value = ".")]
-    paths: Vec<String>,
+    paths: Vec<PathBuf>,
 
     /// Output format for diagnostics (plain, json)
     #[arg(long, default_value = "plain")]
@@ -47,7 +47,7 @@ fn run() -> anyhow::Result<()> {
         Config::load().map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
 
     let options = LintOptions {
-        paths: cli.paths.into_iter().map(PathBuf::from).collect(),
+        paths: cli.paths,
         diff: cli.diff,
         diff_rev: cli.diff_rev,
     };
