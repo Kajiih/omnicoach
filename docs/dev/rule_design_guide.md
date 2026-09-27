@@ -63,7 +63,7 @@ All rule unit tests in `src/code_lint/rules/*.rs` must use `crate::test_utils::r
 * **Minimum Required Cases**:
   1. **Core Antipattern (`fail`)**: The primary construct the rule flags.
   2. **Canonical Fix & Syntactic Exemptions (`pass`)**: The recommended pit-of-success replacement (e.g. `inspect.cleandoc`, `indoc::indoc!`, docstrings) to prove the suggested fix passes the rule.
-  3. **Do Not Re-Test Framework Config Plumbing**: `FilterListDefaults` and `ThresholdDefaults` resolution are tested centrally in `src/core.rs`. Individual rule tests must not re-test framework configuration parsing.
+  3. **Do Not Re-Test Framework Config Plumbing**: `FilterListDefaults` and `LanguageDefaults` threshold resolution are tested centrally in `src/core.rs`. Individual rule tests must not re-test framework configuration parsing.
 * **One Behavior per Case**: Each `pass`/`fail` case exercises exactly one code path (one banned pattern, one exemption, one AST construct) and is named after it, so a failing case name pinpoints the regression.
 
 ---
