@@ -217,6 +217,11 @@ impl SuppressionTracker {
     /// Parses suppression directives from the parsed file and its content.
     #[must_use]
     pub fn from_file(file: &ParsedFile, content: &str) -> Self {
+        // Every directive contains `omni:`; skip the comment-node traversal when none can exist.
+        if !content.contains("omni:") {
+            return Self::default();
+        }
+
         let directives = ast::collect_comment_nodes(file)
             .into_iter()
             .filter_map(|comment_node| {
