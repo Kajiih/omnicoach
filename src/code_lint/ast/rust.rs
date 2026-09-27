@@ -359,8 +359,10 @@ fn is_conditional_test_attribute(attr_item: &RawNode<'_>) -> bool {
     let Some(token_tree) = attr.children().find(|child| child.kind() == "token_tree") else {
         return false;
     };
-    let arguments = non_delimiter_children(&token_tree);
-    arguments.len() == 1 && arguments[0].kind() == "identifier" && arguments[0].text() == "test"
+    matches!(
+        non_delimiter_children(&token_tree).as_slice(),
+        [argument] if argument.kind() == "identifier" && argument.text() == "test"
+    )
 }
 
 /// Returns true if an `attribute_item` AST node represents a `#[doc = "..."]` attribute.
@@ -387,21 +389,10 @@ fn preceding_attributes<'a>(node: &RawNode<'a>) -> impl Iterator<Item = RawNode<
         .filter(|sibling| sibling.kind() == "attribute_item")
 }
 
-/// Returns true if `node` is preceded by an `attribute_item` sibling matching `predicate`.
-fn has_matching_attribute(node: &RawNode<'_>, predicate: fn(&RawNode<'_>) -> bool) -> bool {
-    preceding_attributes(node).any(|sibling| predicate(&sibling))
-}
-
 /// Returns true if a Rust item is preceded by a test attribute (`#[test]`, `#[tokio::test]`, `#[rstest]`, etc.).
 #[must_use]
 fn has_test_attribute(node: &RawNode<'_>) -> bool {
-    has_matching_attribute(node, is_test_attribute)
-}
-
-/// Returns true if a Rust item is preceded by a `#[cfg(test)]` attribute.
-#[must_use]
-fn has_conditional_test_attribute(node: &RawNode<'_>) -> bool {
-    has_matching_attribute(node, is_conditional_test_attribute)
+    preceding_attributes(node).any(|sibling| is_test_attribute(&sibling))
 }
 
 /// Collects byte spans for all inline test items (`#[cfg(test)]` modules/items and `#[test]` functions)
@@ -414,15 +405,32 @@ pub fn collect_inline_test_ranges(file: &ParsedFile) -> Vec<std::ops::Range<usiz
 }
 
 fn collect_inline_test_ranges_rec(node: &RawNode<'_>, ranges: &mut Vec<std::ops::Range<usize>>) {
-    if has_conditional_test_attribute(node) || has_test_attribute(node) {
-        let start = preceding_attributes(node)
-            .last()
-            .map_or_else(|| node.range().start, |attribute| attribute.range().start);
-        ranges.push(start..node.range().end);
-        return;
-    }
+    let mut first_attribute_start: Option<usize> = None;
+    let mut pending_test_attribute = false;
+
     for child in node.children() {
-        collect_inline_test_ranges_rec(&child, ranges);
+        let kind = child.kind();
+        if kind == "attribute_item" {
+            first_attribute_start.get_or_insert_with(|| child.range().start);
+            if is_conditional_test_attribute(&child) || is_test_attribute(&child) {
+                pending_test_attribute = true;
+            }
+            continue;
+        }
+        if is_comment_kind(kind.as_ref()) {
+            continue;
+        }
+        if pending_test_attribute {
+            let start = first_attribute_start.unwrap_or_else(|| child.range().start);
+            ranges.push(start..child.range().end);
+            first_attribute_start = None;
+            pending_test_attribute = false;
+            continue;
+        }
+        first_attribute_start = None;
+        if kind != "token_tree" {
+            collect_inline_test_ranges_rec(&child, ranges);
+        }
     }
 }
 
@@ -550,9 +558,11 @@ pub fn has_top_level_logical_and(macro_node: &AstNode<'_>) -> bool {
         return true;
     }
 
-    meaningful.len() == 1
-        && meaningful[0].kind() == "token_tree"
-        && meaningful[0].children().any(|child| child.kind() == "&&")
+    matches!(
+        meaningful.as_slice(),
+        [only_child] if only_child.kind() == "token_tree"
+            && only_child.children().any(|child| child.kind() == "&&")
+    )
 }
 
 /// Extracts the argument nodes inside a Rust `macro_invocation`'s `token_tree`.
@@ -723,98 +733,354 @@ pub(super) fn function_name_and_is_top_level<'a>(
     Some((name, is_top_level))
 }
 
-/// Collects all CST nodes in `file` that introduce a second path to an item:
-/// - `#[macro_export]` attributes (`attribute_item`)
-/// - Visible `use` declarations (`pub use`, `pub(crate) use`, etc.), except `pub(crate) use <name>;`
-///   for a `macro_rules! <name>` defined in the same `file`.
-#[must_use]
-pub fn collect_second_path_declarations(file: &ParsedFile) -> Vec<AstNode<'_>> {
-    let defined_macros: std::collections::HashSet<String> = file
-        .grep
-        .root()
-        .dfs()
-        .filter(|node| node.kind() == "macro_definition")
-        .filter_map(|node| Some(node.field("name")?.text().into_owned()))
-        .collect();
+/// Visibility and name of a top-level external `mod <name>;` declaration in a Rust file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalModDeclaration {
+    /// Module identifier (e.g. `"rust"` in `pub mod rust;`).
+    pub name: String,
+    /// Full trimmed source text of the declaration (e.g. `"pub mod rust;"`).
+    pub declaration_text: String,
+    /// True when the declaration has no `visibility_modifier` (`mod child;`).
+    pub is_private: bool,
+}
 
-    file.grep
-        .root()
-        .dfs()
-        .filter(|node| match node.kind().as_ref() {
-            "attribute_item" => attribute_terminal_name(node)
-                .is_some_and(|terminal| terminal.text() == "macro_export"),
-            "use_declaration" => {
-                let Some(visibility) = node
-                    .children()
-                    .find(|child| child.kind() == "visibility_modifier")
-                else {
-                    return false;
-                };
-                let is_own_macro_path = visibility.text().trim() == "pub(crate)"
-                    && node.field("argument").is_some_and(|argument| {
-                        argument.kind() == "identifier"
-                            && defined_macros.contains(argument.text().as_ref())
-                    });
-                !is_own_macro_path
+/// A referenced path in production Rust code (from a `use` tree or inline qualified path).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RustPathReference {
+    /// 1-indexed starting line number of the reference or enclosing `use` declaration.
+    pub line: usize,
+    /// Raw syntactic path segments joined by `::` (e.g. `"crate::code_lint::ast::ParsedFile"`,
+    /// `"super::AstNode"`, `"self::rust::collect_bindings"`, `"ast_grep_core::Node"`).
+    pub raw_path: String,
+    /// Trimmed source text of the enclosing `use` declaration or inline path node for diagnostics.
+    pub statement_text: String,
+}
+
+/// A visible `use` declaration (`pub use ...`, `pub(crate) use ...`) in production Rust code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisibleUseDeclaration {
+    /// 1-indexed starting line number.
+    pub line: usize,
+    /// Full trimmed source text (e.g. `"pub use self::child::Item;"`).
+    pub declaration_text: String,
+    /// Expanded target paths imported by this `use` tree (e.g. `["self::child::Item"]`).
+    pub target_paths: Vec<String>,
+}
+
+/// Structural and dependency summary of the production code in a Rust source file,
+/// extracted in a single CST pass while skipping `#[cfg(test)]` and `#[test]` subtrees.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RustFileSummary {
+    /// Arguments of all `architecture_component!(...)` macro invocations in production code.
+    pub architecture_components: Vec<String>,
+    /// Top-level external `mod <name>;` declarations (`mod foo;`, `pub mod foo;`).
+    pub external_mods: Vec<ExternalModDeclaration>,
+    /// `(line, item_text)` of top-level production items that are neither external `mod` declarations
+    /// nor `macro_rules!` definitions.
+    pub non_namespace_items: Vec<(usize, String)>,
+    /// `(line, item_text)` of top-level production `macro_rules!` definitions (`macro_definition`).
+    pub macro_definitions: Vec<(usize, String)>,
+    /// All `#[macro_export]` attribute texts in production code.
+    pub macro_exports: Vec<String>,
+    /// Visible `use` declarations (`pub use`, `pub(crate) use`, etc.) excluding `pub(crate) use <local_macro>;`.
+    pub visible_uses: Vec<VisibleUseDeclaration>,
+    /// All module/item paths referenced in production code (`use` trees, inline qualified paths,
+    /// and `::`-qualified paths inside macro `token_tree` arguments).
+    pub referenced_paths: Vec<RustPathReference>,
+}
+
+fn compact_path_text(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
+}
+
+fn join_use_prefix(prefix: &str, segment: &str) -> String {
+    let clean = compact_path_text(segment);
+    if prefix.is_empty() {
+        clean
+    } else if clean == "self" {
+        prefix.to_string()
+    } else if let Some(rest) = clean.strip_prefix("self::") {
+        format!("{prefix}::{rest}")
+    } else {
+        format!("{prefix}::{clean}")
+    }
+}
+
+fn expand_use_tree(node: &RawNode<'_>, prefix: &str, out: &mut Vec<String>) {
+    match node.kind().as_ref() {
+        "use_declaration" => {
+            if let Some(argument) = node.field("argument") {
+                expand_use_tree(&argument, prefix, out);
             }
-            _ => false,
-        })
-        .map(AstNode::from_raw)
-        .collect()
+        }
+        "identifier" | "type_identifier" | "crate" | "self" | "super" => {
+            let text = node.text();
+            if text != "_" {
+                out.push(join_use_prefix(prefix, text.as_ref()));
+            }
+        }
+        "scoped_identifier" => {
+            out.push(join_use_prefix(prefix, node.text().as_ref()));
+        }
+        "use_as_clause" => {
+            if let Some(path) = node.field("path") {
+                expand_use_tree(&path, prefix, out);
+            }
+        }
+        "use_wildcard" => {
+            if let Some(path_child) = node.children().find(|child| {
+                let kind = child.kind();
+                kind != "::" && kind != "*" && !is_comment_kind(kind.as_ref())
+            }) {
+                expand_use_tree(&path_child, prefix, out);
+            } else if !prefix.is_empty() {
+                out.push(prefix.to_string());
+            }
+        }
+        "scoped_use_list" => {
+            let next_prefix = node.field("path").map_or_else(
+                || prefix.to_string(),
+                |path| join_use_prefix(prefix, path.text().as_ref()),
+            );
+            if let Some(list) = node.field("list") {
+                expand_use_tree(&list, &next_prefix, out);
+            }
+        }
+        "use_list" => {
+            for child in node.children() {
+                let kind = child.kind();
+                if kind != "{" && kind != "}" && kind != "," && !is_comment_kind(kind.as_ref()) {
+                    expand_use_tree(&child, prefix, out);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
-/// Collects all `use_declaration` CST nodes in `file` that import via a relative `super` path segment.
-#[must_use]
-pub fn collect_relative_use_declarations(file: &ParsedFile) -> Vec<AstNode<'_>> {
-    file.grep
-        .root()
-        .dfs()
-        .filter(|node| {
-            node.kind() == "use_declaration" && node.dfs().any(|child| child.kind() == "super")
-        })
-        .map(AstNode::from_raw)
-        .collect()
+fn is_pure_path_segment(node: &RawNode<'_>) -> bool {
+    matches!(
+        node.kind().as_ref(),
+        "identifier" | "type_identifier" | "crate" | "self" | "super"
+    ) || is_pure_scoped_path(node)
 }
 
-/// Collects all top-level external `mod <name>;` declarations (excluding inline `mod <name> { ... }` blocks).
-#[must_use]
-pub fn collect_external_mod_declarations(file: &ParsedFile) -> Vec<AstNode<'_>> {
-    file.grep
-        .root()
-        .children()
-        .filter(|child| child.kind() == "mod_item" && child.field("body").is_none())
-        .map(AstNode::from_raw)
-        .collect()
+fn is_pure_scoped_path(node: &RawNode<'_>) -> bool {
+    matches!(
+        node.kind().as_ref(),
+        "scoped_identifier" | "scoped_type_identifier"
+    ) && node
+        .field("path")
+        .is_some_and(|path| is_pure_path_segment(&path))
 }
 
-/// Collects all top-level CST items in `file` that are not external `mod <name>;` declarations
-/// (or `macro_rules!` definitions when `allow_macro_definitions` is true).
-#[must_use]
-pub fn collect_non_namespace_items(
-    file: &ParsedFile,
-    allow_macro_definitions: bool,
-) -> Vec<AstNode<'_>> {
-    file.grep
-        .root()
-        .children()
-        .filter(|child| {
-            let kind = child.kind();
-            if child.is_extra()
-                || is_comment_kind(kind.as_ref())
-                || matches!(kind.as_ref(), "attribute_item" | "inner_attribute_item")
+fn is_token_path_segment(kind: &str) -> bool {
+    matches!(
+        kind,
+        "identifier" | "type_identifier" | "crate" | "self" | "super"
+    )
+}
+
+fn collect_token_tree_paths(
+    token_tree: &RawNode<'_>,
+    statement_text: &str,
+    out: &mut Vec<RustPathReference>,
+) {
+    let children: Vec<RawNode<'_>> = token_tree.children().collect();
+    let mut index = 0;
+    while index < children.len() {
+        let current = &children[index];
+        if current.kind() == "token_tree" {
+            collect_token_tree_paths(current, statement_text, out);
+            index += 1;
+            continue;
+        }
+        if is_token_path_segment(current.kind().as_ref())
+            && index + 2 < children.len()
+            && children[index + 1].kind() == "::"
+            && is_token_path_segment(children[index + 2].kind().as_ref())
+        {
+            let line = current.start_pos().line() + 1;
+            let mut segments = vec![current.text().trim().to_string()];
+            index += 1;
+            while index + 1 < children.len()
+                && children[index].kind() == "::"
+                && is_token_path_segment(children[index + 1].kind().as_ref())
             {
-                return false;
+                segments.push(children[index + 1].text().trim().to_string());
+                index += 2;
             }
-            if kind == "mod_item" && child.field("body").is_none() {
-                return false;
+            out.push(RustPathReference {
+                line,
+                raw_path: segments.join("::"),
+                statement_text: statement_text.to_string(),
+            });
+            continue;
+        }
+        index += 1;
+    }
+}
+
+fn summarize_rust_node(
+    node: &RawNode<'_>,
+    test_ranges: &[std::ops::Range<usize>],
+    defined_macros: &std::collections::HashSet<String>,
+    summary: &mut RustFileSummary,
+) {
+    let start_offset = node.range().start;
+    if test_ranges
+        .iter()
+        .any(|range| range.contains(&start_offset))
+    {
+        return;
+    }
+
+    let kind = node.kind();
+    match kind.as_ref() {
+        "attribute_item" => {
+            if attribute_terminal_name(node)
+                .is_some_and(|terminal| terminal.text() == "macro_export")
+            {
+                summary.macro_exports.push("#[macro_export]".to_string());
             }
-            if allow_macro_definitions && kind == "macro_definition" {
-                return false;
+        }
+        "use_declaration" => {
+            let line = node.start_pos().line() + 1;
+            let declaration_text = node.text().trim().to_string();
+            let mut target_paths = Vec::new();
+            expand_use_tree(node, "", &mut target_paths);
+            for raw_path in &target_paths {
+                summary.referenced_paths.push(RustPathReference {
+                    line,
+                    raw_path: raw_path.clone(),
+                    statement_text: declaration_text.clone(),
+                });
             }
-            true
-        })
-        .map(AstNode::from_raw)
-        .collect()
+            if let Some(visibility) = node
+                .children()
+                .find(|child| child.kind() == "visibility_modifier")
+            {
+                let is_own_macro_path = visibility.text().trim() == "pub(crate)"
+                    && matches!(
+                        target_paths.as_slice(),
+                        [target] if defined_macros.contains(target.as_str())
+                    );
+                if !is_own_macro_path {
+                    summary.visible_uses.push(VisibleUseDeclaration {
+                        line,
+                        declaration_text,
+                        target_paths,
+                    });
+                }
+            }
+            return;
+        }
+        "macro_definition" => {
+            return;
+        }
+        "macro_invocation" => {
+            if macro_terminal_name_raw(node) == "architecture_component" {
+                let component_argument: String =
+                    extract_macro_arguments(&AstNode::from_raw(node.clone()))
+                        .into_iter()
+                        .map(|argument| argument.text().into_owned())
+                        .collect();
+                summary.architecture_components.push(component_argument);
+            }
+            if let Some(token_tree) = node.children().find(|child| child.kind() == "token_tree") {
+                let statement_text = node.text().trim().to_string();
+                collect_token_tree_paths(
+                    &token_tree,
+                    &statement_text,
+                    &mut summary.referenced_paths,
+                );
+            }
+        }
+        "scoped_identifier" | "scoped_type_identifier" => {
+            if is_pure_scoped_path(node) {
+                if node
+                    .parent()
+                    .is_none_or(|parent| !is_pure_scoped_path(&parent))
+                {
+                    summary.referenced_paths.push(RustPathReference {
+                        line: node.start_pos().line() + 1,
+                        raw_path: compact_path_text(node.text().as_ref()),
+                        statement_text: node.text().trim().to_string(),
+                    });
+                }
+                return;
+            }
+        }
+        _ => {}
+    }
+
+    for child in node.children() {
+        if child.kind() != "token_tree" {
+            summarize_rust_node(&child, test_ranges, defined_macros, summary);
+        }
+    }
+}
+
+/// Extracts a complete structural and dependency summary of the production code in `file`
+/// in a single CST pass, skipping `#[cfg(test)]` and `#[test]` items.
+#[must_use]
+pub fn summarize_rust_file(file: &ParsedFile) -> RustFileSummary {
+    let root = file.grep.root();
+    let test_ranges = collect_inline_test_ranges(file);
+    let mut summary = RustFileSummary::default();
+    let mut defined_macros = std::collections::HashSet::new();
+
+    for child in root.children() {
+        let start_offset = child.range().start;
+        if test_ranges
+            .iter()
+            .any(|range| range.contains(&start_offset))
+        {
+            continue;
+        }
+        let kind = child.kind();
+        if child.is_extra()
+            || is_comment_kind(kind.as_ref())
+            || matches!(kind.as_ref(), "attribute_item" | "inner_attribute_item")
+        {
+            continue;
+        }
+        if kind == "mod_item" && child.field("body").is_none() {
+            if let Some(name_node) = child.field("name") {
+                let is_private = !child
+                    .children()
+                    .any(|grandchild| grandchild.kind() == "visibility_modifier");
+                summary.external_mods.push(ExternalModDeclaration {
+                    name: name_node.text().trim().to_string(),
+                    declaration_text: child.text().trim().to_string(),
+                    is_private,
+                });
+            }
+            continue;
+        }
+        if kind == "macro_definition" {
+            if let Some(name_node) = child.field("name") {
+                defined_macros.insert(name_node.text().into_owned());
+            }
+            summary.macro_definitions.push((
+                child.start_pos().line() + 1,
+                child.text().trim().to_string(),
+            ));
+            continue;
+        }
+        summary.non_namespace_items.push((
+            child.start_pos().line() + 1,
+            child.text().trim().to_string(),
+        ));
+    }
+
+    for child in root.children() {
+        summarize_rust_node(&child, &test_ranges, &defined_macros, &mut summary);
+    }
+
+    summary
 }
 
 #[cfg(test)]
@@ -912,5 +1178,82 @@ mod tests {
             .map(|node| node.text().to_string())
             .collect();
         assert_eq!(names, vec!["main", "x"]);
+    }
+
+    #[test]
+    fn test_summarize_rust_file_extracts_production_structure_and_paths() {
+        let source = indoc::indoc! {r"
+            architecture_component!(CodeSyntaxAdapters);
+
+            mod detail;
+            pub mod public_child;
+
+            macro_rules! local_mac {
+                () => {};
+            }
+            pub(crate) use local_mac;
+
+            pub use self::detail::Exported;
+            use crate::core::{self, Config as Cfg, tags::*};
+
+            #[cfg(test)]
+            fn ignored_test_helper() {
+                use crate::forbidden::in_test;
+                let _ = super::ignored::call();
+            }
+
+            pub fn run(input: super::ParentType) {
+                let _ = crate::a::b::Foo::<crate::c::d::Bar>::baz();
+                assert!(super::detail::check(input));
+            }
+        "};
+        let file = ParsedFile::rust(source);
+        let summary = summarize_rust_file(&file);
+        let raw_paths: Vec<&str> = summary
+            .referenced_paths
+            .iter()
+            .map(|reference| reference.raw_path.as_str())
+            .collect();
+
+        assert_eq!(
+            (summary.architecture_components, summary.visible_uses),
+            (
+                vec!["CodeSyntaxAdapters".to_string()],
+                vec![VisibleUseDeclaration {
+                    line: 11,
+                    declaration_text: "pub use self::detail::Exported;".to_string(),
+                    target_paths: vec!["self::detail::Exported".to_string()],
+                }],
+            )
+        );
+        assert_eq!(
+            summary.external_mods,
+            vec![
+                ExternalModDeclaration {
+                    name: "detail".to_string(),
+                    declaration_text: "mod detail;".to_string(),
+                    is_private: true,
+                },
+                ExternalModDeclaration {
+                    name: "public_child".to_string(),
+                    declaration_text: "pub mod public_child;".to_string(),
+                    is_private: false,
+                },
+            ]
+        );
+        assert_eq!(
+            raw_paths,
+            vec![
+                "local_mac",
+                "self::detail::Exported",
+                "crate::core",
+                "crate::core::Config",
+                "crate::core::tags",
+                "super::ParentType",
+                "crate::a::b::Foo",
+                "crate::c::d::Bar",
+                "super::detail::check",
+            ]
+        );
     }
 }

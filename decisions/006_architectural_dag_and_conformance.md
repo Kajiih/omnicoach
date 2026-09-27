@@ -89,14 +89,16 @@ define_architecture! {
 }
 ```
 
-### 2.4. Automatic Discovery, Transitive Reachability & Universal Sibling Isolation
-- **Automatic Module Discovery**: Component roots are discovered directly from the `architecture_component!(...)` declarations in `src/` via `omni::code_lint::ast` CST inspection, and child modules resolve their component by climbing their module path to the nearest declared ancestor.
-- **Transitive Reachability ($\to^+$)**: An allowed import is computed via reachability on the DAG. For example, `CodeLintRules` depends directly on `[CodeRuleContracts, CodeSuppressionEngine]`, transitively granting access to `CodeSemanticEngines`, `CodeSyntaxAdapters`, `CoreVocabulary`, and `FoundationPrimitives` without manual configuration.
+### 2.4. Native Single-Pass CST Conformance Engine & Idiomatic Module Policies
+- **Single-Pass `RustFileSummary` Extraction (`src/code_lint/ast/rust.rs`)**: All `.rs` files in `src/` are parsed once via `ParsedFile::rust` and summarized by `summarize_rust_file` into plain `Send + Sync` value structs (`RustFileSummary`) cached in a `static LazyLock` in `tests/architecture_conformance.rs`.
+- **Automatic Module Discovery**: Component roots are discovered directly from the `architecture_component!(...)` declarations in `src/`, and child modules resolve their component by climbing their module path to the nearest declared ancestor. Unannotated router modules (`src/lib.rs`, `src/code_lint.rs`, `src/command_lint.rs`) are verified both topologically (must be an ancestor of at least one declared component root) and structurally via the CST (may contain only external `mod <name>;` declarations, plus `macro_rules!` in `src/lib.rs`).
+- **Complete Path Canonicalization & Transitive Reachability ($\to^+$)**: Every referenced path in production code—across expanded `use` trees, inline expressions/types (`scoped_identifier` / `scoped_type_identifier`), turbofish type arguments, and macro `token_tree` arguments—is normalized (`crate::`, `omni::`, `self::`, `super::`, and local child `mod` prefixes) to a canonical module path and verified against the transitive reachability of `ARCHITECTURE_GRAPH`.
 - **Universal Sibling Subtree Isolation**: Every multi-unit component enforces a strict hub-and-spoke internal topology:
   - The component root (`code_lint::ast`, `code_lint::semantic`, `code_lint::rules`, `command_lint::rules`) owns shared component contracts and coordinates its children.
   - Direct child subtrees under a component root (as well as multi-root siblings in `FoundationPrimitives` and `ApplicationBinaries`) may import from their component root, but **may never import sideways from sibling units**.
-- **Domain Hermeticity**: `code_lint` and `command_lint` have disjoint graph paths. A command rule attempting to import code ASTs or vice versa is immediately blocked.
-- **Structural Production vs. Test Segregation**: Production code is verified by blanking out inline `#[cfg(test)]` and `#[test]` CST byte spans (`collect_inline_test_ranges`) before AST validation, preserving production items that appear below a `#[cfg(test)]` item and preventing `TestingHarness` from leaking into production logic.
+- **Idiomatic Intra-Component Relative Paths (`super::` / `self::`)**: Relative paths (`super::` and `self::`) are permitted in production code when their resolved canonical target stays within the enclosing file's `ArchitectureComponent` root subtree (e.g. `code_lint::ast::rust` referencing `super::AstNode`). Cross-component references must use canonical `crate::` paths.
+- **Idiomatic Private-Child Facade Re-Exports (`pub use`)**: Every item maintains a single public path. A module may re-export items (`pub use` / `pub(crate) use`) when all targets come from a **private direct child submodule** (`mod child; pub use self::child::Item;`), enabling clean component facades without creating duplicate public paths or smuggling cross-component symbols.
+- **Structural Production vs. Test Segregation**: `summarize_rust_file` skips inline `#[cfg(test)]` and `#[test]` CST subtrees (including their preceding attributes) directly during traversal, preserving production items that appear below a `#[cfg(test)]` item and preventing `TestingHarness` from leaking into production logic.
 
 ---
 
@@ -109,14 +111,14 @@ Tests are split by what they check: the graph definition itself is unit-tested n
 3. `test_all_architecture_components_have_descriptions`: Ensures every `ArchitectureComponent` variant has a non-empty doc comment accessible via `strum::EnumMessage`.
 
 `tests/architecture_conformance.rs` enforces conformance of the source tree:
-1. `test_all_source_files_declare_architecture_component`: Ensures every file in `src/` either belongs to a valid component subtree (with no redundant child declarations) or is a CST-verified pure namespace router (`mod`-only items), and every component variant is backed by at least one root file.
+1. `test_all_source_files_declare_architecture_component`: Ensures every file in `src/` either belongs to a valid component subtree (with no redundant child declarations) or is a topologically valid, CST-verified pure namespace router (`mod`-only items), and every component variant is backed by at least one root file.
 2. `test_architecture_conformance`: Verifies all source files comply with the DAG reachability and universal sibling subtree isolation rules.
-3. `test_architecture_rules_detect_forbidden_dependencies`: Guards against vacuous conformance passes by injecting upward, cross-domain, direct-child sibling, and multi-root sibling dependencies.
+3. `test_architecture_rules_detect_forbidden_dependencies`: Guards against vacuous conformance passes by injecting upward, cross-domain, turbofish, macro-argument, direct-child sibling (via `super::`), and multi-root sibling dependencies.
 4. `test_subtree_inheritance_resolves_leaf_modules_and_rejects_namespace_routers`: Verifies ancestor component inheritance for leaf files and `None` resolution for pure namespace routers.
-5. `test_namespace_validator_accepts_pure_routers_and_rejects_code_or_imports`: Guards against production items, imports, or inline `mod` blocks sneaking into namespace router files.
-6. `test_strip_inline_tests_preserves_production_code_after_conditional_test_item`: Guards against mid-file `#[cfg(test)]` truncation.
+5. `test_namespace_validator_accepts_pure_routers_and_rejects_code_or_orphan_routers`: Guards against production items, imports, or orphan namespace routers sneaking into `src/`.
+6. `test_summary_preserves_production_code_after_conditional_test_item`: Guards against mid-file `#[cfg(test)]` truncation.
 7. `test_ast_grep_is_encapsulated`: Ensures only designated adapter modules handle `ast_grep_core`.
-8. `test_items_have_a_single_path`: Ensures no item is given multiple visibility paths (bans `pub use` re-exports and `#[macro_export]` outside `src/lib.rs`).
-9. `test_no_relative_imports_in_production_code`: Enforces absolute `crate::` canonical paths across all production code.
-10. `test_second_path_declarations_are_detected`: Guards against vacuous second-path passes and false positives in comments/strings.
-11. `test_structural_extractors_ignore_strings_and_catch_after_conditional_test`: Guards against false positives in string literals/comments and verifies extraction after `#[cfg(test)]` items.
+8. `test_items_have_a_single_path`: Enforces single public paths while permitting private-child facade re-exports (`mod child; pub use self::child::Item;`).
+9. `test_second_path_detection_allows_private_child_facades_and_rejects_duplicates`: Guards against vacuous second-path passes, duplicate public paths (`pub mod` + `pub use`), and cross-component re-exports.
+10. `test_relative_paths_stay_within_component`: Enforces that `super::` and `self::` stay within their enclosing component root subtree while cross-component references use `crate::`.
+11. `test_relative_path_boundary_allows_intra_component_and_rejects_cross_component`: Guards against vacuous relative-path passes and false positives in comments/strings/tests.
