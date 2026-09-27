@@ -1,6 +1,6 @@
 //! AST helper predicates and structural extractors for Python.
 
-use crate::code_lint::ast::{AstNode, ParsedFile, RawNode};
+use crate::code_lint::ast::{AstNode, ParsedFile, PositionalRead, RawNode, ScopePositionalReads};
 
 /// Returns true for Python node kinds that hold statements as direct children.
 ///
@@ -1105,6 +1105,208 @@ pub fn find_unwrapped_multiline_strings(
         .collect()
 }
 
+/// Returns the value of a Python decimal `integer` literal (not `0x1`, `1_000`, ...).
+fn decimal_literal(node: &RawNode<'_>) -> Option<i64> {
+    let text = node.text();
+    if node.kind() != "integer" || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+/// Returns the position read by a Python `subscript` index: a decimal literal, or its negation
+/// for end-relative reads (`xs[-1]`).
+fn literal_position(index: &RawNode<'_>) -> Option<i64> {
+    if index.kind() == "unary_operator" && index.field("operator")?.text() == "-" {
+        return decimal_literal(&index.field("argument")?).map(std::ops::Neg::neg);
+    }
+    decimal_literal(index)
+}
+
+/// Returns true if `receiver` names a stable value: a name, attribute or subscript chain with no
+/// call inside, so that identical text means the same value.
+fn is_stable_receiver(receiver: &RawNode<'_>) -> bool {
+    matches!(
+        receiver.kind().as_ref(),
+        "identifier" | "attribute" | "subscript"
+    ) && !receiver.dfs().any(|node| node.kind() == "call")
+}
+
+/// Node kinds an assignment or deletion target can be nested in (`a[0], b = ...`).
+const TARGET_CONTAINER_KINDS: &[&str] = &[
+    "pattern_list",
+    "tuple_pattern",
+    "list_pattern",
+    "expression_list",
+    "parenthesized_expression",
+    "list_splat_pattern",
+];
+
+/// Methods that mutate a `list`, `dict` or `set` in place.
+const MUTATING_METHODS: &[&str] = &[
+    "append",
+    "extend",
+    "insert",
+    "pop",
+    "remove",
+    "clear",
+    "sort",
+    "reverse",
+    "update",
+    "setdefault",
+    "popitem",
+    "add",
+    "discard",
+];
+
+/// Returns true if `node` is assigned to, augmented, deleted, or bound by a `for` loop.
+fn is_write_target(node: &RawNode<'_>) -> bool {
+    let mut target = node.clone();
+    while let Some(parent) = target.parent() {
+        match parent.kind().as_ref() {
+            kind if TARGET_CONTAINER_KINDS.contains(&kind) => target = parent,
+            "delete_statement" => return true,
+            "assignment" | "augmented_assignment" | "for_statement" | "for_in_clause" => {
+                return parent
+                    .field("left")
+                    .is_some_and(|left| left.range() == target.range());
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Returns the position a `subscript` reads, if its index is a single literal.
+fn literal_index(subscript: &RawNode<'_>) -> Option<i64> {
+    let mut indices = subscript.field_children("subscript");
+    match (indices.next(), indices.next()) {
+        (Some(index), None) => literal_position(&index),
+        _ => None,
+    }
+}
+
+/// Records a `subscript` as a positional read, or its receiver as an exempt receiver when it
+/// is written to or indexed by anything but a single literal.
+fn record_subscript<'a>(subscript: &RawNode<'a>, scope: &mut ScopePositionalReads<'a>) {
+    let Some(receiver) = subscript.field("value") else {
+        return;
+    };
+    match literal_index(subscript) {
+        Some(position) if !is_write_target(subscript) => {
+            if is_stable_receiver(&receiver) {
+                scope.reads.push(PositionalRead {
+                    node: AstNode::from_raw(subscript.clone()),
+                    receiver: receiver.text().into_owned(),
+                    position,
+                });
+            }
+        }
+        _ => {
+            scope.exempt_receivers.insert(receiver.text().into_owned());
+        }
+    }
+}
+
+/// Builtins that iterate or size their positional arguments (`len(xs)`, `enumerate(xs)`,
+/// `zip(xs, ys)`).
+const COLLECTION_BUILTINS: &[&str] = &["len", "enumerate", "zip", "reversed", "sorted"];
+
+/// Returns the collections a `call` iterates, sizes (`len(xs)`, `zip(xs, ys)`) or mutates
+/// (`xs.append(...)`).
+fn called_collections<'a>(call: &RawNode<'a>) -> Vec<RawNode<'a>> {
+    let Some(function) = call.field("function") else {
+        return Vec::new();
+    };
+    match function.kind().as_ref() {
+        "identifier" if COLLECTION_BUILTINS.contains(&function.text().as_ref()) => {
+            call.field("arguments").map_or_else(Vec::new, |arguments| {
+                arguments
+                    .children()
+                    .filter(|child| {
+                        child.is_named() && !child.is_extra() && child.kind() != "keyword_argument"
+                    })
+                    .collect()
+            })
+        }
+        "attribute" => {
+            let is_mutating = function
+                .field("attribute")
+                .is_some_and(|method| MUTATING_METHODS.contains(&method.text().as_ref()));
+            if is_mutating {
+                function.field("object").into_iter().collect()
+            } else {
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Returns the collections a node iterates (`for x in xs`), sizes or mutates.
+fn collection_uses<'a>(node: &RawNode<'a>) -> Vec<RawNode<'a>> {
+    match node.kind().as_ref() {
+        "for_statement" | "for_in_clause" => node.field("right").into_iter().collect(),
+        "call" => called_collections(node),
+        _ => Vec::new(),
+    }
+}
+
+/// Walks `node`, recording reads and collection uses into `scope` (none in class bodies) and
+/// pushing each finished function scope to `out`. Lambdas are skipped.
+fn collect_positional_reads_rec<'a>(
+    node: &RawNode<'a>,
+    mut scope: Option<&mut ScopePositionalReads<'a>>,
+    out: &mut Vec<ScopePositionalReads<'a>>,
+) {
+    match node.kind().as_ref() {
+        "lambda" => return,
+        "function_definition" => {
+            // Default values and annotations are evaluated in the enclosing scope.
+            let body = node.field("body");
+            for child in node.children() {
+                if body
+                    .as_ref()
+                    .is_some_and(|body| body.range() == child.range())
+                {
+                    let mut function_scope = ScopePositionalReads::default();
+                    collect_positional_reads_rec(&child, Some(&mut function_scope), out);
+                    out.push(function_scope);
+                } else {
+                    collect_positional_reads_rec(&child, scope.as_deref_mut(), out);
+                }
+            }
+            return;
+        }
+        "class_definition" => scope = None,
+        _ => {}
+    }
+    if let Some(scope) = scope.as_deref_mut() {
+        if node.kind() == "subscript" {
+            record_subscript(node, scope);
+        } else {
+            for collection in collection_uses(node) {
+                scope
+                    .exempt_receivers
+                    .insert(collection.text().into_owned());
+            }
+        }
+    }
+    for child in node.children() {
+        collect_positional_reads_rec(&child, scope.as_deref_mut(), out);
+    }
+}
+
+/// Collects Python positional reads grouped by scope (see [`super::collect_positional_reads`]).
+#[must_use]
+pub fn collect_positional_reads(file: &ParsedFile) -> Vec<ScopePositionalReads<'_>> {
+    let mut module_scope = ScopePositionalReads::default();
+    let mut out = Vec::new();
+    collect_positional_reads_rec(&file.grep.root(), Some(&mut module_scope), &mut out);
+    out.push(module_scope);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1390,5 +1592,34 @@ mod tests {
         assert_eq!(params[1].type_text.as_deref(), Some("int"));
         assert_eq!(params[2].name, "b");
         assert_eq!(params[2].type_text.as_deref(), Some("str"));
+    }
+
+    /// Module-level reads form their own scope. `rule_test!` cannot cover this: repeating a
+    /// fail case in one file merges both copies into the same module scope.
+    #[test]
+    fn test_collect_positional_reads_module_scope() {
+        let source = indoc::indoc! {r"
+            src, dst = sys.argv[1], sys.argv[2]
+
+            def main(argv):
+                return argv[1]
+        "};
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let reads_by_scope: Vec<Vec<(String, i64)>> = collect_positional_reads(&file)
+            .into_iter()
+            .map(|scope| {
+                scope
+                    .reads
+                    .into_iter()
+                    .map(|read| (read.receiver, read.position))
+                    .collect()
+            })
+            .collect();
+
+        let module_reads = vec![("sys.argv".to_string(), 1), ("sys.argv".to_string(), 2)];
+        assert!(
+            reads_by_scope.contains(&module_reads),
+            "no module scope holding exactly the top-level reads: {reads_by_scope:?}"
+        );
     }
 }

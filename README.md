@@ -129,6 +129,14 @@ All rules support the `mode = "ban" | "require-explanation"` configuration. Belo
 * **`no-logging-error-in-except`**: Bans using `logging.error` inside Python `except` blocks (suggests `logging.exception` to preserve stack traces). *(Python)*
 * **`no-uncommented-suppress`**: Enforces that `contextlib.suppress(...)` statements document why swallowing the exception is benign (defaults to `mode = "require-explanation"`). *(Python)*
 
+### Code Style
+* **`prefer-tuple-unpacking`**: Flags a value read at several literal positions in one function or the Python module top level (`p[0]` and `p[1]`, `xs[0]` and `xs[-1]`, `span.0` and `span.1`) and suggests unpacking it once (`x, y = p`, `let (start, end) = span;`). Receivers containing a call are ignored. A receiver is exempt for the whole scope when it is written to, sliced, `&mut`-borrowed (Rust), or used as a collection (Python: iterated, passed to `len()` / `enumerate()` / `zip()`, mutated, indexed by a variable). Rust macro arguments are not inspected. *(Python, Rust)*
+  ```toml
+  [rules.prefer-tuple-unpacking]
+  min = 2 # default: 2, distinct positions read before flagging
+  max = 2 # default: 2, `_` placeholders the unpacking may need (`row[0]`, `row[3]` → `a, _, _, d, *_ = row`)
+  ```
+
 ### VCS & Workflow Commands
 * **`no-edits-on-described-commits`**: Prohibits running `jj edit` on commits that already have descriptions to preserve review stability. *(JJ)*
 

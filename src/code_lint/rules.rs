@@ -19,6 +19,7 @@ pub mod no_uncommented_suppress;
 pub mod no_unstructured_task_creation;
 pub mod prefer_dedent_for_multiline_strings;
 pub mod prefer_timedelta_over_seconds;
+pub mod prefer_tuple_unpacking;
 pub mod single_letter_variable_name;
 
 /// Static list of all code linter rules.
@@ -43,6 +44,7 @@ pub const CODE_RULES: &[&dyn crate::code_lint::rule::CodeRule] = &[
     &no_env_in_functions::NoEnvInFunctions,
     &enforce_frozen_slots_dataclass::EnforceFrozenSlotsDataclass,
     &prefer_dedent_for_multiline_strings::PreferDedentForMultilineStrings,
+    &prefer_tuple_unpacking::PreferTupleUnpacking,
     &crate::code_lint::suppression::MissingSuppressionReason,
     &crate::code_lint::suppression::UnusedSuppression,
     &crate::code_lint::suppression::UnknownSuppressionRule,

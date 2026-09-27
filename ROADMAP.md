@@ -46,6 +46,36 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
 - **Escaping Nested Scopes (`no-env-in-functions`)**:
   - *Current*: The boundary exemption (`main`, `from_env`, ...) is inherited by every scope declared inside it, which is correct for nested functions and closures but also exempts a class declared inside a boundary whose methods later escape (returned, registered as a callback).
   - *Target*: Treat a `class` / `impl` declared inside a boundary as a barrier that resets the exemption, once a real-world occurrence justifies the added language-specific complexity.
+- **Rule-Specific Threshold Aliases (`ThresholdConfig`)**:
+  - *Current*: The `min_args` serde alias on `ThresholdConfig::min` (`src/core.rs`), added for `no-identical-positional-types`, is accepted by every threshold rule (`[rules.prefer-tuple-unpacking] min_args = 3` silently sets the position count).
+  - *Target*: Scope the alias to `no-identical-positional-types` (or drop it), so each rule only accepts keys that mean something for it.
+
+## Candidate Rules
+
+Source: Python Tip of the Week #069 "Prefer constants over wild values" (Python tips #069) and the legacy linter `IndexingInsteadOfUnpackingRule` (`scratch/legacy_reference/legacy_lints.py`). Candidates to prioritize, not commitments.
+
+- **`prefer-tuple-unpacking`** (Python, Rust — tip `#unpack`) — **implemented**, design in `docs/dev/prefer_tuple_unpacking/`. Follow-ups:
+  - *Named record for sparse positional access*: reads needing more `_` placeholders than `prefer-tuple-unpacking` allows (`row[0]`, `row[7]`) → `NamedTuple` / dataclass / struct (or `csv.DictReader` for CSV rows).
+  - *Tuple-returning functions*: functions returning tuples of ≥3 elements → `NamedTuple` / dataclass / struct.
+  - *Multi-field tuple structs* (Rust): tuple structs with ≥2 fields → named-field struct (tuple structs reserved for newtypes).
+  - *`re.Match` group indexing* (Python): `m[1]`, `m[2]` → `a, b = m.groups()`.
+  - *Rust slice patterns*: `arr[0]`, `arr[1]` on fixed-size arrays → `let [a, b] = arr;`.
+  - *Macro arguments*: reads inside expression-like macros (`format!`, `assert_eq!`, `vec![]`) are not inspected because tree-sitter leaves them as flat `token_tree` tokens (pass case `known_gap_macro_arguments_not_inspected`). Supporting them needs a multi-token span in `AstNode` (`cmd.span.0` is several tokens, not one node) or re-parsing the arguments as expressions.
+  - *Receiver rebinding*: `a = p[0]; p = nxt(); b = p[1]` groups two different values as one receiver (both languages). Needs binding awareness (split the group at each rebinding).
+  - *Shadowing*: a closure parameter (`|t| t.1`) or comprehension variable reusing the receiver's name is grouped with the outer receiver (both languages).
+  - *Receiver normalization*: receivers are grouped by source text, so `(t).0` vs `t.0`, `len((xs))` vs `len(xs)`, and chains split across lines are not recognized as the same receiver.
+- **`no-manual-enum-name-map`** (Python, Rust — tip `#protobufs`):
+  - *Detection*: A dict literal where every entry is `'NAME': X.Y.NAME` (string key equals the value's last attribute). Suggest `Enum.Value(name)` (protobuf), `Enum[name]`, or `Enum.__members__`.
+  - *Rust*: `match` arms mapping `"Alpha" => Kind::Alpha` → derive `strum::EnumString`.
+- **`no-overprecise-float-in-tests`** (Python, Rust — tip `#keep_it_simple`):
+  - *Detection*: Float literals in test code with more significant digits than a configurable threshold (e.g. >6).
+  - *Overlap*: Clippy `excessive_precision` only flags digits beyond `f64` representability, not unreadable test values.
+- **`no-repeated-literals`** (Python, Rust — tip core rule and `#no_magic`):
+  - *Detection*: The same string or numeric literal appearing ≥N times in one file. Exempt `0`, `1`, `-1`, `''`, very short strings, docstrings, and annotations (the tip's own `_ZERO` / `_COMMA` / `TWO` counter-examples). Minimum count and string length via `LanguageDefaults` thresholds.
+  - *Blocker*: Per-file aggregation cannot satisfy `rule_test!`'s repeated-occurrence check (`assert_every_occurrence_reported` expects exactly two diagnostics at mirrored spans). Requires a per-file opt-out in the harness first (see `docs/dev/rule_design_guide.md` §6). Guardrail: make it a per-case opt-out, and have `tests/registry.rs` require at least one fully checked `fail` case per language, so the opt-out cannot hide a rule that stops after its first match.
+- **Time-unit literal arithmetic** (extension of `prefer-timedelta-over-seconds` — tip `#rationale`):
+  - *Detection*: `24 * 60 * 60`, `60 * 60`, `86400`, `3600` → `timedelta` / `Duration`.
+- *Not pursued*: magic numbers in comparisons (covered by Ruff `PLR2004`), bare HTTP status codes (too narrow), path composition (Ruff `PTH`), test correspondence-signaling and same-value/different-meaning constants (require semantic understanding).
 
 ---
 

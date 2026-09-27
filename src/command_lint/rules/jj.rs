@@ -87,12 +87,13 @@ impl crate::command_lint::rule::CommandRule for NoJJEditOnDescribedCommits {
             return Vec::new();
         }
 
+        let (start, end) = cmd.span;
         vec![self.render_diagnostic(
             &[("revision", &revision)],
             SourceLocation::virtual_span(
                 crate::diagnostic::VCS_CONTEXT_NAME,
                 &cmd.raw_string,
-                SourceSpan::new(cmd.span.0, cmd.span.1),
+                SourceSpan::new(start, end),
             ),
         )]
     }
