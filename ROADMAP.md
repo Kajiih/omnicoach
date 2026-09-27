@@ -81,20 +81,14 @@ Source: Python Tip of the Week #069 "Prefer constants over wild values" (go/pyth
 
 ## 2. Performance & Concurrency Architecture
 
-- **Remaining Per-File Caching & Fast-Path Cleanups**:
-  - *Default Filter-Set Caching (`src/core.rs`)*: Avoid rebuilding default `HashSet<String>` filter sets in `effective_banned_set` / `effective_allowed_set` (`FilterListDefaults::resolve_default_for_lang`) on every file across 14 rules when no rule-level configuration overrides exist in `.omnilint.toml`.
-  - *Suppression Fast-Path (`src/code_lint/suppression.rs`)*: Short-circuit `SuppressionTracker::from_file` before running the full-CST `ast::collect_comment_nodes(file)` traversal when `!content.contains("omni:")`.
-  - *Path Normalization & `per_file_ignores` Glob Caching (`src/core.rs`)*: Cache `std::env::current_dir()` in `normalize_path_for_glob` instead of invoking a syscall per absolute path, and pre-compile `per_file_ignores` glob matchers when non-empty instead of calling `GlobBuilder::new(pattern)` per `(file, rule)` pair.
 - **Directory Discovery Parallelism & Micro-Run Overhead**:
   - *Current*: File-level analysis runs in parallel via `rayon` (`targets.into_par_iter()`) with deterministic sorting across both plain-text and JSON output, while directory traversal in `collect_directory_candidates` runs single-threaded via `ignore::WalkBuilder::build()`.
   - *Investigation*:
     - Evaluate whether `ignore::WalkParallel` improves directory discovery on large repositories compared to single-threaded collection + `rayon`.
     - Measure `rayon` thread-pool initialization overhead on small repositories to ensure micro-runs and pre-commit hooks are not penalized.
 - **Parse & Pipeline Floor Profiling**:
-  - *Context*: Disabling all rules via tag exclusion shows that the shared per-file pipeline (walking files, reading from disk, tree-sitter parsing via `ast-grep`, and comment suppression scanning) accounts for ~228ms (56% of total runtime on ~8k lines). Pre-I/O `detect_language` filtering is now in place.
-  - *Investigation*:
-    - Investigate the remaining parse cost breakdown: how much is Tree-sitter parser initialization / tree building vs. `SuppressionTracker::from_file` traversing comment nodes?
-    - Determine whether suppression comments can be scanned more cheaply (e.g., via the `!content.contains("omni:")` fast-path) or parsed concurrently with AST visitation.
+  - *Context*: Disabling all rules via tag exclusion shows that the shared per-file pipeline (walking files, reading from disk, tree-sitter parsing via `ast-grep`, and comment suppression scanning) accounts for ~228ms (56% of total runtime on ~8k lines). Pre-I/O `detect_language` filtering is in place, and `SuppressionTracker::from_file` skips the comment walk on files without `omni:`.
+  - *Investigation*: Break down the remaining cost between Tree-sitter parser initialization and tree building, and whether either can be reduced.
 - **Subprocess Batching & Caching (`EnvContext`)**:
   - *Current*: Command rules spawn individual `jj` or `git` CLI calls per evaluation.
   - *Target*: Introduce a shared `EnvContext` struct that pre-fetches and caches repository state (e.g., batching queries into a single `jj log --json` or `git status` invocation) to ensure sub-10ms execution across multiple rules.
