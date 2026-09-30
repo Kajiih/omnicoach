@@ -7,6 +7,7 @@ use crate::code_lint::ast::{AstNode, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::core::{Config, LanguageDefaults, Rule, Tag};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -21,6 +22,16 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 
 /// Rule that flags functions with `>= min_args` positional parameters where 2 or more share an identical type annotation.
 pub struct NoIdenticalPositionalTypes;
+
+impl NoIdenticalPositionalTypes {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::STATIC_TYPING, Topic::POSITIONAL_MEANING],
+        precision: Precision::Exact,
+        consensus: Consensus::Opinionated,
+        impacted_quality: ImpactedQuality::Reliability,
+    };
+}
 
 impl Rule for NoIdenticalPositionalTypes {
     fn name(&self) -> RuleName {

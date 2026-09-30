@@ -4,6 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeRule;
 use crate::core::{Config, FilterListDefaults, Rule, Tag};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -22,6 +23,16 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 
 /// Rule struct.
 pub struct NoLoggingErrorInExcept;
+
+impl NoLoggingErrorInExcept {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::LOGGING, Topic::ERROR_HANDLING],
+        precision: Precision::Exact,
+        consensus: Consensus::Unopinionated,
+        impacted_quality: ImpactedQuality::Reliability,
+    };
+}
 
 impl Rule for NoLoggingErrorInExcept {
     fn name(&self) -> RuleName {

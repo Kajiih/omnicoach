@@ -9,6 +9,9 @@ use crate::diagnostic::{
     Diagnostic, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationTemplate,
     violation_template,
 };
+use crate::rule_taxonomy::{
+    Classification, ClassifiedRule, Consensus, ImpactedQuality, Precision, Topic,
+};
 use ast_grep_language::SupportLang;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -21,6 +24,16 @@ const MISSING_REASON_TEMPLATE: ViolationTemplate = violation_template! {
 
 /// Flags suppression directives missing a non-empty explanation reason.
 pub struct MissingSuppressionReason;
+
+impl MissingSuppressionReason {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::SUPPRESSION_DIRECTIVES],
+        precision: Precision::Exact,
+        consensus: Consensus::Opinionated,
+        impacted_quality: ImpactedQuality::Maintainability,
+    };
+}
 
 impl Rule for MissingSuppressionReason {
     fn name(&self) -> RuleName {
@@ -49,6 +62,16 @@ const UNUSED_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
 /// Flags suppression directives when no violation occurred for the specified rule.
 pub struct UnusedSuppression;
 
+impl UnusedSuppression {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::SUPPRESSION_DIRECTIVES],
+        precision: Precision::Exact,
+        consensus: Consensus::Unopinionated,
+        impacted_quality: ImpactedQuality::Reliability,
+    };
+}
+
 impl Rule for UnusedSuppression {
     fn name(&self) -> RuleName {
         RuleName("unused-suppression")
@@ -75,6 +98,16 @@ const UNKNOWN_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
 
 /// Flags suppression directives targeting unknown or non-suppressible rules.
 pub struct UnknownSuppressionRule;
+
+impl UnknownSuppressionRule {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::SUPPRESSION_DIRECTIVES],
+        precision: Precision::Exact,
+        consensus: Consensus::Unopinionated,
+        impacted_quality: ImpactedQuality::Reliability,
+    };
+}
 
 impl Rule for UnknownSuppressionRule {
     fn name(&self) -> RuleName {
@@ -103,6 +136,16 @@ const BLANKET_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
 /// Flags blanket suppression directives that omit explicit rule names.
 pub struct BlanketSuppression;
 
+impl BlanketSuppression {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::SUPPRESSION_DIRECTIVES],
+        precision: Precision::Exact,
+        consensus: Consensus::Unopinionated,
+        impacted_quality: ImpactedQuality::Reliability,
+    };
+}
+
 impl Rule for BlanketSuppression {
     fn name(&self) -> RuleName {
         RuleName("blanket-suppression")
@@ -121,13 +164,25 @@ impl Rule for BlanketSuppression {
     }
 }
 
-/// Static list of the suppression audits, evaluated by [`SuppressionTracker::audit`] rather than
+/// Static list of the suppression audits with their classifications, evaluated by [`SuppressionTracker::audit`] rather than
 /// per file like code rules.
-pub const SUPPRESSION_AUDITS: &[&dyn Rule] = &[
-    &MissingSuppressionReason,
-    &UnusedSuppression,
-    &UnknownSuppressionRule,
-    &BlanketSuppression,
+pub const SUPPRESSION_AUDITS: &[ClassifiedRule<dyn Rule>] = &[
+    ClassifiedRule {
+        rule: &MissingSuppressionReason,
+        classification: MissingSuppressionReason::CLASSIFICATION,
+    },
+    ClassifiedRule {
+        rule: &UnusedSuppression,
+        classification: UnusedSuppression::CLASSIFICATION,
+    },
+    ClassifiedRule {
+        rule: &UnknownSuppressionRule,
+        classification: UnknownSuppressionRule::CLASSIFICATION,
+    },
+    ClassifiedRule {
+        rule: &BlanketSuppression,
+        classification: BlanketSuppression::CLASSIFICATION,
+    },
 ];
 
 /// The placement scope of a parsed suppression directive.

@@ -8,6 +8,7 @@ use crate::core::{Config, Rule, Tag};
 use crate::diagnostic::{
     Diagnostic, RuleName, SourceLocation, SourceSpan, ViolationTemplate, violation_template,
 };
+use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 
 /// CLI schema definition for Jujutsu commands.
 const JJ_CLI_SCHEMA: ProgramCliSchema = ProgramCliSchema {
@@ -48,6 +49,16 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 
 /// Blocks running `jj edit <revision>` if the target revision has a non-empty description.
 pub struct NoJJEditOnDescribedCommits;
+
+impl NoJJEditOnDescribedCommits {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::JJ],
+        precision: Precision::Exact,
+        consensus: Consensus::Opinionated,
+        impacted_quality: ImpactedQuality::Reliability,
+    };
+}
 
 impl Rule for NoJJEditOnDescribedCommits {
     fn name(&self) -> RuleName {

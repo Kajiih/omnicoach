@@ -4,6 +4,7 @@ use crate::code_lint::ast::{self, AstNode, ParsedFile, ScopePositionalReads};
 use crate::code_lint::rule::CodeRule;
 use crate::core::{Config, LanguageDefaults, Rule, Tag};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -31,6 +32,16 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 
 /// Rule that flags a receiver read at several literal positions in one scope.
 pub struct PreferTupleUnpacking;
+
+impl PreferTupleUnpacking {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::POSITIONAL_INDEXING],
+        precision: Precision::Heuristic,
+        consensus: Consensus::Opinionated,
+        impacted_quality: ImpactedQuality::Maintainability,
+    };
+}
 
 impl Rule for PreferTupleUnpacking {
     fn name(&self) -> RuleName {

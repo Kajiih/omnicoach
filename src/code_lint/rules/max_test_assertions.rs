@@ -4,6 +4,7 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::core::{Config, LanguageDefaults, Rule, Tag};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -23,6 +24,16 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 
 /// Rule that limits the number of assertions inside a single test function.
 pub struct MaxTestAssertions;
+
+impl MaxTestAssertions {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::TEST_ASSERTIONS],
+        precision: Precision::Heuristic,
+        consensus: Consensus::Opinionated,
+        impacted_quality: ImpactedQuality::Maintainability,
+    };
+}
 
 impl Rule for MaxTestAssertions {
     fn name(&self) -> RuleName {

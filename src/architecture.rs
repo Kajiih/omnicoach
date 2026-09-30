@@ -79,6 +79,8 @@ define_architecture! {
     FoundationPrimitives  => [],
     /// Shared domain vocabulary, config, and tags (`core`).
     CoreVocabulary        => [FoundationPrimitives],
+    /// Pure rule classification types: topics and declared facets (`rule_taxonomy`).
+    RuleTaxonomy          => [FoundationPrimitives],
 
     // --- Static Code Analysis Domain (`code_lint`) ---
     /// Encapsulated AST syntax adapters and language parsers (`code_lint::ast`).
@@ -88,9 +90,9 @@ define_architecture! {
     /// Contract traits and execution interfaces for code linting (`code_lint::rule`).
     CodeRuleContracts     => [CoreVocabulary, CodeSemanticEngines, CodeSyntaxAdapters],
     /// Inline comment suppression tracker and directive policies (`code_lint::suppression`).
-    CodeSuppressionEngine => [CodeRuleContracts, CodeSemanticEngines],
+    CodeSuppressionEngine => [CodeRuleContracts, CodeSemanticEngines, RuleTaxonomy],
     /// Concrete static analysis linter rules (`code_lint::rules`).
-    CodeLintRules         => [CodeRuleContracts],
+    CodeLintRules         => [CodeRuleContracts, RuleTaxonomy],
     /// Static code linting multi-file orchestration runner (`code_lint::runner`).
     CodeLintRunner        => [CodeLintRules, CodeSuppressionEngine],
 
@@ -100,7 +102,7 @@ define_architecture! {
     /// Contract traits and intercepted command schemas (`command_lint::rule`).
     CommandRuleContracts  => [CoreVocabulary, CommandVcsAdapters],
     /// Concrete command safety linting rules (`command_lint::rules`).
-    CommandLintRules      => [CommandRuleContracts],
+    CommandLintRules      => [CommandRuleContracts, RuleTaxonomy],
     /// Command linting orchestration and interception runner (`command_lint::runner`).
     CommandLintRunner     => [CommandLintRules],
 

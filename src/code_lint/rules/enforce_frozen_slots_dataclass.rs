@@ -5,6 +5,7 @@ use crate::code_lint::ast::python::{PythonClassInfo, extract_classes};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::core::{Rule, Tag};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -16,6 +17,16 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 
 /// Rule that enforces `@dataclass(frozen=True, slots=True)` in Python files.
 pub struct EnforceFrozenSlotsDataclass;
+
+impl EnforceFrozenSlotsDataclass {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::RECORD_TYPES],
+        precision: Precision::Exact,
+        consensus: Consensus::Opinionated,
+        impacted_quality: ImpactedQuality::Reliability,
+    };
+}
 
 impl Rule for EnforceFrozenSlotsDataclass {
     fn name(&self) -> RuleName {
