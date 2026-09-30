@@ -50,16 +50,20 @@ mode = "require-explanation"
 ### Global Selection & File Scoping
 
 ```toml
-# Select only specific tags or rule names
-select = ["Testing", "no-typing-cast"]
+# Select tags (topics, facet values such as `heuristic`, or languages) and rule names.
+# A topic includes its subtopics: `testing` covers `test-timing`, `test-doubles`, ...
+select = ["testing", "no-typing-cast"]
 
-# Globally ignore specific rules
-ignore = ["single-letter-variable-name"]
+# The nearest selector wins along a topic path, so `testing` rules stay on except the
+# `test-doubles` ones. A rule name beats any tag.
+ignore = ["test-doubles"]
 
-# Per-file rule ignores using glob patterns (invalid patterns fail at config load)
+# Per-file rule ignores using glob patterns, applied after `select` / `ignore`
 [per_file_ignores]
-"tests/**" = ["single-letter-variable-name", "flat-scope-enforced"]
+"tests/**" = ["single-letter-variable-name", "heuristic"]
 ```
+
+Unknown labels, facet names (`precision`) and a selector in both `select` and `ignore` fail at config load. Tags, their meaning and the full topic tree are in [docs/dev/tag_guide.md](docs/dev/tag_guide.md).
 
 ---
 

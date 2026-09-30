@@ -47,6 +47,18 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
   - *Current*: The boundary exemption (`main`, `from_env`, ...) is inherited by every scope declared inside it, which is correct for nested functions and closures but also exempts a class declared inside a boundary whose methods later escape (returned, registered as a callback).
   - *Target*: Treat a `class` / `impl` declared inside a boundary as a barrier that resets the exemption, once a real-world occurrence justifies the added language-specific complexity.
 
+## Rule Defects (found during the tag taxonomy review)
+
+Source: E1 reviewers in `docs/dev/rule_docs_and_tags/t1/04_execution_log.md` §3. Behaviour contradicting a rule's own documentation.
+
+- **`no-logging-error-in-except` flags `exc_info=True`**: that call keeps the traceback, contradicting the rationale ("lost traceback"). Exempt it, or reword the rule as "prefer `.exception`".
+- **`prefer-dedent-for-multiline-strings` flags `textwrap.dedent`**: the module doc and summary allow a dedent helper, but the defaults omit it and a test flags it.
+- **Call matching ignores imports** (`src/code_lint/semantic/calls.rs`): callees are matched by bare name, so `sqlalchemy.cast`, `ctypes.cast` or httpx `patch` are flagged. Resolve the import origin.
+- **`blanket-suppression` rationale is wrong**: a blanket directive has no `target_rules` and therefore suppresses nothing (`suppression.rs` `filter_diagnostics`); the rationale claims it prevents *unintended* suppression. Reword it ("a blanket directive silently does nothing").
+- **`unused-suppression` with disabled rules** (unverified): a directive whose target rule is disabled by config probably reports as unused. Add a test; skip rules not enabled for the file.
+- **`no-unstructured-task-creation` flags stored, awaited tasks**: the documented hazard (GC of an unreferenced task) does not apply when the task is kept and awaited.
+- **`no-zero-sleep-in-tests` Python half**: the asyncio docs endorse `asyncio.sleep(0)` as a yield; the hazard is Rust-specific (tokio `sleep(ZERO)` is not guaranteed to yield). Reconsider the Python scope.
+
 ## Candidate Rules
 
 Source: Python Tip of the Week #069 "Prefer constants over wild values" (go/python-tips/069) and the legacy linter `IndexingInsteadOfUnpackingRule` (`scratch/legacy_reference/legacy_lints.py`). Candidates to prioritize, not commitments.
@@ -126,21 +138,29 @@ Source: Python Tip of the Week #069 "Prefer constants over wild values" (go/pyth
 
 ## 5. Tags, Discovery & Documentation
 
-Prior analysis, candidate designs, and open questions: [docs/dev/tag_system_analysis.md](docs/dev/tag_system_analysis.md). Nothing in that document is decided; it is the starting point for the design work below, not a specification of it.
+Exploration and design records live in [docs/dev/rule_docs_and_tags/](docs/dev/rule_docs_and_tags/) and the contributor guide in [docs/dev/tag_guide.md](docs/dev/tag_guide.md). Implementation follows in order: **T1 (taxonomy `impl/`) → T2 (rule doc model) → T3 (surfaces) → content pass** (D12).
 
-- **Tag Taxonomy Design**:
-  - *Current*: The tag set grew ad-hoc, and at 17 rules there is not enough evidence to judge it. `Cli` has zero members, so `select = ["cli"]` silently matches nothing; `Workflow`, `Vcs`, and `JJ` resolve to the same singleton set; `Safety` covers one typing rule while documenting operational command restrictions.
-  - *Target*: Decide what a tag is for (selector, documentation, or both), then design the taxonomy that follows: whether axes are the right organising idea, what admission criteria a tag must meet, and how dispositions are defined. Apply the outcome to the concrete tag set and record it as an ADR in `decisions/`.
-  - *Trigger*: The first configuration need a tag cannot express, or `CODE_RULES` exceeding ~40 rules, whichever comes first.
-- **Tag Hierarchy Design**:
-  - *Current*: `has_tag` is flat set membership, so a rule must declare every ancestor tag it wants to be selectable by, and a specific tag can silently duplicate a general one.
-  - *Target*: Decide whether tags should nest at all, and if so choose a mechanism and the rule for when a parent link is legitimate. A `Tag::parent` function with a chain-walking `has_tag` is one candidate; declaring the parent on each rule plus a test assertion is another.
-  - *Trigger*: The first genuine parent/child pair with independent members — for example a Git rule joining the jj rule under `Vcs`.
-- **Rule Discovery**:
-  - *Current*: No way to ask the binary what rules exist. `Tag::description` and `Tag::as_str` are unused, and `test_tag_description` asserts a doc comment against a copy of itself.
-  - *Target*: Design how users discover rules — plausibly a `rules` subcommand listing names, languages, tags, target scope, and configuration keys. Settling this also settles whether tags are documentation, which the taxonomy design depends on.
-  - *Trigger*: The README rule list exceeding ~30 entries, or the first user outside this repository.
-- **Generated Rule Documentation**:
-  - *Current*: `README.md` hand-maintains a flat list of every rule, with no tags or languages, and nothing detects drift from `CODE_RULES`.
-  - *Target*: Decide whether rule documentation should be generated from the registry, and if so how drift is prevented.
-  - *Trigger*: With rule discovery, which would supply the rendering.
+- **T1 — Tag Taxonomy & Selection (`impl/`)**:
+  - *Status*: Implemented (`src/rule_taxonomy.rs`, `src/rule_selection.rs`; plan in `docs/dev/rule_docs_and_tags/t1/impl/01_plan.md`).
+  - *Design*: Complete (D1–D38 in `docs/dev/rule_docs_and_tags/t1/01`–`04`, guide in `docs/dev/tag_guide.md`). Typed facet fields (`topics`, `precision`, `consensus`, `impacted_quality`), topic tree as plain `const` `Topic` struct literals (cycles rejected by `rustc`, E0391), precedence model B, and `RuleSelection` architecture isolation so rules and runners never branch on tags (D37).
+  - *Deferred from T1 `impl/`*: **Shadowed-selector config warning** (D35) — warn when a `select` or `ignore` entry changes no rule's outcome (needs config warning plumbing).
+  - *Follow-up*: **Reject unknown top-level config keys** — a misspelled key (e.g. `selct`) is still silently ignored.
+- **T2 & T3 — Rule Documentation Model & Discovery Surfaces**:
+  - *Status*: Exploration complete (`docs/dev/rule_docs_and_tags/t2_t3/`, ADR 008 in `decisions/008_rule_documentation_and_discovery.md`). Moving to production implementation (`impl/01_plan.md`).
+  - *Design*: In-tree `RuleDoc` with two-tier summaries (`summary` + `what_it_does`), strongly-typed `ConfigShape` enum with `RuleCatalog` key derivation, `--list-rules [--tag <label>]` and `--explain <rule>` discovery surfaces on both binaries, active configuration status resolution in `explain`, plain diagnostics footer, and `OutputFormat` ValueEnum.
+- **Rule Doc Examples (from T2 exploration, D42)**:
+  - *Current*: Every code rule's `rule_test!` pass/fail cases are the best-maintained examples, but they live in `#[cfg(test)]` and no doc can use them. Command rules and suppression audits have no `rule_test!`.
+  - *Target*: Add Example / Use-instead sections sourced from a marked subset of test cases per language, so rendered examples are always executed as tests.
+- **Deferred from T2/T3 exploration (D43, `docs/dev/rule_docs_and_tags/t2_t3/02_sota_and_references.md` §4)**:
+  - JSON output for discovery commands (`--format json` for `--list-rules` / `--explain`), and `tags` on JSON diagnostics.
+  - Path-aware status in `explain` (evaluating `per_file_ignores` for a given file path).
+  - Typed configuration keys with their types and real per-rule defaults in rule docs.
+  - Generated in-repo rule catalog guarded by a golden-file drift test (replacing manual README catalog).
+  - Styled Markdown rendering in the terminal.
+  - JSON Schema for `.omnilint.toml` (editor completion).
+  - Typed overlap / sources field linking rules to equivalent Ruff / Clippy rules.
+  - Decide whether plain diagnostics keep printing the full rationale and suggestion on every hit.
+  - Investigate subcommands (`rules`, `explain`, a default `check`) instead of the `--list-rules` / `--explain` flags (DI8).
+- **Later / Out-of-Scope Ideas**:
+  - **Abstraction-driven auto-tagging** (D7, NG2): importing or using a domain helper (e.g. a logging abstraction) automatically attaches its topic tag to the rule.
+  - **Computed `recommended` view** (NG5): if curated presets are ever introduced, define `recommended` as a computed view (`exact` ∧ `unopinionated`) rather than a second hand-maintained list.
