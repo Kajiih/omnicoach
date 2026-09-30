@@ -2,7 +2,7 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeRule;
-use crate::core::{Config, FilterListDefaults, Rule, Tag};
+use crate::core::{Config, FilterListDefaults, Rule};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -37,10 +37,6 @@ impl NoLoggingErrorInExcept {
 impl Rule for NoLoggingErrorInExcept {
     fn name(&self) -> RuleName {
         RuleName("no-logging-error-in-except")
-    }
-
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::Logging, Tag::Exceptions]
     }
 
     fn supported_languages(&self) -> &'static [SupportLang] {

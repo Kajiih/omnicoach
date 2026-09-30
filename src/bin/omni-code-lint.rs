@@ -3,8 +3,8 @@
 omni::architecture_component!(ApplicationBinaries);
 
 use omni::code_lint::runner::{LintOptions, run_code_lint};
-use omni::core::Config;
 use omni::diagnostic::print_diagnostics;
+use omni::rule_selection::load_config;
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -44,7 +44,7 @@ fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     let config =
-        Config::load().map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
+        load_config().map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
 
     let options = LintOptions {
         paths: cli.paths,

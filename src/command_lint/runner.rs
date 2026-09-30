@@ -18,7 +18,7 @@ pub fn run_command_lint(raw_cmd: &str, config: &Config) -> Vec<Diagnostic> {
     for cmd in &commands {
         for registered in COMMAND_RULES {
             let rule = registered.rule;
-            if config.is_rule_enabled(rule) {
+            if config.is_rule_enabled(rule.name()) {
                 all_diagnostics.extend(rule.check_command(cmd, &jj_client, config));
             }
         }

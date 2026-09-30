@@ -3,8 +3,8 @@
 omni::architecture_component!(ApplicationBinaries);
 
 use omni::command_lint::runner::run_command_lint;
-use omni::core::Config;
 use omni::diagnostic::print_diagnostics;
+use omni::rule_selection::load_config;
 
 use clap::Parser;
 
@@ -27,7 +27,7 @@ struct Cli {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let config = match Config::load() {
+    let config = match load_config() {
         Ok(loaded_config) => loaded_config,
         Err(error) => {
             eprintln!("Error: Failed to load configuration: {error}");

@@ -1,0 +1,417 @@
+//! Rule selection: resolves `select`, `ignore` and `per_file_ignores` into the tag-free
+//! [`RuleName`] sets on [`Config`] (ADR 007 §2.3–§2.4).
+//!
+//! Selectors are resolved once, at load, with precedence model B (D18): on each of a rule's
+//! branches the nearest selector wins, the rule name being the leaf of every branch (D15).
+//! When branches disagree, `ignore` wins. With no verdict, the rule is on only if `select` is
+//! absent. `per_file_ignores` is a later, subtract-only stage. This is the only module that
+//! parses selector strings.
+
+architecture_component!(RuleSelection);
+
+mod taxonomy;
+
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::fmt;
+
+use serde::Deserialize;
+use strum::IntoEnumIterator as _;
+
+use self::taxonomy::{Facet, REGISTERED_RULES, RegisteredRule, Selector, Tag};
+use crate::core::{CONFIG_FILE_NAME, Config, compile_glob};
+use crate::diagnostic::RuleName;
+
+/// Where in the config an entry was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Location {
+    /// The `select` list.
+    Select,
+    /// The `ignore` list.
+    Ignore,
+    /// A `per_file_ignores` pattern.
+    PerFile(String),
+}
+
+impl fmt::Display for Location {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Select => formatter.write_str("`select`"),
+            Self::Ignore => formatter.write_str("`ignore`"),
+            Self::PerFile(pattern) => write!(formatter, "`per_file_ignores.\"{pattern}\"`"),
+        }
+    }
+}
+
+/// Why a config was rejected. The message is what the user sees.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    /// Failed to read the configuration file from disk.
+    #[error("failed to read `{path}`: {source}")]
+    Io {
+        /// Path to the configuration file.
+        path: &'static str,
+        /// The underlying IO error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// Not valid TOML, or a value of the wrong shape.
+    #[error(transparent)]
+    Toml(#[from] toml::de::Error),
+    /// A label that is not a rule, a tag or a synonym.
+    #[error(
+        "unknown selector `{label}` in {location}{}",
+        suggestion.map(|known| format!("; did you mean `{known}`?")).unwrap_or_default()
+    )]
+    UnknownSelector {
+        /// The label as written.
+        label: String,
+        /// Where it was written.
+        location: Location,
+        /// The closest registered label.
+        suggestion: Option<&'static str>,
+    },
+    /// A facet label, which is never a selector (D19).
+    #[error(
+        "`{label}` in {location} is a facet label, not a selector; use one of its values: {values}"
+    )]
+    FacetLabel {
+        /// The label as written.
+        label: String,
+        /// Where it was written.
+        location: Location,
+        /// The facet's values, comma-separated.
+        values: String,
+    },
+    /// A canonical selector in both `select` and `ignore`.
+    #[error(
+        "`{0}` is both selected and ignored (synonyms count as the same selector); \
+         remove it from one list"
+    )]
+    Conflict(&'static str),
+    /// A `per_file_ignores` pattern that is not a valid glob.
+    #[error("invalid glob `{pattern}` in `per_file_ignores`: {source}")]
+    Glob {
+        /// The pattern as written.
+        pattern: String,
+        /// The glob error.
+        #[source]
+        source: globset::Error,
+    },
+}
+
+/// The selection entries of the config file; every other entry belongs to [`Config`].
+#[derive(Deserialize)]
+struct RawSelection {
+    select: Option<Vec<String>>,
+    #[serde(default)]
+    ignore: Vec<String>,
+    #[serde(default)]
+    per_file_ignores: BTreeMap<String, Vec<String>>,
+}
+
+/// Loads `.omnilint.toml` from the current directory, or the default config if it is absent.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] if the file cannot be read or is rejected by [`parse_config`].
+pub fn load_config() -> Result<Config, ConfigError> {
+    match std::fs::read_to_string(CONFIG_FILE_NAME) {
+        Ok(content) => parse_config(&content),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
+        Err(source) => Err(ConfigError::Io {
+            path: CONFIG_FILE_NAME,
+            source,
+        }),
+    }
+}
+
+/// Parses a TOML config and resolves its selectors into rule names.
+///
+/// # Errors
+///
+/// On invalid TOML, unknown selectors, facet labels, conflicts and invalid globs.
+pub fn parse_config(config_toml: &str) -> Result<Config, ConfigError> {
+    let mut config: Config = toml::from_str(config_toml)?;
+    let raw: RawSelection = toml::from_str(config_toml)?;
+    let select = raw
+        .select
+        .map(|labels| resolve_all(labels, &Location::Select))
+        .transpose()?;
+    let ignore = resolve_all(raw.ignore, &Location::Ignore)?;
+    if let Some(&both) = select
+        .iter()
+        .flatten()
+        .find(|&selector| ignore.contains(selector))
+    {
+        return Err(ConfigError::Conflict(both.label()));
+    }
+    let plan = Plan { select, ignore };
+    config.disabled_rules = rule_names(|rule| !plan.selects(rule));
+    config.per_file_ignores = raw
+        .per_file_ignores
+        .into_iter()
+        .map(|(pattern, labels)| {
+            let selectors = resolve_all(labels, &Location::PerFile(pattern.clone()))?;
+            let matcher = compile_glob(&pattern)
+                .map_err(|source| ConfigError::Glob { pattern, source })?
+                .compile_matcher();
+            let rules = rule_names(|rule| selectors.iter().any(|&selector| rule.matches(selector)));
+            Ok((matcher, rules))
+        })
+        .collect::<Result<_, ConfigError>>()?;
+    Ok(config)
+}
+
+fn rule_names(mut predicate: impl FnMut(&RegisteredRule) -> bool) -> HashSet<RuleName> {
+    REGISTERED_RULES
+        .iter()
+        .filter(|rule| predicate(rule))
+        .map(|rule| rule.name)
+        .collect()
+}
+
+fn resolve_all(
+    labels: Vec<String>,
+    location: &Location,
+) -> Result<BTreeSet<Selector>, ConfigError> {
+    labels
+        .into_iter()
+        .map(|label| resolve(label, location))
+        .collect()
+}
+
+fn resolve(label: String, location: &Location) -> Result<Selector, ConfigError> {
+    if let Some(selector) = taxonomy::lookup(&label) {
+        return Ok(selector);
+    }
+    let location = location.clone();
+    match Facet::iter().find(|facet| facet.matches_label(&label)) {
+        Some(facet) => Err(ConfigError::FacetLabel {
+            label,
+            location,
+            values: taxonomy::all_tags()
+                .filter(|tag| tag.facet() == facet)
+                .map(Tag::label)
+                .collect::<Vec<_>>()
+                .join(", "),
+        }),
+        None => Err(ConfigError::UnknownSelector {
+            suggestion: taxonomy::closest_label(&label),
+            label,
+            location,
+        }),
+    }
+}
+
+/// What a selector asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    Select,
+    Ignore,
+}
+
+/// Validated `select` and `ignore` sets (`select: None` selects every rule by default).
+struct Plan {
+    select: Option<BTreeSet<Selector>>,
+    ignore: BTreeSet<Selector>,
+}
+
+impl Plan {
+    fn verdict(&self, selector: Selector) -> Option<Verdict> {
+        if self.ignore.contains(&selector) {
+            Some(Verdict::Ignore)
+        } else if self.select.as_ref()?.contains(&selector) {
+            Some(Verdict::Select)
+        } else {
+            None
+        }
+    }
+
+    /// Model B: nearest selector per branch, then ignore wins across branches.
+    fn selects(&self, rule: &RegisteredRule) -> bool {
+        let verdicts: Vec<Verdict> = rule
+            .branches()
+            .iter()
+            .filter_map(|branch| {
+                std::iter::once(Selector::Rule(rule.name))
+                    .chain(branch.iter().rev().map(|&tag| Selector::Tag(tag)))
+                    .find_map(|selector| self.verdict(selector))
+            })
+            .collect();
+        if verdicts.contains(&Verdict::Ignore) {
+            false
+        } else if verdicts.contains(&Verdict::Select) {
+            true
+        } else {
+            self.select.is_none()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use rstest::rstest;
+
+    use super::*;
+
+    const HEURISTIC: &[&str] = &[
+        "banned-abbreviations",
+        "no-hungarian-notation",
+        "prefer-timedelta-over-seconds",
+        "prefer-tuple-unpacking",
+        "no-env-in-functions",
+        "no-unstructured-task-creation",
+        "max-test-assertions",
+    ];
+
+    fn enabled(config: &Config, path: &str) -> BTreeSet<&'static str> {
+        REGISTERED_RULES
+            .iter()
+            .map(|rule| rule.name)
+            .filter(|&name| config.is_rule_enabled_for_path(name, Path::new(path)))
+            .map(|name| name.0)
+            .collect()
+    }
+
+    fn all_except(excluded: &[&str]) -> BTreeSet<&'static str> {
+        REGISTERED_RULES
+            .iter()
+            .map(|rule| rule.name.0)
+            .filter(|name| !excluded.contains(name))
+            .collect()
+    }
+
+    #[rstest]
+    #[case::empty_select("select = []", &[])]
+    #[case::adoption_ramp(
+        r#"ignore = ["heuristic", "opinionated"]"#,
+        &["no-logging-error-in-except", "no-sleep-in-tests", "unused-suppression",
+          "unknown-suppression-rule", "blanket-suppression"]
+    )]
+    #[case::parent_includes_children(r#"select = ["vcs"]"#, &["no-edits-on-described-commits"])]
+    #[case::synonym(r#"select = ["jujutsu"]"#, &["no-edits-on-described-commits"])]
+    #[case::ignored_child_under_selected_parent(
+        "select = [\"testing\"]\nignore = [\"test-timing\"]",
+        &["max-test-assertions", "no-assertion-packing", "no-mocks-in-tests", "no-mock-assertions"]
+    )]
+    #[case::branches_disagree_ignore_wins(
+        "select = [\"testing\"]\nignore = [\"test-doubles\"]",
+        &["no-sleep-in-tests", "no-zero-sleep-in-tests", "max-test-assertions",
+          "no-assertion-packing"]
+    )]
+    #[case::cross_facet(
+        "select = [\"heuristic\"]\nignore = [\"naming\"]",
+        &["prefer-tuple-unpacking", "no-env-in-functions", "no-unstructured-task-creation",
+          "max-test-assertions"]
+    )]
+    #[case::rule_name_beats_tag(
+        "select = [\"no-sleep-in-tests\"]\nignore = [\"testing\"]",
+        &["no-sleep-in-tests"]
+    )]
+    #[case::rule_name_with_topics(
+        "select = [\"naming\", \"no-sleep-in-tests\"]\nignore = [\"testing\"]",
+        &["banned-abbreviations", "single-letter-variable-name", "no-hungarian-notation",
+          "prefer-timedelta-over-seconds", "no-sleep-in-tests"]
+    )]
+    #[case::ignored_rule_inside_tag(
+        "select = [\"testing\"]\nignore = [\"no-mocks-in-tests\"]",
+        &["no-sleep-in-tests", "no-zero-sleep-in-tests", "max-test-assertions",
+          "no-assertion-packing", "no-mock-assertions"]
+    )]
+    #[case::derived_facets(
+        "select = [\"rust\"]\nignore = [\"tests-only\"]",
+        &["banned-abbreviations", "single-letter-variable-name", "no-hungarian-notation",
+          "prefer-timedelta-over-seconds", "prefer-dedent-for-multiline-strings",
+          "prefer-tuple-unpacking", "no-env-in-functions", "missing-suppression-reason",
+          "unused-suppression", "unknown-suppression-rule", "blanket-suppression"]
+    )]
+    fn selection_enables_exactly(#[case] config_toml: &str, #[case] expected: &[&str]) {
+        let config = parse_config(config_toml).unwrap();
+        let expected: BTreeSet<_> = expected.iter().copied().collect();
+        assert_eq!(enabled(&config, "src/module.py"), expected);
+    }
+
+    #[rstest]
+    #[case::no_config("", &[])]
+    #[case::child_beats_ignored_parent(
+        "select = [\"python\", \"type-checker-bypass\"]\nignore = [\"static-typing\"]",
+        &["no-identical-positional-types", "no-edits-on-described-commits"]
+    )]
+    #[case::jj_beats_ignored_vcs("select = [\"exact\", \"jj\"]\nignore = [\"vcs\"]", HEURISTIC)]
+    fn selection_enables_all_except(#[case] config_toml: &str, #[case] excluded: &[&str]) {
+        let config = parse_config(config_toml).unwrap();
+        assert_eq!(enabled(&config, "src/module.py"), all_except(excluded));
+    }
+
+    #[test]
+    fn per_file_ignores_remove_only_on_matching_paths() {
+        let config = parse_config("[per_file_ignores]\n\"tests/**\" = [\"heuristic\"]").unwrap();
+        assert_eq!(
+            enabled(&config, "tests/test_module.py"),
+            all_except(HEURISTIC)
+        );
+        assert_eq!(enabled(&config, "src/module.py"), all_except(&[]));
+    }
+
+    #[test]
+    fn per_file_ignores_apply_after_selection_by_rule_name() {
+        let config = parse_config(
+            "select = [\"max-test-assertions\"]\n[per_file_ignores]\n\"tests/**\" = [\"testing\"]",
+        )
+        .unwrap();
+        assert!(enabled(&config, "tests/test_module.py").is_empty());
+        assert_eq!(
+            enabled(&config, "src/module.py"),
+            BTreeSet::from(["max-test-assertions"])
+        );
+    }
+
+    #[rstest]
+    #[case::typo_topic(
+        r#"select = ["tesing"]"#,
+        "unknown selector `tesing` in `select`; did you mean `testing`?"
+    )]
+    #[case::typo_rule(
+        r#"select = ["no-sleep-in-test"]"#,
+        "unknown selector `no-sleep-in-test` in `select`; did you mean `no-sleep-in-tests`?"
+    )]
+    #[case::wrong_case(
+        r#"ignore = ["Testing"]"#,
+        "unknown selector `Testing` in `ignore`; did you mean `testing`?"
+    )]
+    #[case::conflict(
+        "select = [\"jj\"]\nignore = [\"jj\"]",
+        "`jj` is both selected and ignored (synonyms count as the same selector); remove it \
+         from one list"
+    )]
+    #[case::synonym_conflict(
+        "select = [\"jujutsu\"]\nignore = [\"jj\"]",
+        "`jj` is both selected and ignored (synonyms count as the same selector); remove it \
+         from one list"
+    )]
+    #[case::facet_label(
+        r#"select = ["precision"]"#,
+        "`precision` in `select` is a facet label, not a selector; use one of its values: \
+         exact, heuristic"
+    )]
+    #[case::multi_word_facet_label(
+        r#"select = ["Impacted quality"]"#,
+        "`Impacted quality` in `select` is a facet label, not a selector; use one of its \
+         values: reliability, maintainability"
+    )]
+    #[case::typo_in_per_file(
+        "[per_file_ignores]\n\"tests/**\" = [\"heurstic\"]",
+        "unknown selector `heurstic` in `per_file_ignores.\"tests/**\"`; did you mean \
+         `heuristic`?"
+    )]
+    #[case::invalid_glob(
+        "[per_file_ignores]\n\"src/[\" = [\"testing\"]",
+        "invalid glob `src/[` in `per_file_ignores`: "
+    )]
+    fn invalid_configs_are_rejected_loudly(#[case] config_toml: &str, #[case] message: &str) {
+        let error = parse_config(config_toml).unwrap_err().to_string();
+        assert!(error.starts_with(message), "{error}");
+    }
+}

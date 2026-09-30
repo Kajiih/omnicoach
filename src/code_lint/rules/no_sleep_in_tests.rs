@@ -3,7 +3,7 @@
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls::CallMatch;
-use crate::core::{Config, FilterListDefaults, Rule, Tag};
+use crate::core::{Config, FilterListDefaults, Rule};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -68,10 +68,6 @@ impl Rule for NoSleepInTests {
         RuleName("no-sleep-in-tests")
     }
 
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::Testing]
-    }
-
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python, SupportLang::Rust]
     }
@@ -97,10 +93,6 @@ impl NoZeroSleepInTests {
 impl Rule for NoZeroSleepInTests {
     fn name(&self) -> RuleName {
         RuleName("no-zero-sleep-in-tests")
-    }
-
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::Testing]
     }
 
     fn supported_languages(&self) -> &'static [SupportLang] {

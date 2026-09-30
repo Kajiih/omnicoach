@@ -9,93 +9,6 @@ use ast_grep_language::SupportLang;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
-use strum::{Display, EnumIter, EnumMessage, EnumString, IntoStaticStr};
-
-/// Metadata tags used to categorize rules.
-#[derive(
-    Copy,
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    Display,
-    EnumString,
-    EnumIter,
-    IntoStaticStr,
-    EnumMessage,
-)]
-#[strum(ascii_case_insensitive)]
-pub enum Tag {
-    /// Checks targeting Python source code ASTs
-    Python,
-    /// Checks targeting Rust source code ASTs
-    Rust,
-
-    /// Identifier conventions, abbreviations, suffixes
-    Naming,
-    /// Asynchronous execution and structured concurrency
-    Async,
-    /// Test files, assertions, and mock hygiene
-    Testing,
-    /// Type annotations, dataclasses, and protocols
-    Typing,
-    /// Scope nesting, function length, and complexity
-    Complexity,
-    /// Checks related to logging configurations and invocations
-    Logging,
-    /// Checks targeting exception handling structures
-    Exceptions,
-    /// Inline and file-level suppression comment hygiene
-    Suppression,
-    /// Code style and formatting conventions
-    Style,
-    /// Safety guidelines and command restrictions
-    Safety,
-    /// Command-line syntax checks
-    Cli,
-    /// Workflow execution rules
-    Workflow,
-    /// Version control systems integrations
-    Vcs,
-    /// JJ version control system
-    JJ,
-
-    /// Rule relies on heuristics and may trigger edge-case false positives
-    Heuristic,
-    /// Enforces team or architectural opinions beyond baseline bugs
-    Opinionated,
-    /// Hidden global state, ambient dependencies, and other impurity-inducing side effects
-    #[serde(rename = "side-effects")]
-    #[strum(serialize = "side-effects")]
-    SideEffects,
-}
-
-impl Tag {
-    /// Returns the tag name as a static string slice.
-    #[must_use]
-    pub fn as_str(&self) -> &'static str {
-        (*self).into()
-    }
-
-    /// Returns a human-readable description of the tag's purpose.
-    #[must_use]
-    pub fn description(&self) -> &'static str {
-        self.get_documentation().unwrap_or_default().trim()
-    }
-
-    /// Returns the corresponding ast-grep `SupportLang` if this tag represents a language.
-    #[must_use]
-    pub const fn to_support_lang(self) -> Option<SupportLang> {
-        match self {
-            Self::Python => Some(SupportLang::Python),
-            Self::Rust => Some(SupportLang::Rust),
-            _ => None,
-        }
-    }
-}
 
 /// Returns true if `name` is a non-empty `kebab-case` identifier (`[a-z0-9]+(-[a-z0-9]+)*`).
 #[must_use]
@@ -415,10 +328,6 @@ pub trait Rule: Send + Sync {
     #[must_use]
     fn name(&self) -> RuleName;
 
-    /// Returns the domain tags of the rule (language tags are derived from `supported_languages`).
-    #[must_use]
-    fn tags(&self) -> &'static [Tag];
-
     /// Returns the single violation template for this rule (`1 Rule = 1 Template`).
     #[must_use]
     fn violation_template(&self) -> &'static ViolationTemplate;
@@ -427,16 +336,6 @@ pub trait Rule: Send + Sync {
     #[must_use]
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[]
-    }
-
-    /// Returns true if the rule carries the given tag, including language tags
-    /// derived from `supported_languages`.
-    #[must_use]
-    fn has_tag(&self, tag: Tag) -> bool {
-        self.tags().contains(&tag)
-            || tag
-                .to_support_lang()
-                .is_some_and(|lang| self.supported_languages().contains(&lang))
     }
 
     /// Returns the default enforcement mode for this rule across languages.
@@ -534,50 +433,6 @@ pub trait Rule: Send + Sync {
     }
 }
 
-/// A filter selector parsed from linter configuration settings.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Selector {
-    /// Matches a specific rule name.
-    // TODO: Why String and not RuleName?
-    Name(String),
-    /// Matches all rules under a category tag.
-    Tag(Tag),
-}
-
-impl<'de> Deserialize<'de> for Selector {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let selector_input = String::deserialize(deserializer)?;
-
-        // 1. Try to parse as Tag
-        if let Ok(tag) = selector_input.parse::<Tag>() {
-            return Ok(Self::Tag(tag));
-        }
-
-        // 2. Try to parse as kebab-case RuleName
-        if is_kebab_case(&selector_input) {
-            return Ok(Self::Name(selector_input));
-        }
-
-        Err(serde::de::Error::custom(format!(
-            "invalid rule selector '{selector_input}'. Must be a valid rule name or category tag."
-        )))
-    }
-}
-
-impl Selector {
-    /// Returns true if this selector matches the given rule.
-    #[must_use]
-    pub fn matches_rule(&self, rule: &dyn Rule) -> bool {
-        match self {
-            Self::Name(name) => name == rule.name().0,
-            Self::Tag(tag) => rule.has_tag(*tag),
-        }
-    }
-}
-
 const DEFAULT_TEST_PATTERNS: &[&str] = &[
     "**/tests/**",
     "**/test_*.py",
@@ -587,7 +442,11 @@ const DEFAULT_TEST_PATTERNS: &[&str] = &[
 ];
 
 /// Compiles `pattern` with `*` matching across `/`, as all config globs do.
-fn compile_glob(pattern: &str) -> Result<globset::Glob, globset::Error> {
+///
+/// # Errors
+///
+/// Returns the glob syntax error for an invalid pattern.
+pub(crate) fn compile_glob(pattern: &str) -> Result<globset::Glob, globset::Error> {
     globset::GlobBuilder::new(pattern)
         .literal_separator(false)
         .build()
@@ -616,22 +475,6 @@ where
     compile_glob_set(patterns.iter().map(String::as_str)).map_err(serde::de::Error::custom)
 }
 
-fn deserialize_per_file_ignores<'de, D>(
-    deserializer: D,
-) -> Result<Vec<(globset::GlobMatcher, HashSet<Selector>)>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    std::collections::HashMap::<String, HashSet<Selector>>::deserialize(deserializer)?
-        .into_iter()
-        .map(|(pattern, selectors)| {
-            compile_glob(&pattern)
-                .map(|glob| (glob.compile_matcher(), selectors))
-                .map_err(serde::de::Error::custom)
-        })
-        .collect()
-}
-
 /// Configuration settings for path context detection (e.g. test paths).
 #[derive(Deserialize, Debug, Clone)]
 pub struct ContextConfig {
@@ -652,39 +495,23 @@ impl Default for ContextConfig {
 }
 
 /// Configuration settings parsed from `.omnilint.toml`.
+///
+/// Rule selection is already resolved into rule names: `select`, `ignore` and
+/// `per_file_ignores` selectors are parsed by `rule_selection`, never here.
 #[derive(Deserialize, Debug, Default, Clone)]
 pub struct Config {
-    /// Optional set of selected rules or tags to run.
-    pub select: Option<HashSet<Selector>>,
-    /// Optional set of rules or tags to ignore.
-    pub ignore: Option<HashSet<Selector>>,
+    /// Rules disabled by `select` and `ignore`.
+    #[serde(skip)]
+    pub disabled_rules: HashSet<RuleName>,
     /// Generic map of rule-specific configurations.
     #[serde(default)]
     pub rules: std::collections::HashMap<String, serde_json::Value>,
     /// Path context classifier settings.
     #[serde(default)]
     pub context: ContextConfig,
-    /// Per-file rule ignores: glob patterns (compiled at load) paired with rule selectors.
-    #[serde(default, deserialize_with = "deserialize_per_file_ignores")]
-    pub per_file_ignores: Vec<(globset::GlobMatcher, HashSet<Selector>)>,
-}
-
-/// Errors encountered during configuration loading and parsing.
-#[derive(Debug, thiserror::Error)]
-pub enum ConfigError {
-    /// Failed to read the configuration file from disk.
-    #[error("failed to read `{path}`: {source}")]
-    Io {
-        /// Path to the configuration file.
-        path: &'static str,
-        /// The underlying IO error.
-        #[source]
-        source: std::io::Error,
-    },
-
-    /// Failed to parse TOML configuration syntax or schema.
-    #[error(transparent)]
-    Toml(#[from] toml::de::Error),
+    /// Per-file rule ignores: glob patterns paired with the rules they disable.
+    #[serde(skip)]
+    pub per_file_ignores: Vec<(globset::GlobMatcher, HashSet<RuleName>)>,
 }
 
 fn normalize_path_for_glob(path: &Path) -> String {
@@ -712,25 +539,13 @@ impl Config {
 
     /// Returns true if the given rule is enabled in this configuration.
     #[must_use]
-    pub fn is_rule_enabled(&self, rule: &dyn Rule) -> bool {
-        if let Some(ref select) = self.select
-            && !select.iter().any(|selector| selector.matches_rule(rule))
-        {
-            return false;
-        }
-
-        if let Some(ref ignore) = self.ignore
-            && ignore.iter().any(|selector| selector.matches_rule(rule))
-        {
-            return false;
-        }
-
-        true
+    pub fn is_rule_enabled(&self, rule: RuleName) -> bool {
+        !self.disabled_rules.contains(&rule)
     }
 
     /// Returns true if the given rule is enabled for a specific file path.
     #[must_use]
-    pub fn is_rule_enabled_for_path(&self, rule: &dyn Rule, path: &Path) -> bool {
+    pub fn is_rule_enabled_for_path(&self, rule: RuleName, path: &Path) -> bool {
         if !self.is_rule_enabled(rule) {
             return false;
         }
@@ -739,16 +554,10 @@ impl Config {
         }
 
         let normalized = normalize_path_for_glob(path);
-
-        for (matcher, selectors) in &self.per_file_ignores {
-            if matcher.is_match(&normalized)
-                && selectors.iter().any(|selector| selector.matches_rule(rule))
-            {
-                return false;
-            }
-        }
-
-        true
+        !self
+            .per_file_ignores
+            .iter()
+            .any(|(matcher, rules)| matcher.is_match(&normalized) && rules.contains(&rule))
     }
 
     /// Deserializes a rule-specific configuration.
@@ -775,113 +584,14 @@ impl Config {
         let rule_config: DynamicRuleConfig<EnforcementConfig> = self.get_rule_config(rule_name);
         rule_config.effective_mode_for_lang(lang, defaults)
     }
-
-    /// Loads configuration settings from the default `.omnilint.toml` in the current directory.
-    /// Returns default settings if the file does not exist.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ConfigError`] if the file is present but fails to read or has syntax errors.
-    pub fn load() -> Result<Self, ConfigError> {
-        match std::fs::read_to_string(CONFIG_FILE_NAME) {
-            Ok(content) => {
-                let config = toml::from_str(&content)?;
-                Ok(config)
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(error) => Err(ConfigError::Io {
-                path: CONFIG_FILE_NAME,
-                source: error,
-            }),
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    struct MockRule {
-        name: &'static str,
-        tags: &'static [Tag],
-    }
-
-    const MOCK_TEMPLATE: ViolationTemplate =
-        ViolationTemplate::from_static("Mock summary", "Mock rationale", "Mock suggestion");
-
-    impl Rule for MockRule {
-        fn name(&self) -> RuleName {
-            RuleName(self.name)
-        }
-
-        fn tags(&self) -> &'static [Tag] {
-            self.tags
-        }
-
-        fn violation_template(&self) -> &'static ViolationTemplate {
-            &MOCK_TEMPLATE
-        }
-    }
-
-    const LOGGING_RULE: MockRule = MockRule {
-        name: "mock-logging-rule",
-        tags: &[Tag::Logging],
-    };
-
-    const STYLE_RULE: MockRule = MockRule {
-        name: "mock-style-rule",
-        tags: &[Tag::Style],
-    };
-
-    #[test]
-    fn test_select_by_tag() {
-        let mut select = HashSet::new();
-        select.insert(Selector::Tag(Tag::Logging));
-        let config = Config {
-            select: Some(select),
-            ignore: None,
-            ..Default::default()
-        };
-
-        assert!(config.is_rule_enabled(&LOGGING_RULE));
-        assert!(!config.is_rule_enabled(&STYLE_RULE));
-    }
-
-    #[test]
-    fn test_ignore_by_tag() {
-        let mut ignore = HashSet::new();
-        ignore.insert(Selector::Tag(Tag::Logging));
-        let config = Config {
-            select: None,
-            ignore: Some(ignore),
-            ..Default::default()
-        };
-
-        assert!(!config.is_rule_enabled(&LOGGING_RULE));
-        assert!(config.is_rule_enabled(&STYLE_RULE));
-    }
-
-    #[test]
-    fn test_tag_description() {
-        assert_eq!(
-            Tag::Logging.description(),
-            "Checks related to logging configurations and invocations"
-        );
-        assert_eq!(
-            Tag::Exceptions.description(),
-            "Checks targeting exception handling structures"
-        );
-    }
-
-    #[test]
-    fn test_selector_deserialization() {
-        let toml_content = r#"select = ["logging", "no-edits-on-described-commits"]"#;
-        let config: Config = toml::from_str(toml_content).unwrap();
-        let selectors = config.select.unwrap();
-        assert_eq!(selectors.len(), 2);
-        assert!(selectors.contains(&Selector::Tag(Tag::Logging)));
-        assert!(selectors.contains(&Selector::Name("no-edits-on-described-commits".to_string())));
-    }
+    const LOGGING_RULE: RuleName = RuleName("mock-logging-rule");
+    const STYLE_RULE: RuleName = RuleName("mock-style-rule");
 
     #[test]
     fn test_filter_list_defaults_resolve() {
@@ -1014,16 +724,19 @@ mod tests {
     }
 
     #[test]
-    fn test_per_file_ignores() {
-        let toml_content = indoc::indoc! {r#"
-            [per_file_ignores]
-            "tests/**" = ["style"]
-        "#};
-        let config: Config = toml::from_str(toml_content).unwrap();
+    fn test_disabled_rules_and_per_file_ignores() {
+        let config = Config {
+            disabled_rules: HashSet::from([LOGGING_RULE]),
+            per_file_ignores: vec![(
+                compile_glob("tests/**").unwrap().compile_matcher(),
+                HashSet::from([STYLE_RULE]),
+            )],
+            ..Default::default()
+        };
 
-        assert!(!config.is_rule_enabled_for_path(&STYLE_RULE, Path::new("tests/my_test.rs")));
-        assert!(config.is_rule_enabled_for_path(&STYLE_RULE, Path::new("src/lib.rs")));
-        assert!(config.is_rule_enabled_for_path(&LOGGING_RULE, Path::new("tests/my_test.rs")));
+        assert!(!config.is_rule_enabled(LOGGING_RULE));
+        assert!(!config.is_rule_enabled_for_path(STYLE_RULE, Path::new("tests/my_test.rs")));
+        assert!(config.is_rule_enabled_for_path(STYLE_RULE, Path::new("src/lib.rs")));
     }
 
     #[test]
@@ -1039,7 +752,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::per_file_ignores("[per_file_ignores]\n\"src/[\" = [\"style\"]")]
     #[case::test_patterns("[context]\ntest_patterns = [\"src/[\"]")]
     fn test_invalid_glob_is_config_error(#[case] toml_content: &str) {
         let error = toml::from_str::<Config>(toml_content).unwrap_err();

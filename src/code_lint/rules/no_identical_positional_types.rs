@@ -5,7 +5,7 @@ use crate::code_lint::ast::python::{
 };
 use crate::code_lint::ast::{AstNode, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::{Config, LanguageDefaults, Rule, Tag};
+use crate::core::{Config, LanguageDefaults, Rule};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -36,10 +36,6 @@ impl NoIdenticalPositionalTypes {
 impl Rule for NoIdenticalPositionalTypes {
     fn name(&self) -> RuleName {
         RuleName("no-identical-positional-types")
-    }
-
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::Typing, Tag::Safety, Tag::Opinionated]
     }
 
     fn supported_languages(&self) -> &'static [SupportLang] {

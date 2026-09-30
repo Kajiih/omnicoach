@@ -2,7 +2,7 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::{Config, FilterListDefaults, Rule, Tag};
+use crate::core::{Config, FilterListDefaults, Rule};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -48,10 +48,6 @@ impl NoUnstructuredTaskCreation {
 impl Rule for NoUnstructuredTaskCreation {
     fn name(&self) -> RuleName {
         RuleName("no-unstructured-task-creation")
-    }
-
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::Async]
     }
 
     fn supported_languages(&self) -> &'static [SupportLang] {

@@ -7,7 +7,7 @@
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::is_with_context_manager;
 use crate::code_lint::rule::CodeRule;
-use crate::core::{Config, EnforcementMode, FilterListDefaults, LanguageDefaults, Rule, Tag};
+use crate::core::{Config, EnforcementMode, FilterListDefaults, LanguageDefaults, Rule};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -47,10 +47,6 @@ impl NoUncommentedSuppress {
 impl Rule for NoUncommentedSuppress {
     fn name(&self) -> RuleName {
         RuleName("no-uncommented-suppress")
-    }
-
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::Exceptions]
     }
 
     fn supported_languages(&self) -> &'static [SupportLang] {
