@@ -5,8 +5,8 @@ architecture_component!(CodeLintRunner);
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::comments::CommentIndex;
-use crate::code_lint::suppression::SuppressionTracker;
-use crate::core::{Config, Tag};
+use crate::code_lint::suppression::{SUPPRESSION_AUDITS, SuppressionTracker};
+use crate::core::Config;
 use crate::diagnostic::Diagnostic;
 use ast_grep_language::SupportLang;
 use rayon::prelude::*;
@@ -35,9 +35,6 @@ fn should_evaluate_rule(
     has_inline_tests: bool,
     config: &Config,
 ) -> bool {
-    if rule.tags().contains(&Tag::Suppression) {
-        return false;
-    }
     if !config.is_rule_enabled_for_path(rule, path) || !rule.supports_language(lang) {
         return false;
     }
@@ -91,9 +88,6 @@ fn is_rule_candidate_for_path(
     is_test: bool,
     config: &Config,
 ) -> bool {
-    if rule.tags().contains(&Tag::Suppression) {
-        return false;
-    }
     config.is_rule_enabled_for_path(rule, path)
         && rule.supports_language(lang)
         && match rule.target() {
@@ -113,10 +107,9 @@ fn has_active_suppression_audit(
     config: &Config,
 ) -> bool {
     content.contains("omni:")
-        && crate::code_lint::rules::CODE_RULES.iter().any(|rule| {
-            rule.tags().contains(&Tag::Suppression)
-                && config.is_rule_enabled_for_path(*rule, path)
-                && rule.supports_language(lang)
+        && SUPPRESSION_AUDITS.iter().any(|rule| {
+            config.is_rule_enabled_for_path(*rule, path)
+                && rule.supported_languages().contains(&lang)
         })
 }
 
@@ -143,7 +136,6 @@ static SUPPRESSIBLE_RULES: std::sync::LazyLock<HashSet<&'static str>> =
     std::sync::LazyLock::new(|| {
         crate::code_lint::rules::CODE_RULES
             .iter()
-            .filter(|rule| !rule.tags().contains(&Tag::Suppression))
             .map(|rule| rule.name().0)
             .collect()
     });
@@ -351,8 +343,8 @@ fn lint_single_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::code_lint::{rules, suppression};
-    use crate::core::Selector;
+    use crate::code_lint::rules;
+    use crate::core::{Selector, Tag};
     use rstest::rstest;
 
     #[rstest]
@@ -367,13 +359,6 @@ mod tests {
         &rules::no_logging_error_in_except::NoLoggingErrorInExcept,
         "service.rs",
         SupportLang::Rust,
-        false,
-        false
-    )]
-    #[case::suppression_rule_excluded(
-        &suppression::BlanketSuppression,
-        "service.py",
-        SupportLang::Python,
         false,
         false
     )]

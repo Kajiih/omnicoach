@@ -5,4 +5,4 @@ pub mod rule;
 pub mod rules;
 pub mod runner;
 pub(crate) mod semantic;
-pub(crate) mod suppression;
+pub mod suppression;
