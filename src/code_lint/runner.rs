@@ -35,7 +35,7 @@ fn should_evaluate_rule(
     has_inline_tests: bool,
     config: &Config,
 ) -> bool {
-    if !config.is_rule_enabled_for_path(rule, path) || !rule.supports_language(lang) {
+    if !config.is_rule_enabled_for_path(rule.name(), path) || !rule.supports_language(lang) {
         return false;
     }
     match rule.target() {
@@ -88,7 +88,7 @@ fn is_rule_candidate_for_path(
     is_test: bool,
     config: &Config,
 ) -> bool {
-    config.is_rule_enabled_for_path(rule, path)
+    config.is_rule_enabled_for_path(rule.name(), path)
         && rule.supports_language(lang)
         && match rule.target() {
             RuleTarget::SourceOnly => !is_test,
@@ -109,7 +109,7 @@ fn has_active_suppression_audit(
     content.contains("omni:")
         && SUPPRESSION_AUDITS.iter().any(|audit| {
             let rule = audit.rule;
-            config.is_rule_enabled_for_path(rule, path)
+            config.is_rule_enabled_for_path(rule.name(), path)
                 && rule.supported_languages().contains(&lang)
         })
 }
@@ -346,8 +346,27 @@ fn lint_single_file(
 mod tests {
     use super::*;
     use crate::code_lint::rules;
-    use crate::core::{Selector, Tag};
+    use crate::diagnostic::RuleName;
     use rstest::rstest;
+
+    fn code_rule_names() -> impl Iterator<Item = RuleName> {
+        rules::CODE_RULES
+            .iter()
+            .map(|registered| registered.rule.name())
+    }
+
+    fn audit_names() -> impl Iterator<Item = RuleName> {
+        SUPPRESSION_AUDITS
+            .iter()
+            .map(|registered| registered.rule.name())
+    }
+
+    fn config_disabling(rules: impl Iterator<Item = RuleName>) -> Config {
+        Config {
+            disabled_rules: rules.collect(),
+            ..Default::default()
+        }
+    }
 
     #[rstest]
     #[case::python_rule_on_python_file(
@@ -431,10 +450,7 @@ mod tests {
         #[case] expected: bool,
     ) {
         let config = if disable_suppression_rules {
-            Config {
-                ignore: Some(HashSet::from([Selector::Tag(Tag::Suppression)])),
-                ..Default::default()
-            }
+            config_disabling(audit_names())
         } else {
             Config::default()
         };
@@ -463,14 +479,8 @@ mod tests {
             &config
         ));
 
-        // Config ignoring all rules on python files: should skip AST parse
-        let no_rules_config = Config {
-            ignore: Some(HashSet::from([
-                Selector::Tag(Tag::Python),
-                Selector::Tag(Tag::Suppression),
-            ])),
-            ..Default::default()
-        };
+        // Config disabling every rule: should skip AST parse
+        let no_rules_config = config_disabling(code_rule_names().chain(audit_names()));
         assert!(should_skip_ast_parse(
             py_path,
             SupportLang::Python,
@@ -481,10 +491,7 @@ mod tests {
 
         // When all general code rules are ignored, but suppression directives are present:
         // do NOT skip so suppression hygiene can be audited
-        let suppression_only_config = Config {
-            select: Some(HashSet::from([Selector::Tag(Tag::Suppression)])),
-            ..Default::default()
-        };
+        let suppression_only_config = config_disabling(code_rule_names());
         let code_with_comment = "# omni:ignore -- missing reason";
         assert!(!should_skip_ast_parse(
             py_path,
@@ -708,8 +715,7 @@ mod tests {
     #[test]
     fn test_suppressing_supp_in_config() {
         let content = "clean_name = 1  # omni:ignore [single-letter-variable-name] -- intentional dormant suppression";
-        let toml_content = r#"ignore = ["unused-suppression"]"#;
-        let config: Config = toml::from_str(toml_content).unwrap();
+        let config = config_disabling(std::iter::once(RuleName("unused-suppression")));
         let diags = lint_file(Path::new("src/template.py"), content, &config);
 
         assert!(diags.is_empty(), "Expected 0 diagnostics, got: {diags:?}");

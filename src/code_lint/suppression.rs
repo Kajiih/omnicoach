@@ -4,7 +4,7 @@ architecture_component!(CodeSuppressionEngine);
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::semantic::comments::strip_comment_delimiters;
-use crate::core::{Config, Rule, Tag};
+use crate::core::{Config, Rule};
 use crate::diagnostic::{
     Diagnostic, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationTemplate,
     violation_template,
@@ -40,10 +40,6 @@ impl Rule for MissingSuppressionReason {
         RuleName("missing-suppression-reason")
     }
 
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::Suppression]
-    }
-
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python, SupportLang::Rust]
     }
@@ -75,10 +71,6 @@ impl UnusedSuppression {
 impl Rule for UnusedSuppression {
     fn name(&self) -> RuleName {
         RuleName("unused-suppression")
-    }
-
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::Suppression]
     }
 
     fn supported_languages(&self) -> &'static [SupportLang] {
@@ -114,10 +106,6 @@ impl Rule for UnknownSuppressionRule {
         RuleName("unknown-suppression-rule")
     }
 
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::Suppression]
-    }
-
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[SupportLang::Python, SupportLang::Rust]
     }
@@ -149,10 +137,6 @@ impl BlanketSuppression {
 impl Rule for BlanketSuppression {
     fn name(&self) -> RuleName {
         RuleName("blanket-suppression")
-    }
-
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::Suppression]
     }
 
     fn supported_languages(&self) -> &'static [SupportLang] {
@@ -446,17 +430,17 @@ fn audit_single_directive(
 ) {
     let location = SourceLocation::file_span(path, directive.span, directive.coord);
 
-    if directive.is_blanket && config.is_rule_enabled_for_path(&BlanketSuppression, path) {
+    if directive.is_blanket && config.is_rule_enabled_for_path(BlanketSuppression.name(), path) {
         diagnostics.push(BlanketSuppression.render_diagnostic(&[], location.clone()));
     }
 
     if directive.reason.is_none()
-        && config.is_rule_enabled_for_path(&MissingSuppressionReason, path)
+        && config.is_rule_enabled_for_path(MissingSuppressionReason.name(), path)
     {
         diagnostics.push(MissingSuppressionReason.render_diagnostic(&[], location.clone()));
     }
 
-    if config.is_rule_enabled_for_path(&UnknownSuppressionRule, path) {
+    if config.is_rule_enabled_for_path(UnknownSuppressionRule.name(), path) {
         for target_rule in &directive.target_rules {
             if !suppressible_rules.contains(target_rule.as_str()) {
                 diagnostics.push(
@@ -467,7 +451,7 @@ fn audit_single_directive(
         }
     }
 
-    if !directive.is_blanket && config.is_rule_enabled_for_path(&UnusedSuppression, path) {
+    if !directive.is_blanket && config.is_rule_enabled_for_path(UnusedSuppression.name(), path) {
         for target_rule in &directive.target_rules {
             if suppressible_rules.contains(target_rule.as_str())
                 && directive

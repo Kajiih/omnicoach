@@ -2,7 +2,7 @@
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::{Config, FilterListDefaults, Rule, Tag};
+use crate::core::{Config, FilterListDefaults, Rule};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -78,10 +78,6 @@ impl NoEnvInFunctions {
 impl Rule for NoEnvInFunctions {
     fn name(&self) -> RuleName {
         RuleName("no-env-in-functions")
-    }
-
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::SideEffects, Tag::Opinionated]
     }
 
     fn supported_languages(&self) -> &'static [SupportLang] {

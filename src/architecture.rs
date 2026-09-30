@@ -77,7 +77,7 @@ define_architecture! {
     // --- Shared Foundations ---
     /// Zero-dependency foundational primitives (`architecture`, `diagnostic`, `diff`).
     FoundationPrimitives  => [],
-    /// Shared domain vocabulary, config, and tags (`core`).
+    /// Shared domain vocabulary and config (`core`).
     CoreVocabulary        => [FoundationPrimitives],
     /// Pure rule classification types: topics and declared facets (`rule_taxonomy`).
     RuleTaxonomy          => [FoundationPrimitives],
@@ -106,11 +106,15 @@ define_architecture! {
     /// Command linting orchestration and interception runner (`command_lint::runner`).
     CommandLintRunner     => [CommandLintRules],
 
+    // --- Rule Selection ---
+    /// Taxonomy queries and config selector resolution into rule names (`rule_selection`).
+    RuleSelection         => [RuleTaxonomy, CodeLintRules, CodeSuppressionEngine, CommandLintRules, CoreVocabulary],
+
     // --- Test Harness & Entrypoints ---
     /// Test harness and snapshot fixtures (`test_utils`).
     TestingHarness        => [CodeRuleContracts, CommandRuleContracts],
     /// CLI application entrypoint binaries (`src/bin/*`).
-    ApplicationBinaries   => [CodeLintRunner, CommandLintRunner, CoreVocabulary],
+    ApplicationBinaries   => [CodeLintRunner, CommandLintRunner, RuleSelection, CoreVocabulary],
 }
 
 impl ArchitectureComponent {

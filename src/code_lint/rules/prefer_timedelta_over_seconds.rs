@@ -2,7 +2,7 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeRule;
-use crate::core::{FilterListDefaults, Rule, Tag};
+use crate::core::{FilterListDefaults, Rule};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -44,10 +44,6 @@ impl PreferTimedeltaOverSeconds {
 impl Rule for PreferTimedeltaOverSeconds {
     fn name(&self) -> RuleName {
         RuleName("prefer-timedelta-over-seconds")
-    }
-
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::Style, Tag::Naming, Tag::Typing]
     }
 
     fn supported_languages(&self) -> &'static [SupportLang] {

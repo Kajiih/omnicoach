@@ -2,7 +2,7 @@
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::{Config, Rule, Tag};
+use crate::core::{Config, Rule};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -38,10 +38,6 @@ impl NoAssertionPacking {
 impl Rule for NoAssertionPacking {
     fn name(&self) -> RuleName {
         RuleName("no-assertion-packing")
-    }
-
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::Testing, Tag::Opinionated]
     }
 
     fn supported_languages(&self) -> &'static [SupportLang] {

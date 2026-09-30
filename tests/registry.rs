@@ -6,11 +6,10 @@
 use omni::code_lint::rules::CODE_RULES;
 use omni::code_lint::suppression::SUPPRESSION_AUDITS;
 use omni::command_lint::rules::COMMAND_RULES;
-use omni::core::{Tag, is_kebab_case};
+use omni::core::is_kebab_case;
 use omni::rule_taxonomy::ClassifiedRule;
 use rstest::rstest;
 use std::collections::HashSet;
-use strum::IntoEnumIterator;
 
 fn validate_rule(rule: &(impl omni::core::Rule + ?Sized), names: &mut HashSet<&'static str>) {
     let name = rule.name().0;
@@ -22,10 +21,6 @@ fn validate_rule(rule: &(impl omni::core::Rule + ?Sized), names: &mut HashSet<&'
     assert!(
         is_kebab_case(name),
         "Rule name '{name}' does not match standard kebab-case pattern"
-    );
-    assert!(
-        !rule.tags().is_empty(),
-        "Rule {name} must declare at least one domain tag"
     );
 
     let template = rule.violation_template();
@@ -115,35 +110,6 @@ fn test_code_rules_declare_supported_languages() {
             !languages.is_empty(),
             "Code rule {name} must declare at least one supported language"
         );
-    }
-}
-
-#[rstest]
-#[case::code_rules(CODE_RULES)]
-#[case::suppression_audits(SUPPRESSION_AUDITS)]
-#[case::command_rules(COMMAND_RULES)]
-fn test_language_tags_are_derived_not_declared<R>(#[case] rules: &[ClassifiedRule<R>])
-where
-    R: omni::core::Rule + ?Sized,
-{
-    for rule in rules.iter().map(|registered| registered.rule) {
-        for tag in rule.tags() {
-            assert!(
-                tag.to_support_lang().is_none(),
-                "Rule {} declares language tag {tag:?}; language tags are derived from supported_languages()",
-                rule.name().0
-            );
-        }
-        for lang in rule.supported_languages() {
-            let lang_tag = Tag::iter()
-                .find(|tag| tag.to_support_lang() == Some(*lang))
-                .expect("supported language must have a matching Tag variant");
-            assert!(
-                rule.has_tag(lang_tag),
-                "Rule {} does not resolve derived language tag {lang_tag:?}",
-                rule.name().0
-            );
-        }
     }
 }
 

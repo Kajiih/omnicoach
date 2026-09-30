@@ -1,7 +1,7 @@
 //! Rule taxonomy: the facets each rule declares.
 //!
 //! Pure, constant metadata with no queries. Rules and runners never branch on it:
-//! rule selection is its only reader.
+//! [`crate::rule_selection`] is its only reader.
 
 architecture_component!(RuleTaxonomy);
 

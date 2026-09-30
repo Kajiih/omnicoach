@@ -2,7 +2,7 @@
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::{FilterListDefaults, Rule, Tag};
+use crate::core::{FilterListDefaults, Rule};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -60,10 +60,6 @@ impl PreferDedentForMultilineStrings {
 impl Rule for PreferDedentForMultilineStrings {
     fn name(&self) -> RuleName {
         RuleName("prefer-dedent-for-multiline-strings")
-    }
-
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::Style]
     }
 
     fn supported_languages(&self) -> &'static [SupportLang] {

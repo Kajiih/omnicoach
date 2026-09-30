@@ -3,7 +3,7 @@
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{PythonClassInfo, extract_classes};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::{Rule, Tag};
+use crate::core::Rule;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -31,10 +31,6 @@ impl EnforceFrozenSlotsDataclass {
 impl Rule for EnforceFrozenSlotsDataclass {
     fn name(&self) -> RuleName {
         RuleName("enforce-frozen-slots-dataclass")
-    }
-
-    fn tags(&self) -> &'static [Tag] {
-        &[Tag::Typing, Tag::Style, Tag::Opinionated]
     }
 
     fn supported_languages(&self) -> &'static [SupportLang] {
