@@ -9,6 +9,7 @@ use crate::code_lint::ast::python::is_with_context_manager;
 use crate::code_lint::rule::CodeRule;
 use crate::core::{Config, EnforcementMode, FilterListDefaults, LanguageDefaults, Rule, Tag};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -32,6 +33,16 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 
 /// Rule struct.
 pub struct NoUncommentedSuppress;
+
+impl NoUncommentedSuppress {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::ERROR_HANDLING],
+        precision: Precision::Exact,
+        consensus: Consensus::Opinionated,
+        impacted_quality: ImpactedQuality::Maintainability,
+    };
+}
 
 impl Rule for NoUncommentedSuppress {
     fn name(&self) -> RuleName {

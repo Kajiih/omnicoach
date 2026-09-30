@@ -5,6 +5,7 @@ use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls::CallMatch;
 use crate::core::{Config, FilterListDefaults, Rule, Tag};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -52,6 +53,16 @@ const ZERO_SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
 /// Rule that bans non-zero wall-clock and async sleeps in test files.
 pub struct NoSleepInTests;
 
+impl NoSleepInTests {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::TEST_TIMING],
+        precision: Precision::Exact,
+        consensus: Consensus::Unopinionated,
+        impacted_quality: ImpactedQuality::Reliability,
+    };
+}
+
 impl Rule for NoSleepInTests {
     fn name(&self) -> RuleName {
         RuleName("no-sleep-in-tests")
@@ -72,6 +83,16 @@ impl Rule for NoSleepInTests {
 
 /// Rule that bans zero-duration sleeps (`sleep(0)`, `sleep(Duration::ZERO)`) in test files.
 pub struct NoZeroSleepInTests;
+
+impl NoZeroSleepInTests {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::TEST_TIMING],
+        precision: Precision::Exact,
+        consensus: Consensus::Opinionated,
+        impacted_quality: ImpactedQuality::Reliability,
+    };
+}
 
 impl Rule for NoZeroSleepInTests {
     fn name(&self) -> RuleName {

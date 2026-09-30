@@ -4,6 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::core::{FilterListDefaults, Rule, Tag};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -37,6 +38,16 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 
 /// Rule that bans mock interaction assertions in test files.
 pub struct NoMockAssertions;
+
+impl NoMockAssertions {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::TEST_ASSERTIONS, Topic::TEST_DOUBLES],
+        precision: Precision::Exact,
+        consensus: Consensus::Opinionated,
+        impacted_quality: ImpactedQuality::Maintainability,
+    };
+}
 
 impl Rule for NoMockAssertions {
     fn name(&self) -> RuleName {

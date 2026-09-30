@@ -4,6 +4,7 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::core::{FilterListDefaults, Rule, Tag};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -45,6 +46,16 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 
 /// Rule enforcing that multiline string literals are wrapped in a dedent helper.
 pub struct PreferDedentForMultilineStrings;
+
+impl PreferDedentForMultilineStrings {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::LITERALS],
+        precision: Precision::Exact,
+        consensus: Consensus::Opinionated,
+        impacted_quality: ImpactedQuality::Reliability,
+    };
+}
 
 impl Rule for PreferDedentForMultilineStrings {
     fn name(&self) -> RuleName {

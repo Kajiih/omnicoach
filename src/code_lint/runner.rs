@@ -107,8 +107,9 @@ fn has_active_suppression_audit(
     config: &Config,
 ) -> bool {
     content.contains("omni:")
-        && SUPPRESSION_AUDITS.iter().any(|rule| {
-            config.is_rule_enabled_for_path(*rule, path)
+        && SUPPRESSION_AUDITS.iter().any(|audit| {
+            let rule = audit.rule;
+            config.is_rule_enabled_for_path(rule, path)
                 && rule.supported_languages().contains(&lang)
         })
 }
@@ -127,7 +128,7 @@ fn should_skip_ast_parse(
 ) -> bool {
     let has_code_rules = crate::code_lint::rules::CODE_RULES
         .iter()
-        .any(|rule| is_rule_candidate_for_path(*rule, path, lang, is_test, config));
+        .any(|registered| is_rule_candidate_for_path(registered.rule, path, lang, is_test, config));
 
     !has_code_rules && !has_active_suppression_audit(path, lang, content, config)
 }
@@ -136,7 +137,7 @@ static SUPPRESSIBLE_RULES: std::sync::LazyLock<HashSet<&'static str>> =
     std::sync::LazyLock::new(|| {
         crate::code_lint::rules::CODE_RULES
             .iter()
-            .map(|rule| rule.name().0)
+            .map(|registered| registered.rule.name().0)
             .collect()
     });
 
@@ -163,8 +164,9 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
     let mut raw_diagnostics = Vec::new();
     let mut comment_index = None;
 
-    for rule in crate::code_lint::rules::CODE_RULES {
-        if !should_evaluate_rule(*rule, path, lang, is_test, has_inline_tests, config) {
+    for registered in crate::code_lint::rules::CODE_RULES {
+        let rule = registered.rule;
+        if !should_evaluate_rule(rule, path, lang, is_test, has_inline_tests, config) {
             continue;
         }
         let mode = rule.enforcement_mode(lang, config);

@@ -4,6 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::core::{FilterListDefaults, Rule, Tag};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -31,6 +32,16 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 
 /// Rule that bans dynamic attribute reflection in Python files.
 pub struct NoDynamicAttributeAccess;
+
+impl NoDynamicAttributeAccess {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::TYPE_CHECKER_BYPASS],
+        precision: Precision::Exact,
+        consensus: Consensus::Opinionated,
+        impacted_quality: ImpactedQuality::Reliability,
+    };
+}
 
 impl Rule for NoDynamicAttributeAccess {
     fn name(&self) -> RuleName {

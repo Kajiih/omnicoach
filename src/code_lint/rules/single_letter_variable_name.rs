@@ -4,6 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeRule;
 use crate::core::{FilterListDefaults, Rule, Tag};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -22,6 +23,16 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 
 /// Rule that bans single-letter variable names.
 pub struct SingleLetterVariableName;
+
+impl SingleLetterVariableName {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::ABBREVIATED_NAMES],
+        precision: Precision::Exact,
+        consensus: Consensus::Opinionated,
+        impacted_quality: ImpactedQuality::Maintainability,
+    };
+}
 
 impl Rule for SingleLetterVariableName {
     fn name(&self) -> RuleName {

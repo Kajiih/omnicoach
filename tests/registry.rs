@@ -7,6 +7,7 @@ use omni::code_lint::rules::CODE_RULES;
 use omni::code_lint::suppression::SUPPRESSION_AUDITS;
 use omni::command_lint::rules::COMMAND_RULES;
 use omni::core::{Tag, is_kebab_case};
+use omni::rule_taxonomy::ClassifiedRule;
 use rstest::rstest;
 use std::collections::HashSet;
 use strum::IntoEnumIterator;
@@ -66,13 +67,13 @@ fn validate_rule(rule: &(impl omni::core::Rule + ?Sized), names: &mut HashSet<&'
 #[case::code_rules(CODE_RULES)]
 #[case::suppression_audits(SUPPRESSION_AUDITS)]
 #[case::command_rules(COMMAND_RULES)]
-fn test_registry_integrity<R>(#[case] rules: &[&R])
+fn test_registry_integrity<R>(#[case] rules: &[ClassifiedRule<R>])
 where
     R: omni::core::Rule + ?Sized,
 {
     let mut names = HashSet::new();
-    for rule in rules {
-        validate_rule(*rule, &mut names);
+    for registered in rules {
+        validate_rule(registered.rule, &mut names);
     }
 }
 
@@ -80,9 +81,13 @@ where
 fn test_global_registry_uniqueness() {
     let mut names = HashSet::new();
 
-    let code_names = CODE_RULES.iter().map(|rule| rule.name().0);
-    let audit_names = SUPPRESSION_AUDITS.iter().map(|rule| rule.name().0);
-    let command_names = COMMAND_RULES.iter().map(|rule| rule.name().0);
+    let code_names = CODE_RULES.iter().map(|registered| registered.rule.name().0);
+    let audit_names = SUPPRESSION_AUDITS
+        .iter()
+        .map(|registered| registered.rule.name().0);
+    let command_names = COMMAND_RULES
+        .iter()
+        .map(|registered| registered.rule.name().0);
     for name in code_names.chain(audit_names).chain(command_names) {
         assert!(
             names.insert(name),
@@ -93,12 +98,18 @@ fn test_global_registry_uniqueness() {
 
 #[test]
 fn test_code_rules_declare_supported_languages() {
-    let code_languages = CODE_RULES
-        .iter()
-        .map(|rule| (rule.name(), rule.supported_languages()));
-    let audit_languages = SUPPRESSION_AUDITS
-        .iter()
-        .map(|rule| (rule.name(), rule.supported_languages()));
+    let code_languages = CODE_RULES.iter().map(|registered| {
+        (
+            registered.rule.name(),
+            registered.rule.supported_languages(),
+        )
+    });
+    let audit_languages = SUPPRESSION_AUDITS.iter().map(|registered| {
+        (
+            registered.rule.name(),
+            registered.rule.supported_languages(),
+        )
+    });
     for (name, languages) in code_languages.chain(audit_languages) {
         assert!(
             !languages.is_empty(),
@@ -111,11 +122,11 @@ fn test_code_rules_declare_supported_languages() {
 #[case::code_rules(CODE_RULES)]
 #[case::suppression_audits(SUPPRESSION_AUDITS)]
 #[case::command_rules(COMMAND_RULES)]
-fn test_language_tags_are_derived_not_declared<R>(#[case] rules: &[&R])
+fn test_language_tags_are_derived_not_declared<R>(#[case] rules: &[ClassifiedRule<R>])
 where
     R: omni::core::Rule + ?Sized,
 {
-    for rule in rules {
+    for rule in rules.iter().map(|registered| registered.rule) {
         for tag in rule.tags() {
             assert!(
                 tag.to_support_lang().is_none(),

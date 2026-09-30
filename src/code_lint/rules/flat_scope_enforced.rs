@@ -4,6 +4,7 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::CodeRule;
 use crate::core::{Rule, Tag};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
@@ -15,6 +16,16 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 
 /// Rule enforcing flat function definitions (no nested named functions).
 pub struct FlatScopeEnforced;
+
+impl FlatScopeEnforced {
+    /// The rule's declared facets (ADR 007).
+    pub(crate) const CLASSIFICATION: Classification = Classification {
+        topics: &[Topic::COMPLEXITY],
+        precision: Precision::Exact,
+        consensus: Consensus::Opinionated,
+        impacted_quality: ImpactedQuality::Maintainability,
+    };
+}
 
 impl Rule for FlatScopeEnforced {
     fn name(&self) -> RuleName {
