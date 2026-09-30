@@ -90,9 +90,9 @@ define_architecture! {
     /// Inline comment suppression tracker and directive policies (`code_lint::suppression`).
     CodeSuppressionEngine => [CodeRuleContracts, CodeSemanticEngines],
     /// Concrete static analysis linter rules (`code_lint::rules`).
-    CodeLintRules         => [CodeRuleContracts, CodeSuppressionEngine],
+    CodeLintRules         => [CodeRuleContracts],
     /// Static code linting multi-file orchestration runner (`code_lint::runner`).
-    CodeLintRunner        => [CodeLintRules],
+    CodeLintRunner        => [CodeLintRules, CodeSuppressionEngine],
 
     // --- Command Safety Domain (`command_lint`) ---
     /// VCS interaction and repository diff adapters (`command_lint::vcs`).

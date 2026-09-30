@@ -3,7 +3,6 @@
 architecture_component!(CodeSuppressionEngine);
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::rule::CodeRule;
 use crate::code_lint::semantic::comments::strip_comment_delimiters;
 use crate::core::{Config, Rule, Tag};
 use crate::diagnostic::{
@@ -41,13 +40,6 @@ impl Rule for MissingSuppressionReason {
     }
 }
 
-impl CodeRule for MissingSuppressionReason {
-    fn check_file(&self, _path: &Path, _file: &ParsedFile, _config: &Config) -> Vec<Diagnostic> {
-        // Evaluated during the suppression tracker audit pass
-        Vec::new()
-    }
-}
-
 const UNUSED_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Suppression directive for rule `{target_rule}` is unused.",
     rationale: "No violation occurred for this rule; obsolete suppressions cause dead comments and confusion.",
@@ -72,13 +64,6 @@ impl Rule for UnusedSuppression {
 
     fn violation_template(&self) -> &'static ViolationTemplate {
         &UNUSED_SUPPRESSION_TEMPLATE
-    }
-}
-
-impl CodeRule for UnusedSuppression {
-    fn check_file(&self, _path: &Path, _file: &ParsedFile, _config: &Config) -> Vec<Diagnostic> {
-        // Evaluated during the suppression tracker audit pass
-        Vec::new()
     }
 }
 
@@ -109,13 +94,6 @@ impl Rule for UnknownSuppressionRule {
     }
 }
 
-impl CodeRule for UnknownSuppressionRule {
-    fn check_file(&self, _path: &Path, _file: &ParsedFile, _config: &Config) -> Vec<Diagnostic> {
-        // Evaluated during the suppression tracker audit pass
-        Vec::new()
-    }
-}
-
 const BLANKET_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Blanket suppression directives without rule names are banned.",
     rationale: "Directives must explicitly target rule names in brackets (e.g. `[rule-name]`) to prevent unintended rule suppression.",
@@ -143,12 +121,14 @@ impl Rule for BlanketSuppression {
     }
 }
 
-impl CodeRule for BlanketSuppression {
-    fn check_file(&self, _path: &Path, _file: &ParsedFile, _config: &Config) -> Vec<Diagnostic> {
-        // Evaluated during the suppression tracker audit pass
-        Vec::new()
-    }
-}
+/// Static list of the suppression audits, evaluated by [`SuppressionTracker::audit`] rather than
+/// per file like code rules.
+pub const SUPPRESSION_AUDITS: &[&dyn Rule] = &[
+    &MissingSuppressionReason,
+    &UnusedSuppression,
+    &UnknownSuppressionRule,
+    &BlanketSuppression,
+];
 
 /// The placement scope of a parsed suppression directive.
 #[derive(Debug, Clone, PartialEq, Eq)]

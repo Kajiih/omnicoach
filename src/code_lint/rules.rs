@@ -45,8 +45,4 @@ pub const CODE_RULES: &[&dyn crate::code_lint::rule::CodeRule] = &[
     &enforce_frozen_slots_dataclass::EnforceFrozenSlotsDataclass,
     &prefer_dedent_for_multiline_strings::PreferDedentForMultilineStrings,
     &prefer_tuple_unpacking::PreferTupleUnpacking,
-    &crate::code_lint::suppression::MissingSuppressionReason,
-    &crate::code_lint::suppression::UnusedSuppression,
-    &crate::code_lint::suppression::UnknownSuppressionRule,
-    &crate::code_lint::suppression::BlanketSuppression,
 ];
