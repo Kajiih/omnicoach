@@ -52,8 +52,8 @@ Static rules should establish sane defaults while respecting domain vocabulary.
 All rule unit tests in `src/code_lint/rules/*.rs` must use `crate::test_utils::rule_test!`.
 
 * **Never Snapshot Static Prose in Unit Tests**: `insta::assert_snapshot!` and `assert_code_rule_snapshot` are reserved for end-to-end CLI output tests (`tests/cli.rs`). Unit tests must never assert on rendered static `TEMPLATE` text (`summary`, `rationale`, `suggestion`), as `tests/registry.rs` validates template integrity globally.
-* **Declarative Suites with `rule_test!`**: Every rule file invokes `#[cfg(test)] crate::test_utils::rule_test!(RuleName, { Language => { pass: [...], fail: [...] } })` at the bottom of the file. Bespoke `#[test]` or `#[rstest]` functions are strictly forbidden in rule files and enforced by CI.
-* **Language Completeness**: The generated `language_completeness` test verifies at test execution time that every `SupportLang` declared in `rule.supported_languages()` is covered in `rule_test!`.
+* **Declarative Suites with `rule_test!`**: Every rule file invokes `#[cfg(test)] crate::test_utils::rule_test!(RULE, { Language => { pass: [...], fail: [...] } })` at the bottom of the file. Bespoke `#[test]` or `#[rstest]` functions are strictly forbidden in rule files and enforced by CI.
+* **Language Completeness**: The generated `language_completeness` test verifies at test execution time that every `SupportLang` declared in `RULE.declaration.languages` is covered in `rule_test!`.
 * **Mandatory AST Span Verification**:
   * Omit `=> r#"..."#` when the entire test snippet is the flagged AST node: `case_name => "typing.cast(int, x)"`.
   * Add `=> r#"..."#` when the flagged construct is an inner AST slice inside setup syntax: `case_name => r#"fn build() { let bad = "..."; }"# => r#""...""#`.
@@ -63,7 +63,7 @@ All rule unit tests in `src/code_lint/rules/*.rs` must use `crate::test_utils::r
 * **Minimum Required Cases**:
   1. **Core Antipattern (`fail`)**: The primary construct the rule flags.
   2. **Canonical Fix & Syntactic Exemptions (`pass`)**: The recommended pit-of-success replacement (e.g. `inspect.cleandoc`, `indoc::indoc!`, docstrings) to prove the suggested fix passes the rule.
-  3. **Do Not Re-Test Framework Config Plumbing**: option validation and per-language resolution (`RuleOverrides`, `ResolvedOptions`) are tested centrally in `core`. Individual rule tests must not re-test framework configuration parsing.
+  3. **Do Not Re-Test Framework Config Plumbing**: option validation and per-language resolution (`RuleOverrides`, `OptionsDeclaration`) are tested centrally in `core`. Individual rule tests must not re-test framework configuration parsing.
 * **One Behavior per Case**: Each `pass`/`fail` case exercises exactly one code path (one banned pattern, one exemption, one AST construct) and is named after it, so a failing case name pinpoints the regression.
 * **Exemption Cases Must Be Able to Fail**: A `pass` case for an exemption must be flagged if the exemption were removed (e.g. keep enough other reads to reach the threshold); otherwise it passes for an unrelated reason and proves nothing. Confirm once by disabling the exemption and watching the case fail.
 * **Known Gaps as Named Cases**: An accepted false negative is a `pass` case named `known_gap_*` with a `ROADMAP.md` entry, so the gap stays visible and fixing it forces the case to be updated.
@@ -77,16 +77,18 @@ Rule files are the highest-level policy code in the codebase: they state *what* 
 | Component | Modules | Role |
 | :--- | :--- | :--- |
 | `FoundationPrimitives` | `architecture`, `diagnostic`, `diff` | Zero-dependency primitives: DAG, locations, spans, diffs |
-| `CoreVocabulary` | `core` | Domain vocabulary, config, tags, selectors |
+| `CoreVocabulary` | `core` | Domain vocabulary, config, rule option declarations |
+| `RuleTaxonomy` / `RuleDocumentation` | `rule_taxonomy`, `rule_documentation` | Faceted rule classification and user-facing documentation |
+| `RuleDeclaration` | `rule_declaration` | Rule declaration (`Declaration`, `DeclaredRule`) |
 | `CodeSyntaxAdapters` / `CommandVcsAdapters` | `code_lint::ast`, `command_lint::vcs` | Syntax and VCS adapters; `code_lint::ast` encapsulates `ast_grep_core` |
 | `CodeSemanticEngines` | `code_lint::semantic::{bindings,calls,comments}` | Cross-language semantic engines |
-| `CodeRuleContracts` / `CommandRuleContracts` | `code_lint::rule`, `command_lint::rule` | Rule contracts (`CodeDetector`, `CommandDetector`) |
+| `CodeRuleContracts` / `CommandRuleContracts` | `code_lint::rule`, `command_lint::rule` | Rule contracts (`CodeRule`, `AnyCodeRule`, `CommandRule`) |
 | `CodeSuppressionEngine` | `code_lint::suppression` | Inline comment suppression tracker and directive policies |
 | `CodeLintRules` / `CommandLintRules` | `code_lint::rules::*`, `command_lint::rules::*` | Concrete lint rules and static registries (`CODE_RULES`, `COMMAND_RULES`) |
 | `CodeLintRunner` / `CommandLintRunner` | `code_lint::runner`, `command_lint::runner` | Multi-file and command orchestration runners |
 
-* **One Declaration per Rule**: a rule file exposes exactly one `pub const RULE: Rule<dyn CodeDetector>` (or one per rule when a file holds several) bundling the private detector, its `Classification`, its `RuleDoc` and its `RuleOptions`. Options are `CountOption` / `ListOption` consts declared next to `RULE`, listed in `RULE.options`, and read in `check_file` through `ResolvedOptions` (`options.count(&MAX_ASSERTIONS)`). The loader validates `[rules.<name>]` against that declaration and `--explain` renders it, so defaults are never repeated in prose.
-* **Rules See Opaque Nodes**: `CodeDetector::check_file` receives a `ParsedFile`. Rules query it through named AST/semantic helpers (`ast::python::extract_classes`, `ast::collect_call_candidates`, `self.check_banned_calls(...)`) and anchor diagnostics on `AstNode`, which exposes text, span, and location but no tree navigation or grammar kinds. A rule needing a new structural fact adds a named helper to `code_lint::ast` rather than walking the tree itself.
+* **One Declaration per Rule**: a rule file exposes a single `pub const RULE: CodeRule<Options>` (or one per rule when a file holds several) bundling its `Declaration` (`name`, `template`, `languages`, `options`, `classification`, `doc`), its `RuleTarget`, and its `check: check_file` function pointer. Options are `CountOption` / `ListOption` consts declared next to `RULE`, passed to `RuleOptions::code_rule(...)`, and received directly as a typed parameter (`()`, `usize`, `(usize, usize)`, or `&HashSet<String>`) by `check_file`. The loader validates `[rules.<name>]` against that declaration and `--explain` renders it, so defaults are never repeated in prose.
+* **Rules See Opaque Nodes**: `check_file` receives a `ParsedFile`. Rules query it through named AST/semantic helpers (`ast::python::extract_classes`, `ast::collect_call_candidates`, `rule.check_banned_calls(...)`) and anchor diagnostics on `AstNode`, which exposes text, span, and location but no tree navigation or grammar kinds. A rule needing a new structural fact adds a named helper to `code_lint::ast` rather than walking the tree itself.
 * **Universal Sibling Isolation**: Rule files inherit `CodeLintRules` / `CommandLintRules` from their parent component root (`src/code_lint/rules.rs`, `src/command_lint/rules.rs`) and never import sideways from sibling rules; shared logic moves down to `code_lint::semantic` or `code_lint::ast`.
 * **Single Public Path & Intra-Component Relative Paths**: Every item keeps a single canonical path. Cross-component imports use `crate::`; relative paths (`super::`, `self::`) are allowed within the same component subtree. Visible re-exports (`pub use` / `pub(crate) use`) are allowed only when a parent module re-exports items from a private direct child submodule (`mod child; pub use self::child::Item;`). A `macro_rules!` macro declares its module path with `pub(crate) use name;` next to its definition; `#[macro_export]` is used only in `src/lib.rs`.
 * **Enforced, Not Documented**: `tests/architecture_conformance.rs` (powered by `summarize_rust_file` in `code_lint::ast::rust`) enforces DAG reachability, universal sibling subtree isolation, single-path/facade rules, intra-component relative path bounds, and `ast_grep_core` encapsulation.

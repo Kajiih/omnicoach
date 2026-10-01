@@ -11,8 +11,9 @@ use crate::code_lint::rule::RuleTarget;
 use crate::code_lint::rules::CODE_RULES;
 use crate::code_lint::suppression::SUPPRESSION_AUDITS;
 use crate::command_lint::rules::COMMAND_RULES;
-use crate::core::{RuleOptions, closest_match};
+use crate::core::{DeclaredOptions, closest_match};
 use crate::diagnostic::{RuleName, ViolationTemplate};
+use crate::rule_declaration::DeclaredRule;
 use crate::rule_documentation::RuleDoc;
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 
@@ -159,66 +160,55 @@ pub struct RegisteredRule {
     /// The rule's raw violation template.
     pub template: &'static ViolationTemplate,
     /// What the rule accepts under `[rules.<name>]`.
-    pub options: RuleOptions,
+    pub options: DeclaredOptions,
     /// The languages the rule analyzes; empty for command rules.
     pub languages: &'static [SupportLang],
     classification: Classification,
     derived: Vec<Derived>,
 }
 
-/// Every registered rule (code rules, suppression audits, command rules).
-pub static REGISTERED_RULES: LazyLock<Vec<RegisteredRule>> = LazyLock::new(|| {
-    let languages = |languages: &[SupportLang]| -> Vec<Derived> {
-        languages
+impl RegisteredRule {
+    /// The rule declared by `declared`, with its language facets and the `registry` facets.
+    fn new(declared: DeclaredRule, registry: impl IntoIterator<Item = Derived>) -> Self {
+        let languages = declared
+            .languages
             .iter()
             .filter_map(|language| match language {
                 SupportLang::Python => Some(Derived::Python),
                 SupportLang::Rust => Some(Derived::Rust),
                 _ => None,
-            })
-            .collect()
-    };
-    let code = CODE_RULES.iter().map(|registered| {
-        let scope = match registered.detector.target() {
+            });
+        Self {
+            name: declared.name,
+            doc: declared.doc,
+            template: declared.template,
+            options: declared.options,
+            languages: declared.languages,
+            classification: declared.classification,
+            derived: languages.chain(registry).collect(),
+        }
+    }
+}
+
+/// Every registered rule (code rules, suppression audits, command rules).
+pub static REGISTERED_RULES: LazyLock<Vec<RegisteredRule>> = LazyLock::new(|| {
+    let code = CODE_RULES.iter().map(|rule| {
+        let scope = match rule.target() {
             RuleTarget::All => None,
             RuleTarget::TestsOnly => Some(Derived::TestsOnly),
             RuleTarget::SourceOnly => Some(Derived::SourceOnly),
         };
-        let mut derived = languages(registered.detector.supported_languages());
-        derived.push(Derived::Code);
-        derived.extend(scope);
-        RegisteredRule {
-            name: registered.detector.name(),
-            doc: registered.doc,
-            template: registered.detector.violation_template(),
-            options: registered.options,
-            languages: registered.detector.supported_languages(),
-            classification: registered.classification,
-            derived,
-        }
+        RegisteredRule::new(
+            rule.declaration(),
+            std::iter::once(Derived::Code).chain(scope),
+        )
     });
-    let audits = SUPPRESSION_AUDITS.iter().map(|registered| {
-        let mut derived = languages(registered.detector.supported_languages());
-        derived.push(Derived::Code);
-        RegisteredRule {
-            name: registered.detector.name(),
-            doc: registered.doc,
-            template: registered.detector.violation_template(),
-            options: registered.options,
-            languages: registered.detector.supported_languages(),
-            classification: registered.classification,
-            derived,
-        }
-    });
-    let commands = COMMAND_RULES.iter().map(|registered| RegisteredRule {
-        name: registered.detector.name(),
-        doc: registered.doc,
-        template: registered.detector.violation_template(),
-        options: registered.options,
-        languages: registered.detector.supported_languages(),
-        classification: registered.classification,
-        derived: vec![Derived::Command],
-    });
+    let audits = SUPPRESSION_AUDITS
+        .iter()
+        .map(|audit| RegisteredRule::new(audit.declared(), [Derived::Code]));
+    let commands = COMMAND_RULES
+        .iter()
+        .map(|rule| RegisteredRule::new(rule.declaration.declared(), [Derived::Command]));
     code.chain(audits).chain(commands).collect()
 });
 
@@ -294,7 +284,7 @@ impl RegisteredRule {
             name: RuleName(name),
             doc: RuleDoc::TODO,
             template: &TEMPLATE,
-            options: RuleOptions::NONE,
+            options: crate::core::RuleOptions::none().declared(),
             languages: &[],
             classification,
             derived: Vec::new(),

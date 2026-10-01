@@ -13,20 +13,28 @@ Rule configuration grew in layers that did not know about each other:
 
 ### 2.1. One declaration per rule
 
-Each rule file exposes exactly one item:
+There are no detector traits (`Detector`, `CodeDetector`, `CommandDetector`) or zero-sized detector structs. Each rule is a single `const` struct literal holding its metadata, its typed options declaration, and its check function pointer:
 
 ```rust
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &MaxTestAssertions,       // private struct
-    classification: Classification { ... },
-    doc: RuleDoc { ... },
-    options: RuleOptions { options: &[OptionSpec::Count(&MAX_ASSERTIONS)], ..RuleOptions::CODE_RULE },
+pub const RULE: CodeRule<CountOption> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("max-test-assertions"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python, SupportLang::Rust],
+        options: RuleOptions::code_rule(MAX_ASSERTIONS),
+        classification: Classification { ... },
+        doc: RuleDoc { ... },
+    },
+    target: RuleTarget::TestsOnly,
+    check: check_file,
 };
 ```
 
-`Rule<D>` lives in a new component, `RuleDeclaration => [CoreVocabulary, RuleTaxonomy, RuleDocumentation]`. `RuleTaxonomy` is pure classification again. Registries are flat lists of these consts (`&[max_test_assertions::RULE, ...]`), so a rule cannot be registered without all four parts, and nothing is repeated at the registration site. Detector structs are private; the only public path to a rule is its `RULE`.
+`Declaration<Options>` and its type-erased view `DeclaredRule` live in `RuleDeclaration => [CoreVocabulary, RuleTaxonomy, RuleDocumentation]`, while `RuleTaxonomy` remains pure classification. `CodeRule<Options>` (in `code_lint::rule`), `CommandRule` (in `command_lint::rule`), and the four suppression audits (`Declaration` consts in `code_lint::suppression`) share `Declaration` for their name, template, languages, options, classification, and doc.
 
-### 2.2. Options are declared as const handles
+Because `CodeRule<Options>` is parameterized by `Options`, `code_lint::rule` also defines a type-erased `AnyCodeRule` trait blanket-implemented once for every `CodeRule<Options>`. The registries (`CODE_RULES: &[&dyn AnyCodeRule]`, `SUPPRESSION_AUDITS: &[Declaration]`, `COMMAND_RULES: &[CommandRule]`) are flat slices of these consts, so a rule cannot be registered without every part and nothing is repeated at the registration site.
+
+### 2.2. Options are declared as const values implementing `OptionsDeclaration`
 
 An option is a `const` next to `RULE`, holding its key, its one-sentence doc and its per-language default:
 
@@ -38,18 +46,18 @@ const MAX_ASSERTIONS: CountOption = CountOption {
 };
 ```
 
-Two kinds exist, in `core`:
+Two option structs exist in `core`, and together with `()` and `(First, Second)` they implement `OptionsDeclaration`:
 
-- `CountOption { key, doc, default: LanguageDefaults<usize> }`. Keys name what is counted (`max_assertions`, `min_positional_parameters`), never a bare `max` or `min`.
-- `ListOption { kind: ListKind, doc, default: FilterListDefaults }`. `ListKind::Deny` fixes the keys `banned`, `extend_banned`, `allowed`; `ListKind::Allow` fixes `allowed`, `extend_allowed`, `banned`. Because the kind fixes the keys, a rule declares at most one list; a registry test enforces it.
+- `()` — no rule-specific options (`Resolved = ()`, `Param<'a> = ()`).
+- `CountOption { key, doc, default: LanguageDefaults<usize> }` (`Resolved = usize`, `Param<'a> = usize`). Keys name what is counted (`max_assertions`, `min_positional_parameters`), never a bare `max` or `min`.
+- `ListOption { kind: ListKind, doc, default: FilterListDefaults }` (`Resolved = HashSet<String>`, `Param<'a> = &'a HashSet<String>`). `ListKind::Deny` fixes the keys `banned`, `extend_banned`, `allowed`; `ListKind::Allow` fixes `allowed`, `extend_allowed`, `banned`. Because the kind fixes the keys, a rule declares at most one list; a registry test enforces it.
+- `(First, Second)` — a pair of option declarations (`Resolved = (First::Resolved, Second::Resolved)`, `Param<'a> = (First::Param<'a>, Second::Param<'a>)`).
 
-`RuleOptions { enforcement_mode: Option<LanguageDefaults<EnforcementMode>>, options: &[OptionSpec] }` is the rule's whole surface under `[rules.<name>]` and `[rules.<name>.<language>]`. `RuleOptions::CODE_RULE` is a code rule with no options of its own (`enforcement_mode` defaults to `ban`); `RuleOptions::NONE` rejects every key, including `enforcement_mode`, and is used by suppression audits and command rules, whose runners never honour a mode.
-
-The option types live in `core` rather than in `RuleDeclaration` because the detector contract (`CodeDetector::check_file`, in `CodeRuleContracts`) takes the resolved options, and that contract must not depend on taxonomy or documentation.
+`RuleOptions<Options> { enforcement_mode: Option<LanguageDefaults<EnforcementMode>>, options: Options }` is the rule's whole surface under `[rules.<name>]` and `[rules.<name>.<language>]`. `RuleOptions::code_rule(options)` wraps `options` with `enforcement_mode` defaulting to `ban`; `RuleOptions::none()` rejects every key, including `enforcement_mode`, and is used by suppression audits and command rules, whose runners never honour a mode. `RuleOptions::declared(&self) -> DeclaredOptions` converts the typed `Options` into a `Vec<OptionSpec>` for config validation and `--explain`.
 
 ### 2.3. Enforcement mode is an ordinary option
 
-The key is `enforcement_mode`. Every code rule declares a default (`ban`, except `no-uncommented-suppress` which defaults to `require-explanation`), and `--explain` documents it for every code rule. There is no rule-specific handling in the runner beyond reading `options.enforcement_mode()`.
+The key is `enforcement_mode`. Every code rule declares a default (`ban`, except `no-uncommented-suppress` which defaults to `require-explanation`), and `--explain` documents it for every code rule. There is no rule-specific handling in the runner beyond reading `rule.enforcement_mode(lang, overrides)`.
 
 ### 2.4. Validation happens once, at load
 
@@ -62,19 +70,26 @@ The key is `enforcement_mode`. Every code rule declares a default (`ban`, except
 
 The result is `Config.rule_overrides: HashMap<RuleName, RuleOverrides>`, typed values and nothing else. No string-keyed lookup survives past load.
 
-### 2.5. Rules read through `ResolvedOptions`
+### 2.5. Compile-time linking between declared options and `check`
 
-`CodeDetector::check_file(&self, path, file, options: &ResolvedOptions<'_>)`. The runner builds the view once per rule and file from the language, `RULE.options` and the rule's overrides. Reads are by handle: `options.count(&MAX_ASSERTIONS)`, `options.list(&BANNED)`, `options.enforcement_mode()`. Precedence is language table, then rule table, then the declared per-language default; list additions and removals apply from every layer. `CommandDetector::check_command` no longer takes a `Config`.
+`CodeRule<Options>::check` has the type `for<'a> fn(&Self, &Path, &ParsedFile, Options::Param<'a>) -> Vec<Diagnostic>`. `CodeRule::check_file` resolves `self.declaration.options.options.resolve(file.lang(), overrides)` once per file and passes `Options::as_param(&options)` directly to `self.check`:
+
+- a rule with `Options = ()` receives `(): ()` by value;
+- a rule with `Options = CountOption` receives `usize` by value;
+- a rule with `Options = (CountOption, CountOption)` receives `(usize, usize)` by value;
+- a rule with `Options = ListOption` receives `&HashSet<String>` by reference.
+
+Precedence is language table, then rule table, then the declared per-language default; list additions and removals apply from every layer. Because the check function receives only `Options::Param<'a>`, a rule cannot read an option it did not declare, and a signature mismatch fails to compile with `E0308` at `check: check_file`.
 
 ### 2.6. `--explain` renders the declaration
 
-`RuleCatalog` renders the `## Configuration` section from `RuleOptions`: one bullet per key with its type, per-language defaults and doc, under the rule's `[rules.<name>]` heading. Rule prose no longer states defaults. Rules whose `RuleOptions` is `NONE` get no section.
+`RuleCatalog` renders the `## Configuration` section from `DeclaredOptions`: one bullet per key with its type, per-language defaults and doc, under the rule's `[rules.<name>]` heading. Rule prose no longer states defaults. Rules whose `RuleOptions` is `none()` get no section.
 
 ## 3. Consequences
 
 - Runtime, validation and `--explain` read the same const, so keys, types and defaults cannot drift between them.
-- Per rule: one line (`options: RuleOptions::CODE_RULE`) for a rule without options; a 5-line handle plus a 4-line `options` block for a count; a 9-line handle plus the block for a list.
-- A rule can still read a handle it did not list in `RULE.options`. That compiles; `ResolvedOptions` catches it with a `debug_assert` that every rule's own tests exercise, and a release build would fall back to the handle's default. Closing this gap at compile time (typing `Rule` by its options declaration) is the planned follow-up.
+- A rule cannot read an undeclared option: `check` receives only the resolved value of the `Options` type declared in `RULE`.
+- Zero-sized detector structs, `Detector`, `CodeDetector` and `CommandDetector` traits, and per-rule `impl` blocks are gone; every rule is a single `const` struct literal plus a private `check_file` / `check_command` function.
 - `RuleDoc::configuration` and `ConfigShape` (ADR 008 §2.2), the `effective_*` helpers, `ThresholdConfig`, `DenyListConfig`, `AllowListConfig`, `EnforcementConfig`, `DynamicRuleConfig` and `Config.rules` are removed.
 - Breaking for users: `mode` → `enforcement_mode`; `max` / `min` → explicit names; `enforcement_mode` on an audit or command rule is now an error. Each case fails loudly with a suggestion.
 - Rejecting unknown top-level keys and a JSON Schema generated from the declarations stay on the roadmap.

@@ -1,9 +1,10 @@
-//! Command rule contract ([`CommandDetector`]) and the intercepted command parser it consumes.
+//! Command rule contract ([`CommandRule`]) and the intercepted command parser it consumes.
 
 architecture_component!(CommandRuleContracts);
 
 use crate::command_lint::vcs::JjClient;
 use crate::diagnostic::Diagnostic;
+use crate::rule_declaration::Declaration;
 use ast_grep_core::AstGrep;
 use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_language::SupportLang;
@@ -85,11 +86,26 @@ impl InterceptedCommand {
     }
 }
 
-/// A detector that analyzes intercepted shell commands.
-pub trait CommandDetector: crate::core::Detector {
-    /// Evaluates the intercepted command against this validation rule.
+/// A rule that analyzes intercepted shell commands: its declaration and the function that
+/// finds its violations.
+#[derive(Clone, Copy)]
+pub struct CommandRule {
+    /// Name, template, options, classification and doc; command rules analyze no language.
+    pub declaration: Declaration,
+    /// Finds the rule's violations in one intercepted command.
+    pub check: fn(&Self, &InterceptedCommand, &dyn JjClient) -> Vec<Diagnostic>,
+}
+
+impl CommandRule {
+    /// Finds the rule's violations in `cmd`.
     #[must_use]
-    fn check_command(&self, cmd: &InterceptedCommand, jj_client: &dyn JjClient) -> Vec<Diagnostic>;
+    pub fn check_command(
+        &self,
+        cmd: &InterceptedCommand,
+        jj_client: &dyn JjClient,
+    ) -> Vec<Diagnostic> {
+        (self.check)(self, cmd, jj_client)
+    }
 }
 
 struct ArgParser<'a> {

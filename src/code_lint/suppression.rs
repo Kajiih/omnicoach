@@ -4,12 +4,12 @@ architecture_component!(CodeSuppressionEngine);
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::semantic::comments::strip_comment_delimiters;
-use crate::core::{Config, Detector, RuleOptions};
+use crate::core::{Config, RuleOptions};
 use crate::diagnostic::{
     Diagnostic, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationTemplate,
     violation_template,
 };
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -23,11 +23,11 @@ const MISSING_REASON_TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Flags suppression directives missing a non-empty explanation reason.
-struct MissingSuppressionReason;
-
-/// The rule's declaration.
-const MISSING_SUPPRESSION_REASON: Rule<dyn Detector> = Rule {
-    detector: &MissingSuppressionReason,
+const MISSING_SUPPRESSION_REASON: Declaration = Declaration {
+    name: RuleName("missing-suppression-reason"),
+    template: &MISSING_REASON_TEMPLATE,
+    languages: &[SupportLang::Python, SupportLang::Rust],
+    options: RuleOptions::none(),
     classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
         precision: Precision::Exact,
@@ -51,22 +51,7 @@ const MISSING_SUPPRESSION_REASON: Rule<dyn Detector> = Rule {
             url: "https://docs.astral.sh/ruff/linter/#error-suppression",
         }],
     },
-    options: RuleOptions::NONE,
 };
-
-impl Detector for MissingSuppressionReason {
-    fn name(&self) -> RuleName {
-        RuleName("missing-suppression-reason")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &MISSING_REASON_TEMPLATE
-    }
-}
 
 const UNUSED_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Suppression directive for rule `{target_rule}` is unused.",
@@ -75,11 +60,11 @@ const UNUSED_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Flags suppression directives when no violation occurred for the specified rule.
-struct UnusedSuppression;
-
-/// The rule's declaration.
-const UNUSED_SUPPRESSION: Rule<dyn Detector> = Rule {
-    detector: &UnusedSuppression,
+const UNUSED_SUPPRESSION: Declaration = Declaration {
+    name: RuleName("unused-suppression"),
+    template: &UNUSED_SUPPRESSION_TEMPLATE,
+    languages: &[SupportLang::Python, SupportLang::Rust],
+    options: RuleOptions::none(),
     classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
         precision: Precision::Exact,
@@ -109,22 +94,7 @@ const UNUSED_SUPPRESSION: Rule<dyn Detector> = Rule {
             url: "https://docs.astral.sh/ruff/rules/unused-noqa/",
         }],
     },
-    options: RuleOptions::NONE,
 };
-
-impl Detector for UnusedSuppression {
-    fn name(&self) -> RuleName {
-        RuleName("unused-suppression")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &UNUSED_SUPPRESSION_TEMPLATE
-    }
-}
 
 const UNKNOWN_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Unknown rule `{target_rule}` in suppression directive.",
@@ -133,11 +103,11 @@ const UNKNOWN_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Flags suppression directives targeting unknown or non-suppressible rules.
-struct UnknownSuppressionRule;
-
-/// The rule's declaration.
-const UNKNOWN_SUPPRESSION_RULE: Rule<dyn Detector> = Rule {
-    detector: &UnknownSuppressionRule,
+const UNKNOWN_SUPPRESSION_RULE: Declaration = Declaration {
+    name: RuleName("unknown-suppression-rule"),
+    template: &UNKNOWN_SUPPRESSION_TEMPLATE,
+    languages: &[SupportLang::Python, SupportLang::Rust],
+    options: RuleOptions::none(),
     classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
         precision: Precision::Exact,
@@ -160,22 +130,7 @@ const UNKNOWN_SUPPRESSION_RULE: Rule<dyn Detector> = Rule {
                           it from the directive.",
         references: &[],
     },
-    options: RuleOptions::NONE,
 };
-
-impl Detector for UnknownSuppressionRule {
-    fn name(&self) -> RuleName {
-        RuleName("unknown-suppression-rule")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &UNKNOWN_SUPPRESSION_TEMPLATE
-    }
-}
 
 const BLANKET_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Blanket suppression directives without rule names are banned.",
@@ -184,11 +139,11 @@ const BLANKET_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Flags blanket suppression directives that omit explicit rule names.
-struct BlanketSuppression;
-
-/// The rule's declaration.
-const BLANKET_SUPPRESSION: Rule<dyn Detector> = Rule {
-    detector: &BlanketSuppression,
+const BLANKET_SUPPRESSION: Declaration = Declaration {
+    name: RuleName("blanket-suppression"),
+    template: &BLANKET_SUPPRESSION_TEMPLATE,
+    languages: &[SupportLang::Python, SupportLang::Rust],
+    options: RuleOptions::none(),
     classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
         precision: Precision::Exact,
@@ -213,26 +168,11 @@ const BLANKET_SUPPRESSION: Rule<dyn Detector> = Rule {
             url: "https://docs.astral.sh/ruff/rules/blanket-noqa/",
         }],
     },
-    options: RuleOptions::NONE,
 };
 
-impl Detector for BlanketSuppression {
-    fn name(&self) -> RuleName {
-        RuleName("blanket-suppression")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &BLANKET_SUPPRESSION_TEMPLATE
-    }
-}
-
-/// Static list of the suppression audits with their classifications, evaluated by [`SuppressionTracker::audit`] rather than
-/// per file like code rules.
-pub const SUPPRESSION_AUDITS: &[Rule<dyn Detector>] = &[
+/// The suppression audits, evaluated by [`SuppressionTracker::audit`] rather than per file
+/// like code rules.
+pub const SUPPRESSION_AUDITS: &[Declaration] = &[
     MISSING_SUPPRESSION_REASON,
     UNUSED_SUPPRESSION,
     UNKNOWN_SUPPRESSION_RULE,
@@ -500,28 +440,28 @@ fn audit_single_directive(
 ) {
     let location = SourceLocation::file_span(path, directive.span, directive.coord);
 
-    if directive.is_blanket && config.is_rule_enabled_for_path(BlanketSuppression.name(), path) {
-        diagnostics.push(BlanketSuppression.render_diagnostic(&[], location.clone()));
+    if directive.is_blanket && config.is_rule_enabled_for_path(BLANKET_SUPPRESSION.name, path) {
+        diagnostics.push(BLANKET_SUPPRESSION.render_diagnostic(&[], location.clone()));
     }
 
     if directive.reason.is_none()
-        && config.is_rule_enabled_for_path(MissingSuppressionReason.name(), path)
+        && config.is_rule_enabled_for_path(MISSING_SUPPRESSION_REASON.name, path)
     {
-        diagnostics.push(MissingSuppressionReason.render_diagnostic(&[], location.clone()));
+        diagnostics.push(MISSING_SUPPRESSION_REASON.render_diagnostic(&[], location.clone()));
     }
 
-    if config.is_rule_enabled_for_path(UnknownSuppressionRule.name(), path) {
+    if config.is_rule_enabled_for_path(UNKNOWN_SUPPRESSION_RULE.name, path) {
         for target_rule in &directive.target_rules {
             if !suppressible_rules.contains(target_rule.as_str()) {
                 diagnostics.push(
-                    UnknownSuppressionRule
+                    UNKNOWN_SUPPRESSION_RULE
                         .render_diagnostic(&[("target_rule", target_rule)], location.clone()),
                 );
             }
         }
     }
 
-    if !directive.is_blanket && config.is_rule_enabled_for_path(UnusedSuppression.name(), path) {
+    if !directive.is_blanket && config.is_rule_enabled_for_path(UNUSED_SUPPRESSION.name, path) {
         for target_rule in &directive.target_rules {
             if suppressible_rules.contains(target_rule.as_str())
                 && directive
@@ -530,7 +470,7 @@ fn audit_single_directive(
                     .is_none_or(|&count| count == 0)
             {
                 diagnostics.push(
-                    UnusedSuppression
+                    UNUSED_SUPPRESSION
                         .render_diagnostic(&[("target_rule", target_rule)], location.clone()),
                 );
             }

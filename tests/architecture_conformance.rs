@@ -431,15 +431,6 @@ fn ast_grep_encapsulation_rules() -> Vec<ForbiddenDependencyRule> {
     }]
 }
 
-/// Runners reach `rule_taxonomy` transitively through the rule registries, but their behaviour
-/// must never depend on a rule's classification.
-fn taxonomy_isolation_rules() -> Vec<ForbiddenDependencyRule> {
-    ["code_lint::runner", "command_lint::runner"]
-        .into_iter()
-        .map(|runner| ForbiddenDependencyRule::must_not_depend_on(runner, ["rule_taxonomy"]))
-        .collect()
-}
-
 fn violations_in(files: &[SourceFileEntry], rules: &[ForbiddenDependencyRule]) -> Vec<String> {
     files
         .iter()
@@ -662,23 +653,6 @@ fn test_architecture_conformance() {
 #[test]
 fn test_ast_grep_is_encapsulated() {
     assert_src_complies_with(&ast_grep_encapsulation_rules());
-}
-
-#[test]
-fn test_runners_never_read_the_taxonomy() {
-    assert_src_complies_with(&taxonomy_isolation_rules());
-}
-
-/// Guards against vacuous passes: a runner naming a taxonomy type is caught.
-#[test]
-fn test_taxonomy_isolation_detects_runner_references() {
-    let offending = SourceFileEntry::from_source(
-        "src/code_lint/runner.rs",
-        "code_lint::runner",
-        "fn skip() -> bool { crate::rule_taxonomy::Precision::Heuristic == precision() }",
-    );
-    let violations = violations_in(&[offending], &taxonomy_isolation_rules());
-    assert_eq!(violations.len(), 1, "{violations:?}");
 }
 
 #[test]

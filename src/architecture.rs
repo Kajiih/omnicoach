@@ -82,7 +82,7 @@ define_architecture! {
     RuleTaxonomy          => [FoundationPrimitives],
     /// Pure user-facing rule docs: sections and references (`rule_documentation`).
     RuleDocumentation     => [FoundationPrimitives],
-    /// The single item each rule exposes: detector, classification, doc and options (`rule_declaration`).
+    /// What every rule states about itself: name, template, languages, options, classification and doc (`rule_declaration`).
     RuleDeclaration       => [CoreVocabulary, RuleTaxonomy, RuleDocumentation],
 
     // --- Static Code Analysis Domain (`code_lint`) ---
@@ -90,8 +90,8 @@ define_architecture! {
     CodeSyntaxAdapters    => [FoundationPrimitives],
     /// Semantic analysis engines (`code_lint::semantic`).
     CodeSemanticEngines   => [CodeSyntaxAdapters],
-    /// Contract traits and execution interfaces for code linting (`code_lint::rule`).
-    CodeRuleContracts     => [CoreVocabulary, CodeSemanticEngines, CodeSyntaxAdapters],
+    /// The code rule contract: a declaration, a file target and a check function (`code_lint::rule`).
+    CodeRuleContracts     => [CoreVocabulary, CodeSemanticEngines, CodeSyntaxAdapters, RuleDeclaration],
     /// Inline comment suppression tracker and directive policies (`code_lint::suppression`).
     CodeSuppressionEngine => [CodeRuleContracts, CodeSemanticEngines, RuleDeclaration],
     /// Concrete static analysis linter rules (`code_lint::rules`).
@@ -102,8 +102,8 @@ define_architecture! {
     // --- Command Safety Domain (`command_lint`) ---
     /// VCS interaction and repository diff adapters (`command_lint::vcs`).
     CommandVcsAdapters    => [FoundationPrimitives],
-    /// Contract traits and intercepted command schemas (`command_lint::rule`).
-    CommandRuleContracts  => [CoreVocabulary, CommandVcsAdapters],
+    /// The command rule contract and intercepted command schemas (`command_lint::rule`).
+    CommandRuleContracts  => [CoreVocabulary, CommandVcsAdapters, RuleDeclaration],
     /// Concrete command safety linting rules (`command_lint::rules`).
     CommandLintRules      => [CommandRuleContracts, RuleDeclaration],
     /// Command linting orchestration and interception runner (`command_lint::runner`).
@@ -117,7 +117,7 @@ define_architecture! {
 
     // --- Test Harness & Entrypoints ---
     /// Test harness and snapshot fixtures (`test_utils`).
-    TestingHarness        => [CodeRuleContracts, CommandRuleContracts, RuleDeclaration],
+    TestingHarness        => [CodeRuleContracts, CommandRuleContracts],
     /// CLI application entrypoint binaries (`src/bin/*`).
     ApplicationBinaries   => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog, CoreVocabulary],
 }

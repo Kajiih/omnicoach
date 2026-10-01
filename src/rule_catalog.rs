@@ -5,7 +5,7 @@ architecture_component!(RuleCatalog);
 use strum::IntoEnumIterator as _;
 
 use crate::core::{
-    EnforcementMode, FilterListDefaults, LanguageDefaults, OptionSpec, RuleOptions,
+    DeclaredOptions, EnforcementMode, FilterListDefaults, LanguageDefaults, OptionSpec,
     support_lang_name,
 };
 use crate::rule_selection::{
@@ -158,7 +158,7 @@ fn render_rule(rule: &RegisteredRule) -> String {
 }
 
 /// One bullet per accepted key: its type, default and meaning, as declared by the rule.
-fn configuration_lines(options: &RuleOptions) -> Vec<String> {
+fn configuration_lines(options: &DeclaredOptions) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(default) = options.enforcement_mode {
         let modes: Vec<&str> = EnforcementMode::iter().map(Into::into).collect();
@@ -170,7 +170,7 @@ fn configuration_lines(options: &RuleOptions) -> Vec<String> {
             EnforcementMode::DOC
         ));
     }
-    for option in options.options {
+    for option in &options.options {
         match option {
             OptionSpec::Count(count) => lines.push(format!(
                 "- `{}` (integer, default {}): {}",

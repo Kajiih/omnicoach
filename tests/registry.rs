@@ -7,16 +7,16 @@ use omni::code_lint::rules::CODE_RULES;
 use omni::code_lint::suppression::SUPPRESSION_AUDITS;
 use omni::command_lint::rules::COMMAND_RULES;
 use omni::core::{
-    EnforcementMode, OptionSpec, RuleOptions, SUPPORTED_LANGUAGES, support_lang_name,
+    DeclaredOptions, EnforcementMode, OptionSpec, SUPPORTED_LANGUAGES, support_lang_name,
 };
-use omni::rule_declaration::Rule;
+use omni::rule_declaration::{Declaration, DeclaredRule};
 use rstest::rstest;
 use std::collections::HashSet;
 
-fn validate_rule(rule: &(impl omni::core::Detector + ?Sized)) {
-    let name = rule.name().0;
+fn validate_rule(rule: &DeclaredRule) {
+    let name = rule.name.0;
 
-    let template = rule.violation_template();
+    let template = rule.template;
     for field in [template.summary, template.rationale, template.suggestion] {
         for text in std::iter::once(field.base).chain(
             field
@@ -44,14 +44,14 @@ fn validate_rule(rule: &(impl omni::core::Detector + ?Sized)) {
                 "Rule {name} has duplicate template override for {lang:?}"
             );
             assert!(
-                rule.supported_languages().contains(lang),
-                "Rule {name} declares template override for {lang:?}, which is not in supported_languages()"
+                rule.languages.contains(lang),
+                "Rule {name} declares template override for {lang:?}, which is not in its languages"
             );
         }
     }
 }
 
-fn validate_options(name: &str, options: &RuleOptions) {
+fn validate_options(name: &str, options: &DeclaredOptions) {
     let lists = options
         .options
         .iter()
@@ -82,37 +82,25 @@ fn validate_options(name: &str, options: &RuleOptions) {
 }
 
 #[rstest]
-#[case::code_rules(CODE_RULES)]
-#[case::suppression_audits(SUPPRESSION_AUDITS)]
-#[case::command_rules(COMMAND_RULES)]
-fn test_registry_integrity<R>(#[case] rules: &[Rule<R>])
-where
-    R: omni::core::Detector + ?Sized,
-{
-    for registered in rules {
-        validate_rule(registered.detector);
-        validate_options(registered.detector.name().0, &registered.options);
+#[case::code_rules(CODE_RULES.iter().map(|rule| rule.declaration()).collect())]
+#[case::suppression_audits(SUPPRESSION_AUDITS.iter().map(Declaration::declared).collect())]
+#[case::command_rules(COMMAND_RULES.iter().map(|rule| rule.declaration.declared()).collect())]
+fn test_registry_integrity(#[case] rules: Vec<DeclaredRule>) {
+    for rule in &rules {
+        validate_rule(rule);
+        validate_options(rule.name.0, &rule.options);
     }
 }
 
 #[test]
 fn test_code_rules_declare_supported_languages() {
-    let code_languages = CODE_RULES.iter().map(|registered| {
-        (
-            registered.detector.name(),
-            registered.detector.supported_languages(),
-        )
-    });
-    let audit_languages = SUPPRESSION_AUDITS.iter().map(|registered| {
-        (
-            registered.detector.name(),
-            registered.detector.supported_languages(),
-        )
-    });
-    for (name, languages) in code_languages.chain(audit_languages) {
+    let code_rules = CODE_RULES.iter().map(|rule| rule.declaration());
+    let audits = SUPPRESSION_AUDITS.iter().map(Declaration::declared);
+    for rule in code_rules.chain(audits) {
         assert!(
-            !languages.is_empty(),
-            "Code rule {name} must declare at least one supported language"
+            !rule.languages.is_empty(),
+            "Code rule {} must declare at least one supported language",
+            rule.name
         );
     }
 }

@@ -4,12 +4,10 @@ use crate::code_lint::ast::python::{
     PythonFunctionSignature, PythonParameterInfo, extract_function_signatures, has_decorator,
 };
 use crate::code_lint::ast::{AstNode, ParsedFile};
-use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{
-    CountOption, Detector, LanguageDefaults, OptionSpec, ResolvedOptions, RuleOptions,
-};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{CountOption, LanguageDefaults, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -27,63 +25,49 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     suggestion: "Insert a keyword-only separator `*` in `{func_name}` (e.g., `def {func_name}(*, ...)`) so callers must pass these arguments by name.",
 };
 
-/// Rule that flags functions with `>= min_args` positional parameters where 2 or more share an identical type annotation.
-struct NoIdenticalPositionalTypes;
-
 /// The rule's declaration.
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &NoIdenticalPositionalTypes,
-    classification: Classification {
-        topics: &[Topic::STATIC_TYPING, Topic::POSITIONAL_MEANING],
-        precision: Precision::Exact,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Reliability,
+pub const RULE: CodeRule<CountOption> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("no-identical-positional-types"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python],
+        options: RuleOptions::code_rule(MIN_POSITIONAL_PARAMETERS),
+        classification: Classification {
+            topics: &[Topic::STATIC_TYPING, Topic::POSITIONAL_MEANING],
+            precision: Precision::Exact,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Reliability,
+        },
+        doc: RuleDoc {
+            summary: "Flags Python functions whose positional parameters share a type annotation.",
+            what_it_does: "Flags a function in Python source files (test files are not \
+                           checked) that has at least `min_positional_parameters` positional \
+                           parameters of which two or more have the same type annotation. A \
+                           leading `self` or `cls`, keyword-only parameters (after `*` or \
+                           `*args`), `*args` and `**kwargs` are not counted. Annotations are \
+                           compared as written, so `dict[str, int]` and `dict[str, float]` \
+                           differ, and unannotated parameters count toward the minimum but never \
+                           match each other. Dunder methods other than `__init__` and \
+                           `__new__`, and functions decorated with `@override`, `@overload`, \
+                           `@abstractmethod` or `@fixture`, are exempt because their signature \
+                           is imposed from outside.",
+            why_is_this_bad: "When two positional parameters have the same type, a call that \
+                              swaps them, such as `transfer(target_id, source_id, amount)`, \
+                              still type-checks and reads plausibly in review. The bug shows up \
+                              only at runtime, often as wrong data rather than an error.\n\n\
+                              Make the parameters keyword-only with a `*` separator, for \
+                              example `def transfer(*, source_id: str, target_id: str, amount: \
+                              int)`, so every call names its arguments. Distinct types (such as \
+                              `NewType` wrappers) also let the type checker catch the swap.",
+            references: &[Reference {
+                title: "PEP 3102: Keyword-Only Arguments",
+                url: "https://peps.python.org/pep-3102/",
+            }],
+        },
     },
-    doc: RuleDoc {
-        summary: "Flags Python functions whose positional parameters share a type annotation.",
-        what_it_does: "Flags a function in Python source files (test files are not \
-                       checked) that has at least `min_positional_parameters` positional \
-                       parameters of which two or more have the same type annotation. A \
-                       leading `self` or `cls`, keyword-only parameters (after `*` or \
-                       `*args`), `*args` and `**kwargs` are not counted. Annotations are \
-                       compared as written, so `dict[str, int]` and `dict[str, float]` \
-                       differ, and unannotated parameters count toward the minimum but never \
-                       match each other. Dunder methods other than `__init__` and \
-                       `__new__`, and functions decorated with `@override`, `@overload`, \
-                       `@abstractmethod` or `@fixture`, are exempt because their signature \
-                       is imposed from outside.",
-        why_is_this_bad: "When two positional parameters have the same type, a call that \
-                          swaps them, such as `transfer(target_id, source_id, amount)`, \
-                          still type-checks and reads plausibly in review. The bug shows up \
-                          only at runtime, often as wrong data rather than an error.\n\n\
-                          Make the parameters keyword-only with a `*` separator, for \
-                          example `def transfer(*, source_id: str, target_id: str, amount: \
-                          int)`, so every call names its arguments. Distinct types (such as \
-                          `NewType` wrappers) also let the type checker catch the swap.",
-        references: &[Reference {
-            title: "PEP 3102: Keyword-Only Arguments",
-            url: "https://peps.python.org/pep-3102/",
-        }],
-    },
-    options: RuleOptions {
-        options: &[OptionSpec::Count(&MIN_POSITIONAL_PARAMETERS)],
-        ..RuleOptions::CODE_RULE
-    },
+    target: RuleTarget::SourceOnly,
+    check: check_file,
 };
-
-impl Detector for NoIdenticalPositionalTypes {
-    fn name(&self) -> RuleName {
-        RuleName("no-identical-positional-types")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
-    }
-}
 
 /// Returns true if `func_node` is a Python Data Model dunder method with a fixed runtime positional signature
 /// (all `__*__` methods except constructors `__init__` and `__new__`).
@@ -130,7 +114,7 @@ fn collect_duplicate_type_groups(
 
 /// Evaluates a single Python function signature and returns a consolidated diagnostic if violated.
 fn check_function_signature(
-    rule: &NoIdenticalPositionalTypes,
+    rule: &CodeRule<CountOption>,
     signature: &PythonFunctionSignature<'_>,
     path: &Path,
     min_args: usize,
@@ -184,24 +168,16 @@ fn check_function_signature(
     ))
 }
 
-impl CodeDetector for NoIdenticalPositionalTypes {
-    fn target(&self) -> RuleTarget {
-        RuleTarget::SourceOnly
-    }
-
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        let min_args = options.count(&MIN_POSITIONAL_PARAMETERS);
-
-        extract_function_signatures(file)
-            .iter()
-            .filter_map(|signature| check_function_signature(self, signature, path, min_args))
-            .collect()
-    }
+fn check_file(
+    rule: &CodeRule<CountOption>,
+    path: &Path,
+    file: &ParsedFile,
+    min_args: usize,
+) -> Vec<Diagnostic> {
+    extract_function_signatures(file)
+        .iter()
+        .filter_map(|signature| check_function_signature(rule, signature, path, min_args))
+        .collect()
 }
 
 #[cfg(test)]

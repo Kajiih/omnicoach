@@ -1,15 +1,14 @@
 //! Rule targeting banned abbreviations in definitions across multiple languages.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::rule::CodeDetector;
-use crate::core::{
-    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
-};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{FilterListDefaults, ListKind, ListOption, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
+use std::collections::HashSet;
 use std::path::Path;
 
 const BANNED: ListOption = ListOption {
@@ -71,89 +70,72 @@ fn split_segments(name: &str) -> Vec<String> {
     segments
 }
 
-/// Rule that bans abbreviations in identifier bindings.
-struct BannedAbbreviations;
-
 /// The rule's declaration.
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &BannedAbbreviations,
-    classification: Classification {
-        topics: &[Topic::ABBREVIATED_NAMES],
-        precision: Precision::Heuristic,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Maintainability,
+pub const RULE: CodeRule<ListOption> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("banned-abbreviations"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python, SupportLang::Rust],
+        options: RuleOptions::code_rule(BANNED),
+        classification: Classification {
+            topics: &[Topic::ABBREVIATED_NAMES],
+            precision: Precision::Heuristic,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Maintainability,
+        },
+        doc: RuleDoc {
+            summary: "Flags names that contain a banned abbreviation such as `ctx` or `msg`.",
+            what_it_does: "Splits each name the code defines into words, at underscores and \
+                           at lowercase-to-uppercase or digit-to-uppercase boundaries, and \
+                           flags the name if any word is a banned abbreviation, ignoring case. \
+                           Only whole words match: `strategy` and \
+                           `category` are not flagged, `handle_msg` and `TaskRes` are. \
+                           Checked names: variables, parameters, loop and pattern bindings, \
+                           functions, classes, structs, enums, traits, type aliases, constants \
+                           and import aliases (`import os as os_cfg`). Not checked: unaliased \
+                           imports, attributes (`self.ctx = ...`), struct fields, and names \
+                           imposed by a contract (Python methods marked `@override`, members \
+                           of a Rust `impl Trait for Type` block), although the parameters of \
+                           those methods are still checked.",
+            why_is_this_bad: "An abbreviation makes the reader guess: `res` can be a result, a \
+                              response or a resource, `ch` a channel or a character. Different \
+                              authors also shorten the same word differently (`cfg`, `conf`, \
+                              `config`), so a search for one spelling misses the others.\n\n\
+                              Spell the word out (`context`, `message`, `result`, `config`).",
+            references: &[Reference {
+                title: "Google Python Style Guide: Naming",
+                url: "https://google.github.io/styleguide/pyguide.html#316-naming",
+            }],
+        },
     },
-    doc: RuleDoc {
-        summary: "Flags names that contain a banned abbreviation such as `ctx` or `msg`.",
-        what_it_does: "Splits each name the code defines into words, at underscores and \
-                       at lowercase-to-uppercase or digit-to-uppercase boundaries, and \
-                       flags the name if any word is a banned abbreviation, ignoring case. \
-                       Only whole words match: `strategy` and \
-                       `category` are not flagged, `handle_msg` and `TaskRes` are. \
-                       Checked names: variables, parameters, loop and pattern bindings, \
-                       functions, classes, structs, enums, traits, type aliases, constants \
-                       and import aliases (`import os as os_cfg`). Not checked: unaliased \
-                       imports, attributes (`self.ctx = ...`), struct fields, and names \
-                       imposed by a contract (Python methods marked `@override`, members \
-                       of a Rust `impl Trait for Type` block), although the parameters of \
-                       those methods are still checked.",
-        why_is_this_bad: "An abbreviation makes the reader guess: `res` can be a result, a \
-                          response or a resource, `ch` a channel or a character. Different \
-                          authors also shorten the same word differently (`cfg`, `conf`, \
-                          `config`), so a search for one spelling misses the others.\n\n\
-                          Spell the word out (`context`, `message`, `result`, `config`).",
-        references: &[Reference {
-            title: "Google Python Style Guide: Naming",
-            url: "https://google.github.io/styleguide/pyguide.html#316-naming",
-        }],
-    },
-    options: RuleOptions {
-        options: &[OptionSpec::List(&BANNED)],
-        ..RuleOptions::CODE_RULE
-    },
+    target: RuleTarget::All,
+    check: check_file,
 };
 
-impl Detector for BannedAbbreviations {
-    fn name(&self) -> RuleName {
-        RuleName("banned-abbreviations")
-    }
+fn check_file(
+    rule: &CodeRule<ListOption>,
+    path: &Path,
+    file: &ParsedFile,
+    banned: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
 
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
-    }
-}
-
-impl CodeDetector for BannedAbbreviations {
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        let banned = options.list(&BANNED);
-        let mut diagnostics = Vec::new();
-
-        for node in crate::code_lint::semantic::bindings::collect_renameable_bindings(file) {
-            let name = node.text();
-            for segment in split_segments(&name) {
-                if banned.contains(&segment) {
-                    diagnostics.push(self.diagnostic_at_node(
-                        path,
-                        &node,
-                        &[("name", &name), ("token", &segment), ("segment", &segment)],
-                    ));
-                    // Flag each node at most once
-                    break;
-                }
+    for node in crate::code_lint::semantic::bindings::collect_renameable_bindings(file) {
+        let name = node.text();
+        for segment in split_segments(&name) {
+            if banned.contains(&segment) {
+                diagnostics.push(rule.diagnostic_at_node(
+                    path,
+                    &node,
+                    &[("name", &name), ("token", &segment), ("segment", &segment)],
+                ));
+                // Flag each node at most once
+                break;
             }
         }
-
-        diagnostics
     }
+
+    diagnostics
 }
 
 #[cfg(test)]

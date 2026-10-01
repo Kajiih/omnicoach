@@ -5,12 +5,10 @@ architecture_component!(CoreVocabulary);
 mod rule_options;
 
 pub use self::rule_options::{
-    CountOption, ListKind, ListOption, OptionProblem, OptionSpec, ResolvedOptions, RuleOptions,
-    RuleOptionsError, RuleOverrides,
+    CountOption, DeclaredOptions, ListKind, ListOption, OptionProblem, OptionSpec,
+    OptionsDeclaration, RuleOptions, RuleOptionsError, RuleOverrides,
 };
-use crate::diagnostic::{
-    Diagnostic, RuleName, SourceLocation, ViolationMessage, ViolationTemplate,
-};
+use crate::diagnostic::RuleName;
 use ast_grep_language::SupportLang;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -157,50 +155,6 @@ fn edit_distance(left: &str, right: &str) -> usize {
 
 /// The default configuration file name.
 pub const CONFIG_FILE_NAME: &str = ".omnilint.toml";
-
-/// The part of a rule that finds violations: its name, message template and languages.
-/// Runners execute detectors and never see a rule's classification or doc.
-pub trait Detector: Send + Sync {
-    /// Returns the rule name (e.g., `RuleName("no-logging-error-in-except")`).
-    #[must_use]
-    fn name(&self) -> RuleName;
-
-    /// Returns the single violation template for this rule (`1 Rule = 1 Template`).
-    #[must_use]
-    fn violation_template(&self) -> &'static ViolationTemplate;
-
-    /// Returns the languages analyzed by this rule. Command rules default to an empty slice.
-    #[must_use]
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[]
-    }
-
-    /// Constructs a `Diagnostic` with this rule's name.
-    #[must_use]
-    fn create_diagnostic(&self, message: ViolationMessage, location: SourceLocation) -> Diagnostic {
-        Diagnostic::new(self.name(), message, location)
-    }
-
-    /// Renders a diagnostic using the base template (for command and language-independent rules).
-    #[must_use]
-    fn render_diagnostic(&self, params: &[(&str, &str)], location: SourceLocation) -> Diagnostic {
-        self.create_diagnostic(self.violation_template().render(params), location)
-    }
-
-    /// Renders a diagnostic for a specific programming language (for code rules).
-    #[must_use]
-    fn render_diagnostic_for_lang(
-        &self,
-        lang: SupportLang,
-        params: &[(&str, &str)],
-        location: SourceLocation,
-    ) -> Diagnostic {
-        self.create_diagnostic(
-            self.violation_template().render_for_lang(lang, params),
-            location,
-        )
-    }
-}
 
 const DEFAULT_TEST_PATTERNS: &[&str] = &[
     "**/tests/**",

@@ -16,9 +16,8 @@ pub fn run_command_lint(raw_cmd: &str, config: &Config) -> Vec<Diagnostic> {
     let mut all_diagnostics = Vec::new();
 
     for cmd in &commands {
-        for registered in COMMAND_RULES {
-            let rule = registered.detector;
-            if config.is_rule_enabled(rule.name()) {
+        for rule in COMMAND_RULES {
+            if config.is_rule_enabled(rule.declaration.name) {
                 all_diagnostics.extend(rule.check_command(cmd, &jj_client));
             }
         }
