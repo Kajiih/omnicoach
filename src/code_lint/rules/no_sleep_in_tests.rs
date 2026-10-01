@@ -119,7 +119,34 @@ impl NoZeroSleepInTests {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Flags zero-duration sleeps used to yield in tests.",
+        what_it_does: "Flags the same sleep calls as `no-sleep-in-tests` when their single \
+                       argument is a literal zero duration: `0`, `0.0` or `0.` in Python, \
+                       and `Duration::ZERO`, `Duration::from_secs(0)` or \
+                       `Duration::from_millis(0)` in Rust. Other spellings of zero, such as \
+                       a variable holding `0`, and calls with more than one argument are not \
+                       flagged. Python is checked too, including `asyncio.sleep(0)`, even \
+                       though the asyncio documentation presents it as a way to yield.",
+        why_is_this_bad: "A zero-duration sleep is used for its side effect: letting other \
+                          tasks run. The code says \"wait for no time\" when it means \"yield \
+                          to the scheduler\", and whether it yields depends on how the \
+                          runtime treats a zero timer. Tokio, for example, does not guarantee \
+                          that `sleep(Duration::ZERO)` yields at all.\n\n\
+                          Use the explicit yield primitive: `tokio::task::yield_now().await` \
+                          in Rust, `await anyio.lowlevel.checkpoint()` in Python.",
+        configuration: &[ConfigShape::DenyList],
+        references: &[
+            Reference {
+                title: "tokio::task::yield_now",
+                url: "https://docs.rs/tokio/latest/tokio/task/fn.yield_now.html",
+            },
+            Reference {
+                title: "asyncio.sleep (Python documentation)",
+                url: "https://docs.python.org/3/library/asyncio-task.html#asyncio.sleep",
+            },
+        ],
+    };
 }
 
 impl Detector for NoZeroSleepInTests {

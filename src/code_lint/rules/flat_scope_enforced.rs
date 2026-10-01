@@ -4,6 +4,7 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::CodeDetector;
 use crate::core::Detector;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::RuleDoc;
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -27,8 +28,26 @@ impl FlatScopeEnforced {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
-        crate::rule_documentation::RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Flags Python functions defined inside other functions.",
+        what_it_does: "Flags every `def` that appears inside the body of another \
+                       function or method in Python source files; test files are not \
+                       checked. This includes the methods of a class declared inside a \
+                       function. Top-level functions, methods of top-level classes and \
+                       `lambda` expressions are not flagged. Nested functions with a \
+                       return annotation (`def inner() -> int:`) are currently missed.",
+        why_is_this_bad: "A nested function captures the enclosing function's local \
+                          variables implicitly, so its real inputs are not visible in its \
+                          signature. It cannot be imported, tested or reused on its own, \
+                          and it makes the enclosing function longer and harder to \
+                          follow.\n\n\
+                          Move the function to module level, conventionally with a \
+                          leading underscore, and pass what it needs as parameters. A \
+                          `lambda` remains fine for a trivial callback such as a sort \
+                          key.",
+        configuration: &[],
+        references: &[],
+    };
 }
 
 impl Detector for FlatScopeEnforced {

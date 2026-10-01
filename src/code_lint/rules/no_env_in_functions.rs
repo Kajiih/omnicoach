@@ -4,6 +4,7 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
 use crate::core::{Config, Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -75,8 +76,40 @@ impl NoEnvInFunctions {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
-        crate::rule_documentation::RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Flags environment variable access inside functions.",
+        what_it_does: "Flags reads and writes of environment variables inside a function \
+                       or method in source files; test files are not checked. In Python \
+                       this covers `os.getenv`, `os.putenv`, `os.unsetenv`, the \
+                       `os.environ` methods `get`, `pop`, `setdefault`, `update` and \
+                       `clear`, and `os.environ[...]` subscripts, also when written as \
+                       `getenv` or `environ` after a `from os import`. In Rust it covers \
+                       `std::env::var`, `var_os`, `vars`, `vars_os`, `set_var` and \
+                       `remove_var`, written with an `std::env::` or `env::` prefix. The \
+                       deny list configures the calls; Python `environ[...]` subscripts \
+                       are always checked. Access at module, class or `static` scope is \
+                       allowed, and so is the compile-time `env!` macro. Functions named \
+                       `from_env`, `from_environ` or `load_env`, and a `main` at the top \
+                       level of the file, are configuration boundaries: access inside \
+                       them, including inside functions, closures and lambdas nested in \
+                       them, is not flagged. A method or `mod`-level function named `main` \
+                       is not a boundary.",
+        why_is_this_bad: "A function that reads the environment depends on hidden global \
+                          state: its signature does not say what configuration it needs, \
+                          and its behaviour changes with the process that runs it. Tests \
+                          must then set and restore environment variables, which leaks \
+                          between tests and races when tests run in parallel. Writing the \
+                          environment from several threads is undefined behaviour on some \
+                          platforms.\n\n\
+                          Read the environment once, at startup or in a `from_env` \
+                          constructor, into a typed configuration object, and pass that \
+                          object, or the values it holds, to the code that needs them.",
+        configuration: &[ConfigShape::DenyList],
+        references: &[Reference {
+            title: "Rust docs: std::env::set_var (safety)",
+            url: "https://doc.rust-lang.org/std/env/fn.set_var.html",
+        }],
+    };
 }
 
 impl Detector for NoEnvInFunctions {

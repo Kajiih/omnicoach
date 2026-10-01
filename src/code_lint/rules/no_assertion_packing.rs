@@ -4,6 +4,7 @@ use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
 use crate::core::{Config, Detector};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -35,8 +36,33 @@ impl NoAssertionPacking {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
-        crate::rule_documentation::RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Flags assertions that pack several checks into one condition.",
+        what_it_does: "Flags two shapes of assertion in test files. A compound condition \
+                       joined by a top-level `and` in a Python `assert` statement, or by a \
+                       top-level `&&` in a Rust `assert!` or `debug_assert!`. And a \
+                       comparison against a tuple, list or array of two or more boolean \
+                       literals, such as `assert (valid, active) == (True, False)` or \
+                       `assert_eq!((a, b), (true, true))` in any `assert_*` or \
+                       `debug_assert_*` macro. Conditions joined by `or`, an `and` nested \
+                       inside a function call, and collections holding anything other than \
+                       boolean literals are not flagged. In Python only bare `assert` \
+                       statements are checked, not `unittest` methods such as \
+                       `self.assertTrue`.",
+        why_is_this_bad: "When a packed assertion fails, the report only says the whole \
+                          condition was false: it does not say which part failed, and a \
+                          tuple of booleans shows `True`/`False` values with no name \
+                          attached. Finding the culprit means rerunning the test or adding \
+                          prints.\n\n\
+                          Write one assertion per check, so each failure names its \
+                          condition and shows its values, or compare the result against one \
+                          expected object or struct.",
+        configuration: &[],
+        references: &[Reference {
+            title: "pytest: How to write and report assertions in tests",
+            url: "https://docs.pytest.org/en/stable/how-to/assert.html",
+        }],
+    };
 }
 
 impl Detector for NoAssertionPacking {

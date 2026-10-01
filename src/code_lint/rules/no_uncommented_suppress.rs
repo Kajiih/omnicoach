@@ -9,6 +9,7 @@ use crate::code_lint::ast::python::is_with_context_manager;
 use crate::code_lint::rule::CodeDetector;
 use crate::core::{Config, Detector, EnforcementMode, FilterListDefaults, LanguageDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -44,8 +45,31 @@ impl NoUncommentedSuppress {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
-        crate::rule_documentation::RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Requires a comment explaining each `contextlib.suppress` block.",
+        what_it_does: "Flags `suppress(...)` and `contextlib.suppress(...)` used as a context \
+                       manager in a Python `with` statement, unless a comment explains it. \
+                       The comment can trail the `suppress(...)` line, trail any line of a \
+                       multi-line `with (...)` header, or sit in the block of comment lines \
+                       directly above the statement. It must be substantive: at least three \
+                       words and ten characters, and a bare tool directive such as \
+                       `# noqa: SIM105` or `# type: ignore` does not count. Comments inside \
+                       the `with` body do not count. A `suppress(...)` call outside a `with` \
+                       statement is not flagged. With `mode = \"ban\"`, every such block is \
+                       flagged, commented or not.",
+        why_is_this_bad: "`suppress` silently discards an exception. The code does not say \
+                          why that failure is harmless, so a reader cannot tell an \
+                          intentional ignore from a bug being hidden, and a later change \
+                          that makes the exception meaningful goes unnoticed.\n\n\
+                          State why the exception is safe to ignore in a comment next to \
+                          the `with` statement, for example \
+                          `# The file may already have been removed by the cleanup job.`",
+        configuration: &[ConfigShape::DenyList, ConfigShape::Enforcement],
+        references: &[Reference {
+            title: "Python docs: contextlib.suppress",
+            url: "https://docs.python.org/3/library/contextlib.html#contextlib.suppress",
+        }],
+    };
 }
 
 impl Detector for NoUncommentedSuppress {

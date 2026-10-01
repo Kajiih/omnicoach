@@ -4,6 +4,7 @@ use crate::code_lint::ast::{self, AstNode, ParsedFile, ScopePositionalReads};
 use crate::code_lint::rule::CodeDetector;
 use crate::core::{Config, Detector, LanguageDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::collections::BTreeSet;
@@ -43,8 +44,48 @@ impl PreferTupleUnpacking {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
-        crate::rule_documentation::RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Flags a value read at several literal positions instead of being unpacked once.",
+        what_it_does: "Groups positional reads by value within one function and flags \
+                       the value when at least `min` distinct positions are read (2 by \
+                       default) and unpacking them would need at most `max` `_` \
+                       placeholders (2 by default; `row[0], row[7]` is left alone). In \
+                       Python, a read is an index by a decimal integer literal, negative \
+                       allowed (`point[0]`, `xs[-1]`), on a name, attribute or index \
+                       chain without calls (`self.pair[1]`, `rows[i][0]`); the type is \
+                       not known, so lists and dicts with integer keys count too. \
+                       Module-level code counts as one scope, comprehensions belong to \
+                       their function, and lambdas and class bodies are ignored. A value \
+                       is not flagged in a scope where it is also written through an \
+                       index, deleted from, sliced, indexed by a variable or a \
+                       non-decimal literal, iterated, passed to `len`, `enumerate`, \
+                       `zip`, `reversed` or `sorted`, or mutated by a method such as \
+                       `append` or `update`. In Rust, a read is a tuple field access \
+                       (`span.0`, `self.1`, `cmd.span.0`) inside a function, closures \
+                       included; a value whose field is assigned or mutably borrowed is \
+                       not flagged, and macro arguments (`assert_eq!(t.0, t.1)`) are not \
+                       inspected.",
+        why_is_this_bad: "An index says where an element sits, not what it means: \
+                          `point[0]` and `span.1` force the reader to remember the \
+                          layout, and every index site silently reads the wrong element \
+                          when the layout changes.\n\n\
+                          Unpack once into named variables: `x, y = point` (or \
+                          `first, *_, last = xs`) in Python, `let (start, end) = span;` \
+                          in Rust. When the tuple crosses a function boundary, return a \
+                          `NamedTuple`, a dataclass or a struct with named fields \
+                          instead.",
+        configuration: &[ConfigShape::Threshold],
+        references: &[
+            Reference {
+                title: "PEP 3132: Extended Iterable Unpacking",
+                url: "https://peps.python.org/pep-3132/",
+            },
+            Reference {
+                title: "The Rust Programming Language: The Tuple Type",
+                url: "https://doc.rust-lang.org/book/ch03-02-data-types.html#the-tuple-type",
+            },
+        ],
+    };
 }
 
 impl Detector for PreferTupleUnpacking {

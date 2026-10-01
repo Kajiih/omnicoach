@@ -4,6 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
 use crate::core::{Config, Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -45,8 +46,39 @@ impl NoUnstructuredTaskCreation {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
-        crate::rule_documentation::RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Flags asyncio tasks spawned outside a task group.",
+        what_it_does: "Flags Python calls that start a background task with no enclosing \
+                       scope: `asyncio.create_task`, `asyncio.ensure_future`, a bare \
+                       `create_task` or `ensure_future`, `loop.create_task`, \
+                       `event_loop.create_task`, and `.create_task` on the result of a call, \
+                       such as `asyncio.get_running_loop().create_task(...)`. Calls on a \
+                       task group, such as `tg.create_task(...)` or `tg.start_soon(...)`, \
+                       are not flagged. The rule matches the call alone: a task that is \
+                       stored and awaited later is flagged too. It runs on source and test \
+                       files.",
+        why_is_this_bad: "A task started this way is not tied to the code that started \
+                          it. The event loop keeps only a weak reference to it, so an \
+                          unreferenced task can be garbage-collected before it finishes. If \
+                          nobody awaits it, its exception is only logged when the task is \
+                          destroyed, and it keeps running after its caller returns, fails \
+                          or is cancelled.\n\n\
+                          Start concurrent work inside `async with asyncio.TaskGroup() as \
+                          tg:` or `anyio.create_task_group()`: the block waits for every \
+                          task, cancels the others when one fails, and raises their \
+                          errors.",
+        configuration: &[ConfigShape::DenyList],
+        references: &[
+            Reference {
+                title: "Python docs: asyncio.create_task",
+                url: "https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task",
+            },
+            Reference {
+                title: "Python docs: asyncio Task Groups",
+                url: "https://docs.python.org/3/library/asyncio-task.html#task-groups",
+            },
+        ],
+    };
 }
 
 impl Detector for NoUnstructuredTaskCreation {

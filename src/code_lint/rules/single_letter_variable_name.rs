@@ -4,6 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeDetector;
 use crate::core::{Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -34,8 +35,29 @@ impl SingleLetterVariableName {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
-        crate::rule_documentation::RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Flags names made of a single letter.",
+        what_it_does: "Flags single-letter names the code defines: variables, \
+                       parameters (including lambda and closure parameters), loop, \
+                       comprehension, `except ... as`, walrus and pattern bindings, and \
+                       function, class and constant names. Allowed by default: `i`, `j`, \
+                       `x` and `f`, plus `c` in Rust; `_` is never flagged. Unaliased \
+                       imports, members of a Rust `impl Trait for Type` block, Python \
+                       methods marked `@override`, type parameters such as `T`, and \
+                       references to existing names are not checked.",
+        why_is_this_bad: "A single letter says nothing about what the value is, so the \
+                          reader has to trace where it comes from, and the meaning gets \
+                          lost as the scope grows. Single letters are also impossible to \
+                          search for: a search for `d` matches almost every line.\n\n\
+                          Use a noun that says what the value is (`index`, `user`, \
+                          `error`). Keep the allowed letters for conventional cases such \
+                          as loop counters or coordinates.",
+        configuration: &[ConfigShape::AllowList],
+        references: &[Reference {
+            title: "Google Python Style Guide: Naming",
+            url: "https://google.github.io/styleguide/pyguide.html#316-naming",
+        }],
+    };
 }
 
 impl Detector for SingleLetterVariableName {

@@ -7,6 +7,7 @@ use crate::code_lint::ast::{AstNode, ParsedFile};
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
 use crate::core::{Config, Detector, LanguageDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -33,8 +34,33 @@ impl NoIdenticalPositionalTypes {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
-        crate::rule_documentation::RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Flags Python functions whose positional parameters share a type annotation.",
+        what_it_does: "Flags a function in Python source files (test files are not \
+                       checked) that has at least `min` positional parameters (3 by \
+                       default) of which two or more have the same type annotation. A \
+                       leading `self` or `cls`, keyword-only parameters (after `*` or \
+                       `*args`), `*args` and `**kwargs` are not counted. Annotations are \
+                       compared as written, so `dict[str, int]` and `dict[str, float]` \
+                       differ, and unannotated parameters count toward `min` but never \
+                       match each other. Dunder methods other than `__init__` and \
+                       `__new__`, and functions decorated with `@override`, `@overload`, \
+                       `@abstractmethod` or `@fixture`, are exempt because their signature \
+                       is imposed from outside.",
+        why_is_this_bad: "When two positional parameters have the same type, a call that \
+                          swaps them, such as `transfer(target_id, source_id, amount)`, \
+                          still type-checks and reads plausibly in review. The bug shows up \
+                          only at runtime, often as wrong data rather than an error.\n\n\
+                          Make the parameters keyword-only with a `*` separator, for \
+                          example `def transfer(*, source_id: str, target_id: str, amount: \
+                          int)`, so every call names its arguments. Distinct types (such as \
+                          `NewType` wrappers) also let the type checker catch the swap.",
+        configuration: &[ConfigShape::Threshold],
+        references: &[Reference {
+            title: "PEP 3102: Keyword-Only Arguments",
+            url: "https://peps.python.org/pep-3102/",
+        }],
+    };
 }
 
 impl Detector for NoIdenticalPositionalTypes {
