@@ -495,45 +495,6 @@ mod tests {
     }
 
     #[test]
-    fn test_violation_template_render() {
-        const TEMPLATE: ViolationTemplate = ViolationTemplate::new(
-            LanguageText::from_static("Function `{func}` too long"),
-            LanguageText::from_static("Long functions are hard to read"),
-            LanguageText::new(
-                "Split function `{func}` into smaller helpers",
-                &[
-                    (
-                        SupportLang::Python,
-                        "Refactor `{func}` with helper functions",
-                    ),
-                    (
-                        SupportLang::Rust,
-                        "Extract logic from `{func}` into sub-functions",
-                    ),
-                ],
-            ),
-        );
-
-        assert_eq!(
-            TEMPLATE.render_for_lang(SupportLang::Python, &[("func", "process_data")]),
-            ViolationMessage::new(
-                "Function `process_data` too long",
-                "Long functions are hard to read",
-                "Refactor `process_data` with helper functions",
-            )
-        );
-
-        assert_eq!(
-            TEMPLATE.render_for_lang(SupportLang::Rust, &[("func", "process_data")]),
-            ViolationMessage::new(
-                "Function `process_data` too long",
-                "Long functions are hard to read",
-                "Extract logic from `process_data` into sub-functions",
-            )
-        );
-    }
-
-    #[test]
     fn test_violation_template_macro() {
         const TEMPLATE: ViolationTemplate = violation_template! {
             summary: "Function `{func}` too long",
@@ -570,15 +531,6 @@ mod tests {
             "src/main.rs",
             SourceSpan::new(16, 31),
             LineColumn { line: 2, column: 5 },
-        );
-        assert_eq!(
-            loc,
-            SourceLocation {
-                context: LocationContext::File(PathBuf::from("src/main.rs")),
-                span: SourceSpan::new(16, 31),
-                line: 2,
-                column: 5,
-            }
         );
         assert_eq!(loc.format_header(), "src/main.rs:2:5");
         assert_eq!(

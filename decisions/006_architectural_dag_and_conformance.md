@@ -108,7 +108,8 @@ Tests are split by what they check: the graph definition itself is unit-tested n
 `src/architecture.rs` (`#[cfg(test)] mod tests`) verifies the graph definition:
 1. `test_architecture_graph_is_acyclic`: Verifies that `ARCHITECTURE_GRAPH` is acyclic using 3-color DFS.
 2. `test_cycle_detector_identifies_cycles`: Guards against vacuous cycle detection using `architecture_graph!`.
-3. `test_all_architecture_components_have_descriptions`: Ensures every `ArchitectureComponent` variant has a non-empty doc comment accessible via `strum::EnumMessage`.
+
+Every `ArchitectureComponent` variant must carry a doc comment; the crate-wide `missing_docs = "deny"` lint enforces it at compile time.
 
 `tests/architecture_conformance.rs` enforces conformance of the source tree:
 1. `test_all_source_files_declare_architecture_component`: Ensures every file in `src/` either belongs to a valid component subtree (with no redundant child declarations) or is a topologically valid, CST-verified pure namespace router (`mod`-only items), and every component variant is backed by at least one root file.

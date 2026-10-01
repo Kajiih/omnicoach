@@ -283,20 +283,11 @@ mod tests {
         assert_eq!(doc_problems(&doc), expected);
     }
 
-    #[rstest]
-    #[case::unknown_rule(
-        "no-sleep-in-test",
-        "unknown rule `no-sleep-in-test`; did you mean `no-sleep-in-tests`?"
-    )]
-    #[case::tag_is_not_a_rule("testing", "unknown rule `testing`")]
-    fn explain_rejects_unknown_rules(#[case] name: &str, #[case] message: &str) {
-        assert_eq!(explain(name).unwrap_err().to_string(), message);
-    }
-
-    #[rstest]
-    #[case::topic_includes_subtopics("testing", "no-sleep-in-tests")]
-    #[case::synonym("jujutsu", "no-edits-on-described-commits")]
-    fn list_rules_filters_like_select(#[case] tag: &str, #[case] expected_rule: &str) {
-        assert!(list_rules(Some(tag)).unwrap().contains(expected_rule));
+    #[test]
+    fn explain_rejects_unknown_rules() {
+        assert_eq!(
+            explain("testing").unwrap_err().to_string(),
+            "unknown rule `testing`"
+        );
     }
 }

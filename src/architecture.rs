@@ -6,7 +6,7 @@
 
 architecture_component!(FoundationPrimitives);
 
-use strum::{AsRefStr, Display, EnumMessage, EnumString, VariantArray};
+use strum::{AsRefStr, Display, EnumString, VariantArray};
 
 /// Bounded specification of an architectural component and its direct dependencies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,7 +51,6 @@ macro_rules! define_architecture {
             Ord,
             Hash,
             Display,
-            EnumMessage,
             EnumString,
             AsRefStr,
             VariantArray,
@@ -119,14 +118,6 @@ define_architecture! {
     TestingHarness        => [CodeRuleContracts, CommandRuleContracts],
     /// CLI application entrypoint binaries (`src/bin/*`).
     ApplicationBinaries   => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog, CoreVocabulary],
-}
-
-impl ArchitectureComponent {
-    /// Canonical architectural description extracted directly from doc comments via `strum`.
-    #[must_use]
-    pub fn description(&self) -> &'static str {
-        self.get_documentation().unwrap_or_default()
-    }
 }
 
 #[cfg(test)]
@@ -219,16 +210,5 @@ mod tests {
             detect_cycle(cyclic_graph),
             Some(vec!["alpha", "beta", "alpha"])
         );
-    }
-
-    #[test]
-    fn test_all_architecture_components_have_descriptions() {
-        for component in ArchitectureComponent::VARIANTS {
-            let description = component.description();
-            assert!(
-                !description.trim().is_empty(),
-                "Component {component:?} is missing a doc comment description"
-            );
-        }
     }
 }

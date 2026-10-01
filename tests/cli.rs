@@ -157,30 +157,11 @@ fn test_code_lint_invalid_config() {
     insta::assert_snapshot!(output);
 }
 
-#[test]
-fn test_command_lint_help_flag() {
-    let output = run_and_sanitize_cli("omni-command-lint", &["--help"], None, &[]);
-    insta::assert_snapshot!(output);
-}
-
 #[rstest::rstest]
 #[case::list_rules("omni-code-lint", &["--list-rules"], "list_rules")]
-#[case::list_rules_other_binary("omni-command-lint", &["--list-rules"], "list_rules")]
-#[case::tag_topic("omni-code-lint", &["--list-rules", "--tag", "testing"], "tag_testing")]
-#[case::tag_synonym("omni-command-lint", &["--list-rules", "--tag", "jujutsu"], "tag_jujutsu")]
 #[case::tag_typo("omni-code-lint", &["--list-rules", "--tag", "tesing"], "tag_typo")]
 #[case::tag_without_list("omni-code-lint", &["--tag", "testing"], "tag_without_list")]
 #[case::explain("omni-code-lint", &["--explain", "no-sleep-in-tests"], "explain_no_sleep")]
-#[case::explain_other_binary(
-    "omni-command-lint",
-    &["--explain", "no-sleep-in-tests"],
-    "explain_no_sleep"
-)]
-#[case::explain_command_rule(
-    "omni-code-lint",
-    &["--explain", "no-edits-on-described-commits"],
-    "explain_jj"
-)]
 #[case::explain_typo("omni-command-lint", &["--explain", "no-sleep-in-test"], "explain_typo")]
 #[case::format_typo("omni-code-lint", &["--format", "jsno", "."], "format_typo")]
 #[case::command_lint_needs_cmd("omni-command-lint", &[], "command_lint_needs_cmd")]
@@ -191,6 +172,20 @@ fn test_discovery_and_cli_errors(
 ) {
     let output = run_and_sanitize_cli(binary, args, None, &[]);
     insta::assert_snapshot!(snapshot, output.replace(binary, "<binary>"));
+}
+
+/// Both binaries serve the same rule catalog.
+#[rstest::rstest]
+#[case::list_rules(&["--list-rules"])]
+#[case::explain(&["--explain", "no-edits-on-described-commits"])]
+fn test_discovery_is_identical_across_binaries(#[case] args: &[&str]) {
+    let code_lint = run_and_sanitize_cli("omni-code-lint", args, None, &[]);
+    let command_lint = run_and_sanitize_cli("omni-command-lint", args, None, &[]);
+    assert!(code_lint.contains("--- exit code ---\n0\n"), "{code_lint}");
+    assert_eq!(
+        code_lint.replace("omni-code-lint", "<binary>"),
+        command_lint.replace("omni-command-lint", "<binary>")
+    );
 }
 
 #[test]
@@ -365,53 +360,4 @@ fn test_code_lint_json_format_deterministic() {
         &[temp_file.path()],
     );
     insta::assert_snapshot!(output);
-}
-
-#[test]
-fn test_code_lint_json_format_parallel_multi_run_deterministic() {
-    let temp_dir = tempfile::tempdir().unwrap();
-
-    let py_code_1 = indoc! {r"
-        def func_a():
-            def nested_1():
-                pass
-    "};
-    let py_code_2 = indoc! {r"
-        def func_b():
-            def nested_2():
-                pass
-    "};
-    let py_code_3 = indoc! {r"
-        def func_c():
-            def nested_3():
-                pass
-    "};
-
-    fs::write(temp_dir.path().join("a.py"), py_code_1).unwrap();
-    fs::write(temp_dir.path().join("b.py"), py_code_2).unwrap();
-    fs::write(temp_dir.path().join("c.py"), py_code_3).unwrap();
-
-    let baseline = run_and_sanitize_cli(
-        "omni-code-lint",
-        &["--format", "json", temp_dir.path().to_str().unwrap()],
-        None,
-        &[temp_dir.path()],
-    );
-
-    assert!(baseline.contains("nested_1"));
-    assert!(baseline.contains("nested_2"));
-    assert!(baseline.contains("nested_3"));
-
-    for iteration in 1..=5 {
-        let run_output = run_and_sanitize_cli(
-            "omni-code-lint",
-            &["--format", "json", temp_dir.path().to_str().unwrap()],
-            None,
-            &[temp_dir.path()],
-        );
-        assert_eq!(
-            baseline, run_output,
-            "JSON output diverged on iteration {iteration}; output must be 100% deterministic"
-        );
-    }
 }

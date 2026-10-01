@@ -370,6 +370,11 @@ mod tests {
         }
     }
 
+    /// Every suppression audit, and only the `enabled` code rules.
+    fn config_enabling(enabled: &[&str]) -> Config {
+        config_disabling(code_rule_names().filter(|name| !enabled.contains(&name.0)))
+    }
+
     #[rstest]
     #[case::python_rule_on_python_file(
         &rules::no_logging_error_in_except::NoLoggingErrorInExcept,
@@ -514,24 +519,6 @@ mod tests {
     }
 
     #[test]
-    fn test_framework_enforcement_mode_ban_default() {
-        let source_documented = indoc::indoc! {r"
-            # Valid explanation for type cast
-            x = cast(int, y)
-        "};
-        let source_uncommented = "x = cast(int, y)";
-
-        let default_config = Config::default();
-        let diagnostics_banned_doc =
-            lint_file(Path::new("main.py"), source_documented, &default_config);
-        assert_eq!(diagnostics_banned_doc.len(), 1);
-
-        let diagnostics_banned_uncommented =
-            lint_file(Path::new("main.py"), source_uncommented, &default_config);
-        assert_eq!(diagnostics_banned_uncommented.len(), 1);
-    }
-
-    #[test]
     fn test_framework_enforcement_mode_require_explanation() {
         let source_documented = indoc::indoc! {r"
             # Valid explanation for type cast
@@ -543,7 +530,10 @@ mod tests {
             [rules.no-typing-cast]
             mode = "require-explanation"
         "#};
-        let req_doc_config: Config = toml::from_str(config_toml).unwrap();
+        let req_doc_config = Config {
+            disabled_rules: config_enabling(&["no-typing-cast"]).disabled_rules,
+            ..toml::from_str(config_toml).unwrap()
+        };
 
         let diagnostics_req_doc =
             lint_file(Path::new("main.py"), source_documented, &req_doc_config);
@@ -557,16 +547,12 @@ mod tests {
     #[test]
     fn test_rule_target_tests_only_filtering() {
         let source_prod = "import time\ndef run(): time.sleep(5)\n";
-        let default_config = Config::default();
+        let config = config_enabling(&["no-sleep-in-tests"]);
 
-        let prod_diagnostics = lint_file(Path::new("src/daemon.py"), source_prod, &default_config);
+        let prod_diagnostics = lint_file(Path::new("src/daemon.py"), source_prod, &config);
         assert!(prod_diagnostics.is_empty());
 
-        let test_diagnostics = lint_file(
-            Path::new("tests/test_daemon.py"),
-            source_prod,
-            &default_config,
-        );
+        let test_diagnostics = lint_file(Path::new("tests/test_daemon.py"), source_prod, &config);
         assert_eq!(test_diagnostics.len(), 1);
     }
 
@@ -584,8 +570,8 @@ mod tests {
                 }
             }
         "};
-        let default_config = Config::default();
-        let diagnostics = lint_file(Path::new("src/worker.rs"), source_rust, &default_config);
+        let config = config_enabling(&["no-sleep-in-tests"]);
+        let diagnostics = lint_file(Path::new("src/worker.rs"), source_rust, &config);
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].location.line, 8);
     }
@@ -597,23 +583,19 @@ mod tests {
             def read_key():
                 return os.getenv("API_KEY")
         "#};
-        let default_config = Config::default();
+        let config = config_enabling(&["no-env-in-functions"]);
 
-        let src_diagnostics = lint_file(Path::new("src/service.py"), source_py, &default_config);
+        let src_diagnostics = lint_file(Path::new("src/service.py"), source_py, &config);
         assert_eq!(src_diagnostics.len(), 1);
 
-        let test_diagnostics = lint_file(
-            Path::new("tests/test_service.py"),
-            source_py,
-            &default_config,
-        );
+        let test_diagnostics = lint_file(Path::new("tests/test_service.py"), source_py, &config);
         assert!(test_diagnostics.is_empty());
     }
 
     #[test]
     fn test_valid_inline_suppression_silences_violation() {
         let content = "a = 1  # omni:ignore [single-letter-variable-name] -- math variable";
-        let config = Config::default();
+        let config = config_enabling(&["single-letter-variable-name"]);
         let diags = lint_file(Path::new("math.py"), content, &config);
         assert!(diags.is_empty(), "Expected 0 diagnostics, got: {diags:?}");
     }
@@ -621,7 +603,7 @@ mod tests {
     #[test]
     fn test_valid_preceding_line_suppression_silences_violation() {
         let content = "# omni:ignore [single-letter-variable-name] -- math variable\na = 1";
-        let config = Config::default();
+        let config = config_enabling(&["single-letter-variable-name"]);
         let diags = lint_file(Path::new("math.py"), content, &config);
         assert!(diags.is_empty(), "Expected 0 diagnostics, got: {diags:?}");
     }
@@ -630,7 +612,7 @@ mod tests {
     fn test_unused_suppression_flagged() {
         let content =
             "clean_name = 1  # omni:ignore [single-letter-variable-name] -- math variable";
-        let config = Config::default();
+        let config = config_enabling(&["single-letter-variable-name"]);
         let diags = lint_file(Path::new("clean.py"), content, &config);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].rule_name.0, "unused-suppression");
@@ -692,7 +674,7 @@ mod tests {
                 def inner():
                     a = 1
         "};
-        let config = Config::default();
+        let config = config_enabling(&["flat-scope-enforced", "single-letter-variable-name"]);
         let diags = lint_file(Path::new("src/module.py"), content, &config);
 
         // flat-scope-enforced should be suppressed, but single-letter-variable-name should be reported!
@@ -707,7 +689,7 @@ mod tests {
             def clean():
                 pass
         "};
-        let config = Config::default();
+        let config = config_enabling(&["no-logging-error-in-except"]);
         let diags = lint_file(Path::new("src/module.py"), content, &config);
 
         assert_eq!(diags.len(), 1);
@@ -717,7 +699,8 @@ mod tests {
     #[test]
     fn test_suppressing_supp_in_config() {
         let content = "clean_name = 1  # omni:ignore [single-letter-variable-name] -- intentional dormant suppression";
-        let config = config_disabling(std::iter::once(RuleName("unused-suppression")));
+        let mut config = config_enabling(&["single-letter-variable-name"]);
+        config.disabled_rules.insert(RuleName("unused-suppression"));
         let diags = lint_file(Path::new("src/template.py"), content, &config);
 
         assert!(diags.is_empty(), "Expected 0 diagnostics, got: {diags:?}");
@@ -727,7 +710,7 @@ mod tests {
     fn test_string_literal_does_not_trigger_suppression() {
         let content =
             r##"sample_text = "# omni:ignore [single-letter-variable-name] -- not a comment""##;
-        let config = Config::default();
+        let config = config_enabling(&["single-letter-variable-name"]);
         let diags = lint_file(Path::new("src/test_case.py"), content, &config);
 
         // Does not trigger unused-suppression since it's a string literal, not a comment
@@ -738,7 +721,7 @@ mod tests {
     fn test_comment_prefix_word_boundary() {
         // Comments containing 'omni:ignored' should not be treated as omni:ignore directives
         let content = "a = 1  # omni:ignored by other tool";
-        let config = Config::default();
+        let config = config_enabling(&["single-letter-variable-name"]);
         let diags = lint_file(Path::new("src/test.py"), content, &config);
 
         // Should flag single-letter-variable-name violation, and NOT flag blanket-suppression

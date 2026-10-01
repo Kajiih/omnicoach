@@ -1268,7 +1268,7 @@ mod tests {
 
     #[test]
     fn test_summarize_rust_file_extracts_production_structure_and_paths() {
-        let source = indoc::indoc! {r"
+        let source = indoc::indoc! {r#"
             architecture_component!(CodeSyntaxAdapters);
 
             mod detail;
@@ -1288,11 +1288,16 @@ mod tests {
                 let _ = super::ignored::call();
             }
 
+            const RAW_FIXTURE: &str = r"
+            #[cfg(test)]
+            mod fake_tests {}
+            ";
+
             pub fn run(input: super::ParentType) {
                 let _ = crate::a::b::Foo::<crate::c::d::Bar>::baz();
                 assert!(super::detail::check(input));
             }
-        "};
+        "#};
         let file = ParsedFile::rust(source);
         let summary = summarize_rust_file(&file);
         let raw_paths: Vec<&str> = summary

@@ -274,6 +274,19 @@ impl RegisteredRule {
             Selector::Tag(tag) => self.branches().iter().flatten().any(|&own| own == tag),
         }
     }
+
+    /// A rule outside the registry, with no derived facets.
+    #[cfg(test)]
+    pub(crate) fn synthetic(name: &'static str, classification: Classification) -> Self {
+        static TEMPLATE: ViolationTemplate = ViolationTemplate::from_static("", "", "");
+        Self {
+            name: RuleName(name),
+            doc: RuleDoc::TODO,
+            template: &TEMPLATE,
+            classification,
+            derived: Vec::new(),
+        }
+    }
 }
 
 /// The single global label registry: rule names, tag labels and topic synonyms.
@@ -342,13 +355,6 @@ mod tests {
 
     use super::*;
     use crate::core::is_kebab_case;
-
-    fn rule(name: &str) -> &'static RegisteredRule {
-        REGISTERED_RULES
-            .iter()
-            .find(|rule| rule.name.0 == name)
-            .unwrap()
-    }
 
     #[test]
     fn every_rule_has_a_topic() {
@@ -433,57 +439,64 @@ mod tests {
         assert!(facet_like.is_empty(), "{facet_like:?} read as facet labels");
     }
 
-    #[test]
-    fn synonyms_resolve_to_their_canonical_topic() {
-        assert_eq!(
-            lookup("jujutsu"),
-            Some(Selector::Tag(Tag::Topic(Topic::JJ)))
-        );
-        assert_eq!(
-            lookup("version-control"),
-            Some(Selector::Tag(Tag::Topic(Topic::VCS)))
-        );
-        assert_eq!(lookup("precision"), None);
-    }
-
     #[rstest::rstest]
-    #[case::typo("tesing", Some("testing"))]
-    #[case::wrong_case("JJ", Some("jj"))]
-    #[case::rule_name("no-sleep-in-test", Some("no-sleep-in-tests"))]
-    #[case::unrelated("completely-unrelated", None)]
-    fn closest_label_suggests_typos_only(#[case] label: &str, #[case] expected: Option<&str>) {
-        assert_eq!(closest_label(label), expected);
+    #[case::missing_letter("alpa", Some("alpha"))]
+    #[case::case_folded("ALPHA", Some("alpha"))]
+    #[case::nearest_wins("alphabe", Some("alphabet"))]
+    #[case::at_tolerance("alphaxy", Some("alpha"))]
+    #[case::beyond_tolerance("alphaxyz", None)]
+    fn closest_suggests_typos_only(#[case] label: &str, #[case] expected: Option<&str>) {
+        let candidates = ["alpha", "alphabet", "omega"];
+        assert_eq!(closest(label, candidates.into_iter()), expected);
     }
 
     #[test]
-    fn edit_distance_is_levenshtein() {
-        assert_eq!(edit_distance("kitten", "sitting"), 3);
-    }
-
-    #[test]
-    fn derived_facets_follow_registry_languages_and_target() {
-        assert_eq!(
-            rule("no-sleep-in-tests").derived,
-            [
-                Derived::Python,
-                Derived::Rust,
-                Derived::Code,
-                Derived::TestsOnly
-            ]
-        );
-        assert_eq!(
-            rule("unused-suppression").derived,
-            [Derived::Python, Derived::Rust, Derived::Code]
-        );
-        assert_eq!(
-            rule("no-edits-on-described-commits").derived,
-            [Derived::Command]
-        );
+    fn code_rules_and_only_code_rules_have_a_language() {
+        for rule in REGISTERED_RULES.iter() {
+            let has_language = rule
+                .derived
+                .iter()
+                .any(|&value| Tag::Derived(value).facet() == Facet::Languages);
+            assert_eq!(
+                has_language,
+                rule.derived.contains(&Derived::Code),
+                "{}",
+                rule.name
+            );
+        }
     }
 
     #[test]
     fn a_topic_branch_is_its_path_from_the_root() {
-        let branches = rule("no-edits-on-described-commits").branches();
-        assert_eq!(branches[0], [Tag::Topic(Topic::VCS), Tag::Topic(Topic::JJ)]);
+        const PARENT: Topic = Topic {
+            label: "parent",
+            parent: None,
+            description: "",
+            scope_note: "",
+            synonyms: &[],
+        };
+        const CHILD: Topic = Topic {
+            label: "child",
+            parent: Some(&PARENT),
+            ..PARENT
+        };
+        let rule = RegisteredRule::synthetic(
+            "rule",
+            Classification {
+                topics: &[CHILD],
+                precision: Precision::Exact,
+                consensus: Consensus::Unopinionated,
+                impacted_quality: ImpactedQuality::Reliability,
+            },
+        );
+        assert_eq!(
+            rule.branches(),
+            [
+                vec![Tag::Topic(PARENT), Tag::Topic(CHILD)],
+                vec![Tag::Precision(Precision::Exact)],
+                vec![Tag::Consensus(Consensus::Unopinionated)],
+                vec![Tag::ImpactedQuality(ImpactedQuality::Reliability)],
+            ]
+        );
     }
 }

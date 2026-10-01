@@ -768,6 +768,10 @@ fn test_second_path_detection_allows_private_child_facades_and_rejects_duplicate
 /// and `self::` are allowed, while cross-component `super::` (both in `use` and inline) is rejected.
 #[test]
 fn test_relative_path_boundary_allows_intra_component_and_rejects_cross_component() {
+    let declared_components = BTreeMap::from([(
+        "code_lint::ast".to_owned(),
+        ArchitectureComponent::CodeSyntaxAdapters,
+    )]);
     let child_source = indoc::indoc! {r#"
         // Allowed: child `code_lint::ast::rust` referencing parent root `code_lint::ast`
         use super::{AstNode, ParsedFile};
@@ -795,7 +799,7 @@ fn test_relative_path_boundary_allows_intra_component_and_rejects_cross_componen
         child_source,
     );
     let child_lines: Vec<usize> =
-        relative_path_boundary_violations_in_entry(&child_entry, &DECLARED_COMPONENTS)
+        relative_path_boundary_violations_in_entry(&child_entry, &declared_components)
             .into_iter()
             .map(|(line, _)| line)
             .collect();
@@ -812,7 +816,7 @@ fn test_relative_path_boundary_allows_intra_component_and_rejects_cross_componen
     let root_entry =
         SourceFileEntry::from_source("src/code_lint/ast.rs", "code_lint::ast", root_source);
     let root_lines: Vec<usize> =
-        relative_path_boundary_violations_in_entry(&root_entry, &DECLARED_COMPONENTS)
+        relative_path_boundary_violations_in_entry(&root_entry, &declared_components)
             .into_iter()
             .map(|(line, _)| line)
             .collect();
@@ -865,25 +869,30 @@ fn test_architecture_rules_detect_forbidden_dependencies() {
 
 #[test]
 fn test_subtree_inheritance_resolves_leaf_modules_and_rejects_namespace_routers() {
+    let declared_components = BTreeMap::from([
+        (
+            "domain::unit".to_owned(),
+            ArchitectureComponent::CodeLintRules,
+        ),
+        ("other".to_owned(), ArchitectureComponent::CommandLintRules),
+    ]);
     let queries = [
-        "code_lint::rules::banned_abbreviations",
-        "code_lint::ast::rust",
-        "code_lint::semantic::bindings",
-        "command_lint::rules::jj",
-        "code_lint",
-        "command_lint",
+        "domain::unit",
+        "domain::unit::leaf::deeper",
+        "other::leaf",
+        "domain",
+        "domain::unit_sibling",
     ];
     let resolved: Vec<Option<ArchitectureComponent>> = queries
         .into_iter()
-        .map(|module| resolve_inherited_component(module, &DECLARED_COMPONENTS))
+        .map(|module| resolve_inherited_component(module, &declared_components))
         .collect();
 
     assert_eq!(
         resolved,
         vec![
             Some(ArchitectureComponent::CodeLintRules),
-            Some(ArchitectureComponent::CodeSyntaxAdapters),
-            Some(ArchitectureComponent::CodeSemanticEngines),
+            Some(ArchitectureComponent::CodeLintRules),
             Some(ArchitectureComponent::CommandLintRules),
             None,
             None,
@@ -932,40 +941,5 @@ fn test_namespace_validator_accepts_pure_routers_and_rejects_code_or_orphan_rout
             "src/code_lint.rs:3: pure namespace router without 'architecture_component!' may only contain external 'mod' declarations, found: pub const SNEAKY: usize = 1;",
             "src/orphan_router.rs: missing 'architecture_component!(<Variant>);' (and not a pure namespace router for any declared component)",
         ]
-    );
-}
-
-/// Guards against mid-file `#[cfg(test)]` truncation: a `#[cfg(test)]` helper item (or raw string
-/// containing `#[cfg(test)]`) must not blind the architecture checker to forbidden dependencies
-/// in production items that appear later in the same file.
-#[test]
-fn test_summary_preserves_production_code_after_conditional_test_item() {
-    let source_with_mid_file_conditional_test = indoc::indoc! {r#"
-        #[cfg(test)]
-        fn test_helper() {
-            let _ = crate::code_lint::runner::lint_file;
-        }
-
-        const RAW_FIXTURE: &str = r"
-        #[cfg(test)]
-        mod fake_tests {}
-        ";
-
-        pub fn production_fn() {
-            crate::code_lint::runner::lint_file();
-        }
-    "#};
-
-    let entry = SourceFileEntry::from_source(
-        "src/code_lint/rules/offending.rs",
-        "code_lint::rules::offending",
-        source_with_mid_file_conditional_test,
-    );
-    let violations = violations_in(&[entry], &ARCHITECTURE_CONFORMANCE_RULES);
-    assert!(
-        violations
-            .iter()
-            .any(|violation| violation.contains("code_lint::runner")),
-        "Expected forbidden dependency after #[cfg(test)] item to be detected, got: {violations:?}"
     );
 }
