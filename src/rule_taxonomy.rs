@@ -7,6 +7,8 @@ architecture_component!(RuleTaxonomy);
 
 use strum::{EnumIter, EnumMessage, IntoStaticStr};
 
+use crate::rule_documentation::RuleDoc;
+
 /// The subject of a rule: the only multi-valued, hierarchical facet.
 ///
 /// Each topic is declared once, as an associated `const` on [`Topic`]. The consts are
@@ -400,13 +402,15 @@ pub struct Classification {
     pub impacted_quality: ImpactedQuality,
 }
 
-/// A registry entry: a rule with its classification, so an unclassified rule cannot be
-/// registered (R3).
+/// A registry entry: a rule with its classification and doc, so an unclassified or
+/// undocumented rule cannot be registered (R3, K1).
 // TODO: Why not just add classification as a new field for rules instead of creating a new struct?
 #[derive(Clone, Copy)]
-pub struct ClassifiedRule<Rule: ?Sized + 'static> {
+pub struct RuleEntry<Rule: ?Sized + 'static> {
     /// The rule.
     pub rule: &'static Rule,
     /// Its classification.
     pub classification: Classification,
+    /// Its user-facing doc.
+    pub doc: RuleDoc,
 }

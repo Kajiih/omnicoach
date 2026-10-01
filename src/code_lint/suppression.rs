@@ -9,8 +9,9 @@ use crate::diagnostic::{
     Diagnostic, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationTemplate,
     violation_template,
 };
+use crate::rule_documentation::RuleDoc;
 use crate::rule_taxonomy::{
-    Classification, ClassifiedRule, Consensus, ImpactedQuality, Precision, Topic,
+    Classification, Consensus, ImpactedQuality, Precision, RuleEntry, Topic,
 };
 use ast_grep_language::SupportLang;
 use std::collections::{HashMap, HashSet};
@@ -33,6 +34,9 @@ impl MissingSuppressionReason {
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Maintainability,
     };
+
+    /// The rule's user-facing doc.
+    pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
 }
 
 impl Rule for MissingSuppressionReason {
@@ -66,6 +70,9 @@ impl UnusedSuppression {
         consensus: Consensus::Unopinionated,
         impacted_quality: ImpactedQuality::Reliability,
     };
+
+    /// The rule's user-facing doc.
+    pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
 }
 
 impl Rule for UnusedSuppression {
@@ -99,6 +106,9 @@ impl UnknownSuppressionRule {
         consensus: Consensus::Unopinionated,
         impacted_quality: ImpactedQuality::Reliability,
     };
+
+    /// The rule's user-facing doc.
+    pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
 }
 
 impl Rule for UnknownSuppressionRule {
@@ -132,6 +142,9 @@ impl BlanketSuppression {
         consensus: Consensus::Unopinionated,
         impacted_quality: ImpactedQuality::Reliability,
     };
+
+    /// The rule's user-facing doc.
+    pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
 }
 
 impl Rule for BlanketSuppression {
@@ -150,22 +163,26 @@ impl Rule for BlanketSuppression {
 
 /// Static list of the suppression audits with their classifications, evaluated by [`SuppressionTracker::audit`] rather than
 /// per file like code rules.
-pub const SUPPRESSION_AUDITS: &[ClassifiedRule<dyn Rule>] = &[
-    ClassifiedRule {
+pub const SUPPRESSION_AUDITS: &[RuleEntry<dyn Rule>] = &[
+    RuleEntry {
         rule: &MissingSuppressionReason,
         classification: MissingSuppressionReason::CLASSIFICATION,
+        doc: MissingSuppressionReason::DOC,
     },
-    ClassifiedRule {
+    RuleEntry {
         rule: &UnusedSuppression,
         classification: UnusedSuppression::CLASSIFICATION,
+        doc: UnusedSuppression::DOC,
     },
-    ClassifiedRule {
+    RuleEntry {
         rule: &UnknownSuppressionRule,
         classification: UnknownSuppressionRule::CLASSIFICATION,
+        doc: UnknownSuppressionRule::DOC,
     },
-    ClassifiedRule {
+    RuleEntry {
         rule: &BlanketSuppression,
         classification: BlanketSuppression::CLASSIFICATION,
+        doc: BlanketSuppression::DOC,
     },
 ];
 

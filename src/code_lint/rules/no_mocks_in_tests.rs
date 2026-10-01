@@ -87,6 +87,10 @@ impl NoMocksInTests {
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Reliability,
     };
+
+    /// The rule's user-facing doc.
+    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
+        crate::rule_documentation::RuleDoc::TODO;
 }
 
 impl Rule for NoMocksInTests {

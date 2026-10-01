@@ -4,6 +4,7 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::core::{Config, LanguageDefaults, Rule};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::RuleDoc;
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -33,6 +34,9 @@ impl MaxTestAssertions {
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Maintainability,
     };
+
+    /// The rule's user-facing doc.
+    pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
 }
 
 impl Rule for MaxTestAssertions {
