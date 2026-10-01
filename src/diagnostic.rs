@@ -408,6 +408,15 @@ impl LineIndex {
     }
 }
 
+/// Output format of diagnostics (D51).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum OutputFormat {
+    /// Human-readable text
+    Plain,
+    /// Pretty-printed JSON array
+    Json,
+}
+
 /// Formats and prints a list of diagnostics to stdout.
 ///
 /// Supports JSON pretty-printing and plain text with pre-resolved line-column coordinates.
@@ -415,11 +424,11 @@ impl LineIndex {
 /// # Errors
 ///
 /// Returns an error if JSON serialization fails.
-pub fn print_diagnostics(diagnostics: &[Diagnostic], format: &str) -> anyhow::Result<()> {
+pub fn print_diagnostics(diagnostics: &[Diagnostic], format: OutputFormat) -> anyhow::Result<()> {
     let mut sorted: Vec<&Diagnostic> = diagnostics.iter().collect();
     sorted.sort_unstable();
 
-    if format == "json" {
+    if format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&sorted)?);
     } else {
         for diagnostic in sorted {

@@ -3,7 +3,8 @@
 omni::architecture_component!(ApplicationBinaries);
 
 use omni::command_lint::runner::run_command_lint;
-use omni::diagnostic::print_diagnostics;
+use omni::diagnostic::{OutputFormat, print_diagnostics};
+use omni::rule_catalog::{DiscoveryArgs, explain_footer};
 use omni::rule_selection::load_config;
 
 use clap::Parser;
@@ -15,17 +16,34 @@ use clap::Parser;
     about = "Command execution workflow safety linter"
 )]
 struct Cli {
-    /// Format output (plain, json)
-    #[arg(long, default_value = "plain")]
-    format: String,
+    /// Output format for diagnostics
+    #[arg(long, value_enum, default_value_t = OutputFormat::Plain)]
+    format: OutputFormat,
 
     /// Shell command string to validate
-    #[arg(long)]
-    cmd: String,
+    #[arg(long, required_unless_present_any = ["list_rules", "explain"])]
+    cmd: Option<String>,
+
+    #[command(flatten)]
+    discovery: DiscoveryArgs,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    if let Some(output) = cli.discovery.render() {
+        match output {
+            Ok(text) => print!("{text}"),
+            Err(error) => {
+                eprintln!("Error: {error}");
+                std::process::exit(2);
+            }
+        }
+        return Ok(());
+    }
+    let Some(cmd) = cli.cmd else {
+        unreachable!("clap requires --cmd unless a discovery flag is given");
+    };
 
     let config = match load_config() {
         Ok(loaded_config) => loaded_config,
@@ -35,10 +53,13 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    let all_diagnostics = run_command_lint(&cli.cmd, &config);
+    let all_diagnostics = run_command_lint(&cmd, &config);
 
     if !all_diagnostics.is_empty() {
-        print_diagnostics(&all_diagnostics, &cli.format)?;
+        print_diagnostics(&all_diagnostics, cli.format)?;
+        if cli.format == OutputFormat::Plain {
+            println!("{}", explain_footer(env!("CARGO_BIN_NAME")));
+        }
         std::process::exit(1);
     }
     Ok(())

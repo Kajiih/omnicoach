@@ -1,0 +1,15 @@
+---
+source: tests/cli.rs
+expression: "output.replace(binary, \"<binary>\")"
+---
+--- exit code ---
+2
+--- stdout ---
+
+--- stderr ---
+error: the following required arguments were not provided:
+  --cmd <CMD>
+
+Usage: <binary> --cmd <CMD>
+
+For more information, try '--help'.

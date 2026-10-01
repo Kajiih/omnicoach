@@ -1,0 +1,15 @@
+---
+source: tests/cli.rs
+expression: "output.replace(binary, \"<binary>\")"
+---
+--- exit code ---
+0
+--- stdout ---
+- `max-test-assertions` (python, rust): Documentation pending.
+- `no-assertion-packing` (python, rust): Documentation pending.
+- `no-mock-assertions` (python): Documentation pending.
+- `no-mocks-in-tests` (python): Documentation pending.
+- `no-sleep-in-tests` (python, rust): Documentation pending.
+- `no-zero-sleep-in-tests` (python, rust): Documentation pending.
+
+--- stderr ---

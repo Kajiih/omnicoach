@@ -1,0 +1,10 @@
+---
+source: tests/cli.rs
+expression: "output.replace(binary, \"<binary>\")"
+---
+--- exit code ---
+2
+--- stdout ---
+
+--- stderr ---
+Error: unknown tag `tesing`; did you mean `testing`?
