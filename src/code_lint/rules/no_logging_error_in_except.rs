@@ -4,6 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeDetector;
 use crate::core::{Config, Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -34,8 +35,28 @@ impl NoLoggingErrorInExcept {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
-        crate::rule_documentation::RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Flags `logging.error` calls inside Python `except` blocks.",
+        what_it_does: "Flags calls to `logging.error(...)` anywhere inside an `except` \
+                       block, including bare `except:` and nested blocks such as an `if` \
+                       within the handler. Calls in the `try`, `else` and `finally` blocks, \
+                       or outside any `try`, are not flagged. By default only the \
+                       module-level `logging.error` is matched: a logger instance call such \
+                       as `logger.error(...)` is not flagged. A call passing \
+                       `exc_info=True` is flagged too.",
+        why_is_this_bad: "Inside an `except` block, the exception being handled is the \
+                          most useful thing to log. `logging.error` records only the \
+                          message, so the log loses the traceback: the exception type and \
+                          where it was raised. Whoever reads the log later has to guess the \
+                          root cause.\n\n\
+                          Use `logging.exception(...)`, which logs at error level and \
+                          attaches the active traceback.",
+        configuration: &[ConfigShape::DenyList],
+        references: &[Reference {
+            title: "Python docs: logging.exception",
+            url: "https://docs.python.org/3/library/logging.html#logging.exception",
+        }],
+    };
 }
 
 impl Detector for NoLoggingErrorInExcept {

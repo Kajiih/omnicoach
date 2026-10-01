@@ -4,6 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
 use crate::core::{Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -43,8 +44,28 @@ impl NoDynamicAttributeAccess {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
-        crate::rule_documentation::RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Flags `getattr`, `hasattr`, `setattr` and `delattr` calls in Python.",
+        what_it_does: "Flags calls to the built-in functions `getattr`, `hasattr`, \
+                       `setattr` and `delattr`, written bare or as `builtins.getattr` and \
+                       so on, in all Python files, tests included. Methods of the same name \
+                       on another object, such as `registry.getattr(\"key\")`, are not \
+                       flagged.",
+        why_is_this_bad: "These functions take the attribute name as a runtime string. The \
+                          type checker cannot verify that the attribute exists and usually \
+                          types the result as `Any`; renaming tools and \"find \
+                          references\" miss the access; a typo fails only at runtime. \
+                          `hasattr` also returns `False` when a property raises \
+                          `AttributeError` internally, which hides the real bug.\n\n\
+                          Access attributes directly on a typed object. For data keyed by \
+                          runtime strings, use a `dict` or `Mapping`; to accept several \
+                          types that share attributes, declare a `Protocol`.",
+        configuration: &[ConfigShape::DenyList],
+        references: &[Reference {
+            title: "Python docs: built-in getattr",
+            url: "https://docs.python.org/3/library/functions.html#getattr",
+        }],
+    };
 }
 
 impl Detector for NoDynamicAttributeAccess {

@@ -4,6 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
 use crate::core::{Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -89,8 +90,42 @@ impl NoMocksInTests {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
-        crate::rule_documentation::RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Flags dynamic mocks and monkeypatching in Python tests.",
+        what_it_does: "Flags calls that create mocks or patch code at run time in Python \
+                       test files: `Mock`, `MagicMock`, `AsyncMock`, `NonCallableMock`, \
+                       `PropertyMock`, `create_autospec` and `patch` (with `patch.object`, \
+                       `patch.dict` and `patch.multiple`), whether called bare or through \
+                       `mock.` or `unittest.mock.`. It also flags pytest-mock's `mocker.*` \
+                       equivalents plus `mocker.spy`, `mocker.stub` and `mocker.async_stub`, \
+                       and pytest's `MonkeyPatch` and `monkeypatch.setattr`, `delattr`, \
+                       `setitem` and `delitem`. Calls are matched by name, not by import: a \
+                       bare `patch(...)` is flagged even when imported from another library, \
+                       while a method such as `http_client.patch(...)` is not, and the \
+                       `mocker` and `monkeypatch` calls are only matched under those exact \
+                       names.",
+        why_is_this_bad: "A mock replaces a real collaborator with an object that accepts \
+                          any call and returns whatever the test told it to. Patching \
+                          swaps code by its import path. Both tie the test to how the code \
+                          is wired internally rather than to what it does, so refactors \
+                          break tests that should pass, and tests keep passing when the \
+                          real dependency changes its signature or behaviour.\n\n\
+                          Pass dependencies in explicitly and use a fake in tests: a small \
+                          working in-memory implementation of the same interface (for \
+                          example a `FakeRepository` backed by a dict), then assert on its \
+                          state.",
+        configuration: &[ConfigShape::DenyList],
+        references: &[
+            Reference {
+                title: "Software Engineering at Google, ch. 13: Test Doubles",
+                url: "https://abseil.io/resources/swe-book/html/ch13.html",
+            },
+            Reference {
+                title: "Mocks Aren't Stubs (Martin Fowler)",
+                url: "https://martinfowler.com/articles/mocksArentStubs.html",
+            },
+        ],
+    };
 }
 
 impl Detector for NoMocksInTests {

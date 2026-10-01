@@ -5,31 +5,31 @@ expression: "output.replace(binary, \"<binary>\")"
 --- exit code ---
 0
 --- stdout ---
-- `banned-abbreviations` (python, rust): Documentation pending.
-- `blanket-suppression` (python, rust): Documentation pending.
-- `enforce-frozen-slots-dataclass` (python): Documentation pending.
-- `flat-scope-enforced` (python): Documentation pending.
+- `banned-abbreviations` (python, rust): Flags names that contain a banned abbreviation such as `ctx` or `msg`.
+- `blanket-suppression` (python, rust): Flags suppression directives that name no rule.
+- `enforce-frozen-slots-dataclass` (python): Requires Python dataclasses to declare `frozen=True` and `slots=True`.
+- `flat-scope-enforced` (python): Flags Python functions defined inside other functions.
 - `max-test-assertions` (python, rust): Limits the number of assertions in one test function.
 - `missing-suppression-reason` (python, rust): Requires every suppression directive to give a reason.
-- `no-assertion-packing` (python, rust): Documentation pending.
-- `no-dynamic-attribute-access` (python): Documentation pending.
+- `no-assertion-packing` (python, rust): Flags assertions that pack several checks into one condition.
+- `no-dynamic-attribute-access` (python): Flags `getattr`, `hasattr`, `setattr` and `delattr` calls in Python.
 - `no-edits-on-described-commits` (command): Blocks `jj edit` on a commit that already has a description.
-- `no-env-in-functions` (python, rust): Documentation pending.
-- `no-hungarian-notation` (python, rust): Documentation pending.
-- `no-identical-positional-types` (python): Documentation pending.
-- `no-logging-error-in-except` (python): Documentation pending.
-- `no-mock-assertions` (python): Documentation pending.
-- `no-mocks-in-tests` (python): Documentation pending.
+- `no-env-in-functions` (python, rust): Flags environment variable access inside functions.
+- `no-hungarian-notation` (python, rust): Flags variable names that end with a type suffix such as `_list` or `_str`.
+- `no-identical-positional-types` (python): Flags Python functions whose positional parameters share a type annotation.
+- `no-logging-error-in-except` (python): Flags `logging.error` calls inside Python `except` blocks.
+- `no-mock-assertions` (python): Flags assertions on how a mock was called in Python tests.
+- `no-mocks-in-tests` (python): Flags dynamic mocks and monkeypatching in Python tests.
 - `no-sleep-in-tests` (python, rust): Flags fixed-duration sleeps in tests.
-- `no-typing-cast` (python): Documentation pending.
-- `no-uncommented-suppress` (python): Documentation pending.
-- `no-unstructured-task-creation` (python): Documentation pending.
-- `no-zero-sleep-in-tests` (python, rust): Documentation pending.
-- `prefer-dedent-for-multiline-strings` (python, rust): Documentation pending.
-- `prefer-timedelta-over-seconds` (python, rust): Documentation pending.
-- `prefer-tuple-unpacking` (python, rust): Documentation pending.
-- `single-letter-variable-name` (python, rust): Documentation pending.
-- `unknown-suppression-rule` (python, rust): Documentation pending.
-- `unused-suppression` (python, rust): Documentation pending.
+- `no-typing-cast` (python): Flags `typing.cast` calls in Python production code.
+- `no-uncommented-suppress` (python): Requires a comment explaining each `contextlib.suppress` block.
+- `no-unstructured-task-creation` (python): Flags asyncio tasks spawned outside a task group.
+- `no-zero-sleep-in-tests` (python, rust): Flags zero-duration sleeps used to yield in tests.
+- `prefer-dedent-for-multiline-strings` (python, rust): Flags multiline string literals that are not wrapped in a dedent helper.
+- `prefer-timedelta-over-seconds` (python, rust): Flags variable names that carry a time unit, such as `timeout_secs` or `delay_ms`.
+- `prefer-tuple-unpacking` (python, rust): Flags a value read at several literal positions instead of being unpacked once.
+- `single-letter-variable-name` (python, rust): Flags names made of a single letter.
+- `unknown-suppression-rule` (python, rust): Flags suppression directives that name a rule Omni does not know.
+- `unused-suppression` (python, rust): Flags suppression directives that suppress no finding.
 
 --- stderr ---

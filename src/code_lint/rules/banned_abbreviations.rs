@@ -4,6 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeDetector;
 use crate::core::{Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -77,8 +78,34 @@ impl BannedAbbreviations {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
-        crate::rule_documentation::RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Flags names that contain a banned abbreviation such as `ctx` or `msg`.",
+        what_it_does: "Splits each name the code defines into words, at underscores and \
+                       at lowercase-to-uppercase or digit-to-uppercase boundaries, and \
+                       flags the name if any word is a banned abbreviation, ignoring case. \
+                       Banned by default: `err`, `ctx`, `cfg`, `res`, `msg`, `str`, `num`, \
+                       `btn`, `cb`, `ch`, `diag`, `ty`, `cat`, `stmt`, `ext`, `fmt`, \
+                       `arch` and `vis`; `str` is allowed in Rust, where it is a type \
+                       (`as_str`, `from_str`). Only whole words match: `strategy` and \
+                       `category` are not flagged, `handle_msg` and `TaskRes` are. \
+                       Checked names: variables, parameters, loop and pattern bindings, \
+                       functions, classes, structs, enums, traits, type aliases, constants \
+                       and import aliases (`import os as os_cfg`). Not checked: unaliased \
+                       imports, attributes (`self.ctx = ...`), struct fields, and names \
+                       imposed by a contract (Python methods marked `@override`, members \
+                       of a Rust `impl Trait for Type` block), although the parameters of \
+                       those methods are still checked.",
+        why_is_this_bad: "An abbreviation makes the reader guess: `res` can be a result, a \
+                          response or a resource, `ch` a channel or a character. Different \
+                          authors also shorten the same word differently (`cfg`, `conf`, \
+                          `config`), so a search for one spelling misses the others.\n\n\
+                          Spell the word out (`context`, `message`, `result`, `config`).",
+        configuration: &[ConfigShape::DenyList],
+        references: &[Reference {
+            title: "Google Python Style Guide: Naming",
+            url: "https://google.github.io/styleguide/pyguide.html#316-naming",
+        }],
+    };
 }
 
 impl Detector for BannedAbbreviations {

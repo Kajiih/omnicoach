@@ -5,6 +5,7 @@ use crate::code_lint::ast::python::{PythonClassInfo, extract_classes};
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
 use crate::core::Detector;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -28,8 +29,32 @@ impl EnforceFrozenSlotsDataclass {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
-        crate::rule_documentation::RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Requires Python dataclasses to declare `frozen=True` and `slots=True`.",
+        what_it_does: "Flags a class decorated with `@dataclass` or \
+                       `@dataclasses.dataclass` that does not pass both `frozen` and \
+                       `slots`, in all Python files, tests included. An argument passed \
+                       explicitly, even as `frozen=False` or `slots=False`, counts as a \
+                       deliberate choice and is not reported as missing. The decorator is \
+                       matched by name, not by import: a bare `@dataclass` is checked \
+                       whatever module it comes from, while other decorators, such as \
+                       `@attrs.define`, are not.",
+        why_is_this_bad: "A default dataclass is mutable: any code holding an instance can \
+                          change its fields, so a value passed to a function or stored in a \
+                          cache can change behind the owner's back, and the instance cannot \
+                          be hashed by value. Without slots, each instance carries a \
+                          `__dict__` that costs memory and silently accepts misspelled \
+                          attribute assignments.\n\n\
+                          Write `@dataclass(frozen=True, slots=True)` (`slots` needs Python \
+                          3.10 or later) and derive modified copies with \
+                          `dataclasses.replace`. When mutability or a `__dict__` is really \
+                          needed, say so with `frozen=False` or `slots=False`.",
+        configuration: &[],
+        references: &[Reference {
+            title: "Python docs: dataclasses",
+            url: "https://docs.python.org/3/library/dataclasses.html",
+        }],
+    };
 }
 
 impl Detector for EnforceFrozenSlotsDataclass {

@@ -4,6 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeDetector;
 use crate::core::{Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -37,8 +38,31 @@ impl NoHungarianNotation {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
-        crate::rule_documentation::RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Flags variable names that end with a type suffix such as `_list` or `_str`.",
+        what_it_does: "Flags variables, parameters, loop and pattern bindings, and \
+                       constants whose name ends, ignoring case, with a type suffix: \
+                       `_list`, `_arr`, `_dict`, `_map`, `_vec`, `_str`, `_int`, `_bool`, \
+                       `_set`, `_ptr`, `_num`, `_float` or `_byte` by default \
+                       (`users_dict`, `MY_INT`). A name that is only the suffix, such as \
+                       `_list`, is not flagged. Functions, classes, structs, enums, \
+                       traits, type aliases, imports (aliased or not) and members of a \
+                       Rust `impl Trait for Type` block are not checked; neither are \
+                       attributes (`self.users_dict = ...`) or struct fields.",
+        why_is_this_bad: "The suffix repeats what the type annotation or the compiler \
+                          already knows, and it lies as soon as the type changes: a \
+                          `user_list` that becomes a set or a generator keeps its old \
+                          name unless every use is renamed. It also takes the place of \
+                          what the name should say: what the value means.\n\n\
+                          Name the value by its role, using a plural for collections \
+                          (`users`, `name`, `scores_by_player`), and leave the type to the \
+                          annotation.",
+        configuration: &[ConfigShape::DenyList],
+        references: &[Reference {
+            title: "Making Wrong Code Look Wrong (Joel Spolsky)",
+            url: "https://www.joelonsoftware.com/2005/05/11/making-wrong-code-look-wrong/",
+        }],
+    };
 }
 
 impl Detector for NoHungarianNotation {

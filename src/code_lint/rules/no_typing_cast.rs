@@ -16,6 +16,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
 use crate::core::{Config, Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -46,8 +47,28 @@ impl NoTypingCast {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
-        crate::rule_documentation::RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Flags `typing.cast` calls in Python production code.",
+        what_it_does: "Flags calls to `typing.cast`, `typing_extensions.cast` and a bare \
+                       `cast` in Python source files; test files are not checked. Calls are \
+                       matched by how they are written, not by where the name was imported \
+                       from: a bare `cast(...)` is flagged even if `cast` comes from another \
+                       library, while a method call such as `pl.col(\"a\").cast(pl.Int64)` \
+                       is not.",
+        why_is_this_bad: "`cast` tells the type checker to trust a type without checking \
+                          it, at analysis time or at runtime. If the value is not what the \
+                          cast claims, the error surfaces later and far from its cause, and \
+                          the type checker can no longer help find it. A cast also stays \
+                          silently wrong when the surrounding code changes.\n\n\
+                          Narrow the type with a check the type checker understands: \
+                          `isinstance()`, a `TypeGuard` or `TypeIs` function, or a \
+                          `Protocol` that describes the contract.",
+        configuration: &[ConfigShape::DenyList],
+        references: &[Reference {
+            title: "Python docs: typing.cast",
+            url: "https://docs.python.org/3/library/typing.html#typing.cast",
+        }],
+    };
 }
 
 impl Detector for NoTypingCast {
