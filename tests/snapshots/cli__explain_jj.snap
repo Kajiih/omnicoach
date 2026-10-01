@@ -1,0 +1,34 @@
+---
+source: tests/cli.rs
+expression: "output.replace(binary, \"<binary>\")"
+---
+--- exit code ---
+0
+--- stdout ---
+# no-edits-on-described-commits
+
+Status: enabled (default)
+
+## What it does
+
+Documentation pending.
+
+## Why is this bad?
+
+Documentation pending.
+
+## Message
+
+- Summary: Command `jj edit {revision}` targets a non-empty described commit.
+- Rationale: Directly mutating an already-described commit rewrites reviewed history in place and risks tangling unrelated work into an existing change.
+- Suggestion: Create a child change on top with `jj new {revision}` and squash intentional fixes selectively via `jj squash`.
+
+## Tags
+
+- Topic: jj, vcs [via jj]
+- Precision: exact
+- Consensus: opinionated
+- Impacted quality: reliability
+- Analyzed input: command
+
+--- stderr ---

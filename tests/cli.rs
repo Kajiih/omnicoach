@@ -163,6 +163,36 @@ fn test_command_lint_help_flag() {
     insta::assert_snapshot!(output);
 }
 
+#[rstest::rstest]
+#[case::list_rules("omni-code-lint", &["--list-rules"], "list_rules")]
+#[case::list_rules_other_binary("omni-command-lint", &["--list-rules"], "list_rules")]
+#[case::tag_topic("omni-code-lint", &["--list-rules", "--tag", "testing"], "tag_testing")]
+#[case::tag_synonym("omni-command-lint", &["--list-rules", "--tag", "jujutsu"], "tag_jujutsu")]
+#[case::tag_typo("omni-code-lint", &["--list-rules", "--tag", "tesing"], "tag_typo")]
+#[case::tag_without_list("omni-code-lint", &["--tag", "testing"], "tag_without_list")]
+#[case::explain("omni-code-lint", &["--explain", "no-sleep-in-tests"], "explain_no_sleep")]
+#[case::explain_other_binary(
+    "omni-command-lint",
+    &["--explain", "no-sleep-in-tests"],
+    "explain_no_sleep"
+)]
+#[case::explain_command_rule(
+    "omni-code-lint",
+    &["--explain", "no-edits-on-described-commits"],
+    "explain_jj"
+)]
+#[case::explain_typo("omni-command-lint", &["--explain", "no-sleep-in-test"], "explain_typo")]
+#[case::format_typo("omni-code-lint", &["--format", "jsno", "."], "format_typo")]
+#[case::command_lint_needs_cmd("omni-command-lint", &[], "command_lint_needs_cmd")]
+fn test_discovery_and_cli_errors(
+    #[case] binary: &str,
+    #[case] args: &[&str],
+    #[case] snapshot: &str,
+) {
+    let output = run_and_sanitize_cli(binary, args, None, &[]);
+    insta::assert_snapshot!(snapshot, output.replace(binary, "<binary>"));
+}
+
 #[test]
 fn test_command_lint_described_commit_blocked() {
     let temp_repo = setup_temp_jj_repo();

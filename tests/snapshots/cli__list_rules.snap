@@ -1,0 +1,35 @@
+---
+source: tests/cli.rs
+expression: "output.replace(binary, \"<binary>\")"
+---
+--- exit code ---
+0
+--- stdout ---
+- `banned-abbreviations` (python, rust): Documentation pending.
+- `blanket-suppression` (python, rust): Documentation pending.
+- `enforce-frozen-slots-dataclass` (python): Documentation pending.
+- `flat-scope-enforced` (python): Documentation pending.
+- `max-test-assertions` (python, rust): Documentation pending.
+- `missing-suppression-reason` (python, rust): Documentation pending.
+- `no-assertion-packing` (python, rust): Documentation pending.
+- `no-dynamic-attribute-access` (python): Documentation pending.
+- `no-edits-on-described-commits` (command): Documentation pending.
+- `no-env-in-functions` (python, rust): Documentation pending.
+- `no-hungarian-notation` (python, rust): Documentation pending.
+- `no-identical-positional-types` (python): Documentation pending.
+- `no-logging-error-in-except` (python): Documentation pending.
+- `no-mock-assertions` (python): Documentation pending.
+- `no-mocks-in-tests` (python): Documentation pending.
+- `no-sleep-in-tests` (python, rust): Documentation pending.
+- `no-typing-cast` (python): Documentation pending.
+- `no-uncommented-suppress` (python): Documentation pending.
+- `no-unstructured-task-creation` (python): Documentation pending.
+- `no-zero-sleep-in-tests` (python, rust): Documentation pending.
+- `prefer-dedent-for-multiline-strings` (python, rust): Documentation pending.
+- `prefer-timedelta-over-seconds` (python, rust): Documentation pending.
+- `prefer-tuple-unpacking` (python, rust): Documentation pending.
+- `single-letter-variable-name` (python, rust): Documentation pending.
+- `unknown-suppression-rule` (python, rust): Documentation pending.
+- `unused-suppression` (python, rust): Documentation pending.
+
+--- stderr ---

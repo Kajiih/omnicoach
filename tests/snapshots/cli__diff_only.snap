@@ -9,6 +9,7 @@ expression: output_diff
   Rationale: Nested named functions bloat enclosing scopes and capture ambient state implicitly, increasing cognitive complexity and preventing isolated unit testing.
   Suggestion: Extract `world` to a module-level private function (`_world`) or use an inline `lambda` for trivial callbacks.
 
+For details on a rule, run: omni-code-lint --explain <rule>
 
 --- stderr ---
 Info: Comparing against Jujutsu revision '@-'.

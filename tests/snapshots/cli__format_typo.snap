@@ -1,0 +1,15 @@
+---
+source: tests/cli.rs
+expression: "output.replace(binary, \"<binary>\")"
+---
+--- exit code ---
+2
+--- stdout ---
+
+--- stderr ---
+error: invalid value 'jsno' for '--format <FORMAT>'
+  [possible values: plain, json]
+
+  tip: a similar value exists: 'json'
+
+For more information, try '--help'.

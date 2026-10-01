@@ -3,7 +3,8 @@
 omni::architecture_component!(ApplicationBinaries);
 
 use omni::code_lint::runner::{LintOptions, run_code_lint};
-use omni::diagnostic::print_diagnostics;
+use omni::diagnostic::{OutputFormat, print_diagnostics};
+use omni::rule_catalog::{DiscoveryArgs, explain_footer};
 use omni::rule_selection::load_config;
 use std::path::PathBuf;
 
@@ -20,9 +21,9 @@ struct Cli {
     #[arg(default_value = ".")]
     paths: Vec<PathBuf>,
 
-    /// Output format for diagnostics (plain, json)
-    #[arg(long, default_value = "plain")]
-    format: String,
+    /// Output format for diagnostics
+    #[arg(long, value_enum, default_value_t = OutputFormat::Plain)]
+    format: OutputFormat,
 
     /// Run linter only on files/lines changed in VCS
     #[arg(long)]
@@ -31,6 +32,9 @@ struct Cli {
     /// Run linter comparing against a custom revision/commit (implies --diff)
     #[arg(long)]
     diff_rev: Option<String>,
+
+    #[command(flatten)]
+    discovery: DiscoveryArgs,
 }
 
 fn main() {
@@ -42,6 +46,11 @@ fn main() {
 
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    if let Some(output) = cli.discovery.render() {
+        print!("{}", output?);
+        return Ok(());
+    }
 
     let config =
         load_config().map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
@@ -56,7 +65,10 @@ fn run() -> anyhow::Result<()> {
 
     // Print diagnostics according to format
     if !all_diagnostics.is_empty() {
-        print_diagnostics(&all_diagnostics, &cli.format)?;
+        print_diagnostics(&all_diagnostics, cli.format)?;
+        if cli.format == OutputFormat::Plain {
+            println!("{}", explain_footer(env!("CARGO_BIN_NAME")));
+        }
         std::process::exit(1);
     }
     Ok(())

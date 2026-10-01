@@ -1,0 +1,38 @@
+---
+source: tests/cli.rs
+expression: "output.replace(binary, \"<binary>\")"
+---
+--- exit code ---
+0
+--- stdout ---
+# no-sleep-in-tests
+
+Status: enabled (default)
+
+## What it does
+
+Documentation pending.
+
+## Why is this bad?
+
+Documentation pending.
+
+## Message
+
+- Summary: Wall-clock or async sleep call `{call}()` in test.
+- Rationale: Sleeping for fixed durations slows down test execution and introduces timing-dependent flakiness under load.
+- Suggestion: Synchronize on deterministic primitives (events, channels, conditions) or advance an injected virtual clock (`clock.sleep(...)`).
+  - Python: Synchronize on deterministic signals (`anyio.Event`, `asyncio.Event`, or a queue) or advance an injected virtual clock (`clock.sleep(...)`).
+  - Rust: Synchronize on deterministic primitives (`tokio::sync::Notify`, channels, `Condvar`) or pause time with `tokio::time::pause()`.
+
+## Tags
+
+- Topic: test-timing, testing [via test-timing]
+- Precision: exact
+- Consensus: unopinionated
+- Impacted quality: reliability
+- Languages: python, rust
+- Analyzed input: code
+- File scope: tests-only
+
+--- stderr ---

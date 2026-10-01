@@ -118,7 +118,7 @@ define_architecture! {
     /// Test harness and snapshot fixtures (`test_utils`).
     TestingHarness        => [CodeRuleContracts, CommandRuleContracts],
     /// CLI application entrypoint binaries (`src/bin/*`).
-    ApplicationBinaries   => [CodeLintRunner, CommandLintRunner, RuleSelection, CoreVocabulary],
+    ApplicationBinaries   => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog, CoreVocabulary],
 }
 
 impl ArchitectureComponent {

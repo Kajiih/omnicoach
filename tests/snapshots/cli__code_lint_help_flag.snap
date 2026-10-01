@@ -10,13 +10,40 @@ Static analysis codebase linter
 Usage: omni-code-lint [OPTIONS] [PATHS]...
 
 Arguments:
-  [PATHS]...  Paths to inspect [default: .]
+  [PATHS]...
+          Paths to inspect
+          
+          [default: .]
 
 Options:
-      --format <FORMAT>      Output format for diagnostics (plain, json) [default: plain]
-      --diff                 Run linter only on files/lines changed in VCS
-      --diff-rev <DIFF_REV>  Run linter comparing against a custom revision/commit (implies --diff)
-  -h, --help                 Print help
-  -V, --version              Print version
+      --format <FORMAT>
+          Output format for diagnostics
+
+          Possible values:
+          - plain: Human-readable text
+          - json:  Pretty-printed JSON array
+          
+          [default: plain]
+
+      --diff
+          Run linter only on files/lines changed in VCS
+
+      --diff-rev <DIFF_REV>
+          Run linter comparing against a custom revision/commit (implies --diff)
+
+      --list-rules
+          List every rule with its languages and summary, as Markdown
+
+      --tag <LABEL>
+          With --list-rules, keep only the rules a `select` label selects (tag, synonym or rule)
+
+      --explain <RULE>
+          Print one rule's documentation as Markdown
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
 
 --- stderr ---

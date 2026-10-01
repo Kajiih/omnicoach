@@ -1,0 +1,10 @@
+---
+source: tests/cli.rs
+expression: "output.replace(binary, \"<binary>\")"
+---
+--- exit code ---
+0
+--- stdout ---
+- `no-edits-on-described-commits` (command): Documentation pending.
+
+--- stderr ---
