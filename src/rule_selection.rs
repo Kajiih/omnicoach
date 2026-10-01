@@ -393,16 +393,30 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 
-    const HEURISTIC: &[&str] = &[
-        "banned-abbreviations",
-        "no-hungarian-notation",
-        "prefer-timedelta-over-seconds",
-        "prefer-tuple-unpacking",
-        "no-env-in-functions",
-        "no-unstructured-task-creation",
-        "max-test-assertions",
-    ];
+    const PARENT: Topic = Topic {
+        label: "parent",
+        parent: None,
+        description: "",
+        scope_note: "",
+        synonyms: &[],
+    };
+    const CHILD: Topic = Topic {
+        label: "child",
+        parent: Some(&PARENT),
+        ..PARENT
+    };
+    const OTHER: Topic = Topic {
+        label: "other",
+        ..PARENT
+    };
+
+    const RULE: Selector = Selector::Rule(RuleName("rule"));
+    const PARENT_TAG: Selector = Selector::Tag(Tag::Topic(PARENT));
+    const CHILD_TAG: Selector = Selector::Tag(Tag::Topic(CHILD));
+    const OTHER_TAG: Selector = Selector::Tag(Tag::Topic(OTHER));
+    const HEURISTIC: Selector = Selector::Tag(Tag::Precision(Precision::Heuristic));
 
     fn enabled(config: &Config, path: &str) -> BTreeSet<&'static str> {
         REGISTERED_RULES
@@ -421,89 +435,91 @@ mod tests {
             .collect()
     }
 
+    /// The status of `rule`, on the branches `parent > child`, `other` and `heuristic`.
     #[rstest]
-    #[case::empty_select("select = []", &[])]
-    #[case::adoption_ramp(
-        r#"ignore = ["heuristic", "opinionated"]"#,
-        &["no-logging-error-in-except", "no-sleep-in-tests", "unused-suppression",
-          "unknown-suppression-rule", "blanket-suppression"]
+    #[case::default_on_without_select(None, &[], "enabled (default)")]
+    #[case::default_off_with_select(Some(vec![]), &[], "disabled (not in `select`)")]
+    #[case::ignored_without_select(None, &[OTHER_TAG], "disabled by `ignore = [\"other\"]`")]
+    #[case::ancestor_selected(
+        Some(vec![PARENT_TAG]),
+        &[],
+        "enabled by `select = [\"parent\"]` (via parent > child)"
     )]
-    #[case::parent_includes_children(r#"select = ["vcs"]"#, &["no-edits-on-described-commits"])]
-    #[case::synonym(r#"select = ["jujutsu"]"#, &["no-edits-on-described-commits"])]
-    #[case::ignored_child_under_selected_parent(
-        "select = [\"testing\"]\nignore = [\"test-timing\"]",
-        &["max-test-assertions", "no-assertion-packing", "no-mocks-in-tests", "no-mock-assertions"]
+    #[case::nearest_select_on_a_branch_wins(
+        Some(vec![CHILD_TAG]),
+        &[PARENT_TAG],
+        "enabled by `select = [\"child\"]` (via parent > child)"
     )]
-    #[case::branches_disagree_ignore_wins(
-        "select = [\"testing\"]\nignore = [\"test-doubles\"]",
-        &["no-sleep-in-tests", "no-zero-sleep-in-tests", "max-test-assertions",
-          "no-assertion-packing"]
+    #[case::nearest_ignore_on_a_branch_wins(
+        Some(vec![PARENT_TAG]),
+        &[CHILD_TAG],
+        "disabled by `ignore = [\"child\"]` (via parent > child)"
     )]
-    #[case::cross_facet(
-        "select = [\"heuristic\"]\nignore = [\"naming\"]",
-        &["prefer-tuple-unpacking", "no-env-in-functions", "no-unstructured-task-creation",
-          "max-test-assertions"]
+    #[case::ignore_wins_across_topics(
+        Some(vec![CHILD_TAG]),
+        &[OTHER_TAG],
+        "disabled by `ignore = [\"other\"]`"
     )]
-    #[case::rule_name_beats_tag(
-        "select = [\"no-sleep-in-tests\"]\nignore = [\"testing\"]",
-        &["no-sleep-in-tests"]
+    #[case::ignore_wins_across_facets(
+        Some(vec![HEURISTIC]),
+        &[PARENT_TAG],
+        "disabled by `ignore = [\"parent\"]` (via parent > child)"
     )]
-    #[case::rule_name_with_topics(
-        "select = [\"naming\", \"no-sleep-in-tests\"]\nignore = [\"testing\"]",
-        &["banned-abbreviations", "single-letter-variable-name", "no-hungarian-notation",
-          "prefer-timedelta-over-seconds", "no-sleep-in-tests"]
+    #[case::selected_rule_name_beats_tags(
+        Some(vec![RULE]),
+        &[PARENT_TAG, OTHER_TAG, HEURISTIC],
+        "enabled by `select = [\"rule\"]`"
     )]
-    #[case::ignored_rule_inside_tag(
-        "select = [\"testing\"]\nignore = [\"no-mocks-in-tests\"]",
-        &["no-sleep-in-tests", "no-zero-sleep-in-tests", "max-test-assertions",
-          "no-assertion-packing", "no-mock-assertions"]
+    #[case::ignored_rule_name_beats_tags(
+        Some(vec![PARENT_TAG, OTHER_TAG, HEURISTIC]),
+        &[RULE],
+        "disabled by `ignore = [\"rule\"]`"
     )]
-    #[case::derived_facets(
-        "select = [\"rust\"]\nignore = [\"tests-only\"]",
-        &["banned-abbreviations", "single-letter-variable-name", "no-hungarian-notation",
-          "prefer-timedelta-over-seconds", "prefer-dedent-for-multiline-strings",
-          "prefer-tuple-unpacking", "no-env-in-functions", "missing-suppression-reason",
-          "unused-suppression", "unknown-suppression-rule", "blanket-suppression"]
-    )]
-    fn selection_enables_exactly(#[case] config_toml: &str, #[case] expected: &[&str]) {
-        let config = parse_config(config_toml).unwrap();
-        let expected: BTreeSet<_> = expected.iter().copied().collect();
-        assert_eq!(enabled(&config, "src/module.py"), expected);
-    }
-
-    #[rstest]
-    #[case::no_config("", &[])]
-    #[case::child_beats_ignored_parent(
-        "select = [\"python\", \"type-checker-bypass\"]\nignore = [\"static-typing\"]",
-        &["no-identical-positional-types", "no-edits-on-described-commits"]
-    )]
-    #[case::jj_beats_ignored_vcs("select = [\"exact\", \"jj\"]\nignore = [\"vcs\"]", HEURISTIC)]
-    fn selection_enables_all_except(#[case] config_toml: &str, #[case] excluded: &[&str]) {
-        let config = parse_config(config_toml).unwrap();
-        assert_eq!(enabled(&config, "src/module.py"), all_except(excluded));
+    fn the_nearest_selector_decides_and_ignore_wins_across_branches(
+        #[case] select: Option<Vec<Selector>>,
+        #[case] ignore: &[Selector],
+        #[case] expected: &str,
+    ) {
+        let rule = RegisteredRule::synthetic(
+            "rule",
+            Classification {
+                topics: &[CHILD, OTHER],
+                precision: Precision::Heuristic,
+                consensus: Consensus::Opinionated,
+                impacted_quality: ImpactedQuality::Maintainability,
+            },
+        );
+        let plan = Plan {
+            select: select.map(|selectors| selectors.into_iter().collect()),
+            ignore: ignore.iter().copied().collect(),
+        };
+        assert_eq!(plan.decide(&rule).to_string(), expected);
     }
 
     #[test]
     fn per_file_ignores_remove_only_on_matching_paths() {
+        let heuristic: Vec<_> = rules_tagged("heuristic")
+            .unwrap()
+            .iter()
+            .map(|rule| rule.name.0)
+            .collect();
         let config = parse_config("[per_file_ignores]\n\"tests/**\" = [\"heuristic\"]").unwrap();
         assert_eq!(
             enabled(&config, "tests/test_module.py"),
-            all_except(HEURISTIC)
+            all_except(&heuristic)
         );
         assert_eq!(enabled(&config, "src/module.py"), all_except(&[]));
     }
 
     #[test]
     fn per_file_ignores_apply_after_selection_by_rule_name() {
-        let config = parse_config(
-            "select = [\"max-test-assertions\"]\n[per_file_ignores]\n\"tests/**\" = [\"testing\"]",
-        )
+        let rule = rules_tagged("heuristic").unwrap()[0].name.0;
+        let config = parse_config(&format!(
+            "select = [\"{rule}\"]\n[per_file_ignores]\n\"tests/**\" = [\"heuristic\"]"
+        ))
         .unwrap();
         assert!(enabled(&config, "tests/test_module.py").is_empty());
-        assert_eq!(
-            enabled(&config, "src/module.py"),
-            BTreeSet::from(["max-test-assertions"])
-        );
+        assert_eq!(enabled(&config, "src/module.py"), BTreeSet::from([rule]));
     }
 
     #[rstest]
@@ -551,23 +567,5 @@ mod tests {
     fn invalid_configs_are_rejected_loudly(#[case] config_toml: &str, #[case] message: &str) {
         let error = parse_config(config_toml).unwrap_err().to_string();
         assert!(error.starts_with(message), "{error}");
-    }
-
-    #[rstest]
-    #[case::default("", "enabled (default)")]
-    #[case::not_selected("select = [\"naming\"]", "disabled (not in `select`)")]
-    #[case::ignored_ancestor(
-        "ignore = [\"testing\"]",
-        "disabled by `ignore = [\"testing\"]` (via testing > test-timing)"
-    )]
-    #[case::rule_name_wins(
-        "select = [\"no-sleep-in-tests\"]\nignore = [\"testing\"]",
-        "enabled by `select = [\"no-sleep-in-tests\"]`"
-    )]
-    #[case::flat_facet("ignore = [\"exact\"]", "disabled by `ignore = [\"exact\"]`")]
-    fn status_names_the_deciding_selector(#[case] config_toml: &str, #[case] expected: &str) {
-        let rule = find_rule("no-sleep-in-tests").unwrap();
-        let status = rule_status(config_toml, rule).unwrap();
-        assert_eq!(status.to_string(), expected);
     }
 }

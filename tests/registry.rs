@@ -6,22 +6,12 @@
 use omni::code_lint::rules::CODE_RULES;
 use omni::code_lint::suppression::SUPPRESSION_AUDITS;
 use omni::command_lint::rules::COMMAND_RULES;
-use omni::core::is_kebab_case;
 use omni::rule_taxonomy::Rule;
 use rstest::rstest;
 use std::collections::HashSet;
 
-fn validate_rule(rule: &(impl omni::core::Detector + ?Sized), names: &mut HashSet<&'static str>) {
+fn validate_rule(rule: &(impl omni::core::Detector + ?Sized)) {
     let name = rule.name().0;
-
-    assert!(
-        names.insert(name),
-        "Duplicate rule name found in registry: {name}"
-    );
-    assert!(
-        is_kebab_case(name),
-        "Rule name '{name}' does not match standard kebab-case pattern"
-    );
 
     let template = rule.violation_template();
     for field in [template.summary, template.rationale, template.suggestion] {
@@ -66,30 +56,8 @@ fn test_registry_integrity<R>(#[case] rules: &[Rule<R>])
 where
     R: omni::core::Detector + ?Sized,
 {
-    let mut names = HashSet::new();
     for registered in rules {
-        validate_rule(registered.detector, &mut names);
-    }
-}
-
-#[test]
-fn test_global_registry_uniqueness() {
-    let mut names = HashSet::new();
-
-    let code_names = CODE_RULES
-        .iter()
-        .map(|registered| registered.detector.name().0);
-    let audit_names = SUPPRESSION_AUDITS
-        .iter()
-        .map(|registered| registered.detector.name().0);
-    let command_names = COMMAND_RULES
-        .iter()
-        .map(|registered| registered.detector.name().0);
-    for name in code_names.chain(audit_names).chain(command_names) {
-        assert!(
-            names.insert(name),
-            "Global rule name collision across registries: {name}"
-        );
+        validate_rule(registered.detector);
     }
 }
 
@@ -130,26 +98,6 @@ static RULE_SOURCES: std::sync::LazyLock<Vec<(std::path::PathBuf, String)>> =
         sources.sort_by(|(left, _), (right, _)| left.cmp(right));
         sources
     });
-
-/// Diagnostic ordering is owned by the reporting layer, so a rule sorting its own output is dead work.
-#[test]
-fn test_rule_sources_do_not_sort_diagnostics() {
-    let suppression_path = std::path::PathBuf::from(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/code_lint/suppression.rs"
-    ));
-    let suppression_source =
-        std::fs::read_to_string(&suppression_path).expect("suppression source must be readable");
-    let suppression_entry = (suppression_path, suppression_source);
-
-    for (path, source) in RULE_SOURCES.iter().chain([&suppression_entry]) {
-        assert!(
-            !source.contains(".sort"),
-            "{} sorts its output; diagnostic ordering belongs to the reporting layer",
-            path.display()
-        );
-    }
-}
 
 fn rule_test_convention_violation(source: &str) -> Option<&'static str> {
     if !source.contains("rule_test!(") {

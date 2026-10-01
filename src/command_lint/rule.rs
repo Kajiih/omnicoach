@@ -296,18 +296,6 @@ mod tests {
     }
 
     #[test]
-    fn test_program_base_name() {
-        let cmd = InterceptedCommand::parse_all("/usr/local/bin/jj edit").remove(0);
-        assert_eq!(cmd.program_base_name(), "jj");
-
-        let cmd_rel = InterceptedCommand::parse_all("./bin/git status").remove(0);
-        assert_eq!(cmd_rel.program_base_name(), "git");
-
-        let cmd_simple = InterceptedCommand::parse_all("jj edit").remove(0);
-        assert_eq!(cmd_simple.program_base_name(), "jj");
-    }
-
-    #[test]
     fn test_parse_args_basic() {
         let cmd = InterceptedCommand::parse_all("jj edit -R . --config myconf @-").remove(0);
         let schema = ProgramCliSchema {

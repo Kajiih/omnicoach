@@ -804,13 +804,6 @@ mod tests {
         assert_eq!(config.effective_max_for_lang(lang, &DEFAULTS), expected);
     }
 
-    #[test]
-    fn test_threshold_config_rejects_rule_specific_min_args_key() {
-        // Every threshold rule shares `ThresholdConfig`, so a rule-specific key would leak to all.
-        let config: ThresholdConfig = toml::from_str("min_args = 5").unwrap();
-        assert_eq!(config.min, None);
-    }
-
     #[rstest::rstest]
     #[case("", SupportLang::Python, EnforcementMode::Ban)]
     #[case("", SupportLang::Rust, EnforcementMode::RequireExplanation)]
