@@ -4,22 +4,14 @@ architecture_component!(RuleCatalog);
 
 use strum::IntoEnumIterator as _;
 
-use crate::rule_documentation::ConfigShape;
+use crate::core::{
+    EnforcementMode, FilterListDefaults, LanguageDefaults, OptionSpec, RuleOptions,
+    support_lang_name,
+};
 use crate::rule_selection::{
     ConfigError, Facet, RegisteredRule, UnknownLabel, find_rule, load_rule_status,
     registered_rules, rules_tagged,
 };
-
-/// The configuration keys recognized by each shape.
-#[must_use]
-pub const fn shape_keys(shape: ConfigShape) -> &'static [&'static str] {
-    match shape {
-        ConfigShape::Threshold => crate::core::ThresholdConfig::KEYS,
-        ConfigShape::DenyList => crate::core::DenyListConfig::KEYS,
-        ConfigShape::AllowList => crate::core::AllowListConfig::KEYS,
-        ConfigShape::Enforcement => crate::core::EnforcementConfig::KEYS,
-    }
-}
 
 /// Why a discovery request failed. The message is what the user sees.
 #[derive(Debug, thiserror::Error)]
@@ -133,15 +125,8 @@ fn render_rule(rule: &RegisteredRule) -> String {
                 .map(|(language, override_text)| format!("  - {language}: {override_text}")),
         );
     }
-    let mut keys: Vec<&'static str> = doc
-        .configuration
-        .iter()
-        .flat_map(|&shape| shape_keys(shape))
-        .copied()
-        .collect();
-    keys.sort_unstable();
-    keys.dedup();
-    if !keys.is_empty() {
+    let configuration = configuration_lines(&rule.options);
+    if !configuration.is_empty() {
         lines.extend([
             String::new(),
             "## Configuration".to_owned(),
@@ -152,7 +137,7 @@ fn render_rule(rule: &RegisteredRule) -> String {
             ),
             String::new(),
         ]);
-        lines.extend(keys.iter().map(|key| format!("- `{key}`")));
+        lines.extend(configuration);
     }
     if !doc.references.is_empty() {
         lines.extend([String::new(), "## References".to_owned(), String::new()]);
@@ -170,6 +155,80 @@ fn render_rule(rule: &RegisteredRule) -> String {
             .map(|(facet, tags)| format!("- {}: {tags}", facet.label())),
     );
     lines.join("\n") + "\n"
+}
+
+/// One bullet per accepted key: its type, default and meaning, as declared by the rule.
+fn configuration_lines(options: &RuleOptions) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(default) = options.enforcement_mode {
+        let modes: Vec<&str> = EnforcementMode::iter().map(Into::into).collect();
+        lines.push(format!(
+            "- `{}` (`{}`, default {}): {}",
+            EnforcementMode::KEY,
+            modes.join("` or `"),
+            per_language(default, |mode| format!("`{}`", <&str>::from(mode))),
+            EnforcementMode::DOC
+        ));
+    }
+    for option in options.options {
+        match option {
+            OptionSpec::Count(count) => lines.push(format!(
+                "- `{}` (integer, default {}): {}",
+                count.key,
+                per_language(count.default, |value| value.to_string()),
+                count.doc
+            )),
+            OptionSpec::List(list) => lines.extend([
+                format!(
+                    "- `{}` (list of strings, default {}): {}",
+                    list.kind.replace_key(),
+                    list_default(&list.default),
+                    list.doc
+                ),
+                format!(
+                    "- `{}` (list of strings): items added to the default.",
+                    list.kind.extend_key()
+                ),
+                format!(
+                    "- `{}` (list of strings): items removed from the default.",
+                    list.kind.remove_key()
+                ),
+            ]),
+        }
+    }
+    lines
+}
+
+/// A default and its per-language overrides, e.g. `4, rust: 6`.
+fn per_language<T: Copy>(defaults: LanguageDefaults<T>, render: impl Fn(T) -> String) -> String {
+    let overrides = defaults
+        .overrides
+        .iter()
+        .map(|&(language, value)| format!(", {}: {}", support_lang_name(language), render(value)));
+    std::iter::once(render(defaults.base))
+        .chain(overrides)
+        .collect()
+}
+
+/// A list default and its per-language changes, e.g. `` `a`, `b`; rust removes `b` ``.
+fn list_default(defaults: &FilterListDefaults) -> String {
+    let quoted = |items: &[&str]| {
+        let items: Vec<String> = items.iter().map(|item| format!("`{item}`")).collect();
+        items.join(", ")
+    };
+    let base = if defaults.base.is_empty() {
+        "empty".to_owned()
+    } else {
+        quoted(defaults.base)
+    };
+    let added = defaults.extend.iter().map(|&(language, items)| {
+        format!("{} adds {}", support_lang_name(language), quoted(items))
+    });
+    let removed = defaults.exempt.iter().map(|&(language, items)| {
+        format!("{} removes {}", support_lang_name(language), quoted(items))
+    });
+    let parts: Vec<String> = std::iter::once(base).chain(added).chain(removed).collect();
+    parts.join("; ")
 }
 
 /// The rule's tags in `facet`, comma-separated; an ancestor topic names the topic it comes
@@ -199,7 +258,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+    use crate::rule_documentation::{Reference, RuleDoc};
 
     /// The style problems of one doc.
     fn doc_problems(doc: &RuleDoc) -> Vec<String> {
@@ -254,7 +313,6 @@ mod tests {
         summary: "Flags things.",
         what_it_does: "Flags things when they happen.",
         why_is_this_bad: "Things are bad.",
-        configuration: &[ConfigShape::Threshold],
         references: &[Reference {
             title: "Title",
             url: "https://example.com",

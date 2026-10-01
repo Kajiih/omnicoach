@@ -2,8 +2,9 @@
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::CodeDetector;
-use crate::core::Detector;
+use crate::core::{Detector, ResolvedOptions, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_declaration::Rule;
 use crate::rule_documentation::RuleDoc;
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -16,19 +17,18 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule enforcing flat function definitions (no nested named functions).
-pub struct FlatScopeEnforced;
+struct FlatScopeEnforced;
 
-impl FlatScopeEnforced {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &FlatScopeEnforced,
+    classification: Classification {
         topics: &[Topic::COMPLEXITY],
         precision: Precision::Exact,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Maintainability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags Python functions defined inside other functions.",
         what_it_does: "Flags every `def` that appears inside the body of another \
                        function or method in Python source files; test files are not \
@@ -45,10 +45,10 @@ impl FlatScopeEnforced {
                           leading underscore, and pass what it needs as parameters. A \
                           `lambda` remains fine for a trivial callback such as a sort \
                           key.",
-        configuration: &[],
         references: &[],
-    };
-}
+    },
+    options: RuleOptions::CODE_RULE,
+};
 
 impl Detector for FlatScopeEnforced {
     fn name(&self) -> RuleName {
@@ -73,7 +73,7 @@ impl CodeDetector for FlatScopeEnforced {
         &self,
         path: &Path,
         file: &ParsedFile,
-        _config: &crate::core::Config,
+        _options: &ResolvedOptions<'_>,
     ) -> Vec<Diagnostic> {
         ast::python::find_nested_functions(file)
             .into_iter()
@@ -86,7 +86,7 @@ impl CodeDetector for FlatScopeEnforced {
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    FlatScopeEnforced,
+    RULE,
     {
         Python => {
             pass: [

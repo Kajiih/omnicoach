@@ -30,21 +30,21 @@ Create a `.omnilint.toml` file at the root of your project workspace.
 ### Framework Rule Design: Enforcement Modes
 
 Every rule in Omni is built on a unified enforcement framework:
-- **`mode = "ban"`** (default for most rules): Prohibits the pattern. Violations can only be bypassed using explicit `# omni:ignore[rule] -- <reason>` directives.
-- **`mode = "require-explanation"`**: Permits the pattern as long as it is accompanied by an adjacent or inline substantive explanatory comment.
+- **`enforcement_mode = "ban"`** (default for most rules): Prohibits the pattern. Violations can only be bypassed using explicit `# omni:ignore[rule] -- <reason>` directives.
+- **`enforcement_mode = "require-explanation"`**: Permits the pattern as long as it is accompanied by an adjacent or inline substantive explanatory comment.
 
-You can configure enforcement mode globally or per-language for any rule:
+You can configure enforcement mode globally or per-language for any code rule (suppression audits and command rules reject it):
 
 ```toml
 [rules.no-typing-cast]
-mode = "ban" # default: strictly banned
+enforcement_mode = "ban" # default: strictly banned
 
 [rules.no-sleep-in-tests]
-mode = "require-explanation" # permitted only when documented with an explanation comment
+enforcement_mode = "require-explanation" # permitted only when documented with an explanation comment
 
 # Language-specific mode overrides
 [rules.single-letter-variable-name.python]
-mode = "require-explanation"
+enforcement_mode = "require-explanation"
 ```
 
 ### Global Selection & File Scoping

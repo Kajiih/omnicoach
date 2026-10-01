@@ -2,21 +2,27 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeDetector;
-use crate::core::{Detector, FilterListDefaults};
+use crate::core::{
+    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Static defaults for banned time-unit suffixes.
-const DEFAULT_BANNED_SUFFIXES: FilterListDefaults = FilterListDefaults {
-    base: &[
-        "_seconds", "_secs", "_sec", "_minutes", "_mins", "_min", "_hours", "_hrs", "_hr", "_days",
-        "_millis", "_ms", "_micros", "_us", "_nanos", "_ns",
-    ],
-    extend: &[],
-    exempt: &[],
+const BANNED_SUFFIXES: ListOption = ListOption {
+    kind: ListKind::Deny,
+    doc: "Time-unit suffixes flagged at the end of an identifier.",
+    default: FilterListDefaults {
+        base: &[
+            "_seconds", "_secs", "_sec", "_minutes", "_mins", "_min", "_hours", "_hrs", "_hr",
+            "_days", "_millis", "_ms", "_micros", "_us", "_nanos", "_ns",
+        ],
+        extend: &[],
+        exempt: &[],
+    },
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -30,19 +36,18 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule that flags numeric variables encoding time unit suffixes.
-pub struct PreferTimedeltaOverSeconds;
+struct PreferTimedeltaOverSeconds;
 
-impl PreferTimedeltaOverSeconds {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &PreferTimedeltaOverSeconds,
+    classification: Classification {
         topics: &[Topic::TYPE_ENCODED_NAMES, Topic::DURATIONS],
         precision: Precision::Heuristic,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Reliability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags variable names that carry a time unit, such as `timeout_secs` or `delay_ms`.",
         what_it_does: "Flags variables, parameters, loop and pattern bindings, and \
                        constants whose name ends, ignoring case, with a time-unit suffix: \
@@ -62,7 +67,6 @@ impl PreferTimedeltaOverSeconds {
                           (`timeout: timedelta`). The unit is then chosen once, where the \
                           value is created (`timedelta(seconds=10)`, \
                           `Duration::from_millis(250)`).",
-        configuration: &[ConfigShape::DenyList],
         references: &[
             Reference {
                 title: "Python docs: datetime.timedelta",
@@ -73,8 +77,12 @@ impl PreferTimedeltaOverSeconds {
                 url: "https://doc.rust-lang.org/std/time/struct.Duration.html",
             },
         ],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[OptionSpec::List(&BANNED_SUFFIXES)],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for PreferTimedeltaOverSeconds {
     fn name(&self) -> RuleName {
@@ -95,15 +103,15 @@ impl CodeDetector for PreferTimedeltaOverSeconds {
         &self,
         path: &Path,
         file: &ParsedFile,
-        config: &crate::core::Config,
+        options: &ResolvedOptions<'_>,
     ) -> Vec<Diagnostic> {
-        self.check_banned_suffixes(path, file, config, &DEFAULT_BANNED_SUFFIXES)
+        self.check_banned_suffixes(path, file, &options.list(&BANNED_SUFFIXES))
     }
 }
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    PreferTimedeltaOverSeconds,
+    RULE,
     {
         Python => {
             pass: [

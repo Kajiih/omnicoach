@@ -6,7 +6,7 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
 use crate::code_lint::semantic::comments::CommentIndex;
 use crate::code_lint::suppression::{SUPPRESSION_AUDITS, SuppressionTracker};
-use crate::core::Config;
+use crate::core::{Config, EnforcementMode, ResolvedOptions};
 use crate::diagnostic::Diagnostic;
 use ast_grep_language::SupportLang;
 use rayon::prelude::*;
@@ -171,9 +171,13 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
         if !should_evaluate_rule(rule, path, lang, is_test, has_inline_tests, config) {
             continue;
         }
-        let mode = rule.enforcement_mode(lang, config);
-        let mut rule_diagnostics = rule.check_file(path, &file, config);
-        if mode == crate::core::EnforcementMode::RequireExplanation {
+        let options = ResolvedOptions::new(
+            lang,
+            &registered.options,
+            config.rule_overrides.get(&rule.name()),
+        );
+        let mut rule_diagnostics = rule.check_file(path, &file, &options);
+        if options.enforcement_mode() == EnforcementMode::RequireExplanation {
             let index = comment_index.get_or_insert_with(|| CommentIndex::from_file(&file));
             rule_diagnostics.retain(|diagnostic| {
                 !index.has_explanation_for_span(
@@ -348,8 +352,10 @@ fn lint_single_file(
 mod tests {
     use super::*;
     use crate::code_lint::rules;
+    use crate::core::RuleOverrides;
     use crate::diagnostic::RuleName;
     use rstest::rstest;
+    use std::collections::HashMap;
 
     fn code_rule_names() -> impl Iterator<Item = RuleName> {
         rules::CODE_RULES
@@ -377,49 +383,49 @@ mod tests {
 
     #[rstest]
     #[case::python_rule_on_python_file(
-        &rules::no_logging_error_in_except::NoLoggingErrorInExcept,
+        rules::no_logging_error_in_except::RULE.detector,
         "service.py",
         SupportLang::Python,
         false,
         true
     )]
     #[case::python_rule_on_rust_file(
-        &rules::no_logging_error_in_except::NoLoggingErrorInExcept,
+        rules::no_logging_error_in_except::RULE.detector,
         "service.rs",
         SupportLang::Rust,
         false,
         false
     )]
     #[case::tests_only_python_in_test_path(
-        &rules::no_sleep_in_tests::NoSleepInTests,
+        rules::no_sleep_in_tests::NO_SLEEP_IN_TESTS.detector,
         "test_service.py",
         SupportLang::Python,
         true,
         true
     )]
     #[case::tests_only_python_in_source_path(
-        &rules::no_sleep_in_tests::NoSleepInTests,
+        rules::no_sleep_in_tests::NO_SLEEP_IN_TESTS.detector,
         "service.py",
         SupportLang::Python,
         false,
         false
     )]
     #[case::tests_only_rust_source_path_eligible_for_inline_cfg_test(
-        &rules::no_sleep_in_tests::NoSleepInTests,
+        rules::no_sleep_in_tests::NO_SLEEP_IN_TESTS.detector,
         "service.rs",
         SupportLang::Rust,
         false,
         true
     )]
     #[case::source_only_on_production_file(
-        &rules::no_env_in_functions::NoEnvInFunctions,
+        rules::no_env_in_functions::RULE.detector,
         "service.rs",
         SupportLang::Rust,
         false,
         true
     )]
     #[case::source_only_skipped_on_test_file(
-        &rules::no_env_in_functions::NoEnvInFunctions,
+        rules::no_env_in_functions::RULE.detector,
         "tests/test_service.rs",
         SupportLang::Rust,
         true,
@@ -526,13 +532,19 @@ mod tests {
         "};
         let source_uncommented = "x = cast(int, y)";
 
-        let config_toml = indoc::indoc! {r#"
-            [rules.no-typing-cast]
-            mode = "require-explanation"
-        "#};
+        let rule = rules::no_typing_cast::RULE;
+        let table: toml::Value =
+            toml::from_str(r#"enforcement_mode = "require-explanation""#).expect("valid TOML");
+        let overrides = RuleOverrides::parse(
+            rule.detector.name().0,
+            &rule.options,
+            rule.detector.supported_languages(),
+            &table,
+        )
+        .expect("valid options");
         let req_doc_config = Config {
-            disabled_rules: config_enabling(&["no-typing-cast"]).disabled_rules,
-            ..toml::from_str(config_toml).unwrap()
+            rule_overrides: HashMap::from([(rule.detector.name(), overrides)]),
+            ..config_enabling(&["no-typing-cast"])
         };
 
         let diagnostics_req_doc =

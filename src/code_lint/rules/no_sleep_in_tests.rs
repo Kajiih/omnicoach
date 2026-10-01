@@ -2,33 +2,39 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::code_lint::semantic::calls::CallMatch;
-use crate::core::{Config, Detector, FilterListDefaults};
+use crate::code_lint::semantic::calls::{self, CallMatch};
+use crate::core::{
+    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Static default banned sleep call patterns across Python and Rust.
-const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
-    base: &["sleep"],
-    extend: &[
-        (
-            SupportLang::Python,
-            &["time.sleep", "asyncio.sleep", "anyio.sleep", "trio.sleep"],
-        ),
-        (
-            SupportLang::Rust,
-            &[
-                "thread::sleep",
-                "std::thread::sleep",
-                "time::sleep",
-                "tokio::time::sleep",
-            ],
-        ),
-    ],
-    exempt: &[],
+const BANNED_CALLS: ListOption = ListOption {
+    kind: ListKind::Deny,
+    doc: "Sleep calls flagged in tests.",
+    default: FilterListDefaults {
+        base: &["sleep"],
+        extend: &[
+            (
+                SupportLang::Python,
+                &["time.sleep", "asyncio.sleep", "anyio.sleep", "trio.sleep"],
+            ),
+            (
+                SupportLang::Rust,
+                &[
+                    "thread::sleep",
+                    "std::thread::sleep",
+                    "time::sleep",
+                    "tokio::time::sleep",
+                ],
+            ),
+        ],
+        exempt: &[],
+    },
 };
 
 const SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
@@ -52,19 +58,18 @@ const ZERO_SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule that bans non-zero wall-clock and async sleeps in test files.
-pub struct NoSleepInTests;
+struct NoSleepInTests;
 
-impl NoSleepInTests {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The `no-sleep-in-tests` rule's declaration.
+pub const NO_SLEEP_IN_TESTS: Rule<dyn CodeDetector> = Rule {
+    detector: &NoSleepInTests,
+    classification: Classification {
         topics: &[Topic::TEST_TIMING],
         precision: Precision::Exact,
         consensus: Consensus::Unopinionated,
         impacted_quality: ImpactedQuality::Reliability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags fixed-duration sleeps in tests.",
         what_it_does: "Flags wall-clock and async sleep calls in test files: `time.sleep`, \
                        `asyncio.sleep`, `anyio.sleep` and `trio.sleep` in Python, \
@@ -78,7 +83,6 @@ impl NoSleepInTests {
                           Either way, the test no longer says what it waits for.\n\n\
                           Wait on the event itself (an event, a channel, a condition \
                           variable), or inject a clock that the test advances.",
-        configuration: &[ConfigShape::DenyList],
         references: &[
             Reference {
                 title: "Eradicating Non-Determinism in Tests (Martin Fowler)",
@@ -89,8 +93,12 @@ impl NoSleepInTests {
                 url: "https://testing.googleblog.com/2016/05/flaky-tests-at-google-and-how-we.html",
             },
         ],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[OptionSpec::List(&BANNED_CALLS)],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for NoSleepInTests {
     fn name(&self) -> RuleName {
@@ -107,19 +115,18 @@ impl Detector for NoSleepInTests {
 }
 
 /// Rule that bans zero-duration sleeps (`sleep(0)`, `sleep(Duration::ZERO)`) in test files.
-pub struct NoZeroSleepInTests;
+struct NoZeroSleepInTests;
 
-impl NoZeroSleepInTests {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The `no-zero-sleep-in-tests` rule's declaration.
+pub const NO_ZERO_SLEEP_IN_TESTS: Rule<dyn CodeDetector> = Rule {
+    detector: &NoZeroSleepInTests,
+    classification: Classification {
         topics: &[Topic::TEST_TIMING],
         precision: Precision::Exact,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Reliability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags zero-duration sleeps used to yield in tests.",
         what_it_does: "Flags the same sleep calls as `no-sleep-in-tests` when their single \
                        argument is a literal zero duration: `0`, `0.0` or `0.` in Python, \
@@ -135,7 +142,6 @@ impl NoZeroSleepInTests {
                           that `sleep(Duration::ZERO)` yields at all.\n\n\
                           Use the explicit yield primitive: `tokio::task::yield_now().await` \
                           in Rust, `await anyio.lowlevel.checkpoint()` in Python.",
-        configuration: &[ConfigShape::DenyList],
         references: &[
             Reference {
                 title: "tokio::task::yield_now",
@@ -146,8 +152,12 @@ impl NoZeroSleepInTests {
                 url: "https://docs.python.org/3/library/asyncio-task.html#asyncio.sleep",
             },
         ],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[OptionSpec::List(&BANNED_CALLS)],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for NoZeroSleepInTests {
     fn name(&self) -> RuleName {
@@ -188,8 +198,13 @@ impl CodeDetector for NoSleepInTests {
         RuleTarget::TestsOnly
     }
 
-    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
-        self.find_configured_banned_calls(file, config, &DEFAULT_BANNED_CALLS)
+    fn check_file(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        options: &ResolvedOptions<'_>,
+    ) -> Vec<Diagnostic> {
+        calls::find_banned_calls(file, &options.list(&BANNED_CALLS))
             .into_iter()
             .filter(|call_match| zero_duration_arg(call_match).is_none())
             .map(|call_match| {
@@ -204,8 +219,13 @@ impl CodeDetector for NoZeroSleepInTests {
         RuleTarget::TestsOnly
     }
 
-    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
-        self.find_configured_banned_calls(file, config, &DEFAULT_BANNED_CALLS)
+    fn check_file(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        options: &ResolvedOptions<'_>,
+    ) -> Vec<Diagnostic> {
+        calls::find_banned_calls(file, &options.list(&BANNED_CALLS))
             .into_iter()
             .filter_map(|call_match| {
                 let zero_arg = zero_duration_arg(&call_match)?;
@@ -220,7 +240,7 @@ impl CodeDetector for NoZeroSleepInTests {
 }
 
 #[cfg(test)]
-crate::test_utils::rule_test!(tests_no_sleep: NoSleepInTests, {
+crate::test_utils::rule_test!(tests_no_sleep: NO_SLEEP_IN_TESTS, {
     Python => {
         pass: [
             zero_duration_sleep_handled_separately => r"
@@ -339,7 +359,7 @@ crate::test_utils::rule_test!(tests_no_sleep: NoSleepInTests, {
 });
 
 #[cfg(test)]
-crate::test_utils::rule_test!(tests_no_zero_sleep: NoZeroSleepInTests, {
+crate::test_utils::rule_test!(tests_no_zero_sleep: NO_ZERO_SLEEP_IN_TESTS, {
     Python => {
         pass: [
             non_zero_sleep => r"

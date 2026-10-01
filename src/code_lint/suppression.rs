@@ -4,13 +4,14 @@ architecture_component!(CodeSuppressionEngine);
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::semantic::comments::strip_comment_delimiters;
-use crate::core::{Config, Detector};
+use crate::core::{Config, Detector, RuleOptions};
 use crate::diagnostic::{
     Diagnostic, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationTemplate,
     violation_template,
 };
+use crate::rule_declaration::Rule;
 use crate::rule_documentation::{Reference, RuleDoc};
-use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Rule, Topic};
+use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -22,19 +23,18 @@ const MISSING_REASON_TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Flags suppression directives missing a non-empty explanation reason.
-pub struct MissingSuppressionReason;
+struct MissingSuppressionReason;
 
-impl MissingSuppressionReason {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+const MISSING_SUPPRESSION_REASON: Rule<dyn Detector> = Rule {
+    detector: &MissingSuppressionReason,
+    classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
         precision: Precision::Exact,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Maintainability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Requires every suppression directive to give a reason.",
         what_it_does: "Flags `omni:ignore` and `omni:disable-file` directives that do not \
                        end with `-- <reason>`, or whose reason is empty. For example, \
@@ -46,13 +46,13 @@ impl MissingSuppressionReason {
                           the suppression is still needed. The reason keeps the decision \
                           reviewable, and makes stale suppressions easy to spot and \
                           remove.",
-        configuration: &[],
         references: &[Reference {
             title: "Ruff: Error suppression",
             url: "https://docs.astral.sh/ruff/linter/#error-suppression",
         }],
-    };
-}
+    },
+    options: RuleOptions::NONE,
+};
 
 impl Detector for MissingSuppressionReason {
     fn name(&self) -> RuleName {
@@ -75,19 +75,18 @@ const UNUSED_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Flags suppression directives when no violation occurred for the specified rule.
-pub struct UnusedSuppression;
+struct UnusedSuppression;
 
-impl UnusedSuppression {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+const UNUSED_SUPPRESSION: Rule<dyn Detector> = Rule {
+    detector: &UnusedSuppression,
+    classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
         precision: Precision::Exact,
         consensus: Consensus::Unopinionated,
         impacted_quality: ImpactedQuality::Reliability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags suppression directives that suppress no finding.",
         what_it_does: "Flags each rule named in an `omni:ignore` or `omni:disable-file` \
                        directive that produced no finding in the directive's scope: its own \
@@ -105,13 +104,13 @@ impl UnusedSuppression {
                           reported.\n\n\
                           Remove the rule from the directive, or the whole directive when \
                           no rule is left.",
-        configuration: &[],
         references: &[Reference {
             title: "Ruff: unused-noqa (RUF100)",
             url: "https://docs.astral.sh/ruff/rules/unused-noqa/",
         }],
-    };
-}
+    },
+    options: RuleOptions::NONE,
+};
 
 impl Detector for UnusedSuppression {
     fn name(&self) -> RuleName {
@@ -134,19 +133,18 @@ const UNKNOWN_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Flags suppression directives targeting unknown or non-suppressible rules.
-pub struct UnknownSuppressionRule;
+struct UnknownSuppressionRule;
 
-impl UnknownSuppressionRule {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+const UNKNOWN_SUPPRESSION_RULE: Rule<dyn Detector> = Rule {
+    detector: &UnknownSuppressionRule,
+    classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
         precision: Precision::Exact,
         consensus: Consensus::Unopinionated,
         impacted_quality: ImpactedQuality::Reliability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags suppression directives that name a rule Omni does not know.",
         what_it_does: "Flags each rule name in an `omni:ignore` or `omni:disable-file` \
                        directive that is not a code rule known to Omni, such as the typo \
@@ -160,10 +158,10 @@ impl UnknownSuppressionRule {
                           removed rules pile up as noise.\n\n\
                           Fix the name (`--list-rules` prints every rule name), or remove \
                           it from the directive.",
-        configuration: &[],
         references: &[],
-    };
-}
+    },
+    options: RuleOptions::NONE,
+};
 
 impl Detector for UnknownSuppressionRule {
     fn name(&self) -> RuleName {
@@ -186,19 +184,18 @@ const BLANKET_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Flags blanket suppression directives that omit explicit rule names.
-pub struct BlanketSuppression;
+struct BlanketSuppression;
 
-impl BlanketSuppression {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+const BLANKET_SUPPRESSION: Rule<dyn Detector> = Rule {
+    detector: &BlanketSuppression,
+    classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
         precision: Precision::Exact,
         consensus: Consensus::Unopinionated,
         impacted_quality: ImpactedQuality::Reliability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags suppression directives that name no rule.",
         what_it_does: "Flags `omni:ignore` and `omni:disable-file` directives with no \
                        bracketed rule list, an empty list `[]`, or an unclosed `[`. For \
@@ -211,13 +208,13 @@ impl BlanketSuppression {
                           file, which misleads the reader.\n\n\
                           Name the rules to suppress in brackets, followed by a reason: \
                           `[rule-name] -- reason`.",
-        configuration: &[],
         references: &[Reference {
             title: "Ruff: blanket-noqa (PGH004)",
             url: "https://docs.astral.sh/ruff/rules/blanket-noqa/",
         }],
-    };
-}
+    },
+    options: RuleOptions::NONE,
+};
 
 impl Detector for BlanketSuppression {
     fn name(&self) -> RuleName {
@@ -236,26 +233,10 @@ impl Detector for BlanketSuppression {
 /// Static list of the suppression audits with their classifications, evaluated by [`SuppressionTracker::audit`] rather than
 /// per file like code rules.
 pub const SUPPRESSION_AUDITS: &[Rule<dyn Detector>] = &[
-    Rule {
-        detector: &MissingSuppressionReason,
-        classification: MissingSuppressionReason::CLASSIFICATION,
-        doc: MissingSuppressionReason::DOC,
-    },
-    Rule {
-        detector: &UnusedSuppression,
-        classification: UnusedSuppression::CLASSIFICATION,
-        doc: UnusedSuppression::DOC,
-    },
-    Rule {
-        detector: &UnknownSuppressionRule,
-        classification: UnknownSuppressionRule::CLASSIFICATION,
-        doc: UnknownSuppressionRule::DOC,
-    },
-    Rule {
-        detector: &BlanketSuppression,
-        classification: BlanketSuppression::CLASSIFICATION,
-        doc: BlanketSuppression::DOC,
-    },
+    MISSING_SUPPRESSION_REASON,
+    UNUSED_SUPPRESSION,
+    UNKNOWN_SUPPRESSION_RULE,
+    BLANKET_SUPPRESSION,
 ];
 
 /// The placement scope of a parsed suppression directive.

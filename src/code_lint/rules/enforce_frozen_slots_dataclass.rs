@@ -3,8 +3,9 @@
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{PythonClassInfo, extract_classes};
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::Detector;
+use crate::core::{Detector, ResolvedOptions, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_declaration::Rule;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -17,19 +18,18 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule that enforces `@dataclass(frozen=True, slots=True)` in Python files.
-pub struct EnforceFrozenSlotsDataclass;
+struct EnforceFrozenSlotsDataclass;
 
-impl EnforceFrozenSlotsDataclass {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &EnforceFrozenSlotsDataclass,
+    classification: Classification {
         topics: &[Topic::RECORD_TYPES],
         precision: Precision::Exact,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Reliability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Requires Python dataclasses to declare `frozen=True` and `slots=True`.",
         what_it_does: "Flags a class decorated with `@dataclass` or \
                        `@dataclasses.dataclass` that does not pass both `frozen` and \
@@ -49,13 +49,13 @@ impl EnforceFrozenSlotsDataclass {
                           3.10 or later) and derive modified copies with \
                           `dataclasses.replace`. When mutability or a `__dict__` is really \
                           needed, say so with `frozen=False` or `slots=False`.",
-        configuration: &[],
         references: &[Reference {
             title: "Python docs: dataclasses",
             url: "https://docs.python.org/3/library/dataclasses.html",
         }],
-    };
-}
+    },
+    options: RuleOptions::CODE_RULE,
+};
 
 impl Detector for EnforceFrozenSlotsDataclass {
     fn name(&self) -> RuleName {
@@ -111,7 +111,7 @@ impl CodeDetector for EnforceFrozenSlotsDataclass {
         &self,
         path: &Path,
         file: &ParsedFile,
-        _config: &crate::core::Config,
+        _options: &ResolvedOptions<'_>,
     ) -> Vec<Diagnostic> {
         extract_classes(file)
             .into_iter()
@@ -122,7 +122,7 @@ impl CodeDetector for EnforceFrozenSlotsDataclass {
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    EnforceFrozenSlotsDataclass,
+    RULE,
     {
         Python => {
             pass: [

@@ -3,8 +3,8 @@
 //! Flags calls to `typing.cast(...)`, `typing_extensions.cast(...)`, or `cast(...)` in Python production code.
 //! `cast()` bypasses static type verification without runtime validation, masking underlying type errors and bugs.
 //!
-//! By default, `cast` is completely banned (`mode = "ban"`).
-//! When configured with `mode = "require-explanation"`, `cast()` is permitted if accompanied by
+//! By default, `cast` is completely banned (`enforcement_mode = "ban"`).
+//! When configured with `enforcement_mode = "require-explanation"`, `cast()` is permitted if accompanied by
 //! an adjacent explanatory comment.
 //! In all modes, legitimate uses can be justified via `# omni:ignore[no-typing-cast] -- <explanation>`.
 
@@ -14,18 +14,24 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{Config, Detector, FilterListDefaults};
+use crate::core::{
+    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Static defaults for banned typing cast functions.
-const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
-    base: &["cast", "typing.cast", "typing_extensions.cast"],
-    extend: &[],
-    exempt: &[],
+const BANNED_CALLS: ListOption = ListOption {
+    kind: ListKind::Deny,
+    doc: "Cast functions flagged when called.",
+    default: FilterListDefaults {
+        base: &["cast", "typing.cast", "typing_extensions.cast"],
+        extend: &[],
+        exempt: &[],
+    },
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -35,19 +41,18 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule struct.
-pub struct NoTypingCast;
+struct NoTypingCast;
 
-impl NoTypingCast {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &NoTypingCast,
+    classification: Classification {
         topics: &[Topic::TYPE_CHECKER_BYPASS],
         precision: Precision::Exact,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Reliability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags `typing.cast` calls in Python production code.",
         what_it_does: "Flags calls to `typing.cast`, `typing_extensions.cast` and a bare \
                        `cast` in Python source files; test files are not checked. Calls are \
@@ -63,13 +68,16 @@ impl NoTypingCast {
                           Narrow the type with a check the type checker understands: \
                           `isinstance()`, a `TypeGuard` or `TypeIs` function, or a \
                           `Protocol` that describes the contract.",
-        configuration: &[ConfigShape::DenyList],
         references: &[Reference {
             title: "Python docs: typing.cast",
             url: "https://docs.python.org/3/library/typing.html#typing.cast",
         }],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[OptionSpec::List(&BANNED_CALLS)],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for NoTypingCast {
     fn name(&self) -> RuleName {
@@ -90,14 +98,19 @@ impl CodeDetector for NoTypingCast {
         RuleTarget::SourceOnly
     }
 
-    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
-        self.check_banned_calls(path, file, config, &DEFAULT_BANNED_CALLS)
+    fn check_file(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        options: &ResolvedOptions<'_>,
+    ) -> Vec<Diagnostic> {
+        self.check_banned_calls(path, file, &options.list(&BANNED_CALLS))
     }
 }
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    NoTypingCast,
+    RULE,
     {
         Python => {
             pass: [

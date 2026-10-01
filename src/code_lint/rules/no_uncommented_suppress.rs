@@ -7,23 +7,26 @@
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::is_with_context_manager;
 use crate::code_lint::rule::CodeDetector;
-use crate::core::{Config, Detector, EnforcementMode, FilterListDefaults, LanguageDefaults};
+use crate::code_lint::semantic::calls;
+use crate::core::{
+    Detector, EnforcementMode, FilterListDefaults, LanguageDefaults, ListKind, ListOption,
+    OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Static defaults for banned suppress functions.
-const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
-    base: &["suppress", "contextlib.suppress"],
-    extend: &[],
-    exempt: &[],
-};
-
-const DEFAULT_ENFORCEMENT: LanguageDefaults<EnforcementMode> = LanguageDefaults {
-    base: EnforcementMode::RequireExplanation,
-    overrides: &[],
+const BANNED_CALLS: ListOption = ListOption {
+    kind: ListKind::Deny,
+    doc: "Exception suppression calls flagged when called.",
+    default: FilterListDefaults {
+        base: &["suppress", "contextlib.suppress"],
+        extend: &[],
+        exempt: &[],
+    },
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -33,19 +36,18 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule struct.
-pub struct NoUncommentedSuppress;
+struct NoUncommentedSuppress;
 
-impl NoUncommentedSuppress {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &NoUncommentedSuppress,
+    classification: Classification {
         topics: &[Topic::ERROR_HANDLING],
         precision: Precision::Exact,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Maintainability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Requires a comment explaining each `contextlib.suppress` block.",
         what_it_does: "Flags `suppress(...)` and `contextlib.suppress(...)` used as a context \
                        manager in a Python `with` statement, unless a comment explains it. \
@@ -55,8 +57,8 @@ impl NoUncommentedSuppress {
                        words and ten characters, and a bare tool directive such as \
                        `# noqa: SIM105` or `# type: ignore` does not count. Comments inside \
                        the `with` body do not count. A `suppress(...)` call outside a `with` \
-                       statement is not flagged. With `mode = \"ban\"`, every such block is \
-                       flagged, commented or not.",
+                       statement is not flagged. With `enforcement_mode = \"ban\"`, every \
+                       such block is flagged, commented or not.",
         why_is_this_bad: "`suppress` silently discards an exception. The code does not say \
                           why that failure is harmless, so a reader cannot tell an \
                           intentional ignore from a bug being hidden, and a later change \
@@ -64,13 +66,19 @@ impl NoUncommentedSuppress {
                           State why the exception is safe to ignore in a comment next to \
                           the `with` statement, for example \
                           `# The file may already have been removed by the cleanup job.`",
-        configuration: &[ConfigShape::DenyList, ConfigShape::Enforcement],
         references: &[Reference {
             title: "Python docs: contextlib.suppress",
             url: "https://docs.python.org/3/library/contextlib.html#contextlib.suppress",
         }],
-    };
-}
+    },
+    options: RuleOptions {
+        enforcement_mode: Some(LanguageDefaults::new(
+            EnforcementMode::RequireExplanation,
+            &[],
+        )),
+        options: &[OptionSpec::List(&BANNED_CALLS)],
+    },
+};
 
 impl Detector for NoUncommentedSuppress {
     fn name(&self) -> RuleName {
@@ -81,18 +89,19 @@ impl Detector for NoUncommentedSuppress {
         &[SupportLang::Python]
     }
 
-    fn default_enforcement_mode(&self) -> LanguageDefaults<EnforcementMode> {
-        DEFAULT_ENFORCEMENT
-    }
-
     fn violation_template(&self) -> &'static ViolationTemplate {
         &TEMPLATE
     }
 }
 
 impl CodeDetector for NoUncommentedSuppress {
-    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
-        self.find_configured_banned_calls(file, config, &DEFAULT_BANNED_CALLS)
+    fn check_file(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        options: &ResolvedOptions<'_>,
+    ) -> Vec<Diagnostic> {
+        calls::find_banned_calls(file, &options.list(&BANNED_CALLS))
             .into_iter()
             .filter(|matched| is_with_context_manager(&matched.node))
             .map(|matched| self.diagnostic_at_node(path, &matched.node, &[]))
@@ -102,7 +111,7 @@ impl CodeDetector for NoUncommentedSuppress {
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    NoUncommentedSuppress,
+    RULE,
     {
         Python => {
             pass: [

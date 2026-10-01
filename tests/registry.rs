@@ -6,7 +6,10 @@
 use omni::code_lint::rules::CODE_RULES;
 use omni::code_lint::suppression::SUPPRESSION_AUDITS;
 use omni::command_lint::rules::COMMAND_RULES;
-use omni::rule_taxonomy::Rule;
+use omni::core::{
+    EnforcementMode, OptionSpec, RuleOptions, SUPPORTED_LANGUAGES, support_lang_name,
+};
+use omni::rule_declaration::Rule;
 use rstest::rstest;
 use std::collections::HashSet;
 
@@ -48,6 +51,36 @@ fn validate_rule(rule: &(impl omni::core::Detector + ?Sized)) {
     }
 }
 
+fn validate_options(name: &str, options: &RuleOptions) {
+    let lists = options
+        .options
+        .iter()
+        .filter(|option| matches!(option, OptionSpec::List(_)))
+        .count();
+    assert!(
+        lists <= 1,
+        "Rule {name} declares {lists} list options; at most one fits the list keys"
+    );
+    let reserved: Vec<&str> = std::iter::once(EnforcementMode::KEY)
+        .chain(
+            SUPPORTED_LANGUAGES
+                .iter()
+                .map(|&language| support_lang_name(language)),
+        )
+        .collect();
+    let mut keys = HashSet::new();
+    for key in options.options.iter().flat_map(|option| option.keys()) {
+        assert!(
+            !reserved.contains(&key),
+            "Rule {name} declares the reserved key `{key}`"
+        );
+        assert!(
+            keys.insert(key),
+            "Rule {name} declares the key `{key}` twice"
+        );
+    }
+}
+
 #[rstest]
 #[case::code_rules(CODE_RULES)]
 #[case::suppression_audits(SUPPRESSION_AUDITS)]
@@ -58,6 +91,7 @@ where
 {
     for registered in rules {
         validate_rule(registered.detector);
+        validate_options(registered.detector.name().0, &registered.options);
     }
 }
 

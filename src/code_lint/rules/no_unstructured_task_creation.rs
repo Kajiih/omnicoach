@@ -2,29 +2,35 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{Config, Detector, FilterListDefaults};
+use crate::core::{
+    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Static default banned unstructured task creation call patterns.
-const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
-    base: &[],
-    extend: &[(
-        SupportLang::Python,
-        &[
-            "create_task",
-            "ensure_future",
-            "asyncio.create_task",
-            "asyncio.ensure_future",
-            "loop.create_task",
-            "event_loop.create_task",
-            "$LOOP($$$LOOP_ARGS).create_task",
-        ],
-    )],
-    exempt: &[],
+const BANNED_CALLS: ListOption = ListOption {
+    kind: ListKind::Deny,
+    doc: "Task creation calls flagged when called.",
+    default: FilterListDefaults {
+        base: &[],
+        extend: &[(
+            SupportLang::Python,
+            &[
+                "create_task",
+                "ensure_future",
+                "asyncio.create_task",
+                "asyncio.ensure_future",
+                "loop.create_task",
+                "event_loop.create_task",
+                "$LOOP($$$LOOP_ARGS).create_task",
+            ],
+        )],
+        exempt: &[],
+    },
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -34,19 +40,18 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule that bans unstructured asyncio task creation.
-pub struct NoUnstructuredTaskCreation;
+struct NoUnstructuredTaskCreation;
 
-impl NoUnstructuredTaskCreation {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &NoUnstructuredTaskCreation,
+    classification: Classification {
         topics: &[Topic::ASYNC],
         precision: Precision::Heuristic,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Reliability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags asyncio tasks spawned outside a task group.",
         what_it_does: "Flags Python calls that start a background task with no enclosing \
                        scope: `asyncio.create_task`, `asyncio.ensure_future`, a bare \
@@ -67,7 +72,6 @@ impl NoUnstructuredTaskCreation {
                           tg:` or `anyio.create_task_group()`: the block waits for every \
                           task, cancels the others when one fails, and raises their \
                           errors.",
-        configuration: &[ConfigShape::DenyList],
         references: &[
             Reference {
                 title: "Python docs: asyncio.create_task",
@@ -78,8 +82,12 @@ impl NoUnstructuredTaskCreation {
                 url: "https://docs.python.org/3/library/asyncio-task.html#task-groups",
             },
         ],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[OptionSpec::List(&BANNED_CALLS)],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for NoUnstructuredTaskCreation {
     fn name(&self) -> RuleName {
@@ -100,14 +108,19 @@ impl CodeDetector for NoUnstructuredTaskCreation {
         RuleTarget::All
     }
 
-    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
-        self.check_banned_calls(path, file, config, &DEFAULT_BANNED_CALLS)
+    fn check_file(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        options: &ResolvedOptions<'_>,
+    ) -> Vec<Diagnostic> {
+        self.check_banned_calls(path, file, &options.list(&BANNED_CALLS))
     }
 }
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    NoUnstructuredTaskCreation,
+    RULE,
     {
         Python => {
             pass: [

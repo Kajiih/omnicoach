@@ -2,73 +2,79 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{Detector, FilterListDefaults};
+use crate::core::{
+    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Static defaults for banned mock and monkeypatching functions in tests.
-const DEFAULT_BANNED_MOCKS: FilterListDefaults = FilterListDefaults {
-    base: &[
-        // Standalone unittest.mock symbols
-        "Mock",
-        "MagicMock",
-        "AsyncMock",
-        "NonCallableMock",
-        "PropertyMock",
-        "create_autospec",
-        "patch",
-        "patch.object",
-        "patch.dict",
-        "patch.multiple",
-        // Qualified mock.* symbols
-        "mock.Mock",
-        "mock.MagicMock",
-        "mock.AsyncMock",
-        "mock.NonCallableMock",
-        "mock.PropertyMock",
-        "mock.create_autospec",
-        "mock.patch",
-        "mock.patch.object",
-        "mock.patch.dict",
-        "mock.patch.multiple",
-        // Qualified unittest.mock.* symbols
-        "unittest.mock.Mock",
-        "unittest.mock.MagicMock",
-        "unittest.mock.AsyncMock",
-        "unittest.mock.NonCallableMock",
-        "unittest.mock.PropertyMock",
-        "unittest.mock.create_autospec",
-        "unittest.mock.patch",
-        "unittest.mock.patch.object",
-        "unittest.mock.patch.dict",
-        "unittest.mock.patch.multiple",
-        // pytest-mock (mocker.*) symbols
-        "mocker.Mock",
-        "mocker.MagicMock",
-        "mocker.AsyncMock",
-        "mocker.NonCallableMock",
-        "mocker.PropertyMock",
-        "mocker.create_autospec",
-        "mocker.patch",
-        "mocker.patch.object",
-        "mocker.patch.dict",
-        "mocker.patch.multiple",
-        "mocker.spy",
-        "mocker.stub",
-        "mocker.async_stub",
-        // pytest monkeypatch symbols
-        "MonkeyPatch",
-        "pytest.MonkeyPatch",
-        "monkeypatch.setattr",
-        "monkeypatch.delattr",
-        "monkeypatch.setitem",
-        "monkeypatch.delitem",
-    ],
-    extend: &[],
-    exempt: &[],
+const BANNED_MOCKS: ListOption = ListOption {
+    kind: ListKind::Deny,
+    doc: "Mocking and monkeypatching calls flagged in tests.",
+    default: FilterListDefaults {
+        base: &[
+            // Standalone unittest.mock symbols
+            "Mock",
+            "MagicMock",
+            "AsyncMock",
+            "NonCallableMock",
+            "PropertyMock",
+            "create_autospec",
+            "patch",
+            "patch.object",
+            "patch.dict",
+            "patch.multiple",
+            // Qualified mock.* symbols
+            "mock.Mock",
+            "mock.MagicMock",
+            "mock.AsyncMock",
+            "mock.NonCallableMock",
+            "mock.PropertyMock",
+            "mock.create_autospec",
+            "mock.patch",
+            "mock.patch.object",
+            "mock.patch.dict",
+            "mock.patch.multiple",
+            // Qualified unittest.mock.* symbols
+            "unittest.mock.Mock",
+            "unittest.mock.MagicMock",
+            "unittest.mock.AsyncMock",
+            "unittest.mock.NonCallableMock",
+            "unittest.mock.PropertyMock",
+            "unittest.mock.create_autospec",
+            "unittest.mock.patch",
+            "unittest.mock.patch.object",
+            "unittest.mock.patch.dict",
+            "unittest.mock.patch.multiple",
+            // pytest-mock (mocker.*) symbols
+            "mocker.Mock",
+            "mocker.MagicMock",
+            "mocker.AsyncMock",
+            "mocker.NonCallableMock",
+            "mocker.PropertyMock",
+            "mocker.create_autospec",
+            "mocker.patch",
+            "mocker.patch.object",
+            "mocker.patch.dict",
+            "mocker.patch.multiple",
+            "mocker.spy",
+            "mocker.stub",
+            "mocker.async_stub",
+            // pytest monkeypatch symbols
+            "MonkeyPatch",
+            "pytest.MonkeyPatch",
+            "monkeypatch.setattr",
+            "monkeypatch.delattr",
+            "monkeypatch.setitem",
+            "monkeypatch.delitem",
+        ],
+        extend: &[],
+        exempt: &[],
+    },
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -78,19 +84,18 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule that bans dynamic mocks and monkeypatching in test files.
-pub struct NoMocksInTests;
+struct NoMocksInTests;
 
-impl NoMocksInTests {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &NoMocksInTests,
+    classification: Classification {
         topics: &[Topic::TEST_DOUBLES],
         precision: Precision::Exact,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Reliability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags dynamic mocks and monkeypatching in Python tests.",
         what_it_does: "Flags calls that create mocks or patch code at run time in Python \
                        test files: `Mock`, `MagicMock`, `AsyncMock`, `NonCallableMock`, \
@@ -114,7 +119,6 @@ impl NoMocksInTests {
                           working in-memory implementation of the same interface (for \
                           example a `FakeRepository` backed by a dict), then assert on its \
                           state.",
-        configuration: &[ConfigShape::DenyList],
         references: &[
             Reference {
                 title: "Software Engineering at Google, ch. 13: Test Doubles",
@@ -125,8 +129,12 @@ impl NoMocksInTests {
                 url: "https://martinfowler.com/articles/mocksArentStubs.html",
             },
         ],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[OptionSpec::List(&BANNED_MOCKS)],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for NoMocksInTests {
     fn name(&self) -> RuleName {
@@ -151,15 +159,15 @@ impl CodeDetector for NoMocksInTests {
         &self,
         path: &Path,
         file: &ParsedFile,
-        config: &crate::core::Config,
+        options: &ResolvedOptions<'_>,
     ) -> Vec<Diagnostic> {
-        self.check_banned_calls(path, file, config, &DEFAULT_BANNED_MOCKS)
+        self.check_banned_calls(path, file, &options.list(&BANNED_MOCKS))
     }
 }
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    NoMocksInTests,
+    RULE,
     {
         Python => {
             pass: [

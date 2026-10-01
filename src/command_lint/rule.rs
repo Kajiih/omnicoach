@@ -3,7 +3,6 @@
 architecture_component!(CommandRuleContracts);
 
 use crate::command_lint::vcs::JjClient;
-use crate::core::Config;
 use crate::diagnostic::Diagnostic;
 use ast_grep_core::AstGrep;
 use ast_grep_core::tree_sitter::StrDoc;
@@ -90,12 +89,7 @@ impl InterceptedCommand {
 pub trait CommandDetector: crate::core::Detector {
     /// Evaluates the intercepted command against this validation rule.
     #[must_use]
-    fn check_command(
-        &self,
-        cmd: &InterceptedCommand,
-        jj_client: &dyn JjClient,
-        config: &Config,
-    ) -> Vec<Diagnostic>;
+    fn check_command(&self, cmd: &InterceptedCommand, jj_client: &dyn JjClient) -> Vec<Diagnostic>;
 }
 
 struct ArgParser<'a> {

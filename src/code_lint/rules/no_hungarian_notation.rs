@@ -2,21 +2,27 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeDetector;
-use crate::core::{Detector, FilterListDefaults};
+use crate::core::{
+    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Static defaults for banned type suffixes.
-const DEFAULT_BANNED_SUFFIXES: FilterListDefaults = FilterListDefaults {
-    base: &[
-        "_list", "_arr", "_dict", "_map", "_vec", "_str", "_int", "_bool", "_set", "_ptr", "_num",
-        "_float", "_byte",
-    ],
-    extend: &[],
-    exempt: &[],
+const BANNED_SUFFIXES: ListOption = ListOption {
+    kind: ListKind::Deny,
+    doc: "Type suffixes flagged at the end of an identifier.",
+    default: FilterListDefaults {
+        base: &[
+            "_list", "_arr", "_dict", "_map", "_vec", "_str", "_int", "_bool", "_set", "_ptr",
+            "_num", "_float", "_byte",
+        ],
+        extend: &[],
+        exempt: &[],
+    },
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -26,19 +32,18 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule that bans Hungarian notation type suffixes.
-pub struct NoHungarianNotation;
+struct NoHungarianNotation;
 
-impl NoHungarianNotation {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &NoHungarianNotation,
+    classification: Classification {
         topics: &[Topic::TYPE_ENCODED_NAMES],
         precision: Precision::Heuristic,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Maintainability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags variable names that end with a type suffix such as `_list` or `_str`.",
         what_it_does: "Flags variables, parameters, loop and pattern bindings, and \
                        constants whose name ends, ignoring case, with a type suffix: \
@@ -57,13 +62,16 @@ impl NoHungarianNotation {
                           Name the value by its role, using a plural for collections \
                           (`users`, `name`, `scores_by_player`), and leave the type to the \
                           annotation.",
-        configuration: &[ConfigShape::DenyList],
         references: &[Reference {
             title: "Making Wrong Code Look Wrong (Joel Spolsky)",
             url: "https://www.joelonsoftware.com/2005/05/11/making-wrong-code-look-wrong/",
         }],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[OptionSpec::List(&BANNED_SUFFIXES)],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for NoHungarianNotation {
     fn name(&self) -> RuleName {
@@ -84,15 +92,15 @@ impl CodeDetector for NoHungarianNotation {
         &self,
         path: &Path,
         file: &ParsedFile,
-        config: &crate::core::Config,
+        options: &ResolvedOptions<'_>,
     ) -> Vec<Diagnostic> {
-        self.check_banned_suffixes(path, file, config, &DEFAULT_BANNED_SUFFIXES)
+        self.check_banned_suffixes(path, file, &options.list(&BANNED_SUFFIXES))
     }
 }
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    NoHungarianNotation,
+    RULE,
     {
         Python => {
             pass: [

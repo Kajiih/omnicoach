@@ -26,6 +26,7 @@ pub mod core;
 pub mod diagnostic;
 pub(crate) mod diff;
 pub mod rule_catalog;
+pub mod rule_declaration;
 pub mod rule_documentation;
 pub mod rule_selection;
 pub mod rule_taxonomy;

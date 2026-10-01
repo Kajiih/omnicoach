@@ -14,20 +14,6 @@ pub struct Reference {
     pub url: &'static str,
 }
 
-/// A configuration shape a rule reads under `[rules.<name>]`. Its keys are derived from the
-/// matching config struct, never listed by hand.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfigShape {
-    /// Numeric `min` / `max` thresholds.
-    Threshold,
-    /// A deny list: replace, extend or exempt banned items.
-    DenyList,
-    /// An allow list: replace, extend or revoke allowed items.
-    AllowList,
-    /// An enforcement `mode`.
-    Enforcement,
-}
-
 /// A rule's user-facing documentation. A missing section does not compile (`E0063`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuleDoc {
@@ -37,8 +23,6 @@ pub struct RuleDoc {
     pub what_it_does: &'static str,
     /// Why the flagged code is a problem: the authoritative, longer rationale.
     pub why_is_this_bad: &'static str,
-    /// The configuration shapes the rule reads; empty if it takes no configuration.
-    pub configuration: &'static [ConfigShape],
     /// Links to backing or related documents.
     pub references: &'static [Reference],
 }
@@ -49,7 +33,6 @@ impl RuleDoc {
         summary: "Documentation pending.",
         what_it_does: "Documentation pending.",
         why_is_this_bad: "Documentation pending.",
-        configuration: &[],
         references: &[],
     };
 

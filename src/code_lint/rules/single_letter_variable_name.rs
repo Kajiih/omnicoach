@@ -2,18 +2,24 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeDetector;
-use crate::core::{Detector, FilterListDefaults};
+use crate::core::{
+    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Static defaults for single-letter variable names.
-const DEFAULT_ALLOWED: FilterListDefaults = FilterListDefaults {
-    base: &["i", "j", "x", "f"],
-    extend: &[(SupportLang::Rust, &["c"])],
-    exempt: &[],
+const ALLOWED: ListOption = ListOption {
+    kind: ListKind::Allow,
+    doc: "Single-letter names accepted as variable names.",
+    default: FilterListDefaults {
+        base: &["i", "j", "x", "f"],
+        extend: &[(SupportLang::Rust, &["c"])],
+        exempt: &[],
+    },
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -23,25 +29,24 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule that bans single-letter variable names.
-pub struct SingleLetterVariableName;
+struct SingleLetterVariableName;
 
-impl SingleLetterVariableName {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &SingleLetterVariableName,
+    classification: Classification {
         topics: &[Topic::ABBREVIATED_NAMES],
         precision: Precision::Exact,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Maintainability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags names made of a single letter.",
         what_it_does: "Flags single-letter names the code defines: variables, \
                        parameters (including lambda and closure parameters), loop, \
                        comprehension, `except ... as`, walrus and pattern bindings, and \
-                       function, class and constant names. Allowed by default: `i`, `j`, \
-                       `x` and `f`, plus `c` in Rust; `_` is never flagged. Unaliased \
+                       function, class and constant names, except the allowed ones; `_` \
+                       is never flagged. Unaliased \
                        imports, members of a Rust `impl Trait for Type` block, Python \
                        methods marked `@override`, type parameters such as `T`, and \
                        references to existing names are not checked.",
@@ -52,13 +57,16 @@ impl SingleLetterVariableName {
                           Use a noun that says what the value is (`index`, `user`, \
                           `error`). Keep the allowed letters for conventional cases such \
                           as loop counters or coordinates.",
-        configuration: &[ConfigShape::AllowList],
         references: &[Reference {
             title: "Google Python Style Guide: Naming",
             url: "https://google.github.io/styleguide/pyguide.html#316-naming",
         }],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[OptionSpec::List(&ALLOWED)],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for SingleLetterVariableName {
     fn name(&self) -> RuleName {
@@ -78,14 +86,14 @@ impl CodeDetector for SingleLetterVariableName {
         &self,
         path: &Path,
         file: &ParsedFile,
-        config: &crate::core::Config,
+        options: &ResolvedOptions<'_>,
     ) -> Vec<Diagnostic> {
-        let effective_allowed = self.effective_allowed_set(file.lang(), config, &DEFAULT_ALLOWED);
+        let allowed = options.list(&ALLOWED);
 
         let mut diagnostics = Vec::new();
         for node in crate::code_lint::semantic::bindings::collect_renameable_bindings(file) {
             let name = node.text();
-            if name.len() == 1 && name != "_" && !effective_allowed.contains(&*name) {
+            if name.len() == 1 && name != "_" && !allowed.contains(&*name) {
                 diagnostics.push(self.diagnostic_at_node(path, &node, &[("name", &name)]));
             }
         }
@@ -95,7 +103,7 @@ impl CodeDetector for SingleLetterVariableName {
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    SingleLetterVariableName,
+    RULE,
     {
         Python => {
             pass: [

@@ -2,24 +2,30 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeDetector;
-use crate::core::{Detector, FilterListDefaults};
+use crate::core::{
+    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Static defaults for banned abbreviations.
-const DEFAULT_BANNED: FilterListDefaults = FilterListDefaults {
-    base: &[
-        "err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag", "ty", "cat",
-        "stmt", "ext", "fmt", "arch", "vis",
-    ],
-    extend: &[],
-    // In Rust, `str` is a primitive type keyword rather than an abbreviation, and it is
-    // load-bearing in conventional conversion names (`as_str`, `to_str`, `from_str`).
-    // Hungarian `_str` type suffixes remain covered by no-hungarian-notation.
-    exempt: &[(SupportLang::Rust, &["str"])],
+const BANNED: ListOption = ListOption {
+    kind: ListKind::Deny,
+    doc: "Abbreviations flagged as a word of an identifier.",
+    default: FilterListDefaults {
+        base: &[
+            "err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag", "ty",
+            "cat", "stmt", "ext", "fmt", "arch", "vis",
+        ],
+        extend: &[],
+        // In Rust, `str` is a primitive type keyword rather than an abbreviation, and it is
+        // load-bearing in conventional conversion names (`as_str`, `to_str`, `from_str`).
+        // Hungarian `_str` type suffixes remain covered by no-hungarian-notation.
+        exempt: &[(SupportLang::Rust, &["str"])],
+    },
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -66,27 +72,23 @@ fn split_segments(name: &str) -> Vec<String> {
 }
 
 /// Rule that bans abbreviations in identifier bindings.
-pub struct BannedAbbreviations;
+struct BannedAbbreviations;
 
-impl BannedAbbreviations {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &BannedAbbreviations,
+    classification: Classification {
         topics: &[Topic::ABBREVIATED_NAMES],
         precision: Precision::Heuristic,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Maintainability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags names that contain a banned abbreviation such as `ctx` or `msg`.",
         what_it_does: "Splits each name the code defines into words, at underscores and \
                        at lowercase-to-uppercase or digit-to-uppercase boundaries, and \
                        flags the name if any word is a banned abbreviation, ignoring case. \
-                       Banned by default: `err`, `ctx`, `cfg`, `res`, `msg`, `str`, `num`, \
-                       `btn`, `cb`, `ch`, `diag`, `ty`, `cat`, `stmt`, `ext`, `fmt`, \
-                       `arch` and `vis`; `str` is allowed in Rust, where it is a type \
-                       (`as_str`, `from_str`). Only whole words match: `strategy` and \
+                       Only whole words match: `strategy` and \
                        `category` are not flagged, `handle_msg` and `TaskRes` are. \
                        Checked names: variables, parameters, loop and pattern bindings, \
                        functions, classes, structs, enums, traits, type aliases, constants \
@@ -100,13 +102,16 @@ impl BannedAbbreviations {
                           authors also shorten the same word differently (`cfg`, `conf`, \
                           `config`), so a search for one spelling misses the others.\n\n\
                           Spell the word out (`context`, `message`, `result`, `config`).",
-        configuration: &[ConfigShape::DenyList],
         references: &[Reference {
             title: "Google Python Style Guide: Naming",
             url: "https://google.github.io/styleguide/pyguide.html#316-naming",
         }],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[OptionSpec::List(&BANNED)],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for BannedAbbreviations {
     fn name(&self) -> RuleName {
@@ -127,15 +132,15 @@ impl CodeDetector for BannedAbbreviations {
         &self,
         path: &Path,
         file: &ParsedFile,
-        config: &crate::core::Config,
+        options: &ResolvedOptions<'_>,
     ) -> Vec<Diagnostic> {
-        let effective_banned = self.effective_banned_set(file.lang(), config, &DEFAULT_BANNED);
+        let banned = options.list(&BANNED);
         let mut diagnostics = Vec::new();
 
         for node in crate::code_lint::semantic::bindings::collect_renameable_bindings(file) {
             let name = node.text();
             for segment in split_segments(&name) {
-                if effective_banned.contains(&segment) {
+                if banned.contains(&segment) {
                     diagnostics.push(self.diagnostic_at_node(
                         path,
                         &node,
@@ -153,7 +158,7 @@ impl CodeDetector for BannedAbbreviations {
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    BannedAbbreviations,
+    RULE,
     {
         Python => {
             pass: [

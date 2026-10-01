@@ -19,7 +19,7 @@ use strum::IntoEnumIterator as _;
 
 pub use self::taxonomy::{Derived, Facet, RegisteredRule, Tag};
 use self::taxonomy::{REGISTERED_RULES, Selector};
-use crate::core::{CONFIG_FILE_NAME, Config, compile_glob};
+use crate::core::{CONFIG_FILE_NAME, Config, RuleOptionsError, RuleOverrides, compile_glob};
 use crate::diagnostic::RuleName;
 
 /// Where in the config an entry was written.
@@ -98,9 +98,24 @@ pub enum ConfigError {
         #[source]
         source: globset::Error,
     },
+    /// A `[rules.<name>]` table for a rule that does not exist.
+    #[error(
+        "`rules.{name}`: unknown rule{}",
+        suggestion.map(|known| format!("; did you mean `{known}`?")).unwrap_or_default()
+    )]
+    UnknownRule {
+        /// The rule name as written.
+        name: String,
+        /// The closest registered rule name.
+        suggestion: Option<&'static str>,
+    },
+    /// A `[rules.<name>]` entry that the rule's declared options reject.
+    #[error(transparent)]
+    RuleOptions(#[from] RuleOptionsError),
 }
 
-/// The selection entries of the config file; every other entry belongs to [`Config`].
+/// The config entries resolved against the rule registry: selection and rule options. Every
+/// other entry belongs to [`Config`].
 #[derive(Deserialize)]
 struct RawSelection {
     select: Option<Vec<String>>,
@@ -108,6 +123,8 @@ struct RawSelection {
     ignore: Vec<String>,
     #[serde(default)]
     per_file_ignores: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    rules: toml::Table,
 }
 
 /// A label given on the command line that names no rule or tag.
@@ -221,6 +238,21 @@ pub fn parse_config(config_toml: &str) -> Result<Config, ConfigError> {
                 .compile_matcher();
             let rules = rule_names(|rule| selectors.iter().any(|&selector| rule.matches(selector)));
             Ok((matcher, rules))
+        })
+        .collect::<Result<_, ConfigError>>()?;
+    config.rule_overrides = raw
+        .rules
+        .iter()
+        .map(|(name, value)| {
+            let rule = REGISTERED_RULES
+                .iter()
+                .find(|rule| rule.name.0 == name)
+                .ok_or_else(|| ConfigError::UnknownRule {
+                    name: name.clone(),
+                    suggestion: taxonomy::closest_rule_name(name),
+                })?;
+            let overrides = RuleOverrides::parse(name, &rule.options, rule.languages, value)?;
+            Ok((rule.name, overrides))
         })
         .collect::<Result<_, ConfigError>>()?;
     Ok(config)
@@ -564,8 +596,58 @@ mod tests {
         "[per_file_ignores]\n\"src/[\" = [\"testing\"]",
         "invalid glob `src/[` in `per_file_ignores`: "
     )]
+    #[case::unknown_rule(
+        "[rules.max-test-assertion]\nmax_assertions = 3",
+        "`rules.max-test-assertion`: unknown rule; did you mean `max-test-assertions`?"
+    )]
+    #[case::unknown_key(
+        "[rules.max-test-assertions]\nmax = 3",
+        "`rules.max-test-assertions.max`: unknown key; did you mean `max_assertions`?"
+    )]
+    #[case::renamed_enforcement_mode_key(
+        "[rules.no-typing-cast]\nmode = \"ban\"",
+        "`rules.no-typing-cast.mode`: unknown key; did you mean `enforcement_mode`?"
+    )]
+    #[case::wrong_type(
+        "[rules.max-test-assertions.rust]\nmax_assertions = \"5\"",
+        "`rules.max-test-assertions.rust.max_assertions`: expected a non-negative integer, \
+         found \"5\""
+    )]
+    #[case::unknown_enforcement_mode(
+        "[rules.no-typing-cast]\nenforcement_mode = \"warn\"",
+        "`rules.no-typing-cast.enforcement_mode`: expected `ban` or `require-explanation`, \
+         found \"warn\""
+    )]
+    #[case::unsupported_language(
+        "[rules.no-typing-cast.rust]\nbanned = []",
+        "`rules.no-typing-cast.rust`: this rule does not analyze this language; it analyzes \
+         python"
+    )]
+    #[case::enforcement_mode_on_audit(
+        "[rules.unused-suppression]\nenforcement_mode = \"ban\"",
+        "`rules.unused-suppression.enforcement_mode`: this rule has no enforcement mode; it \
+         always reports every finding"
+    )]
+    #[case::enforcement_mode_on_command_rule(
+        "[rules.no-edits-on-described-commits]\nenforcement_mode = \"ban\"",
+        "`rules.no-edits-on-described-commits.enforcement_mode`: this rule has no enforcement \
+         mode; it always reports every finding"
+    )]
     fn invalid_configs_are_rejected_loudly(#[case] config_toml: &str, #[case] message: &str) {
         let error = parse_config(config_toml).unwrap_err().to_string();
         assert!(error.starts_with(message), "{error}");
+    }
+
+    #[test]
+    fn valid_rule_options_are_stored_per_rule() {
+        let config = parse_config(
+            "[rules.max-test-assertions]\nmax_assertions = 6\n\
+             [rules.max-test-assertions.rust]\nmax_assertions = 8\n\
+             [rules.banned-abbreviations]\nallowed = [\"ctx\"]",
+        )
+        .unwrap();
+        let mut configured: Vec<_> = config.rule_overrides.keys().map(|name| name.0).collect();
+        configured.sort_unstable();
+        assert_eq!(configured, ["banned-abbreviations", "max-test-assertions"]);
     }
 }
