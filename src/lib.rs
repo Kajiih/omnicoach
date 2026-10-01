@@ -25,6 +25,7 @@ pub mod command_lint;
 pub mod core;
 pub mod diagnostic;
 pub(crate) mod diff;
+pub mod rule_documentation;
 pub mod rule_selection;
 pub mod rule_taxonomy;
 

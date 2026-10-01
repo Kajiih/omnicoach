@@ -80,7 +80,9 @@ define_architecture! {
     /// Shared domain vocabulary and config (`core`).
     CoreVocabulary        => [FoundationPrimitives],
     /// Pure rule classification types: topics and declared facets (`rule_taxonomy`).
-    RuleTaxonomy          => [FoundationPrimitives],
+    RuleTaxonomy          => [FoundationPrimitives, RuleDocumentation],
+    /// Pure user-facing rule docs: sections, references, configuration shapes (`rule_documentation`).
+    RuleDocumentation     => [FoundationPrimitives],
 
     // --- Static Code Analysis Domain (`code_lint`) ---
     /// Encapsulated AST syntax adapters and language parsers (`code_lint::ast`).

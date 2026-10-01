@@ -7,7 +7,7 @@ use omni::code_lint::rules::CODE_RULES;
 use omni::code_lint::suppression::SUPPRESSION_AUDITS;
 use omni::command_lint::rules::COMMAND_RULES;
 use omni::core::is_kebab_case;
-use omni::rule_taxonomy::ClassifiedRule;
+use omni::rule_taxonomy::RuleEntry;
 use rstest::rstest;
 use std::collections::HashSet;
 
@@ -62,7 +62,7 @@ fn validate_rule(rule: &(impl omni::core::Rule + ?Sized), names: &mut HashSet<&'
 #[case::code_rules(CODE_RULES)]
 #[case::suppression_audits(SUPPRESSION_AUDITS)]
 #[case::command_rules(COMMAND_RULES)]
-fn test_registry_integrity<R>(#[case] rules: &[ClassifiedRule<R>])
+fn test_registry_integrity<R>(#[case] rules: &[RuleEntry<R>])
 where
     R: omni::core::Rule + ?Sized,
 {

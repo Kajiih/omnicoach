@@ -35,6 +35,10 @@ impl NoHungarianNotation {
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Maintainability,
     };
+
+    /// The rule's user-facing doc.
+    pub(crate) const DOC: crate::rule_documentation::RuleDoc =
+        crate::rule_documentation::RuleDoc::TODO;
 }
 
 impl Rule for NoHungarianNotation {

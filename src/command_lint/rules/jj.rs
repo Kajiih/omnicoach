@@ -8,6 +8,7 @@ use crate::core::{Config, Rule};
 use crate::diagnostic::{
     Diagnostic, RuleName, SourceLocation, SourceSpan, ViolationTemplate, violation_template,
 };
+use crate::rule_documentation::RuleDoc;
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 
 /// CLI schema definition for Jujutsu commands.
@@ -58,6 +59,9 @@ impl NoJJEditOnDescribedCommits {
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Reliability,
     };
+
+    /// The rule's user-facing doc.
+    pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
 }
 
 impl Rule for NoJJEditOnDescribedCommits {

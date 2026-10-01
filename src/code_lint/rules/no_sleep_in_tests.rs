@@ -5,6 +5,7 @@ use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls::CallMatch;
 use crate::core::{Config, FilterListDefaults, Rule};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_documentation::RuleDoc;
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -61,6 +62,9 @@ impl NoSleepInTests {
         consensus: Consensus::Unopinionated,
         impacted_quality: ImpactedQuality::Reliability,
     };
+
+    /// The rule's user-facing doc.
+    pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
 }
 
 impl Rule for NoSleepInTests {
@@ -88,6 +92,9 @@ impl NoZeroSleepInTests {
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Reliability,
     };
+
+    /// The rule's user-facing doc.
+    pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
 }
 
 impl Rule for NoZeroSleepInTests {
