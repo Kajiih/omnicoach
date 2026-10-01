@@ -1,4 +1,4 @@
-//! Command rule contract ([`CommandRule`]) and the intercepted command parser it consumes.
+//! Command rule contract ([`CommandDetector`]) and the intercepted command parser it consumes.
 
 architecture_component!(CommandRuleContracts);
 
@@ -86,8 +86,8 @@ impl InterceptedCommand {
     }
 }
 
-/// Common trait for command execution workflow safety rules.
-pub trait CommandRule: crate::core::Rule {
+/// A detector that analyzes intercepted shell commands.
+pub trait CommandDetector: crate::core::Detector {
     /// Evaluates the intercepted command against this validation rule.
     #[must_use]
     fn check_command(

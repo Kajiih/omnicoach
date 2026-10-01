@@ -1,8 +1,8 @@
 //! Enforces strongly typed durations over numeric variables with time-unit suffixes.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::rule::CodeRule;
-use crate::core::{FilterListDefaults, Rule};
+use crate::code_lint::rule::CodeDetector;
+use crate::core::{Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -45,7 +45,7 @@ impl PreferTimedeltaOverSeconds {
         crate::rule_documentation::RuleDoc::TODO;
 }
 
-impl Rule for PreferTimedeltaOverSeconds {
+impl Detector for PreferTimedeltaOverSeconds {
     fn name(&self) -> RuleName {
         RuleName("prefer-timedelta-over-seconds")
     }
@@ -59,7 +59,7 @@ impl Rule for PreferTimedeltaOverSeconds {
     }
 }
 
-impl CodeRule for PreferTimedeltaOverSeconds {
+impl CodeDetector for PreferTimedeltaOverSeconds {
     fn check_file(
         &self,
         path: &Path,

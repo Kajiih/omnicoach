@@ -1,8 +1,8 @@
 //! Flags tuple elements read by literal position instead of being unpacked once (`prefer-tuple-unpacking`).
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile, ScopePositionalReads};
-use crate::code_lint::rule::CodeRule;
-use crate::core::{Config, LanguageDefaults, Rule};
+use crate::code_lint::rule::CodeDetector;
+use crate::core::{Config, Detector, LanguageDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -47,7 +47,7 @@ impl PreferTupleUnpacking {
         crate::rule_documentation::RuleDoc::TODO;
 }
 
-impl Rule for PreferTupleUnpacking {
+impl Detector for PreferTupleUnpacking {
     fn name(&self) -> RuleName {
         RuleName("prefer-tuple-unpacking")
     }
@@ -108,7 +108,7 @@ fn placeholder_count(positions: &BTreeSet<i64>) -> usize {
     usize::try_from(leading_gaps + trailing_gaps).unwrap_or(usize::MAX)
 }
 
-impl CodeRule for PreferTupleUnpacking {
+impl CodeDetector for PreferTupleUnpacking {
     fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
         let lang = file.lang();
         let min_positions = self.effective_min_threshold(lang, config, &DEFAULT_MIN_POSITIONS);

@@ -35,7 +35,7 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
   - *Target*: Support case-insensitive and format-tolerant rule selection (matching `SingleLetterVariableName`, `single-letter-variable-name`, and `single_letter_variable_name` interchangeably).
   - *Trigger*: When adding declarative AST rule files or multi-rule alias configurations.
 - **Rule Autofix Engine (`diffy` / `similar`)**:
-  - *Target*: Extend `CodeRule` and `CommandRule` with optional auto-fix transformations. Support `--fix` and `--fix --dry-run` with in-memory unified diff previews before writing changes to disk.
+  - *Target*: Extend `CodeDetector` and `CommandDetector` with optional auto-fix transformations. Support `--fix` and `--fix --dry-run` with in-memory unified diff previews before writing changes to disk.
   - *Trigger*: When implementing the first batch of auto-fixable rules (e.g., replacing `logging.error` with `logging.exception`).
 - **Multiline Decorator & Attribute Span Awareness for `omni:ignore`**:
   - *Current*: `compute_effective_target_line` in `src/code_lint/suppression.rs` advances `end_target_line` across contiguous lines starting with `@`, `#[`, `//`, or `#`, handling single-line decorators and attributes. However, multiline decorators or attributes whose continuation lines do not start with `@` or `#[` stop the line scan early.

@@ -45,7 +45,7 @@ impl NoSleepInTests {
 }
 ```
 
-The registry (`CODE_RULES`, `SUPPRESSION_AUDITS` or `COMMAND_RULES`) lists the rule as a `ClassifiedRule { rule, classification }`, so a rule cannot be registered without it. Forgetting a field, giving a field two values, or declaring a derived facet does not compile.
+The registry (`CODE_RULES`, `SUPPRESSION_AUDITS` or `COMMAND_RULES`) lists the rule as a `Rule { detector, classification, doc }`, so a rule cannot be registered without it. Forgetting a field, giving a field two values, or declaring a derived facet does not compile.
 
 ### 2.1 Topics: most specific, at least one
 

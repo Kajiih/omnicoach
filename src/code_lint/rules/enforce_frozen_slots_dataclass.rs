@@ -2,8 +2,8 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{PythonClassInfo, extract_classes};
-use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::Rule;
+use crate::code_lint::rule::{CodeDetector, RuleTarget};
+use crate::core::Detector;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -32,7 +32,7 @@ impl EnforceFrozenSlotsDataclass {
         crate::rule_documentation::RuleDoc::TODO;
 }
 
-impl Rule for EnforceFrozenSlotsDataclass {
+impl Detector for EnforceFrozenSlotsDataclass {
     fn name(&self) -> RuleName {
         RuleName("enforce-frozen-slots-dataclass")
     }
@@ -77,7 +77,7 @@ fn check_dataclass_info(
     ))
 }
 
-impl CodeRule for EnforceFrozenSlotsDataclass {
+impl CodeDetector for EnforceFrozenSlotsDataclass {
     fn target(&self) -> RuleTarget {
         RuleTarget::All
     }

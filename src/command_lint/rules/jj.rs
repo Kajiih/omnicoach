@@ -4,7 +4,7 @@
 
 use crate::command_lint::rule::{InterceptedCommand, ProgramCliSchema};
 use crate::command_lint::vcs::JjClient;
-use crate::core::{Config, Rule};
+use crate::core::{Config, Detector};
 use crate::diagnostic::{
     Diagnostic, RuleName, SourceLocation, SourceSpan, ViolationTemplate, violation_template,
 };
@@ -81,7 +81,7 @@ impl NoJJEditOnDescribedCommits {
     };
 }
 
-impl Rule for NoJJEditOnDescribedCommits {
+impl Detector for NoJJEditOnDescribedCommits {
     fn name(&self) -> RuleName {
         RuleName("no-edits-on-described-commits")
     }
@@ -91,7 +91,7 @@ impl Rule for NoJJEditOnDescribedCommits {
     }
 }
 
-impl crate::command_lint::rule::CommandRule for NoJJEditOnDescribedCommits {
+impl crate::command_lint::rule::CommandDetector for NoJJEditOnDescribedCommits {
     fn check_command(
         &self,
         cmd: &InterceptedCommand,

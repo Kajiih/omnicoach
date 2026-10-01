@@ -174,37 +174,37 @@ pub static REGISTERED_RULES: LazyLock<Vec<RegisteredRule>> = LazyLock::new(|| {
             .collect()
     };
     let code = CODE_RULES.iter().map(|registered| {
-        let scope = match registered.rule.target() {
+        let scope = match registered.detector.target() {
             RuleTarget::All => None,
             RuleTarget::TestsOnly => Some(Derived::TestsOnly),
             RuleTarget::SourceOnly => Some(Derived::SourceOnly),
         };
-        let mut derived = languages(registered.rule.supported_languages());
+        let mut derived = languages(registered.detector.supported_languages());
         derived.push(Derived::Code);
         derived.extend(scope);
         RegisteredRule {
-            name: registered.rule.name(),
+            name: registered.detector.name(),
             doc: registered.doc,
-            template: registered.rule.violation_template(),
+            template: registered.detector.violation_template(),
             classification: registered.classification,
             derived,
         }
     });
     let audits = SUPPRESSION_AUDITS.iter().map(|registered| {
-        let mut derived = languages(registered.rule.supported_languages());
+        let mut derived = languages(registered.detector.supported_languages());
         derived.push(Derived::Code);
         RegisteredRule {
-            name: registered.rule.name(),
+            name: registered.detector.name(),
             doc: registered.doc,
-            template: registered.rule.violation_template(),
+            template: registered.detector.violation_template(),
             classification: registered.classification,
             derived,
         }
     });
     let commands = COMMAND_RULES.iter().map(|registered| RegisteredRule {
-        name: registered.rule.name(),
+        name: registered.detector.name(),
         doc: registered.doc,
-        template: registered.rule.violation_template(),
+        template: registered.detector.violation_template(),
         classification: registered.classification,
         derived: vec![Derived::Command],
     });

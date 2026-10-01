@@ -1,10 +1,10 @@
-//! Code rule contract ([`CodeRule`], [`RuleTarget`]) and shared diagnostic helpers.
+//! Code rule contract ([`CodeDetector`], [`RuleTarget`]) and shared diagnostic helpers.
 
 architecture_component!(CodeRuleContracts);
 
 use crate::code_lint::ast::{AstNode, ParsedFile};
 use crate::code_lint::semantic::{bindings, calls};
-use crate::core::{Config, FilterListDefaults, Rule};
+use crate::core::{Config, Detector, FilterListDefaults};
 use crate::diagnostic::Diagnostic;
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -21,8 +21,8 @@ pub enum RuleTarget {
     SourceOnly,
 }
 
-/// Common trait for static file code validation rules.
-pub trait CodeRule: Rule {
+/// A detector that analyzes source files.
+pub trait CodeDetector: Detector {
     /// Returns the target execution scope of this code rule (defaults to `RuleTarget::All`).
     #[must_use]
     fn target(&self) -> RuleTarget {

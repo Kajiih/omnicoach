@@ -7,11 +7,11 @@ use omni::code_lint::rules::CODE_RULES;
 use omni::code_lint::suppression::SUPPRESSION_AUDITS;
 use omni::command_lint::rules::COMMAND_RULES;
 use omni::core::is_kebab_case;
-use omni::rule_taxonomy::RuleEntry;
+use omni::rule_taxonomy::Rule;
 use rstest::rstest;
 use std::collections::HashSet;
 
-fn validate_rule(rule: &(impl omni::core::Rule + ?Sized), names: &mut HashSet<&'static str>) {
+fn validate_rule(rule: &(impl omni::core::Detector + ?Sized), names: &mut HashSet<&'static str>) {
     let name = rule.name().0;
 
     assert!(
@@ -62,13 +62,13 @@ fn validate_rule(rule: &(impl omni::core::Rule + ?Sized), names: &mut HashSet<&'
 #[case::code_rules(CODE_RULES)]
 #[case::suppression_audits(SUPPRESSION_AUDITS)]
 #[case::command_rules(COMMAND_RULES)]
-fn test_registry_integrity<R>(#[case] rules: &[RuleEntry<R>])
+fn test_registry_integrity<R>(#[case] rules: &[Rule<R>])
 where
-    R: omni::core::Rule + ?Sized,
+    R: omni::core::Detector + ?Sized,
 {
     let mut names = HashSet::new();
     for registered in rules {
-        validate_rule(registered.rule, &mut names);
+        validate_rule(registered.detector, &mut names);
     }
 }
 
@@ -76,13 +76,15 @@ where
 fn test_global_registry_uniqueness() {
     let mut names = HashSet::new();
 
-    let code_names = CODE_RULES.iter().map(|registered| registered.rule.name().0);
+    let code_names = CODE_RULES
+        .iter()
+        .map(|registered| registered.detector.name().0);
     let audit_names = SUPPRESSION_AUDITS
         .iter()
-        .map(|registered| registered.rule.name().0);
+        .map(|registered| registered.detector.name().0);
     let command_names = COMMAND_RULES
         .iter()
-        .map(|registered| registered.rule.name().0);
+        .map(|registered| registered.detector.name().0);
     for name in code_names.chain(audit_names).chain(command_names) {
         assert!(
             names.insert(name),
@@ -95,14 +97,14 @@ fn test_global_registry_uniqueness() {
 fn test_code_rules_declare_supported_languages() {
     let code_languages = CODE_RULES.iter().map(|registered| {
         (
-            registered.rule.name(),
-            registered.rule.supported_languages(),
+            registered.detector.name(),
+            registered.detector.supported_languages(),
         )
     });
     let audit_languages = SUPPRESSION_AUDITS.iter().map(|registered| {
         (
-            registered.rule.name(),
-            registered.rule.supported_languages(),
+            registered.detector.name(),
+            registered.detector.supported_languages(),
         )
     });
     for (name, languages) in code_languages.chain(audit_languages) {

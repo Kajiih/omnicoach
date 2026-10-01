@@ -1,8 +1,8 @@
 //! Enforces that environment variables are only accessed at module/static scope or explicit configuration boundaries (`no-env-in-functions`).
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::{Config, FilterListDefaults, Rule};
+use crate::code_lint::rule::{CodeDetector, RuleTarget};
+use crate::core::{Config, Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -79,7 +79,7 @@ impl NoEnvInFunctions {
         crate::rule_documentation::RuleDoc::TODO;
 }
 
-impl Rule for NoEnvInFunctions {
+impl Detector for NoEnvInFunctions {
     fn name(&self) -> RuleName {
         RuleName("no-env-in-functions")
     }
@@ -116,7 +116,7 @@ fn is_exempt_boundary_function(name: &str, is_top_level: bool) -> bool {
     }
 }
 
-impl CodeRule for NoEnvInFunctions {
+impl CodeDetector for NoEnvInFunctions {
     fn target(&self) -> RuleTarget {
         RuleTarget::SourceOnly
     }

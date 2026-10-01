@@ -4,15 +4,13 @@ architecture_component!(CodeSuppressionEngine);
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::semantic::comments::strip_comment_delimiters;
-use crate::core::{Config, Rule};
+use crate::core::{Config, Detector};
 use crate::diagnostic::{
     Diagnostic, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationTemplate,
     violation_template,
 };
 use crate::rule_documentation::{Reference, RuleDoc};
-use crate::rule_taxonomy::{
-    Classification, Consensus, ImpactedQuality, Precision, RuleEntry, Topic,
-};
+use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Rule, Topic};
 use ast_grep_language::SupportLang;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -56,7 +54,7 @@ impl MissingSuppressionReason {
     };
 }
 
-impl Rule for MissingSuppressionReason {
+impl Detector for MissingSuppressionReason {
     fn name(&self) -> RuleName {
         RuleName("missing-suppression-reason")
     }
@@ -92,7 +90,7 @@ impl UnusedSuppression {
     pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
 }
 
-impl Rule for UnusedSuppression {
+impl Detector for UnusedSuppression {
     fn name(&self) -> RuleName {
         RuleName("unused-suppression")
     }
@@ -128,7 +126,7 @@ impl UnknownSuppressionRule {
     pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
 }
 
-impl Rule for UnknownSuppressionRule {
+impl Detector for UnknownSuppressionRule {
     fn name(&self) -> RuleName {
         RuleName("unknown-suppression-rule")
     }
@@ -164,7 +162,7 @@ impl BlanketSuppression {
     pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
 }
 
-impl Rule for BlanketSuppression {
+impl Detector for BlanketSuppression {
     fn name(&self) -> RuleName {
         RuleName("blanket-suppression")
     }
@@ -180,24 +178,24 @@ impl Rule for BlanketSuppression {
 
 /// Static list of the suppression audits with their classifications, evaluated by [`SuppressionTracker::audit`] rather than
 /// per file like code rules.
-pub const SUPPRESSION_AUDITS: &[RuleEntry<dyn Rule>] = &[
-    RuleEntry {
-        rule: &MissingSuppressionReason,
+pub const SUPPRESSION_AUDITS: &[Rule<dyn Detector>] = &[
+    Rule {
+        detector: &MissingSuppressionReason,
         classification: MissingSuppressionReason::CLASSIFICATION,
         doc: MissingSuppressionReason::DOC,
     },
-    RuleEntry {
-        rule: &UnusedSuppression,
+    Rule {
+        detector: &UnusedSuppression,
         classification: UnusedSuppression::CLASSIFICATION,
         doc: UnusedSuppression::DOC,
     },
-    RuleEntry {
-        rule: &UnknownSuppressionRule,
+    Rule {
+        detector: &UnknownSuppressionRule,
         classification: UnknownSuppressionRule::CLASSIFICATION,
         doc: UnknownSuppressionRule::DOC,
     },
-    RuleEntry {
-        rule: &BlanketSuppression,
+    Rule {
+        detector: &BlanketSuppression,
         classification: BlanketSuppression::CLASSIFICATION,
         doc: BlanketSuppression::DOC,
     },

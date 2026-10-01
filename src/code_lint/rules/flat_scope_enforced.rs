@@ -1,8 +1,8 @@
 //! Verifies that python functions are flat (no nested defs).
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::rule::CodeRule;
-use crate::core::Rule;
+use crate::code_lint::rule::CodeDetector;
+use crate::core::Detector;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -31,7 +31,7 @@ impl FlatScopeEnforced {
         crate::rule_documentation::RuleDoc::TODO;
 }
 
-impl Rule for FlatScopeEnforced {
+impl Detector for FlatScopeEnforced {
     fn name(&self) -> RuleName {
         RuleName("flat-scope-enforced")
     }
@@ -45,7 +45,7 @@ impl Rule for FlatScopeEnforced {
     }
 }
 
-impl CodeRule for FlatScopeEnforced {
+impl CodeDetector for FlatScopeEnforced {
     fn target(&self) -> crate::code_lint::rule::RuleTarget {
         crate::code_lint::rule::RuleTarget::SourceOnly
     }

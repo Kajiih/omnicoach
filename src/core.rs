@@ -345,8 +345,9 @@ impl DynamicRuleConfig<EnforcementConfig> {
 /// The default configuration file name.
 pub const CONFIG_FILE_NAME: &str = ".omnilint.toml";
 
-/// Common metadata shared by all lint rules.
-pub trait Rule: Send + Sync {
+/// The part of a rule that finds violations: its name, message template and languages.
+/// Runners execute detectors and never see a rule's classification or doc.
+pub trait Detector: Send + Sync {
     /// Returns the rule name (e.g., `RuleName("no-logging-error-in-except")`).
     #[must_use]
     fn name(&self) -> RuleName;

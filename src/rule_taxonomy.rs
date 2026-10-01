@@ -402,13 +402,12 @@ pub struct Classification {
     pub impacted_quality: ImpactedQuality,
 }
 
-/// A registry entry: a rule with its classification and doc, so an unclassified or
-/// undocumented rule cannot be registered (R3, K1).
-// TODO: Why not just add classification as a new field for rules instead of creating a new struct?
+/// A rule: the detector that finds violations, its classification and its doc. A rule
+/// cannot be registered without all three.
 #[derive(Clone, Copy)]
-pub struct RuleEntry<Rule: ?Sized + 'static> {
-    /// The rule.
-    pub rule: &'static Rule,
+pub struct Rule<DetectorType: ?Sized + 'static> {
+    /// The detector that finds violations.
+    pub detector: &'static DetectorType,
     /// Its classification.
     pub classification: Classification,
     /// Its user-facing doc.

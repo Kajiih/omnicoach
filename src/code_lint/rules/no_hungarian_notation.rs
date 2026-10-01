@@ -1,8 +1,8 @@
 //! Bans type suffixes (Hungarian notation) in variable names.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::rule::CodeRule;
-use crate::core::{FilterListDefaults, Rule};
+use crate::code_lint::rule::CodeDetector;
+use crate::core::{Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -41,7 +41,7 @@ impl NoHungarianNotation {
         crate::rule_documentation::RuleDoc::TODO;
 }
 
-impl Rule for NoHungarianNotation {
+impl Detector for NoHungarianNotation {
     fn name(&self) -> RuleName {
         RuleName("no-hungarian-notation")
     }
@@ -55,7 +55,7 @@ impl Rule for NoHungarianNotation {
     }
 }
 
-impl CodeRule for NoHungarianNotation {
+impl CodeDetector for NoHungarianNotation {
     fn check_file(
         &self,
         path: &Path,
