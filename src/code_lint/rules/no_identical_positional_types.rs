@@ -4,8 +4,8 @@ use crate::code_lint::ast::python::{
     PythonFunctionSignature, PythonParameterInfo, extract_function_signatures, has_decorator,
 };
 use crate::code_lint::ast::{AstNode, ParsedFile};
-use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::{Config, LanguageDefaults, Rule};
+use crate::code_lint::rule::{CodeDetector, RuleTarget};
+use crate::core::{Config, Detector, LanguageDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -37,7 +37,7 @@ impl NoIdenticalPositionalTypes {
         crate::rule_documentation::RuleDoc::TODO;
 }
 
-impl Rule for NoIdenticalPositionalTypes {
+impl Detector for NoIdenticalPositionalTypes {
     fn name(&self) -> RuleName {
         RuleName("no-identical-positional-types")
     }
@@ -150,7 +150,7 @@ fn check_function_signature(
     ))
 }
 
-impl CodeRule for NoIdenticalPositionalTypes {
+impl CodeDetector for NoIdenticalPositionalTypes {
     fn target(&self) -> RuleTarget {
         RuleTarget::SourceOnly
     }

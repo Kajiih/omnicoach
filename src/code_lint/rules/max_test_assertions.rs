@@ -1,8 +1,8 @@
 //! Enforces a maximum number of assertions per test function (`max-test-assertions`).
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::{Config, LanguageDefaults, Rule};
+use crate::code_lint::rule::{CodeDetector, RuleTarget};
+use crate::core::{Config, Detector, LanguageDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
@@ -57,7 +57,7 @@ impl MaxTestAssertions {
     };
 }
 
-impl Rule for MaxTestAssertions {
+impl Detector for MaxTestAssertions {
     fn name(&self) -> RuleName {
         RuleName("max-test-assertions")
     }
@@ -71,7 +71,7 @@ impl Rule for MaxTestAssertions {
     }
 }
 
-impl CodeRule for MaxTestAssertions {
+impl CodeDetector for MaxTestAssertions {
     fn target(&self) -> RuleTarget {
         RuleTarget::TestsOnly
     }

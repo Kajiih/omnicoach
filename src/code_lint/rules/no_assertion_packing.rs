@@ -1,8 +1,8 @@
 //! Flags compound boolean conditions (`&&`, `and`) and boolean tuple equality packing in test assertions (`no-assertion-packing`).
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile};
-use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::{Config, Rule};
+use crate::code_lint::rule::{CodeDetector, RuleTarget};
+use crate::core::{Config, Detector};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -39,7 +39,7 @@ impl NoAssertionPacking {
         crate::rule_documentation::RuleDoc::TODO;
 }
 
-impl Rule for NoAssertionPacking {
+impl Detector for NoAssertionPacking {
     fn name(&self) -> RuleName {
         RuleName("no-assertion-packing")
     }
@@ -113,7 +113,7 @@ fn check_python_assert_statement(assert_node: &AstNode<'_>, path: &Path) -> Opti
     None
 }
 
-impl CodeRule for NoAssertionPacking {
+impl CodeDetector for NoAssertionPacking {
     fn target(&self) -> RuleTarget {
         RuleTarget::TestsOnly
     }

@@ -13,8 +13,8 @@
 // TODO: Also remove from every violation template, they should not suggest to ignore.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::{Config, FilterListDefaults, Rule};
+use crate::code_lint::rule::{CodeDetector, RuleTarget};
+use crate::core::{Config, Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -50,7 +50,7 @@ impl NoTypingCast {
         crate::rule_documentation::RuleDoc::TODO;
 }
 
-impl Rule for NoTypingCast {
+impl Detector for NoTypingCast {
     fn name(&self) -> RuleName {
         RuleName("no-typing-cast")
     }
@@ -64,7 +64,7 @@ impl Rule for NoTypingCast {
     }
 }
 
-impl CodeRule for NoTypingCast {
+impl CodeDetector for NoTypingCast {
     fn target(&self) -> RuleTarget {
         RuleTarget::SourceOnly
     }

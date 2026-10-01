@@ -3,7 +3,7 @@
 architecture_component!(CodeLintRunner);
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::code_lint::rule::{CodeDetector, RuleTarget};
 use crate::code_lint::semantic::comments::CommentIndex;
 use crate::code_lint::suppression::{SUPPRESSION_AUDITS, SuppressionTracker};
 use crate::core::Config;
@@ -28,7 +28,7 @@ pub fn detect_language(path: &Path) -> Option<SupportLang> {
 
 /// Returns true if `rule` should be evaluated on `path` given its language and test-file context.
 fn should_evaluate_rule(
-    rule: &dyn CodeRule,
+    rule: &dyn CodeDetector,
     path: &Path,
     lang: SupportLang,
     is_test: bool,
@@ -82,7 +82,7 @@ fn filter_diagnostics_by_target(
 /// modules (`#[cfg(test)]`), so `TestsOnly` rules remain eligible until AST ranges are inspected.
 #[must_use]
 fn is_rule_candidate_for_path(
-    rule: &dyn CodeRule,
+    rule: &dyn CodeDetector,
     path: &Path,
     lang: SupportLang,
     is_test: bool,
@@ -108,7 +108,7 @@ fn has_active_suppression_audit(
 ) -> bool {
     content.contains("omni:")
         && SUPPRESSION_AUDITS.iter().any(|audit| {
-            let rule = audit.rule;
+            let rule = audit.detector;
             config.is_rule_enabled_for_path(rule.name(), path)
                 && rule.supported_languages().contains(&lang)
         })
@@ -128,7 +128,9 @@ fn should_skip_ast_parse(
 ) -> bool {
     let has_code_rules = crate::code_lint::rules::CODE_RULES
         .iter()
-        .any(|registered| is_rule_candidate_for_path(registered.rule, path, lang, is_test, config));
+        .any(|registered| {
+            is_rule_candidate_for_path(registered.detector, path, lang, is_test, config)
+        });
 
     !has_code_rules && !has_active_suppression_audit(path, lang, content, config)
 }
@@ -137,7 +139,7 @@ static SUPPRESSIBLE_RULES: std::sync::LazyLock<HashSet<&'static str>> =
     std::sync::LazyLock::new(|| {
         crate::code_lint::rules::CODE_RULES
             .iter()
-            .map(|registered| registered.rule.name().0)
+            .map(|registered| registered.detector.name().0)
             .collect()
     });
 
@@ -165,7 +167,7 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
     let mut comment_index = None;
 
     for registered in crate::code_lint::rules::CODE_RULES {
-        let rule = registered.rule;
+        let rule = registered.detector;
         if !should_evaluate_rule(rule, path, lang, is_test, has_inline_tests, config) {
             continue;
         }
@@ -352,13 +354,13 @@ mod tests {
     fn code_rule_names() -> impl Iterator<Item = RuleName> {
         rules::CODE_RULES
             .iter()
-            .map(|registered| registered.rule.name())
+            .map(|registered| registered.detector.name())
     }
 
     fn audit_names() -> impl Iterator<Item = RuleName> {
         SUPPRESSION_AUDITS
             .iter()
-            .map(|registered| registered.rule.name())
+            .map(|registered| registered.detector.name())
     }
 
     fn config_disabling(rules: impl Iterator<Item = RuleName>) -> Config {
@@ -419,7 +421,7 @@ mod tests {
         false
     )]
     fn test_is_rule_candidate(
-        #[case] rule: &dyn CodeRule,
+        #[case] rule: &dyn CodeDetector,
         #[case] path: &str,
         #[case] lang: SupportLang,
         #[case] is_test: bool,

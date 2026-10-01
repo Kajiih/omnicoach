@@ -1,8 +1,8 @@
 //! Declarations of generic rules targeting multiple languages.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::rule::CodeRule;
-use crate::core::{FilterListDefaults, Rule};
+use crate::code_lint::rule::CodeDetector;
+use crate::core::{Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -38,7 +38,7 @@ impl SingleLetterVariableName {
         crate::rule_documentation::RuleDoc::TODO;
 }
 
-impl Rule for SingleLetterVariableName {
+impl Detector for SingleLetterVariableName {
     fn name(&self) -> RuleName {
         RuleName("single-letter-variable-name")
     }
@@ -51,7 +51,7 @@ impl Rule for SingleLetterVariableName {
         &TEMPLATE
     }
 }
-impl CodeRule for SingleLetterVariableName {
+impl CodeDetector for SingleLetterVariableName {
     fn check_file(
         &self,
         path: &Path,

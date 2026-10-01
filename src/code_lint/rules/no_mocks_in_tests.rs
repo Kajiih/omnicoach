@@ -1,8 +1,8 @@
 //! Bans dynamic mocks and monkeypatching in tests in favor of state-based Fakes.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::{FilterListDefaults, Rule};
+use crate::code_lint::rule::{CodeDetector, RuleTarget};
+use crate::core::{Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -93,7 +93,7 @@ impl NoMocksInTests {
         crate::rule_documentation::RuleDoc::TODO;
 }
 
-impl Rule for NoMocksInTests {
+impl Detector for NoMocksInTests {
     fn name(&self) -> RuleName {
         RuleName("no-mocks-in-tests")
     }
@@ -107,7 +107,7 @@ impl Rule for NoMocksInTests {
     }
 }
 
-impl CodeRule for NoMocksInTests {
+impl CodeDetector for NoMocksInTests {
     fn target(&self) -> RuleTarget {
         RuleTarget::TestsOnly
     }

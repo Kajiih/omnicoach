@@ -1,9 +1,9 @@
 //! Flags wall-clock/async `sleep` calls (`no-sleep-in-tests`) and zero-duration sleeps (`no-zero-sleep-in-tests`) in test files.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::code_lint::rule::{CodeDetector, RuleTarget};
 use crate::code_lint::semantic::calls::CallMatch;
-use crate::core::{Config, FilterListDefaults, Rule};
+use crate::core::{Config, Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
@@ -92,7 +92,7 @@ impl NoSleepInTests {
     };
 }
 
-impl Rule for NoSleepInTests {
+impl Detector for NoSleepInTests {
     fn name(&self) -> RuleName {
         RuleName("no-sleep-in-tests")
     }
@@ -122,7 +122,7 @@ impl NoZeroSleepInTests {
     pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
 }
 
-impl Rule for NoZeroSleepInTests {
+impl Detector for NoZeroSleepInTests {
     fn name(&self) -> RuleName {
         RuleName("no-zero-sleep-in-tests")
     }
@@ -156,7 +156,7 @@ fn zero_duration_arg(call_match: &CallMatch<'_>) -> Option<String> {
     .then(|| trimmed.to_string())
 }
 
-impl CodeRule for NoSleepInTests {
+impl CodeDetector for NoSleepInTests {
     fn target(&self) -> RuleTarget {
         RuleTarget::TestsOnly
     }
@@ -172,7 +172,7 @@ impl CodeRule for NoSleepInTests {
     }
 }
 
-impl CodeRule for NoZeroSleepInTests {
+impl CodeDetector for NoZeroSleepInTests {
     fn target(&self) -> RuleTarget {
         RuleTarget::TestsOnly
     }

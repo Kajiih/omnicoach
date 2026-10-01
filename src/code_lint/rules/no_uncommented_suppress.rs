@@ -6,8 +6,8 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::is_with_context_manager;
-use crate::code_lint::rule::CodeRule;
-use crate::core::{Config, EnforcementMode, FilterListDefaults, LanguageDefaults, Rule};
+use crate::code_lint::rule::CodeDetector;
+use crate::core::{Config, Detector, EnforcementMode, FilterListDefaults, LanguageDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -48,7 +48,7 @@ impl NoUncommentedSuppress {
         crate::rule_documentation::RuleDoc::TODO;
 }
 
-impl Rule for NoUncommentedSuppress {
+impl Detector for NoUncommentedSuppress {
     fn name(&self) -> RuleName {
         RuleName("no-uncommented-suppress")
     }
@@ -66,7 +66,7 @@ impl Rule for NoUncommentedSuppress {
     }
 }
 
-impl CodeRule for NoUncommentedSuppress {
+impl CodeDetector for NoUncommentedSuppress {
     fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
         self.find_configured_banned_calls(file, config, &DEFAULT_BANNED_CALLS)
             .into_iter()

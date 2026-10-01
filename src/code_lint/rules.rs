@@ -1,8 +1,8 @@
 //! Submodules containing implementations of code validation rules.
 architecture_component!(CodeLintRules);
 
-use crate::code_lint::rule::CodeRule;
-use crate::rule_taxonomy::RuleEntry;
+use crate::code_lint::rule::CodeDetector;
+use crate::rule_taxonomy::Rule;
 
 pub mod banned_abbreviations;
 pub mod enforce_frozen_slots_dataclass;
@@ -26,110 +26,110 @@ pub mod prefer_tuple_unpacking;
 pub mod single_letter_variable_name;
 
 /// Static list of all code linter rules, each registered with its classification and doc.
-pub const CODE_RULES: &[RuleEntry<dyn CodeRule>] = &[
-    RuleEntry {
-        rule: &no_unstructured_task_creation::NoUnstructuredTaskCreation,
+pub const CODE_RULES: &[Rule<dyn CodeDetector>] = &[
+    Rule {
+        detector: &no_unstructured_task_creation::NoUnstructuredTaskCreation,
         classification: no_unstructured_task_creation::NoUnstructuredTaskCreation::CLASSIFICATION,
         doc: no_unstructured_task_creation::NoUnstructuredTaskCreation::DOC,
     },
-    RuleEntry {
-        rule: &no_sleep_in_tests::NoSleepInTests,
+    Rule {
+        detector: &no_sleep_in_tests::NoSleepInTests,
         classification: no_sleep_in_tests::NoSleepInTests::CLASSIFICATION,
         doc: no_sleep_in_tests::NoSleepInTests::DOC,
     },
-    RuleEntry {
-        rule: &no_sleep_in_tests::NoZeroSleepInTests,
+    Rule {
+        detector: &no_sleep_in_tests::NoZeroSleepInTests,
         classification: no_sleep_in_tests::NoZeroSleepInTests::CLASSIFICATION,
         doc: no_sleep_in_tests::NoZeroSleepInTests::DOC,
     },
-    RuleEntry {
-        rule: &max_test_assertions::MaxTestAssertions,
+    Rule {
+        detector: &max_test_assertions::MaxTestAssertions,
         classification: max_test_assertions::MaxTestAssertions::CLASSIFICATION,
         doc: max_test_assertions::MaxTestAssertions::DOC,
     },
-    RuleEntry {
-        rule: &no_assertion_packing::NoAssertionPacking,
+    Rule {
+        detector: &no_assertion_packing::NoAssertionPacking,
         classification: no_assertion_packing::NoAssertionPacking::CLASSIFICATION,
         doc: no_assertion_packing::NoAssertionPacking::DOC,
     },
-    RuleEntry {
-        rule: &no_mocks_in_tests::NoMocksInTests,
+    Rule {
+        detector: &no_mocks_in_tests::NoMocksInTests,
         classification: no_mocks_in_tests::NoMocksInTests::CLASSIFICATION,
         doc: no_mocks_in_tests::NoMocksInTests::DOC,
     },
-    RuleEntry {
-        rule: &no_mock_assertions::NoMockAssertions,
+    Rule {
+        detector: &no_mock_assertions::NoMockAssertions,
         classification: no_mock_assertions::NoMockAssertions::CLASSIFICATION,
         doc: no_mock_assertions::NoMockAssertions::DOC,
     },
-    RuleEntry {
-        rule: &no_logging_error_in_except::NoLoggingErrorInExcept,
+    Rule {
+        detector: &no_logging_error_in_except::NoLoggingErrorInExcept,
         classification: no_logging_error_in_except::NoLoggingErrorInExcept::CLASSIFICATION,
         doc: no_logging_error_in_except::NoLoggingErrorInExcept::DOC,
     },
-    RuleEntry {
-        rule: &no_uncommented_suppress::NoUncommentedSuppress,
+    Rule {
+        detector: &no_uncommented_suppress::NoUncommentedSuppress,
         classification: no_uncommented_suppress::NoUncommentedSuppress::CLASSIFICATION,
         doc: no_uncommented_suppress::NoUncommentedSuppress::DOC,
     },
-    RuleEntry {
-        rule: &no_typing_cast::NoTypingCast,
+    Rule {
+        detector: &no_typing_cast::NoTypingCast,
         classification: no_typing_cast::NoTypingCast::CLASSIFICATION,
         doc: no_typing_cast::NoTypingCast::DOC,
     },
-    RuleEntry {
-        rule: &no_dynamic_attribute_access::NoDynamicAttributeAccess,
+    Rule {
+        detector: &no_dynamic_attribute_access::NoDynamicAttributeAccess,
         classification: no_dynamic_attribute_access::NoDynamicAttributeAccess::CLASSIFICATION,
         doc: no_dynamic_attribute_access::NoDynamicAttributeAccess::DOC,
     },
-    RuleEntry {
-        rule: &flat_scope_enforced::FlatScopeEnforced,
+    Rule {
+        detector: &flat_scope_enforced::FlatScopeEnforced,
         classification: flat_scope_enforced::FlatScopeEnforced::CLASSIFICATION,
         doc: flat_scope_enforced::FlatScopeEnforced::DOC,
     },
-    RuleEntry {
-        rule: &single_letter_variable_name::SingleLetterVariableName,
+    Rule {
+        detector: &single_letter_variable_name::SingleLetterVariableName,
         classification: single_letter_variable_name::SingleLetterVariableName::CLASSIFICATION,
         doc: single_letter_variable_name::SingleLetterVariableName::DOC,
     },
-    RuleEntry {
-        rule: &banned_abbreviations::BannedAbbreviations,
+    Rule {
+        detector: &banned_abbreviations::BannedAbbreviations,
         classification: banned_abbreviations::BannedAbbreviations::CLASSIFICATION,
         doc: banned_abbreviations::BannedAbbreviations::DOC,
     },
-    RuleEntry {
-        rule: &no_hungarian_notation::NoHungarianNotation,
+    Rule {
+        detector: &no_hungarian_notation::NoHungarianNotation,
         classification: no_hungarian_notation::NoHungarianNotation::CLASSIFICATION,
         doc: no_hungarian_notation::NoHungarianNotation::DOC,
     },
-    RuleEntry {
-        rule: &prefer_timedelta_over_seconds::PreferTimedeltaOverSeconds,
+    Rule {
+        detector: &prefer_timedelta_over_seconds::PreferTimedeltaOverSeconds,
         classification: prefer_timedelta_over_seconds::PreferTimedeltaOverSeconds::CLASSIFICATION,
         doc: prefer_timedelta_over_seconds::PreferTimedeltaOverSeconds::DOC,
     },
-    RuleEntry {
-        rule: &no_identical_positional_types::NoIdenticalPositionalTypes,
+    Rule {
+        detector: &no_identical_positional_types::NoIdenticalPositionalTypes,
         classification: no_identical_positional_types::NoIdenticalPositionalTypes::CLASSIFICATION,
         doc: no_identical_positional_types::NoIdenticalPositionalTypes::DOC,
     },
-    RuleEntry {
-        rule: &no_env_in_functions::NoEnvInFunctions,
+    Rule {
+        detector: &no_env_in_functions::NoEnvInFunctions,
         classification: no_env_in_functions::NoEnvInFunctions::CLASSIFICATION,
         doc: no_env_in_functions::NoEnvInFunctions::DOC,
     },
-    RuleEntry {
-        rule: &enforce_frozen_slots_dataclass::EnforceFrozenSlotsDataclass,
+    Rule {
+        detector: &enforce_frozen_slots_dataclass::EnforceFrozenSlotsDataclass,
         classification: enforce_frozen_slots_dataclass::EnforceFrozenSlotsDataclass::CLASSIFICATION,
         doc: enforce_frozen_slots_dataclass::EnforceFrozenSlotsDataclass::DOC,
     },
-    RuleEntry {
-        rule: &prefer_dedent_for_multiline_strings::PreferDedentForMultilineStrings,
+    Rule {
+        detector: &prefer_dedent_for_multiline_strings::PreferDedentForMultilineStrings,
         classification:
             prefer_dedent_for_multiline_strings::PreferDedentForMultilineStrings::CLASSIFICATION,
         doc: prefer_dedent_for_multiline_strings::PreferDedentForMultilineStrings::DOC,
     },
-    RuleEntry {
-        rule: &prefer_tuple_unpacking::PreferTupleUnpacking,
+    Rule {
+        detector: &prefer_tuple_unpacking::PreferTupleUnpacking,
         classification: prefer_tuple_unpacking::PreferTupleUnpacking::CLASSIFICATION,
         doc: prefer_tuple_unpacking::PreferTupleUnpacking::DOC,
     },

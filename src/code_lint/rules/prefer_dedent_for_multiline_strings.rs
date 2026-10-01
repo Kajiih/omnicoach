@@ -1,8 +1,8 @@
 //! Enforces wrapping multiline string literals in a dedent helper (`textwrap.dedent`, `indoc!`, etc.).
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::{FilterListDefaults, Rule};
+use crate::code_lint::rule::{CodeDetector, RuleTarget};
+use crate::core::{Detector, FilterListDefaults};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -61,7 +61,7 @@ impl PreferDedentForMultilineStrings {
         crate::rule_documentation::RuleDoc::TODO;
 }
 
-impl Rule for PreferDedentForMultilineStrings {
+impl Detector for PreferDedentForMultilineStrings {
     fn name(&self) -> RuleName {
         RuleName("prefer-dedent-for-multiline-strings")
     }
@@ -75,7 +75,7 @@ impl Rule for PreferDedentForMultilineStrings {
     }
 }
 
-impl CodeRule for PreferDedentForMultilineStrings {
+impl CodeDetector for PreferDedentForMultilineStrings {
     fn target(&self) -> RuleTarget {
         RuleTarget::All
     }
