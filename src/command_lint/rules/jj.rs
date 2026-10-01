@@ -8,7 +8,7 @@ use crate::core::{Config, Rule};
 use crate::diagnostic::{
     Diagnostic, RuleName, SourceLocation, SourceSpan, ViolationTemplate, violation_template,
 };
-use crate::rule_documentation::RuleDoc;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 
 /// CLI schema definition for Jujutsu commands.
@@ -61,7 +61,24 @@ impl NoJJEditOnDescribedCommits {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Blocks `jj edit` on a commit that already has a description.",
+        what_it_does: "Checks shell commands before they run and flags `jj edit <revision>` \
+                       (or a bare `jj edit`, which targets `@`) when the target revision \
+                       has a non-empty description. Global options such as `-R` are \
+                       understood. Commits without a description can still be edited.",
+        why_is_this_bad: "In Jujutsu, a described commit is usually finished work, often \
+                          already reviewed. Editing it makes every later file change part \
+                          of that commit, silently: unrelated work gets tangled into it and \
+                          reviewed history is rewritten in place.\n\n\
+                          Create a child change with `jj new <revision>`, then move only \
+                          the intended fixes into the commit with `jj squash`.",
+        configuration: &[],
+        references: &[Reference {
+            title: "Jujutsu: Working copy",
+            url: "https://jj-vcs.github.io/jj/latest/working-copy/",
+        }],
+    };
 }
 
 impl Rule for NoJJEditOnDescribedCommits {

@@ -5,7 +5,7 @@ use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls::CallMatch;
 use crate::core::{Config, FilterListDefaults, Rule};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::RuleDoc;
+use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -64,7 +64,32 @@ impl NoSleepInTests {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Flags fixed-duration sleeps in tests.",
+        what_it_does: "Flags wall-clock and async sleep calls in test files: `time.sleep`, \
+                       `asyncio.sleep`, `anyio.sleep` and `trio.sleep` in Python, \
+                       `std::thread::sleep` and `tokio::time::sleep` in Rust, and a bare \
+                       `sleep`. Calls on an injected object, such as `fake_clock.sleep(10)`, \
+                       are not flagged. Zero-duration sleeps are left to \
+                       `no-zero-sleep-in-tests`.",
+        why_is_this_bad: "A fixed sleep guesses how long another thread, task or process \
+                          needs. Too short, and the test fails when the machine is loaded: \
+                          the test is flaky. Too long, and every run pays the full delay. \
+                          Either way, the test no longer says what it waits for.\n\n\
+                          Wait on the event itself (an event, a channel, a condition \
+                          variable), or inject a clock that the test advances.",
+        configuration: &[ConfigShape::DenyList],
+        references: &[
+            Reference {
+                title: "Eradicating Non-Determinism in Tests (Martin Fowler)",
+                url: "https://martinfowler.com/articles/nonDeterminism.html",
+            },
+            Reference {
+                title: "Flaky Tests at Google and How We Mitigate Them",
+                url: "https://testing.googleblog.com/2016/05/flaky-tests-at-google-and-how-we.html",
+            },
+        ],
+    };
 }
 
 impl Rule for NoSleepInTests {
