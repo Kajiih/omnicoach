@@ -1,12 +1,10 @@
 //! Enforces a maximum number of assertions per test function (`max-test-assertions`).
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{
-    CountOption, Detector, LanguageDefaults, OptionSpec, ResolvedOptions, RuleOptions,
-};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{CountOption, LanguageDefaults, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -29,87 +27,65 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     },
 };
 
-/// Rule that limits the number of assertions inside a single test function.
-struct MaxTestAssertions;
-
 /// The rule's declaration.
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &MaxTestAssertions,
-    classification: Classification {
-        topics: &[Topic::TEST_ASSERTIONS],
-        precision: Precision::Heuristic,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Maintainability,
+pub const RULE: CodeRule<CountOption> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("max-test-assertions"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python, SupportLang::Rust],
+        options: RuleOptions::code_rule(MAX_ASSERTIONS),
+        classification: Classification {
+            topics: &[Topic::TEST_ASSERTIONS],
+            precision: Precision::Heuristic,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Maintainability,
+        },
+        doc: RuleDoc {
+            summary: "Limits the number of assertions in one test function.",
+            what_it_does: "Counts the assertions in each test function and flags a test with \
+                           more than `max_assertions` of them. A `pytest.raises` block counts as \
+                           one assertion. Assertions inside nested functions or classes, and in \
+                           helpers that are not tests, are not counted.",
+            why_is_this_bad: "A test with many assertions usually checks several behaviours at \
+                              once. It stops at the first failing assertion, so the later ones \
+                              are never reported, and its name cannot say which behaviour \
+                              broke.\n\n\
+                              Split independent scenarios into separate tests, parameterize \
+                              variations (`@pytest.mark.parametrize`, `#[rstest]`), or compare \
+                              the result against one expected value.",
+            references: &[Reference {
+                title: "Software Engineering at Google, ch. 12: Test behaviors, not methods",
+                url: "https://abseil.io/resources/swe-book/html/ch12.html",
+            }],
+        },
     },
-    doc: RuleDoc {
-        summary: "Limits the number of assertions in one test function.",
-        what_it_does: "Counts the assertions in each test function and flags a test with \
-                       more than `max_assertions` of them. A `pytest.raises` block counts as \
-                       one assertion. Assertions inside nested functions or classes, and in \
-                       helpers that are not tests, are not counted.",
-        why_is_this_bad: "A test with many assertions usually checks several behaviours at \
-                          once. It stops at the first failing assertion, so the later ones \
-                          are never reported, and its name cannot say which behaviour \
-                          broke.\n\n\
-                          Split independent scenarios into separate tests, parameterize \
-                          variations (`@pytest.mark.parametrize`, `#[rstest]`), or compare \
-                          the result against one expected value.",
-        references: &[Reference {
-            title: "Software Engineering at Google, ch. 12: Test behaviors, not methods",
-            url: "https://abseil.io/resources/swe-book/html/ch12.html",
-        }],
-    },
-    options: RuleOptions {
-        options: &[OptionSpec::Count(&MAX_ASSERTIONS)],
-        ..RuleOptions::CODE_RULE
-    },
+    target: RuleTarget::TestsOnly,
+    check: check_file,
 };
 
-impl Detector for MaxTestAssertions {
-    fn name(&self) -> RuleName {
-        RuleName("max-test-assertions")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
-    }
-}
-
-impl CodeDetector for MaxTestAssertions {
-    fn target(&self) -> RuleTarget {
-        RuleTarget::TestsOnly
-    }
-
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        let max_allowed = options.count(&MAX_ASSERTIONS);
-
-        ast::collect_test_function_assertion_counts(file)
-            .into_iter()
-            .filter(|(_, _, assertion_count)| *assertion_count > max_allowed)
-            .map(|(name_node, func_name, assertion_count)| {
-                let formatted_count = assertion_count.to_string();
-                let formatted_max = max_allowed.to_string();
-                self.diagnostic_at_node(
-                    path,
-                    &name_node,
-                    &[
-                        ("func", &func_name),
-                        ("count", &formatted_count),
-                        ("max", &formatted_max),
-                    ],
-                )
-            })
-            .collect()
-    }
+fn check_file(
+    rule: &CodeRule<CountOption>,
+    path: &Path,
+    file: &ParsedFile,
+    max_allowed: usize,
+) -> Vec<Diagnostic> {
+    ast::collect_test_function_assertion_counts(file)
+        .into_iter()
+        .filter(|(_, _, assertion_count)| *assertion_count > max_allowed)
+        .map(|(name_node, func_name, assertion_count)| {
+            let formatted_count = assertion_count.to_string();
+            let formatted_max = max_allowed.to_string();
+            rule.diagnostic_at_node(
+                path,
+                &name_node,
+                &[
+                    ("func", &func_name),
+                    ("count", &formatted_count),
+                    ("max", &formatted_max),
+                ],
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

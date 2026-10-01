@@ -3,13 +3,12 @@
 architecture_component!(TestingHarness);
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::rule::CodeDetector;
+use crate::code_lint::rule::CodeRule;
 use crate::code_lint::semantic::comments::CommentIndex;
-use crate::command_lint::rule::CommandDetector;
+use crate::command_lint::rule::CommandRule;
 use crate::command_lint::vcs::JjClient;
-use crate::core::{EnforcementMode, ResolvedOptions};
+use crate::core::{EnforcementMode, OptionsDeclaration};
 use crate::diagnostic::Diagnostic;
-use crate::rule_declaration::Rule;
 use ast_grep_language::SupportLang;
 use std::fmt::Write;
 use std::path::Path;
@@ -39,8 +38,8 @@ pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic]) -> String {
 /// # Panics
 /// Panics if `filename` does not have a recognized file extension (`.py` or `.rs`).
 #[must_use]
-pub fn run_code_rule(
-    rule: &Rule<dyn CodeDetector>,
+pub fn run_code_rule<Options: OptionsDeclaration>(
+    rule: &CodeRule<Options>,
     source: &str,
     filename: &str,
 ) -> Vec<Diagnostic> {
@@ -51,9 +50,8 @@ pub fn run_code_rule(
         _ => panic!("run_code_rule: unsupported extension in test file '{filename}'"),
     };
     let file = ParsedFile::new(source, lang);
-    let options = ResolvedOptions::new(lang, &rule.options, None);
-    let mut diags = rule.detector.check_file(path, &file, &options);
-    if options.enforcement_mode() == EnforcementMode::RequireExplanation {
+    let mut diags = rule.check_file(path, &file, None);
+    if rule.enforcement_mode(lang, None) == EnforcementMode::RequireExplanation {
         let index = CommentIndex::from_file(&file);
         diags.retain(|diagnostic| {
             !index.has_explanation_for_span(
@@ -66,10 +64,10 @@ pub fn run_code_rule(
     diags
 }
 
-/// Helper to execute `check_command` on a `CommandDetector` and return its formatted diagnostics snapshot.
+/// Helper to execute `check_command` on a [`CommandRule`] and return its formatted diagnostics snapshot.
 #[must_use]
 pub fn assert_command_rule_snapshot(
-    rule: &impl CommandDetector,
+    rule: &CommandRule,
     command_input: &str,
     client: &dyn JjClient,
 ) -> String {
@@ -78,22 +76,22 @@ pub fn assert_command_rule_snapshot(
     format_diagnostics_for_test(&diags)
 }
 
-/// Validates that the languages tested in `rule_test!` exactly match `rule.supported_languages()`.
+/// Validates that the languages tested in `rule_test!` exactly match the rule's declared languages.
 ///
 /// # Panics
 /// Panics if a supported language is missing or an unsupported language is included.
 #[track_caller]
-pub fn assert_language_completeness(
-    rule: &Rule<dyn CodeDetector>,
+pub fn assert_language_completeness<Options: OptionsDeclaration>(
+    rule: &CodeRule<Options>,
     tested_languages: &[SupportLang],
 ) {
-    let rule_name = rule.detector.name().0;
-    let supported = rule.detector.supported_languages();
+    let rule_name = rule.declaration.name.0;
+    let supported = rule.declaration.languages;
 
     for lang in tested_languages {
         assert!(
             supported.contains(lang),
-            "rule_test! [{rule_name}]: {lang:?} is not in supported_languages()."
+            "rule_test! [{rule_name}]: {lang:?} is not in the rule's languages."
         );
     }
 
@@ -110,13 +108,13 @@ pub fn assert_language_completeness(
 /// # Panics
 /// Panics if the rule emits any diagnostics on `code`.
 #[track_caller]
-pub fn assert_rule_pass(
-    rule: &Rule<dyn CodeDetector>,
+pub fn assert_rule_pass<Options: OptionsDeclaration>(
+    rule: &CodeRule<Options>,
     lang: SupportLang,
     case_name: &str,
     code: &str,
 ) {
-    let rule_name = rule.detector.name().0;
+    let rule_name = rule.declaration.name.0;
     let filename = dummy_filename(lang);
     let diags = run_code_rule(rule, code, filename);
     assert!(
@@ -137,14 +135,14 @@ pub fn assert_rule_pass(
 /// Panics if diagnostic count, `rule_name`, normalized AST span slice, or repeated-occurrence
 /// spans do not match.
 #[track_caller]
-pub fn assert_rule_fail(
-    rule: &Rule<dyn CodeDetector>,
+pub fn assert_rule_fail<Options: OptionsDeclaration>(
+    rule: &CodeRule<Options>,
     lang: SupportLang,
     case_name: &str,
     code: &str,
     expected_snippet: Option<&str>,
 ) {
-    let rule_name = rule.detector.name().0;
+    let rule_name = rule.declaration.name.0;
     let filename = dummy_filename(lang);
     let diags = run_code_rule(rule, code, filename);
     let expected_slice = expected_snippet.unwrap_or(code).trim();
@@ -177,14 +175,14 @@ pub fn assert_rule_fail(
 /// Repeats `code` twice in one file and asserts the rule flags the same span in both copies,
 /// so a rule that stops after its first match cannot pass.
 #[track_caller]
-fn assert_every_occurrence_reported(
-    rule: &Rule<dyn CodeDetector>,
+fn assert_every_occurrence_reported<Options: OptionsDeclaration>(
+    rule: &CodeRule<Options>,
     lang: SupportLang,
     case_name: &str,
     code: &str,
     span: std::ops::Range<usize>,
 ) {
-    let rule_name = rule.detector.name().0;
+    let rule_name = rule.declaration.name.0;
     let repeated = format!("{code}\n{code}");
     let offset = code.len() + 1;
     let diags = run_code_rule(rule, &repeated, dummy_filename(lang));
@@ -241,10 +239,10 @@ fn dummy_filename(lang: SupportLang) -> &'static str {
     }
 }
 
-/// Declarative macro generating the complete `#[cfg(test)] mod tests` suite for a [`CodeDetector`].
+/// Declarative macro generating the complete `#[cfg(test)] mod tests` suite for a [`CodeRule`].
 ///
 /// Expands every `pass` and `fail` entry into an independent `#[rstest::rstest]` `#[case]`
-/// and generates a `language_completeness` test verifying all `supported_languages()`.
+/// and generates a `language_completeness` test verifying all the rule's declared languages.
 ///
 /// Each `fail` entry accepts at most one expected snippet (`=> r#"..."#`) and must produce
 /// exactly one diagnostic, so every case exercises a single flagged node.

@@ -1,15 +1,14 @@
 //! Bans dynamic mocks and monkeypatching in tests in favor of state-based Fakes.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{
-    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
-};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{FilterListDefaults, ListKind, ListOption, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
+use std::collections::HashSet;
 use std::path::Path;
 
 const BANNED_MOCKS: ListOption = ListOption {
@@ -83,86 +82,66 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     suggestion: "Inject a lightweight in-memory Fake (e.g., `FakeRepository`, `FakeHttpClient`) implementing the target `Protocol`.",
 };
 
-/// Rule that bans dynamic mocks and monkeypatching in test files.
-struct NoMocksInTests;
-
 /// The rule's declaration.
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &NoMocksInTests,
-    classification: Classification {
-        topics: &[Topic::TEST_DOUBLES],
-        precision: Precision::Exact,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Reliability,
+pub const RULE: CodeRule<ListOption> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("no-mocks-in-tests"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python],
+        options: RuleOptions::code_rule(BANNED_MOCKS),
+        classification: Classification {
+            topics: &[Topic::TEST_DOUBLES],
+            precision: Precision::Exact,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Reliability,
+        },
+        doc: RuleDoc {
+            summary: "Flags dynamic mocks and monkeypatching in Python tests.",
+            what_it_does: "Flags calls that create mocks or patch code at run time in Python \
+                           test files: `Mock`, `MagicMock`, `AsyncMock`, `NonCallableMock`, \
+                           `PropertyMock`, `create_autospec` and `patch` (with `patch.object`, \
+                           `patch.dict` and `patch.multiple`), whether called bare or through \
+                           `mock.` or `unittest.mock.`. It also flags pytest-mock's `mocker.*` \
+                           equivalents plus `mocker.spy`, `mocker.stub` and `mocker.async_stub`, \
+                           and pytest's `MonkeyPatch` and `monkeypatch.setattr`, `delattr`, \
+                           `setitem` and `delitem`. Calls are matched by name, not by import: a \
+                           bare `patch(...)` is flagged even when imported from another library, \
+                           while a method such as `http_client.patch(...)` is not, and the \
+                           `mocker` and `monkeypatch` calls are only matched under those exact \
+                           names.",
+            why_is_this_bad: "A mock replaces a real collaborator with an object that accepts \
+                              any call and returns whatever the test told it to. Patching \
+                              swaps code by its import path. Both tie the test to how the code \
+                              is wired internally rather than to what it does, so refactors \
+                              break tests that should pass, and tests keep passing when the \
+                              real dependency changes its signature or behaviour.\n\n\
+                              Pass dependencies in explicitly and use a fake in tests: a small \
+                              working in-memory implementation of the same interface (for \
+                              example a `FakeRepository` backed by a dict), then assert on its \
+                              state.",
+            references: &[
+                Reference {
+                    title: "Software Engineering at Google, ch. 13: Test Doubles",
+                    url: "https://abseil.io/resources/swe-book/html/ch13.html",
+                },
+                Reference {
+                    title: "Mocks Aren't Stubs (Martin Fowler)",
+                    url: "https://martinfowler.com/articles/mocksArentStubs.html",
+                },
+            ],
+        },
     },
-    doc: RuleDoc {
-        summary: "Flags dynamic mocks and monkeypatching in Python tests.",
-        what_it_does: "Flags calls that create mocks or patch code at run time in Python \
-                       test files: `Mock`, `MagicMock`, `AsyncMock`, `NonCallableMock`, \
-                       `PropertyMock`, `create_autospec` and `patch` (with `patch.object`, \
-                       `patch.dict` and `patch.multiple`), whether called bare or through \
-                       `mock.` or `unittest.mock.`. It also flags pytest-mock's `mocker.*` \
-                       equivalents plus `mocker.spy`, `mocker.stub` and `mocker.async_stub`, \
-                       and pytest's `MonkeyPatch` and `monkeypatch.setattr`, `delattr`, \
-                       `setitem` and `delitem`. Calls are matched by name, not by import: a \
-                       bare `patch(...)` is flagged even when imported from another library, \
-                       while a method such as `http_client.patch(...)` is not, and the \
-                       `mocker` and `monkeypatch` calls are only matched under those exact \
-                       names.",
-        why_is_this_bad: "A mock replaces a real collaborator with an object that accepts \
-                          any call and returns whatever the test told it to. Patching \
-                          swaps code by its import path. Both tie the test to how the code \
-                          is wired internally rather than to what it does, so refactors \
-                          break tests that should pass, and tests keep passing when the \
-                          real dependency changes its signature or behaviour.\n\n\
-                          Pass dependencies in explicitly and use a fake in tests: a small \
-                          working in-memory implementation of the same interface (for \
-                          example a `FakeRepository` backed by a dict), then assert on its \
-                          state.",
-        references: &[
-            Reference {
-                title: "Software Engineering at Google, ch. 13: Test Doubles",
-                url: "https://abseil.io/resources/swe-book/html/ch13.html",
-            },
-            Reference {
-                title: "Mocks Aren't Stubs (Martin Fowler)",
-                url: "https://martinfowler.com/articles/mocksArentStubs.html",
-            },
-        ],
-    },
-    options: RuleOptions {
-        options: &[OptionSpec::List(&BANNED_MOCKS)],
-        ..RuleOptions::CODE_RULE
-    },
+    target: RuleTarget::TestsOnly,
+    check: check_file,
 };
 
-impl Detector for NoMocksInTests {
-    fn name(&self) -> RuleName {
-        RuleName("no-mocks-in-tests")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
-    }
-}
-
-impl CodeDetector for NoMocksInTests {
-    fn target(&self) -> RuleTarget {
-        RuleTarget::TestsOnly
-    }
-
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        self.check_banned_calls(path, file, &options.list(&BANNED_MOCKS))
-    }
+fn check_file(
+    rule: &CodeRule<ListOption>,
+    path: &Path,
+    file: &ParsedFile,
+    banned: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    rule.check_banned_calls(path, file, banned)
 }
 
 #[cfg(test)]

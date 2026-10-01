@@ -1,15 +1,14 @@
 //! Declarations of generic rules targeting multiple languages.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::rule::CodeDetector;
-use crate::core::{
-    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
-};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{FilterListDefaults, ListKind, ListOption, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
+use std::collections::HashSet;
 use std::path::Path;
 
 const ALLOWED: ListOption = ListOption {
@@ -28,77 +27,60 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     suggestion: "Rename `{name}` to a descriptive noun representing its domain role in an explicit and self explanatory way.",
 };
 
-/// Rule that bans single-letter variable names.
-struct SingleLetterVariableName;
-
 /// The rule's declaration.
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &SingleLetterVariableName,
-    classification: Classification {
-        topics: &[Topic::ABBREVIATED_NAMES],
-        precision: Precision::Exact,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Maintainability,
+pub const RULE: CodeRule<ListOption> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("single-letter-variable-name"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python, SupportLang::Rust],
+        options: RuleOptions::code_rule(ALLOWED),
+        classification: Classification {
+            topics: &[Topic::ABBREVIATED_NAMES],
+            precision: Precision::Exact,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Maintainability,
+        },
+        doc: RuleDoc {
+            summary: "Flags names made of a single letter.",
+            what_it_does: "Flags single-letter names the code defines: variables, \
+                           parameters (including lambda and closure parameters), loop, \
+                           comprehension, `except ... as`, walrus and pattern bindings, and \
+                           function, class and constant names, except the allowed ones; `_` \
+                           is never flagged. Unaliased \
+                           imports, members of a Rust `impl Trait for Type` block, Python \
+                           methods marked `@override`, type parameters such as `T`, and \
+                           references to existing names are not checked.",
+            why_is_this_bad: "A single letter says nothing about what the value is, so the \
+                              reader has to trace where it comes from, and the meaning gets \
+                              lost as the scope grows. Single letters are also impossible to \
+                              search for: a search for `d` matches almost every line.\n\n\
+                              Use a noun that says what the value is (`index`, `user`, \
+                              `error`). Keep the allowed letters for conventional cases such \
+                              as loop counters or coordinates.",
+            references: &[Reference {
+                title: "Google Python Style Guide: Naming",
+                url: "https://google.github.io/styleguide/pyguide.html#316-naming",
+            }],
+        },
     },
-    doc: RuleDoc {
-        summary: "Flags names made of a single letter.",
-        what_it_does: "Flags single-letter names the code defines: variables, \
-                       parameters (including lambda and closure parameters), loop, \
-                       comprehension, `except ... as`, walrus and pattern bindings, and \
-                       function, class and constant names, except the allowed ones; `_` \
-                       is never flagged. Unaliased \
-                       imports, members of a Rust `impl Trait for Type` block, Python \
-                       methods marked `@override`, type parameters such as `T`, and \
-                       references to existing names are not checked.",
-        why_is_this_bad: "A single letter says nothing about what the value is, so the \
-                          reader has to trace where it comes from, and the meaning gets \
-                          lost as the scope grows. Single letters are also impossible to \
-                          search for: a search for `d` matches almost every line.\n\n\
-                          Use a noun that says what the value is (`index`, `user`, \
-                          `error`). Keep the allowed letters for conventional cases such \
-                          as loop counters or coordinates.",
-        references: &[Reference {
-            title: "Google Python Style Guide: Naming",
-            url: "https://google.github.io/styleguide/pyguide.html#316-naming",
-        }],
-    },
-    options: RuleOptions {
-        options: &[OptionSpec::List(&ALLOWED)],
-        ..RuleOptions::CODE_RULE
-    },
+    target: RuleTarget::All,
+    check: check_file,
 };
 
-impl Detector for SingleLetterVariableName {
-    fn name(&self) -> RuleName {
-        RuleName("single-letter-variable-name")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
-    }
-}
-impl CodeDetector for SingleLetterVariableName {
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        let allowed = options.list(&ALLOWED);
-
-        let mut diagnostics = Vec::new();
-        for node in crate::code_lint::semantic::bindings::collect_renameable_bindings(file) {
-            let name = node.text();
-            if name.len() == 1 && name != "_" && !allowed.contains(&*name) {
-                diagnostics.push(self.diagnostic_at_node(path, &node, &[("name", &name)]));
-            }
+fn check_file(
+    rule: &CodeRule<ListOption>,
+    path: &Path,
+    file: &ParsedFile,
+    allowed: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for node in crate::code_lint::semantic::bindings::collect_renameable_bindings(file) {
+        let name = node.text();
+        if name.len() == 1 && name != "_" && !allowed.contains(&*name) {
+            diagnostics.push(rule.diagnostic_at_node(path, &node, &[("name", &name)]));
         }
-        diagnostics
     }
+    diagnostics
 }
 
 #[cfg(test)]

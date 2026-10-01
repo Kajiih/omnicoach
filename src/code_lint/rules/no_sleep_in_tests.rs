@@ -1,16 +1,15 @@
 //! Flags wall-clock/async `sleep` calls (`no-sleep-in-tests`) and zero-duration sleeps (`no-zero-sleep-in-tests`) in test files.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::rule::{CodeDetector, RuleTarget};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls::{self, CallMatch};
-use crate::core::{
-    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
-};
+use crate::core::{FilterListDefaults, ListKind, ListOption, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
+use std::collections::HashSet;
 use std::path::Path;
 
 const BANNED_CALLS: ListOption = ListOption {
@@ -57,121 +56,93 @@ const ZERO_SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
     },
 };
 
-/// Rule that bans non-zero wall-clock and async sleeps in test files.
-struct NoSleepInTests;
-
 /// The `no-sleep-in-tests` rule's declaration.
-pub const NO_SLEEP_IN_TESTS: Rule<dyn CodeDetector> = Rule {
-    detector: &NoSleepInTests,
-    classification: Classification {
-        topics: &[Topic::TEST_TIMING],
-        precision: Precision::Exact,
-        consensus: Consensus::Unopinionated,
-        impacted_quality: ImpactedQuality::Reliability,
+pub const NO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("no-sleep-in-tests"),
+        template: &SLEEP_TEMPLATE,
+        languages: &[SupportLang::Python, SupportLang::Rust],
+        options: RuleOptions::code_rule(BANNED_CALLS),
+        classification: Classification {
+            topics: &[Topic::TEST_TIMING],
+            precision: Precision::Exact,
+            consensus: Consensus::Unopinionated,
+            impacted_quality: ImpactedQuality::Reliability,
+        },
+        doc: RuleDoc {
+            summary: "Flags fixed-duration sleeps in tests.",
+            what_it_does: "Flags wall-clock and async sleep calls in test files: `time.sleep`, \
+                           `asyncio.sleep`, `anyio.sleep` and `trio.sleep` in Python, \
+                           `std::thread::sleep` and `tokio::time::sleep` in Rust, and a bare \
+                           `sleep`. Calls on an injected object, such as `fake_clock.sleep(10)`, \
+                           are not flagged. Zero-duration sleeps are left to \
+                           `no-zero-sleep-in-tests`.",
+            why_is_this_bad: "A fixed sleep guesses how long another thread, task or process \
+                              needs. Too short, and the test fails when the machine is loaded: \
+                              the test is flaky. Too long, and every run pays the full delay. \
+                              Either way, the test no longer says what it waits for.\n\n\
+                              Wait on the event itself (an event, a channel, a condition \
+                              variable), or inject a clock that the test advances.",
+            references: &[
+                Reference {
+                    title: "Eradicating Non-Determinism in Tests (Martin Fowler)",
+                    url: "https://martinfowler.com/articles/nonDeterminism.html",
+                },
+                Reference {
+                    title: "Flaky Tests at Google and How We Mitigate Them",
+                    url: "https://testing.googleblog.com/2016/05/flaky-tests-at-google-and-how-we.html",
+                },
+            ],
+        },
     },
-    doc: RuleDoc {
-        summary: "Flags fixed-duration sleeps in tests.",
-        what_it_does: "Flags wall-clock and async sleep calls in test files: `time.sleep`, \
-                       `asyncio.sleep`, `anyio.sleep` and `trio.sleep` in Python, \
-                       `std::thread::sleep` and `tokio::time::sleep` in Rust, and a bare \
-                       `sleep`. Calls on an injected object, such as `fake_clock.sleep(10)`, \
-                       are not flagged. Zero-duration sleeps are left to \
-                       `no-zero-sleep-in-tests`.",
-        why_is_this_bad: "A fixed sleep guesses how long another thread, task or process \
-                          needs. Too short, and the test fails when the machine is loaded: \
-                          the test is flaky. Too long, and every run pays the full delay. \
-                          Either way, the test no longer says what it waits for.\n\n\
-                          Wait on the event itself (an event, a channel, a condition \
-                          variable), or inject a clock that the test advances.",
-        references: &[
-            Reference {
-                title: "Eradicating Non-Determinism in Tests (Martin Fowler)",
-                url: "https://martinfowler.com/articles/nonDeterminism.html",
-            },
-            Reference {
-                title: "Flaky Tests at Google and How We Mitigate Them",
-                url: "https://testing.googleblog.com/2016/05/flaky-tests-at-google-and-how-we.html",
-            },
-        ],
-    },
-    options: RuleOptions {
-        options: &[OptionSpec::List(&BANNED_CALLS)],
-        ..RuleOptions::CODE_RULE
-    },
+    target: RuleTarget::TestsOnly,
+    check: check_sleep,
 };
-
-impl Detector for NoSleepInTests {
-    fn name(&self) -> RuleName {
-        RuleName("no-sleep-in-tests")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &SLEEP_TEMPLATE
-    }
-}
-
-/// Rule that bans zero-duration sleeps (`sleep(0)`, `sleep(Duration::ZERO)`) in test files.
-struct NoZeroSleepInTests;
 
 /// The `no-zero-sleep-in-tests` rule's declaration.
-pub const NO_ZERO_SLEEP_IN_TESTS: Rule<dyn CodeDetector> = Rule {
-    detector: &NoZeroSleepInTests,
-    classification: Classification {
-        topics: &[Topic::TEST_TIMING],
-        precision: Precision::Exact,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Reliability,
+pub const NO_ZERO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("no-zero-sleep-in-tests"),
+        template: &ZERO_SLEEP_TEMPLATE,
+        languages: &[SupportLang::Python, SupportLang::Rust],
+        options: RuleOptions::code_rule(BANNED_CALLS),
+        classification: Classification {
+            topics: &[Topic::TEST_TIMING],
+            precision: Precision::Exact,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Reliability,
+        },
+        doc: RuleDoc {
+            summary: "Flags zero-duration sleeps used to yield in tests.",
+            what_it_does: "Flags the same sleep calls as `no-sleep-in-tests` when their single \
+                           argument is a literal zero duration: `0`, `0.0` or `0.` in Python, \
+                           and `Duration::ZERO`, `Duration::from_secs(0)` or \
+                           `Duration::from_millis(0)` in Rust. Other spellings of zero, such as \
+                           a variable holding `0`, and calls with more than one argument are not \
+                           flagged. Python is checked too, including `asyncio.sleep(0)`, even \
+                           though the asyncio documentation presents it as a way to yield.",
+            why_is_this_bad: "A zero-duration sleep is used for its side effect: letting other \
+                              tasks run. The code says \"wait for no time\" when it means \"yield \
+                              to the scheduler\", and whether it yields depends on how the \
+                              runtime treats a zero timer. Tokio, for example, does not guarantee \
+                              that `sleep(Duration::ZERO)` yields at all.\n\n\
+                              Use the explicit yield primitive: `tokio::task::yield_now().await` \
+                              in Rust, `await anyio.lowlevel.checkpoint()` in Python.",
+            references: &[
+                Reference {
+                    title: "tokio::task::yield_now",
+                    url: "https://docs.rs/tokio/latest/tokio/task/fn.yield_now.html",
+                },
+                Reference {
+                    title: "asyncio.sleep (Python documentation)",
+                    url: "https://docs.python.org/3/library/asyncio-task.html#asyncio.sleep",
+                },
+            ],
+        },
     },
-    doc: RuleDoc {
-        summary: "Flags zero-duration sleeps used to yield in tests.",
-        what_it_does: "Flags the same sleep calls as `no-sleep-in-tests` when their single \
-                       argument is a literal zero duration: `0`, `0.0` or `0.` in Python, \
-                       and `Duration::ZERO`, `Duration::from_secs(0)` or \
-                       `Duration::from_millis(0)` in Rust. Other spellings of zero, such as \
-                       a variable holding `0`, and calls with more than one argument are not \
-                       flagged. Python is checked too, including `asyncio.sleep(0)`, even \
-                       though the asyncio documentation presents it as a way to yield.",
-        why_is_this_bad: "A zero-duration sleep is used for its side effect: letting other \
-                          tasks run. The code says \"wait for no time\" when it means \"yield \
-                          to the scheduler\", and whether it yields depends on how the \
-                          runtime treats a zero timer. Tokio, for example, does not guarantee \
-                          that `sleep(Duration::ZERO)` yields at all.\n\n\
-                          Use the explicit yield primitive: `tokio::task::yield_now().await` \
-                          in Rust, `await anyio.lowlevel.checkpoint()` in Python.",
-        references: &[
-            Reference {
-                title: "tokio::task::yield_now",
-                url: "https://docs.rs/tokio/latest/tokio/task/fn.yield_now.html",
-            },
-            Reference {
-                title: "asyncio.sleep (Python documentation)",
-                url: "https://docs.python.org/3/library/asyncio-task.html#asyncio.sleep",
-            },
-        ],
-    },
-    options: RuleOptions {
-        options: &[OptionSpec::List(&BANNED_CALLS)],
-        ..RuleOptions::CODE_RULE
-    },
+    target: RuleTarget::TestsOnly,
+    check: check_zero_sleep,
 };
-
-impl Detector for NoZeroSleepInTests {
-    fn name(&self) -> RuleName {
-        RuleName("no-zero-sleep-in-tests")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &ZERO_SLEEP_TEMPLATE
-    }
-}
 
 /// Returns the trimmed argument string if the call is a zero-duration sleep (e.g. `sleep(0)`, `sleep(Duration::ZERO)`).
 fn zero_duration_arg(call_match: &CallMatch<'_>) -> Option<String> {
@@ -193,50 +164,38 @@ fn zero_duration_arg(call_match: &CallMatch<'_>) -> Option<String> {
     .then(|| trimmed.to_string())
 }
 
-impl CodeDetector for NoSleepInTests {
-    fn target(&self) -> RuleTarget {
-        RuleTarget::TestsOnly
-    }
-
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        calls::find_banned_calls(file, &options.list(&BANNED_CALLS))
-            .into_iter()
-            .filter(|call_match| zero_duration_arg(call_match).is_none())
-            .map(|call_match| {
-                self.diagnostic_at_node(path, &call_match.node, &[("call", &call_match.callee)])
-            })
-            .collect()
-    }
+fn check_sleep(
+    rule: &CodeRule<ListOption>,
+    path: &Path,
+    file: &ParsedFile,
+    banned: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    calls::find_banned_calls(file, banned)
+        .into_iter()
+        .filter(|call_match| zero_duration_arg(call_match).is_none())
+        .map(|call_match| {
+            rule.diagnostic_at_node(path, &call_match.node, &[("call", &call_match.callee)])
+        })
+        .collect()
 }
 
-impl CodeDetector for NoZeroSleepInTests {
-    fn target(&self) -> RuleTarget {
-        RuleTarget::TestsOnly
-    }
-
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        calls::find_banned_calls(file, &options.list(&BANNED_CALLS))
-            .into_iter()
-            .filter_map(|call_match| {
-                let zero_arg = zero_duration_arg(&call_match)?;
-                Some(self.diagnostic_at_node(
-                    path,
-                    &call_match.node,
-                    &[("call", &call_match.callee), ("arg", &zero_arg)],
-                ))
-            })
-            .collect()
-    }
+fn check_zero_sleep(
+    rule: &CodeRule<ListOption>,
+    path: &Path,
+    file: &ParsedFile,
+    banned: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    calls::find_banned_calls(file, banned)
+        .into_iter()
+        .filter_map(|call_match| {
+            let zero_arg = zero_duration_arg(&call_match)?;
+            Some(rule.diagnostic_at_node(
+                path,
+                &call_match.node,
+                &[("call", &call_match.callee), ("arg", &zero_arg)],
+            ))
+        })
+        .collect()
 }
 
 #[cfg(test)]

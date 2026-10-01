@@ -2,13 +2,13 @@
 
 // TODO: Consider if we should replace this rule with a no edit on bookmarked commit?
 
-use crate::command_lint::rule::{CommandDetector, InterceptedCommand, ProgramCliSchema};
+use crate::command_lint::rule::{CommandRule, InterceptedCommand, ProgramCliSchema};
 use crate::command_lint::vcs::JjClient;
-use crate::core::{Detector, RuleOptions};
+use crate::core::RuleOptions;
 use crate::diagnostic::{
     Diagnostic, RuleName, SourceLocation, SourceSpan, ViolationTemplate, violation_template,
 };
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 
@@ -49,77 +49,72 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     suggestion: "Create a child change on top with `jj new {revision}` and squash intentional fixes selectively via `jj squash`.",
 };
 
-/// Blocks running `jj edit <revision>` if the target revision has a non-empty description.
-struct NoJJEditOnDescribedCommits;
-
-/// The rule's declaration.
-pub const RULE: Rule<dyn CommandDetector> = Rule {
-    detector: &NoJJEditOnDescribedCommits,
-    classification: Classification {
-        topics: &[Topic::JJ],
-        precision: Precision::Exact,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Reliability,
+/// The rule's declaration: blocks running `jj edit <revision>` if the target revision has a
+/// non-empty description.
+pub const RULE: CommandRule = CommandRule {
+    declaration: Declaration {
+        name: RuleName("no-edits-on-described-commits"),
+        template: &TEMPLATE,
+        languages: &[],
+        options: RuleOptions::none(),
+        classification: Classification {
+            topics: &[Topic::JJ],
+            precision: Precision::Exact,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Reliability,
+        },
+        doc: RuleDoc {
+            summary: "Blocks `jj edit` on a commit that already has a description.",
+            what_it_does: "Checks shell commands before they run and flags `jj edit <revision>` \
+                           (or a bare `jj edit`, which targets `@`) when the target revision \
+                           has a non-empty description. Global options such as `-R` are \
+                           understood. Commits without a description can still be edited.",
+            why_is_this_bad: "In Jujutsu, a described commit is usually finished work, often \
+                              already reviewed. Editing it makes every later file change part \
+                              of that commit, silently: unrelated work gets tangled into it and \
+                              reviewed history is rewritten in place.\n\n\
+                              Create a child change with `jj new <revision>`, then move only \
+                              the intended fixes into the commit with `jj squash`.",
+            references: &[Reference {
+                title: "Jujutsu: Working copy",
+                url: "https://jj-vcs.github.io/jj/latest/working-copy/",
+            }],
+        },
     },
-    doc: RuleDoc {
-        summary: "Blocks `jj edit` on a commit that already has a description.",
-        what_it_does: "Checks shell commands before they run and flags `jj edit <revision>` \
-                       (or a bare `jj edit`, which targets `@`) when the target revision \
-                       has a non-empty description. Global options such as `-R` are \
-                       understood. Commits without a description can still be edited.",
-        why_is_this_bad: "In Jujutsu, a described commit is usually finished work, often \
-                          already reviewed. Editing it makes every later file change part \
-                          of that commit, silently: unrelated work gets tangled into it and \
-                          reviewed history is rewritten in place.\n\n\
-                          Create a child change with `jj new <revision>`, then move only \
-                          the intended fixes into the commit with `jj squash`.",
-        references: &[Reference {
-            title: "Jujutsu: Working copy",
-            url: "https://jj-vcs.github.io/jj/latest/working-copy/",
-        }],
-    },
-    options: RuleOptions::NONE,
+    check: check_command,
 };
 
-impl Detector for NoJJEditOnDescribedCommits {
-    fn name(&self) -> RuleName {
-        RuleName("no-edits-on-described-commits")
+fn check_command(
+    rule: &CommandRule,
+    cmd: &InterceptedCommand,
+    jj_client: &dyn JjClient,
+) -> Vec<Diagnostic> {
+    if cmd.program_base_name() != "jj" {
+        return Vec::new();
     }
 
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
+    let Some(revision) = extract_jj_edit_revision(cmd) else {
+        return Vec::new();
+    };
+
+    // Guard: Query target revision description
+    // TODO(roadmap): Propagate or report VCS client query errors rather than silently returning empty diagnostics.
+    let Ok(desc) = jj_client.get_commit_description(&revision) else {
+        return Vec::new();
+    };
+    if desc.is_empty() {
+        return Vec::new();
     }
-}
 
-impl CommandDetector for NoJJEditOnDescribedCommits {
-    fn check_command(&self, cmd: &InterceptedCommand, jj_client: &dyn JjClient) -> Vec<Diagnostic> {
-        if cmd.program_base_name() != "jj" {
-            return Vec::new();
-        }
-
-        let Some(revision) = extract_jj_edit_revision(cmd) else {
-            return Vec::new();
-        };
-
-        // Guard: Query target revision description
-        // TODO(roadmap): Propagate or report VCS client query errors rather than silently returning empty diagnostics.
-        let Ok(desc) = jj_client.get_commit_description(&revision) else {
-            return Vec::new();
-        };
-        if desc.is_empty() {
-            return Vec::new();
-        }
-
-        let (start, end) = cmd.span;
-        vec![self.render_diagnostic(
-            &[("revision", &revision)],
-            SourceLocation::virtual_span(
-                crate::diagnostic::VCS_CONTEXT_NAME,
-                &cmd.raw_string,
-                SourceSpan::new(start, end),
-            ),
-        )]
-    }
+    let (start, end) = cmd.span;
+    vec![rule.declaration.render_diagnostic(
+        &[("revision", &revision)],
+        SourceLocation::virtual_span(
+            crate::diagnostic::VCS_CONTEXT_NAME,
+            &cmd.raw_string,
+            SourceSpan::new(start, end),
+        ),
+    )]
 }
 
 #[cfg(test)]
@@ -146,27 +141,18 @@ mod tests {
         let jj_client = MockJjClient { descriptions };
 
         // Block described commit edit
-        let output = crate::test_utils::assert_command_rule_snapshot(
-            &NoJJEditOnDescribedCommits,
-            "jj edit d123",
-            &jj_client,
-        );
+        let output =
+            crate::test_utils::assert_command_rule_snapshot(&RULE, "jj edit d123", &jj_client);
         insta::assert_snapshot!(output, @"[no-edits-on-described-commits] Line 1, Col 1: Command `jj edit d123` targets a non-empty described commit.");
 
         // Allow empty/anonymous commit edit
-        let output_allowed = crate::test_utils::assert_command_rule_snapshot(
-            &NoJJEditOnDescribedCommits,
-            "jj edit a456",
-            &jj_client,
-        );
+        let output_allowed =
+            crate::test_utils::assert_command_rule_snapshot(&RULE, "jj edit a456", &jj_client);
         assert!(output_allowed.is_empty());
 
         // Allow unrelated commands
-        let output_log = crate::test_utils::assert_command_rule_snapshot(
-            &NoJJEditOnDescribedCommits,
-            "jj log -r d123",
-            &jj_client,
-        );
+        let output_log =
+            crate::test_utils::assert_command_rule_snapshot(&RULE, "jj log -r d123", &jj_client);
         assert!(output_log.is_empty());
     }
 

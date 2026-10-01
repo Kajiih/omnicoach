@@ -1,10 +1,10 @@
 //! Flags compound boolean conditions (`&&`, `and`) and boolean tuple equality packing in test assertions (`no-assertion-packing`).
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile};
-use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{Detector, ResolvedOptions, RuleOptions};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::RuleOptions;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -24,70 +24,63 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     },
 };
 
-/// Rule that bans compound boolean conditions and boolean tuple packing in assertions.
-struct NoAssertionPacking;
-
 /// The rule's declaration.
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &NoAssertionPacking,
-    classification: Classification {
-        topics: &[Topic::TEST_ASSERTIONS],
-        precision: Precision::Exact,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Maintainability,
+pub const RULE: CodeRule = CodeRule {
+    declaration: Declaration {
+        name: RuleName("no-assertion-packing"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python, SupportLang::Rust],
+        options: RuleOptions::code_rule(()),
+        classification: Classification {
+            topics: &[Topic::TEST_ASSERTIONS],
+            precision: Precision::Exact,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Maintainability,
+        },
+        doc: RuleDoc {
+            summary: "Flags assertions that pack several checks into one condition.",
+            what_it_does: "Flags two shapes of assertion in test files. A compound condition \
+                           joined by a top-level `and` in a Python `assert` statement, or by a \
+                           top-level `&&` in a Rust `assert!` or `debug_assert!`. And a \
+                           comparison against a tuple, list or array of two or more boolean \
+                           literals, such as `assert (valid, active) == (True, False)` or \
+                           `assert_eq!((a, b), (true, true))` in any `assert_*` or \
+                           `debug_assert_*` macro. Conditions joined by `or`, an `and` nested \
+                           inside a function call, and collections holding anything other than \
+                           boolean literals are not flagged. In Python only bare `assert` \
+                           statements are checked, not `unittest` methods such as \
+                           `self.assertTrue`.",
+            why_is_this_bad: "When a packed assertion fails, the report only says the whole \
+                              condition was false: it does not say which part failed, and a \
+                              tuple of booleans shows `True`/`False` values with no name \
+                              attached. Finding the culprit means rerunning the test or adding \
+                              prints.\n\n\
+                              Write one assertion per check, so each failure names its \
+                              condition and shows its values, or compare the result against one \
+                              expected object or struct.",
+            references: &[Reference {
+                title: "pytest: How to write and report assertions in tests",
+                url: "https://docs.pytest.org/en/stable/how-to/assert.html",
+            }],
+        },
     },
-    doc: RuleDoc {
-        summary: "Flags assertions that pack several checks into one condition.",
-        what_it_does: "Flags two shapes of assertion in test files. A compound condition \
-                       joined by a top-level `and` in a Python `assert` statement, or by a \
-                       top-level `&&` in a Rust `assert!` or `debug_assert!`. And a \
-                       comparison against a tuple, list or array of two or more boolean \
-                       literals, such as `assert (valid, active) == (True, False)` or \
-                       `assert_eq!((a, b), (true, true))` in any `assert_*` or \
-                       `debug_assert_*` macro. Conditions joined by `or`, an `and` nested \
-                       inside a function call, and collections holding anything other than \
-                       boolean literals are not flagged. In Python only bare `assert` \
-                       statements are checked, not `unittest` methods such as \
-                       `self.assertTrue`.",
-        why_is_this_bad: "When a packed assertion fails, the report only says the whole \
-                          condition was false: it does not say which part failed, and a \
-                          tuple of booleans shows `True`/`False` values with no name \
-                          attached. Finding the culprit means rerunning the test or adding \
-                          prints.\n\n\
-                          Write one assertion per check, so each failure names its \
-                          condition and shows its values, or compare the result against one \
-                          expected object or struct.",
-        references: &[Reference {
-            title: "pytest: How to write and report assertions in tests",
-            url: "https://docs.pytest.org/en/stable/how-to/assert.html",
-        }],
-    },
-    options: RuleOptions::CODE_RULE,
+    target: RuleTarget::TestsOnly,
+    check: check_file,
 };
 
-impl Detector for NoAssertionPacking {
-    fn name(&self) -> RuleName {
-        RuleName("no-assertion-packing")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
-    }
-}
-
 /// Evaluates a single Rust assertion macro invocation node for packed conditions.
-fn check_rust_assertion_macro(macro_node: &AstNode<'_>, path: &Path) -> Option<Diagnostic> {
+fn check_rust_assertion_macro(
+    rule: &CodeRule,
+    macro_node: &AstNode<'_>,
+    path: &Path,
+) -> Option<Diagnostic> {
     let macro_name = ast::rust::macro_terminal_name(macro_node);
 
     // 1. Compound boolean condition: assert!(a && b)
     if (macro_name == "assert" || macro_name == "debug_assert")
         && ast::rust::has_top_level_logical_and(macro_node)
     {
-        return Some(NoAssertionPacking.diagnostic_at_node(
+        return Some(rule.diagnostic_at_node(
             path,
             macro_node,
             &[
@@ -103,7 +96,7 @@ fn check_rust_assertion_macro(macro_node: &AstNode<'_>, path: &Path) -> Option<D
             .iter()
             .any(ast::rust::is_boolean_literal_collection)
     {
-        return Some(NoAssertionPacking.diagnostic_at_node(
+        return Some(rule.diagnostic_at_node(
             path,
             macro_node,
             &[
@@ -117,10 +110,14 @@ fn check_rust_assertion_macro(macro_node: &AstNode<'_>, path: &Path) -> Option<D
 }
 
 /// Evaluates a single Python `assert` statement node for packed conditions.
-fn check_python_assert_statement(assert_node: &AstNode<'_>, path: &Path) -> Option<Diagnostic> {
+fn check_python_assert_statement(
+    rule: &CodeRule,
+    assert_node: &AstNode<'_>,
+    path: &Path,
+) -> Option<Diagnostic> {
     // 1. Compound boolean condition: assert a and b
     if ast::python::has_top_level_logical_and(assert_node) {
-        return Some(NoAssertionPacking.diagnostic_at_node(
+        return Some(rule.diagnostic_at_node(
             path,
             assert_node,
             &[("construct", "Compound boolean condition (`and`)")],
@@ -129,7 +126,7 @@ fn check_python_assert_statement(assert_node: &AstNode<'_>, path: &Path) -> Opti
 
     // 2. Boolean tuple/list equality: assert (a, b) == (True, True)
     if ast::python::has_boolean_literal_comparison(assert_node) {
-        return Some(NoAssertionPacking.diagnostic_at_node(
+        return Some(rule.diagnostic_at_node(
             path,
             assert_node,
             &[("construct", "Boolean tuple/collection equality")],
@@ -139,27 +136,16 @@ fn check_python_assert_statement(assert_node: &AstNode<'_>, path: &Path) -> Opti
     None
 }
 
-impl CodeDetector for NoAssertionPacking {
-    fn target(&self) -> RuleTarget {
-        RuleTarget::TestsOnly
-    }
-
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        _options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        match file.lang() {
-            SupportLang::Rust => ast::rust::collect_macro_invocations(file)
-                .iter()
-                .filter_map(|node| check_rust_assertion_macro(node, path))
-                .collect(),
-            _ => ast::python::collect_assert_statements(file)
-                .iter()
-                .filter_map(|node| check_python_assert_statement(node, path))
-                .collect(),
-        }
+fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
+    match file.lang() {
+        SupportLang::Rust => ast::rust::collect_macro_invocations(file)
+            .iter()
+            .filter_map(|node| check_rust_assertion_macro(rule, node, path))
+            .collect(),
+        _ => ast::python::collect_assert_statements(file)
+            .iter()
+            .filter_map(|node| check_python_assert_statement(rule, node, path))
+            .collect(),
     }
 }
 

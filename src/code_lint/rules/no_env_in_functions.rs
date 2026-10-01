@@ -1,16 +1,15 @@
 //! Enforces that environment variables are only accessed at module/static scope or explicit configuration boundaries (`no-env-in-functions`).
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::rule::{CodeDetector, RuleTarget};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls;
-use crate::core::{
-    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
-};
+use crate::core::{FilterListDefaults, ListKind, ListOption, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
+use std::collections::HashSet;
 use std::path::Path;
 
 const BANNED_CALLS: ListOption = ListOption {
@@ -70,70 +69,56 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     },
 };
 
-/// Rule that flags direct environment variable reads/writes inside regular functions and methods.
-struct NoEnvInFunctions;
-
 /// The rule's declaration.
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &NoEnvInFunctions,
-    classification: Classification {
-        topics: &[Topic::GLOBAL_STATE],
-        precision: Precision::Heuristic,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Reliability,
+pub const RULE: CodeRule<ListOption> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("no-env-in-functions"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python, SupportLang::Rust],
+        options: RuleOptions::code_rule(BANNED_CALLS),
+        classification: Classification {
+            topics: &[Topic::GLOBAL_STATE],
+            precision: Precision::Heuristic,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Reliability,
+        },
+        doc: RuleDoc {
+            summary: "Flags environment variable access inside functions.",
+            what_it_does: "Flags reads and writes of environment variables inside a function \
+                           or method in source files; test files are not checked. In Python \
+                           this covers `os.getenv`, `os.putenv`, `os.unsetenv`, the \
+                           `os.environ` methods `get`, `pop`, `setdefault`, `update` and \
+                           `clear`, and `os.environ[...]` subscripts, also when written as \
+                           `getenv` or `environ` after a `from os import`. In Rust it covers \
+                           `std::env::var`, `var_os`, `vars`, `vars_os`, `set_var` and \
+                           `remove_var`, written with an `std::env::` or `env::` prefix. The \
+                           deny list configures the calls; Python `environ[...]` subscripts \
+                           are always checked. Access at module, class or `static` scope is \
+                           allowed, and so is the compile-time `env!` macro. Functions named \
+                           `from_env`, `from_environ` or `load_env`, and a `main` at the top \
+                           level of the file, are configuration boundaries: access inside \
+                           them, including inside functions, closures and lambdas nested in \
+                           them, is not flagged. A method or `mod`-level function named `main` \
+                           is not a boundary.",
+            why_is_this_bad: "A function that reads the environment depends on hidden global \
+                              state: its signature does not say what configuration it needs, \
+                              and its behaviour changes with the process that runs it. Tests \
+                              must then set and restore environment variables, which leaks \
+                              between tests and races when tests run in parallel. Writing the \
+                              environment from several threads is undefined behaviour on some \
+                              platforms.\n\n\
+                              Read the environment once, at startup or in a `from_env` \
+                              constructor, into a typed configuration object, and pass that \
+                              object, or the values it holds, to the code that needs them.",
+            references: &[Reference {
+                title: "Rust docs: std::env::set_var (safety)",
+                url: "https://doc.rust-lang.org/std/env/fn.set_var.html",
+            }],
+        },
     },
-    doc: RuleDoc {
-        summary: "Flags environment variable access inside functions.",
-        what_it_does: "Flags reads and writes of environment variables inside a function \
-                       or method in source files; test files are not checked. In Python \
-                       this covers `os.getenv`, `os.putenv`, `os.unsetenv`, the \
-                       `os.environ` methods `get`, `pop`, `setdefault`, `update` and \
-                       `clear`, and `os.environ[...]` subscripts, also when written as \
-                       `getenv` or `environ` after a `from os import`. In Rust it covers \
-                       `std::env::var`, `var_os`, `vars`, `vars_os`, `set_var` and \
-                       `remove_var`, written with an `std::env::` or `env::` prefix. The \
-                       deny list configures the calls; Python `environ[...]` subscripts \
-                       are always checked. Access at module, class or `static` scope is \
-                       allowed, and so is the compile-time `env!` macro. Functions named \
-                       `from_env`, `from_environ` or `load_env`, and a `main` at the top \
-                       level of the file, are configuration boundaries: access inside \
-                       them, including inside functions, closures and lambdas nested in \
-                       them, is not flagged. A method or `mod`-level function named `main` \
-                       is not a boundary.",
-        why_is_this_bad: "A function that reads the environment depends on hidden global \
-                          state: its signature does not say what configuration it needs, \
-                          and its behaviour changes with the process that runs it. Tests \
-                          must then set and restore environment variables, which leaks \
-                          between tests and races when tests run in parallel. Writing the \
-                          environment from several threads is undefined behaviour on some \
-                          platforms.\n\n\
-                          Read the environment once, at startup or in a `from_env` \
-                          constructor, into a typed configuration object, and pass that \
-                          object, or the values it holds, to the code that needs them.",
-        references: &[Reference {
-            title: "Rust docs: std::env::set_var (safety)",
-            url: "https://doc.rust-lang.org/std/env/fn.set_var.html",
-        }],
-    },
-    options: RuleOptions {
-        options: &[OptionSpec::List(&BANNED_CALLS)],
-        ..RuleOptions::CODE_RULE
-    },
+    target: RuleTarget::SourceOnly,
+    check: check_file,
 };
-
-impl Detector for NoEnvInFunctions {
-    fn name(&self) -> RuleName {
-        RuleName("no-env-in-functions")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
-    }
-}
 
 /// Returns true if a function named `name` is an entrypoint or configuration boundary allowed to
 /// access env vars.
@@ -158,53 +143,47 @@ fn is_exempt_boundary_function(name: &str, is_top_level: bool) -> bool {
     }
 }
 
-impl CodeDetector for NoEnvInFunctions {
-    fn target(&self) -> RuleTarget {
-        RuleTarget::SourceOnly
+fn check_file(
+    rule: &CodeRule<ListOption>,
+    path: &Path,
+    file: &ParsedFile,
+    banned_calls: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    let lang = file.lang();
+    let mut diagnostics = Vec::new();
+
+    for call_match in calls::find_banned_calls(file, banned_calls) {
+        if let Some(func_name) = ast::enclosing_non_exempt_function_name(
+            &call_match.node,
+            lang,
+            is_exempt_boundary_function,
+        ) {
+            let expr = format!("{}()", call_match.callee);
+            diagnostics.push(rule.diagnostic_at_node(
+                path,
+                &call_match.node,
+                &[("call", &expr), ("expr", &expr), ("func_name", &func_name)],
+            ));
+        }
     }
 
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        let lang = file.lang();
-        let mut diagnostics = Vec::new();
-
-        for call_match in calls::find_banned_calls(file, &options.list(&BANNED_CALLS)) {
+    if lang == SupportLang::Python {
+        for (subscript_node, label) in ast::python::collect_environ_subscripts(file) {
             if let Some(func_name) = ast::enclosing_non_exempt_function_name(
-                &call_match.node,
+                &subscript_node,
                 lang,
                 is_exempt_boundary_function,
             ) {
-                let expr = format!("{}()", call_match.callee);
-                diagnostics.push(self.diagnostic_at_node(
+                diagnostics.push(rule.diagnostic_at_node(
                     path,
-                    &call_match.node,
-                    &[("call", &expr), ("expr", &expr), ("func_name", &func_name)],
+                    &subscript_node,
+                    &[("call", label), ("expr", label), ("func_name", &func_name)],
                 ));
             }
         }
-
-        if lang == SupportLang::Python {
-            for (subscript_node, label) in ast::python::collect_environ_subscripts(file) {
-                if let Some(func_name) = ast::enclosing_non_exempt_function_name(
-                    &subscript_node,
-                    lang,
-                    is_exempt_boundary_function,
-                ) {
-                    diagnostics.push(self.diagnostic_at_node(
-                        path,
-                        &subscript_node,
-                        &[("call", label), ("expr", label), ("func_name", &func_name)],
-                    ));
-                }
-            }
-        }
-
-        diagnostics
     }
+
+    diagnostics
 }
 
 #[cfg(test)]

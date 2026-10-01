@@ -6,17 +6,17 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::is_with_context_manager;
-use crate::code_lint::rule::CodeDetector;
+use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls;
 use crate::core::{
-    Detector, EnforcementMode, FilterListDefaults, LanguageDefaults, ListKind, ListOption,
-    OptionSpec, ResolvedOptions, RuleOptions,
+    EnforcementMode, FilterListDefaults, LanguageDefaults, ListKind, ListOption, RuleOptions,
 };
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
+use std::collections::HashSet;
 use std::path::Path;
 
 const BANNED_CALLS: ListOption = ListOption {
@@ -35,78 +35,65 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     suggestion: "Add an inline or directly preceding `# comment` explaining why the suppressed exception is safe to ignore.",
 };
 
-/// Rule struct.
-struct NoUncommentedSuppress;
-
 /// The rule's declaration.
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &NoUncommentedSuppress,
-    classification: Classification {
-        topics: &[Topic::ERROR_HANDLING],
-        precision: Precision::Exact,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Maintainability,
+pub const RULE: CodeRule<ListOption> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("no-uncommented-suppress"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python],
+        options: RuleOptions {
+            enforcement_mode: Some(LanguageDefaults::new(
+                EnforcementMode::RequireExplanation,
+                &[],
+            )),
+            options: BANNED_CALLS,
+        },
+        classification: Classification {
+            topics: &[Topic::ERROR_HANDLING],
+            precision: Precision::Exact,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Maintainability,
+        },
+        doc: RuleDoc {
+            summary: "Requires a comment explaining each `contextlib.suppress` block.",
+            what_it_does: "Flags `suppress(...)` and `contextlib.suppress(...)` used as a context \
+                           manager in a Python `with` statement, unless a comment explains it. \
+                           The comment can trail the `suppress(...)` line, trail any line of a \
+                           multi-line `with (...)` header, or sit in the block of comment lines \
+                           directly above the statement. It must be substantive: at least three \
+                           words and ten characters, and a bare tool directive such as \
+                           `# noqa: SIM105` or `# type: ignore` does not count. Comments inside \
+                           the `with` body do not count. A `suppress(...)` call outside a `with` \
+                           statement is not flagged. With `enforcement_mode = \"ban\"`, every \
+                           such block is flagged, commented or not.",
+            why_is_this_bad: "`suppress` silently discards an exception. The code does not say \
+                              why that failure is harmless, so a reader cannot tell an \
+                              intentional ignore from a bug being hidden, and a later change \
+                              that makes the exception meaningful goes unnoticed.\n\n\
+                              State why the exception is safe to ignore in a comment next to \
+                              the `with` statement, for example \
+                              `# The file may already have been removed by the cleanup job.`",
+            references: &[Reference {
+                title: "Python docs: contextlib.suppress",
+                url: "https://docs.python.org/3/library/contextlib.html#contextlib.suppress",
+            }],
+        },
     },
-    doc: RuleDoc {
-        summary: "Requires a comment explaining each `contextlib.suppress` block.",
-        what_it_does: "Flags `suppress(...)` and `contextlib.suppress(...)` used as a context \
-                       manager in a Python `with` statement, unless a comment explains it. \
-                       The comment can trail the `suppress(...)` line, trail any line of a \
-                       multi-line `with (...)` header, or sit in the block of comment lines \
-                       directly above the statement. It must be substantive: at least three \
-                       words and ten characters, and a bare tool directive such as \
-                       `# noqa: SIM105` or `# type: ignore` does not count. Comments inside \
-                       the `with` body do not count. A `suppress(...)` call outside a `with` \
-                       statement is not flagged. With `enforcement_mode = \"ban\"`, every \
-                       such block is flagged, commented or not.",
-        why_is_this_bad: "`suppress` silently discards an exception. The code does not say \
-                          why that failure is harmless, so a reader cannot tell an \
-                          intentional ignore from a bug being hidden, and a later change \
-                          that makes the exception meaningful goes unnoticed.\n\n\
-                          State why the exception is safe to ignore in a comment next to \
-                          the `with` statement, for example \
-                          `# The file may already have been removed by the cleanup job.`",
-        references: &[Reference {
-            title: "Python docs: contextlib.suppress",
-            url: "https://docs.python.org/3/library/contextlib.html#contextlib.suppress",
-        }],
-    },
-    options: RuleOptions {
-        enforcement_mode: Some(LanguageDefaults::new(
-            EnforcementMode::RequireExplanation,
-            &[],
-        )),
-        options: &[OptionSpec::List(&BANNED_CALLS)],
-    },
+    target: RuleTarget::All,
+    check: check_file,
 };
 
-impl Detector for NoUncommentedSuppress {
-    fn name(&self) -> RuleName {
-        RuleName("no-uncommented-suppress")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
-    }
-}
-
-impl CodeDetector for NoUncommentedSuppress {
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        calls::find_banned_calls(file, &options.list(&BANNED_CALLS))
-            .into_iter()
-            .filter(|matched| is_with_context_manager(&matched.node))
-            .map(|matched| self.diagnostic_at_node(path, &matched.node, &[]))
-            .collect()
-    }
+fn check_file(
+    rule: &CodeRule<ListOption>,
+    path: &Path,
+    file: &ParsedFile,
+    banned_calls: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    calls::find_banned_calls(file, banned_calls)
+        .into_iter()
+        .filter(|matched| is_with_context_manager(&matched.node))
+        .map(|matched| rule.diagnostic_at_node(path, &matched.node, &[]))
+        .collect()
 }
 
 #[cfg(test)]

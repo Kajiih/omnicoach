@@ -1,15 +1,14 @@
 //! Enforces strongly typed durations over numeric variables with time-unit suffixes.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::rule::CodeDetector;
-use crate::core::{
-    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
-};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{FilterListDefaults, ListKind, ListOption, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
+use std::collections::HashSet;
 use std::path::Path;
 
 const BANNED_SUFFIXES: ListOption = ListOption {
@@ -35,78 +34,62 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     },
 };
 
-/// Rule that flags numeric variables encoding time unit suffixes.
-struct PreferTimedeltaOverSeconds;
-
 /// The rule's declaration.
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &PreferTimedeltaOverSeconds,
-    classification: Classification {
-        topics: &[Topic::TYPE_ENCODED_NAMES, Topic::DURATIONS],
-        precision: Precision::Heuristic,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Reliability,
+pub const RULE: CodeRule<ListOption> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("prefer-timedelta-over-seconds"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python, SupportLang::Rust],
+        options: RuleOptions::code_rule(BANNED_SUFFIXES),
+        classification: Classification {
+            topics: &[Topic::TYPE_ENCODED_NAMES, Topic::DURATIONS],
+            precision: Precision::Heuristic,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Reliability,
+        },
+        doc: RuleDoc {
+            summary: "Flags variable names that carry a time unit, such as `timeout_secs` or `delay_ms`.",
+            what_it_does: "Flags variables, parameters, loop and pattern bindings, and \
+                           constants whose name ends, ignoring case, with a time-unit suffix: \
+                           `_seconds`, `_secs`, `_sec`, `_minutes`, `_mins`, `_min`, `_hours`, \
+                           `_hrs`, `_hr`, `_days`, `_millis`, `_ms`, `_micros`, `_us`, \
+                           `_nanos` or `_ns` by default. The check reads the name only, not \
+                           the type, so a suffixed name is flagged even when it already holds \
+                           a `timedelta` or `Duration`. A name that is only the suffix, such \
+                           as `_ms`, is not flagged. Functions, classes, structs, imports \
+                           (aliased or not), attributes and struct fields are not checked.",
+            why_is_this_bad: "A plain number with a unit in its name relies on every caller \
+                              reading the name: nothing stops passing milliseconds to a \
+                              `timeout_secs` parameter, and each boundary needs a manual \
+                              conversion that can be wrong by a factor of 1000.\n\n\
+                              Use a duration type, `datetime.timedelta` in Python or \
+                              `std::time::Duration` in Rust, and drop the suffix \
+                              (`timeout: timedelta`). The unit is then chosen once, where the \
+                              value is created (`timedelta(seconds=10)`, \
+                              `Duration::from_millis(250)`).",
+            references: &[
+                Reference {
+                    title: "Python docs: datetime.timedelta",
+                    url: "https://docs.python.org/3/library/datetime.html#timedelta-objects",
+                },
+                Reference {
+                    title: "Rust docs: std::time::Duration",
+                    url: "https://doc.rust-lang.org/std/time/struct.Duration.html",
+                },
+            ],
+        },
     },
-    doc: RuleDoc {
-        summary: "Flags variable names that carry a time unit, such as `timeout_secs` or `delay_ms`.",
-        what_it_does: "Flags variables, parameters, loop and pattern bindings, and \
-                       constants whose name ends, ignoring case, with a time-unit suffix: \
-                       `_seconds`, `_secs`, `_sec`, `_minutes`, `_mins`, `_min`, `_hours`, \
-                       `_hrs`, `_hr`, `_days`, `_millis`, `_ms`, `_micros`, `_us`, \
-                       `_nanos` or `_ns` by default. The check reads the name only, not \
-                       the type, so a suffixed name is flagged even when it already holds \
-                       a `timedelta` or `Duration`. A name that is only the suffix, such \
-                       as `_ms`, is not flagged. Functions, classes, structs, imports \
-                       (aliased or not), attributes and struct fields are not checked.",
-        why_is_this_bad: "A plain number with a unit in its name relies on every caller \
-                          reading the name: nothing stops passing milliseconds to a \
-                          `timeout_secs` parameter, and each boundary needs a manual \
-                          conversion that can be wrong by a factor of 1000.\n\n\
-                          Use a duration type, `datetime.timedelta` in Python or \
-                          `std::time::Duration` in Rust, and drop the suffix \
-                          (`timeout: timedelta`). The unit is then chosen once, where the \
-                          value is created (`timedelta(seconds=10)`, \
-                          `Duration::from_millis(250)`).",
-        references: &[
-            Reference {
-                title: "Python docs: datetime.timedelta",
-                url: "https://docs.python.org/3/library/datetime.html#timedelta-objects",
-            },
-            Reference {
-                title: "Rust docs: std::time::Duration",
-                url: "https://doc.rust-lang.org/std/time/struct.Duration.html",
-            },
-        ],
-    },
-    options: RuleOptions {
-        options: &[OptionSpec::List(&BANNED_SUFFIXES)],
-        ..RuleOptions::CODE_RULE
-    },
+    target: RuleTarget::All,
+    check: check_file,
 };
 
-impl Detector for PreferTimedeltaOverSeconds {
-    fn name(&self) -> RuleName {
-        RuleName("prefer-timedelta-over-seconds")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
-    }
-}
-
-impl CodeDetector for PreferTimedeltaOverSeconds {
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        self.check_banned_suffixes(path, file, &options.list(&BANNED_SUFFIXES))
-    }
+fn check_file(
+    rule: &CodeRule<ListOption>,
+    path: &Path,
+    file: &ParsedFile,
+    banned: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    rule.check_banned_suffixes(path, file, banned)
 }
 
 #[cfg(test)]

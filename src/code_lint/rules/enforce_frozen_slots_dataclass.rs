@@ -2,10 +2,10 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{PythonClassInfo, extract_classes};
-use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{Detector, ResolvedOptions, RuleOptions};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::RuleOptions;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -17,66 +17,55 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     suggestion: "Add `{missing}` to the `@dataclass` decorator (or explicitly pass `frozen=False` / `slots=False` when mutability or dynamic attributes are required).",
 };
 
-/// Rule that enforces `@dataclass(frozen=True, slots=True)` in Python files.
-struct EnforceFrozenSlotsDataclass;
-
 /// The rule's declaration.
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &EnforceFrozenSlotsDataclass,
-    classification: Classification {
-        topics: &[Topic::RECORD_TYPES],
-        precision: Precision::Exact,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Reliability,
+pub const RULE: CodeRule = CodeRule {
+    declaration: Declaration {
+        name: RuleName("enforce-frozen-slots-dataclass"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python],
+        options: RuleOptions::code_rule(()),
+        classification: Classification {
+            topics: &[Topic::RECORD_TYPES],
+            precision: Precision::Exact,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Reliability,
+        },
+        doc: RuleDoc {
+            summary: "Requires Python dataclasses to declare `frozen=True` and `slots=True`.",
+            what_it_does: "Flags a class decorated with `@dataclass` or \
+                           `@dataclasses.dataclass` that does not pass both `frozen` and \
+                           `slots`, in all Python files, tests included. An argument passed \
+                           explicitly, even as `frozen=False` or `slots=False`, counts as a \
+                           deliberate choice and is not reported as missing. The decorator is \
+                           matched by name, not by import: a bare `@dataclass` is checked \
+                           whatever module it comes from, while other decorators, such as \
+                           `@attrs.define`, are not.",
+            why_is_this_bad: "A default dataclass is mutable: any code holding an instance can \
+                              change its fields, so a value passed to a function or stored in a \
+                              cache can change behind the owner's back, and the instance cannot \
+                              be hashed by value. Without slots, each instance carries a \
+                              `__dict__` that costs memory and silently accepts misspelled \
+                              attribute assignments.\n\n\
+                              Write `@dataclass(frozen=True, slots=True)` (`slots` needs Python \
+                              3.10 or later) and derive modified copies with \
+                              `dataclasses.replace`. When mutability or a `__dict__` is really \
+                              needed, say so with `frozen=False` or `slots=False`.",
+            references: &[Reference {
+                title: "Python docs: dataclasses",
+                url: "https://docs.python.org/3/library/dataclasses.html",
+            }],
+        },
     },
-    doc: RuleDoc {
-        summary: "Requires Python dataclasses to declare `frozen=True` and `slots=True`.",
-        what_it_does: "Flags a class decorated with `@dataclass` or \
-                       `@dataclasses.dataclass` that does not pass both `frozen` and \
-                       `slots`, in all Python files, tests included. An argument passed \
-                       explicitly, even as `frozen=False` or `slots=False`, counts as a \
-                       deliberate choice and is not reported as missing. The decorator is \
-                       matched by name, not by import: a bare `@dataclass` is checked \
-                       whatever module it comes from, while other decorators, such as \
-                       `@attrs.define`, are not.",
-        why_is_this_bad: "A default dataclass is mutable: any code holding an instance can \
-                          change its fields, so a value passed to a function or stored in a \
-                          cache can change behind the owner's back, and the instance cannot \
-                          be hashed by value. Without slots, each instance carries a \
-                          `__dict__` that costs memory and silently accepts misspelled \
-                          attribute assignments.\n\n\
-                          Write `@dataclass(frozen=True, slots=True)` (`slots` needs Python \
-                          3.10 or later) and derive modified copies with \
-                          `dataclasses.replace`. When mutability or a `__dict__` is really \
-                          needed, say so with `frozen=False` or `slots=False`.",
-        references: &[Reference {
-            title: "Python docs: dataclasses",
-            url: "https://docs.python.org/3/library/dataclasses.html",
-        }],
-    },
-    options: RuleOptions::CODE_RULE,
+    target: RuleTarget::All,
+    check: check_file,
 };
-
-impl Detector for EnforceFrozenSlotsDataclass {
-    fn name(&self) -> RuleName {
-        RuleName("enforce-frozen-slots-dataclass")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
-    }
-}
 
 /// Evaluates whether a dataclass definition is missing `frozen=True` or `slots=True`.
 ///
 /// If the user explicitly passed `frozen=...` or `slots=...` (including `frozen=False` or
 /// `slots=False`), this represents an intentional configuration or opt-out and is NOT flagged.
 fn check_dataclass_info(
-    rule: &EnforceFrozenSlotsDataclass,
+    rule: &CodeRule,
     cls: &PythonClassInfo<'_>,
     path: &Path,
 ) -> Option<Diagnostic> {
@@ -102,22 +91,11 @@ fn check_dataclass_info(
     ))
 }
 
-impl CodeDetector for EnforceFrozenSlotsDataclass {
-    fn target(&self) -> RuleTarget {
-        RuleTarget::All
-    }
-
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        _options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        extract_classes(file)
-            .into_iter()
-            .filter_map(|cls| check_dataclass_info(self, &cls, path))
-            .collect()
-    }
+fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
+    extract_classes(file)
+        .into_iter()
+        .filter_map(|cls| check_dataclass_info(rule, &cls, path))
+        .collect()
 }
 
 #[cfg(test)]

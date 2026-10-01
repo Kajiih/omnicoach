@@ -3,10 +3,11 @@
 architecture_component!(CodeLintRunner);
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::rule::{CodeDetector, RuleTarget};
+use crate::code_lint::rule::{AnyCodeRule, RuleTarget};
+use crate::code_lint::rules::CODE_RULES;
 use crate::code_lint::semantic::comments::CommentIndex;
 use crate::code_lint::suppression::{SUPPRESSION_AUDITS, SuppressionTracker};
-use crate::core::{Config, EnforcementMode, ResolvedOptions};
+use crate::core::{Config, EnforcementMode};
 use crate::diagnostic::Diagnostic;
 use ast_grep_language::SupportLang;
 use rayon::prelude::*;
@@ -28,7 +29,7 @@ pub fn detect_language(path: &Path) -> Option<SupportLang> {
 
 /// Returns true if `rule` should be evaluated on `path` given its language and test-file context.
 fn should_evaluate_rule(
-    rule: &dyn CodeDetector,
+    rule: &dyn AnyCodeRule,
     path: &Path,
     lang: SupportLang,
     is_test: bool,
@@ -82,7 +83,7 @@ fn filter_diagnostics_by_target(
 /// modules (`#[cfg(test)]`), so `TestsOnly` rules remain eligible until AST ranges are inspected.
 #[must_use]
 fn is_rule_candidate_for_path(
-    rule: &dyn CodeDetector,
+    rule: &dyn AnyCodeRule,
     path: &Path,
     lang: SupportLang,
     is_test: bool,
@@ -106,12 +107,12 @@ fn has_active_suppression_audit(
     content: &str,
     config: &Config,
 ) -> bool {
-    content.contains("omni:")
-        && SUPPRESSION_AUDITS.iter().any(|audit| {
-            let rule = audit.detector;
-            config.is_rule_enabled_for_path(rule.name(), path)
-                && rule.supported_languages().contains(&lang)
-        })
+    if !content.contains("omni:") {
+        return false;
+    }
+    SUPPRESSION_AUDITS.iter().any(|audit| {
+        config.is_rule_enabled_for_path(audit.name, path) && audit.languages.contains(&lang)
+    })
 }
 
 /// Determines whether AST parsing can be skipped entirely for a file.
@@ -126,22 +127,15 @@ fn should_skip_ast_parse(
     is_test: bool,
     config: &Config,
 ) -> bool {
-    let has_code_rules = crate::code_lint::rules::CODE_RULES
+    let has_code_rules = CODE_RULES
         .iter()
-        .any(|registered| {
-            is_rule_candidate_for_path(registered.detector, path, lang, is_test, config)
-        });
+        .any(|&rule| is_rule_candidate_for_path(rule, path, lang, is_test, config));
 
     !has_code_rules && !has_active_suppression_audit(path, lang, content, config)
 }
 
 static SUPPRESSIBLE_RULES: std::sync::LazyLock<HashSet<&'static str>> =
-    std::sync::LazyLock::new(|| {
-        crate::code_lint::rules::CODE_RULES
-            .iter()
-            .map(|registered| registered.detector.name().0)
-            .collect()
-    });
+    std::sync::LazyLock::new(|| CODE_RULES.iter().map(|rule| rule.name().0).collect());
 
 /// Analyzes the structure of a file and returns diagnostic alerts.
 #[must_use]
@@ -166,18 +160,13 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
     let mut raw_diagnostics = Vec::new();
     let mut comment_index = None;
 
-    for registered in crate::code_lint::rules::CODE_RULES {
-        let rule = registered.detector;
+    for &rule in CODE_RULES {
         if !should_evaluate_rule(rule, path, lang, is_test, has_inline_tests, config) {
             continue;
         }
-        let options = ResolvedOptions::new(
-            lang,
-            &registered.options,
-            config.rule_overrides.get(&rule.name()),
-        );
-        let mut rule_diagnostics = rule.check_file(path, &file, &options);
-        if options.enforcement_mode() == EnforcementMode::RequireExplanation {
+        let overrides = config.rule_overrides.get(&rule.name());
+        let mut rule_diagnostics = rule.check_file(path, &file, overrides);
+        if rule.enforcement_mode(lang, overrides) == EnforcementMode::RequireExplanation {
             let index = comment_index.get_or_insert_with(|| CommentIndex::from_file(&file));
             rule_diagnostics.retain(|diagnostic| {
                 !index.has_explanation_for_span(
@@ -358,15 +347,19 @@ mod tests {
     use std::collections::HashMap;
 
     fn code_rule_names() -> impl Iterator<Item = RuleName> {
-        rules::CODE_RULES
-            .iter()
-            .map(|registered| registered.detector.name())
+        CODE_RULES.iter().map(|rule| rule.name())
     }
 
     fn audit_names() -> impl Iterator<Item = RuleName> {
-        SUPPRESSION_AUDITS
+        SUPPRESSION_AUDITS.iter().map(|audit| audit.name)
+    }
+
+    fn code_rule_named(name: &str) -> &'static dyn AnyCodeRule {
+        CODE_RULES
             .iter()
-            .map(|registered| registered.detector.name())
+            .copied()
+            .find(|rule| rule.name().0 == name)
+            .expect("registered code rule")
     }
 
     fn config_disabling(rules: impl Iterator<Item = RuleName>) -> Config {
@@ -383,56 +376,56 @@ mod tests {
 
     #[rstest]
     #[case::python_rule_on_python_file(
-        rules::no_logging_error_in_except::RULE.detector,
+        "no-logging-error-in-except",
         "service.py",
         SupportLang::Python,
         false,
         true
     )]
     #[case::python_rule_on_rust_file(
-        rules::no_logging_error_in_except::RULE.detector,
+        "no-logging-error-in-except",
         "service.rs",
         SupportLang::Rust,
         false,
         false
     )]
     #[case::tests_only_python_in_test_path(
-        rules::no_sleep_in_tests::NO_SLEEP_IN_TESTS.detector,
+        "no-sleep-in-tests",
         "test_service.py",
         SupportLang::Python,
         true,
         true
     )]
     #[case::tests_only_python_in_source_path(
-        rules::no_sleep_in_tests::NO_SLEEP_IN_TESTS.detector,
+        "no-sleep-in-tests",
         "service.py",
         SupportLang::Python,
         false,
         false
     )]
     #[case::tests_only_rust_source_path_eligible_for_inline_cfg_test(
-        rules::no_sleep_in_tests::NO_SLEEP_IN_TESTS.detector,
+        "no-sleep-in-tests",
         "service.rs",
         SupportLang::Rust,
         false,
         true
     )]
     #[case::source_only_on_production_file(
-        rules::no_env_in_functions::RULE.detector,
+        "no-env-in-functions",
         "service.rs",
         SupportLang::Rust,
         false,
         true
     )]
     #[case::source_only_skipped_on_test_file(
-        rules::no_env_in_functions::RULE.detector,
+        "no-env-in-functions",
         "tests/test_service.rs",
         SupportLang::Rust,
         true,
         false
     )]
     fn test_is_rule_candidate(
-        #[case] rule: &dyn CodeDetector,
+        #[case] rule_name: &str,
         #[case] path: &str,
         #[case] lang: SupportLang,
         #[case] is_test: bool,
@@ -440,7 +433,13 @@ mod tests {
     ) {
         let config = Config::default();
         assert_eq!(
-            is_rule_candidate_for_path(rule, Path::new(path), lang, is_test, &config),
+            is_rule_candidate_for_path(
+                code_rule_named(rule_name),
+                Path::new(path),
+                lang,
+                is_test,
+                &config
+            ),
             expected
         );
     }
@@ -532,18 +531,18 @@ mod tests {
         "};
         let source_uncommented = "x = cast(int, y)";
 
-        let rule = rules::no_typing_cast::RULE;
+        let declaration = rules::no_typing_cast::RULE.declaration;
         let table: toml::Value =
             toml::from_str(r#"enforcement_mode = "require-explanation""#).expect("valid TOML");
         let overrides = RuleOverrides::parse(
-            rule.detector.name().0,
-            &rule.options,
-            rule.detector.supported_languages(),
+            declaration.name.0,
+            &declaration.options.declared(),
+            declaration.languages,
             &table,
         )
         .expect("valid options");
         let req_doc_config = Config {
-            rule_overrides: HashMap::from([(rule.detector.name(), overrides)]),
+            rule_overrides: HashMap::from([(declaration.name, overrides)]),
             ..config_enabling(&["no-typing-cast"])
         };
 

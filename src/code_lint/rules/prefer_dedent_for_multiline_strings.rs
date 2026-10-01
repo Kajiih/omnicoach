@@ -1,15 +1,14 @@
 //! Enforces wrapping multiline string literals in a dedent helper (`textwrap.dedent`, `indoc!`, etc.).
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{
-    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
-};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{FilterListDefaults, ListKind, ListOption, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
+use std::collections::HashSet;
 use std::path::Path;
 
 const ALLOWED_WRAPPERS: ListOption = ListOption {
@@ -51,91 +50,70 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     },
 };
 
-/// Rule enforcing that multiline string literals are wrapped in a dedent helper.
-struct PreferDedentForMultilineStrings;
-
 /// The rule's declaration.
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &PreferDedentForMultilineStrings,
-    classification: Classification {
-        topics: &[Topic::LITERALS],
-        precision: Precision::Exact,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Reliability,
+pub const RULE: CodeRule<ListOption> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("prefer-dedent-for-multiline-strings"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python, SupportLang::Rust],
+        options: RuleOptions::code_rule(ALLOWED_WRAPPERS),
+        classification: Classification {
+            topics: &[Topic::LITERALS],
+            precision: Precision::Exact,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Reliability,
+        },
+        doc: RuleDoc {
+            summary: "Flags multiline string literals that are not wrapped in a dedent helper.",
+            what_it_does: "Flags string literals that span several lines and contain a real \
+                           line break. In Python these are triple-quoted strings; strings \
+                           used as a statement on their own, such as docstrings, are not \
+                           flagged. A string anywhere inside a call to `inspect.cleandoc` is \
+                           allowed; `textwrap.dedent` is not allowed by default and must be \
+                           added to the allow list. In Rust, normal, raw, byte and C string \
+                           literals are checked; a normal string whose line breaks are all \
+                           `\\` continuations is not flagged. Strings inside the `indoc` \
+                           macros (`indoc!`, `formatdoc!`, `writedoc!`, `printdoc!`, \
+                           `eprintdoc!`), `#[doc = ...]` attributes and `insta` inline \
+                           snapshots (`@\"...\"`) are allowed. Test files are checked too.",
+            why_is_this_bad: "A multiline literal keeps the source indentation and the line \
+                              break after the opening quote in its value. Indented to match \
+                              the code, the text carries extra spaces that break \
+                              indentation-sensitive content (YAML, Markdown, expected output) \
+                              and shift line and column numbers. Moved to column 0 to avoid \
+                              that, it breaks the visual structure of the surrounding code.\n\n\
+                              Indent the literal with the code and wrap it in a helper that \
+                              strips the common indentation: `inspect.cleandoc(\"\"\"...\"\"\")` \
+                              in Python, `indoc::indoc!` (or `formatdoc!` to interpolate) in \
+                              Rust. Write a single-line literal when the value has one line.",
+            references: &[
+                Reference {
+                    title: "Python docs: inspect.cleandoc",
+                    url: "https://docs.python.org/3/library/inspect.html#inspect.cleandoc",
+                },
+                Reference {
+                    title: "indoc crate documentation",
+                    url: "https://docs.rs/indoc",
+                },
+            ],
+        },
     },
-    doc: RuleDoc {
-        summary: "Flags multiline string literals that are not wrapped in a dedent helper.",
-        what_it_does: "Flags string literals that span several lines and contain a real \
-                       line break. In Python these are triple-quoted strings; strings \
-                       used as a statement on their own, such as docstrings, are not \
-                       flagged. A string anywhere inside a call to `inspect.cleandoc` is \
-                       allowed; `textwrap.dedent` is not allowed by default and must be \
-                       added to the allow list. In Rust, normal, raw, byte and C string \
-                       literals are checked; a normal string whose line breaks are all \
-                       `\\` continuations is not flagged. Strings inside the `indoc` \
-                       macros (`indoc!`, `formatdoc!`, `writedoc!`, `printdoc!`, \
-                       `eprintdoc!`), `#[doc = ...]` attributes and `insta` inline \
-                       snapshots (`@\"...\"`) are allowed. Test files are checked too.",
-        why_is_this_bad: "A multiline literal keeps the source indentation and the line \
-                          break after the opening quote in its value. Indented to match \
-                          the code, the text carries extra spaces that break \
-                          indentation-sensitive content (YAML, Markdown, expected output) \
-                          and shift line and column numbers. Moved to column 0 to avoid \
-                          that, it breaks the visual structure of the surrounding code.\n\n\
-                          Indent the literal with the code and wrap it in a helper that \
-                          strips the common indentation: `inspect.cleandoc(\"\"\"...\"\"\")` \
-                          in Python, `indoc::indoc!` (or `formatdoc!` to interpolate) in \
-                          Rust. Write a single-line literal when the value has one line.",
-        references: &[
-            Reference {
-                title: "Python docs: inspect.cleandoc",
-                url: "https://docs.python.org/3/library/inspect.html#inspect.cleandoc",
-            },
-            Reference {
-                title: "indoc crate documentation",
-                url: "https://docs.rs/indoc",
-            },
-        ],
-    },
-    options: RuleOptions {
-        options: &[OptionSpec::List(&ALLOWED_WRAPPERS)],
-        ..RuleOptions::CODE_RULE
-    },
+    target: RuleTarget::All,
+    check: check_file,
 };
 
-impl Detector for PreferDedentForMultilineStrings {
-    fn name(&self) -> RuleName {
-        RuleName("prefer-dedent-for-multiline-strings")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
-    }
-}
-
-impl CodeDetector for PreferDedentForMultilineStrings {
-    fn target(&self) -> RuleTarget {
-        RuleTarget::All
-    }
-
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        let allowed = options.list(&ALLOWED_WRAPPERS);
-        ast::find_unwrapped_multiline_strings(file, |full_path, terminal| {
-            allowed.contains(full_path) || allowed.contains(terminal)
-        })
-        .iter()
-        .map(|node| self.diagnostic_at_node(path, node, &[]))
-        .collect()
-    }
+fn check_file(
+    rule: &CodeRule<ListOption>,
+    path: &Path,
+    file: &ParsedFile,
+    allowed: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    ast::find_unwrapped_multiline_strings(file, |full_path, terminal| {
+        allowed.contains(full_path) || allowed.contains(terminal)
+    })
+    .iter()
+    .map(|node| rule.diagnostic_at_node(path, node, &[]))
+    .collect()
 }
 
 #[cfg(test)]

@@ -1,12 +1,10 @@
 //! Flags tuple elements read by literal position instead of being unpacked once (`prefer-tuple-unpacking`).
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile, ScopePositionalReads};
-use crate::code_lint::rule::CodeDetector;
-use crate::core::{
-    CountOption, Detector, LanguageDefaults, OptionSpec, ResolvedOptions, RuleOptions,
-};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{CountOption, LanguageDefaults, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -40,81 +38,64 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     },
 };
 
-/// Rule that flags a receiver read at several literal positions in one scope.
-struct PreferTupleUnpacking;
-
 /// The rule's declaration.
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &PreferTupleUnpacking,
-    classification: Classification {
-        topics: &[Topic::POSITIONAL_INDEXING],
-        precision: Precision::Heuristic,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Maintainability,
+pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("prefer-tuple-unpacking"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python, SupportLang::Rust],
+        options: RuleOptions::code_rule((MIN_POSITIONS, MAX_PLACEHOLDERS)),
+        classification: Classification {
+            topics: &[Topic::POSITIONAL_INDEXING],
+            precision: Precision::Heuristic,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Maintainability,
+        },
+        doc: RuleDoc {
+            summary: "Flags a value read at several literal positions instead of being unpacked once.",
+            what_it_does: "Groups positional reads by value within one function and flags \
+                           the value when at least `min_positions` distinct positions are \
+                           read and unpacking them would need at most `max_placeholders` `_` \
+                           placeholders (`row[0], row[7]` is left alone by default). In \
+                           Python, a read is an index by a decimal integer literal, negative \
+                           allowed (`point[0]`, `xs[-1]`), on a name, attribute or index \
+                           chain without calls (`self.pair[1]`, `rows[i][0]`); the type is \
+                           not known, so lists and dicts with integer keys count too. \
+                           Module-level code counts as one scope, comprehensions belong to \
+                           their function, and lambdas and class bodies are ignored. A value \
+                           is not flagged in a scope where it is also written through an \
+                           index, deleted from, sliced, indexed by a variable or a \
+                           non-decimal literal, iterated, passed to `len`, `enumerate`, \
+                           `zip`, `reversed` or `sorted`, or mutated by a method such as \
+                           `append` or `update`. In Rust, a read is a tuple field access \
+                           (`span.0`, `self.1`, `cmd.span.0`) inside a function, closures \
+                           included; a value whose field is assigned or mutably borrowed is \
+                           not flagged, and macro arguments (`assert_eq!(t.0, t.1)`) are not \
+                           inspected.",
+            why_is_this_bad: "An index says where an element sits, not what it means: \
+                              `point[0]` and `span.1` force the reader to remember the \
+                              layout, and every index site silently reads the wrong element \
+                              when the layout changes.\n\n\
+                              Unpack once into named variables: `x, y = point` (or \
+                              `first, *_, last = xs`) in Python, `let (start, end) = span;` \
+                              in Rust. When the tuple crosses a function boundary, return a \
+                              `NamedTuple`, a dataclass or a struct with named fields \
+                              instead.",
+            references: &[
+                Reference {
+                    title: "PEP 3132: Extended Iterable Unpacking",
+                    url: "https://peps.python.org/pep-3132/",
+                },
+                Reference {
+                    title: "The Rust Programming Language: The Tuple Type",
+                    url: "https://doc.rust-lang.org/book/ch03-02-data-types.html#the-tuple-type",
+                },
+            ],
+        },
     },
-    doc: RuleDoc {
-        summary: "Flags a value read at several literal positions instead of being unpacked once.",
-        what_it_does: "Groups positional reads by value within one function and flags \
-                       the value when at least `min_positions` distinct positions are \
-                       read and unpacking them would need at most `max_placeholders` `_` \
-                       placeholders (`row[0], row[7]` is left alone by default). In \
-                       Python, a read is an index by a decimal integer literal, negative \
-                       allowed (`point[0]`, `xs[-1]`), on a name, attribute or index \
-                       chain without calls (`self.pair[1]`, `rows[i][0]`); the type is \
-                       not known, so lists and dicts with integer keys count too. \
-                       Module-level code counts as one scope, comprehensions belong to \
-                       their function, and lambdas and class bodies are ignored. A value \
-                       is not flagged in a scope where it is also written through an \
-                       index, deleted from, sliced, indexed by a variable or a \
-                       non-decimal literal, iterated, passed to `len`, `enumerate`, \
-                       `zip`, `reversed` or `sorted`, or mutated by a method such as \
-                       `append` or `update`. In Rust, a read is a tuple field access \
-                       (`span.0`, `self.1`, `cmd.span.0`) inside a function, closures \
-                       included; a value whose field is assigned or mutably borrowed is \
-                       not flagged, and macro arguments (`assert_eq!(t.0, t.1)`) are not \
-                       inspected.",
-        why_is_this_bad: "An index says where an element sits, not what it means: \
-                          `point[0]` and `span.1` force the reader to remember the \
-                          layout, and every index site silently reads the wrong element \
-                          when the layout changes.\n\n\
-                          Unpack once into named variables: `x, y = point` (or \
-                          `first, *_, last = xs`) in Python, `let (start, end) = span;` \
-                          in Rust. When the tuple crosses a function boundary, return a \
-                          `NamedTuple`, a dataclass or a struct with named fields \
-                          instead.",
-        references: &[
-            Reference {
-                title: "PEP 3132: Extended Iterable Unpacking",
-                url: "https://peps.python.org/pep-3132/",
-            },
-            Reference {
-                title: "The Rust Programming Language: The Tuple Type",
-                url: "https://doc.rust-lang.org/book/ch03-02-data-types.html#the-tuple-type",
-            },
-        ],
-    },
-    options: RuleOptions {
-        options: &[
-            OptionSpec::Count(&MIN_POSITIONS),
-            OptionSpec::Count(&MAX_PLACEHOLDERS),
-        ],
-        ..RuleOptions::CODE_RULE
-    },
+    target: RuleTarget::All,
+    check: check_file,
 };
-
-impl Detector for PreferTupleUnpacking {
-    fn name(&self) -> RuleName {
-        RuleName("prefer-tuple-unpacking")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
-    }
-}
 
 /// Positions read from one receiver in one scope, anchored on its first read.
 struct ReceiverReads<'a> {
@@ -163,38 +144,33 @@ fn placeholder_count(positions: &BTreeSet<i64>) -> usize {
     usize::try_from(leading_gaps + trailing_gaps).unwrap_or(usize::MAX)
 }
 
-impl CodeDetector for PreferTupleUnpacking {
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        let min_positions = options.count(&MIN_POSITIONS);
-        let max_placeholders = options.count(&MAX_PLACEHOLDERS);
-
-        ast::collect_positional_reads(file)
-            .into_iter()
-            .flat_map(group_reads_by_receiver)
-            .filter(|group| {
-                group.positions.len() >= min_positions
-                    && placeholder_count(&group.positions) <= max_placeholders
-            })
-            .map(|group| {
-                let positions = group
-                    .positions
-                    .iter()
-                    .map(i64::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                self.diagnostic_at_node(
-                    path,
-                    &group.first_read,
-                    &[("receiver", &group.receiver), ("positions", &positions)],
-                )
-            })
-            .collect()
-    }
+fn check_file(
+    rule: &CodeRule<(CountOption, CountOption)>,
+    path: &Path,
+    file: &ParsedFile,
+    (min_positions, max_placeholders): (usize, usize),
+) -> Vec<Diagnostic> {
+    ast::collect_positional_reads(file)
+        .into_iter()
+        .flat_map(group_reads_by_receiver)
+        .filter(|group| {
+            group.positions.len() >= min_positions
+                && placeholder_count(&group.positions) <= max_placeholders
+        })
+        .map(|group| {
+            let positions = group
+                .positions
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            rule.diagnostic_at_node(
+                path,
+                &group.first_read,
+                &[("receiver", &group.receiver), ("positions", &positions)],
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

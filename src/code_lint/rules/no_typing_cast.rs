@@ -13,15 +13,14 @@
 // TODO: Also remove from every violation template, they should not suggest to ignore.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{
-    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
-};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{FilterListDefaults, ListKind, ListOption, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
+use std::collections::HashSet;
 use std::path::Path;
 
 const BANNED_CALLS: ListOption = ListOption {
@@ -40,72 +39,52 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     suggestion: "Narrow the type at runtime with `isinstance()` or a `TypeGuard` function, or model the contract with a `Protocol`.",
 };
 
-/// Rule struct.
-struct NoTypingCast;
-
 /// The rule's declaration.
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &NoTypingCast,
-    classification: Classification {
-        topics: &[Topic::TYPE_CHECKER_BYPASS],
-        precision: Precision::Exact,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Reliability,
+pub const RULE: CodeRule<ListOption> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("no-typing-cast"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python],
+        options: RuleOptions::code_rule(BANNED_CALLS),
+        classification: Classification {
+            topics: &[Topic::TYPE_CHECKER_BYPASS],
+            precision: Precision::Exact,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Reliability,
+        },
+        doc: RuleDoc {
+            summary: "Flags `typing.cast` calls in Python production code.",
+            what_it_does: "Flags calls to `typing.cast`, `typing_extensions.cast` and a bare \
+                           `cast` in Python source files; test files are not checked. Calls are \
+                           matched by how they are written, not by where the name was imported \
+                           from: a bare `cast(...)` is flagged even if `cast` comes from another \
+                           library, while a method call such as `pl.col(\"a\").cast(pl.Int64)` \
+                           is not.",
+            why_is_this_bad: "`cast` tells the type checker to trust a type without checking \
+                              it, at analysis time or at runtime. If the value is not what the \
+                              cast claims, the error surfaces later and far from its cause, and \
+                              the type checker can no longer help find it. A cast also stays \
+                              silently wrong when the surrounding code changes.\n\n\
+                              Narrow the type with a check the type checker understands: \
+                              `isinstance()`, a `TypeGuard` or `TypeIs` function, or a \
+                              `Protocol` that describes the contract.",
+            references: &[Reference {
+                title: "Python docs: typing.cast",
+                url: "https://docs.python.org/3/library/typing.html#typing.cast",
+            }],
+        },
     },
-    doc: RuleDoc {
-        summary: "Flags `typing.cast` calls in Python production code.",
-        what_it_does: "Flags calls to `typing.cast`, `typing_extensions.cast` and a bare \
-                       `cast` in Python source files; test files are not checked. Calls are \
-                       matched by how they are written, not by where the name was imported \
-                       from: a bare `cast(...)` is flagged even if `cast` comes from another \
-                       library, while a method call such as `pl.col(\"a\").cast(pl.Int64)` \
-                       is not.",
-        why_is_this_bad: "`cast` tells the type checker to trust a type without checking \
-                          it, at analysis time or at runtime. If the value is not what the \
-                          cast claims, the error surfaces later and far from its cause, and \
-                          the type checker can no longer help find it. A cast also stays \
-                          silently wrong when the surrounding code changes.\n\n\
-                          Narrow the type with a check the type checker understands: \
-                          `isinstance()`, a `TypeGuard` or `TypeIs` function, or a \
-                          `Protocol` that describes the contract.",
-        references: &[Reference {
-            title: "Python docs: typing.cast",
-            url: "https://docs.python.org/3/library/typing.html#typing.cast",
-        }],
-    },
-    options: RuleOptions {
-        options: &[OptionSpec::List(&BANNED_CALLS)],
-        ..RuleOptions::CODE_RULE
-    },
+    target: RuleTarget::SourceOnly,
+    check: check_file,
 };
 
-impl Detector for NoTypingCast {
-    fn name(&self) -> RuleName {
-        RuleName("no-typing-cast")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
-    }
-}
-
-impl CodeDetector for NoTypingCast {
-    fn target(&self) -> RuleTarget {
-        RuleTarget::SourceOnly
-    }
-
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        self.check_banned_calls(path, file, &options.list(&BANNED_CALLS))
-    }
+fn check_file(
+    rule: &CodeRule<ListOption>,
+    path: &Path,
+    file: &ParsedFile,
+    banned: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    rule.check_banned_calls(path, file, banned)
 }
 
 #[cfg(test)]

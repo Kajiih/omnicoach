@@ -1,15 +1,14 @@
 //! Bans type suffixes (Hungarian notation) in variable names.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::rule::CodeDetector;
-use crate::core::{
-    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
-};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{FilterListDefaults, ListKind, ListOption, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
+use std::collections::HashSet;
 use std::path::Path;
 
 const BANNED_SUFFIXES: ListOption = ListOption {
@@ -31,71 +30,55 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     suggestion: "Rename `{name}` to a semantic or domain-plural noun such as `{base_name}` (e.g., `users`, `name`).",
 };
 
-/// Rule that bans Hungarian notation type suffixes.
-struct NoHungarianNotation;
-
 /// The rule's declaration.
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &NoHungarianNotation,
-    classification: Classification {
-        topics: &[Topic::TYPE_ENCODED_NAMES],
-        precision: Precision::Heuristic,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Maintainability,
+pub const RULE: CodeRule<ListOption> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("no-hungarian-notation"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python, SupportLang::Rust],
+        options: RuleOptions::code_rule(BANNED_SUFFIXES),
+        classification: Classification {
+            topics: &[Topic::TYPE_ENCODED_NAMES],
+            precision: Precision::Heuristic,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Maintainability,
+        },
+        doc: RuleDoc {
+            summary: "Flags variable names that end with a type suffix such as `_list` or `_str`.",
+            what_it_does: "Flags variables, parameters, loop and pattern bindings, and \
+                           constants whose name ends, ignoring case, with a type suffix: \
+                           `_list`, `_arr`, `_dict`, `_map`, `_vec`, `_str`, `_int`, `_bool`, \
+                           `_set`, `_ptr`, `_num`, `_float` or `_byte` by default \
+                           (`users_dict`, `MY_INT`). A name that is only the suffix, such as \
+                           `_list`, is not flagged. Functions, classes, structs, enums, \
+                           traits, type aliases, imports (aliased or not) and members of a \
+                           Rust `impl Trait for Type` block are not checked; neither are \
+                           attributes (`self.users_dict = ...`) or struct fields.",
+            why_is_this_bad: "The suffix repeats what the type annotation or the compiler \
+                              already knows, and it lies as soon as the type changes: a \
+                              `user_list` that becomes a set or a generator keeps its old \
+                              name unless every use is renamed. It also takes the place of \
+                              what the name should say: what the value means.\n\n\
+                              Name the value by its role, using a plural for collections \
+                              (`users`, `name`, `scores_by_player`), and leave the type to the \
+                              annotation.",
+            references: &[Reference {
+                title: "Making Wrong Code Look Wrong (Joel Spolsky)",
+                url: "https://www.joelonsoftware.com/2005/05/11/making-wrong-code-look-wrong/",
+            }],
+        },
     },
-    doc: RuleDoc {
-        summary: "Flags variable names that end with a type suffix such as `_list` or `_str`.",
-        what_it_does: "Flags variables, parameters, loop and pattern bindings, and \
-                       constants whose name ends, ignoring case, with a type suffix: \
-                       `_list`, `_arr`, `_dict`, `_map`, `_vec`, `_str`, `_int`, `_bool`, \
-                       `_set`, `_ptr`, `_num`, `_float` or `_byte` by default \
-                       (`users_dict`, `MY_INT`). A name that is only the suffix, such as \
-                       `_list`, is not flagged. Functions, classes, structs, enums, \
-                       traits, type aliases, imports (aliased or not) and members of a \
-                       Rust `impl Trait for Type` block are not checked; neither are \
-                       attributes (`self.users_dict = ...`) or struct fields.",
-        why_is_this_bad: "The suffix repeats what the type annotation or the compiler \
-                          already knows, and it lies as soon as the type changes: a \
-                          `user_list` that becomes a set or a generator keeps its old \
-                          name unless every use is renamed. It also takes the place of \
-                          what the name should say: what the value means.\n\n\
-                          Name the value by its role, using a plural for collections \
-                          (`users`, `name`, `scores_by_player`), and leave the type to the \
-                          annotation.",
-        references: &[Reference {
-            title: "Making Wrong Code Look Wrong (Joel Spolsky)",
-            url: "https://www.joelonsoftware.com/2005/05/11/making-wrong-code-look-wrong/",
-        }],
-    },
-    options: RuleOptions {
-        options: &[OptionSpec::List(&BANNED_SUFFIXES)],
-        ..RuleOptions::CODE_RULE
-    },
+    target: RuleTarget::All,
+    check: check_file,
 };
 
-impl Detector for NoHungarianNotation {
-    fn name(&self) -> RuleName {
-        RuleName("no-hungarian-notation")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python, SupportLang::Rust]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
-    }
-}
-
-impl CodeDetector for NoHungarianNotation {
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        self.check_banned_suffixes(path, file, &options.list(&BANNED_SUFFIXES))
-    }
+fn check_file(
+    rule: &CodeRule<ListOption>,
+    path: &Path,
+    file: &ParsedFile,
+    banned: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    rule.check_banned_suffixes(path, file, banned)
 }
 
 #[cfg(test)]

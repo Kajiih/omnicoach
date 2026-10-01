@@ -1,15 +1,14 @@
 //! Bans dynamic runtime attribute reflection (`getattr`, `hasattr`, `setattr`, `delattr`).
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{
-    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
-};
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::core::{FilterListDefaults, ListKind, ListOption, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Rule;
+use crate::rule_declaration::Declaration;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
+use std::collections::HashSet;
 use std::path::Path;
 
 const BANNED_FUNCTIONS: ListOption = ListOption {
@@ -37,72 +36,52 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     suggestion: "Access attributes directly on a typed object, use a `Mapping` lookup (`dict.get`), or define a structural `Protocol`.",
 };
 
-/// Rule that bans dynamic attribute reflection in Python files.
-struct NoDynamicAttributeAccess;
-
 /// The rule's declaration.
-pub const RULE: Rule<dyn CodeDetector> = Rule {
-    detector: &NoDynamicAttributeAccess,
-    classification: Classification {
-        topics: &[Topic::TYPE_CHECKER_BYPASS],
-        precision: Precision::Exact,
-        consensus: Consensus::Opinionated,
-        impacted_quality: ImpactedQuality::Reliability,
+pub const RULE: CodeRule<ListOption> = CodeRule {
+    declaration: Declaration {
+        name: RuleName("no-dynamic-attribute-access"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python],
+        options: RuleOptions::code_rule(BANNED_FUNCTIONS),
+        classification: Classification {
+            topics: &[Topic::TYPE_CHECKER_BYPASS],
+            precision: Precision::Exact,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Reliability,
+        },
+        doc: RuleDoc {
+            summary: "Flags `getattr`, `hasattr`, `setattr` and `delattr` calls in Python.",
+            what_it_does: "Flags calls to the built-in functions `getattr`, `hasattr`, \
+                           `setattr` and `delattr`, written bare or as `builtins.getattr` and \
+                           so on, in all Python files, tests included. Methods of the same name \
+                           on another object, such as `registry.getattr(\"key\")`, are not \
+                           flagged.",
+            why_is_this_bad: "These functions take the attribute name as a runtime string. The \
+                              type checker cannot verify that the attribute exists and usually \
+                              types the result as `Any`; renaming tools and \"find \
+                              references\" miss the access; a typo fails only at runtime. \
+                              `hasattr` also returns `False` when a property raises \
+                              `AttributeError` internally, which hides the real bug.\n\n\
+                              Access attributes directly on a typed object. For data keyed by \
+                              runtime strings, use a `dict` or `Mapping`; to accept several \
+                              types that share attributes, declare a `Protocol`.",
+            references: &[Reference {
+                title: "Python docs: built-in getattr",
+                url: "https://docs.python.org/3/library/functions.html#getattr",
+            }],
+        },
     },
-    doc: RuleDoc {
-        summary: "Flags `getattr`, `hasattr`, `setattr` and `delattr` calls in Python.",
-        what_it_does: "Flags calls to the built-in functions `getattr`, `hasattr`, \
-                       `setattr` and `delattr`, written bare or as `builtins.getattr` and \
-                       so on, in all Python files, tests included. Methods of the same name \
-                       on another object, such as `registry.getattr(\"key\")`, are not \
-                       flagged.",
-        why_is_this_bad: "These functions take the attribute name as a runtime string. The \
-                          type checker cannot verify that the attribute exists and usually \
-                          types the result as `Any`; renaming tools and \"find \
-                          references\" miss the access; a typo fails only at runtime. \
-                          `hasattr` also returns `False` when a property raises \
-                          `AttributeError` internally, which hides the real bug.\n\n\
-                          Access attributes directly on a typed object. For data keyed by \
-                          runtime strings, use a `dict` or `Mapping`; to accept several \
-                          types that share attributes, declare a `Protocol`.",
-        references: &[Reference {
-            title: "Python docs: built-in getattr",
-            url: "https://docs.python.org/3/library/functions.html#getattr",
-        }],
-    },
-    options: RuleOptions {
-        options: &[OptionSpec::List(&BANNED_FUNCTIONS)],
-        ..RuleOptions::CODE_RULE
-    },
+    target: RuleTarget::All,
+    check: check_file,
 };
 
-impl Detector for NoDynamicAttributeAccess {
-    fn name(&self) -> RuleName {
-        RuleName("no-dynamic-attribute-access")
-    }
-
-    fn supported_languages(&self) -> &'static [SupportLang] {
-        &[SupportLang::Python]
-    }
-
-    fn violation_template(&self) -> &'static ViolationTemplate {
-        &TEMPLATE
-    }
-}
-
-impl CodeDetector for NoDynamicAttributeAccess {
-    fn target(&self) -> RuleTarget {
-        RuleTarget::All
-    }
-
-    fn check_file(
-        &self,
-        path: &Path,
-        file: &ParsedFile,
-        options: &ResolvedOptions<'_>,
-    ) -> Vec<Diagnostic> {
-        self.check_banned_calls(path, file, &options.list(&BANNED_FUNCTIONS))
-    }
+fn check_file(
+    rule: &CodeRule<ListOption>,
+    path: &Path,
+    file: &ParsedFile,
+    banned_functions: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    rule.check_banned_calls(path, file, banned_functions)
 }
 
 #[cfg(test)]
