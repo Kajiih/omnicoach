@@ -111,6 +111,8 @@ define_architecture! {
     // --- Rule Selection ---
     /// Taxonomy queries and config selector resolution into rule names (`rule_selection`).
     RuleSelection         => [RuleTaxonomy, CodeLintRules, CodeSuppressionEngine, CommandLintRules, CoreVocabulary],
+    /// Rule list and single-rule Markdown rendering for discovery commands (`rule_catalog`).
+    RuleCatalog           => [RuleSelection, RuleDocumentation, CoreVocabulary],
 
     // --- Test Harness & Entrypoints ---
     /// Test harness and snapshot fixtures (`test_utils`).
