@@ -84,6 +84,7 @@ impl<T: Copy + 'static> LanguageDefaults<T> {
 
 /// Configuration for rules controlled by numeric `min` or `max` thresholds (e.g., `max-test-assertions`, `no-identical-positional-types`).
 #[derive(Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(test, derive(Serialize))]
 pub struct ThresholdConfig {
     /// Optional override for the minimum threshold.
     #[serde(default)]
@@ -94,11 +95,17 @@ pub struct ThresholdConfig {
     pub max: Option<usize>,
 }
 
+impl ThresholdConfig {
+    /// The TOML keys of this shape, checked against the serde fields by a test.
+    pub const KEYS: &'static [&'static str] = &["min", "max"];
+}
+
 /// Configuration for rules that filter identifier names, abbreviations, or suffixes (denylist rules).
 ///
 /// Supports explicit replacement of base items, additive items (`extend_banned`),
 /// and subtractive items (`allowed`).
 #[derive(Deserialize, Debug, Clone, Default)]
+#[cfg_attr(test, derive(Serialize))]
 pub struct DenyListConfig {
     /// Explicit replacement for the default base set (e.g., banned words or suffixes).
     /// If `None`, the rule's built-in defaults are used.
@@ -115,11 +122,17 @@ pub struct DenyListConfig {
     pub allowed: HashSet<String>,
 }
 
+impl DenyListConfig {
+    /// The TOML keys of this shape, checked against the serde fields by a test.
+    pub const KEYS: &'static [&'static str] = &["banned", "extend_banned", "allowed"];
+}
+
 /// Configuration for rules that enforce an allowlist of valid identifiers (e.g. single-letter variable names).
 ///
 /// Supports explicit replacement of base allowed items, additive items (`extend_allowed`),
 /// and subtractive/revocation items (`banned`).
 #[derive(Deserialize, Debug, Clone, Default)]
+#[cfg_attr(test, derive(Serialize))]
 pub struct AllowListConfig {
     /// Explicit replacement for the default allowed set.
     /// If `None`, the rule's built-in defaults are used.
@@ -134,6 +147,11 @@ pub struct AllowListConfig {
     /// Banned items revoked/removed from the allowed set.
     #[serde(default)]
     pub banned: HashSet<String>,
+}
+
+impl AllowListConfig {
+    /// The TOML keys of this shape, checked against the serde fields by a test.
+    pub const KEYS: &'static [&'static str] = &["allowed", "extend_allowed", "banned"];
 }
 
 /// Enforcement mode for rules targeting sensitive language constructs
@@ -153,6 +171,11 @@ pub struct EnforcementConfig {
     /// The enforcement mode (`ban` or `require-explanation`).
     #[serde(default)]
     pub mode: Option<EnforcementMode>,
+}
+
+impl EnforcementConfig {
+    /// The TOML keys of this shape, checked against the serde fields by a test.
+    pub const KEYS: &'static [&'static str] = &["mode"];
 }
 
 /// A generic configuration container that supports global settings across all
@@ -821,5 +844,33 @@ mod tests {
             toml::from_str(toml_content).unwrap()
         };
         assert_eq!(config.effective_mode_for_lang(lang, &DEFAULTS), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::threshold(
+        serde_json::to_value(ThresholdConfig::default()),
+        ThresholdConfig::KEYS
+    )]
+    #[case::deny_list(serde_json::to_value(DenyListConfig::default()), DenyListConfig::KEYS)]
+    #[case::allow_list(
+        serde_json::to_value(AllowListConfig::default()),
+        AllowListConfig::KEYS
+    )]
+    #[case::enforcement(
+        serde_json::to_value(EnforcementConfig::default()),
+        EnforcementConfig::KEYS
+    )]
+    fn test_config_keys_match_serde_fields(
+        #[case] serialized: serde_json::Result<serde_json::Value>,
+        #[case] keys: &[&str],
+    ) {
+        let serialized = serialized.unwrap();
+        let fields: HashSet<&str> = serialized
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(fields, keys.iter().copied().collect());
     }
 }

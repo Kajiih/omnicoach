@@ -11,7 +11,8 @@ use crate::code_lint::rule::RuleTarget;
 use crate::code_lint::rules::CODE_RULES;
 use crate::code_lint::suppression::SUPPRESSION_AUDITS;
 use crate::command_lint::rules::COMMAND_RULES;
-use crate::diagnostic::RuleName;
+use crate::diagnostic::{RuleName, ViolationTemplate};
+use crate::rule_documentation::RuleDoc;
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 
 /// A value of a derived facet, computed from the rule and never declared.
@@ -53,7 +54,8 @@ pub enum Facet {
 
 impl Facet {
     /// The display label (D28, D38).
-    const fn label(self) -> &'static str {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Topic => "Topic",
             Self::Precision => "Precision",
@@ -67,6 +69,7 @@ impl Facet {
 
     /// Whether `candidate` names this facet (case-insensitively, spaces/underscores/hyphens
     /// equivalent).
+    #[must_use]
     pub fn matches_label(self, candidate: &str) -> bool {
         let normalize = |byte: u8| match byte {
             b' ' | b'_' => b'-',
@@ -99,6 +102,7 @@ pub enum Tag {
 
 impl Tag {
     /// The tag's canonical label, e.g. `heuristic`.
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Topic(value) => value.label,
@@ -110,6 +114,7 @@ impl Tag {
     }
 
     /// The facet the tag belongs to.
+    #[must_use]
     pub const fn facet(self) -> Facet {
         match self {
             Self::Topic(_) => Facet::Topic,
@@ -142,11 +147,16 @@ impl Selector {
     }
 }
 
-/// A registered rule as the taxonomy sees it: its name, declared and derived facets.
+/// A registered rule as the taxonomy sees it: its name, declared and derived facets, doc and
+/// raw message template.
 #[derive(Debug)]
 pub struct RegisteredRule {
     /// The rule's name.
     pub name: RuleName,
+    /// The rule's user-facing doc.
+    pub doc: RuleDoc,
+    /// The rule's raw violation template.
+    pub template: &'static ViolationTemplate,
     classification: Classification,
     derived: Vec<Derived>,
 }
@@ -174,6 +184,8 @@ pub static REGISTERED_RULES: LazyLock<Vec<RegisteredRule>> = LazyLock::new(|| {
         derived.extend(scope);
         RegisteredRule {
             name: registered.rule.name(),
+            doc: registered.doc,
+            template: registered.rule.violation_template(),
             classification: registered.classification,
             derived,
         }
@@ -183,12 +195,16 @@ pub static REGISTERED_RULES: LazyLock<Vec<RegisteredRule>> = LazyLock::new(|| {
         derived.push(Derived::Code);
         RegisteredRule {
             name: registered.rule.name(),
+            doc: registered.doc,
+            template: registered.rule.violation_template(),
             classification: registered.classification,
             derived,
         }
     });
     let commands = COMMAND_RULES.iter().map(|registered| RegisteredRule {
         name: registered.rule.name(),
+        doc: registered.doc,
+        template: registered.rule.violation_template(),
         classification: registered.classification,
         derived: vec![Derived::Command],
     });
@@ -251,6 +267,7 @@ impl RegisteredRule {
     }
 
     /// Whether `selector` selects the rule.
+    #[must_use]
     pub fn matches(&self, selector: Selector) -> bool {
         match selector {
             Selector::Rule(name) => name == self.name,
@@ -282,10 +299,19 @@ pub fn lookup(label: &str) -> Option<Selector> {
 
 /// The registered label closest to `label`, if it is close enough to be a typo.
 pub fn closest_label(label: &str) -> Option<&'static str> {
+    closest(label, labels().map(|(known, _)| known))
+}
+
+/// The registered rule name closest to `label`, if it is close enough to be a typo.
+pub fn closest_rule_name(label: &str) -> Option<&'static str> {
+    closest(label, REGISTERED_RULES.iter().map(|rule| rule.name.0))
+}
+
+fn closest(label: &str, candidates: impl Iterator<Item = &'static str>) -> Option<&'static str> {
     let normalized = label.to_ascii_lowercase();
     let tolerance = (normalized.chars().count() / 3).max(1);
-    labels()
-        .map(|(known, _)| (edit_distance(&normalized, known), known))
+    candidates
+        .map(|known| (edit_distance(&normalized, known), known))
         .filter(|&(distance, _)| distance <= tolerance)
         .min()
         .map(|(_, known)| known)

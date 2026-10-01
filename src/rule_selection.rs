@@ -17,7 +17,8 @@ use std::fmt;
 use serde::Deserialize;
 use strum::IntoEnumIterator as _;
 
-use self::taxonomy::{Facet, REGISTERED_RULES, RegisteredRule, Selector, Tag};
+pub use self::taxonomy::{Derived, Facet, RegisteredRule, Tag};
+use self::taxonomy::{REGISTERED_RULES, Selector};
 use crate::core::{CONFIG_FILE_NAME, Config, compile_glob};
 use crate::diagnostic::RuleName;
 
@@ -109,20 +110,95 @@ struct RawSelection {
     per_file_ignores: BTreeMap<String, Vec<String>>,
 }
 
+/// A label given on the command line that names no rule or tag.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "unknown {kind} `{label}`{}",
+    suggestion.map(|known| format!("; did you mean `{known}`?")).unwrap_or_default()
+)]
+pub struct UnknownLabel {
+    kind: &'static str,
+    label: String,
+    suggestion: Option<&'static str>,
+}
+
+/// Every registered rule, in registry order.
+#[must_use]
+pub fn registered_rules() -> &'static [RegisteredRule] {
+    &REGISTERED_RULES
+}
+
+/// The rules that `select = ["<label>"]` would select: a topic includes its subtopics and
+/// synonyms resolve.
+///
+/// # Errors
+///
+/// Returns [`UnknownLabel`] if `label` is not a rule, a tag or a synonym.
+pub fn rules_tagged(label: &str) -> Result<Vec<&'static RegisteredRule>, UnknownLabel> {
+    let selector = taxonomy::lookup(label).ok_or_else(|| UnknownLabel {
+        kind: "tag",
+        label: label.to_owned(),
+        suggestion: taxonomy::closest_label(label),
+    })?;
+    Ok(REGISTERED_RULES
+        .iter()
+        .filter(|rule| rule.matches(selector))
+        .collect())
+}
+
+/// The registered rule named `name`.
+///
+/// # Errors
+///
+/// Returns [`UnknownLabel`] if no rule has this name.
+pub fn find_rule(name: &str) -> Result<&'static RegisteredRule, UnknownLabel> {
+    REGISTERED_RULES
+        .iter()
+        .find(|rule| rule.name.0 == name)
+        .ok_or_else(|| UnknownLabel {
+            kind: "rule",
+            label: name.to_owned(),
+            suggestion: taxonomy::closest_rule_name(name),
+        })
+}
+
+fn read_config_file() -> Result<Option<String>, ConfigError> {
+    match std::fs::read_to_string(CONFIG_FILE_NAME) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(ConfigError::Io {
+            path: CONFIG_FILE_NAME,
+            source,
+        }),
+    }
+}
+
 /// Loads `.omnilint.toml` from the current directory, or the default config if it is absent.
 ///
 /// # Errors
 ///
 /// Returns [`ConfigError`] if the file cannot be read or is rejected by [`parse_config`].
 pub fn load_config() -> Result<Config, ConfigError> {
-    match std::fs::read_to_string(CONFIG_FILE_NAME) {
-        Ok(content) => parse_config(&content),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
-        Err(source) => Err(ConfigError::Io {
-            path: CONFIG_FILE_NAME,
-            source,
-        }),
-    }
+    read_config_file()?.map_or_else(|| Ok(Config::default()), |content| parse_config(&content))
+}
+
+/// Whether `rule` is on under `.omnilint.toml` in the current directory, and why.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] if the file cannot be read or is rejected by [`rule_status`].
+pub fn load_rule_status(rule: &RegisteredRule) -> Result<RuleStatus, ConfigError> {
+    rule_status(&read_config_file()?.unwrap_or_default(), rule)
+}
+
+/// Whether `rule` is on under `config_toml`'s `select` and `ignore`, and why.
+///
+/// # Errors
+///
+/// On invalid TOML, unknown selectors, facet labels and conflicts.
+pub fn rule_status(config_toml: &str, rule: &RegisteredRule) -> Result<RuleStatus, ConfigError> {
+    let raw: RawSelection = toml::from_str(config_toml)?;
+    Ok(parse_plan(raw.select, raw.ignore)?.decide(rule))
 }
 
 /// Parses a TOML config and resolves its selectors into rule names.
@@ -133,20 +209,8 @@ pub fn load_config() -> Result<Config, ConfigError> {
 pub fn parse_config(config_toml: &str) -> Result<Config, ConfigError> {
     let mut config: Config = toml::from_str(config_toml)?;
     let raw: RawSelection = toml::from_str(config_toml)?;
-    let select = raw
-        .select
-        .map(|labels| resolve_all(labels, &Location::Select))
-        .transpose()?;
-    let ignore = resolve_all(raw.ignore, &Location::Ignore)?;
-    if let Some(&both) = select
-        .iter()
-        .flatten()
-        .find(|&selector| ignore.contains(selector))
-    {
-        return Err(ConfigError::Conflict(both.label()));
-    }
-    let plan = Plan { select, ignore };
-    config.disabled_rules = rule_names(|rule| !plan.selects(rule));
+    let plan = parse_plan(raw.select, raw.ignore)?;
+    config.disabled_rules = rule_names(|rule| !plan.decide(rule).enabled());
     config.per_file_ignores = raw
         .per_file_ignores
         .into_iter()
@@ -160,6 +224,21 @@ pub fn parse_config(config_toml: &str) -> Result<Config, ConfigError> {
         })
         .collect::<Result<_, ConfigError>>()?;
     Ok(config)
+}
+
+fn parse_plan(select: Option<Vec<String>>, ignore: Vec<String>) -> Result<Plan, ConfigError> {
+    let select = select
+        .map(|labels| resolve_all(labels, &Location::Select))
+        .transpose()?;
+    let ignore = resolve_all(ignore, &Location::Ignore)?;
+    if let Some(&both) = select
+        .iter()
+        .flatten()
+        .find(|&selector| ignore.contains(selector))
+    {
+        return Err(ConfigError::Conflict(both.label()));
+    }
+    Ok(Plan { select, ignore })
 }
 
 fn rule_names(mut predicate: impl FnMut(&RegisteredRule) -> bool) -> HashSet<RuleName> {
@@ -228,23 +307,82 @@ impl Plan {
     }
 
     /// Model B: nearest selector per branch, then ignore wins across branches.
-    fn selects(&self, rule: &RegisteredRule) -> bool {
-        let verdicts: Vec<Verdict> = rule
-            .branches()
-            .iter()
-            .filter_map(|branch| {
-                std::iter::once(Selector::Rule(rule.name))
-                    .chain(branch.iter().rev().map(|&tag| Selector::Tag(tag)))
-                    .find_map(|selector| self.verdict(selector))
+    fn decide(&self, rule: &RegisteredRule) -> RuleStatus {
+        let decisions = rule.branches().into_iter().filter_map(|branch| {
+            let (selector, verdict) = std::iter::once(Selector::Rule(rule.name))
+                .chain(branch.iter().rev().map(|&tag| Selector::Tag(tag)))
+                .find_map(|selector| Some((selector, self.verdict(selector)?)))?;
+            Some(Decision {
+                verdict,
+                selector,
+                branch,
             })
-            .collect();
-        if verdicts.contains(&Verdict::Ignore) {
-            false
-        } else if verdicts.contains(&Verdict::Select) {
-            true
-        } else {
-            self.select.is_none()
+        });
+        RuleStatus {
+            selected_by_default: self.select.is_none(),
+            // The first `ignore` decision if any, else the first `select` one.
+            deciding: decisions.min_by_key(|decision| decision.verdict == Verdict::Select),
         }
+    }
+}
+
+/// The selector that decided a rule's status, on the branch where it was found.
+#[derive(Debug)]
+struct Decision {
+    verdict: Verdict,
+    selector: Selector,
+    branch: Vec<Tag>,
+}
+
+/// Whether a rule is on under `select` and `ignore`, and the deciding selector (per-file
+/// ignores aside). Its `Display` is the one-line explanation shown by `--explain`.
+#[derive(Debug)]
+pub struct RuleStatus {
+    selected_by_default: bool,
+    deciding: Option<Decision>,
+}
+
+impl RuleStatus {
+    /// Whether the rule is on.
+    #[must_use]
+    pub fn enabled(&self) -> bool {
+        self.deciding
+            .as_ref()
+            .map_or(self.selected_by_default, |decision| {
+                decision.verdict == Verdict::Select
+            })
+    }
+}
+
+impl fmt::Display for RuleStatus {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let state = if self.enabled() {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        let Some(decision) = &self.deciding else {
+            let reason = if self.selected_by_default {
+                "default"
+            } else {
+                "not in `select`"
+            };
+            return write!(formatter, "{state} ({reason})");
+        };
+        let list = match decision.verdict {
+            Verdict::Select => "select",
+            Verdict::Ignore => "ignore",
+        };
+        write!(
+            formatter,
+            "{state} by `{list} = [\"{}\"]`",
+            decision.selector.label()
+        )?;
+        if matches!(decision.selector, Selector::Tag(_)) && decision.branch.len() > 1 {
+            let path: Vec<_> = decision.branch.iter().map(|&tag| tag.label()).collect();
+            write!(formatter, " (via {})", path.join(" > "))?;
+        }
+        Ok(())
     }
 }
 
@@ -413,5 +551,23 @@ mod tests {
     fn invalid_configs_are_rejected_loudly(#[case] config_toml: &str, #[case] message: &str) {
         let error = parse_config(config_toml).unwrap_err().to_string();
         assert!(error.starts_with(message), "{error}");
+    }
+
+    #[rstest]
+    #[case::default("", "enabled (default)")]
+    #[case::not_selected("select = [\"naming\"]", "disabled (not in `select`)")]
+    #[case::ignored_ancestor(
+        "ignore = [\"testing\"]",
+        "disabled by `ignore = [\"testing\"]` (via testing > test-timing)"
+    )]
+    #[case::rule_name_wins(
+        "select = [\"no-sleep-in-tests\"]\nignore = [\"testing\"]",
+        "enabled by `select = [\"no-sleep-in-tests\"]`"
+    )]
+    #[case::flat_facet("ignore = [\"exact\"]", "disabled by `ignore = [\"exact\"]`")]
+    fn status_names_the_deciding_selector(#[case] config_toml: &str, #[case] expected: &str) {
+        let rule = find_rule("no-sleep-in-tests").unwrap();
+        let status = rule_status(config_toml, rule).unwrap();
+        assert_eq!(status.to_string(), expected);
     }
 }
