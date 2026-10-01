@@ -5,11 +5,11 @@ expression: "output.replace(binary, \"<binary>\")"
 --- exit code ---
 0
 --- stdout ---
-- `max-test-assertions` (python, rust): Documentation pending.
+- `max-test-assertions` (python, rust): Limits the number of assertions in one test function.
 - `no-assertion-packing` (python, rust): Documentation pending.
 - `no-mock-assertions` (python): Documentation pending.
 - `no-mocks-in-tests` (python): Documentation pending.
-- `no-sleep-in-tests` (python, rust): Documentation pending.
+- `no-sleep-in-tests` (python, rust): Flags fixed-duration sleeps in tests.
 - `no-zero-sleep-in-tests` (python, rust): Documentation pending.
 
 --- stderr ---

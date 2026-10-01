@@ -67,88 +67,17 @@ Unknown labels, facet names (`precision`) and a selector in both `select` and `i
 
 ---
 
-## 📋 Rules Catalog
+## 📋 Rules
 
-All rules support the `mode = "ban" | "require-explanation"` configuration. Below are the rules and their domain-specific settings:
+Both binaries document every rule, code and command alike:
 
-### Concurrency & Async
-* **`no-unstructured-task-creation`**: Bans fire-and-forget background task creation (`asyncio.create_task`, `ensure_future`, `loop.create_task`) in favor of structured concurrency (`asyncio.TaskGroup`). *(Python)*
+```bash
+omni-code-lint --list-rules              # every rule, with its languages and summary
+omni-code-lint --list-rules --tag testing # the rules `select = ["testing"]` would select
+omni-code-lint --explain no-sleep-in-tests # one rule: what it does, why, configuration, tags, status
+```
 
-### Testing Hygiene
-* **`no-sleep-in-tests`**: Bans arbitrary wall-clock and async sleep calls (`time.sleep`, `thread::sleep`, `tokio::time::sleep`) in test files. *(Python, Rust)*
-* **`no-zero-sleep-in-tests`**: Bans zero-duration scheduler yield hacks (`sleep(0)`, `sleep(Duration::ZERO)`) in test files. *(Python, Rust)*
-* **`max-test-assertions`**: Enforces a maximum assertion count per test function to prevent monolithic multi-concept tests. *(Python, Rust)*
-  ```toml
-  [rules.max-test-assertions]
-  max = 4 # default: 4
-  ```
-* **`no-assertion-packing`**: Bans compound boolean assertions (`and`, `&&`) and boolean collection equality packing designed to circumvent assertion limits. *(Python, Rust)*
-* **`no-mocks-in-tests`**: Bans dynamic mocks and monkeypatching (`MagicMock`, `patch`, `mocker.*`, `monkeypatch.*`, `setattr`) in tests in favor of state-based in-memory Fakes. *(Python)*
-  ```toml
-  [rules.no-mocks-in-tests]
-  allowed = ["create_autospec"]
-  ```
-* **`no-mock-assertions`**: Bans interaction-based mock assertion methods (`assert_called_once`, `assert_called_with`, `assert_awaited`, etc.) in tests in favor of asserting on returned values or observable state changes. *(Python)*
-
-### Naming & Vocabulary
-* **`single-letter-variable-name`**: Bans uncommunicative single-letter variable names outside of standard idioms (`i`, `j`, `k`, `x`, `y`, `z`, `_`). *(Python, Rust)*
-  ```toml
-  [rules.single-letter-variable-name]
-  extend_allowed = ["w", "h"]
-  ```
-* **`banned-abbreviations`**: Bans ambiguous abbreviations (`ctx`, `req`, `resp`, `mgr`, `cb`) in favor of full domain words. *(Python, Rust)*
-  ```toml
-  [rules.banned-abbreviations]
-  extend_banned = ["cfg", "idx"]
-  ```
-* **`no-hungarian-notation`**: Bans Hungarian type suffixes (`_list`, `_dict`, `_arr`) from identifier names. *(Python, Rust)*
-  ```toml
-  [rules.no-hungarian-notation]
-  allowed = ["_str"]
-  ```
-* **`prefer-timedelta-over-seconds`**: Enforces strongly typed durations (`datetime.timedelta` / `std::time::Duration`) over numeric variables with raw time-unit suffixes (`_seconds`, `_secs`, `_ms`, `_millis`). *(Python, Rust)*
-  ```toml
-  [rules.prefer-timedelta-over-seconds]
-  allowed = ["_sec"]
-  ```
-* **`prefer-dedent-for-multiline-strings`**: Enforces wrapping multiline string literals in a dedent helper (`textwrap.dedent` / `inspect.cleandoc` in Python; `indoc!` / `formatdoc!` / `concat!` in Rust) across all scopes while exempting docstrings and `insta` `@"..."` inline snapshots. *(Python, Rust)*
-  ```toml
-  [rules.prefer-dedent-for-multiline-strings]
-  extend_allowed = ["custom_dedent"]
-  ```
-
-### Typing & Signatures
-* **`no-typing-cast`**: Bans unchecked type assertions (`cast()`, `typing.cast()`, `typing_extensions.cast()`) in production code. *(Python)*
-* **`no-dynamic-attribute-access`**: Bans runtime attribute reflection (`getattr`, `hasattr`, `setattr`, `delattr`, `builtins.*`) that erases types to `Any` and obscures symbol references. *(Python)*
-* **`enforce-frozen-slots-dataclass`**: Enforces that Python `@dataclass` classes specify `frozen=True` and `slots=True` to guarantee immutability and memory efficiency, unless explicitly opted out with `frozen=False` / `slots=False`. *(Python)*
-* **`no-identical-positional-types`**: Bans functions with $\ge 3$ positional parameters where 2 or more share an identical type annotation (suggests keyword-only arguments or domain newtypes). *(Python, Rust)*
-  ```toml
-  [rules.no-identical-positional-types]
-  min = 3 # minimum positional parameter count; default: 3
-  ```
-
-### Architecture & Control Flow
-* **`no-env-in-functions`**: Bans reading/writing environment variables (`os.getenv`, `std::env::var`) inside functions and methods outside of configuration entrypoints. *(Python, Rust)*
-* **`flat-scope-enforced`**: Bans nested function and closure definitions in source files to prevent hidden state and encourage modular helpers. *(Python)*
-* **`no-logging-error-in-except`**: Bans using `logging.error` inside Python `except` blocks (suggests `logging.exception` to preserve stack traces). *(Python)*
-* **`no-uncommented-suppress`**: Enforces that `contextlib.suppress(...)` statements document why swallowing the exception is benign (defaults to `mode = "require-explanation"`). *(Python)*
-
-### Code Style
-* **`prefer-tuple-unpacking`**: Flags a value read at several literal positions in one function or the Python module top level (`p[0]` and `p[1]`, `xs[0]` and `xs[-1]`, `span.0` and `span.1`) and suggests unpacking it once (`x, y = p`, `let (start, end) = span;`). Receivers containing a call are ignored. A receiver is exempt for the whole scope when it is written to, sliced, `&mut`-borrowed (Rust), or used as a collection (Python: iterated, passed to `len()` / `enumerate()` / `zip()`, mutated, indexed by a variable). Rust macro arguments are not inspected. *(Python, Rust)*
-  ```toml
-  [rules.prefer-tuple-unpacking]
-  min = 2 # default: 2, distinct positions read before flagging
-  max = 2 # default: 2, `_` placeholders the unpacking may need (`row[0]`, `row[3]` → `a, _, _, d, *_ = row`)
-  ```
-
-### VCS & Workflow Commands
-* **`no-edits-on-described-commits`**: Prohibits running `jj edit` on commits that already have descriptions to preserve review stability. *(JJ)*
-
-### Suppression Hygiene
-* **`missing-suppression-reason`**: Enforces non-empty `-- <reason>` justifications on all suppression comments.
-* **`unused-suppression`**: Flags stale suppression directives when no violation occurs on the target line or file.
-* **`unknown-suppression-rule`**: Flags directives referencing nonexistent or mistyped rule names.
-* **`blanket-suppression`**: Bans bare suppression directives that omit bracketed rule names.
+`--explain` also reports whether the rule is on under the `.omnilint.toml` of the current directory, and which selector decided it.
 
 ---
 

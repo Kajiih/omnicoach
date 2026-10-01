@@ -9,7 +9,7 @@ use crate::diagnostic::{
     Diagnostic, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationTemplate,
     violation_template,
 };
-use crate::rule_documentation::RuleDoc;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{
     Classification, Consensus, ImpactedQuality, Precision, RuleEntry, Topic,
 };
@@ -36,7 +36,24 @@ impl MissingSuppressionReason {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Requires every suppression directive to give a reason.",
+        what_it_does: "Flags `omni:ignore` and `omni:disable-file` directives that do not \
+                       end with `-- <reason>`, or whose reason is empty. For example, \
+                       `# omni:ignore [flat-scope-enforced]` is flagged, while \
+                       `# omni:ignore [flat-scope-enforced] -- required for fixture` is not.",
+        why_is_this_bad: "A suppression switches a check off, and only its author knows \
+                          why. Without a reason, a reviewer cannot tell a deliberate \
+                          exception from a shortcut, and a later reader cannot tell whether \
+                          the suppression is still needed. The reason keeps the decision \
+                          reviewable, and makes stale suppressions easy to spot and \
+                          remove.",
+        configuration: &[],
+        references: &[Reference {
+            title: "Ruff: Error suppression",
+            url: "https://docs.astral.sh/ruff/linter/#error-suppression",
+        }],
+    };
 }
 
 impl Rule for MissingSuppressionReason {

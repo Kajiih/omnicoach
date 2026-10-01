@@ -4,7 +4,7 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::core::{Config, LanguageDefaults, Rule};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::RuleDoc;
+use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -36,7 +36,25 @@ impl MaxTestAssertions {
     };
 
     /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc::TODO;
+    pub(crate) const DOC: RuleDoc = RuleDoc {
+        summary: "Limits the number of assertions in one test function.",
+        what_it_does: "Counts the assertions in each test function and flags a test with \
+                       more than `max` of them (4 by default). A `pytest.raises` block \
+                       counts as one assertion. Assertions inside nested functions or \
+                       classes, and in helpers that are not tests, are not counted.",
+        why_is_this_bad: "A test with many assertions usually checks several behaviours at \
+                          once. It stops at the first failing assertion, so the later ones \
+                          are never reported, and its name cannot say which behaviour \
+                          broke.\n\n\
+                          Split independent scenarios into separate tests, parameterize \
+                          variations (`@pytest.mark.parametrize`, `#[rstest]`), or compare \
+                          the result against one expected value.",
+        configuration: &[ConfigShape::Threshold],
+        references: &[Reference {
+            title: "Software Engineering at Google, ch. 12: Test behaviors, not methods",
+            url: "https://abseil.io/resources/swe-book/html/ch12.html",
+        }],
+    };
 }
 
 impl Rule for MaxTestAssertions {
