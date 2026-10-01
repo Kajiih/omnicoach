@@ -182,7 +182,7 @@ There are no aliases for old labels: renaming a topic breaks configs that name i
 
 ## 6. Enforcement map
 
-Compiler checks are pinned by `compile_fail` doctests on `Classification` in `src/rule_taxonomy.rs`. The named tests live in `src/rule_selection/taxonomy.rs` unless stated otherwise.
+Compiler checks are pinned by `compile_fail` doctests on `Classification` in `src/rule_declaration/taxonomy.rs`. The named tests live in `src/rule_selection/taxonomy.rs` unless stated otherwise.
 
 | Guide rule | Caught by |
 |---|---|

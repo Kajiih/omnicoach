@@ -7,8 +7,9 @@ use crate::code_lint::rule::{AnyCodeRule, RuleTarget};
 use crate::code_lint::rules::CODE_RULES;
 use crate::code_lint::semantic::comments::CommentIndex;
 use crate::code_lint::suppression::{SUPPRESSION_AUDITS, SuppressionTracker};
-use crate::core::{Config, EnforcementMode};
+use crate::config::Config;
 use crate::diagnostic::Diagnostic;
+use crate::rule_declaration::EnforcementMode;
 use ast_grep_language::SupportLang;
 use rayon::prelude::*;
 use std::collections::HashSet;
@@ -341,8 +342,8 @@ fn lint_single_file(
 mod tests {
     use super::*;
     use crate::code_lint::rules;
-    use crate::core::RuleOverrides;
     use crate::diagnostic::RuleName;
+    use crate::rule_declaration::RuleOverrides;
     use rstest::rstest;
     use std::collections::HashMap;
 

@@ -3,13 +3,13 @@
 To maintain a cohesive and performant toolkit while avoiding "reinventing the wheel," we rely on world-class ecosystem crates to perform the heavy lifting across our package modules.
 
 ## Why Not a Pre-Existing Framework?
-While tools like `ast-grep` and `semgrep` exist for parsing code, they do not support orchestrating Command Guards or Environment Context. Our package acts as a unified orchestrator (sharing config and reporting via `src/core.rs`) to bring these disparate domains under a single `.toml` configuration, while deploying them as separate, focused binaries (`omni-code-lint` and `omni-command-lint`).
+While tools like `ast-grep` and `semgrep` exist for parsing code, they do not support orchestrating Command Guards or Environment Context. Our package acts as a unified orchestrator (sharing config and reporting via `src/config.rs` and `src/diagnostic.rs`) to bring these disparate domains under a single `.toml` configuration, while deploying them as separate, focused binaries (`omni-code-lint` and `omni-command-lint`).
 
 ## Heavy-Lifting Crates to Reuse
 Instead of writing complex traversal or parsing logic from scratch, the modules delegate to the following dependencies:
 
 ### 1. Diagnostics & Reporting (`src/diagnostic.rs`)
-*   **Standard Output & Zero-Dependency Formatting**: To minimize dependencies and compilation overhead, we avoid complex reporting engines like `miette`. Instead, we calculate line and column offsets dynamically using a fast, inline helper function and output diagnostics in the standard compiler format (`path:line:col: [CODE] message`). This ensures effortless integration with IDEs, terminal output readers, and CI pipelines out of the box.
+*   **Standard Output & Zero-Dependency Formatting**: To minimize dependencies and compilation overhead, we avoid complex reporting engines like `miette`. Instead, we calculate line and column offsets dynamically using a fast, inline helper function and output diagnostics in the standard compiler format (`path:line:col: [rule-name] message`). This ensures effortless integration with IDEs, terminal output readers, and CI pipelines out of the box.
 
 ### 2. Code Parsing & Static Analysis (`src/code_lint.rs`)
 *   **`tree-sitter` & `tree-sitter-<language>`**: We use the official Rust bindings to parse code into a unified AST across all supported languages. We do not write lexers or parsers.

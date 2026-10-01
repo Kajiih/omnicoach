@@ -3,8 +3,6 @@
 //! Pure, constant data with no rendering. Fields hold Markdown without `#` headings: the
 //! renderer owns the section headings.
 
-architecture_component!(RuleDocumentation);
-
 /// A link to a document backing or related to a rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Reference {

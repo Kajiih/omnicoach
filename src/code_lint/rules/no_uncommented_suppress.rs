@@ -8,13 +8,11 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::is_with_context_manager;
 use crate::code_lint::rule::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls;
-use crate::core::{
-    EnforcementMode, FilterListDefaults, LanguageDefaults, ListKind, ListOption, RuleOptions,
-};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Declaration;
-use crate::rule_documentation::{Reference, RuleDoc};
-use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
+use crate::rule_declaration::{
+    Classification, Consensus, Declaration, EnforcementMode, FilterListDefaults, ImpactedQuality,
+    LanguageDefaults, ListKind, ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
+};
 use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;

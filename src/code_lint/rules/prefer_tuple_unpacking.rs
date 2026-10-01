@@ -2,11 +2,11 @@
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile, ScopePositionalReads};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::{CountOption, LanguageDefaults, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Declaration;
-use crate::rule_documentation::{Reference, RuleDoc};
-use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
+use crate::rule_declaration::{
+    Classification, Consensus, CountOption, Declaration, ImpactedQuality, LanguageDefaults,
+    Precision, Reference, RuleDoc, RuleOptions, Topic,
+};
 use ast_grep_language::SupportLang;
 use std::collections::BTreeSet;
 use std::path::Path;

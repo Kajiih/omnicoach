@@ -1,7 +1,7 @@
 //! Shared helpers for matching banned call expressions declaratively.
 //!
 //! Rules that flag banned function or method invocations
-//! specify their targets via a [`crate::core::ListOption`].
+//! specify their targets via a `ListOption`.
 //! Each callee entry (e.g. `"time.sleep"`, `"tokio::time::sleep"`, `"$LOOP($$$LOOP_ARGS).create_task"`)
 //! is either matched by callee text or normalized into a `<callee>($$$ARGS)` structural pattern.
 

@@ -144,7 +144,7 @@ fn test_code_lint_with_violations() {
 fn test_code_lint_invalid_config() {
     let temp_dir = tempfile::tempdir().unwrap();
     fs::write(
-        temp_dir.path().join(omni::core::CONFIG_FILE_NAME),
+        temp_dir.path().join(omni::config::CONFIG_FILE_NAME),
         "select = [invalid syntax]",
     )
     .unwrap();

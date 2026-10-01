@@ -26,11 +26,11 @@ This 1D layering suffered from multiple architectural deficiencies:
 We model and enforce the architecture as a **strongly-typed Directed Acyclic Graph (DAG)** with **colocated component declarations**:
 
 ### 2.1. Canonical Architecture Components
-We define a strongly-typed enum `ArchitectureComponent` representing the 14 bounded functional units across the repository:
-- **Shared Foundations**: `FoundationPrimitives`, `CoreVocabulary`
+We define a strongly-typed enum `ArchitectureComponent` representing the 15 bounded functional units across the repository:
+- **Shared Foundations**: `FoundationPrimitives`, `RuleDeclaration`, `Config`
 - **Static Code Analysis Domain (`code_lint`)**: `CodeSyntaxAdapters`, `CodeSemanticEngines`, `CodeRuleContracts`, `CodeSuppressionEngine`, `CodeLintRules`, `CodeLintRunner`
 - **Command Safety Domain (`command_lint`)**: `CommandVcsAdapters`, `CommandRuleContracts`, `CommandLintRules`, `CommandLintRunner`
-- **Entrypoints & Verification**: `TestingHarness`, `ApplicationBinaries`
+- **Selection, Discovery, Test Harness & Entrypoints**: `RuleSelection`, `RuleCatalog`, `TestingHarness`, `ApplicationBinaries`
 
 ### 2.2. Component-Root Declarations & Subtree Inheritance
 Each component root file in `src/` explicitly declares its component identity at the top of the file:
@@ -44,48 +44,50 @@ const _ARCHITECTURE_COMPONENT: $crate::architecture::ArchitectureComponent =
 ```
 This gives immediate compile-time validation by `rustc` (catching misspelled variants with `E0599` and duplicate declarations in the same module with `E0428`), IDE hover documentation, and direct support in binary targets (`omni::architecture_component!(ApplicationBinaries);`).
 
-- **Subtree Inheritance**: Descendant leaf modules inside a component's subtree (e.g. `src/code_lint/rules/*.rs`, `src/code_lint/ast/*.rs`, `src/code_lint/semantic/*.rs`, `src/command_lint/rules/*.rs`) inherit their component automatically from their nearest declared ancestor and are forbidden from redundantly re-declaring `architecture_component!(...)`.
+- **Subtree Inheritance**: Descendant leaf modules inside a component's subtree (e.g. `src/rule_declaration/*.rs`, `src/code_lint/rules/*.rs`, `src/code_lint/ast/*.rs`, `src/code_lint/semantic/*.rs`, `src/command_lint/rules/*.rs`) inherit their component automatically from their nearest declared ancestor and are forbidden from redundantly re-declaring `architecture_component!(...)`.
 - **Content-Verified Pure Namespace Routers**: Files outside any component subtree (`src/lib.rs`, `src/code_lint.rs`, `src/command_lint.rs`) require no hardcoded exemption list; instead, `test_all_source_files_declare_architecture_component` verifies via the Rust CST that they are pure namespace routers containing only external `mod <name>;` declarations (plus `macro_rules!` in `src/lib.rs`) and zero production functions, types, constants, inline `mod { ... }` blocks, or `use` imports.
 
 ### 2.3. The Composable `define_architecture!` and `architecture_graph!` Macros
 In `src/architecture.rs` (`FoundationPrimitives`), `define_architecture!` generates both the `strum`-derived `ArchitectureComponent` enum (attaching the `///` doc comments to each variant) and the `ARCHITECTURE_GRAPH` constant by delegating slice construction to `architecture_graph!`. Both macros are local to `src/architecture.rs` (not `#[macro_export]`): `architecture_graph!` is also reused by the cycle-detector unit test to build synthetic graphs. Only `architecture_component!` is exported from `src/lib.rs`, because binary crates invoke it as `omni::architecture_component!`:
 ```rust
 define_architecture! {
-    // --- Shared Foundations ---
     /// Zero-dependency foundational primitives (`architecture`, `diagnostic`, `diff`).
     FoundationPrimitives  => [],
-    /// Shared domain vocabulary, config, and tags (`core`).
-    CoreVocabulary        => [FoundationPrimitives],
+    /// Rule declaration, options, faceted classification, and documentation (`rule_declaration`).
+    RuleDeclaration       => [FoundationPrimitives],
+    /// Project configuration and resolved rule/path state (`config`).
+    Config                => [FoundationPrimitives, RuleDeclaration],
 
-    // --- Static Code Analysis Domain (`code_lint`) ---
     /// Encapsulated AST syntax adapters and language parsers (`code_lint::ast`).
     CodeSyntaxAdapters    => [FoundationPrimitives],
     /// Semantic analysis engines (`code_lint::semantic`).
     CodeSemanticEngines   => [CodeSyntaxAdapters],
-    /// Contract traits and execution interfaces for code linting (`code_lint::rule`).
-    CodeRuleContracts     => [CoreVocabulary, CodeSemanticEngines, CodeSyntaxAdapters],
+    /// Rule contracts and execution interfaces for code linting (`code_lint::rule`).
+    CodeRuleContracts     => [RuleDeclaration, CodeSemanticEngines, CodeSyntaxAdapters],
     /// Inline comment suppression tracker and directive policies (`code_lint::suppression`).
-    CodeSuppressionEngine => [CodeRuleContracts, CodeSemanticEngines],
+    CodeSuppressionEngine => [Config, CodeRuleContracts, CodeSemanticEngines],
     /// Concrete static analysis linter rules (`code_lint::rules`).
-    CodeLintRules         => [CodeRuleContracts, CodeSuppressionEngine],
+    CodeLintRules         => [CodeRuleContracts],
     /// Static code linting multi-file orchestration runner (`code_lint::runner`).
-    CodeLintRunner        => [CodeLintRules],
+    CodeLintRunner        => [Config, CodeLintRules, CodeSuppressionEngine],
 
-    // --- Command Safety Domain (`command_lint`) ---
     /// VCS interaction and repository diff adapters (`command_lint::vcs`).
     CommandVcsAdapters    => [FoundationPrimitives],
-    /// Contract traits and intercepted command schemas (`command_lint::rule`).
-    CommandRuleContracts  => [CoreVocabulary, CommandVcsAdapters],
+    /// Rule contracts and intercepted command schemas (`command_lint::rule`).
+    CommandRuleContracts  => [RuleDeclaration, CommandVcsAdapters],
     /// Concrete command safety linting rules (`command_lint::rules`).
     CommandLintRules      => [CommandRuleContracts],
     /// Command linting orchestration and interception runner (`command_lint::runner`).
-    CommandLintRunner     => [CommandLintRules],
+    CommandLintRunner     => [Config, CommandLintRules],
 
-    // --- Test Harness & Entrypoints ---
+    /// Faceted taxonomy queries, hierarchical Model B selector planner, and config resolution (`rule_selection`).
+    RuleSelection         => [CodeLintRules, CodeSuppressionEngine, CommandLintRules, Config],
+    /// Rule catalog, terminal documentation renderer, and discovery CLI surface (`rule_catalog`).
+    RuleCatalog           => [RuleSelection],
     /// Test harness and snapshot fixtures (`test_utils`).
     TestingHarness        => [CodeRuleContracts, CommandRuleContracts],
     /// CLI application entrypoint binaries (`src/bin/*`).
-    ApplicationBinaries   => [CodeLintRunner, CommandLintRunner, CoreVocabulary],
+    ApplicationBinaries   => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog, Config],
 }
 ```
 

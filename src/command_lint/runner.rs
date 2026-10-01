@@ -5,7 +5,7 @@ architecture_component!(CommandLintRunner);
 use crate::command_lint::rule::InterceptedCommand;
 use crate::command_lint::rules::COMMAND_RULES;
 use crate::command_lint::vcs::JjCliClient;
-use crate::core::Config;
+use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 
 /// Evaluates all enabled command rules against the provided raw command string.

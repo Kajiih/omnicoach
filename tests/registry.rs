@@ -6,10 +6,10 @@
 use omni::code_lint::rules::CODE_RULES;
 use omni::code_lint::suppression::SUPPRESSION_AUDITS;
 use omni::command_lint::rules::COMMAND_RULES;
-use omni::core::{
-    DeclaredOptions, EnforcementMode, OptionSpec, SUPPORTED_LANGUAGES, support_lang_name,
+use omni::rule_declaration::{
+    Declaration, DeclaredOptions, DeclaredRule, EnforcementMode, OptionSpec, SUPPORTED_LANGUAGES,
+    support_lang_name,
 };
-use omni::rule_declaration::{Declaration, DeclaredRule};
 use rstest::rstest;
 use std::collections::HashSet;
 

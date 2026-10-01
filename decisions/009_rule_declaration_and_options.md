@@ -30,9 +30,9 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
 };
 ```
 
-`Declaration<Options>` and its type-erased view `DeclaredRule` live in `RuleDeclaration => [CoreVocabulary, RuleTaxonomy, RuleDocumentation]`, while `RuleTaxonomy` remains pure classification. `CodeRule<Options>` (in `code_lint::rule`), `CommandRule` (in `command_lint::rule`), and the four suppression audits (`Declaration` consts in `code_lint::suppression`) share `Declaration` for their name, template, languages, options, classification, and doc.
+`Declaration<Options>`, its type-erased view `DeclaredRule`, and its constituent building blocks—options (`rule_declaration::options`), taxonomy (`rule_declaration::taxonomy`), and documentation (`rule_declaration::documentation`)—live together in a single component `RuleDeclaration => [FoundationPrimitives]`, re-exported from `crate::rule_declaration`. Project-level configuration (`Config`, `ContextConfig`, `compile_glob`) lives in a dedicated `Config => [FoundationPrimitives, RuleDeclaration]` component (`src/config.rs`), so rule contracts (`CodeRuleContracts`, `CommandRuleContracts`) and rule implementations (`CodeLintRules`, `CommandLintRules`) depend on `RuleDeclaration` and never reach `Config`.
 
-Because `CodeRule<Options>` is parameterized by `Options`, `code_lint::rule` also defines a type-erased `AnyCodeRule` trait blanket-implemented once for every `CodeRule<Options>`. The registries (`CODE_RULES: &[&dyn AnyCodeRule]`, `SUPPRESSION_AUDITS: &[Declaration]`, `COMMAND_RULES: &[CommandRule]`) are flat slices of these consts, so a rule cannot be registered without every part and nothing is repeated at the registration site.
+`CodeRule<Options>` (in `code_lint::rule`), `CommandRule` (in `command_lint::rule`), and the four suppression audits (`Declaration` consts in `code_lint::suppression`) share `Declaration` for their name, template, languages, options, classification, and doc. Because `CodeRule<Options>` is parameterized by `Options`, `code_lint::rule` also defines a type-erased `AnyCodeRule` trait blanket-implemented once for every `CodeRule<Options>`. The registries (`CODE_RULES: &[&dyn AnyCodeRule]`, `SUPPRESSION_AUDITS: &[Declaration]`, `COMMAND_RULES: &[CommandRule]`) are flat slices of these consts, so a rule cannot be registered without every part and nothing is repeated at the registration site.
 
 ### 2.2. Options are declared as const values implementing `OptionsDeclaration`
 
@@ -46,7 +46,7 @@ const MAX_ASSERTIONS: CountOption = CountOption {
 };
 ```
 
-Two option structs exist in `core`, and together with `()` and `(First, Second)` they implement `OptionsDeclaration`:
+Two option structs exist in `rule_declaration`, and together with `()` and `(First, Second)` they implement `OptionsDeclaration`:
 
 - `()` — no rule-specific options (`Resolved = ()`, `Param<'a> = ()`).
 - `CountOption { key, doc, default: LanguageDefaults<usize> }` (`Resolved = usize`, `Param<'a> = usize`). Keys name what is counted (`max_assertions`, `min_positional_parameters`), never a bare `max` or `min`.
@@ -90,6 +90,5 @@ Precedence is language table, then rule table, then the declared per-language de
 - Runtime, validation and `--explain` read the same const, so keys, types and defaults cannot drift between them.
 - A rule cannot read an undeclared option: `check` receives only the resolved value of the `Options` type declared in `RULE`.
 - Zero-sized detector structs, `Detector`, `CodeDetector` and `CommandDetector` traits, and per-rule `impl` blocks are gone; every rule is a single `const` struct literal plus a private `check_file` / `check_command` function.
-- `RuleDoc::configuration` and `ConfigShape` (ADR 008 §2.2), the `effective_*` helpers, `ThresholdConfig`, `DenyListConfig`, `AllowListConfig`, `EnforcementConfig`, `DynamicRuleConfig` and `Config.rules` are removed.
 - Breaking for users: `mode` → `enforcement_mode`; `max` / `min` → explicit names; `enforcement_mode` on an audit or command rule is now an error. Each case fails loudly with a suggestion.
 - Rejecting unknown top-level keys and a JSON Schema generated from the declarations stay on the roadmap.

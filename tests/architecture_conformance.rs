@@ -720,7 +720,7 @@ fn test_second_path_detection_allows_private_child_facades_and_rejects_duplicate
         pub use self::public_child::DuplicatePathItem;
         // Rejected: cross-component re-export hides the defining component
         pub use crate::diagnostic::RuleName;
-        pub(crate) use crate::core::Tag;
+        pub(crate) use crate::rule_declaration::Topic;
         #[macro_export]
         macro_rules! exported {
             () => {};
@@ -733,7 +733,7 @@ fn test_second_path_detection_allows_private_child_facades_and_rejects_duplicate
             "#[macro_export]",
             "pub use self::public_child::DuplicatePathItem;",
             "pub use crate::diagnostic::RuleName;",
-            "pub(crate) use crate::core::Tag;",
+            "pub(crate) use crate::rule_declaration::Topic;",
         ]
     );
 }
@@ -894,7 +894,7 @@ fn test_namespace_validator_accepts_pure_routers_and_rejects_code_or_orphan_rout
         SourceFileEntry::from_source(
             "src/code_lint.rs",
             "code_lint",
-            "pub mod ast;\nuse crate::core::Config;\npub const SNEAKY: usize = 1;\n",
+            "pub mod ast;\nuse crate::config::Config;\npub const SNEAKY: usize = 1;\n",
         ),
         SourceFileEntry::from_source(
             "src/code_lint/ast.rs",
@@ -911,7 +911,7 @@ fn test_namespace_validator_accepts_pure_routers_and_rejects_code_or_orphan_rout
     assert_eq!(
         violations,
         vec![
-            "src/code_lint.rs:2: pure namespace router without 'architecture_component!' may only contain external 'mod' declarations, found: use crate::core::Config;",
+            "src/code_lint.rs:2: pure namespace router without 'architecture_component!' may only contain external 'mod' declarations, found: use crate::config::Config;",
             "src/code_lint.rs:3: pure namespace router without 'architecture_component!' may only contain external 'mod' declarations, found: pub const SNEAKY: usize = 1;",
             "src/orphan_router.rs: missing 'architecture_component!(<Variant>);' (and not a pure namespace router for any declared component)",
         ]

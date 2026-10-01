@@ -22,14 +22,12 @@ macro_rules! architecture_component {
 pub mod architecture;
 pub mod code_lint;
 pub mod command_lint;
-pub mod core;
+pub mod config;
 pub mod diagnostic;
 pub(crate) mod diff;
 pub mod rule_catalog;
 pub mod rule_declaration;
-pub mod rule_documentation;
 pub mod rule_selection;
-pub mod rule_taxonomy;
 
 #[cfg(test)]
 pub mod test_utils;

@@ -15,4 +15,4 @@ This document records the foundational design choices for the Custom Lint Toolki
 
 ## Branch 3: Configuration & Standard Alignment
 **Decision:** Option B: Ruff-Aligned TOML
-**Rationale:** We will adopt a Ruff-like `.omnilint.toml` configuration syntax. It supports standard code categories (e.g., `PY001`), allows for `select`/`ignore` filtering, supports inline comments, and aligns cleanly with the expectations of modern developers.
+**Rationale:** We will adopt a Ruff-like `.omnilint.toml` configuration syntax. It supports `select`/`ignore` filtering by rule names and taxonomy tags, per-rule configuration tables, inline comments, and aligns cleanly with the expectations of modern developers.

@@ -4,14 +4,15 @@ architecture_component!(CodeSuppressionEngine);
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::semantic::comments::strip_comment_delimiters;
-use crate::core::{Config, RuleOptions};
+use crate::config::Config;
 use crate::diagnostic::{
     Diagnostic, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationTemplate,
     violation_template,
 };
-use crate::rule_declaration::Declaration;
-use crate::rule_documentation::{Reference, RuleDoc};
-use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
+use crate::rule_declaration::{
+    Classification, Consensus, Declaration, ImpactedQuality, Precision, Reference, RuleDoc,
+    RuleOptions, Topic,
+};
 use ast_grep_language::SupportLang;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
