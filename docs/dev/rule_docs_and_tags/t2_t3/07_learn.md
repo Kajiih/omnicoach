@@ -28,6 +28,13 @@ The T2/T3 exploration cycle evaluated the in-tree rule documentation model and d
 - Introducing `RuleDoc::TODO` decouples the documentation architecture from writing 26 comprehensive rationale texts in one go.
 - Strict style lint tests validate all documented rules without breaking builds for placeholder rules, enabling clean, atomic progress.
 
+### 6. Lessons From the Abandoned Tagging Branches
+An earlier attempt at the same features (branches `lwolwrwz` → `lxzlynuk` and `orqnzvqq`, never merged) left these lessons:
+- **One declaration per rule config.** That attempt declared each rule's config once, and both the runtime and the docs read it. This design declares it twice (`ConfigShape` in the doc, `&DEFAULT_*` at the call sites), and the two drifted within days: `mode` is honoured by every code rule but documented on one. Its README sync test found 5 drifts on its first run. Prefer one declaration, colocated with the rule, with an executable round-trip test over prose copies of defaults.
+- **One parser per vocabulary.** Parsing the same labels with two derives (strum `FromStr` and serde) silently lost the aliases on the serde path. Typed clap enums also beat `format: String` plus a `bail!` arm.
+- **Aliases must be true synonyms.** Aliases that map to a broader concept (`logging` → error handling) silently widen what a selector matches; make them subtopics instead.
+- **Process smells.** Avoid dependencies added in the name of simplicity (`documented`, `schemars`, `toml_edit`), design records rewritten in place, ROADMAP items marked "delivered", and generated artifacts added and dropped one commit later.
+
 ---
 
 ## 2. Next Steps

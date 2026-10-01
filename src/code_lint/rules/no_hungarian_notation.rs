@@ -29,7 +29,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 pub struct NoHungarianNotation;
 
 impl NoHungarianNotation {
-    /// The rule's declared facets (ADR 007).
+    /// The rule's declared facets.
     pub(crate) const CLASSIFICATION: Classification = Classification {
         topics: &[Topic::TYPE_ENCODED_NAMES],
         precision: Precision::Heuristic,

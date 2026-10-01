@@ -25,7 +25,7 @@ const MISSING_REASON_TEMPLATE: ViolationTemplate = violation_template! {
 pub struct MissingSuppressionReason;
 
 impl MissingSuppressionReason {
-    /// The rule's declared facets (ADR 007).
+    /// The rule's declared facets.
     pub(crate) const CLASSIFICATION: Classification = Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
         precision: Precision::Exact,
@@ -78,7 +78,7 @@ const UNUSED_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
 pub struct UnusedSuppression;
 
 impl UnusedSuppression {
-    /// The rule's declared facets (ADR 007).
+    /// The rule's declared facets.
     pub(crate) const CLASSIFICATION: Classification = Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
         precision: Precision::Exact,
@@ -137,7 +137,7 @@ const UNKNOWN_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
 pub struct UnknownSuppressionRule;
 
 impl UnknownSuppressionRule {
-    /// The rule's declared facets (ADR 007).
+    /// The rule's declared facets.
     pub(crate) const CLASSIFICATION: Classification = Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
         precision: Precision::Exact,
@@ -189,7 +189,7 @@ const BLANKET_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
 pub struct BlanketSuppression;
 
 impl BlanketSuppression {
-    /// The rule's declared facets (ADR 007).
+    /// The rule's declared facets.
     pub(crate) const CLASSIFICATION: Classification = Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
         precision: Precision::Exact,

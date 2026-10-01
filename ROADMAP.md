@@ -21,6 +21,8 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
 - **Conformance CST Edge Cases (Watch List)**:
   - *Current*: `summarize_rust_file` skips `macro_definition` bodies (production macros `architecture_component!` and `rule_test!` expand either to a doc attribute or inside `#[cfg(test)]`) and assumes paths do not start with a root-anchored leading `::` (`::omni::...` or `::ast_grep_core::...`).
   - *Target*: If production `macro_rules!` macros calling cross-component helpers (`$crate::...`) are introduced outside `src/lib.rs`, or if root-anchored `::` paths appear, extend `summarize_rust_file` to scan `macro_rule` body token trees and normalize leading `::` prefixes.
+- **Non-transitive DAG edges**: every edge is transitive today, so a component reaches everything its dependencies reach. A "private" edge (a dependency that dependents do not inherit) would let the graph express isolation rules that currently need bespoke conformance checks.
+- **Acyclicity by declaration order**: requiring each component's dependencies to be declared before it makes the graph acyclic by construction, and replaces the DFS cycle detector and its meta-test with one loop.
 
 ## Rule Engine & Declarative Rules
 
@@ -47,9 +49,9 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
   - *Current*: The boundary exemption (`main`, `from_env`, ...) is inherited by every scope declared inside it, which is correct for nested functions and closures but also exempts a class declared inside a boundary whose methods later escape (returned, registered as a callback).
   - *Target*: Treat a `class` / `impl` declared inside a boundary as a barrier that resets the exemption, once a real-world occurrence justifies the added language-specific complexity.
 
-## Rule Defects (found during the tag taxonomy review)
+## Rule Defects
 
-Source: E1 reviewers in `docs/dev/rule_docs_and_tags/t1/04_execution_log.md` §3. Behaviour contradicting a rule's own documentation.
+Behaviour that contradicts a rule's own documentation or intent.
 
 - **`no-logging-error-in-except` flags `exc_info=True`**: that call keeps the traceback, contradicting the rationale ("lost traceback"). Exempt it, or reword the rule as "prefer `.exception`".
 - **`prefer-dedent-for-multiline-strings` flags `textwrap.dedent`**: the module doc and summary allow a dedent helper, but the defaults omit it and a test flags it.
@@ -58,13 +60,10 @@ Source: E1 reviewers in `docs/dev/rule_docs_and_tags/t1/04_execution_log.md` §3
 - **`unused-suppression` with disabled rules**: a directive whose target rule is disabled by config, or does not run on the file, reports as unused (the audit only checks `matched_count == 0`). Add a test; skip rules not enabled for the file.
 - **`no-unstructured-task-creation` flags stored, awaited tasks**: the documented hazard (GC of an unreferenced task) does not apply when the task is kept and awaited.
 - **`no-zero-sleep-in-tests` Python half**: the asyncio docs endorse `asyncio.sleep(0)` as a yield; the hazard is Rust-specific (tokio `sleep(ZERO)` is not guaranteed to yield). Reconsider the Python scope.
-
-Found while writing the rule docs:
-
 - **`flat-scope-enforced` misses annotated nested functions**: the `def $NAME($$$ARGS): $$$BODY` pattern has no return-type slot, so a nested `def inner() -> int:` is not flagged (`async def` is). Match `function_definition` nodes instead of a pattern.
 - **`no-logging-error-in-except` flags nested scopes**: `is_inside_except_clause` accepts any ancestor `except_clause`, so `logging.error` in a function or lambda defined inside an `except` block is flagged. Stop at the first function boundary.
 - **`unknown-suppression-rule` rejects suppression-audit names**: `SUPPRESSIBLE_RULES` holds only the code rules, so naming one of the four suppression audits in a directive is reported as unknown. Decide whether audits are suppressible, then align the list.
-- **`no-typing-cast` module doc describes a mode it lacks**: the module doc documents `mode = "require-explanation"`, but the detector only calls `check_banned_calls` and never reads a mode. Implement it or drop the module-doc paragraph.
+- **`--explain` omits `mode`**: the code runner applies `mode` to every code rule (`runner.rs`), but only `no-uncommented-suppress` lists `ConfigShape::Enforcement`, and no rule shows its default mode. Document `mode` once for every code rule instead of per rule.
 - **`no-mocks-in-tests` misses bare decorators**: only calls are matched, so `@mock.patch.object` without parentheses is not flagged.
 - **`prefer-dedent-for-multiline-strings` defaults name an internal macro**: the Rust allow-list defaults contain `rule_test` / `crate::rule_test`, this repository's test macro. Move them to the repository's own `.omnilint.toml`.
 - **Aliased imports are handled inconsistently**: `no-hungarian-notation` and `prefer-timedelta-over-seconds` skip import aliases, while `banned-abbreviations` flags them. Pick one behaviour for all naming rules.
@@ -149,29 +148,23 @@ Source: Python Tip of the Week #069 "Prefer constants over wild values" (go/pyth
 
 ## 5. Tags, Discovery & Documentation
 
-Exploration and design records live in [docs/dev/rule_docs_and_tags/](docs/dev/rule_docs_and_tags/) and the contributor guide in [docs/dev/tag_guide.md](docs/dev/tag_guide.md). Implementation follows in order: **T1 (taxonomy `impl/`) → T2 (rule doc model) → T3 (surfaces) → content pass** (D12).
+Design rationale: [ADR 007](decisions/007_rule_taxonomy_and_selection.md) (taxonomy and selection) and [ADR 008](decisions/008_rule_documentation_and_discovery.md) (rule docs and discovery). Contributor guide: [docs/dev/tag_guide.md](docs/dev/tag_guide.md).
 
-- **T1 — Tag Taxonomy & Selection (`impl/`)**:
-  - *Status*: Implemented (`src/rule_taxonomy.rs`, `src/rule_selection.rs`; plan in `docs/dev/rule_docs_and_tags/t1/impl/01_plan.md`).
-  - *Design*: Complete (D1–D38 in `docs/dev/rule_docs_and_tags/t1/01`–`04`, guide in `docs/dev/tag_guide.md`). Typed facet fields (`topics`, `precision`, `consensus`, `impacted_quality`), topic tree as plain `const` `Topic` struct literals (cycles rejected by `rustc`, E0391), precedence model B, and `RuleSelection` architecture isolation so rules and runners never branch on tags (D37).
-  - *Deferred from T1 `impl/`*: **Shadowed-selector config warning** (D35) — warn when a `select` or `ignore` entry changes no rule's outcome (needs config warning plumbing).
-  - *Follow-up*: **Reject unknown top-level config keys** — a misspelled key (e.g. `selct`) is still silently ignored.
-- **T2 & T3 — Rule Documentation Model & Discovery Surfaces**:
-  - *Status*: Exploration complete (`docs/dev/rule_docs_and_tags/t2_t3/`, ADR 008 in `decisions/008_rule_documentation_and_discovery.md`). Moving to production implementation (`impl/01_plan.md`).
-  - *Design*: In-tree `RuleDoc` with two-tier summaries (`summary` + `what_it_does`), strongly-typed `ConfigShape` enum with `RuleCatalog` key derivation, `--list-rules [--tag <label>]` and `--explain <rule>` discovery surfaces on both binaries, active configuration status resolution in `explain`, plain diagnostics footer, and `OutputFormat` ValueEnum.
-- **Rule Doc Examples (from T2 exploration, D42)**:
+- **Shadowed-selector config warning**: warn when a `select` or `ignore` entry changes no rule's outcome (needs config warning plumbing).
+- **Reject unknown top-level config keys**: a misspelled key (e.g. `selct`) is still silently ignored.
+- **Rule Doc Examples**:
   - *Current*: Every code rule's `rule_test!` pass/fail cases are the best-maintained examples, but they live in `#[cfg(test)]` and no doc can use them. Command rules and suppression audits have no `rule_test!`.
   - *Target*: Add Example / Use-instead sections sourced from a marked subset of test cases per language, so rendered examples are always executed as tests.
-- **Deferred from T2/T3 exploration (D43, `docs/dev/rule_docs_and_tags/t2_t3/02_sota_and_references.md` §4)**:
-  - JSON output for discovery commands (`--format json` for `--list-rules` / `--explain`), and `tags` on JSON diagnostics.
+- **Discovery & Documentation Follow-ups**:
+  - JSON output for discovery commands (`--format json` for `--list-rules` / `--explain`), and `tags` on JSON diagnostics. Include per-language message overrides (`summary` / `rationale` / `suggestion`), not just the base text.
   - Path-aware status in `explain` (evaluating `per_file_ignores` for a given file path).
-  - Typed configuration keys with their types and real per-rule defaults in rule docs.
-  - Generated in-repo rule catalog guarded by a golden-file drift test (replacing manual README catalog).
+  - Show each configuration key's type and default in `--explain`, including per-language defaults, as a ready-to-paste `[rules.<name>]` TOML block rendered from the rule's config declaration, never from prose. Guard it with a round-trip test: render the defaults, parse them back into `Config`, and compare the effective values per language.
+  - Generated in-repo rule catalog guarded by a golden-file drift test.
   - Styled Markdown rendering in the terminal.
-  - JSON Schema for `.omnilint.toml` (editor completion).
+  - JSON Schema for `.omnilint.toml` (editor completion). It must be registry-aware, because `rules` is a free map: per-rule keys and defaults, the threshold bounds each rule uses, language sub-tables, and every rule name and tag as a selector value. It must agree with the loader on unknown keys, so land it with "Reject unknown top-level config keys". Document the `#:schema` directive (Taplo) in the README.
   - Typed overlap / sources field linking rules to equivalent Ruff / Clippy rules.
   - Decide whether plain diagnostics keep printing the full rationale and suggestion on every hit.
-  - Investigate subcommands (`rules`, `explain`, a default `check`) instead of the `--list-rules` / `--explain` flags (DI8).
+  - Investigate subcommands (`rules`, `explain`, a default `check`) instead of the `--list-rules` / `--explain` flags.
 - **Later / Out-of-Scope Ideas**:
-  - **Abstraction-driven auto-tagging** (D7, NG2): importing or using a domain helper (e.g. a logging abstraction) automatically attaches its topic tag to the rule.
-  - **Computed `recommended` view** (NG5): if curated presets are ever introduced, define `recommended` as a computed view (`exact` ∧ `unopinionated`) rather than a second hand-maintained list.
+  - **Abstraction-driven auto-tagging**: importing or using a domain helper (e.g. a logging abstraction) automatically attaches its topic tag to the rule.
+  - **Computed `recommended` view**: if curated presets are ever introduced, define `recommended` as a computed view (`exact` ∧ `unopinionated`) rather than a second hand-maintained list.

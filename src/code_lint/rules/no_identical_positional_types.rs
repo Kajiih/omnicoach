@@ -25,7 +25,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 pub struct NoIdenticalPositionalTypes;
 
 impl NoIdenticalPositionalTypes {
-    /// The rule's declared facets (ADR 007).
+    /// The rule's declared facets.
     pub(crate) const CLASSIFICATION: Classification = Classification {
         topics: &[Topic::STATIC_TYPING, Topic::POSITIONAL_MEANING],
         precision: Precision::Exact,

@@ -1,7 +1,6 @@
 //! Rule taxonomy: the facets each rule declares.
 //!
-//! Pure, constant metadata with no queries. Rules and runners never branch on it:
-//! [`crate::rule_selection`] is its only reader.
+//! Pure, constant metadata with no queries. Rules and runners never branch on it.
 
 architecture_component!(RuleTaxonomy);
 
@@ -12,13 +11,13 @@ use crate::rule_documentation::RuleDoc;
 /// The subject of a rule: the only multi-valued, hierarchical facet.
 ///
 /// Each topic is declared once, as an associated `const` on [`Topic`]. The consts are
-/// `pub(crate)` so that a topic no rule uses fails the `dead_code` lint (M10).
+/// `pub(crate)` so that a topic no rule uses fails the `dead_code` lint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Topic {
     /// The topic's canonical `kebab-case` label, e.g. `test-timing`.
     pub label: &'static str,
-    /// The broader topic, if any. Its type makes a parent in another facet impossible (M11),
-    /// and `const` evaluation makes a cycle a compile error (M8, `E0391`).
+    /// The broader topic, if any. Its type makes a parent in another facet impossible,
+    /// and `const` evaluation makes a cycle a compile error (`E0391`).
     pub parent: Option<&'static Self>,
     /// One-line description of the topic.
     pub description: &'static str,
@@ -244,7 +243,7 @@ impl Topic {
     };
 }
 
-/// Precision facet: can the rule flag correct code? (D28)
+/// Precision facet: can the rule flag correct code?
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, EnumIter, IntoStaticStr, EnumMessage,
 )]
@@ -256,7 +255,7 @@ pub enum Precision {
     Heuristic,
 }
 
-/// Consensus facet: do reasonable people disagree with the rule? (D23)
+/// Consensus facet: do reasonable people disagree with the rule?
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, EnumIter, IntoStaticStr, EnumMessage,
 )]
@@ -268,7 +267,7 @@ pub enum Consensus {
     Unopinionated,
 }
 
-/// Impacted quality facet (D38, ISO/IEC 25010): what software quality suffers when violated.
+/// Impacted quality facet (ISO/IEC 25010): what software quality suffers when violated.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, EnumIter, IntoStaticStr, EnumMessage,
 )]
@@ -280,12 +279,12 @@ pub enum ImpactedQuality {
     Maintainability,
 }
 
-// TODO: There's a lot of code commented here, why?
-/// A rule's declared classification: one mandatory field per declared facet (D17, D21).
+/// A rule's declared classification: one mandatory field per declared facet.
 ///
 /// Derived facets (languages, analyzed input, file scope) have no field, and `topics` lists
 /// only the most specific topics.
 ///
+/// A valid classification:
 /// ```
 /// use omni::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 /// const TIMING: Topic = Topic {
@@ -303,7 +302,12 @@ pub enum ImpactedQuality {
 /// };
 /// ```
 ///
-/// M1, a single-valued facet is missing:
+/// # Compile-time guarantees
+///
+/// Each example below is a classification mistake that must fail to compile. `cargo test`
+/// runs them as `compile_fail` doctests and checks the expected error code.
+///
+/// A single-valued facet is missing:
 /// ```compile_fail,E0063
 /// # use omni::rule_taxonomy::{Classification, Consensus, Precision};
 /// const MISSING: Classification = Classification {
@@ -313,7 +317,7 @@ pub enum ImpactedQuality {
 /// };
 /// ```
 ///
-/// M2, a single-valued facet gets two values:
+/// A single-valued facet gets two values:
 /// ```compile_fail,E0062
 /// # use omni::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision};
 /// const TWICE: Classification = Classification {
@@ -325,7 +329,7 @@ pub enum ImpactedQuality {
 /// };
 /// ```
 ///
-/// M5, a facet value where a topic belongs:
+/// A facet value where a topic belongs:
 /// ```compile_fail,E0308
 /// # use omni::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision};
 /// const MISPLACED: Classification = Classification {
@@ -336,7 +340,7 @@ pub enum ImpactedQuality {
 /// };
 /// ```
 ///
-/// M6, a derived facet declared by hand:
+/// A derived facet declared by hand:
 /// ```compile_fail,E0560
 /// # use omni::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision};
 /// const DERIVED: Classification = Classification {
@@ -348,7 +352,7 @@ pub enum ImpactedQuality {
 /// };
 /// ```
 ///
-/// M7, a topic that does not exist:
+/// A topic that does not exist:
 /// ```compile_fail,E0599
 /// # use omni::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 /// const TYPO: Classification = Classification {
@@ -359,7 +363,7 @@ pub enum ImpactedQuality {
 /// };
 /// ```
 ///
-/// M8, a cycle in `Topic` parent links:
+/// A cycle in `Topic` parent links:
 /// ```compile_fail,E0391
 /// # use omni::rule_taxonomy::Topic;
 /// const A: Topic = Topic {
@@ -379,7 +383,7 @@ pub enum ImpactedQuality {
 /// # let _ = (A, B);
 /// ```
 ///
-/// M11, a topic's parent in another facet:
+/// A topic's parent in another facet:
 /// ```compile_fail,E0308
 /// # use omni::rule_taxonomy::{Precision, Topic};
 /// const PARENT: Topic = Topic {
@@ -398,7 +402,7 @@ pub struct Classification {
     pub precision: Precision,
     /// Consensus value.
     pub consensus: Consensus,
-    /// Impacted quality value (D38).
+    /// Impacted quality value.
     pub impacted_quality: ImpactedQuality,
 }
 

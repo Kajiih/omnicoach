@@ -1,5 +1,5 @@
 //! Taxonomy queries over the registered rules: derived facets, topic ancestry, branches and
-//! the single global label registry (DI5).
+//! the single global label registry.
 
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
@@ -33,7 +33,7 @@ pub enum Derived {
     SourceOnly,
 }
 
-/// A facet. Its label is for display only and is never a selector (D19).
+/// A facet. Its label is for display only and is never a selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
 pub enum Facet {
     /// Declared, multi-valued, hierarchical.
@@ -42,7 +42,7 @@ pub enum Facet {
     Precision,
     /// Declared, single-valued.
     Consensus,
-    /// Declared, single-valued (D38).
+    /// Declared, single-valued.
     ImpactedQuality,
     /// Derived from the rule's supported languages.
     Languages,
@@ -53,7 +53,7 @@ pub enum Facet {
 }
 
 impl Facet {
-    /// The display label (D28, D38).
+    /// The display label.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -131,7 +131,7 @@ impl Tag {
 /// A validated, canonical selector: a rule name or a tag (synonyms already resolved).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Selector {
-    /// A rule name: the leaf under every tag the rule carries (D15).
+    /// A rule name: the leaf under every tag the rule carries.
     Rule(RuleName),
     /// A tag, with all its descendants.
     Tag(Tag),
@@ -226,7 +226,7 @@ impl Topic {
     }
 }
 
-/// Every topic in use, collected from registered rules and their ancestors (M10).
+/// Every topic in use, collected from registered rules and their ancestors.
 fn all_topics() -> impl Iterator<Item = Topic> {
     let topics: BTreeSet<Topic> = REGISTERED_RULES
         .iter()
@@ -247,7 +247,7 @@ pub fn all_tags() -> impl Iterator<Item = Tag> {
 }
 
 impl RegisteredRule {
-    /// The rule's branches: each root-to-leaf tag path it sits on (D18). A topic branch is the
+    /// The rule's branches: each root-to-leaf tag path it sits on. A topic branch is the
     /// topic's path; every other facet value is a one-tag branch. The rule is the implicit leaf.
     pub fn branches(&self) -> Vec<Vec<Tag>> {
         let declared = self.classification;
@@ -276,7 +276,7 @@ impl RegisteredRule {
     }
 }
 
-/// The single global label registry (DI5): rule names, tag labels and topic synonyms.
+/// The single global label registry: rule names, tag labels and topic synonyms.
 fn labels() -> impl Iterator<Item = (&'static str, Selector)> {
     let rules = REGISTERED_RULES
         .iter()
@@ -430,10 +430,7 @@ mod tests {
             .keys()
             .filter(|label| Facet::iter().any(|facet| facet.matches_label(label)))
             .collect();
-        assert!(
-            facet_like.is_empty(),
-            "{facet_like:?} read as facet labels (D19)"
-        );
+        assert!(facet_like.is_empty(), "{facet_like:?} read as facet labels");
     }
 
     #[test]

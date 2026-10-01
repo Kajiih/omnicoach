@@ -44,7 +44,7 @@ pub struct RuleDoc {
 }
 
 impl RuleDoc {
-    /// Placeholder for rules whose doc is not written yet (content pass, D12).
+    /// Placeholder for rules whose doc is not written yet.
     pub const TODO: Self = Self {
         summary: "Documentation pending.",
         what_it_does: "Documentation pending.",

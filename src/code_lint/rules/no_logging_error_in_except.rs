@@ -26,7 +26,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 pub struct NoLoggingErrorInExcept;
 
 impl NoLoggingErrorInExcept {
-    /// The rule's declared facets (ADR 007).
+    /// The rule's declared facets.
     pub(crate) const CLASSIFICATION: Classification = Classification {
         topics: &[Topic::LOGGING, Topic::ERROR_HANDLING],
         precision: Precision::Exact,
