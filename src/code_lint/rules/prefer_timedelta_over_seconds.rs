@@ -33,7 +33,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 pub struct PreferTimedeltaOverSeconds;
 
 impl PreferTimedeltaOverSeconds {
-    /// The rule's declared facets (ADR 007).
+    /// The rule's declared facets.
     pub(crate) const CLASSIFICATION: Classification = Classification {
         topics: &[Topic::TYPE_ENCODED_NAMES, Topic::DURATIONS],
         precision: Precision::Heuristic,

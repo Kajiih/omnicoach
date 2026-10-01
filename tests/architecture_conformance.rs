@@ -432,7 +432,7 @@ fn ast_grep_encapsulation_rules() -> Vec<ForbiddenDependencyRule> {
 }
 
 /// Runners reach `rule_taxonomy` transitively through the rule registries, but their behaviour
-/// must never depend on a rule's classification (ADR 007, D37).
+/// must never depend on a rule's classification.
 fn taxonomy_isolation_rules() -> Vec<ForbiddenDependencyRule> {
     ["code_lint::runner", "command_lint::runner"]
         .into_iter()

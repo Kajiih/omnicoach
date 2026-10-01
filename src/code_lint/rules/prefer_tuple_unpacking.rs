@@ -35,7 +35,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 pub struct PreferTupleUnpacking;
 
 impl PreferTupleUnpacking {
-    /// The rule's declared facets (ADR 007).
+    /// The rule's declared facets.
     pub(crate) const CLASSIFICATION: Classification = Classification {
         topics: &[Topic::POSITIONAL_INDEXING],
         precision: Precision::Heuristic,

@@ -26,7 +26,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 pub struct SingleLetterVariableName;
 
 impl SingleLetterVariableName {
-    /// The rule's declared facets (ADR 007).
+    /// The rule's declared facets.
     pub(crate) const CLASSIFICATION: Classification = Classification {
         topics: &[Topic::ABBREVIATED_NAMES],
         precision: Precision::Exact,

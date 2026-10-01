@@ -69,7 +69,7 @@ fn split_segments(name: &str) -> Vec<String> {
 pub struct BannedAbbreviations;
 
 impl BannedAbbreviations {
-    /// The rule's declared facets (ADR 007).
+    /// The rule's declared facets.
     pub(crate) const CLASSIFICATION: Classification = Classification {
         topics: &[Topic::ABBREVIATED_NAMES],
         precision: Precision::Heuristic,

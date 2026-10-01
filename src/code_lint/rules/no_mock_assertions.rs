@@ -41,7 +41,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 pub struct NoMockAssertions;
 
 impl NoMockAssertions {
-    /// The rule's declared facets (ADR 007).
+    /// The rule's declared facets.
     pub(crate) const CLASSIFICATION: Classification = Classification {
         topics: &[Topic::TEST_ASSERTIONS, Topic::TEST_DOUBLES],
         precision: Precision::Exact,

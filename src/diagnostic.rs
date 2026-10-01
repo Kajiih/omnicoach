@@ -408,7 +408,7 @@ impl LineIndex {
     }
 }
 
-/// Output format of diagnostics (D51).
+/// Output format of diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum OutputFormat {
     /// Human-readable text

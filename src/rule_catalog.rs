@@ -1,5 +1,4 @@
-//! Rule catalog: renders the rule list and one rule's documentation as plain Markdown (D47,
-//! D50). Both binaries serve every registered rule through this module (DI9).
+//! Rule catalog: renders the rule list and one rule's documentation as plain Markdown.
 
 architecture_component!(RuleCatalog);
 
@@ -33,7 +32,7 @@ pub enum CatalogError {
     Config(#[from] ConfigError),
 }
 
-/// Rule discovery flags shared by both binaries (DI8).
+/// Command-line flags for rule discovery: `--list-rules`, `--tag` and `--explain`.
 #[derive(Debug, clap::Args)]
 pub struct DiscoveryArgs {
     /// List every rule with its languages and summary, as Markdown
@@ -60,13 +59,13 @@ impl DiscoveryArgs {
     }
 }
 
-/// The line printed after plain diagnostics, pointing at `--explain` (D48, DI14).
+/// The line printed after plain diagnostics, pointing at `--explain`.
 #[must_use]
 pub fn explain_footer(binary: &str) -> String {
     format!("For details on a rule, run: {binary} --explain <rule>")
 }
 
-/// One Markdown bullet per rule, sorted by name: name, languages (or input) and summary (DI10).
+/// One Markdown bullet per rule, sorted by name: name, languages (or input) and summary.
 ///
 /// # Errors
 ///
@@ -89,7 +88,7 @@ pub fn list_rules(tag: Option<&str>) -> Result<String, CatalogError> {
     Ok(lines.join("\n") + "\n")
 }
 
-/// The rule's full documentation as Markdown, including its active status (DI13).
+/// The rule's full documentation as Markdown, including its active status.
 ///
 /// # Errors
 ///
@@ -174,7 +173,7 @@ fn render_rule(rule: &RegisteredRule) -> String {
 }
 
 /// The rule's tags in `facet`, comma-separated; an ancestor topic names the topic it comes
-/// from (D36), e.g. `testing [via test-timing]`.
+/// from, e.g. `testing [via test-timing]`.
 fn facet_tags(rule: &RegisteredRule, facet: Facet) -> String {
     let mut labels = Vec::new();
     for branch in rule.branches() {
@@ -202,7 +201,7 @@ mod tests {
     use super::*;
     use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
 
-    /// The K2 style problems of one doc.
+    /// The style problems of one doc.
     fn doc_problems(doc: &RuleDoc) -> Vec<String> {
         let mut problems = Vec::new();
         let summary = doc.summary;

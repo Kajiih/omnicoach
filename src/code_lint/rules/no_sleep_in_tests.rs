@@ -55,7 +55,7 @@ const ZERO_SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
 pub struct NoSleepInTests;
 
 impl NoSleepInTests {
-    /// The rule's declared facets (ADR 007).
+    /// The rule's declared facets.
     pub(crate) const CLASSIFICATION: Classification = Classification {
         topics: &[Topic::TEST_TIMING],
         precision: Precision::Exact,
@@ -110,7 +110,7 @@ impl Detector for NoSleepInTests {
 pub struct NoZeroSleepInTests;
 
 impl NoZeroSleepInTests {
-    /// The rule's declared facets (ADR 007).
+    /// The rule's declared facets.
     pub(crate) const CLASSIFICATION: Classification = Classification {
         topics: &[Topic::TEST_TIMING],
         precision: Precision::Exact,

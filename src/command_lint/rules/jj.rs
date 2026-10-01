@@ -52,7 +52,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 pub struct NoJJEditOnDescribedCommits;
 
 impl NoJJEditOnDescribedCommits {
-    /// The rule's declared facets (ADR 007).
+    /// The rule's declared facets.
     pub(crate) const CLASSIFICATION: Classification = Classification {
         topics: &[Topic::JJ],
         precision: Precision::Exact,

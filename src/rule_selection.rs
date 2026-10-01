@@ -1,8 +1,8 @@
 //! Rule selection: resolves `select`, `ignore` and `per_file_ignores` into the tag-free
-//! [`RuleName`] sets on [`Config`] (ADR 007 §2.3–§2.4).
+//! [`RuleName`] sets on [`Config`].
 //!
-//! Selectors are resolved once, at load, with precedence model B (D18): on each of a rule's
-//! branches the nearest selector wins, the rule name being the leaf of every branch (D15).
+//! Selectors are resolved once, at load, with this precedence: on each of a rule's
+//! branches the nearest selector wins, the rule name being the leaf of every branch.
 //! When branches disagree, `ignore` wins. With no verdict, the rule is on only if `select` is
 //! absent. `per_file_ignores` is a later, subtract-only stage. This is the only module that
 //! parses selector strings.
@@ -71,7 +71,7 @@ pub enum ConfigError {
         /// The closest registered label.
         suggestion: Option<&'static str>,
     },
-    /// A facet label, which is never a selector (D19).
+    /// A facet label, which is never a selector.
     #[error(
         "`{label}` in {location} is a facet label, not a selector; use one of its values: {values}"
     )]
