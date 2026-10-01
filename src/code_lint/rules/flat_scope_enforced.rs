@@ -2,11 +2,10 @@
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
-use crate::core::RuleOptions;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_declaration::Declaration;
-use crate::rule_documentation::RuleDoc;
-use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
+use crate::rule_declaration::{
+    Classification, Consensus, Declaration, ImpactedQuality, Precision, RuleDoc, RuleOptions, Topic,
+};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 

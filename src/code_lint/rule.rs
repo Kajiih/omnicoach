@@ -5,9 +5,10 @@ architecture_component!(CodeRuleContracts);
 
 use crate::code_lint::ast::{AstNode, ParsedFile};
 use crate::code_lint::semantic::{bindings, calls};
-use crate::core::{EnforcementMode, OptionsDeclaration, RuleOverrides};
 use crate::diagnostic::{Diagnostic, RuleName};
-use crate::rule_declaration::{Declaration, DeclaredRule};
+use crate::rule_declaration::{
+    Declaration, DeclaredRule, EnforcementMode, OptionsDeclaration, RuleOverrides,
+};
 use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
@@ -28,8 +29,8 @@ pub enum RuleTarget {
 /// that finds its violations.
 ///
 /// `check` receives the rule's options already resolved for the file, typed by the
-/// declaration: `()` without options, `usize` for a [`crate::core::CountOption`],
-/// `&HashSet<String>` for a [`crate::core::ListOption`], a tuple for a pair. A check function
+/// declaration: `()` without options, `usize` for a [`crate::rule_declaration::CountOption`],
+/// `&HashSet<String>` for a [`crate::rule_declaration::ListOption`], a tuple for a pair. A check function
 /// whose last parameter does not match the declared options does not compile.
 #[derive(Clone, Copy)]
 pub struct CodeRule<Options: OptionsDeclaration = ()> {

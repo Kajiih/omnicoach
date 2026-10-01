@@ -19,8 +19,9 @@ use strum::IntoEnumIterator as _;
 
 pub use self::taxonomy::{Derived, Facet, RegisteredRule, Tag};
 use self::taxonomy::{REGISTERED_RULES, Selector};
-use crate::core::{CONFIG_FILE_NAME, Config, RuleOptionsError, RuleOverrides, compile_glob};
+use crate::config::{CONFIG_FILE_NAME, Config, compile_glob};
 use crate::diagnostic::RuleName;
+use crate::rule_declaration::{RuleOptionsError, RuleOverrides};
 
 /// Where in the config an entry was written.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -425,7 +426,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
+    use crate::rule_declaration::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 
     const PARENT: Topic = Topic {
         label: "parent",

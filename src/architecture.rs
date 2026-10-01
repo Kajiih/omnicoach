@@ -76,14 +76,10 @@ define_architecture! {
     // --- Shared Foundations ---
     /// Zero-dependency foundational primitives (`architecture`, `diagnostic`, `diff`).
     FoundationPrimitives  => [],
-    /// Shared domain vocabulary, config and rule option declarations (`core`).
-    CoreVocabulary        => [FoundationPrimitives],
-    /// Pure rule classification types: topics and declared facets (`rule_taxonomy`).
-    RuleTaxonomy          => [FoundationPrimitives],
-    /// Pure user-facing rule docs: sections and references (`rule_documentation`).
-    RuleDocumentation     => [FoundationPrimitives],
     /// What every rule states about itself: name, template, languages, options, classification and doc (`rule_declaration`).
-    RuleDeclaration       => [CoreVocabulary, RuleTaxonomy, RuleDocumentation],
+    RuleDeclaration       => [FoundationPrimitives],
+    /// Project configuration resolved from `.omnilint.toml` (`config`).
+    Config                => [FoundationPrimitives, RuleDeclaration],
 
     // --- Static Code Analysis Domain (`code_lint`) ---
     /// Encapsulated AST syntax adapters and language parsers (`code_lint::ast`).
@@ -91,9 +87,9 @@ define_architecture! {
     /// Semantic analysis engines (`code_lint::semantic`).
     CodeSemanticEngines   => [CodeSyntaxAdapters],
     /// The code rule contract: a declaration, a file target and a check function (`code_lint::rule`).
-    CodeRuleContracts     => [CoreVocabulary, CodeSemanticEngines, CodeSyntaxAdapters, RuleDeclaration],
+    CodeRuleContracts     => [CodeSemanticEngines, CodeSyntaxAdapters, RuleDeclaration],
     /// Inline comment suppression tracker and directive policies (`code_lint::suppression`).
-    CodeSuppressionEngine => [CodeRuleContracts, CodeSemanticEngines, RuleDeclaration],
+    CodeSuppressionEngine => [CodeRuleContracts, CodeSemanticEngines, RuleDeclaration, Config],
     /// Concrete static analysis linter rules (`code_lint::rules`).
     CodeLintRules         => [CodeRuleContracts, RuleDeclaration],
     /// Static code linting multi-file orchestration runner (`code_lint::runner`).
@@ -103,23 +99,23 @@ define_architecture! {
     /// VCS interaction and repository diff adapters (`command_lint::vcs`).
     CommandVcsAdapters    => [FoundationPrimitives],
     /// The command rule contract and intercepted command schemas (`command_lint::rule`).
-    CommandRuleContracts  => [CoreVocabulary, CommandVcsAdapters, RuleDeclaration],
+    CommandRuleContracts  => [CommandVcsAdapters, RuleDeclaration],
     /// Concrete command safety linting rules (`command_lint::rules`).
     CommandLintRules      => [CommandRuleContracts, RuleDeclaration],
     /// Command linting orchestration and interception runner (`command_lint::runner`).
-    CommandLintRunner     => [CommandLintRules],
+    CommandLintRunner     => [CommandLintRules, Config],
 
     // --- Rule Selection ---
     /// Taxonomy queries, config selector resolution and rule option validation (`rule_selection`).
-    RuleSelection         => [RuleDeclaration, CodeLintRules, CodeSuppressionEngine, CommandLintRules, CoreVocabulary],
+    RuleSelection         => [RuleDeclaration, CodeLintRules, CodeSuppressionEngine, CommandLintRules, Config],
     /// Rule list and single-rule Markdown rendering for discovery commands (`rule_catalog`).
-    RuleCatalog           => [RuleSelection, RuleDocumentation, CoreVocabulary],
+    RuleCatalog           => [RuleSelection, RuleDeclaration],
 
     // --- Test Harness & Entrypoints ---
     /// Test harness and snapshot fixtures (`test_utils`).
     TestingHarness        => [CodeRuleContracts, CommandRuleContracts],
     /// CLI application entrypoint binaries (`src/bin/*`).
-    ApplicationBinaries   => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog, CoreVocabulary],
+    ApplicationBinaries   => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog],
 }
 
 #[cfg(test)]

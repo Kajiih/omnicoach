@@ -4,13 +4,13 @@
 
 use crate::command_lint::rule::{CommandRule, InterceptedCommand, ProgramCliSchema};
 use crate::command_lint::vcs::JjClient;
-use crate::core::RuleOptions;
 use crate::diagnostic::{
     Diagnostic, RuleName, SourceLocation, SourceSpan, ViolationTemplate, violation_template,
 };
-use crate::rule_declaration::Declaration;
-use crate::rule_documentation::{Reference, RuleDoc};
-use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
+use crate::rule_declaration::{
+    Classification, Consensus, Declaration, ImpactedQuality, Precision, Reference, RuleDoc,
+    RuleOptions, Topic,
+};
 
 /// CLI schema definition for Jujutsu commands.
 const JJ_CLI_SCHEMA: ProgramCliSchema = ProgramCliSchema {

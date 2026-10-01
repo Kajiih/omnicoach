@@ -11,11 +11,11 @@ use crate::code_lint::rule::RuleTarget;
 use crate::code_lint::rules::CODE_RULES;
 use crate::code_lint::suppression::SUPPRESSION_AUDITS;
 use crate::command_lint::rules::COMMAND_RULES;
-use crate::core::{DeclaredOptions, closest_match};
 use crate::diagnostic::{RuleName, ViolationTemplate};
-use crate::rule_declaration::DeclaredRule;
-use crate::rule_documentation::RuleDoc;
-use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
+use crate::rule_declaration::{
+    Classification, Consensus, DeclaredOptions, DeclaredRule, ImpactedQuality, Precision, RuleDoc,
+    Topic, closest_match,
+};
 
 /// A value of a derived facet, computed from the rule and never declared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, EnumIter, IntoStaticStr)]
@@ -284,7 +284,7 @@ impl RegisteredRule {
             name: RuleName(name),
             doc: RuleDoc::TODO,
             template: &TEMPLATE,
-            options: crate::core::RuleOptions::none().declared(),
+            options: crate::rule_declaration::RuleOptions::none().declared(),
             languages: &[],
             classification,
             derived: Vec::new(),
@@ -328,7 +328,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::core::is_kebab_case;
+    use crate::rule_declaration::is_kebab_case;
 
     #[test]
     fn every_rule_has_a_topic() {

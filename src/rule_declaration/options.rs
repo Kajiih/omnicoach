@@ -5,12 +5,103 @@
 use std::collections::{HashMap, HashSet};
 
 use ast_grep_language::SupportLang;
-use strum::IntoEnumIterator as _;
+use strum::{EnumIter, IntoEnumIterator as _, IntoStaticStr};
 
-use super::{
-    EnforcementMode, FilterListDefaults, LanguageDefaults, SUPPORTED_LANGUAGES, closest_match,
-    support_lang_name,
-};
+use super::closest_match;
+
+/// Compile-time static descriptor for default filter lists (both allowlists and denylists).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FilterListDefaults {
+    /// Base items active across all supported languages.
+    pub base: &'static [&'static str],
+    /// Language-specific items added to the base defaults.
+    pub extend: &'static [(SupportLang, &'static [&'static str])],
+    /// Language-specific items removed from the base defaults.
+    pub exempt: &'static [(SupportLang, &'static [&'static str])],
+}
+
+impl FilterListDefaults {
+    /// Resolves the default set of strings for a specific language.
+    #[must_use]
+    pub fn resolve_default_for_lang(&self, lang: SupportLang) -> HashSet<String> {
+        let mut set: HashSet<String> = self.base.iter().map(|&item| item.to_string()).collect();
+        for &(target_lang, items) in self.extend {
+            if target_lang == lang {
+                set.extend(items.iter().map(|&item| item.to_string()));
+            }
+        }
+        for &(target_lang, items) in self.exempt {
+            if target_lang == lang {
+                for &item in items {
+                    set.remove(item);
+                }
+            }
+        }
+        set
+    }
+}
+
+/// Compile-time static descriptor for scalar or structured default configuration values
+/// with optional per-language overrides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LanguageDefaults<T: Copy + 'static> {
+    /// Default value active across all supported languages unless overridden.
+    pub base: T,
+    /// Language-specific default values that override `base`.
+    pub overrides: &'static [(SupportLang, T)],
+}
+
+impl<T: Copy + 'static> LanguageDefaults<T> {
+    /// Creates a new static language-aware default descriptor.
+    #[must_use]
+    pub const fn new(base: T, overrides: &'static [(SupportLang, T)]) -> Self {
+        Self { base, overrides }
+    }
+
+    /// Resolves the compile-time default value for a specific language.
+    #[must_use]
+    pub fn resolve_default_for_lang(&self, lang: SupportLang) -> T {
+        for &(target_lang, value) in self.overrides {
+            if target_lang == lang {
+                return value;
+            }
+        }
+        self.base
+    }
+}
+
+/// Enforcement mode for rules targeting sensitive language constructs
+/// (e.g. `cast`, `suppress`, `getattr`, `except Exception`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+pub enum EnforcementMode {
+    /// Completely bans the construct from targeted files (only suppressible via `# omni:ignore`).
+    Ban,
+    /// Permits the construct only if accompanied by an explanatory comment.
+    RequireExplanation,
+}
+
+impl EnforcementMode {
+    /// The key setting a code rule's enforcement mode under `[rules.<name>]`.
+    pub const KEY: &'static str = "enforcement_mode";
+
+    /// What each mode does, for `--explain`.
+    pub const DOC: &'static str = "`ban` flags every occurrence; `require-explanation` accepts \
+                                   an occurrence explained by an adjacent comment.";
+}
+
+/// Every language the linter analyzes.
+pub const SUPPORTED_LANGUAGES: &[SupportLang] = &[SupportLang::Python, SupportLang::Rust];
+
+/// Returns the lowercase canonical configuration key for a supported language.
+#[must_use]
+pub const fn support_lang_name(lang: SupportLang) -> &'static str {
+    match lang {
+        SupportLang::Python => "python",
+        SupportLang::Rust => "rust",
+        _ => "",
+    }
+}
 
 /// The options a rule declares, as a typed value: nothing (`()`), one [`CountOption`], one
 /// [`ListOption`], or a pair of declarations.
@@ -610,6 +701,27 @@ mod tests {
 
     fn words(items: &[&str]) -> HashSet<String> {
         items.iter().map(|&item| item.to_owned()).collect()
+    }
+
+    #[test]
+    fn test_filter_list_defaults_resolve() {
+        const DEFAULTS: FilterListDefaults = FilterListDefaults {
+            base: &["common", "shared", "temp"],
+            extend: &[(SupportLang::Rust, &["rust_only"])],
+            exempt: &[(SupportLang::Rust, &["temp"])],
+        };
+
+        let python_defaults = DEFAULTS.resolve_default_for_lang(SupportLang::Python);
+        assert_eq!(
+            python_defaults,
+            HashSet::from(["common", "shared", "temp"].map(String::from))
+        );
+
+        let rust_defaults = DEFAULTS.resolve_default_for_lang(SupportLang::Rust);
+        assert_eq!(
+            rust_defaults,
+            HashSet::from(["common", "shared", "rust_only"].map(String::from))
+        );
     }
 
     #[rstest]

@@ -23,7 +23,6 @@ pub struct RuleDoc {
     pub summary: &'static str,
     pub what_it_does: &'static str,
     pub why_is_this_bad: &'static str,
-    pub configuration: &'static [ConfigShape],
     pub references: &'static [Reference],
 }
 
@@ -37,24 +36,7 @@ pub struct Reference {
 - **Compile-Time Completeness**: Omitting a field from `RuleDoc` is a compile error (`E0063`).
 - **Incremental Content Rollout (`DI12`)**: A `RuleDoc::TODO` placeholder allows progressive rollout across existing rules while maintaining compile-time completeness. Automated style linter tests enforce formatting on all non-placeholder docs.
 
-### 2.2. Configuration Keys via Strongly-Typed Shapes (`DI11`)
-
-*Superseded by ADR 009: configuration keys are now declared as typed option handles in the rule's `RULE` declaration, and `RuleDoc::configuration` no longer exists.*
-
-Instead of hand-writing string slices of configuration keys (risking typos and drift), rules declare their configuration shapes:
-
-```rust
-pub enum ConfigShape {
-    Threshold,
-    DenyList,
-    AllowList,
-    Enforcement,
-}
-```
-
-- **Architectural Boundary**: `RuleDocumentation` belongs to `FoundationPrimitives` and has zero dependencies on `core`. The mapping from `ConfigShape` to concrete keys (`KEYS: &'static [&'static str]`) is owned by `RuleCatalog`, which depends on both `RuleDocumentation` and `CoreVocabulary`.
-
-### 2.3. Discovery CLI Flags (`DI8`, `DI9`, `DI14`, `D50`)
+### 2.2. Discovery CLI Flags (`DI8`, `DI9`, `DI14`, `D50`)
 
 Both `omni-code-lint` and `omni-command-lint` provide symmetric rule discovery for all registered rules:
 - `--list-rules`: Lists every rule sorted by name, displaying its name, languages/input, and single-sentence summary.
@@ -63,7 +45,7 @@ Both `omni-code-lint` and `omni-command-lint` provide symmetric rule discovery f
 - **Terminal Plain Markdown Rendering (`D50`)**: Markdown is printed directly as plain text without ANSI escapes, ensuring compatibility across terminal emulators, pagers, and CI logs.
 - **Diagnostics Pointer Footer (`D48`, `DI14`)**: Plain diagnostics output appends a single terminal line: `For details on a rule, run: <binary> --explain <rule>`.
 
-### 2.4. Active Configuration Status in `explain` (`DI13`)
+### 2.3. Active Configuration Status in `explain` (`DI13`)
 
 `--explain <rule>` checks the current project's `.omnilint.toml` and displays:
 ```markdown
@@ -76,7 +58,7 @@ Status: enabled (default)
 ```
 This directly resolves the user question "Why is this rule on or off?" by reporting the winning selector and its branch hierarchy.
 
-### 2.5. Strongly-Typed Diagnostic Output Format (`D51`)
+### 2.4. Strongly-Typed Diagnostic Output Format (`D51`)
 
 `--format` on diagnostic execution uses `OutputFormat`:
 ```rust
@@ -89,42 +71,7 @@ pub enum OutputFormat {
 
 ---
 
-## 3. Architecture DAG Integration
-
-The component DAG in `src/architecture.rs` is updated with `RuleDocumentation` and `RuleCatalog`:
-
-```
-FoundationPrimitives
-  ▲              ▲
-  │              │
-RuleDocumentation│
-  ▲              │
-  │              │
-RuleTaxonomy     │
-  ▲              │
-  │              │
-CodeLintRules    │
-CommandLintRules │
-CodeSuppression  │
-  ▲              │
-  │              │
-RuleSelection    │
-  ▲              │
-  │              │
-RuleCatalog ─────┴─► CoreVocabulary
-  ▲
-  │
-ApplicationBinaries
-```
-
-- `RuleDocumentation` lives in `FoundationPrimitives` (zero dependencies).
-- `RuleTaxonomy` depends on `RuleDocumentation`.
-- `RuleCatalog` depends on `RuleSelection`, `RuleDocumentation`, and `CoreVocabulary`.
-- `ApplicationBinaries` depends on `RuleCatalog` and `RuleSelection`.
-
----
-
-## 4. Verification & Testing
+## 3. Verification & Testing
 
 1. **Registry Style Conformance Test**: Every documented rule is tested for:
    - `summary` is exactly one sentence ending with `.`.
@@ -137,7 +84,7 @@ ApplicationBinaries
 
 ---
 
-## 5. Non-Goals & Future Roadmap
+## 4. Non-Goals & Future Roadmap
 
 - **Rule Examples (`D42`)**: In-doc code examples (good/bad snippets) are deferred to a dedicated roadmap item.
 - **Subcommands (`rules`, `explain`)**: Kept as flags (`--list-rules`, `--explain`) for now; CLI subcommands deferred to roadmap.

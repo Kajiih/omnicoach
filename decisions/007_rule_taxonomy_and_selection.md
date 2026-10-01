@@ -81,29 +81,21 @@ Every rule has a set of **branches**: one root-to-leaf path per declared topic (
 
 Rules and runners must never branch on tags (`M13`):
 
-1. **No Tag Getter on `Rule` & Single-Source Registration**:
-   - `Rule::tags()` and `Rule::has_tag()` are removed from the rule execution contracts (`CoreVocabulary`).
-   - Each rule declares an inherent `pub(crate) const CLASSIFICATION: Classification` on its struct, and each domain registry (`CODE_RULES`, `SUPPRESSION_AUDITS`, `COMMAND_RULES`) is a single `&[ClassifiedRule<dyn ...Rule>]` list of `{ rule, classification }` pairs (no macro), so registering an unclassified rule does not compile and no list is duplicated. Runners read only `.rule`. *Superseded by ADR 009: the classification is now one field of the rule's single `Declaration` inside `RULE`.*
+1. **No Tag Access in Runners or Rules**:
+   - Rule contracts expose no tag getters or `has_tag` helpers, and runners are verified by `tests/architecture_conformance.rs` never to read `Classification` or `Topic`.
+   - Each rule's `Declaration` (`RuleDeclaration`) includes `classification: Classification` alongside its name, template, languages, options, and doc (`ADR 009`), so registering an unclassified rule does not compile.
 2. **Eager `RuleName` Resolution Across the Runner Boundary**:
-   - Because no facet depends on the runtime file `path` and the rule registries are static, `RuleSelection` eagerly resolves all tag and synonym selectors in `select`, `ignore`, and `per_file_ignores` at config load time into tag-free `RuleName` sets on `core::Config` (`disabled_rules: HashSet<RuleName>` and `per_file_ignores: Vec<(GlobMatcher, HashSet<RuleName>)>`).
-   - `core::Config::is_rule_enabled` and `core::Config::is_rule_enabled_for_path` stay in `CoreVocabulary` and check only `RuleName`, with zero tag visibility in runners or rules. They now take a `RuleName` instead of a `&dyn Rule` (the only signature change), since no tag lookup is needed.
-   - Selection is resolved only by `rule_selection::load_config` / `rule_selection::parse_config`; deserializing `core::Config` directly leaves `select`, `ignore`, and `per_file_ignores` unresolved.
-3. **Separate Suppression-Audit Contract**:
-   - The four suppression meta-rules (`MissingSuppressionReason`, `UnusedSuppression`, `UnknownSuppressionRule`, `BlanketSuppression`) are separated from AST `CodeRule`s into their own registry in `CodeSuppressionEngine` rather than checking `Tag::Suppression` in `src/code_lint/runner.rs`. Both code rules and suppression-audit rules derive the `code` analyzed-input value.
-4. **Updated `ARCHITECTURE_GRAPH` Edges (`src/architecture.rs`)**:
-   - `RuleTaxonomy => [FoundationPrimitives]` (pure `L0` types: `Topic`, `Precision`, `Consensus`, `ImpactedQuality`, `Classification`; `CoreVocabulary` does not depend on `RuleTaxonomy`)
-   - `CodeSuppressionEngine => [CodeRuleContracts, CodeSemanticEngines, RuleTaxonomy]`
-   - `CodeLintRules => [CodeRuleContracts, RuleTaxonomy]`
-   - `CodeLintRunner => [CodeLintRules, CodeSuppressionEngine]`
-   - `CommandLintRules => [CommandRuleContracts, RuleTaxonomy]`
-   - `RuleSelection => [RuleTaxonomy, CodeLintRules, CodeSuppressionEngine, CommandLintRules, CoreVocabulary]` (`L1`–`L3`: taxonomy queries, Model B planner, and config selector resolution; the `describe_rule` / `describe_tag` / `explain` facades are deferred to T3)
-   - `ApplicationBinaries => [CodeLintRunner, CommandLintRunner, RuleSelection, CoreVocabulary]`
+   - Because no facet depends on the runtime file `path` and the rule registries are static, `RuleSelection` eagerly resolves all tag and synonym selectors in `select`, `ignore`, and `per_file_ignores` at config load time into tag-free `RuleName` sets on `config::Config` (`disabled_rules: HashSet<RuleName>` and `per_file_ignores: Vec<(GlobMatcher, HashSet<RuleName>)>`).
+   - `config::Config::is_rule_enabled` and `config::Config::is_rule_enabled_for_path` live in `Config` (`src/config.rs`) and check only `RuleName`, with zero tag visibility in runners or rules.
+   - Selection is resolved only by `rule_selection::load_config` / `rule_selection::parse_config`.
+3. **Separate Suppression-Audit Registry**:
+   - The four suppression meta-rules (`MISSING_SUPPRESSION_REASON`, `UNUSED_SUPPRESSION`, `UNKNOWN_SUPPRESSION_RULE`, `BLANKET_SUPPRESSION`) live in their own `SUPPRESSION_AUDITS: &[Declaration]` registry in `CodeSuppressionEngine` rather than checking a tag in `src/code_lint/runner.rs`. Both code rules and suppression-audit rules derive the `code` analyzed-input value.
 
 ---
 
 ## 3. Verification Suite
 
-The verification suite lives in production: `compile_fail` doctests on `Classification` in `src/rule_taxonomy.rs` and invariant tests in `src/rule_selection/taxonomy.rs`:
+The verification suite lives in production: `compile_fail` doctests on `Classification` in `src/rule_declaration/taxonomy.rs` and invariant tests in `src/rule_selection/taxonomy.rs`:
 
 - **Compile-Time Checks (7 `compile_fail` Doctests)**:
   - Missing or duplicate single-valued facet field (`M1`: `E0063`, `M2`: `E0062`)

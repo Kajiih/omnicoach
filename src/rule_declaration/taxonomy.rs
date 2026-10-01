@@ -2,8 +2,6 @@
 //!
 //! Pure, constant metadata with no queries. Rules and runners never branch on it.
 
-architecture_component!(RuleTaxonomy);
-
 use strum::{EnumIter, EnumMessage, IntoStaticStr};
 
 /// The subject of a rule: the only multi-valued, hierarchical facet.
@@ -284,7 +282,7 @@ pub enum ImpactedQuality {
 ///
 /// A valid classification:
 /// ```
-/// use omni::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
+/// use omni::rule_declaration::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 /// const TIMING: Topic = Topic {
 ///     label: "timing",
 ///     parent: None,
@@ -307,7 +305,7 @@ pub enum ImpactedQuality {
 ///
 /// A single-valued facet is missing:
 /// ```compile_fail,E0063
-/// # use omni::rule_taxonomy::{Classification, Consensus, Precision};
+/// # use omni::rule_declaration::{Classification, Consensus, Precision};
 /// const MISSING: Classification = Classification {
 ///     topics: &[],
 ///     precision: Precision::Exact,
@@ -317,7 +315,7 @@ pub enum ImpactedQuality {
 ///
 /// A single-valued facet gets two values:
 /// ```compile_fail,E0062
-/// # use omni::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision};
+/// # use omni::rule_declaration::{Classification, Consensus, ImpactedQuality, Precision};
 /// const TWICE: Classification = Classification {
 ///     topics: &[],
 ///     precision: Precision::Exact,
@@ -329,7 +327,7 @@ pub enum ImpactedQuality {
 ///
 /// A facet value where a topic belongs:
 /// ```compile_fail,E0308
-/// # use omni::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision};
+/// # use omni::rule_declaration::{Classification, Consensus, ImpactedQuality, Precision};
 /// const MISPLACED: Classification = Classification {
 ///     topics: &[Precision::Heuristic],
 ///     precision: Precision::Exact,
@@ -340,7 +338,7 @@ pub enum ImpactedQuality {
 ///
 /// A derived facet declared by hand:
 /// ```compile_fail,E0560
-/// # use omni::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision};
+/// # use omni::rule_declaration::{Classification, Consensus, ImpactedQuality, Precision};
 /// const DERIVED: Classification = Classification {
 ///     topics: &[],
 ///     precision: Precision::Exact,
@@ -352,7 +350,7 @@ pub enum ImpactedQuality {
 ///
 /// A topic that does not exist:
 /// ```compile_fail,E0599
-/// # use omni::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
+/// # use omni::rule_declaration::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 /// const TYPO: Classification = Classification {
 ///     topics: &[Topic::TESING],
 ///     precision: Precision::Exact,
@@ -363,7 +361,7 @@ pub enum ImpactedQuality {
 ///
 /// A cycle in `Topic` parent links:
 /// ```compile_fail,E0391
-/// # use omni::rule_taxonomy::Topic;
+/// # use omni::rule_declaration::Topic;
 /// const A: Topic = Topic {
 ///     label: "a",
 ///     parent: Some(&B),
@@ -383,7 +381,7 @@ pub enum ImpactedQuality {
 ///
 /// A topic's parent in another facet:
 /// ```compile_fail,E0308
-/// # use omni::rule_taxonomy::{Precision, Topic};
+/// # use omni::rule_declaration::{Precision, Topic};
 /// const PARENT: Topic = Topic {
 ///     label: "bad",
 ///     parent: Some(&Precision::Exact),

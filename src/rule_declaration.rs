@@ -7,12 +7,65 @@
 
 architecture_component!(RuleDeclaration);
 
+mod documentation;
+mod options;
+mod taxonomy;
+
+pub use self::documentation::{Reference, RuleDoc};
+pub use self::options::{
+    CountOption, DeclaredOptions, EnforcementMode, FilterListDefaults, LanguageDefaults, ListKind,
+    ListOption, OptionProblem, OptionSpec, OptionsDeclaration, RuleOptions, RuleOptionsError,
+    RuleOverrides, SUPPORTED_LANGUAGES, support_lang_name,
+};
+pub use self::taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
+
 use ast_grep_language::SupportLang;
 
-use crate::core::{DeclaredOptions, OptionsDeclaration, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, SourceLocation, ViolationTemplate};
-use crate::rule_documentation::RuleDoc;
-use crate::rule_taxonomy::Classification;
+
+/// Returns true if `name` is a non-empty `kebab-case` identifier (`[a-z0-9]+(-[a-z0-9]+)*`).
+#[must_use]
+pub fn is_kebab_case(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && name.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
+}
+
+/// The candidate closest to `label`, if it is close enough to be a typo.
+pub fn closest_match(
+    label: &str,
+    candidates: impl Iterator<Item = &'static str>,
+) -> Option<&'static str> {
+    let normalized = label.to_ascii_lowercase();
+    let tolerance = (normalized.chars().count() / 3).max(1);
+    candidates
+        .map(|known| (edit_distance(&normalized, known), known))
+        .filter(|&(distance, _)| distance <= tolerance)
+        .min()
+        .map(|(_, known)| known)
+}
+
+/// Levenshtein distance over characters.
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    for (row, left_char) in left.chars().enumerate() {
+        let mut current = vec![row + 1];
+        for (column, &right_char) in right.iter().enumerate() {
+            let substitution = previous[column] + usize::from(left_char != right_char);
+            current.push(
+                substitution
+                    .min(previous[column + 1] + 1)
+                    .min(current[column] + 1),
+            );
+        }
+        previous = current;
+    }
+    previous[right.len()]
+}
 
 /// What a rule states about itself: name, message template, languages, options,
 /// classification and doc. A rule cannot be registered without all six.
@@ -91,4 +144,25 @@ pub struct DeclaredRule {
     pub classification: Classification,
     /// The rule's user-facing doc.
     pub doc: RuleDoc,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[rstest::rstest]
+    #[case::missing_letter("alpa", Some("alpha"))]
+    #[case::case_folded("ALPHA", Some("alpha"))]
+    #[case::nearest_wins("alphabe", Some("alphabet"))]
+    #[case::at_tolerance("alphaxy", Some("alpha"))]
+    #[case::beyond_tolerance("alphaxyz", None)]
+    fn closest_match_suggests_typos_only(#[case] label: &str, #[case] expected: Option<&str>) {
+        let candidates = ["alpha", "alphabet", "omega"];
+        assert_eq!(closest_match(label, candidates.into_iter()), expected);
+    }
+
+    #[test]
+    fn edit_distance_is_levenshtein() {
+        assert_eq!(edit_distance("kitten", "sitting"), 3);
+    }
 }

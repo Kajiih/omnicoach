@@ -4,7 +4,7 @@ architecture_component!(RuleCatalog);
 
 use strum::IntoEnumIterator as _;
 
-use crate::core::{
+use crate::rule_declaration::{
     DeclaredOptions, EnforcementMode, FilterListDefaults, LanguageDefaults, OptionSpec,
     support_lang_name,
 };
@@ -258,7 +258,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::rule_documentation::{Reference, RuleDoc};
+    use crate::rule_declaration::{Reference, RuleDoc};
 
     /// The style problems of one doc.
     fn doc_problems(doc: &RuleDoc) -> Vec<String> {
