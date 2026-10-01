@@ -2,8 +2,9 @@
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{Config, Detector};
+use crate::core::{Detector, ResolvedOptions, RuleOptions};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_declaration::Rule;
 use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
@@ -24,19 +25,18 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule that bans compound boolean conditions and boolean tuple packing in assertions.
-pub struct NoAssertionPacking;
+struct NoAssertionPacking;
 
-impl NoAssertionPacking {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &NoAssertionPacking,
+    classification: Classification {
         topics: &[Topic::TEST_ASSERTIONS],
         precision: Precision::Exact,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Maintainability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags assertions that pack several checks into one condition.",
         what_it_does: "Flags two shapes of assertion in test files. A compound condition \
                        joined by a top-level `and` in a Python `assert` statement, or by a \
@@ -57,13 +57,13 @@ impl NoAssertionPacking {
                           Write one assertion per check, so each failure names its \
                           condition and shows its values, or compare the result against one \
                           expected object or struct.",
-        configuration: &[],
         references: &[Reference {
             title: "pytest: How to write and report assertions in tests",
             url: "https://docs.pytest.org/en/stable/how-to/assert.html",
         }],
-    };
-}
+    },
+    options: RuleOptions::CODE_RULE,
+};
 
 impl Detector for NoAssertionPacking {
     fn name(&self) -> RuleName {
@@ -144,7 +144,12 @@ impl CodeDetector for NoAssertionPacking {
         RuleTarget::TestsOnly
     }
 
-    fn check_file(&self, path: &Path, file: &ParsedFile, _config: &Config) -> Vec<Diagnostic> {
+    fn check_file(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        _options: &ResolvedOptions<'_>,
+    ) -> Vec<Diagnostic> {
         match file.lang() {
             SupportLang::Rust => ast::rust::collect_macro_invocations(file)
                 .iter()
@@ -160,7 +165,7 @@ impl CodeDetector for NoAssertionPacking {
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    NoAssertionPacking,
+    RULE,
     {
         Python => {
             pass: [

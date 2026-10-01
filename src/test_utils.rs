@@ -7,8 +7,9 @@ use crate::code_lint::rule::CodeDetector;
 use crate::code_lint::semantic::comments::CommentIndex;
 use crate::command_lint::rule::CommandDetector;
 use crate::command_lint::vcs::JjClient;
-use crate::core::Config;
+use crate::core::{EnforcementMode, ResolvedOptions};
 use crate::diagnostic::Diagnostic;
+use crate::rule_declaration::Rule;
 use ast_grep_language::SupportLang;
 use std::fmt::Write;
 use std::path::Path;
@@ -33,16 +34,15 @@ pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic]) -> String {
     output
 }
 
-/// Executes `check_file` on a `CodeDetector` (including `RequireExplanation` filtering).
+/// Executes the rule's `check_file` with its default options (including `RequireExplanation` filtering).
 ///
 /// # Panics
 /// Panics if `filename` does not have a recognized file extension (`.py` or `.rs`).
 #[must_use]
 pub fn run_code_rule(
-    rule: &impl CodeDetector,
+    rule: &Rule<dyn CodeDetector>,
     source: &str,
     filename: &str,
-    config: &Config,
 ) -> Vec<Diagnostic> {
     let path = Path::new(filename);
     let lang = match path.extension().and_then(|extension| extension.to_str()) {
@@ -51,9 +51,9 @@ pub fn run_code_rule(
         _ => panic!("run_code_rule: unsupported extension in test file '{filename}'"),
     };
     let file = ParsedFile::new(source, lang);
-    let mode = rule.enforcement_mode(lang, config);
-    let mut diags = rule.check_file(path, &file, config);
-    if mode == crate::core::EnforcementMode::RequireExplanation {
+    let options = ResolvedOptions::new(lang, &rule.options, None);
+    let mut diags = rule.detector.check_file(path, &file, &options);
+    if options.enforcement_mode() == EnforcementMode::RequireExplanation {
         let index = CommentIndex::from_file(&file);
         diags.retain(|diagnostic| {
             !index.has_explanation_for_span(
@@ -72,10 +72,9 @@ pub fn assert_command_rule_snapshot(
     rule: &impl CommandDetector,
     command_input: &str,
     client: &dyn JjClient,
-    config: &Config,
 ) -> String {
     let cmd = crate::command_lint::rule::InterceptedCommand::parse_all(command_input).remove(0);
-    let diags = rule.check_command(&cmd, client, config);
+    let diags = rule.check_command(&cmd, client);
     format_diagnostics_for_test(&diags)
 }
 
@@ -84,9 +83,12 @@ pub fn assert_command_rule_snapshot(
 /// # Panics
 /// Panics if a supported language is missing or an unsupported language is included.
 #[track_caller]
-pub fn assert_language_completeness(rule: &impl CodeDetector, tested_languages: &[SupportLang]) {
-    let rule_name = rule.name().0;
-    let supported = rule.supported_languages();
+pub fn assert_language_completeness(
+    rule: &Rule<dyn CodeDetector>,
+    tested_languages: &[SupportLang],
+) {
+    let rule_name = rule.detector.name().0;
+    let supported = rule.detector.supported_languages();
 
     for lang in tested_languages {
         assert!(
@@ -108,10 +110,15 @@ pub fn assert_language_completeness(rule: &impl CodeDetector, tested_languages: 
 /// # Panics
 /// Panics if the rule emits any diagnostics on `code`.
 #[track_caller]
-pub fn assert_rule_pass(rule: &impl CodeDetector, lang: SupportLang, case_name: &str, code: &str) {
-    let rule_name = rule.name().0;
+pub fn assert_rule_pass(
+    rule: &Rule<dyn CodeDetector>,
+    lang: SupportLang,
+    case_name: &str,
+    code: &str,
+) {
+    let rule_name = rule.detector.name().0;
     let filename = dummy_filename(lang);
-    let diags = run_code_rule(rule, code, filename, &Config::default());
+    let diags = run_code_rule(rule, code, filename);
     assert!(
         diags.is_empty(),
         "rule_test! [{rule_name}] ({lang:?}) PASS case '{case_name}' failed:\nExpected 0 diagnostics, got {}:\n{}\nSource:\n{code}",
@@ -131,15 +138,15 @@ pub fn assert_rule_pass(rule: &impl CodeDetector, lang: SupportLang, case_name: 
 /// spans do not match.
 #[track_caller]
 pub fn assert_rule_fail(
-    rule: &impl CodeDetector,
+    rule: &Rule<dyn CodeDetector>,
     lang: SupportLang,
     case_name: &str,
     code: &str,
     expected_snippet: Option<&str>,
 ) {
-    let rule_name = rule.name().0;
+    let rule_name = rule.detector.name().0;
     let filename = dummy_filename(lang);
-    let diags = run_code_rule(rule, code, filename, &Config::default());
+    let diags = run_code_rule(rule, code, filename);
     let expected_slice = expected_snippet.unwrap_or(code).trim();
 
     let [diagnostic] = diags.as_slice() else {
@@ -171,16 +178,16 @@ pub fn assert_rule_fail(
 /// so a rule that stops after its first match cannot pass.
 #[track_caller]
 fn assert_every_occurrence_reported(
-    rule: &impl CodeDetector,
+    rule: &Rule<dyn CodeDetector>,
     lang: SupportLang,
     case_name: &str,
     code: &str,
     span: std::ops::Range<usize>,
 ) {
-    let rule_name = rule.name().0;
+    let rule_name = rule.detector.name().0;
     let repeated = format!("{code}\n{code}");
     let offset = code.len() + 1;
-    let diags = run_code_rule(rule, &repeated, dummy_filename(lang), &Config::default());
+    let diags = run_code_rule(rule, &repeated, dummy_filename(lang));
 
     let mut actual: Vec<_> = diags
         .iter()

@@ -2,27 +2,33 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{Detector, FilterListDefaults};
+use crate::core::{
+    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Static defaults for banned dynamic reflection functions.
-const DEFAULT_BANNED_FUNCTIONS: FilterListDefaults = FilterListDefaults {
-    base: &[
-        "getattr",
-        "hasattr",
-        "setattr",
-        "delattr",
-        "builtins.getattr",
-        "builtins.hasattr",
-        "builtins.setattr",
-        "builtins.delattr",
-    ],
-    extend: &[],
-    exempt: &[],
+const BANNED_FUNCTIONS: ListOption = ListOption {
+    kind: ListKind::Deny,
+    doc: "Reflection functions flagged when called.",
+    default: FilterListDefaults {
+        base: &[
+            "getattr",
+            "hasattr",
+            "setattr",
+            "delattr",
+            "builtins.getattr",
+            "builtins.hasattr",
+            "builtins.setattr",
+            "builtins.delattr",
+        ],
+        extend: &[],
+        exempt: &[],
+    },
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -32,19 +38,18 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule that bans dynamic attribute reflection in Python files.
-pub struct NoDynamicAttributeAccess;
+struct NoDynamicAttributeAccess;
 
-impl NoDynamicAttributeAccess {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &NoDynamicAttributeAccess,
+    classification: Classification {
         topics: &[Topic::TYPE_CHECKER_BYPASS],
         precision: Precision::Exact,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Reliability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags `getattr`, `hasattr`, `setattr` and `delattr` calls in Python.",
         what_it_does: "Flags calls to the built-in functions `getattr`, `hasattr`, \
                        `setattr` and `delattr`, written bare or as `builtins.getattr` and \
@@ -60,13 +65,16 @@ impl NoDynamicAttributeAccess {
                           Access attributes directly on a typed object. For data keyed by \
                           runtime strings, use a `dict` or `Mapping`; to accept several \
                           types that share attributes, declare a `Protocol`.",
-        configuration: &[ConfigShape::DenyList],
         references: &[Reference {
             title: "Python docs: built-in getattr",
             url: "https://docs.python.org/3/library/functions.html#getattr",
         }],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[OptionSpec::List(&BANNED_FUNCTIONS)],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for NoDynamicAttributeAccess {
     fn name(&self) -> RuleName {
@@ -91,15 +99,15 @@ impl CodeDetector for NoDynamicAttributeAccess {
         &self,
         path: &Path,
         file: &ParsedFile,
-        config: &crate::core::Config,
+        options: &ResolvedOptions<'_>,
     ) -> Vec<Diagnostic> {
-        self.check_banned_calls(path, file, config, &DEFAULT_BANNED_FUNCTIONS)
+        self.check_banned_calls(path, file, &options.list(&BANNED_FUNCTIONS))
     }
 }
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    NoDynamicAttributeAccess,
+    RULE,
     {
         Python => {
             pass: [

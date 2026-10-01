@@ -2,18 +2,25 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::CodeDetector;
-use crate::core::{Config, Detector, FilterListDefaults};
+use crate::code_lint::semantic::calls;
+use crate::core::{
+    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Static defaults for banned logging calls inside except blocks.
-const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
-    base: &["logging.error"],
-    extend: &[],
-    exempt: &[],
+const BANNED_CALLS: ListOption = ListOption {
+    kind: ListKind::Deny,
+    doc: "Logging calls flagged inside an `except` block.",
+    default: FilterListDefaults {
+        base: &["logging.error"],
+        extend: &[],
+        exempt: &[],
+    },
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -23,19 +30,18 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule struct.
-pub struct NoLoggingErrorInExcept;
+struct NoLoggingErrorInExcept;
 
-impl NoLoggingErrorInExcept {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &NoLoggingErrorInExcept,
+    classification: Classification {
         topics: &[Topic::LOGGING, Topic::ERROR_HANDLING],
         precision: Precision::Exact,
         consensus: Consensus::Unopinionated,
         impacted_quality: ImpactedQuality::Reliability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags `logging.error` calls inside Python `except` blocks.",
         what_it_does: "Flags calls to `logging.error(...)` anywhere inside an `except` \
                        block, including bare `except:` and nested blocks such as an `if` \
@@ -51,13 +57,16 @@ impl NoLoggingErrorInExcept {
                           root cause.\n\n\
                           Use `logging.exception(...)`, which logs at error level and \
                           attaches the active traceback.",
-        configuration: &[ConfigShape::DenyList],
         references: &[Reference {
             title: "Python docs: logging.exception",
             url: "https://docs.python.org/3/library/logging.html#logging.exception",
         }],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[OptionSpec::List(&BANNED_CALLS)],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for NoLoggingErrorInExcept {
     fn name(&self) -> RuleName {
@@ -74,8 +83,13 @@ impl Detector for NoLoggingErrorInExcept {
 }
 
 impl CodeDetector for NoLoggingErrorInExcept {
-    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
-        self.find_configured_banned_calls(file, config, &DEFAULT_BANNED_CALLS)
+    fn check_file(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        options: &ResolvedOptions<'_>,
+    ) -> Vec<Diagnostic> {
+        calls::find_banned_calls(file, &options.list(&BANNED_CALLS))
             .into_iter()
             .filter(|matched| crate::code_lint::ast::python::is_inside_except_clause(&matched.node))
             .map(|matched| {
@@ -87,7 +101,7 @@ impl CodeDetector for NoLoggingErrorInExcept {
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    NoLoggingErrorInExcept,
+    RULE,
     {
         Python => {
             pass: [

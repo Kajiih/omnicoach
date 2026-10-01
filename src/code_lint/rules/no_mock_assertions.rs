@@ -2,33 +2,39 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{Detector, FilterListDefaults};
+use crate::core::{
+    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Static defaults for banned mock interaction assertion methods.
-const DEFAULT_BANNED_METHODS: FilterListDefaults = FilterListDefaults {
-    base: &[
-        "$OBJ.assert_called",
-        "$OBJ.assert_called_once",
-        "$OBJ.assert_called_with",
-        "$OBJ.assert_called_once_with",
-        "$OBJ.assert_any_call",
-        "$OBJ.assert_has_calls",
-        "$OBJ.assert_not_called",
-        "$OBJ.assert_awaited",
-        "$OBJ.assert_awaited_once",
-        "$OBJ.assert_awaited_with",
-        "$OBJ.assert_awaited_once_with",
-        "$OBJ.assert_any_await",
-        "$OBJ.assert_has_awaits",
-        "$OBJ.assert_not_awaited",
-    ],
-    extend: &[],
-    exempt: &[],
+const BANNED_METHODS: ListOption = ListOption {
+    kind: ListKind::Deny,
+    doc: "Mock assertion methods flagged when called.",
+    default: FilterListDefaults {
+        base: &[
+            "$OBJ.assert_called",
+            "$OBJ.assert_called_once",
+            "$OBJ.assert_called_with",
+            "$OBJ.assert_called_once_with",
+            "$OBJ.assert_any_call",
+            "$OBJ.assert_has_calls",
+            "$OBJ.assert_not_called",
+            "$OBJ.assert_awaited",
+            "$OBJ.assert_awaited_once",
+            "$OBJ.assert_awaited_with",
+            "$OBJ.assert_awaited_once_with",
+            "$OBJ.assert_any_await",
+            "$OBJ.assert_has_awaits",
+            "$OBJ.assert_not_awaited",
+        ],
+        extend: &[],
+        exempt: &[],
+    },
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -38,19 +44,18 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule that bans mock interaction assertions in test files.
-pub struct NoMockAssertions;
+struct NoMockAssertions;
 
-impl NoMockAssertions {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &NoMockAssertions,
+    classification: Classification {
         topics: &[Topic::TEST_ASSERTIONS, Topic::TEST_DOUBLES],
         precision: Precision::Exact,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Maintainability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags assertions on how a mock was called in Python tests.",
         what_it_does: "Flags calls to the `unittest.mock` interaction assertions in Python \
                        test files: `assert_called`, `assert_called_once`, \
@@ -68,13 +73,16 @@ impl NoMockAssertions {
                           Assert on what callers can observe: the returned value, or the \
                           resulting state of an in-memory fake standing in for the \
                           dependency.",
-        configuration: &[ConfigShape::DenyList],
         references: &[Reference {
             title: "Software Engineering at Google, ch. 13: Test Doubles",
             url: "https://abseil.io/resources/swe-book/html/ch13.html",
         }],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[OptionSpec::List(&BANNED_METHODS)],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for NoMockAssertions {
     fn name(&self) -> RuleName {
@@ -99,15 +107,15 @@ impl CodeDetector for NoMockAssertions {
         &self,
         path: &Path,
         file: &ParsedFile,
-        config: &crate::core::Config,
+        options: &ResolvedOptions<'_>,
     ) -> Vec<Diagnostic> {
-        self.check_banned_calls(path, file, config, &DEFAULT_BANNED_METHODS)
+        self.check_banned_calls(path, file, &options.list(&BANNED_METHODS))
     }
 }
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    NoMockAssertions,
+    RULE,
     {
         Python => {
             pass: [

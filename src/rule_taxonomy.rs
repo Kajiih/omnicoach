@@ -6,8 +6,6 @@ architecture_component!(RuleTaxonomy);
 
 use strum::{EnumIter, EnumMessage, IntoStaticStr};
 
-use crate::rule_documentation::RuleDoc;
-
 /// The subject of a rule: the only multi-valued, hierarchical facet.
 ///
 /// Each topic is declared once, as an associated `const` on [`Topic`]. The consts are
@@ -404,16 +402,4 @@ pub struct Classification {
     pub consensus: Consensus,
     /// Impacted quality value.
     pub impacted_quality: ImpactedQuality,
-}
-
-/// A rule: the detector that finds violations, its classification and its doc. A rule
-/// cannot be registered without all three.
-#[derive(Clone, Copy)]
-pub struct Rule<DetectorType: ?Sized + 'static> {
-    /// The detector that finds violations.
-    pub detector: &'static DetectorType,
-    /// Its classification.
-    pub classification: Classification,
-    /// Its user-facing doc.
-    pub doc: RuleDoc,
 }

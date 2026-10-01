@@ -2,55 +2,62 @@
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{Config, Detector, FilterListDefaults};
+use crate::code_lint::semantic::calls;
+use crate::core::{
+    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Default banned environment variable access callees across Python and Rust.
-const DEFAULT_BANNED_CALLS: FilterListDefaults = FilterListDefaults {
-    base: &[],
-    extend: &[
-        (
-            SupportLang::Python,
-            &[
-                "os.getenv",
-                "getenv",
-                "os.environ.get",
-                "environ.get",
-                "os.environ.pop",
-                "environ.pop",
-                "os.environ.setdefault",
-                "environ.setdefault",
-                "os.environ.update",
-                "environ.update",
-                "os.environ.clear",
-                "environ.clear",
-                "os.putenv",
-                "os.unsetenv",
-            ],
-        ),
-        (
-            SupportLang::Rust,
-            &[
-                "std::env::var",
-                "env::var",
-                "std::env::var_os",
-                "env::var_os",
-                "std::env::vars",
-                "env::vars",
-                "std::env::vars_os",
-                "env::vars_os",
-                "std::env::set_var",
-                "env::set_var",
-                "std::env::remove_var",
-                "env::remove_var",
-            ],
-        ),
-    ],
-    exempt: &[],
+const BANNED_CALLS: ListOption = ListOption {
+    kind: ListKind::Deny,
+    doc: "Environment variable accesses flagged inside functions.",
+    default: FilterListDefaults {
+        base: &[],
+        extend: &[
+            (
+                SupportLang::Python,
+                &[
+                    "os.getenv",
+                    "getenv",
+                    "os.environ.get",
+                    "environ.get",
+                    "os.environ.pop",
+                    "environ.pop",
+                    "os.environ.setdefault",
+                    "environ.setdefault",
+                    "os.environ.update",
+                    "environ.update",
+                    "os.environ.clear",
+                    "environ.clear",
+                    "os.putenv",
+                    "os.unsetenv",
+                ],
+            ),
+            (
+                SupportLang::Rust,
+                &[
+                    "std::env::var",
+                    "env::var",
+                    "std::env::var_os",
+                    "env::var_os",
+                    "std::env::vars",
+                    "env::vars",
+                    "std::env::vars_os",
+                    "env::vars_os",
+                    "std::env::set_var",
+                    "env::set_var",
+                    "std::env::remove_var",
+                    "env::remove_var",
+                ],
+            ),
+        ],
+        exempt: &[],
+    },
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -64,19 +71,18 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule that flags direct environment variable reads/writes inside regular functions and methods.
-pub struct NoEnvInFunctions;
+struct NoEnvInFunctions;
 
-impl NoEnvInFunctions {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &NoEnvInFunctions,
+    classification: Classification {
         topics: &[Topic::GLOBAL_STATE],
         precision: Precision::Heuristic,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Reliability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags environment variable access inside functions.",
         what_it_does: "Flags reads and writes of environment variables inside a function \
                        or method in source files; test files are not checked. In Python \
@@ -104,13 +110,16 @@ impl NoEnvInFunctions {
                           Read the environment once, at startup or in a `from_env` \
                           constructor, into a typed configuration object, and pass that \
                           object, or the values it holds, to the code that needs them.",
-        configuration: &[ConfigShape::DenyList],
         references: &[Reference {
             title: "Rust docs: std::env::set_var (safety)",
             url: "https://doc.rust-lang.org/std/env/fn.set_var.html",
         }],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[OptionSpec::List(&BANNED_CALLS)],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for NoEnvInFunctions {
     fn name(&self) -> RuleName {
@@ -154,11 +163,16 @@ impl CodeDetector for NoEnvInFunctions {
         RuleTarget::SourceOnly
     }
 
-    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
+    fn check_file(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        options: &ResolvedOptions<'_>,
+    ) -> Vec<Diagnostic> {
         let lang = file.lang();
         let mut diagnostics = Vec::new();
 
-        for call_match in self.find_configured_banned_calls(file, config, &DEFAULT_BANNED_CALLS) {
+        for call_match in calls::find_banned_calls(file, &options.list(&BANNED_CALLS)) {
             if let Some(func_name) = ast::enclosing_non_exempt_function_name(
                 &call_match.node,
                 lang,
@@ -195,7 +209,7 @@ impl CodeDetector for NoEnvInFunctions {
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    NoEnvInFunctions,
+    RULE,
     {
         Python => {
             pass: [

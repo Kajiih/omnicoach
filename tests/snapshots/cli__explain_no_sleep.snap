@@ -31,9 +31,10 @@ Wait on the event itself (an event, a channel, a condition variable), or inject 
 
 Keys under `[rules.no-sleep-in-tests]`, or `[rules.no-sleep-in-tests.<language>]` for one language:
 
-- `allowed`
-- `banned`
-- `extend_banned`
+- `enforcement_mode` (`ban` or `require-explanation`, default `ban`): `ban` flags every occurrence; `require-explanation` accepts an occurrence explained by an adjacent comment.
+- `banned` (list of strings, default `sleep`; python adds `time.sleep`, `asyncio.sleep`, `anyio.sleep`, `trio.sleep`; rust adds `thread::sleep`, `std::thread::sleep`, `time::sleep`, `tokio::time::sleep`): Sleep calls flagged in tests.
+- `extend_banned` (list of strings): items added to the default.
+- `allowed` (list of strings): items removed from the default.
 
 ## References
 

@@ -11,6 +11,7 @@ use crate::code_lint::rule::RuleTarget;
 use crate::code_lint::rules::CODE_RULES;
 use crate::code_lint::suppression::SUPPRESSION_AUDITS;
 use crate::command_lint::rules::COMMAND_RULES;
+use crate::core::{RuleOptions, closest_match};
 use crate::diagnostic::{RuleName, ViolationTemplate};
 use crate::rule_documentation::RuleDoc;
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
@@ -157,6 +158,10 @@ pub struct RegisteredRule {
     pub doc: RuleDoc,
     /// The rule's raw violation template.
     pub template: &'static ViolationTemplate,
+    /// What the rule accepts under `[rules.<name>]`.
+    pub options: RuleOptions,
+    /// The languages the rule analyzes; empty for command rules.
+    pub languages: &'static [SupportLang],
     classification: Classification,
     derived: Vec<Derived>,
 }
@@ -186,6 +191,8 @@ pub static REGISTERED_RULES: LazyLock<Vec<RegisteredRule>> = LazyLock::new(|| {
             name: registered.detector.name(),
             doc: registered.doc,
             template: registered.detector.violation_template(),
+            options: registered.options,
+            languages: registered.detector.supported_languages(),
             classification: registered.classification,
             derived,
         }
@@ -197,6 +204,8 @@ pub static REGISTERED_RULES: LazyLock<Vec<RegisteredRule>> = LazyLock::new(|| {
             name: registered.detector.name(),
             doc: registered.doc,
             template: registered.detector.violation_template(),
+            options: registered.options,
+            languages: registered.detector.supported_languages(),
             classification: registered.classification,
             derived,
         }
@@ -205,6 +214,8 @@ pub static REGISTERED_RULES: LazyLock<Vec<RegisteredRule>> = LazyLock::new(|| {
         name: registered.detector.name(),
         doc: registered.doc,
         template: registered.detector.violation_template(),
+        options: registered.options,
+        languages: registered.detector.supported_languages(),
         classification: registered.classification,
         derived: vec![Derived::Command],
     });
@@ -283,6 +294,8 @@ impl RegisteredRule {
             name: RuleName(name),
             doc: RuleDoc::TODO,
             template: &TEMPLATE,
+            options: RuleOptions::NONE,
+            languages: &[],
             classification,
             derived: Vec::new(),
         }
@@ -312,41 +325,12 @@ pub fn lookup(label: &str) -> Option<Selector> {
 
 /// The registered label closest to `label`, if it is close enough to be a typo.
 pub fn closest_label(label: &str) -> Option<&'static str> {
-    closest(label, labels().map(|(known, _)| known))
+    closest_match(label, labels().map(|(known, _)| known))
 }
 
 /// The registered rule name closest to `label`, if it is close enough to be a typo.
 pub fn closest_rule_name(label: &str) -> Option<&'static str> {
-    closest(label, REGISTERED_RULES.iter().map(|rule| rule.name.0))
-}
-
-fn closest(label: &str, candidates: impl Iterator<Item = &'static str>) -> Option<&'static str> {
-    let normalized = label.to_ascii_lowercase();
-    let tolerance = (normalized.chars().count() / 3).max(1);
-    candidates
-        .map(|known| (edit_distance(&normalized, known), known))
-        .filter(|&(distance, _)| distance <= tolerance)
-        .min()
-        .map(|(_, known)| known)
-}
-
-/// Levenshtein distance over characters.
-fn edit_distance(left: &str, right: &str) -> usize {
-    let right: Vec<char> = right.chars().collect();
-    let mut previous: Vec<usize> = (0..=right.len()).collect();
-    for (row, left_char) in left.chars().enumerate() {
-        let mut current = vec![row + 1];
-        for (column, &right_char) in right.iter().enumerate() {
-            let substitution = previous[column] + usize::from(left_char != right_char);
-            current.push(
-                substitution
-                    .min(previous[column + 1] + 1)
-                    .min(current[column] + 1),
-            );
-        }
-        previous = current;
-    }
-    previous[right.len()]
+    closest_match(label, REGISTERED_RULES.iter().map(|rule| rule.name.0))
 }
 
 #[cfg(test)]
@@ -437,17 +421,6 @@ mod tests {
             .filter(|label| Facet::iter().any(|facet| facet.matches_label(label)))
             .collect();
         assert!(facet_like.is_empty(), "{facet_like:?} read as facet labels");
-    }
-
-    #[rstest::rstest]
-    #[case::missing_letter("alpa", Some("alpha"))]
-    #[case::case_folded("ALPHA", Some("alpha"))]
-    #[case::nearest_wins("alphabe", Some("alphabet"))]
-    #[case::at_tolerance("alphaxy", Some("alpha"))]
-    #[case::beyond_tolerance("alphaxyz", None)]
-    fn closest_suggests_typos_only(#[case] label: &str, #[case] expected: Option<&str>) {
-        let candidates = ["alpha", "alphabet", "omega"];
-        assert_eq!(closest(label, candidates.into_iter()), expected);
     }
 
     #[test]

@@ -4,9 +4,10 @@ architecture_component!(CodeRuleContracts);
 
 use crate::code_lint::ast::{AstNode, ParsedFile};
 use crate::code_lint::semantic::{bindings, calls};
-use crate::core::{Config, Detector, FilterListDefaults};
+use crate::core::{Detector, ResolvedOptions};
 use crate::diagnostic::Diagnostic;
 use ast_grep_language::SupportLang;
+use std::collections::HashSet;
 use std::path::Path;
 
 /// Target execution scope for a code rule (source files vs test files).
@@ -46,30 +47,16 @@ pub trait CodeDetector: Detector {
         self.render_diagnostic_for_lang(node.lang(), params, node.to_source_location(path))
     }
 
-    /// Resolves this rule's banned call patterns against `defaults` for the file's language
-    /// and returns all matching call expressions in `file`.
-    #[must_use]
-    fn find_configured_banned_calls<'a>(
-        &self,
-        file: &'a ParsedFile,
-        config: &Config,
-        defaults: &FilterListDefaults,
-    ) -> Vec<calls::CallMatch<'a>> {
-        let effective_banned = self.effective_banned_set(file.lang(), config, defaults);
-        calls::find_banned_calls(file, &effective_banned)
-    }
-
-    /// Evaluates `find_configured_banned_calls` and emits a diagnostic with `("callee", &matched.callee)`
-    /// for every matched call expression.
+    /// Emits a diagnostic with `("callee", &matched.callee)` for every call in `file` to one of
+    /// the `banned` callees.
     #[must_use]
     fn check_banned_calls(
         &self,
         path: &Path,
         file: &ParsedFile,
-        config: &Config,
-        defaults: &FilterListDefaults,
+        banned: &HashSet<String>,
     ) -> Vec<Diagnostic> {
-        self.find_configured_banned_calls(file, config, defaults)
+        calls::find_banned_calls(file, banned)
             .into_iter()
             .map(|matched| {
                 self.diagnostic_at_node(path, &matched.node, &[("callee", &matched.callee)])
@@ -77,19 +64,16 @@ pub trait CodeDetector: Detector {
             .collect()
     }
 
-    /// Resolves this rule's banned identifier suffixes against `defaults` for the file's language
-    /// and emits a diagnostic with `("name", ...), ("actual_suffix", ...), ("base_name", ...)`
-    /// for every matching variable, constant, or parameter binding.
+    /// Emits a diagnostic with `("name", ...), ("actual_suffix", ...), ("base_name", ...)` for
+    /// every variable, constant, or parameter binding ending in one of the `banned` suffixes.
     #[must_use]
     fn check_banned_suffixes(
         &self,
         path: &Path,
         file: &ParsedFile,
-        config: &Config,
-        defaults: &FilterListDefaults,
+        banned: &HashSet<String>,
     ) -> Vec<Diagnostic> {
-        let effective_banned = self.effective_banned_set(file.lang(), config, defaults);
-        bindings::find_suffixed_bindings(file, &effective_banned)
+        bindings::find_suffixed_bindings(file, banned)
             .into_iter()
             .map(|matched| {
                 self.diagnostic_at_node(
@@ -110,5 +94,10 @@ pub trait CodeDetector: Detector {
     /// Returned diagnostics may be in any order: ordering is owned by the reporting layer
     /// ([`crate::diagnostic`]), so sorting here is dead work.
     #[must_use]
-    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic>;
+    fn check_file(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        options: &ResolvedOptions<'_>,
+    ) -> Vec<Diagnostic>;
 }

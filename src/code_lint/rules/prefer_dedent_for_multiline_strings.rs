@@ -2,37 +2,43 @@
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{Detector, FilterListDefaults};
+use crate::core::{
+    Detector, FilterListDefaults, ListKind, ListOption, OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Static defaults for allowed multiline string wrapper functions/macros.
-const DEFAULT_ALLOWED_WRAPPERS: FilterListDefaults = FilterListDefaults {
-    base: &[],
-    extend: &[
-        (SupportLang::Python, &["cleandoc", "inspect.cleandoc"]),
-        (
-            SupportLang::Rust,
-            &[
-                "indoc",
-                "indoc::indoc",
-                "formatdoc",
-                "indoc::formatdoc",
-                "writedoc",
-                "indoc::writedoc",
-                "printdoc",
-                "indoc::printdoc",
-                "eprintdoc",
-                "indoc::eprintdoc",
-                "rule_test",
-                "crate::rule_test",
-            ],
-        ),
-    ],
-    exempt: &[],
+const ALLOWED_WRAPPERS: ListOption = ListOption {
+    kind: ListKind::Allow,
+    doc: "Functions and macros accepted as dedenting a multiline string.",
+    default: FilterListDefaults {
+        base: &[],
+        extend: &[
+            (SupportLang::Python, &["cleandoc", "inspect.cleandoc"]),
+            (
+                SupportLang::Rust,
+                &[
+                    "indoc",
+                    "indoc::indoc",
+                    "formatdoc",
+                    "indoc::formatdoc",
+                    "writedoc",
+                    "indoc::writedoc",
+                    "printdoc",
+                    "indoc::printdoc",
+                    "eprintdoc",
+                    "indoc::eprintdoc",
+                    "rule_test",
+                    "crate::rule_test",
+                ],
+            ),
+        ],
+        exempt: &[],
+    },
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -46,19 +52,18 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule enforcing that multiline string literals are wrapped in a dedent helper.
-pub struct PreferDedentForMultilineStrings;
+struct PreferDedentForMultilineStrings;
 
-impl PreferDedentForMultilineStrings {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &PreferDedentForMultilineStrings,
+    classification: Classification {
         topics: &[Topic::LITERALS],
         precision: Precision::Exact,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Reliability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags multiline string literals that are not wrapped in a dedent helper.",
         what_it_does: "Flags string literals that span several lines and contain a real \
                        line break. In Python these are triple-quoted strings; strings \
@@ -81,7 +86,6 @@ impl PreferDedentForMultilineStrings {
                           strips the common indentation: `inspect.cleandoc(\"\"\"...\"\"\")` \
                           in Python, `indoc::indoc!` (or `formatdoc!` to interpolate) in \
                           Rust. Write a single-line literal when the value has one line.",
-        configuration: &[ConfigShape::AllowList],
         references: &[
             Reference {
                 title: "Python docs: inspect.cleandoc",
@@ -92,8 +96,12 @@ impl PreferDedentForMultilineStrings {
                 url: "https://docs.rs/indoc",
             },
         ],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[OptionSpec::List(&ALLOWED_WRAPPERS)],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for PreferDedentForMultilineStrings {
     fn name(&self) -> RuleName {
@@ -118,9 +126,9 @@ impl CodeDetector for PreferDedentForMultilineStrings {
         &self,
         path: &Path,
         file: &ParsedFile,
-        config: &crate::core::Config,
+        options: &ResolvedOptions<'_>,
     ) -> Vec<Diagnostic> {
-        let allowed = self.effective_allowed_set(file.lang(), config, &DEFAULT_ALLOWED_WRAPPERS);
+        let allowed = options.list(&ALLOWED_WRAPPERS);
         ast::find_unwrapped_multiline_strings(file, |full_path, terminal| {
             allowed.contains(full_path) || allowed.contains(terminal)
         })
@@ -132,7 +140,7 @@ impl CodeDetector for PreferDedentForMultilineStrings {
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    PreferDedentForMultilineStrings,
+    RULE,
     {
         Python => {
             pass: [

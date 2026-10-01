@@ -2,20 +2,29 @@
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile, ScopePositionalReads};
 use crate::code_lint::rule::CodeDetector;
-use crate::core::{Config, Detector, LanguageDefaults};
+use crate::core::{
+    CountOption, Detector, LanguageDefaults, OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-/// Default minimum number of distinct positions read from one receiver (`min`, `2`).
-const DEFAULT_MIN_POSITIONS: LanguageDefaults<usize> = LanguageDefaults::new(2, &[]);
+const MIN_POSITIONS: CountOption = CountOption {
+    key: "min_positions",
+    doc: "Minimum distinct positions read from one value for it to be flagged.",
+    default: LanguageDefaults::new(2, &[]),
+};
 
-/// Default maximum number of `_` placeholders the unpacking may need (`max`, `2`); sparser reads
-/// call for a named record rather than unpacking.
-const DEFAULT_MAX_PLACEHOLDERS: LanguageDefaults<usize> = LanguageDefaults::new(2, &[]);
+const MAX_PLACEHOLDERS: CountOption = CountOption {
+    key: "max_placeholders",
+    doc: "Maximum `_` placeholders the unpacking may need; sparser reads call for a named \
+          record rather than unpacking.",
+    default: LanguageDefaults::new(2, &[]),
+};
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: {
@@ -32,24 +41,23 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule that flags a receiver read at several literal positions in one scope.
-pub struct PreferTupleUnpacking;
+struct PreferTupleUnpacking;
 
-impl PreferTupleUnpacking {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &PreferTupleUnpacking,
+    classification: Classification {
         topics: &[Topic::POSITIONAL_INDEXING],
         precision: Precision::Heuristic,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Maintainability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags a value read at several literal positions instead of being unpacked once.",
         what_it_does: "Groups positional reads by value within one function and flags \
-                       the value when at least `min` distinct positions are read (2 by \
-                       default) and unpacking them would need at most `max` `_` \
-                       placeholders (2 by default; `row[0], row[7]` is left alone). In \
+                       the value when at least `min_positions` distinct positions are \
+                       read and unpacking them would need at most `max_placeholders` `_` \
+                       placeholders (`row[0], row[7]` is left alone by default). In \
                        Python, a read is an index by a decimal integer literal, negative \
                        allowed (`point[0]`, `xs[-1]`), on a name, attribute or index \
                        chain without calls (`self.pair[1]`, `rows[i][0]`); the type is \
@@ -74,7 +82,6 @@ impl PreferTupleUnpacking {
                           in Rust. When the tuple crosses a function boundary, return a \
                           `NamedTuple`, a dataclass or a struct with named fields \
                           instead.",
-        configuration: &[ConfigShape::Threshold],
         references: &[
             Reference {
                 title: "PEP 3132: Extended Iterable Unpacking",
@@ -85,8 +92,15 @@ impl PreferTupleUnpacking {
                 url: "https://doc.rust-lang.org/book/ch03-02-data-types.html#the-tuple-type",
             },
         ],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[
+            OptionSpec::Count(&MIN_POSITIONS),
+            OptionSpec::Count(&MAX_PLACEHOLDERS),
+        ],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for PreferTupleUnpacking {
     fn name(&self) -> RuleName {
@@ -150,11 +164,14 @@ fn placeholder_count(positions: &BTreeSet<i64>) -> usize {
 }
 
 impl CodeDetector for PreferTupleUnpacking {
-    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
-        let lang = file.lang();
-        let min_positions = self.effective_min_threshold(lang, config, &DEFAULT_MIN_POSITIONS);
-        let max_placeholders =
-            self.effective_max_threshold(lang, config, &DEFAULT_MAX_PLACEHOLDERS);
+    fn check_file(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        options: &ResolvedOptions<'_>,
+    ) -> Vec<Diagnostic> {
+        let min_positions = options.count(&MIN_POSITIONS);
+        let max_placeholders = options.count(&MAX_PLACEHOLDERS);
 
         ast::collect_positional_reads(file)
             .into_iter()
@@ -182,7 +199,7 @@ impl CodeDetector for PreferTupleUnpacking {
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    PreferTupleUnpacking,
+    RULE,
     {
         Python => {
             pass: [

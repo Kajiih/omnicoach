@@ -5,15 +5,21 @@ use crate::code_lint::ast::python::{
 };
 use crate::code_lint::ast::{AstNode, ParsedFile};
 use crate::code_lint::rule::{CodeDetector, RuleTarget};
-use crate::core::{Config, Detector, LanguageDefaults};
+use crate::core::{
+    CountOption, Detector, LanguageDefaults, OptionSpec, ResolvedOptions, RuleOptions,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
-use crate::rule_documentation::{ConfigShape, Reference, RuleDoc};
+use crate::rule_declaration::Rule;
+use crate::rule_documentation::{Reference, RuleDoc};
 use crate::rule_taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Default minimum number of positional parameters (excluding `self`/`cls`) before checking for duplicate types (`3`).
-const DEFAULT_MIN_ARGS: LanguageDefaults<usize> = LanguageDefaults::new(3, &[]);
+const MIN_POSITIONAL_PARAMETERS: CountOption = CountOption {
+    key: "min_positional_parameters",
+    doc: "Minimum positional parameters, excluding `self` and `cls`, for a function to be checked.",
+    default: LanguageDefaults::new(3, &[]),
+};
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Function `{func_name}` has {count} positional parameters (>= {min_args}) with identical types ({duplicates}).",
@@ -22,27 +28,26 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// Rule that flags functions with `>= min_args` positional parameters where 2 or more share an identical type annotation.
-pub struct NoIdenticalPositionalTypes;
+struct NoIdenticalPositionalTypes;
 
-impl NoIdenticalPositionalTypes {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
+/// The rule's declaration.
+pub const RULE: Rule<dyn CodeDetector> = Rule {
+    detector: &NoIdenticalPositionalTypes,
+    classification: Classification {
         topics: &[Topic::STATIC_TYPING, Topic::POSITIONAL_MEANING],
         precision: Precision::Exact,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Reliability,
-    };
-
-    /// The rule's user-facing doc.
-    pub(crate) const DOC: RuleDoc = RuleDoc {
+    },
+    doc: RuleDoc {
         summary: "Flags Python functions whose positional parameters share a type annotation.",
         what_it_does: "Flags a function in Python source files (test files are not \
-                       checked) that has at least `min` positional parameters (3 by \
-                       default) of which two or more have the same type annotation. A \
+                       checked) that has at least `min_positional_parameters` positional \
+                       parameters of which two or more have the same type annotation. A \
                        leading `self` or `cls`, keyword-only parameters (after `*` or \
                        `*args`), `*args` and `**kwargs` are not counted. Annotations are \
                        compared as written, so `dict[str, int]` and `dict[str, float]` \
-                       differ, and unannotated parameters count toward `min` but never \
+                       differ, and unannotated parameters count toward the minimum but never \
                        match each other. Dunder methods other than `__init__` and \
                        `__new__`, and functions decorated with `@override`, `@overload`, \
                        `@abstractmethod` or `@fixture`, are exempt because their signature \
@@ -55,13 +60,16 @@ impl NoIdenticalPositionalTypes {
                           example `def transfer(*, source_id: str, target_id: str, amount: \
                           int)`, so every call names its arguments. Distinct types (such as \
                           `NewType` wrappers) also let the type checker catch the swap.",
-        configuration: &[ConfigShape::Threshold],
         references: &[Reference {
             title: "PEP 3102: Keyword-Only Arguments",
             url: "https://peps.python.org/pep-3102/",
         }],
-    };
-}
+    },
+    options: RuleOptions {
+        options: &[OptionSpec::Count(&MIN_POSITIONAL_PARAMETERS)],
+        ..RuleOptions::CODE_RULE
+    },
+};
 
 impl Detector for NoIdenticalPositionalTypes {
     fn name(&self) -> RuleName {
@@ -181,8 +189,13 @@ impl CodeDetector for NoIdenticalPositionalTypes {
         RuleTarget::SourceOnly
     }
 
-    fn check_file(&self, path: &Path, file: &ParsedFile, config: &Config) -> Vec<Diagnostic> {
-        let min_args = self.effective_min_threshold(file.lang(), config, &DEFAULT_MIN_ARGS);
+    fn check_file(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        options: &ResolvedOptions<'_>,
+    ) -> Vec<Diagnostic> {
+        let min_args = options.count(&MIN_POSITIONAL_PARAMETERS);
 
         extract_function_signatures(file)
             .iter()
@@ -193,7 +206,7 @@ impl CodeDetector for NoIdenticalPositionalTypes {
 
 #[cfg(test)]
 crate::test_utils::rule_test!(
-    NoIdenticalPositionalTypes,
+    RULE,
     {
         Python => {
             pass: [

@@ -2,13 +2,20 @@
 
 architecture_component!(CoreVocabulary);
 
+mod rule_options;
+
+pub use self::rule_options::{
+    CountOption, ListKind, ListOption, OptionProblem, OptionSpec, ResolvedOptions, RuleOptions,
+    RuleOptionsError, RuleOverrides,
+};
 use crate::diagnostic::{
     Diagnostic, RuleName, SourceLocation, ViolationMessage, ViolationTemplate,
 };
 use ast_grep_language::SupportLang;
-use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use strum::{EnumIter, IntoStaticStr};
 
 /// Returns true if `name` is a non-empty `kebab-case` identifier (`[a-z0-9]+(-[a-z0-9]+)*`).
 #[must_use]
@@ -82,82 +89,10 @@ impl<T: Copy + 'static> LanguageDefaults<T> {
     }
 }
 
-/// Configuration for rules controlled by numeric `min` or `max` thresholds (e.g., `max-test-assertions`, `no-identical-positional-types`).
-#[derive(Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[cfg_attr(test, derive(Serialize))]
-pub struct ThresholdConfig {
-    /// Optional override for the minimum threshold.
-    #[serde(default)]
-    pub min: Option<usize>,
-
-    /// Optional override for the maximum threshold.
-    #[serde(default)]
-    pub max: Option<usize>,
-}
-
-impl ThresholdConfig {
-    /// The TOML keys of this shape, checked against the serde fields by a test.
-    pub const KEYS: &'static [&'static str] = &["min", "max"];
-}
-
-/// Configuration for rules that filter identifier names, abbreviations, or suffixes (denylist rules).
-///
-/// Supports explicit replacement of base items, additive items (`extend_banned`),
-/// and subtractive items (`allowed`).
-#[derive(Deserialize, Debug, Clone, Default)]
-#[cfg_attr(test, derive(Serialize))]
-pub struct DenyListConfig {
-    /// Explicit replacement for the default base set (e.g., banned words or suffixes).
-    /// If `None`, the rule's built-in defaults are used.
-    /// If `Some`, completely replaces the default base set.
-    #[serde(default)]
-    pub banned: Option<HashSet<String>>,
-
-    /// Additional items to include in the banned set.
-    #[serde(default)]
-    pub extend_banned: HashSet<String>,
-
-    /// Allowed items exempted/removed from the banned set.
-    #[serde(default)]
-    pub allowed: HashSet<String>,
-}
-
-impl DenyListConfig {
-    /// The TOML keys of this shape, checked against the serde fields by a test.
-    pub const KEYS: &'static [&'static str] = &["banned", "extend_banned", "allowed"];
-}
-
-/// Configuration for rules that enforce an allowlist of valid identifiers (e.g. single-letter variable names).
-///
-/// Supports explicit replacement of base allowed items, additive items (`extend_allowed`),
-/// and subtractive/revocation items (`banned`).
-#[derive(Deserialize, Debug, Clone, Default)]
-#[cfg_attr(test, derive(Serialize))]
-pub struct AllowListConfig {
-    /// Explicit replacement for the default allowed set.
-    /// If `None`, the rule's built-in defaults are used.
-    /// If `Some`, completely replaces the default allowed set.
-    #[serde(default)]
-    pub allowed: Option<HashSet<String>>,
-
-    /// Additional items to include in the allowed set.
-    #[serde(default)]
-    pub extend_allowed: HashSet<String>,
-
-    /// Banned items revoked/removed from the allowed set.
-    #[serde(default)]
-    pub banned: HashSet<String>,
-}
-
-impl AllowListConfig {
-    /// The TOML keys of this shape, checked against the serde fields by a test.
-    pub const KEYS: &'static [&'static str] = &["allowed", "extend_allowed", "banned"];
-}
-
 /// Enforcement mode for rules targeting sensitive language constructs
 /// (e.g. `cast`, `suppress`, `getattr`, `except Exception`).
-#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
 pub enum EnforcementMode {
     /// Completely bans the construct from targeted files (only suppressible via `# omni:ignore`).
     Ban,
@@ -165,35 +100,21 @@ pub enum EnforcementMode {
     RequireExplanation,
 }
 
-/// Configuration for rules that support configurable enforcement modes.
-#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct EnforcementConfig {
-    /// The enforcement mode (`ban` or `require-explanation`).
-    #[serde(default)]
-    pub mode: Option<EnforcementMode>,
+impl EnforcementMode {
+    /// The key setting a code rule's enforcement mode under `[rules.<name>]`.
+    pub const KEY: &'static str = "enforcement_mode";
+
+    /// What each mode does, for `--explain`.
+    pub const DOC: &'static str = "`ban` flags every occurrence; `require-explanation` accepts \
+                                   an occurrence explained by an adjacent comment.";
 }
 
-impl EnforcementConfig {
-    /// The TOML keys of this shape, checked against the serde fields by a test.
-    pub const KEYS: &'static [&'static str] = &["mode"];
-}
-
-/// A generic configuration container that supports global settings across all
-/// supported languages, as well as dynamic per-language overrides.
-#[derive(Deserialize, Debug, Clone, Default)]
-pub struct DynamicRuleConfig<T = DenyListConfig> {
-    /// Global settings that apply across all languages.
-    #[serde(flatten)]
-    pub global: T,
-
-    /// Dynamic language-specific overrides, keyed by language name (e.g. "rust", "python").
-    #[serde(flatten)]
-    pub languages: std::collections::HashMap<String, T>,
-}
+/// Every language the linter analyzes.
+pub const SUPPORTED_LANGUAGES: &[SupportLang] = &[SupportLang::Python, SupportLang::Rust];
 
 /// Returns the lowercase canonical configuration key for a supported language.
 #[must_use]
-const fn support_lang_name(lang: SupportLang) -> &'static str {
+pub const fn support_lang_name(lang: SupportLang) -> &'static str {
     match lang {
         SupportLang::Python => "python",
         SupportLang::Rust => "rust",
@@ -201,145 +122,37 @@ const fn support_lang_name(lang: SupportLang) -> &'static str {
     }
 }
 
-impl<T> DynamicRuleConfig<T> {
-    /// Returns the override configuration for a specific language, if configured.
-    #[must_use]
-    pub fn for_lang(&self, lang: SupportLang) -> Option<&T> {
-        self.languages.get(support_lang_name(lang))
-    }
-
-    /// Resolves an effective value for `lang` with precedence:
-    /// 1. Language-specific override (`[rules.<name>.<lang>]`)
-    /// 2. Global rule setting (`[rules.<name>]`)
-    /// 3. Compile-time language default (`defaults.resolve_default_for_lang(lang)`)
-    #[must_use]
-    pub fn resolve_with<V: Copy + 'static>(
-        &self,
-        lang: SupportLang,
-        defaults: &LanguageDefaults<V>,
-        extractor: impl Fn(&T) -> Option<V>,
-    ) -> V {
-        self.for_lang(lang)
-            .and_then(&extractor)
-            .or_else(|| extractor(&self.global))
-            .unwrap_or_else(|| defaults.resolve_default_for_lang(lang))
-    }
+/// The candidate closest to `label`, if it is close enough to be a typo.
+pub fn closest_match(
+    label: &str,
+    candidates: impl Iterator<Item = &'static str>,
+) -> Option<&'static str> {
+    let normalized = label.to_ascii_lowercase();
+    let tolerance = (normalized.chars().count() / 3).max(1);
+    candidates
+        .map(|known| (edit_distance(&normalized, known), known))
+        .filter(|&(distance, _)| distance <= tolerance)
+        .min()
+        .map(|(_, known)| known)
 }
 
-impl DynamicRuleConfig<ThresholdConfig> {
-    /// Resolves the effective `min` threshold for `lang` against `defaults`.
-    #[must_use]
-    pub fn effective_min_for_lang(
-        &self,
-        lang: SupportLang,
-        defaults: &LanguageDefaults<usize>,
-    ) -> usize {
-        self.resolve_with(lang, defaults, |config| config.min)
+/// Levenshtein distance over characters.
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    for (row, left_char) in left.chars().enumerate() {
+        let mut current = vec![row + 1];
+        for (column, &right_char) in right.iter().enumerate() {
+            let substitution = previous[column] + usize::from(left_char != right_char);
+            current.push(
+                substitution
+                    .min(previous[column + 1] + 1)
+                    .min(current[column] + 1),
+            );
+        }
+        previous = current;
     }
-
-    /// Resolves the effective `max` threshold for `lang` against `defaults`.
-    #[must_use]
-    pub fn effective_max_for_lang(
-        &self,
-        lang: SupportLang,
-        defaults: &LanguageDefaults<usize>,
-    ) -> usize {
-        self.resolve_with(lang, defaults, |config| config.max)
-    }
-}
-
-impl DynamicRuleConfig<DenyListConfig> {
-    /// Computes the effective banned set for a specific language given the default descriptor.
-    ///
-    /// The resolution precedence is:
-    /// 1. Base set: Language-specific `banned` -> Global `banned` -> `defaults.resolve_default_for_lang(lang)`.
-    /// 2. Additive: Union with global `extend_banned` and language-specific `extend_banned`.
-    /// 3. Subtractive: Difference with global `allowed` and language-specific `allowed`.
-    #[must_use]
-    pub fn effective_banned_for_lang(
-        &self,
-        lang: SupportLang,
-        defaults: &FilterListDefaults,
-    ) -> HashSet<String> {
-        let lang_override = self.for_lang(lang);
-
-        // 1. Base set
-        let mut effective = lang_override
-            .and_then(|override_config| override_config.banned.as_ref())
-            .or(self.global.banned.as_ref())
-            .map_or_else(|| defaults.resolve_default_for_lang(lang), Clone::clone);
-
-        // 2. Additive
-        effective.extend(self.global.extend_banned.iter().cloned());
-        if let Some(override_config) = lang_override {
-            effective.extend(override_config.extend_banned.iter().cloned());
-        }
-
-        // 3. Subtractive
-        for item in &self.global.allowed {
-            effective.remove(item);
-        }
-        if let Some(override_config) = lang_override {
-            for item in &override_config.allowed {
-                effective.remove(item);
-            }
-        }
-
-        effective
-    }
-}
-
-impl DynamicRuleConfig<AllowListConfig> {
-    /// Computes the effective allowed set for a specific language given the default descriptor.
-    ///
-    /// The resolution precedence is:
-    /// 1. Base set: Language-specific `allowed` -> Global `allowed` -> `defaults.resolve_default_for_lang(lang)`.
-    /// 2. Additive: Union with global `extend_allowed` and language-specific `extend_allowed`.
-    /// 3. Subtractive: Difference with global `banned` and language-specific `banned`.
-    #[must_use]
-    pub fn effective_allowed_for_lang(
-        &self,
-        lang: SupportLang,
-        defaults: &FilterListDefaults,
-    ) -> HashSet<String> {
-        let lang_override = self.for_lang(lang);
-
-        // 1. Base set
-        let mut effective = lang_override
-            .and_then(|override_config| override_config.allowed.as_ref())
-            .or(self.global.allowed.as_ref())
-            .map_or_else(|| defaults.resolve_default_for_lang(lang), Clone::clone);
-
-        // 2. Additive
-        effective.extend(self.global.extend_allowed.iter().cloned());
-        if let Some(override_config) = lang_override {
-            effective.extend(override_config.extend_allowed.iter().cloned());
-        }
-
-        // 3. Subtractive
-        for item in &self.global.banned {
-            effective.remove(item);
-        }
-        if let Some(override_config) = lang_override {
-            for item in &override_config.banned {
-                effective.remove(item);
-            }
-        }
-
-        effective
-    }
-}
-
-impl DynamicRuleConfig<EnforcementConfig> {
-    /// Resolves the effective enforcement mode for `lang` against `defaults`.
-    #[must_use]
-    pub fn effective_mode_for_lang(
-        &self,
-        lang: SupportLang,
-        defaults: &LanguageDefaults<EnforcementMode>,
-    ) -> EnforcementMode {
-        self.resolve_with(lang, defaults, |config| config.mode)
-    }
+    previous[right.len()]
 }
 
 /// The default configuration file name.
@@ -360,74 +173,6 @@ pub trait Detector: Send + Sync {
     #[must_use]
     fn supported_languages(&self) -> &'static [SupportLang] {
         &[]
-    }
-
-    /// Returns the default enforcement mode for this rule across languages.
-    /// Most rules default to `EnforcementMode::Ban`.
-    #[must_use]
-    fn default_enforcement_mode(&self) -> LanguageDefaults<EnforcementMode> {
-        LanguageDefaults {
-            base: EnforcementMode::Ban,
-            overrides: &[],
-        }
-    }
-
-    /// Resolves the effective enforcement mode for this rule given language and config.
-    #[must_use]
-    fn enforcement_mode(&self, lang: SupportLang, config: &Config) -> EnforcementMode {
-        config.get_rule_enforcement_mode(self.name().0, lang, &self.default_enforcement_mode())
-    }
-
-    /// Resolves the effective banned set for this rule given language, config, and defaults.
-    #[must_use]
-    fn effective_banned_set(
-        &self,
-        lang: SupportLang,
-        config: &Config,
-        defaults: &FilterListDefaults,
-    ) -> HashSet<String> {
-        config
-            .get_rule_config::<DynamicRuleConfig<DenyListConfig>>(self.name().0)
-            .effective_banned_for_lang(lang, defaults)
-    }
-
-    /// Resolves the effective allowed set for this rule given language, config, and defaults.
-    #[must_use]
-    fn effective_allowed_set(
-        &self,
-        lang: SupportLang,
-        config: &Config,
-        defaults: &FilterListDefaults,
-    ) -> HashSet<String> {
-        config
-            .get_rule_config::<DynamicRuleConfig<AllowListConfig>>(self.name().0)
-            .effective_allowed_for_lang(lang, defaults)
-    }
-
-    /// Resolves the effective `min` threshold for this rule given language, config, and defaults.
-    #[must_use]
-    fn effective_min_threshold(
-        &self,
-        lang: SupportLang,
-        config: &Config,
-        defaults: &LanguageDefaults<usize>,
-    ) -> usize {
-        config
-            .get_rule_config::<DynamicRuleConfig<ThresholdConfig>>(self.name().0)
-            .effective_min_for_lang(lang, defaults)
-    }
-
-    /// Resolves the effective `max` threshold for this rule given language, config, and defaults.
-    #[must_use]
-    fn effective_max_threshold(
-        &self,
-        lang: SupportLang,
-        config: &Config,
-        defaults: &LanguageDefaults<usize>,
-    ) -> usize {
-        config
-            .get_rule_config::<DynamicRuleConfig<ThresholdConfig>>(self.name().0)
-            .effective_max_for_lang(lang, defaults)
     }
 
     /// Constructs a `Diagnostic` with this rule's name.
@@ -527,9 +272,9 @@ pub struct Config {
     /// Rules disabled by `select` and `ignore`.
     #[serde(skip)]
     pub disabled_rules: HashSet<RuleName>,
-    /// Generic map of rule-specific configurations.
-    #[serde(default)]
-    pub rules: std::collections::HashMap<String, serde_json::Value>,
+    /// Validated `[rules.<name>]` options, keyed by rule; set by `rule_selection`.
+    #[serde(skip)]
+    pub rule_overrides: HashMap<RuleName, RuleOverrides>,
     /// Path context classifier settings.
     #[serde(default)]
     pub context: ContextConfig,
@@ -583,31 +328,6 @@ impl Config {
             .iter()
             .any(|(matcher, rules)| matcher.is_match(&normalized) && rules.contains(&rule))
     }
-
-    /// Deserializes a rule-specific configuration.
-    /// Returns default value if not present or fails to deserialize.
-    #[must_use]
-    pub fn get_rule_config<T>(&self, rule_name: &str) -> T
-    where
-        T: serde::de::DeserializeOwned + Default,
-    {
-        self.rules
-            .get(rule_name)
-            .and_then(|val| T::deserialize(val).ok())
-            .unwrap_or_default()
-    }
-
-    /// Resolves the effective enforcement mode for a rule and language against defaults.
-    #[must_use]
-    pub fn get_rule_enforcement_mode(
-        &self,
-        rule_name: &str,
-        lang: SupportLang,
-        defaults: &LanguageDefaults<EnforcementMode>,
-    ) -> EnforcementMode {
-        let rule_config: DynamicRuleConfig<EnforcementConfig> = self.get_rule_config(rule_name);
-        rule_config.effective_mode_for_lang(lang, defaults)
-    }
 }
 
 #[cfg(test)]
@@ -635,100 +355,6 @@ mod tests {
         assert_eq!(
             rust_defaults,
             HashSet::from(["common", "shared", "rust_only"].map(String::from))
-        );
-    }
-
-    #[test]
-    fn test_dynamic_deny_list_config() {
-        const DEFAULTS: FilterListDefaults = FilterListDefaults {
-            base: &["default_one", "common_ok"],
-            extend: &[],
-            exempt: &[],
-        };
-
-        let toml_content = indoc::indoc! {r#"
-            allowed = ["common_ok"]
-            extend_banned = ["global_bad"]
-
-            [rust]
-            allowed = ["rust_ok"]
-            extend_banned = ["rust_bad"]
-
-            [python]
-            banned = ["py_only_bad"]
-        "#};
-
-        let config: DynamicRuleConfig<DenyListConfig> = toml::from_str(toml_content).unwrap();
-
-        // Rust resolution:
-        // Base: default_banned ("default_one", "common_ok")
-        // Additive: global ("global_bad") + rust ("rust_bad")
-        // Subtractive: global ("common_ok") + rust ("rust_ok")
-        let rust_effective = config.effective_banned_for_lang(SupportLang::Rust, &DEFAULTS);
-        assert_eq!(
-            rust_effective,
-            HashSet::from(["default_one", "global_bad", "rust_bad"].map(String::from))
-        );
-
-        // Python resolution:
-        // Base: explicit python banned ("py_only_bad")
-        // Additive: global ("global_bad")
-        // Subtractive: global ("common_ok")
-        let py_effective = config.effective_banned_for_lang(SupportLang::Python, &DEFAULTS);
-        assert_eq!(
-            py_effective,
-            HashSet::from(["py_only_bad", "global_bad"].map(String::from))
-        );
-    }
-
-    #[test]
-    fn test_dynamic_allow_list_config() {
-        const DEFAULTS: FilterListDefaults = FilterListDefaults {
-            base: &["default_base", "revoked", "rust_revoked"],
-            extend: &[(SupportLang::Rust, &["rust_extra"])],
-            exempt: &[],
-        };
-
-        let toml_content = indoc::indoc! {r#"
-            banned = ["revoked"]
-            extend_allowed = ["global_allowed"]
-
-            [rust]
-            banned = ["rust_revoked"]
-            extend_allowed = ["rust_allowed"]
-
-            [python]
-            allowed = ["py_only_allowed"]
-        "#};
-
-        let config: DynamicRuleConfig<AllowListConfig> = toml::from_str(toml_content).unwrap();
-
-        // Rust resolution:
-        // Base: default_base, revoked, rust_revoked + rust_extra
-        // Additive: global ("global_allowed") + rust ("rust_allowed")
-        // Subtractive: global ("revoked") + rust ("rust_revoked")
-        let rust_effective = config.effective_allowed_for_lang(SupportLang::Rust, &DEFAULTS);
-        assert_eq!(
-            rust_effective,
-            HashSet::from(
-                [
-                    "default_base",
-                    "rust_extra",
-                    "global_allowed",
-                    "rust_allowed",
-                ]
-                .map(String::from)
-            )
-        );
-
-        // Python resolution:
-        // Base: explicit python allowed ("py_only_allowed")
-        // Additive: global ("global_allowed")
-        // Subtractive: global ("revoked")
-        let py_effective = config.effective_allowed_for_lang(SupportLang::Python, &DEFAULTS);
-        assert_eq!(
-            py_effective,
-            HashSet::from(["py_only_allowed", "global_allowed"].map(String::from))
         );
     }
 
@@ -783,88 +409,18 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case("", SupportLang::Python, 4)]
-    #[case("", SupportLang::Rust, 6)]
-    #[case("max = 5", SupportLang::Python, 5)]
-    #[case("max = 5", SupportLang::Rust, 5)]
-    #[case("max = 5\n[rust]\nmax = 10", SupportLang::Python, 5)]
-    #[case("max = 5\n[rust]\nmax = 10", SupportLang::Rust, 10)]
-    fn test_language_defaults_and_threshold_config(
-        #[case] toml_content: &str,
-        #[case] lang: SupportLang,
-        #[case] expected: usize,
-    ) {
-        const DEFAULTS: LanguageDefaults<usize> =
-            LanguageDefaults::new(4, &[(SupportLang::Rust, 6)]);
-        let config: DynamicRuleConfig<ThresholdConfig> = if toml_content.is_empty() {
-            DynamicRuleConfig::default()
-        } else {
-            toml::from_str(toml_content).unwrap()
-        };
-        assert_eq!(config.effective_max_for_lang(lang, &DEFAULTS), expected);
+    #[case::missing_letter("alpa", Some("alpha"))]
+    #[case::case_folded("ALPHA", Some("alpha"))]
+    #[case::nearest_wins("alphabe", Some("alphabet"))]
+    #[case::at_tolerance("alphaxy", Some("alpha"))]
+    #[case::beyond_tolerance("alphaxyz", None)]
+    fn closest_match_suggests_typos_only(#[case] label: &str, #[case] expected: Option<&str>) {
+        let candidates = ["alpha", "alphabet", "omega"];
+        assert_eq!(closest_match(label, candidates.into_iter()), expected);
     }
 
-    #[rstest::rstest]
-    #[case("", SupportLang::Python, EnforcementMode::Ban)]
-    #[case("", SupportLang::Rust, EnforcementMode::RequireExplanation)]
-    #[case("mode = \"ban\"", SupportLang::Rust, EnforcementMode::Ban)]
-    #[case(
-        "mode = \"require-explanation\"",
-        SupportLang::Python,
-        EnforcementMode::RequireExplanation
-    )]
-    #[case(
-        "mode = \"ban\"\n[python]\nmode = \"require-explanation\"",
-        SupportLang::Python,
-        EnforcementMode::RequireExplanation
-    )]
-    #[case(
-        "mode = \"ban\"\n[python]\nmode = \"require-explanation\"",
-        SupportLang::Rust,
-        EnforcementMode::Ban
-    )]
-    fn test_dynamic_enforcement_config(
-        #[case] toml_content: &str,
-        #[case] lang: SupportLang,
-        #[case] expected: EnforcementMode,
-    ) {
-        const DEFAULTS: LanguageDefaults<EnforcementMode> = LanguageDefaults::new(
-            EnforcementMode::Ban,
-            &[(SupportLang::Rust, EnforcementMode::RequireExplanation)],
-        );
-        let config: DynamicRuleConfig<EnforcementConfig> = if toml_content.is_empty() {
-            DynamicRuleConfig::default()
-        } else {
-            toml::from_str(toml_content).unwrap()
-        };
-        assert_eq!(config.effective_mode_for_lang(lang, &DEFAULTS), expected);
-    }
-
-    #[rstest::rstest]
-    #[case::threshold(
-        serde_json::to_value(ThresholdConfig::default()),
-        ThresholdConfig::KEYS
-    )]
-    #[case::deny_list(serde_json::to_value(DenyListConfig::default()), DenyListConfig::KEYS)]
-    #[case::allow_list(
-        serde_json::to_value(AllowListConfig::default()),
-        AllowListConfig::KEYS
-    )]
-    #[case::enforcement(
-        serde_json::to_value(EnforcementConfig::default()),
-        EnforcementConfig::KEYS
-    )]
-    fn test_config_keys_match_serde_fields(
-        #[case] serialized: serde_json::Result<serde_json::Value>,
-        #[case] keys: &[&str],
-    ) {
-        let serialized = serialized.unwrap();
-        let fields: HashSet<&str> = serialized
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
-        assert_eq!(fields, keys.iter().copied().collect());
+    #[test]
+    fn edit_distance_is_levenshtein() {
+        assert_eq!(edit_distance("kitten", "sitting"), 3);
     }
 }

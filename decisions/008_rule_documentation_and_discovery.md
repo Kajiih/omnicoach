@@ -39,6 +39,8 @@ pub struct Reference {
 
 ### 2.2. Configuration Keys via Strongly-Typed Shapes (`DI11`)
 
+*Superseded by ADR 009: configuration keys are now declared as typed option handles in the rule's `RULE` declaration, and `RuleDoc::configuration` no longer exists.*
+
 Instead of hand-writing string slices of configuration keys (risking typos and drift), rules declare their configuration shapes:
 
 ```rust
