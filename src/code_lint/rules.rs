@@ -1,7 +1,7 @@
 //! The code rule registry.
 architecture_component!(CodeLintRules);
 
-use crate::code_lint::rule::AnyCodeRule;
+use crate::code_lint::contract::AnyCodeRule;
 
 pub mod abbreviated_name;
 pub mod bare_multiline_string;

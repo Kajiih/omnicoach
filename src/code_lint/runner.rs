@@ -3,7 +3,7 @@
 architecture_component!(CodeLintRunner);
 
 use crate::code_lint::ast::{self, ParsedFile, detect_language};
-use crate::code_lint::rule::{AnyCodeRule, RuleTarget};
+use crate::code_lint::contract::{AnyCodeRule, RuleTarget};
 use crate::code_lint::rules::CODE_RULES;
 use crate::code_lint::suppression::{SUPPRESSION_AUDITS, SuppressionTracker};
 use crate::config::Config;

@@ -1,7 +1,7 @@
 //! Code rule contract: [`CodeRule`], its type-erased [`AnyCodeRule`] view, [`RuleTarget`], and
 //! the diagnostic helpers its check functions share.
 
-architecture_component!(CodeLintRule);
+architecture_component!(CodeLintContract);
 
 use crate::code_lint::ast::{AstNode, ParsedFile};
 use crate::code_lint::semantic::{bindings, calls, comments::CommentIndex};

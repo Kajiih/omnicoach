@@ -813,7 +813,7 @@ fn test_relative_path_boundary_allows_intra_component_and_rejects_cross_componen
         use super::super::fake_string_import;
         ";
 
-        // Rejected: climbing out of `code_lint::ast` into `code_lint::rule` (or re-entering `ast`)
+        // Rejected: climbing out of `code_lint::ast` into `code_lint::contract` (or re-entering `ast`)
         use super::super::rule::CodeDetector;
         use super::super::ast::AstNode as ReenteredAstNode;
 

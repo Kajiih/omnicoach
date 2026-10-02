@@ -1,7 +1,7 @@
 //! Enforces a maximum number of assertions per test function (`too-many-assertions`).
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, CountOption, Declaration, ImpactedQuality, LanguageDefaults,
