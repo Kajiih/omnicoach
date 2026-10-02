@@ -110,9 +110,26 @@ fn render_rule(rule: &RegisteredRule) -> String {
         String::new(),
         doc.why_is_this_bad.trim_end().to_owned(),
         String::new(),
-        "## Message".to_owned(),
-        String::new(),
     ];
+    if !doc.examples.is_empty() {
+        lines.extend(["## Example".to_owned(), String::new()]);
+        for example in doc.examples {
+            let fence = format!("```{}", support_lang_name(example.language));
+            lines.extend([
+                fence.clone(),
+                example.flagged.trim_end().to_owned(),
+                "```".to_owned(),
+                String::new(),
+                "Use instead:".to_owned(),
+                String::new(),
+                fence,
+                example.fixed.trim_end().to_owned(),
+                "```".to_owned(),
+                String::new(),
+            ]);
+        }
+    }
+    lines.extend(["## Message".to_owned(), String::new()]);
     for (label, text) in [
         ("Summary", template.summary),
         ("Rationale", template.rationale),
@@ -313,6 +330,7 @@ mod tests {
             title: "Title",
             url: "https://example.com",
         }],
+        examples: &[],
     };
 
     #[rstest]

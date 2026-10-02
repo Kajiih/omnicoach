@@ -4,8 +4,8 @@ use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, ImpactedQuality, Precision, Reference, RuleDoc,
-    RuleOptions, Topic,
+    Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
+    RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -62,6 +62,38 @@ pub const RULE: CodeRule = CodeRule {
                 title: "pytest: How to write and report assertions in tests",
                 url: "https://docs.pytest.org/en/stable/how-to/assert.html",
             }],
+            examples: &[
+                Example {
+                    language: SupportLang::Python,
+                    flagged: indoc::indoc! {r"
+                        def test_login():
+                            assert user.is_active and user.is_verified
+                    "},
+                    flagged_span: "assert user.is_active and user.is_verified",
+                    fixed: indoc::indoc! {r"
+                        def test_login():
+                            assert user.is_active
+                            assert user.is_verified
+                    "},
+                },
+                Example {
+                    language: SupportLang::Rust,
+                    flagged: indoc::indoc! {r"
+                        #[test]
+                        fn test_login() {
+                            assert!(user.is_active && user.is_verified);
+                        }
+                    "},
+                    flagged_span: "assert!(user.is_active && user.is_verified)",
+                    fixed: indoc::indoc! {r"
+                        #[test]
+                        fn test_login() {
+                            assert!(user.is_active);
+                            assert!(user.is_verified);
+                        }
+                    "},
+                },
+            ],
         },
     },
     target: RuleTarget::TestsOnly,

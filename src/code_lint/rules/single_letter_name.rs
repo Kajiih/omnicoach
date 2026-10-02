@@ -4,7 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
+    Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
@@ -61,6 +61,40 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 title: "Google Python Style Guide: Naming",
                 url: "https://google.github.io/styleguide/pyguide.html#316-naming",
             }],
+            examples: &[
+                Example {
+                    language: SupportLang::Python,
+                    flagged: indoc::indoc! {r"
+                        def welcome_new_users(new_users):
+                            for u in new_users:
+                                send_welcome_email(u)
+                    "},
+                    flagged_span: "u",
+                    fixed: indoc::indoc! {r"
+                        def welcome_new_users(new_users):
+                            for user in new_users:
+                                send_welcome_email(user)
+                    "},
+                },
+                Example {
+                    language: SupportLang::Rust,
+                    flagged: indoc::indoc! {r"
+                        fn welcome_new_users(new_users: &[User]) {
+                            for u in new_users {
+                                send_welcome_email(u);
+                            }
+                        }
+                    "},
+                    flagged_span: "u",
+                    fixed: indoc::indoc! {r"
+                        fn welcome_new_users(new_users: &[User]) {
+                            for user in new_users {
+                                send_welcome_email(user);
+                            }
+                        }
+                    "},
+                },
+            ],
         },
     },
     target: RuleTarget::All,

@@ -4,8 +4,8 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, CountOption, Declaration, ImpactedQuality, LanguageDefaults,
-    Precision, Reference, RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality,
+    LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -57,6 +57,63 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                 title: "Software Engineering at Google, ch. 12: Test behaviors, not methods",
                 url: "https://abseil.io/resources/swe-book/html/ch12.html",
             }],
+            examples: &[
+                Example {
+                    language: SupportLang::Python,
+                    flagged: indoc::indoc! {r#"
+                        def test_parse_version():
+                            version = parse_version("2.7.1-rc1+20261002")
+                            assert version.major == 2
+                            assert version.minor == 7
+                            assert version.patch == 1
+                            assert version.pre_release == "rc1"
+                            assert version.build_metadata == "20261002"
+                    "#},
+                    flagged_span: "test_parse_version",
+                    fixed: indoc::indoc! {r#"
+                        def test_parse_version():
+                            version = parse_version("2.7.1-rc1+20261002")
+                            assert version == Version(
+                                major=2,
+                                minor=7,
+                                patch=1,
+                                pre_release="rc1",
+                                build_metadata="20261002",
+                            )
+                    "#},
+                },
+                Example {
+                    language: SupportLang::Rust,
+                    flagged: indoc::indoc! {r#"
+                        #[test]
+                        fn test_parse_version() {
+                            let version = parse_version("2.7.1-rc1+20261002");
+                            assert_eq!(version.major, 2);
+                            assert_eq!(version.minor, 7);
+                            assert_eq!(version.patch, 1);
+                            assert_eq!(version.pre_release, "rc1");
+                            assert_eq!(version.build_metadata, "20261002");
+                        }
+                    "#},
+                    flagged_span: "test_parse_version",
+                    fixed: indoc::indoc! {r#"
+                        #[test]
+                        fn test_parse_version() {
+                            let version = parse_version("2.7.1-rc1+20261002");
+                            assert_eq!(
+                                version,
+                                Version {
+                                    major: 2,
+                                    minor: 7,
+                                    patch: 1,
+                                    pre_release: "rc1",
+                                    build_metadata: "20261002",
+                                }
+                            );
+                        }
+                    "#},
+                },
+            ],
         },
     },
     target: RuleTarget::TestsOnly,

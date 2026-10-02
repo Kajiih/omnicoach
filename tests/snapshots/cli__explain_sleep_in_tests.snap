@@ -19,6 +19,48 @@ A fixed sleep guesses how long another thread, task or process needs. Too short,
 
 Wait on the event itself (an event, a channel, a condition variable), or inject a clock that the test advances.
 
+## Example
+
+```python
+import time
+
+def test_session_expires(sessions):
+    sessions.open("alice", ttl=30)
+    time.sleep(31)
+    assert not sessions.is_active("alice")
+```
+
+Use instead:
+
+```python
+def test_session_expires(sessions, fake_clock):
+    sessions.open("alice", ttl=30)
+    fake_clock.advance(31)
+    assert not sessions.is_active("alice")
+```
+
+```rust
+#[tokio::test]
+async fn test_session_expires() {
+    let sessions = SessionStore::with_ttl(Duration::from_secs(30));
+    sessions.open("alice");
+    tokio::time::sleep(Duration::from_secs(31)).await;
+    assert!(!sessions.is_active("alice"));
+}
+```
+
+Use instead:
+
+```rust
+#[tokio::test(start_paused = true)]
+async fn test_session_expires() {
+    let sessions = SessionStore::with_ttl(Duration::from_secs(30));
+    sessions.open("alice");
+    tokio::time::advance(Duration::from_secs(31)).await;
+    assert!(!sessions.is_active("alice"));
+}
+```
+
 ## Message
 
 - Summary: Test calls `{callee}()`.

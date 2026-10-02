@@ -132,9 +132,10 @@ Design rationale: [ADR 007](decisions/007_rule_taxonomy_and_selection.md) (taxon
 - **Shadowed-selector config warning**: warn when a `select` or `ignore` entry changes no rule's outcome (needs config warning plumbing).
 - **Colocate contributor guides (`docs/dev/rule_design_guide.md`, `docs/dev/tag_guide.md`) into Rustdoc (`//!` and `///`)**:
   - *Investigation*: Evaluate moving `rule_design_guide.md` (and the classification rules of `tag_guide.md`) directly into module and item doc comments on `src/rule_declaration.rs`, `ViolationTemplate` (`src/diagnostic.rs`), and `rule_test!` (`src/test_utils.rs`). This replaces placeholder `missing_docs` one-liners with the real specification, eliminates the duplicate component table in `rule_design_guide.md` §7, surfaces the guide in IDE hover, and enforces symbol references via `rustdoc::broken_intra_doc_links`.
-- **Rule Doc Examples**:
-  - *Current*: Every code rule's `rule_test!` pass/fail cases are the best-maintained examples, but they live in `#[cfg(test)]` and no doc can use them. Command rules and suppression audits have no `rule_test!`.
-  - *Target*: Add Example / Use-instead sections sourced from a marked subset of test cases per language, so rendered examples are always executed as tests.
+- **Examples for suppression audits and command rules**:
+  - *Current*: Code rules document one executed example per language (`RuleDoc.examples`, run by `rule_test!`). Suppression audits and command rules have no harness that could run an example, so they declare `examples: &[]` (enforced empty in `tests/registry.rs`).
+  - *Target*: Give them executed examples once a harness exists. Audits can reuse `Example` (code with suppression comments) and only need a harness. Command rules need another shape (a command line plus a fake `jj` state), hence their own type and harness.
+  - *Placement (decided: keep in `RuleDoc`)*: Moving `examples` from `RuleDoc` to `CodeRule` would make empty examples unrepresentable for audits and command rules and drop the emptiness test, without losing any compile check. Rejected for now: it splits the user-facing doc across two places, plumbs examples through `AnyCodeRule` and `RegisteredRule`, and audits (bare `Declaration`s) would need a wrapper type before they could get examples. Revisit when command rule examples land, since they need their own typed field anyway.
 - **Discovery & Documentation Follow-ups**:
   - JSON output for discovery commands (`--format json` for `--list-rules` / `--explain`), and `tags` on JSON diagnostics. Include per-language message overrides (`summary` / `rationale` / `suggestion`), not just the base text.
   - Path-aware status in `explain` (evaluating `per-file-ignores` for a given file path).

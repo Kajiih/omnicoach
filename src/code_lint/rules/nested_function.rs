@@ -4,7 +4,8 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, ImpactedQuality, Precision, RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, RuleDoc,
+    RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -45,6 +46,26 @@ pub const RULE: CodeRule = CodeRule {
                               `lambda` remains fine for a trivial callback such as a sort \
                               key.",
             references: &[],
+            examples: &[Example {
+                language: SupportLang::Python,
+                flagged: indoc::indoc! {r"
+                    def total_price(items):
+                        def line_price(item):
+                            return item.unit_price * item.quantity
+                        return sum(line_price(item) for item in items)
+                "},
+                flagged_span: indoc::indoc! {r"
+                    def line_price(item):
+                        return item.unit_price * item.quantity
+                "},
+                fixed: indoc::indoc! {r"
+                    def _line_price(item):
+                        return item.unit_price * item.quantity
+
+                    def total_price(items):
+                        return sum(_line_price(item) for item in items)
+                "},
+            }],
         },
     },
     target: RuleTarget::SourceOnly,

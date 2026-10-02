@@ -4,7 +4,7 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
+    Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
@@ -92,6 +92,52 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Reference {
                     title: "indoc crate documentation",
                     url: "https://docs.rs/indoc",
+                },
+            ],
+            examples: &[
+                Example {
+                    language: SupportLang::Python,
+                    flagged: indoc::indoc! {r#"
+                        ACTIVE_USERS_QUERY = """
+                            SELECT id, email
+                            FROM users
+                        """
+                    "#},
+                    flagged_span: indoc::indoc! {r#"
+                        """
+                            SELECT id, email
+                            FROM users
+                        """
+                    "#},
+                    fixed: indoc::indoc! {r#"
+                        import inspect
+
+                        ACTIVE_USERS_QUERY = inspect.cleandoc("""
+                            SELECT id, email
+                            FROM users
+                        """)
+                    "#},
+                },
+                Example {
+                    language: SupportLang::Rust,
+                    flagged: indoc::indoc! {r#"
+                        const ACTIVE_USERS_QUERY: &str = r"
+                            SELECT id, email
+                            FROM users
+                        ";
+                    "#},
+                    flagged_span: indoc::indoc! {r#"
+                        r"
+                            SELECT id, email
+                            FROM users
+                        "
+                    "#},
+                    fixed: indoc::indoc! {r#"
+                        const ACTIVE_USERS_QUERY: &str = indoc::indoc! {r"
+                            SELECT id, email
+                            FROM users
+                        "};
+                    "#},
                 },
             ],
         },

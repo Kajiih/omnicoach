@@ -4,7 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
+    Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
@@ -76,6 +76,20 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             references: &[Reference {
                 title: "Software Engineering at Google, ch. 13: Test Doubles",
                 url: "https://abseil.io/resources/swe-book/html/ch13.html",
+            }],
+            examples: &[Example {
+                language: SupportLang::Python,
+                flagged: indoc::indoc! {r"
+                    def test_checkout_charges_order_total(gateway):
+                        checkout(gateway, order_total=100)
+                        gateway.charge.assert_called_once_with(100)
+                "},
+                flagged_span: "gateway.charge.assert_called_once_with(100)",
+                fixed: indoc::indoc! {r"
+                    def test_checkout_charges_order_total(gateway):
+                        checkout(gateway, order_total=100)
+                        assert gateway.charges == [100]
+                "},
             }],
         },
     },

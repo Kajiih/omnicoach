@@ -80,6 +80,7 @@ pub const RULE: CommandRule = CommandRule {
                 title: "Jujutsu: Working copy",
                 url: "https://jj-vcs.github.io/jj/latest/working-copy/",
             }],
+            examples: &[],
         },
     },
     check: check_command,

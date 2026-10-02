@@ -4,7 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
+    Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
@@ -68,6 +68,18 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             references: &[Reference {
                 title: "Python docs: built-in getattr",
                 url: "https://docs.python.org/3/library/functions.html#getattr",
+            }],
+            examples: &[Example {
+                language: SupportLang::Python,
+                flagged: indoc::indoc! {r"
+                    def is_feature_enabled(flags: FeatureFlags, feature: str) -> bool:
+                        return getattr(flags, feature, False)
+                "},
+                flagged_span: "getattr(flags, feature, False)",
+                fixed: indoc::indoc! {r"
+                    def is_feature_enabled(flags: Mapping[str, bool], feature: str) -> bool:
+                        return flags.get(feature, False)
+                "},
             }],
         },
     },

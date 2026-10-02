@@ -4,7 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
+    Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
@@ -75,6 +75,39 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Reference {
                     title: "Rust docs: std::time::Duration",
                     url: "https://doc.rust-lang.org/std/time/struct.Duration.html",
+                },
+            ],
+            examples: &[
+                Example {
+                    language: SupportLang::Python,
+                    flagged: indoc::indoc! {r"
+                        def wait_until_healthy(service, timeout_secs: float) -> None:
+                            service.poll_health(timeout_secs)
+                    "},
+                    flagged_span: "timeout_secs",
+                    fixed: indoc::indoc! {r"
+                        from datetime import timedelta
+
+
+                        def wait_until_healthy(service, timeout: timedelta) -> None:
+                            service.poll_health(timeout)
+                    "},
+                },
+                Example {
+                    language: SupportLang::Rust,
+                    flagged: indoc::indoc! {r"
+                        fn wait_until_healthy(service: &Service, timeout_secs: u64) {
+                            service.poll_health(timeout_secs);
+                        }
+                    "},
+                    flagged_span: "timeout_secs",
+                    fixed: indoc::indoc! {r"
+                        use std::time::Duration;
+
+                        fn wait_until_healthy(service: &Service, timeout: Duration) {
+                            service.poll_health(timeout);
+                        }
+                    "},
                 },
             ],
         },

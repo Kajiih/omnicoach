@@ -4,7 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
+    Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
@@ -59,6 +59,21 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             references: &[Reference {
                 title: "Python docs: typing.cast",
                 url: "https://docs.python.org/3/library/typing.html#typing.cast",
+            }],
+            examples: &[Example {
+                language: SupportLang::Python,
+                flagged: indoc::indoc! {r#"
+                    def load_port(config: dict[str, object]) -> int:
+                        return cast(int, config["port"])
+                "#},
+                flagged_span: r#"cast(int, config["port"])"#,
+                fixed: indoc::indoc! {r#"
+                    def load_port(config: dict[str, object]) -> int:
+                        port = config["port"]
+                        if not isinstance(port, int):
+                            raise TypeError(f"port must be an int, got {port!r}")
+                        return port
+                "#},
             }],
         },
     },

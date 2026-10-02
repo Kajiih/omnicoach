@@ -5,7 +5,7 @@ use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
+    Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
@@ -61,6 +61,22 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             references: &[Reference {
                 title: "Python docs: logging.exception",
                 url: "https://docs.python.org/3/library/logging.html#logging.exception",
+            }],
+            examples: &[Example {
+                language: SupportLang::Python,
+                flagged: indoc::indoc! {r#"
+                    try:
+                        sync_inventory()
+                    except ConnectionError:
+                        logging.error("Inventory sync failed")
+                "#},
+                flagged_span: r#"logging.error("Inventory sync failed")"#,
+                fixed: indoc::indoc! {r#"
+                    try:
+                        sync_inventory()
+                    except ConnectionError:
+                        logging.exception("Inventory sync failed")
+                "#},
             }],
         },
     },
