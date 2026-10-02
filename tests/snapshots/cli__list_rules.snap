@@ -1,5 +1,6 @@
 ---
 source: tests/cli.rs
+assertion_line: 174
 expression: "output.replace(binary, \"<binary>\")"
 ---
 --- exit code ---
@@ -8,6 +9,9 @@ expression: "output.replace(binary, \"<binary>\")"
 - `abbreviated-name` (python, rust): Flags names that contain an abbreviation such as `ctx` or `msg`.
 - `bare-multiline-string` (python, rust): Flags multiline string literals that are not wrapped in a dedent helper.
 - `blanket-suppression` (python, rust): Flags suppression directives that name no rule.
+- `concrete-collection-attribute` (python): Flags public Python class and instance attributes annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
+- `concrete-collection-parameter` (python): Flags Python function parameters annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
+- `concrete-collection-return` (python): Flags Python function return annotations using concrete mutable collection types such as `list`, `dict`, or `set` without an explanation.
 - `dynamic-attribute-access` (python): Flags `getattr`, `hasattr`, `setattr` and `delattr` calls in Python.
 - `edit-of-described-commit` (command): Flags `jj edit` on a commit that already has a description.
 - `environment-variable-in-function` (python, rust): Flags environment variable access inside functions.

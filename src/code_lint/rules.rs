@@ -5,6 +5,9 @@ use crate::code_lint::contract::AnyCodeRule;
 
 pub mod abbreviated_name;
 pub mod bare_multiline_string;
+pub mod concrete_collection_attribute;
+pub mod concrete_collection_parameter;
+pub mod concrete_collection_return;
 pub mod dynamic_attribute_access;
 pub mod environment_variable_in_function;
 pub mod error_log_in_except;
@@ -49,4 +52,7 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &unslotted_dataclass::RULE,
     &bare_multiline_string::RULE,
     &repeated_index_access::RULE,
+    &concrete_collection_parameter::RULE,
+    &concrete_collection_return::RULE,
+    &concrete_collection_attribute::RULE,
 ];

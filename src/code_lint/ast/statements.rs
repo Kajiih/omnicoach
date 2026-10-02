@@ -55,6 +55,9 @@ pub(super) fn find_enclosing_statement<'a>(node: &RawNode<'a>) -> Option<RawNode
 pub(super) fn header_line_range(statement: &RawNode<'_>) -> RangeInclusive<usize> {
     let lang = *statement.lang();
     let start_line = statement.start_pos().line() + 1;
+    if let Some(definition) = statement.field("definition") {
+        return start_line..=*header_line_range(&definition).end();
+    }
     let mut header_end_line = start_line;
     for child in statement.children() {
         if is_statement_container(child.kind().as_ref(), lang) {
