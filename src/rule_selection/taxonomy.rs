@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use ast_grep_language::SupportLang;
 use strum::{EnumIter, IntoEnumIterator as _, IntoStaticStr};
 
-use crate::code_lint::rule::RuleTarget;
+use crate::code_lint::contract::RuleTarget;
 use crate::code_lint::rules::CODE_RULES;
 use crate::code_lint::suppression::SUPPRESSION_AUDITS;
 use crate::command_lint::rules::COMMAND_RULES;

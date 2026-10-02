@@ -3,7 +3,7 @@
 architecture_component!(TestUtils);
 
 use crate::code_lint::ast::{ParsedFile, detect_language};
-use crate::code_lint::rule::CodeRule;
+use crate::code_lint::contract::CodeRule;
 use crate::command_lint::rule::CommandRule;
 use crate::command_lint::vcs::JjClient;
 use crate::diagnostic::Diagnostic;

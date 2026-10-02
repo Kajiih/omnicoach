@@ -94,12 +94,12 @@ define_architecture! {
     CodeLintAst         => [Diagnostic],
     /// Cross-language facts computed over the AST: bindings, calls, comments (`code_lint::semantic`).
     CodeLintSemantic    => [CodeLintAst],
-    /// The code rule contract: a declaration, a file target and a check function (`code_lint::rule`).
-    CodeLintRule        => [CodeLintSemantic, CodeLintAst, RuleDeclaration],
+    /// The code rule contract: a declaration, a file target and a check function (`code_lint::contract`).
+    CodeLintContract    => [CodeLintSemantic, CodeLintAst, RuleDeclaration],
     /// Inline comment suppression tracker and directive policies (`code_lint::suppression`).
-    CodeLintSuppression => [CodeLintRule, CodeLintSemantic, RuleDeclaration, Config],
+    CodeLintSuppression => [CodeLintContract, CodeLintSemantic, RuleDeclaration, Config],
     /// Concrete static analysis linter rules (`code_lint::rules`).
-    CodeLintRules       => [CodeLintRule, RuleDeclaration],
+    CodeLintRules       => [CodeLintContract, RuleDeclaration],
     /// Static code linting multi-file orchestration runner (`code_lint::runner`).
     CodeLintRunner      => [CodeLintRules, CodeLintSuppression, Diff],
 
@@ -121,7 +121,7 @@ define_architecture! {
 
     // --- Test Harness & Entrypoints ---
     /// The `rule_test!` harness and snapshot fixtures (`test_utils`).
-    TestUtils           => [CodeLintRule, CommandLintRule],
+    TestUtils           => [CodeLintContract, CommandLintRule],
     /// CLI entrypoints (`bin::*`).
     Bin                 => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog],
 }

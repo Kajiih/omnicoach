@@ -1,7 +1,7 @@
 //! Flags tuple elements read by literal position instead of being unpacked once (`repeated-index-access`).
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile, ScopePositionalReads};
-use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, CountOption, Declaration, ImpactedQuality, LanguageDefaults,
