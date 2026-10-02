@@ -159,12 +159,14 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
     };
     let has_inline_tests = !inline_test_ranges.is_empty();
     let mut raw_diagnostics = Vec::new();
+    let mut evaluated_rules = HashSet::new();
     let mut comment_index = None;
 
     for &rule in CODE_RULES {
         if !should_evaluate_rule(rule, path, lang, is_test, has_inline_tests, config) {
             continue;
         }
+        evaluated_rules.insert(rule.name().0);
         let overrides = config.rule_overrides.get(&rule.name());
         let mut rule_diagnostics = rule.check_file(path, &file, overrides);
         if rule.enforcement_mode(lang, overrides) == EnforcementMode::RequireExplanation {
@@ -186,7 +188,7 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
     }
 
     let mut diagnostics = tracker.filter_diagnostics(raw_diagnostics);
-    diagnostics.extend(tracker.audit(path, config, &SUPPRESSIBLE_RULES));
+    diagnostics.extend(tracker.audit(path, config, &SUPPRESSIBLE_RULES, &evaluated_rules));
     diagnostics
 }
 
@@ -753,6 +755,34 @@ mod tests {
                 .iter()
                 .any(|diag| diag.rule_name.0 == "unknown-suppression-rule"),
             "Expected unknown-suppression-rule for non-code rule in code directive, got: {diags:?}"
+        );
+    }
+
+    #[rstest]
+    #[case::disabled_in_config(
+        "src/clean.py",
+        "clean_name = 1  # omni:ignore [single-letter-variable-name] -- disabled in config",
+        config_enabling(&[])
+    )]
+    #[case::wrong_language(
+        "src/clean.rs",
+        "pub fn run() {} // omni:ignore [no-logging-error-in-except] -- python-only rule",
+        Config::default()
+    )]
+    #[case::non_matching_target(
+        "tests/test_clean.py",
+        "def test_ok(): assert True  # omni:ignore [flat-scope-enforced] -- source-only rule",
+        Config::default()
+    )]
+    fn test_unused_suppression_skips_unevaluated_rules(
+        #[case] path: &str,
+        #[case] content: &str,
+        #[case] config: Config,
+    ) {
+        let diags = lint_file(Path::new(path), content, &config);
+        assert!(
+            diags.is_empty(),
+            "Expected unevaluated rule suppression not to be flagged as unused, got: {diags:?}"
         );
     }
 }

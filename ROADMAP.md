@@ -57,17 +57,11 @@ Behaviour that contradicts a rule's own documentation or intent.
 - **`no-logging-error-in-except` flags `exc_info=True`**: that call keeps the traceback, contradicting the rationale ("lost traceback"). Exempt it, or reword the rule as "prefer `.exception`".
 - **`prefer-dedent-for-multiline-strings` flags `textwrap.dedent`**: the module doc and summary allow a dedent helper, but the defaults omit it and a test flags it.
 - **Call matching ignores imports** (`src/code_lint/semantic/calls.rs`): callees are matched by bare name, so `sqlalchemy.cast`, `ctypes.cast` or httpx `patch` are flagged. Resolve the import origin.
-- **`blanket-suppression` rationale is wrong**: a blanket directive has no `target_rules` and therefore suppresses nothing (`suppression.rs` `filter_diagnostics`); the rationale claims it prevents *unintended* suppression. Reword it ("a blanket directive silently does nothing").
-- **`unused-suppression` with disabled rules**: a directive whose target rule is disabled by config, or does not run on the file, reports as unused (the audit only checks `matched_count == 0`). Add a test; skip rules not enabled for the file.
 - **`no-unstructured-task-creation` flags stored, awaited tasks**: the documented hazard (GC of an unreferenced task) does not apply when the task is kept and awaited.
 - **`no-zero-sleep-in-tests` Python half**: the asyncio docs endorse `asyncio.sleep(0)` as a yield; the hazard is Rust-specific (tokio `sleep(ZERO)` is not guaranteed to yield). Reconsider the Python scope.
-- **`flat-scope-enforced` misses annotated nested functions**: the `def $NAME($$$ARGS): $$$BODY` pattern has no return-type slot, so a nested `def inner() -> int:` is not flagged (`async def` is). Match `function_definition` nodes instead of a pattern.
-- **`no-logging-error-in-except` flags nested scopes**: `is_inside_except_clause` accepts any ancestor `except_clause`, so `logging.error` in a function or lambda defined inside an `except` block is flagged. Stop at the first function boundary.
 - **`unknown-suppression-rule` rejects suppression-audit names**: `SUPPRESSIBLE_RULES` holds only the code rules, so naming one of the four suppression audits in a directive is reported as unknown. Decide whether audits are suppressible, then align the list.
 - **`no-mocks-in-tests` misses bare decorators**: only calls are matched, so `@mock.patch.object` without parentheses is not flagged.
-- **`prefer-dedent-for-multiline-strings` defaults name an internal macro**: the Rust allow-list defaults contain `rule_test` / `crate::rule_test`, this repository's test macro. Move them to the repository's own `.omnilint.toml`.
 - **Aliased imports are handled inconsistently**: `no-hungarian-notation` and `prefer-timedelta-over-seconds` skip import aliases, while `banned-abbreviations` flags them. Pick one behaviour for all naming rules.
-- **`single-letter-variable-name` measures bytes**: `name.len() == 1` never matches a single non-ASCII letter such as `é`. Count characters instead.
 
 ## Candidate Rules
 

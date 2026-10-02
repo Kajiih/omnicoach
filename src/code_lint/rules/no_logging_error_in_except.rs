@@ -46,7 +46,8 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             what_it_does: "Flags calls to `logging.error(...)` anywhere inside an `except` \
                            block, including bare `except:` and nested blocks such as an `if` \
                            within the handler. Calls in the `try`, `else` and `finally` blocks, \
-                           or outside any `try`, are not flagged. By default only the \
+                           inside a function, `lambda` or class defined within the handler, or \
+                           outside any `try`, are not flagged. By default only the \
                            module-level `logging.error` is matched: a logger instance call such \
                            as `logger.error(...)` is not flagged. A call passing \
                            `exc_info=True` is flagged too.",
@@ -127,6 +128,16 @@ crate::test_utils::rule_test!(
                         run_job()
                     except RuntimeError:
                         logger.error("failed")
+                "#,
+                logging_error_in_nested_function_inside_except => r#"
+                    import logging
+
+                    try:
+                        run_job()
+                    except RuntimeError:
+                        def on_retry_failure():
+                            logging.error("retry failed")
+                        callback = lambda: logging.error("callback failed")
                 "#,
             ],
             fail: [

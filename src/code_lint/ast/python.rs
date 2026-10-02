@@ -879,24 +879,29 @@ fn is_nested_function_raw(func_node: &RawNode<'_>) -> bool {
 pub fn find_nested_functions(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
     file.grep
         .root()
-        .find_all("def $NAME($$$ARGS): $$$BODY")
-        .filter(|func| is_nested_function_raw(func))
+        .dfs()
+        .filter(|func| func.kind() == "function_definition" && is_nested_function_raw(func))
         .map(|func| {
             let func_name = func
                 .field("name")
                 .map(|name_node| name_node.text().to_string())
                 .unwrap_or_default();
-            (AstNode::from_raw(func.get_node().clone()), func_name)
+            (AstNode::from_raw(func), func_name)
         })
         .collect()
 }
 
-/// Returns true if `node` is enclosed inside an `except_clause` block.
+/// Returns true if `node` is enclosed inside an `except_clause` block within the same scope.
 #[must_use]
 pub fn is_inside_except_clause(node: &AstNode<'_>) -> bool {
-    node.raw
-        .ancestors()
-        .any(|ancestor| ancestor.kind() == "except_clause")
+    for ancestor in node.raw.ancestors() {
+        match ancestor.kind().as_ref() {
+            "except_clause" => return true,
+            "function_definition" | "lambda" | "class_definition" => return false,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Returns true if `node` is a Python `tuple` or `list` consisting solely of `>= 2` boolean literals (`True` / `False`).

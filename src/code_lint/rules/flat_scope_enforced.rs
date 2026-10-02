@@ -34,8 +34,7 @@ pub const RULE: CodeRule = CodeRule {
                            function or method in Python source files; test files are not \
                            checked. This includes the methods of a class declared inside a \
                            function. Top-level functions, methods of top-level classes and \
-                           `lambda` expressions are not flagged. Nested functions with a \
-                           return annotation (`def inner() -> int:`) are currently missed.",
+                           `lambda` expressions are not flagged.",
             why_is_this_bad: "A nested function captures the enclosing function's local \
                               variables implicitly, so its real inputs are not visible in its \
                               signature. It cannot be imported, tested or reused on its own, \
@@ -90,6 +89,15 @@ crate::test_utils::rule_test!(
                         return inner()
                 "# => r#"
                     def inner():
+                        return 1
+                "#,
+                nested_with_return_annotation => r#"
+                    def outer() -> int:
+                        def inner() -> int:
+                            return 1
+                        return inner()
+                "# => r#"
+                    def inner() -> int:
                         return 1
                 "#,
                 nested_in_class_method => r#"

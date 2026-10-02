@@ -76,7 +76,7 @@ fn check_file(
     let mut diagnostics = Vec::new();
     for node in crate::code_lint::semantic::bindings::collect_renameable_bindings(file) {
         let name = node.text();
-        if name.len() == 1 && name != "_" && !allowed.contains(&*name) {
+        if name.chars().count() == 1 && name != "_" && !allowed.contains(&*name) {
             diagnostics.push(rule.diagnostic_at_node(path, &node, &[("name", &name)]));
         }
     }
@@ -113,6 +113,9 @@ crate::test_utils::rule_test!(
                 rust_only_allowed_char_flagged_in_python => r#"
                     c = 2
                 "# => "c",
+                non_ascii_single_letter => r#"
+                    é = 1
+                "# => "é",
                 parameter_annotation => r#"
                     def foo(b: int = 1):
                         pass
