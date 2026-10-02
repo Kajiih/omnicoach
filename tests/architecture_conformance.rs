@@ -215,10 +215,10 @@ impl ForbiddenDependencyRule {
 }
 
 /// Computes the set of all components transitively reachable from `from` along directed dependency edges.
-fn compute_transitive_reachability<Component: Copy + Eq + std::hash::Hash + 'static>(
-    from: Component,
-    graph: &[ComponentDefinition<Component>],
-) -> HashSet<Component> {
+fn compute_transitive_reachability(
+    from: ArchitectureComponent,
+    graph: &[ComponentDefinition],
+) -> HashSet<ArchitectureComponent> {
     let mut reachable = HashSet::new();
     let mut queue = VecDeque::new();
     queue.push_back(from);

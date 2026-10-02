@@ -47,8 +47,8 @@ This gives immediate compile-time validation by `rustc` (catching misspelled var
 - **Subtree Inheritance**: Descendant leaf modules inside a component's subtree (e.g. `src/rule_declaration/*.rs`, `src/code_lint/rules/*.rs`, `src/code_lint/ast/*.rs`, `src/code_lint/semantic/*.rs`, `src/command_lint/rules/*.rs`) inherit their component automatically from their nearest declared ancestor and are forbidden from redundantly re-declaring `architecture_component!(...)`.
 - **Content-Verified Pure Namespace Routers**: Files outside any component subtree (`src/lib.rs`, `src/code_lint.rs`, `src/command_lint.rs`) require no hardcoded exemption list; instead, `test_all_source_files_declare_architecture_component` verifies via the Rust CST that they are pure namespace routers containing only external `mod <name>;` declarations (plus `macro_rules!` in `src/lib.rs`) and zero production functions, types, constants, inline `mod { ... }` blocks, or `use` imports.
 
-### 2.3. The Composable `define_architecture!` and `architecture_graph!` Macros
-In `src/architecture.rs` (`FoundationPrimitives`), `define_architecture!` generates both the `strum`-derived `ArchitectureComponent` enum (attaching the `///` doc comments to each variant) and the `ARCHITECTURE_GRAPH` constant by delegating slice construction to `architecture_graph!`. Both macros are local to `src/architecture.rs` (not `#[macro_export]`): `architecture_graph!` is also reused by the cycle-detector unit test to build synthetic graphs. Only `architecture_component!` is exported from `src/lib.rs`, because binary crates invoke it as `omni::architecture_component!`:
+### 2.3. The `define_architecture!` Macro and Compile-Time Acyclicity by Declaration Order
+In `src/architecture.rs` (`FoundationPrimitives`), `define_architecture!` generates the `strum`-derived `ArchitectureComponent` enum (attaching the `///` doc comments to each variant), the `ARCHITECTURE_GRAPH` constant, and a compile-time `const` assertion requiring every dependency in `$node => [ $($dep),* ]` to be declared earlier (`(ArchitectureComponent::$dep as usize) < (ArchitectureComponent::$node as usize)`). This makes any cycle or forward edge a `rustc` compile error (`E0080`) during `cargo check`, with zero runtime cycle-detection code. Only `architecture_component!` is exported from `src/lib.rs`, because binary crates invoke it as `omni::architecture_component!`:
 ```rust
 define_architecture! {
     /// Zero-dependency foundational primitives (`architecture`, `diagnostic`, `diff`).
@@ -63,31 +63,31 @@ define_architecture! {
     /// Semantic analysis engines (`code_lint::semantic`).
     CodeSemanticEngines   => [CodeSyntaxAdapters],
     /// Rule contracts and execution interfaces for code linting (`code_lint::rule`).
-    CodeRuleContracts     => [RuleDeclaration, CodeSemanticEngines, CodeSyntaxAdapters],
+    CodeRuleContracts     => [CodeSemanticEngines, CodeSyntaxAdapters, RuleDeclaration],
     /// Inline comment suppression tracker and directive policies (`code_lint::suppression`).
-    CodeSuppressionEngine => [Config, CodeRuleContracts, CodeSemanticEngines],
+    CodeSuppressionEngine => [CodeRuleContracts, CodeSemanticEngines, RuleDeclaration, Config],
     /// Concrete static analysis linter rules (`code_lint::rules`).
-    CodeLintRules         => [CodeRuleContracts],
+    CodeLintRules         => [CodeRuleContracts, RuleDeclaration],
     /// Static code linting multi-file orchestration runner (`code_lint::runner`).
-    CodeLintRunner        => [Config, CodeLintRules, CodeSuppressionEngine],
+    CodeLintRunner        => [CodeLintRules, CodeSuppressionEngine],
 
     /// VCS interaction and repository diff adapters (`command_lint::vcs`).
     CommandVcsAdapters    => [FoundationPrimitives],
     /// Rule contracts and intercepted command schemas (`command_lint::rule`).
-    CommandRuleContracts  => [RuleDeclaration, CommandVcsAdapters],
+    CommandRuleContracts  => [CommandVcsAdapters, RuleDeclaration],
     /// Concrete command safety linting rules (`command_lint::rules`).
-    CommandLintRules      => [CommandRuleContracts],
+    CommandLintRules      => [CommandRuleContracts, RuleDeclaration],
     /// Command linting orchestration and interception runner (`command_lint::runner`).
-    CommandLintRunner     => [Config, CommandLintRules],
+    CommandLintRunner     => [CommandLintRules, Config],
 
     /// Faceted taxonomy queries, hierarchical Model B selector planner, and config resolution (`rule_selection`).
-    RuleSelection         => [CodeLintRules, CodeSuppressionEngine, CommandLintRules, Config],
+    RuleSelection         => [RuleDeclaration, CodeLintRules, CodeSuppressionEngine, CommandLintRules, Config],
     /// Rule catalog, terminal documentation renderer, and discovery CLI surface (`rule_catalog`).
-    RuleCatalog           => [RuleSelection],
+    RuleCatalog           => [RuleSelection, RuleDeclaration],
     /// Test harness and snapshot fixtures (`test_utils`).
     TestingHarness        => [CodeRuleContracts, CommandRuleContracts],
     /// CLI application entrypoint binaries (`src/bin/*`).
-    ApplicationBinaries   => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog, Config],
+    ApplicationBinaries   => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog],
 }
 ```
 
@@ -104,24 +104,15 @@ define_architecture! {
 
 ---
 
-## 3. Automated Test Suite
-Tests are split by what they check: the graph definition itself is unit-tested next to it, while checks that read the whole `src/` tree live in the integration test.
-
-`src/architecture.rs` (`#[cfg(test)] mod tests`) verifies the graph definition:
-1. `test_architecture_graph_is_acyclic`: Verifies that `ARCHITECTURE_GRAPH` is acyclic using 3-color DFS.
-2. `test_cycle_detector_identifies_cycles`: Guards against vacuous cycle detection using `architecture_graph!`.
-
-Every `ArchitectureComponent` variant must carry a doc comment; the crate-wide `missing_docs = "deny"` lint enforces it at compile time.
-
-`tests/architecture_conformance.rs` enforces conformance of the source tree:
+## 3. Automated Verification
+The graph definition is verified at compile time (`const` topological-order assertion in `define_architecture!` and `missing_docs = "deny"` on every `ArchitectureComponent` variant), while `tests/architecture_conformance.rs` enforces conformance of the source tree:
 1. `test_all_source_files_declare_architecture_component`: Ensures every file in `src/` either belongs to a valid component subtree (with no redundant child declarations) or is a topologically valid, CST-verified pure namespace router (`mod`-only items), and every component variant is backed by at least one root file.
 2. `test_architecture_conformance`: Verifies all source files comply with the DAG reachability and universal sibling subtree isolation rules.
 3. `test_architecture_rules_detect_forbidden_dependencies`: Guards against vacuous conformance passes by injecting upward, cross-domain, turbofish, macro-argument, direct-child sibling (via `super::`), and multi-root sibling dependencies.
 4. `test_subtree_inheritance_resolves_leaf_modules_and_rejects_namespace_routers`: Verifies ancestor component inheritance for leaf files and `None` resolution for pure namespace routers.
 5. `test_namespace_validator_accepts_pure_routers_and_rejects_code_or_orphan_routers`: Guards against production items, imports, or orphan namespace routers sneaking into `src/`.
-6. `test_summary_preserves_production_code_after_conditional_test_item`: Guards against mid-file `#[cfg(test)]` truncation.
-7. `test_ast_grep_is_encapsulated`: Ensures only designated adapter modules handle `ast_grep_core`.
-8. `test_items_have_a_single_path`: Enforces single public paths while permitting private-child facade re-exports (`mod child; pub use self::child::Item;`).
-9. `test_second_path_detection_allows_private_child_facades_and_rejects_duplicates`: Guards against vacuous second-path passes, duplicate public paths (`pub mod` + `pub use`), and cross-component re-exports.
-10. `test_relative_paths_stay_within_component`: Enforces that `super::` and `self::` stay within their enclosing component root subtree while cross-component references use `crate::`.
-11. `test_relative_path_boundary_allows_intra_component_and_rejects_cross_component`: Guards against vacuous relative-path passes and false positives in comments/strings/tests.
+6. `test_ast_grep_is_encapsulated`: Ensures only designated adapter modules handle `ast_grep_core`.
+7. `test_items_have_a_single_path`: Enforces single public paths while permitting private-child facade re-exports (`mod child; pub use self::child::Item;`).
+8. `test_second_path_detection_allows_private_child_facades_and_rejects_duplicates`: Guards against vacuous second-path passes, duplicate public paths (`pub mod` + `pub use`), and cross-component re-exports.
+9. `test_relative_paths_stay_within_component`: Enforces that `super::` and `self::` stay within their enclosing component root subtree while cross-component references use `crate::`.
+10. `test_relative_path_boundary_allows_intra_component_and_rejects_cross_component`: Guards against vacuous relative-path passes and false positives in comments/strings/tests.
