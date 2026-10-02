@@ -5,7 +5,7 @@
 //! No module outside `crate::code_lint::ast` imports `ast_grep_core` or accesses raw Tree-sitter
 //! node kinds, field names, or traversal iterators.
 
-architecture_component!(CodeSyntaxAdapters);
+architecture_component!(CodeLintAst);
 
 /// Dispatches `$func(args...)` to `ast::python` or `ast::rust` by `$lang`, evaluating
 /// `$fallback` for any other language.

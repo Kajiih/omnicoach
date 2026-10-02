@@ -1,6 +1,6 @@
 //! Command execution safety and workflow context linter binary.
 
-omni::architecture_component!(ApplicationBinaries);
+omni::architecture_component!(Bin);
 
 use omni::command_lint::runner::run_command_lint;
 use omni::diagnostic::{OutputFormat, print_diagnostics};
