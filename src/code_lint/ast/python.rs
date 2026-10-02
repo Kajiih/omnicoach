@@ -630,6 +630,8 @@ pub struct PythonFunctionSignature<'a> {
     pub name: String,
     /// Parsed parameters in declaration order.
     pub parameters: Vec<PythonParameterInfo<'a>>,
+    /// Return type annotation AST node (`-> <type>`), if present.
+    pub return_type_node: Option<AstNode<'a>>,
 }
 
 /// Internal helper struct for extracted parameter parts.
@@ -821,14 +823,385 @@ pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSigna
         };
         let name = name_node.text().to_string();
         let parameters = extract_parameters_raw(&params_node);
+        let return_type_node = node.field("return_type").map(AstNode::from_raw);
         signatures.push(PythonFunctionSignature {
             node: AstNode::from_raw(node),
             name_node: AstNode::from_raw(name_node),
             name,
             parameters,
+            return_type_node,
         });
     }
     signatures
+}
+
+/// Controls how deeply [`collect_type_constructors`] traverses a Python type annotation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationTraversalDepth {
+    /// Unwraps only transparent wrappers (`|`, `Optional`, `Union`, `Annotated[T, ...]`,
+    /// `ClassVar[T]`, `Final[T]`, `Required[T]`, `NotRequired[T]`, `ReadOnly[T]`).
+    TransparentWrappersOnly,
+    /// Unwraps transparent wrappers and recurses into known covariant generic type parameter
+    /// positions (`Sequence[T]`, `Mapping[K, V]` value `V`, `tuple[...]`, `Awaitable[T]`,
+    /// `Callable[[...], Ret]` return `Ret`, `Generator`/`Coroutine` yield & return, etc.).
+    CovariantPositions,
+}
+
+/// Returns true if `(path, terminal)` refers to an unqualified or standard-library (`typing`,
+/// `typing_extensions`, `collections.abc`, `builtins`) type constructor.
+fn is_std_type_constructor_prefix(path: &str, terminal: &str) -> bool {
+    path == terminal
+        || path.strip_suffix(terminal).is_some_and(|prefix| {
+            matches!(
+                prefix,
+                "typing." | "typing_extensions." | "collections.abc." | "builtins."
+            )
+        })
+}
+
+/// Returns true if `(path, terminal)` matches one of `targets` in the standard typing namespaces.
+fn is_std_type_constructor(path: &str, terminal: &str, targets: &[&str]) -> bool {
+    targets.contains(&terminal) && is_std_type_constructor_prefix(path, terminal)
+}
+
+/// Returns true if `(path, terminal)` is a concrete mutable collection constructor (`list`, `dict`,
+/// `set`, `typing.List`, `typing.Dict`, `typing.Set`, etc.).
+///
+/// Unqualified `Set` and `collections.abc.Set` are excluded because `from collections.abc import Set`
+/// is the standard PEP 585 abstract set interface, whereas `typing.Set` aliases concrete `builtins.set`.
+#[must_use]
+pub fn is_concrete_collection_constructor(path: &str, terminal: &str) -> bool {
+    match terminal {
+        "list" | "List" | "dict" | "Dict" | "set" => is_std_type_constructor_prefix(path, terminal),
+        "Set" => matches!(path, "typing.Set" | "typing_extensions.Set"),
+        _ => false,
+    }
+}
+
+/// Extracts `(base_node, type_argument_nodes)` from a Python `generic_type` or expression-fallback
+/// `subscript` node inside a type annotation.
+fn extract_generic_base_and_args<'a>(
+    node: &RawNode<'a>,
+) -> Option<(RawNode<'a>, Vec<RawNode<'a>>)> {
+    match node.kind().as_ref() {
+        "generic_type" => {
+            let mut base_node = None;
+            let mut type_args = Vec::new();
+            for child in node.children() {
+                if !child.is_named() || child.is_extra() {
+                    continue;
+                }
+                if child.kind() == "type_parameter" {
+                    for param_child in child.children() {
+                        if param_child.is_named() && !param_child.is_extra() {
+                            type_args.push(param_child);
+                        }
+                    }
+                } else if base_node.is_none() {
+                    base_node = Some(child);
+                }
+            }
+            Some((base_node?, type_args))
+        }
+        "subscript" => {
+            let base_node = node.field("value")?;
+            let raw_args: Vec<_> = node
+                .field_children("subscript")
+                .filter(|child| child.is_named() && !child.is_extra())
+                .collect();
+            let type_args = if raw_args.len() == 1 && raw_args[0].kind() == "tuple" {
+                raw_args[0]
+                    .children()
+                    .filter(|child| child.is_named() && !child.is_extra())
+                    .collect()
+            } else {
+                raw_args
+            };
+            Some((base_node, type_args))
+        }
+        _ => None,
+    }
+}
+
+/// Transparent type wrappers whose all type arguments preserve the enclosing variance.
+const TRANSPARENT_UNION_WRAPPERS: &[&str] = &["Optional", "Union"];
+
+/// Transparent type qualifiers whose first type argument (`arg 0`) preserves the enclosing variance.
+const TRANSPARENT_FIRST_ARG_WRAPPERS: &[&str] = &[
+    "Annotated",
+    "ClassVar",
+    "Final",
+    "Required",
+    "NotRequired",
+    "ReadOnly",
+];
+
+/// Single-parameter generic containers that are covariant in their element type (`arg 0`).
+const SINGLE_ARG_COVARIANT_CONTAINERS: &[&str] = &[
+    "Sequence",
+    "Collection",
+    "Iterable",
+    "Iterator",
+    "Reversible",
+    "Container",
+    "AsyncIterable",
+    "AsyncIterator",
+    "Awaitable",
+    "AbstractSet",
+    "Set",
+    "frozenset",
+    "FrozenSet",
+    "list",
+    "List",
+    "set",
+];
+
+/// Recursively collects matching type constructor paths from `node` according to `depth`.
+fn collect_type_constructors_raw<F>(
+    node: &RawNode<'_>,
+    depth: AnnotationTraversalDepth,
+    predicate: &F,
+    out: &mut Vec<String>,
+) where
+    F: Fn(&str, &str) -> bool,
+{
+    match node.kind().as_ref() {
+        "type" | "parenthesized_expression" | "union_type" => {
+            for child in node.children() {
+                if child.is_named() && !child.is_extra() {
+                    collect_type_constructors_raw(&child, depth, predicate, out);
+                }
+            }
+        }
+        "binary_operator" => {
+            if node.field("operator").is_some_and(|op| op.text() == "|") {
+                if let Some(left) = node.field("left") {
+                    collect_type_constructors_raw(&left, depth, predicate, out);
+                }
+                if let Some(right) = node.field("right") {
+                    collect_type_constructors_raw(&right, depth, predicate, out);
+                }
+            }
+        }
+        "identifier" | "attribute" => {
+            let (path, terminal) = resolve_path_and_terminal_raw(node);
+            if predicate(&path, &terminal) && !out.contains(&path) {
+                out.push(path);
+            }
+        }
+        "generic_type" | "subscript" => {
+            let Some((base_node, type_args)) = extract_generic_base_and_args(node) else {
+                return;
+            };
+            let (base_path, base_terminal) = resolve_path_and_terminal_raw(&base_node);
+
+            if is_std_type_constructor(&base_path, &base_terminal, TRANSPARENT_UNION_WRAPPERS) {
+                for arg in &type_args {
+                    collect_type_constructors_raw(arg, depth, predicate, out);
+                }
+                return;
+            }
+
+            if is_std_type_constructor(&base_path, &base_terminal, TRANSPARENT_FIRST_ARG_WRAPPERS) {
+                if let Some(first_arg) = type_args.first() {
+                    collect_type_constructors_raw(first_arg, depth, predicate, out);
+                }
+                return;
+            }
+
+            if predicate(&base_path, &base_terminal) && !out.contains(&base_path) {
+                out.push(base_path.clone());
+            }
+
+            if depth == AnnotationTraversalDepth::CovariantPositions
+                && is_std_type_constructor_prefix(&base_path, &base_terminal)
+            {
+                match base_terminal.as_str() {
+                    t if SINGLE_ARG_COVARIANT_CONTAINERS.contains(&t) => {
+                        if let Some(first_arg) = type_args.first() {
+                            collect_type_constructors_raw(first_arg, depth, predicate, out);
+                        }
+                    }
+                    "tuple" | "Tuple" => {
+                        for arg in &type_args {
+                            collect_type_constructors_raw(arg, depth, predicate, out);
+                        }
+                    }
+                    "Mapping" | "dict" | "Dict" | "Callable" => {
+                        if let Some(second_arg) = type_args.get(1) {
+                            collect_type_constructors_raw(second_arg, depth, predicate, out);
+                        }
+                    }
+                    "Generator" | "Coroutine" => {
+                        if let Some(yield_arg) = type_args.first() {
+                            collect_type_constructors_raw(yield_arg, depth, predicate, out);
+                        }
+                        if let Some(return_arg) = type_args.get(2) {
+                            collect_type_constructors_raw(return_arg, depth, predicate, out);
+                        }
+                    }
+                    "AsyncGenerator" => {
+                        if let Some(yield_arg) = type_args.first() {
+                            collect_type_constructors_raw(yield_arg, depth, predicate, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Collects matching type constructor strings (in source order, deduplicated) from a Python
+/// type annotation node according to `depth` and `predicate(full_path, terminal_name)`.
+#[must_use]
+pub fn collect_type_constructors<F>(
+    type_node: &AstNode<'_>,
+    depth: AnnotationTraversalDepth,
+    predicate: F,
+) -> Vec<String>
+where
+    F: Fn(&str, &str) -> bool,
+{
+    let mut out = Vec::new();
+    collect_type_constructors_raw(&type_node.raw, depth, &predicate, &mut out);
+    out
+}
+
+/// Collects concrete mutable collection constructors (`list`, `dict`, `set`, etc.) from `type_node`.
+///
+/// Traverses transparent wrappers and covariant container positions (`AnnotationTraversalDepth::CovariantPositions`).
+#[must_use]
+pub fn collect_concrete_collection_types(type_node: &AstNode<'_>) -> Vec<String> {
+    collect_type_constructors(
+        type_node,
+        AnnotationTraversalDepth::CovariantPositions,
+        is_concrete_collection_constructor,
+    )
+}
+
+/// Returns true if `func_name` is a Python Data Model dunder method with a fixed signature
+/// (all `__*__` methods except constructors `__init__` and `__new__`).
+#[must_use]
+pub fn is_exempt_dunder_method(func_name: &str) -> bool {
+    func_name.starts_with("__")
+        && func_name.ends_with("__")
+        && func_name.len() > 4
+        && !matches!(func_name, "__init__" | "__new__")
+}
+
+/// Returns true if `func_node` is decorated with `@override`, `@overload`, `@abstractmethod`,
+/// or `@fixture` (`@pytest.fixture`).
+#[must_use]
+pub fn has_exempt_signature_decorator(func_node: &AstNode<'_>) -> bool {
+    has_decorator(func_node, |terminal| {
+        matches!(
+            terminal,
+            "override" | "overload" | "abstractmethod" | "fixture"
+        )
+    })
+}
+
+/// Returns true if a Python `class_definition` inherits from `Protocol` or `ABC` or declares
+/// `metaclass=ABCMeta`.
+fn is_protocol_or_abc_class_raw(class_node: &RawNode<'_>) -> bool {
+    let Some(superclasses) = class_node.field("superclasses") else {
+        return false;
+    };
+    for child in superclasses.children() {
+        if !child.is_named() || child.is_extra() {
+            continue;
+        }
+        if child.kind() == "keyword_argument" {
+            let is_abc_meta = child.field("name").is_some_and(|n| n.text() == "metaclass")
+                && child.field("value").is_some_and(|v| {
+                    let (_, terminal) = resolve_path_and_terminal_raw(&v);
+                    terminal == "ABCMeta"
+                });
+            if is_abc_meta {
+                return true;
+            }
+            continue;
+        }
+        let base_expr = if matches!(child.kind().as_ref(), "subscript" | "generic_type") {
+            child
+                .field("value")
+                .or_else(|| child.children().find(|c| c.is_named() && !c.is_extra()))
+                .unwrap_or(child)
+        } else {
+            child
+        };
+        let (_, terminal) = resolve_path_and_terminal_raw(&base_expr);
+        if matches!(terminal.as_str(), "Protocol" | "ABC") {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns true if `node` (a method `function_definition` or class attribute node) is directly
+/// enclosed in a `Protocol` or `ABC` class definition.
+#[must_use]
+pub fn is_in_protocol_or_abc_class(node: &AstNode<'_>) -> bool {
+    for ancestor in node.raw.ancestors() {
+        match ancestor.kind().as_ref() {
+            "function_definition" | "lambda" => return false,
+            "class_definition" => return is_protocol_or_abc_class_raw(&ancestor),
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Returns true if `stmt` is an `expression_statement` wrapping a string literal (docstring).
+fn is_docstring_statement_raw(stmt: &RawNode<'_>) -> bool {
+    stmt.kind() == "expression_statement"
+        && stmt
+            .children()
+            .find(|c| c.is_named() && !c.is_extra())
+            .is_some_and(|child| child.kind() == "string")
+}
+
+/// Returns true if `stmt` is `pass`, `...`, or `raise NotImplementedError` / `raise NotImplementedError(...)`.
+fn is_stub_statement_raw(stmt: &RawNode<'_>) -> bool {
+    match stmt.kind().as_ref() {
+        "pass_statement" => true,
+        "expression_statement" => stmt
+            .children()
+            .find(|c| c.is_named() && !c.is_extra())
+            .is_some_and(|child| child.kind() == "ellipsis"),
+        "raise_statement" => stmt.children().any(|child| match child.kind().as_ref() {
+            "identifier" => child.text() == "NotImplementedError",
+            "call" => child.field("function").is_some_and(|func| {
+                let (_, terminal) = resolve_path_and_terminal_raw(&func);
+                terminal == "NotImplementedError"
+            }),
+            _ => false,
+        }),
+        _ => false,
+    }
+}
+
+/// Returns true if `func_node` has a stub body consisting only of an optional docstring and
+/// `...`, `pass`, or `raise NotImplementedError`.
+#[must_use]
+pub fn is_stub_function_body(func_node: &AstNode<'_>) -> bool {
+    let Some(body) = func_node.raw.field("body") else {
+        return false;
+    };
+    let stmts: Vec<_> = body
+        .children()
+        .filter(|child| {
+            child.is_named() && !child.is_extra() && !is_comment_kind(child.kind().as_ref())
+        })
+        .collect();
+    let remaining = if stmts.first().is_some_and(is_docstring_statement_raw) {
+        &stmts[1..]
+    } else {
+        &stmts[..]
+    };
+    remaining.is_empty() || (remaining.len() == 1 && is_stub_statement_raw(&remaining[0]))
 }
 
 /// Returns true if a Python `function_definition` is decorated with `@override`.
@@ -1162,6 +1535,9 @@ const MUTATING_METHODS: &[&str] = &[
     "popitem",
     "add",
     "discard",
+    "intersection_update",
+    "difference_update",
+    "symmetric_difference_update",
 ];
 
 /// Returns true if `node` is assigned to, augmented, deleted, or bound by a `for` loop.
@@ -1180,6 +1556,210 @@ fn is_write_target(node: &RawNode<'_>) -> bool {
         }
     }
     false
+}
+
+/// If `node` mutates a collection receiver in place (`recv.append(...)`, `recv[k] = v`,
+/// `del recv[k]`, `recv += ...`), returns that `recv` node.
+fn in_place_mutated_receiver<'a>(node: &RawNode<'a>) -> Option<RawNode<'a>> {
+    match node.kind().as_ref() {
+        "call" => {
+            let func = node.field("function")?;
+            if func.kind() != "attribute" {
+                return None;
+            }
+            let method = func.field("attribute")?;
+            if MUTATING_METHODS.contains(&method.text().as_ref()) {
+                func.field("object")
+            } else {
+                None
+            }
+        }
+        "subscript" if is_write_target(node) => node.field("value"),
+        "augmented_assignment" => node.field("left"),
+        _ => None,
+    }
+}
+
+/// Extracts the terminal function/method name if `node` is a `call` expression.
+fn called_terminal_name(node: &RawNode<'_>) -> Option<String> {
+    if node.kind() != "call" {
+        return None;
+    }
+    let func = node.field("function")?;
+    let (_, terminal) = resolve_path_and_terminal_raw(&func);
+    (!terminal.is_empty()).then_some(terminal)
+}
+
+/// Collects function or method names whose return values are mutated in place in `file`.
+///
+/// Matches direct call mutations (`fn().append(...)`, `fn()[0] = 1`) and local bindings (`buf = fn(); buf.append(...)`).
+#[must_use]
+pub fn collect_locally_mutated_return_functions(
+    file: &ParsedFile,
+) -> std::collections::HashSet<String> {
+    let mut mutated_functions = std::collections::HashSet::new();
+    let mut bindings_to_callee: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut mutated_identifiers: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+
+    for node in file.grep.root().dfs() {
+        if node.kind() == "assignment"
+            && let (Some(left), Some(right)) = (node.field("left"), node.field("right"))
+            && left.kind() == "identifier"
+            && let Some(callee_name) = called_terminal_name(&right)
+        {
+            bindings_to_callee.insert(left.text().into_owned(), callee_name);
+        }
+
+        if let Some(recv) = in_place_mutated_receiver(&node) {
+            if let Some(callee_name) = called_terminal_name(&recv) {
+                mutated_functions.insert(callee_name);
+            } else if recv.kind() == "identifier" {
+                mutated_identifiers.insert(recv.text().into_owned());
+            }
+        }
+    }
+
+    for var_name in mutated_identifiers {
+        if let Some(callee_name) = bindings_to_callee.remove(&var_name) {
+            mutated_functions.insert(callee_name);
+        }
+    }
+
+    mutated_functions
+}
+
+/// A public Python class or instance attribute carrying a type annotation.
+pub struct PythonAnnotatedAttribute<'a> {
+    /// Name of the enclosing class.
+    pub class_name: String,
+    /// Attribute identifier name (e.g. `"items"`).
+    pub name: String,
+    /// Type annotation AST node (`type`).
+    pub type_node: AstNode<'a>,
+}
+
+/// Walks `node` (without entering nested `class_definition`s) and records attribute names
+/// mutated in place on `self`, `cls`, or `class_name`.
+fn collect_mutated_class_attr_names_rec(
+    node: &RawNode<'_>,
+    class_name: &str,
+    out: &mut std::collections::HashSet<String>,
+) {
+    if node.kind() == "class_definition" {
+        return;
+    }
+    if let Some(recv) = in_place_mutated_receiver(node)
+        && recv.kind() == "attribute"
+        && let (Some(obj), Some(attr)) = (recv.field("object"), recv.field("attribute"))
+    {
+        let obj_text = obj.text();
+        if matches!(obj_text.as_ref(), "self" | "cls") || obj_text == class_name {
+            out.insert(attr.text().into_owned());
+        }
+    }
+    for child in node.children() {
+        collect_mutated_class_attr_names_rec(&child, class_name, out);
+    }
+}
+
+/// Walks statements in `__init__` (without entering nested functions/classes/lambdas) and
+/// collects public `self.<attr>: <type>` annotations not in `mutated_attrs`.
+fn collect_init_annotated_attrs_rec<'a>(
+    node: &RawNode<'a>,
+    class_name: &str,
+    mutated_attrs: &std::collections::HashSet<String>,
+    out: &mut Vec<PythonAnnotatedAttribute<'a>>,
+) {
+    if matches!(
+        node.kind().as_ref(),
+        "function_definition" | "class_definition" | "lambda"
+    ) {
+        return;
+    }
+    if node.kind() == "assignment"
+        && let (Some(left), Some(type_node)) = (node.field("left"), node.field("type"))
+        && left.kind() == "attribute"
+        && left.field("object").is_some_and(|obj| obj.text() == "self")
+        && let Some(attr) = left.field("attribute")
+    {
+        let attr_name = attr.text().into_owned();
+        if !attr_name.starts_with('_') && !mutated_attrs.contains(&attr_name) {
+            out.push(PythonAnnotatedAttribute {
+                class_name: class_name.to_owned(),
+                name: attr_name,
+                type_node: AstNode::from_raw(type_node),
+            });
+        }
+    }
+    for child in node.children() {
+        collect_init_annotated_attrs_rec(&child, class_name, mutated_attrs, out);
+    }
+}
+
+/// Collects unmutated public (`!name.starts_with('_')`) annotated class and `__init__` attributes.
+///
+/// Skips `Protocol` and `ABC` classes and attributes mutated in place within their class.
+#[must_use]
+pub fn collect_unmutated_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotatedAttribute<'_>> {
+    let mut out = Vec::new();
+    for class_node in file.grep.root().dfs() {
+        if class_node.kind() != "class_definition" || is_protocol_or_abc_class_raw(&class_node) {
+            continue;
+        }
+        let Some(name_node) = class_node.field("name") else {
+            continue;
+        };
+        let Some(body) = class_node.field("body") else {
+            continue;
+        };
+        let class_name = name_node.text().into_owned();
+
+        let mut mutated_attrs = std::collections::HashSet::new();
+        for child in body.children() {
+            collect_mutated_class_attr_names_rec(&child, &class_name, &mut mutated_attrs);
+        }
+
+        for child in body.children() {
+            if child.kind() == "expression_statement"
+                && let Some(assign) = child.children().find(|c| c.is_named() && !c.is_extra())
+                && assign.kind() == "assignment"
+                && let (Some(left), Some(type_node)) = (assign.field("left"), assign.field("type"))
+                && left.kind() == "identifier"
+            {
+                let attr_name = left.text().into_owned();
+                if !attr_name.starts_with('_') && !mutated_attrs.contains(&attr_name) {
+                    out.push(PythonAnnotatedAttribute {
+                        class_name: class_name.clone(),
+                        name: attr_name,
+                        type_node: AstNode::from_raw(type_node),
+                    });
+                }
+            } else {
+                let func_candidate = if child.kind() == "decorated_definition" {
+                    child.field("definition")
+                } else {
+                    Some(child)
+                };
+                if let Some(func) = func_candidate
+                    && func.kind() == "function_definition"
+                    && func.field("name").is_some_and(|n| n.text() == "__init__")
+                    && let Some(init_body) = func.field("body")
+                {
+                    for stmt in init_body.children() {
+                        collect_init_annotated_attrs_rec(
+                            &stmt,
+                            &class_name,
+                            &mutated_attrs,
+                            &mut out,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Returns the position a `subscript` reads, if its index is a single literal.
@@ -1626,5 +2206,89 @@ mod tests {
             reads_by_scope.contains(&module_reads),
             "no module scope holding exactly the top-level reads: {reads_by_scope:?}"
         );
+    }
+
+    #[rstest::rstest]
+    #[case::a1_bare_concrete("def f(x: list, y: dict, z: typing.List) -> None: pass", &[&["list"][..], &["dict"][..], &["typing.List"][..]])]
+    #[case::a2_pep585_generic("def f(x: list[int], y: dict[str, int], z: set[str]) -> None: pass", &[&["list"][..], &["dict"][..], &["set"][..]])]
+    #[case::a3_pep484_qualified("def f(x: typing.List[int], y: typing.Dict[str, int], z: typing.Set[str]) -> None: pass", &[&["typing.List"][..], &["typing.Dict"][..], &["typing.Set"][..]])]
+    #[case::a4_pep604_union("def f(x: list[int] | None, y: int | list[str] | set[int]) -> None: pass", &[&["list"][..], &["list", "set"][..]])]
+    #[case::a5_qualified_pep604_union("def f(x: typing.List[int] | None) -> None: pass", &[&["typing.List"][..]])]
+    #[case::a6_optional_and_union("def f(x: Optional[list[int]], y: Union[list[int], str, None]) -> None: pass", &[&["list"][..], &["list"][..]])]
+    #[case::a7_qualified_optional_and_union("def f(x: typing.Optional[typing.Dict[str, int]], y: typing.Union[list[int], None]) -> None: pass", &[&["typing.Dict"][..], &["list"][..]])]
+    #[case::a8_annotated_unwraps_first_arg("def f(x: Annotated[list[int], 'meta'], y: typing.Annotated[set[str], Doc('x')]) -> None: pass", &[&["list"][..], &["set"][..]])]
+    #[case::a9_annotated_ignores_metadata("def f(x: Annotated[Sequence[int], list]) -> None: pass", &[&[][..]])]
+    #[case::a10_qualifiers("def f(x: ClassVar[list[str]], y: Final[dict[str, int]], z: Required[set[str]]) -> None: pass", &[&["list"][..], &["dict"][..], &["set"][..]])]
+    #[case::a11_covariant_single_and_tuple_containers("def f(a: Sequence[list[int]], b: Collection[set[str]], c: Awaitable[list[int]], d: tuple[str, dict[str, int]], e: tuple[list[int], ...]) -> None: pass", &[&["list"][..], &["set"][..], &["list"][..], &["dict"][..], &["list"][..]])]
+    #[case::a12_mapping_covariant_value("def f(x: Mapping[str, list[int]]) -> None: pass", &[&["list"][..]])]
+    #[case::a13_callable_covariant_return("def f(cb: Callable[[int], list[str]]) -> None: pass", &[&["list"][..]])]
+    #[case::a14_callable_contravariant_param_ignored("def f(cb: Callable[[list[int]], None]) -> None: pass", &[&[][..]])]
+    #[case::a15_invariant_mutable_outer_ignored("def f(x: MutableMapping[str, list[int]], y: MutableSequence[list[int]]) -> None: pass", &[&[][..], &[][..]])]
+    #[case::a16_unknown_generic_ignored("def f(x: CustomBox[list[int]]) -> None: pass", &[&[][..]])]
+    #[case::a17_abstract_collections_pass("def f(a: Sequence[int], b: Mapping[str, int], c: AbstractSet[str], d: collections.abc.Set[str], e: Set[str]) -> None: pass", &[&[][..], &[][..], &[][..], &[][..], &[][..]])]
+    #[case::a18_immutable_builtins_pass("def f(a: tuple[int, ...], b: frozenset[str], c: bytes, d: str) -> None: pass", &[&[][..], &[][..], &[][..], &[][..]])]
+    fn test_collect_concrete_collection_types_matrix_a(
+        #[case] source: &str,
+        #[case] expected_per_param: &[&[&str]],
+    ) {
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let sigs = extract_function_signatures(&file);
+        assert_eq!(sigs.len(), 1);
+        let actual: Vec<Vec<String>> = sigs[0]
+            .parameters
+            .iter()
+            .map(|param| {
+                let type_node = param.type_node.as_ref().expect("param should be typed");
+                collect_concrete_collection_types(type_node)
+            })
+            .collect();
+        let expected: Vec<Vec<String>> = expected_per_param
+            .iter()
+            .map(|slice| slice.iter().map(|s| (*s).to_string()).collect())
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::ellipsis_stub("def f(x: list[int]) -> None: ...", true)]
+    #[case::pass_stub("def f(x: list[int]) -> None:\n    pass", true)]
+    #[case::docstring_and_ellipsis(
+        "def f(x: list[int]) -> None:\n    \"\"\"Doc.\"\"\"\n    ...",
+        true
+    )]
+    #[case::raise_not_implemented_bare(
+        "def f(x: list[int]) -> None:\n    raise NotImplementedError",
+        true
+    )]
+    #[case::raise_not_implemented_call(
+        "def f(x: list[int]) -> None:\n    raise NotImplementedError('todo')",
+        true
+    )]
+    #[case::real_body("def f(x: list[int]) -> int:\n    return len(x)", false)]
+    fn test_is_stub_function_body(#[case] source: &str, #[case] expected: bool) {
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let sigs = extract_function_signatures(&file);
+        assert_eq!(is_stub_function_body(&sigs[0].node), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::protocol_class(
+        "class P(Protocol):\n    def f(self, x: list[int]) -> None: pass",
+        true
+    )]
+    #[case::generic_protocol_class(
+        "class P(typing.Protocol[T]):\n    def f(self, x: list[int]) -> None: pass",
+        true
+    )]
+    #[case::abc_class("class A(abc.ABC):\n    def f(self, x: list[int]) -> None: pass", true)]
+    #[case::abc_meta_class(
+        "class A(metaclass=abc.ABCMeta):\n    def f(self, x: list[int]) -> None: pass",
+        true
+    )]
+    #[case::regular_class("class C:\n    def f(self, x: list[int]) -> None: pass", false)]
+    fn test_is_in_protocol_or_abc_class(#[case] source: &str, #[case] expected: bool) {
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let sigs = extract_function_signatures(&file);
+        assert_eq!(is_in_protocol_or_abc_class(&sigs[0].node), expected);
     }
 }
