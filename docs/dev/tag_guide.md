@@ -17,7 +17,7 @@ A rule is described by **facets**. Each facet answers one question. Its **values
 | **Precision** | Can it flag correct code? | `exact`, `heuristic` | Declared, **exactly one** |
 | **Consensus** | Would reasonable people disagree with it? | `opinionated`, `unopinionated` | Declared, **exactly one** |
 | **Impacted quality** | What software quality suffers when it is violated? | `reliability`, `maintainability` (from ISO/IEC 25010; §2.4) | Declared, **exactly one** |
-| **Languages** | Which languages does it check? | `python`, `rust` | Derived from `supported_languages()` (**1+ for code rules, 0 for command rules**) |
+| **Languages** | Which languages does it check? | `python`, `rust` | Derived from `Declaration::languages` (**1+ for code rules, 0 for command rules**) |
 | **Analyzed input** | Code or shell commands? | `code`, `command` | Derived from the rule registry (**exactly one**; suppression audits derive `code`) |
 | **File scope** | Tests only, sources only? | `tests-only`, `source-only` | Derived from `RuleTarget` (**0 or 1**; none when the rule runs on all files) |
 
@@ -25,27 +25,31 @@ Rules of the namespace:
 - **Facet labels are never selectors**. `select = ["precision"]` or `select = ["impacted-quality"]` is an error that lists the values.
 - **Every label is globally unique**: rule names, topic labels, facet values and synonyms share one namespace. That is why values are bare (`heuristic`, not `precision:heuristic`).
 - **Derived facets cannot be declared.** The rule has no field for them.
-- **Behaviour never depends on a tag**. `Rule` exposes no tag getter, suppression audits have their own contract, and the architecture graph (`src/architecture.rs`) keeps rules and runners away from the classification.
+- **Behaviour never depends on a tag**. The classification is constant data with no queries; the queries (`ancestors`, `path`, `matches`) live in `rule_selection`, and the architecture graph (`src/architecture.rs`) keeps rules and runners from depending on it.
 
 ---
 
 ## 2. Classifying a rule
 
-A rule's whole classification is one declaration next to the rule struct, in the rule's own file:
+A rule's whole classification is one field of its `Declaration`, in the rule's own file:
 
 ```rust
-impl NoSleepInTests {
-    /// The rule's declared facets.
-    pub(crate) const CLASSIFICATION: Classification = Classification {
-        topics: &[Topic::TEST_TIMING],
-        precision: Precision::Exact,
-        consensus: Consensus::Unopinionated,
-        impacted_quality: ImpactedQuality::Reliability,
-    };
-}
+pub const SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
+    declaration: Declaration {
+        // name, template, languages, options...
+        classification: Classification {
+            topics: &[Topic::TEST_TIMING],
+            precision: Precision::Exact,
+            consensus: Consensus::Unopinionated,
+            impacted_quality: ImpactedQuality::Reliability,
+        },
+        // doc...
+    },
+    // target, check...
+};
 ```
 
-The registry (`CODE_RULES`, `SUPPRESSION_AUDITS` or `COMMAND_RULES`) lists the rule as a `Rule { detector, classification, doc }`, so a rule cannot be registered without it. Forgetting a field, giving a field two values, or declaring a derived facet does not compile.
+Every registry (`CODE_RULES`, `SUPPRESSION_AUDITS` or `COMMAND_RULES`) holds rules built from a `Declaration`, so a rule cannot be registered without a classification. Forgetting a field, giving a field two values, or declaring a derived facet does not compile.
 
 ### 2.1 Topics: most specific, at least one
 
@@ -196,6 +200,7 @@ Compiler checks are pinned by `compile_fail` doctests on `Classification` in `sr
 | §1, §4.1.4: labels are globally unique, `kebab-case`, and not facet labels | Test `labels_are_globally_unique_and_not_facet_labels` |
 | §2.4, §4.1.5: every topic and facet value has at least one rule | Test `every_tag_has_a_rule` + `dead_code` lint on unused `pub(crate) const` topics |
 | §4.2: a topic's parent is a topic | Compiler (`E0308` type mismatch) |
-| §1: behaviour never depends on a tag | Compiler (`Rule` has no tag getter; separate suppression-audit contract) + `test_runners_never_read_the_taxonomy` in `tests/architecture_conformance.rs` |
+| §1: behaviour never depends on a tag | Architecture graph (`src/architecture.rs`: rules and runners cannot depend on `RuleSelection`) checked by `test_architecture_conformance` in `tests/architecture_conformance.rs` |
 | §4.1.3: every tag has a description and every topic has a scope note | `missing_docs` lint (facet values) + compiler (`E0063` missing struct field on `Topic`) + test `every_topic_is_documented` (non-empty); **Review** (meaning) |
+| §5: the table matches the `Topic` consts | Test `topic_tree_table_matches_the_topics` |
 | §2.2–§2.4, §4.1.1–4.1.2: the yes/no questions | **Review.** A test cannot judge meaning; the worked examples are the reference. |
