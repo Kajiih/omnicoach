@@ -10,31 +10,16 @@ use strum::{AsRefStr, Display, EnumString, VariantArray};
 
 /// Bounded specification of an architectural component and its direct dependencies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ComponentDefinition<Component: 'static = ArchitectureComponent> {
+pub struct ComponentDefinition {
     /// The target architectural component being defined.
-    pub component: Component,
+    pub component: ArchitectureComponent,
     /// Directly permitted dependency components (transitive dependencies are computed automatically).
-    pub depends_on: &'static [Component],
+    pub depends_on: &'static [ArchitectureComponent],
 }
 
-/// Builds a `&[ComponentDefinition<Component>]` graph slice from `node => [deps]` edges.
-macro_rules! architecture_graph {
-    ($(
-        $node:expr => [ $( $dep:expr ),* $(,)? ]
-    ),* $(,)?) => {
-        &[
-            $(
-                ComponentDefinition {
-                    component: $node,
-                    depends_on: &[ $( $dep ),* ],
-                },
-            )*
-        ]
-    };
-}
-
-/// Defines `pub enum ArchitectureComponent` and `pub const ARCHITECTURE_GRAPH`
-/// by delegating graph slice construction to `architecture_graph!`.
+/// Defines `pub enum ArchitectureComponent`, `pub const ARCHITECTURE_GRAPH`, and a compile-time
+/// `const` assertion requiring every dependency to be declared before its dependent (making the
+/// graph acyclic by construction).
 macro_rules! define_architecture {
     ($(
         $(#[$meta:meta])*
@@ -63,12 +48,31 @@ macro_rules! define_architecture {
         }
 
         /// The canonical architectural Directed Acyclic Graph (DAG) specification.
-        pub const ARCHITECTURE_GRAPH: &[ComponentDefinition<ArchitectureComponent>] =
-            architecture_graph! {
+        pub const ARCHITECTURE_GRAPH: &[ComponentDefinition] = &[
+            $(
+                ComponentDefinition {
+                    component: ArchitectureComponent::$node,
+                    depends_on: &[ $( ArchitectureComponent::$dep ),* ],
+                },
+            )*
+        ];
+
+        const _: () = {
+            $(
                 $(
-                    ArchitectureComponent::$node => [ $( ArchitectureComponent::$dep ),* ]
-                ),*
-            };
+                    assert!(
+                        (ArchitectureComponent::$dep as usize) < (ArchitectureComponent::$node as usize),
+                        concat!(
+                            "ArchitectureComponent::",
+                            stringify!($node),
+                            " cannot depend on ArchitectureComponent::",
+                            stringify!($dep),
+                            ": dependencies must be declared before their dependents in define_architecture! to guarantee acyclicity",
+                        ),
+                    );
+                )*
+            )*
+        };
     };
 }
 
@@ -116,97 +120,4 @@ define_architecture! {
     TestingHarness        => [CodeRuleContracts, CommandRuleContracts],
     /// CLI application entrypoint binaries (`src/bin/*`).
     ApplicationBinaries   => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog],
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::BTreeMap;
-
-    /// Detects cycles in a component graph using depth-first search.
-    fn detect_cycle<Component: Copy + Ord + 'static>(
-        graph: &[ComponentDefinition<Component>],
-    ) -> Option<Vec<Component>> {
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        enum State {
-            Unvisited,
-            Visiting,
-            Visited,
-        }
-
-        let mut state = BTreeMap::new();
-        for definition in graph {
-            state.insert(definition.component, State::Unvisited);
-        }
-
-        let mut parent = BTreeMap::new();
-
-        for definition in graph {
-            if state.get(&definition.component) == Some(&State::Unvisited) {
-                let mut stack = vec![(definition.component, 0usize)];
-                state.insert(definition.component, State::Visiting);
-
-                while let Some((node, dependency_index)) = stack.last_mut() {
-                    let node = *node;
-                    let dependencies: &[Component] = graph
-                        .iter()
-                        .find(|item| item.component == node)
-                        .map_or(&[], |item| item.depends_on);
-
-                    if *dependency_index < dependencies.len() {
-                        let next = dependencies[*dependency_index];
-                        *dependency_index += 1;
-
-                        match state.get(&next) {
-                            Some(State::Visiting) => {
-                                let mut cycle = vec![next];
-                                let mut current = node;
-                                while current != next {
-                                    cycle.push(current);
-                                    current = parent[&current];
-                                }
-                                cycle.push(next);
-                                cycle.reverse();
-                                return Some(cycle);
-                            }
-                            Some(State::Unvisited) => {
-                                parent.insert(next, node);
-                                state.insert(next, State::Visiting);
-                                stack.push((next, 0));
-                            }
-                            _ => {}
-                        }
-                    } else {
-                        state.insert(node, State::Visited);
-                        stack.pop();
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    #[test]
-    fn test_architecture_graph_is_acyclic() {
-        if let Some(cycle) = detect_cycle(ARCHITECTURE_GRAPH) {
-            let formatted_cycle = cycle
-                .iter()
-                .map(ArchitectureComponent::as_ref)
-                .collect::<Vec<_>>()
-                .join(" -> ");
-            panic!("Architectural cycle detected in ARCHITECTURE_GRAPH: {formatted_cycle}");
-        }
-    }
-
-    #[test]
-    fn test_cycle_detector_identifies_cycles() {
-        let cyclic_graph = architecture_graph! {
-            "alpha" => ["beta"],
-            "beta"  => ["alpha"],
-        };
-        assert_eq!(
-            detect_cycle(cyclic_graph),
-            Some(vec!["alpha", "beta", "alpha"])
-        );
-    }
 }
