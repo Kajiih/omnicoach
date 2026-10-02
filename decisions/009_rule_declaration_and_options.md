@@ -90,5 +90,5 @@ Precedence is language table, then rule table, then the declared per-language de
 - Runtime, validation and `--explain` read the same const, so keys, types and defaults cannot drift between them.
 - A rule cannot read an undeclared option: `check` receives only the resolved value of the `Options` type declared in `RULE`.
 - Zero-sized detector structs, `Detector`, `CodeDetector` and `CommandDetector` traits, and per-rule `impl` blocks are gone; every rule is a single `const` struct literal plus a private `check_file` / `check_command` function.
-- Breaking for users: `mode` → `enforcement_mode`; `max` / `min` → explicit names; `enforcement_mode` on an audit or command rule is now an error. Each case fails loudly with a suggestion.
-- Rejecting unknown top-level keys and a JSON Schema generated from the declarations stay on the roadmap.
+- Breaking for users: `mode` → `enforcement_mode`; `max` / `min` → explicit names; `enforcement_mode` on an audit or command rule is now an error; unknown top-level or `[context]` keys are rejected.
+- A JSON Schema generated from the declarations stays on the roadmap.

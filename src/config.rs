@@ -57,6 +57,7 @@ where
 
 /// Configuration settings for path context detection (e.g. test paths).
 #[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ContextConfig {
     /// Glob patterns used to identify test files, compiled at load.
     #[serde(
@@ -74,23 +75,16 @@ impl Default for ContextConfig {
     }
 }
 
-/// Configuration settings parsed from `.omnilint.toml`.
-///
-/// Rule selection is already resolved into rule names: `select`, `ignore` and
-/// `per_file_ignores` selectors are parsed by `rule_selection`, never here.
-#[derive(Deserialize, Debug, Default, Clone)]
+/// Configuration settings resolved from `.omnilint.toml` by `rule_selection::parse_config`.
+#[derive(Debug, Default, Clone)]
 pub struct Config {
     /// Rules disabled by `select` and `ignore`.
-    #[serde(skip)]
     pub disabled_rules: HashSet<RuleName>,
-    /// Validated `[rules.<name>]` options, keyed by rule; set by `rule_selection`.
-    #[serde(skip)]
+    /// Validated `[rules.<name>]` options, keyed by rule.
     pub rule_overrides: HashMap<RuleName, RuleOverrides>,
     /// Path context classifier settings.
-    #[serde(default)]
     pub context: ContextConfig,
     /// Per-file rule ignores: glob patterns paired with the rules they disable.
-    #[serde(skip)]
     pub per_file_ignores: Vec<(globset::GlobMatcher, HashSet<RuleName>)>,
 }
 
@@ -181,20 +175,20 @@ mod tests {
 
     #[test]
     fn test_custom_test_patterns_replace_defaults() {
-        let toml_content = indoc::indoc! {r#"
-            [context]
-            test_patterns = ["**/spec/**"]
-        "#};
-        let config: Config = toml::from_str(toml_content).unwrap();
+        let context: ContextConfig = toml::from_str(r#"test_patterns = ["**/spec/**"]"#).unwrap();
+        let config = Config {
+            context,
+            ..Default::default()
+        };
 
         assert!(config.is_test_path(Path::new("app/spec/model.py")));
         assert!(!config.is_test_path(Path::new("tests/foo.rs")));
     }
 
     #[rstest::rstest]
-    #[case::test_patterns("[context]\ntest_patterns = [\"src/[\"]")]
+    #[case::test_patterns("test_patterns = [\"src/[\"]")]
     fn test_invalid_glob_is_config_error(#[case] toml_content: &str) {
-        let error = toml::from_str::<Config>(toml_content).unwrap_err();
+        let error = toml::from_str::<ContextConfig>(toml_content).unwrap_err();
         assert!(error.to_string().contains("src/["), "{error}");
     }
 }

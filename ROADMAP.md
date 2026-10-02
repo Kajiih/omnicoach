@@ -39,7 +39,7 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
   - *Target*: Support case-insensitive and format-tolerant rule selection (matching `SingleLetterVariableName`, `single-letter-variable-name`, and `single_letter_variable_name` interchangeably).
   - *Trigger*: When adding declarative AST rule files or multi-rule alias configurations.
 - **Rule Autofix Engine (`diffy` / `similar`)**:
-  - *Target*: Extend `CodeDetector` and `CommandDetector` with optional auto-fix transformations. Support `--fix` and `--fix --dry-run` with in-memory unified diff previews before writing changes to disk.
+  - *Target*: Extend `CodeRule` and `CommandRule` with optional auto-fix transformations. Support `--fix` and `--fix --dry-run` with in-memory unified diff previews before writing changes to disk.
   - *Trigger*: When implementing the first batch of auto-fixable rules (e.g., replacing `logging.error` with `logging.exception`).
 - **Multiline Decorator & Attribute Span Awareness for `omni:ignore`**:
   - *Current*: `compute_effective_target_line` in `src/code_lint/suppression.rs` advances `end_target_line` across contiguous lines starting with `@`, `#[`, `//`, or `#`, handling single-line decorators and attributes. However, multiline decorators or attributes whose continuation lines do not start with `@` or `#[` stop the line scan early.
@@ -152,17 +152,18 @@ Source: Python Tip of the Week #069 "Prefer constants over wild values" (go/pyth
 Design rationale: [ADR 007](decisions/007_rule_taxonomy_and_selection.md) (taxonomy and selection) and [ADR 008](decisions/008_rule_documentation_and_discovery.md) (rule docs and discovery). Contributor guide: [docs/dev/tag_guide.md](docs/dev/tag_guide.md).
 
 - **Shadowed-selector config warning**: warn when a `select` or `ignore` entry changes no rule's outcome (needs config warning plumbing).
-- **Reject unknown top-level config keys**: a misspelled key (e.g. `selct`) is still silently ignored.
+- **Colocate contributor guides (`docs/dev/rule_design_guide.md`, `docs/dev/tag_guide.md`) into Rustdoc (`//!` and `///`)**:
+  - *Investigation*: Evaluate moving `rule_design_guide.md` (and the classification rules of `tag_guide.md`) directly into module and item doc comments on `src/rule_declaration.rs`, `ViolationTemplate` (`src/diagnostic.rs`), and `rule_test!` (`src/test_utils.rs`). This replaces placeholder `missing_docs` one-liners with the real specification, eliminates the duplicate component table in `rule_design_guide.md` §7, surfaces the guide in IDE hover, and enforces symbol references via `rustdoc::broken_intra_doc_links`.
 - **Rule Doc Examples**:
   - *Current*: Every code rule's `rule_test!` pass/fail cases are the best-maintained examples, but they live in `#[cfg(test)]` and no doc can use them. Command rules and suppression audits have no `rule_test!`.
   - *Target*: Add Example / Use-instead sections sourced from a marked subset of test cases per language, so rendered examples are always executed as tests.
 - **Discovery & Documentation Follow-ups**:
   - JSON output for discovery commands (`--format json` for `--list-rules` / `--explain`), and `tags` on JSON diagnostics. Include per-language message overrides (`summary` / `rationale` / `suggestion`), not just the base text.
   - Path-aware status in `explain` (evaluating `per_file_ignores` for a given file path).
-  - Show each configuration key's type and default in `--explain`, including per-language defaults, as a ready-to-paste `[rules.<name>]` TOML block rendered from the rule's config declaration, never from prose. Guard it with a round-trip test: render the defaults, parse them back into `Config`, and compare the effective values per language.
+  - Ready-to-paste `[rules.<name>]` TOML block in `--explain` (in addition to the current bullet list rendered from `DeclaredOptions`), guarded by a round-trip test that parses the rendered TOML back into `Config` and compares effective values per language.
   - Generated in-repo rule catalog guarded by a golden-file drift test.
   - Styled Markdown rendering in the terminal.
-  - JSON Schema for `.omnilint.toml` (editor completion). It must be registry-aware, because `rules` is a free map: per-rule keys and defaults, the threshold bounds each rule uses, language sub-tables, and every rule name and tag as a selector value. It must agree with the loader on unknown keys, so land it with "Reject unknown top-level config keys". Document the `#:schema` directive (Taplo) in the README.
+  - JSON Schema for `.omnilint.toml` (editor completion). It must be registry-aware, because `rules` is a free map: per-rule keys and defaults, the threshold bounds each rule uses, language sub-tables, and every rule name and tag as a selector value. Document the `#:schema` directive (Taplo) in the README.
   - Typed overlap / sources field linking rules to equivalent Ruff / Clippy rules.
   - Decide whether plain diagnostics keep printing the full rationale and suggestion on every hit.
   - Investigate subcommands (`rules`, `explain`, a default `check`) instead of the `--list-rules` / `--explain` flags.

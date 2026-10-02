@@ -19,7 +19,7 @@ use strum::IntoEnumIterator as _;
 
 pub use self::taxonomy::{Derived, Facet, RegisteredRule, Tag};
 use self::taxonomy::{REGISTERED_RULES, Selector};
-use crate::config::{CONFIG_FILE_NAME, Config, compile_glob};
+use crate::config::{CONFIG_FILE_NAME, Config, ContextConfig, compile_glob};
 use crate::diagnostic::RuleName;
 use crate::rule_declaration::{RuleOptionsError, RuleOverrides};
 
@@ -115,10 +115,10 @@ pub enum ConfigError {
     RuleOptions(#[from] RuleOptionsError),
 }
 
-/// The config entries resolved against the rule registry: selection and rule options. Every
-/// other entry belongs to [`Config`].
+/// The raw `.omnilint.toml` table before selector and rule-option validation.
 #[derive(Deserialize)]
-struct RawSelection {
+#[serde(deny_unknown_fields)]
+struct RawConfig {
     select: Option<Vec<String>>,
     #[serde(default)]
     ignore: Vec<String>,
@@ -126,6 +126,8 @@ struct RawSelection {
     per_file_ignores: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     rules: toml::Table,
+    #[serde(default)]
+    context: ContextConfig,
 }
 
 /// A label given on the command line that names no rule or tag.
@@ -215,7 +217,7 @@ pub fn load_rule_status(rule: &RegisteredRule) -> Result<RuleStatus, ConfigError
 ///
 /// On invalid TOML, unknown selectors, facet labels and conflicts.
 pub fn rule_status(config_toml: &str, rule: &RegisteredRule) -> Result<RuleStatus, ConfigError> {
-    let raw: RawSelection = toml::from_str(config_toml)?;
+    let raw: RawConfig = toml::from_str(config_toml)?;
     Ok(parse_plan(raw.select, raw.ignore)?.decide(rule))
 }
 
@@ -225,11 +227,10 @@ pub fn rule_status(config_toml: &str, rule: &RegisteredRule) -> Result<RuleStatu
 ///
 /// On invalid TOML, unknown selectors, facet labels, conflicts and invalid globs.
 pub fn parse_config(config_toml: &str) -> Result<Config, ConfigError> {
-    let mut config: Config = toml::from_str(config_toml)?;
-    let raw: RawSelection = toml::from_str(config_toml)?;
+    let raw: RawConfig = toml::from_str(config_toml)?;
     let plan = parse_plan(raw.select, raw.ignore)?;
-    config.disabled_rules = rule_names(|rule| !plan.decide(rule).enabled());
-    config.per_file_ignores = raw
+    let disabled_rules = rule_names(|rule| !plan.decide(rule).enabled());
+    let per_file_ignores = raw
         .per_file_ignores
         .into_iter()
         .map(|(pattern, labels)| {
@@ -241,7 +242,7 @@ pub fn parse_config(config_toml: &str) -> Result<Config, ConfigError> {
             Ok((matcher, rules))
         })
         .collect::<Result<_, ConfigError>>()?;
-    config.rule_overrides = raw
+    let rule_overrides = raw
         .rules
         .iter()
         .map(|(name, value)| {
@@ -256,7 +257,12 @@ pub fn parse_config(config_toml: &str) -> Result<Config, ConfigError> {
             Ok((rule.name, overrides))
         })
         .collect::<Result<_, ConfigError>>()?;
-    Ok(config)
+    Ok(Config {
+        disabled_rules,
+        rule_overrides,
+        context: raw.context,
+        per_file_ignores,
+    })
 }
 
 fn parse_plan(select: Option<Vec<String>>, ignore: Vec<String>) -> Result<Plan, ConfigError> {
@@ -633,6 +639,14 @@ mod tests {
         "[rules.no-edits-on-described-commits]\nenforcement_mode = \"ban\"",
         "`rules.no-edits-on-described-commits.enforcement_mode`: this rule has no enforcement \
          mode; it always reports every finding"
+    )]
+    #[case::unknown_top_level_key(
+        r#"selct = ["testing"]"#,
+        "TOML parse error at line 1, column 1\n  |\n1 | selct = [\"testing\"]\n  | ^^^^^\nunknown field `selct`, expected one of `select`, `ignore`, `per_file_ignores`, `rules`, `context`"
+    )]
+    #[case::unknown_context_key(
+        "[context]\ntest_paterns = []",
+        "TOML parse error at line 2, column 1\n  |\n2 | test_paterns = []\n  | ^^^^^^^^^^^^\nunknown field `test_paterns`, expected `test_patterns`"
     )]
     fn invalid_configs_are_rejected_loudly(#[case] config_toml: &str, #[case] message: &str) {
         let error = parse_config(config_toml).unwrap_err().to_string();
