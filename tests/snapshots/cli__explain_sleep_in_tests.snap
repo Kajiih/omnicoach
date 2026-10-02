@@ -21,11 +21,11 @@ Wait on the event itself (an event, a channel, a condition variable), or inject 
 
 ## Message
 
-- Summary: Wall-clock or async sleep call `{call}()` in test.
-- Rationale: Sleeping for fixed durations slows down test execution and introduces timing-dependent flakiness under load.
-- Suggestion: Synchronize on deterministic primitives (events, channels, conditions) or advance an injected virtual clock (`clock.sleep(...)`).
-  - Python: Synchronize on deterministic signals (`anyio.Event`, `asyncio.Event`, or a queue) or advance an injected virtual clock (`clock.sleep(...)`).
-  - Rust: Synchronize on deterministic primitives (`tokio::sync::Notify`, channels, `Condvar`) or pause time with `tokio::time::pause()`.
+- Summary: Test calls `{callee}()`.
+- Rationale: Sleeping in a test slows the suite and makes the outcome depend on timing: the test passes on a fast machine and fails under load.
+- Suggestion: Wait on a deterministic signal (an event, a channel, a condition) or advance an injected clock.
+  - Python: Wait on an `asyncio.Event`, an `anyio.Event` or a queue, or advance an injected clock (`clock.sleep(...)`).
+  - Rust: Wait on a `tokio::sync::Notify`, a channel or a `Condvar`, or pause time with `tokio::time::pause()`.
 
 ## Configuration
 

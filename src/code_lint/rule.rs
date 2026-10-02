@@ -111,8 +111,8 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
             .collect()
     }
 
-    /// Emits a diagnostic with `("name", ...), ("actual_suffix", ...), ("base_name", ...)` for
-    /// every variable, constant, or parameter binding ending in one of the `banned` suffixes.
+    /// Emits a diagnostic with `("name", ...), ("suffix", ...), ("stem", ...)` for every
+    /// variable, constant, or parameter binding ending in one of the `banned` suffixes.
     #[must_use]
     pub fn check_banned_suffixes(
         &self,
@@ -128,8 +128,8 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
                     &matched.node,
                     &[
                         ("name", &matched.name),
-                        ("actual_suffix", &matched.actual_suffix),
-                        ("base_name", &matched.base_name),
+                        ("suffix", &matched.actual_suffix),
+                        ("stem", &matched.base_name),
                     ],
                 )
             })

@@ -25,12 +25,12 @@ const BANNED: ListOption = ListOption {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Identifier `{name}` ends with raw time unit suffix `{actual_suffix}`.",
-    rationale: "Representing time durations as primitive numbers with unit suffixes (`timeout_s`, `delay_ms`) risks unit-conversion bugs across call boundaries.",
+    summary: "Name `{name}` ends with the time unit `{suffix}`.",
+    rationale: "A duration kept as a plain number with its unit in the name is converted by hand at every call boundary, and one missed conversion is a silent bug.",
     suggestion: {
-        base: "Rename `{name}` to `{base_name}` and type it as `datetime.timedelta` (Python) or `std::time::Duration` (Rust).",
-        Python => "Rename `{name}` to `{base_name}` and type it as `datetime.timedelta` (or `whenever.TimeDelta`).",
-        Rust => "Rename `{name}` to `{base_name}` and type it as `std::time::Duration`.",
+        base: "Rename `{name}` to `{stem}` and give it a duration type.",
+        Python => "Rename `{name}` to `{stem}` and type it as `datetime.timedelta` (or `whenever.TimeDelta`).",
+        Rust => "Rename `{name}` to `{stem}` and type it as `std::time::Duration`.",
     },
 };
 
@@ -48,7 +48,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             impacted_quality: ImpactedQuality::Reliability,
         },
         doc: RuleDoc {
-            summary: "Flags variable names that carry a time unit, such as `timeout_secs` or `delay_ms`.",
+            summary: "Flags durations held as plain numbers, detected by a time-unit suffix such as `timeout_secs` or `delay_ms`.",
             what_it_does: "Flags variables, parameters, loop and pattern bindings, and \
                            constants whose name ends, ignoring case, with a time-unit suffix: \
                            `_seconds`, `_secs`, `_sec`, `_minutes`, `_mins`, `_min`, `_hours`, \

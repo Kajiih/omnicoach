@@ -6,9 +6,10 @@
 use omni::code_lint::rules::CODE_RULES;
 use omni::code_lint::suppression::SUPPRESSION_AUDITS;
 use omni::command_lint::rules::COMMAND_RULES;
+use omni::diagnostic::LanguageText;
 use omni::rule_declaration::{
     Declaration, DeclaredOptions, DeclaredRule, EnforcementMode, OptionSpec, SUPPORTED_LANGUAGES,
-    support_lang_name,
+    is_kebab_case, support_lang_name,
 };
 use rstest::rstest;
 use std::collections::HashSet;
@@ -105,21 +106,23 @@ fn test_code_rules_declare_supported_languages() {
     }
 }
 
+fn rule_sources(relative_dir: &str) -> Vec<(std::path::PathBuf, String)> {
+    let rules_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_dir);
+    let entries = std::fs::read_dir(rules_dir).expect("rule directory must be readable");
+    let mut sources: Vec<_> = entries
+        .map(|entry| entry.expect("rule directory entry must be readable").path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "rs"))
+        .map(|path| {
+            let source = std::fs::read_to_string(&path).expect("rule source must be readable");
+            (path, source)
+        })
+        .collect();
+    sources.sort_by(|(left, _), (right, _)| left.cmp(right));
+    sources
+}
+
 static RULE_SOURCES: std::sync::LazyLock<Vec<(std::path::PathBuf, String)>> =
-    std::sync::LazyLock::new(|| {
-        let rules_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/code_lint/rules");
-        let entries = std::fs::read_dir(rules_dir).expect("rule directory must be readable");
-        let mut sources: Vec<_> = entries
-            .map(|entry| entry.expect("rule directory entry must be readable").path())
-            .filter(|path| path.extension().is_some_and(|extension| extension == "rs"))
-            .map(|path| {
-                let source = std::fs::read_to_string(&path).expect("rule source must be readable");
-                (path, source)
-            })
-            .collect();
-        sources.sort_by(|(left, _), (right, _)| left.cmp(right));
-        sources
-    });
+    std::sync::LazyLock::new(|| rule_sources("src/code_lint/rules"));
 
 fn rule_test_convention_violation(source: &str) -> Option<&'static str> {
     if !source.contains("rule_test!(") {
@@ -155,5 +158,326 @@ fn test_rule_files_use_rule_test() {
         if let Some(reason) = rule_test_convention_violation(source) {
             panic!("{filename} {reason}");
         }
+    }
+}
+
+// The tests below enforce `docs/dev/naming_and_message_style_guide.md` §1, §2 and §3.
+
+/// Every rule the three registries declare.
+fn all_declared_rules() -> Vec<DeclaredRule> {
+    CODE_RULES
+        .iter()
+        .map(|rule| rule.declaration())
+        .chain(SUPPRESSION_AUDITS.iter().map(Declaration::declared))
+        .chain(COMMAND_RULES.iter().map(|rule| rule.declaration.declared()))
+        .collect()
+}
+
+/// Name openings and ending that state a policy or a threshold instead of the flagged pattern.
+const POLARITY_PREFIXES: [&str; 6] = ["no-", "prefer-", "enforce-", "banned-", "max-", "min-"];
+const POLARITY_SUFFIX: &str = "-enforced";
+const MAX_RULE_NAME_WORDS: usize = 4;
+
+fn states_a_policy(name: &str) -> bool {
+    POLARITY_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+        || name.ends_with(POLARITY_SUFFIX)
+}
+
+#[test]
+fn test_rule_names_follow_the_naming_grammar() {
+    let mut seen = HashSet::new();
+    for rule in all_declared_rules() {
+        let name = rule.name.0;
+        assert!(is_kebab_case(name), "Rule name `{name}` is not kebab-case");
+        assert!(
+            !states_a_policy(name),
+            "Rule name `{name}` states a policy; name the flagged pattern instead"
+        );
+        assert!(
+            name.split('-').count() <= MAX_RULE_NAME_WORDS,
+            "Rule name `{name}` has more than {MAX_RULE_NAME_WORDS} words"
+        );
+        assert!(seen.insert(name), "Rule name `{name}` is declared twice");
+    }
+}
+
+/// The rule names a source file declares, in order.
+fn declared_rule_names(source: &str) -> Vec<&str> {
+    source
+        .split("RuleName(\"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .collect()
+}
+
+/// A rule file is the `snake_case` of its rule, exposed as `RULE`; a file holding several rules
+/// exposes each as the `SCREAMING_SNAKE_CASE` of its name.
+#[test]
+fn test_rule_files_and_consts_are_named_after_their_rule() {
+    let command_sources = rule_sources("src/command_lint/rules");
+    for (path, source) in RULE_SOURCES.iter().chain(&command_sources) {
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("valid file stem");
+        let names = declared_rule_names(source);
+        assert!(
+            names.iter().any(|name| name.replace('-', "_") == stem),
+            "{stem}.rs is not the snake_case of a rule it declares: {names:?}"
+        );
+        for name in &names {
+            let expected_const = if names.len() == 1 {
+                "RULE".to_string()
+            } else {
+                name.replace('-', "_").to_uppercase()
+            };
+            assert!(
+                source.contains(&format!("pub const {expected_const}:")),
+                "{stem}.rs must expose `{name}` as `pub const {expected_const}`"
+            );
+        }
+    }
+}
+
+/// The verbs a suggestion may open with (guide §2.4).
+const SUGGESTION_VERBS: [&str; 23] = [
+    "Wrap",
+    "Replace",
+    "Rename",
+    "Split",
+    "Add",
+    "Remove",
+    "Move",
+    "Pass",
+    "Wait",
+    "Destructure",
+    "Unpack",
+    "Insert",
+    "Spawn",
+    "Create",
+    "Load",
+    "Narrow",
+    "Assert",
+    "Inject",
+    "Specify",
+    "Verify",
+    "Extract",
+    "Synchronize",
+    "Access",
+];
+/// Verbs that describe the fix; a summary states the fact and a rationale explains the harm.
+const FIX_VERBS: [&str; 5] = ["use", "replace", "add", "rename", "remove"];
+/// Words that judge instead of describing (guide §2.1).
+const JUDGEMENT_WORDS: [&str; 5] = ["banned", "forbidden", "discouraged", "illegal", "must"];
+/// Abbreviations spelled out as "such as" or "for example" (guide §2.1).
+const ABBREVIATIONS: [&str; 2] = ["e.g.", "i.e."];
+/// The placeholders every template draws from (guide §3); a rule may also use the `snake_case`
+/// of its own count option keys.
+const PLACEHOLDERS: [&str; 15] = [
+    "callee",
+    "function",
+    "class",
+    "name",
+    "suffix",
+    "token",
+    "stem",
+    "expression",
+    "receiver",
+    "positions",
+    "construct",
+    "duplicates",
+    "rule",
+    "revision",
+    "count",
+];
+
+/// The base text and every language override of a template field.
+fn texts(field: &LanguageText) -> impl Iterator<Item = &'static str> {
+    std::iter::once(field.base).chain(field.overrides.iter().map(|(_, text)| *text))
+}
+
+/// `text` without its backtick spans: the prose the style rules apply to.
+fn prose(text: &str) -> String {
+    text.split('`').step_by(2).collect()
+}
+
+/// The lowercase words of `text`.
+fn words(text: &str) -> impl Iterator<Item = String> {
+    text.split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+}
+
+/// The first word of `text`, skipping any leading punctuation.
+fn first_word(text: &str) -> &str {
+    text.trim_start_matches(|character: char| !character.is_alphabetic())
+        .split(|character: char| !character.is_alphabetic())
+        .next()
+        .unwrap_or_default()
+}
+
+/// True if `prose` quotes with `'` or `"`; a possessive such as `block's` is not a quote.
+fn has_quotes(prose: &str) -> bool {
+    let mut previous = ' ';
+    prose.chars().any(|character| {
+        let quoting = character == '"' || (character == '\'' && !previous.is_alphanumeric());
+        previous = character;
+        quoting
+    })
+}
+
+/// The `{word}` placeholders of `text`; braces around anything else, such as `{r"..."}`, are
+/// literal text.
+fn placeholders(text: &str) -> impl Iterator<Item = &str> {
+    text.split('{')
+        .skip(1)
+        .filter_map(|rest| rest.split('}').next())
+        .filter(|inner| {
+            !inner.is_empty()
+                && inner
+                    .chars()
+                    .all(|character| character.is_ascii_lowercase() || character == '_')
+        })
+}
+
+/// The `snake_case` form of a rule's count option keys, usable as threshold placeholders.
+fn count_placeholders(options: &DeclaredOptions) -> Vec<String> {
+    options
+        .options
+        .iter()
+        .filter_map(|option| match option {
+            OptionSpec::Count(count) => Some(count.key.replace('-', "_")),
+            OptionSpec::List(_) => None,
+        })
+        .collect()
+}
+
+/// Guide §2.1: every field is a sentence in backtick-quoted prose with no judgement word.
+#[test]
+fn test_template_fields_share_the_common_form() {
+    for rule in all_declared_rules() {
+        let name = rule.name.0;
+        let template = rule.template;
+        for field in [template.summary, template.rationale, template.suggestion] {
+            for text in texts(&field) {
+                let prose = prose(text);
+                assert!(
+                    text.ends_with('.'),
+                    "Rule {name}: `{text}` does not end with a period"
+                );
+                assert!(
+                    ABBREVIATIONS
+                        .iter()
+                        .all(|abbreviation| !text.contains(abbreviation)),
+                    "Rule {name}: `{text}` abbreviates; write \"such as\" or \"for example\""
+                );
+                assert!(
+                    !has_quotes(&prose),
+                    "Rule {name}: `{text}` quotes with ' or \"; use backticks"
+                );
+                assert!(
+                    words(&prose).all(|word| !JUDGEMENT_WORDS.contains(&word.as_str())),
+                    "Rule {name}: `{text}` contains a judgement word"
+                );
+            }
+        }
+    }
+}
+
+/// Guide §2.2: a summary is one sentence stating the fact, with no fix verb.
+#[test]
+fn test_summaries_state_only_the_fact() {
+    for rule in all_declared_rules() {
+        let name = rule.name.0;
+        for text in texts(&rule.template.summary) {
+            let prose = prose(text);
+            assert!(
+                text.starts_with(|character: char| character.is_uppercase() || character == '`'),
+                "Rule {name}: summary `{text}` does not start with an uppercase letter or a backtick"
+            );
+            assert!(
+                !prose.contains(". "),
+                "Rule {name}: summary `{text}` has more than one sentence"
+            );
+            assert!(
+                words(&prose).all(|word| !FIX_VERBS.contains(&word.as_str())),
+                "Rule {name}: summary `{text}` contains a fix verb"
+            );
+        }
+    }
+}
+
+/// Guide §2.3: a rationale explains the harm without commanding a fix.
+#[test]
+fn test_rationales_explain_without_commanding() {
+    for rule in all_declared_rules() {
+        let name = rule.name.0;
+        for text in texts(&rule.template.rationale) {
+            assert!(
+                !FIX_VERBS.contains(&first_word(text).to_lowercase().as_str()),
+                "Rule {name}: rationale `{text}` starts with a fix verb"
+            );
+            assert!(
+                words(&prose(text)).all(|word| word != "should"),
+                "Rule {name}: rationale `{text}` is normative"
+            );
+        }
+    }
+}
+
+/// Guide §2.4: a suggestion opens with a verb from the shared list.
+#[test]
+fn test_suggestions_open_with_a_listed_verb() {
+    for rule in all_declared_rules() {
+        let name = rule.name.0;
+        for text in texts(&rule.template.suggestion) {
+            assert!(
+                SUGGESTION_VERBS.contains(&first_word(text)),
+                "Rule {name}: suggestion `{text}` does not start with a verb from guide §2.4"
+            );
+        }
+    }
+}
+
+/// Guide §3: placeholders come from the shared vocabulary or the rule's own count keys.
+#[test]
+fn test_placeholders_use_the_shared_vocabulary() {
+    for rule in all_declared_rules() {
+        let name = rule.name.0;
+        let template = rule.template;
+        let allowed = count_placeholders(&rule.options);
+        for field in [template.summary, template.rationale, template.suggestion] {
+            for placeholder in texts(&field).flat_map(placeholders) {
+                assert!(
+                    PLACEHOLDERS.contains(&placeholder)
+                        || allowed.iter().any(|key| key == placeholder),
+                    "Rule {name}: placeholder `{{{placeholder}}}` is not in the guide §3 vocabulary"
+                );
+            }
+        }
+    }
+}
+
+/// True if `text` is a single sentence closed by a period.
+fn is_one_sentence(text: &str) -> bool {
+    text.ends_with('.') && !text.contains(". ")
+}
+
+/// Guide §2.5: a doc summary is one sentence opening with `Flags` or `Requires`.
+#[test]
+fn test_doc_summaries_open_with_flags_or_requires() {
+    for rule in all_declared_rules() {
+        let name = rule.name.0;
+        let summary = rule.doc.summary;
+        assert!(
+            summary.starts_with("Flags ") || summary.starts_with("Requires "),
+            "Rule {name}: doc summary `{summary}` does not open with `Flags` or `Requires`"
+        );
+        assert!(
+            is_one_sentence(summary),
+            "Rule {name}: doc summary `{summary}` is not one sentence"
+        );
     }
 }

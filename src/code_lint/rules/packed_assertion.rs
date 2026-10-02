@@ -12,15 +12,15 @@ use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: {
-        base: "{construct} in assertion.",
-        Python => "{construct} in `assert` statement.",
-        Rust => "{construct} in `{macro_name}!` assertion.",
+        base: "Assertion packs several checks into {construct}.",
+        Python => "`assert` packs several checks into {construct}.",
+        Rust => "`{callee}!` packs several checks into {construct}.",
     },
-    rationale: "Packing multiple independent checks into a single assertion obscures which condition failed and produces unhelpful failure diffs.",
+    rationale: "When one assertion holds several independent checks, a failure does not say which check failed, and the diff shows the whole compound value instead of the mismatching part.",
     suggestion: {
-        base: "Split into separate atomic assertions or compare a single domain struct/object directly.",
-        Python => "Split into separate `assert` statements or compare a single domain object directly.",
-        Rust => "Split into separate `assert!` / `assert_eq!` macros or compare a single domain struct directly.",
+        base: "Split the checks into separate assertions, or compare one domain object directly.",
+        Python => "Split the checks into separate `assert` statements, or compare one domain object directly.",
+        Rust => "Split the checks into separate `assert!` / `assert_eq!` calls, or compare one domain struct directly.",
     },
 };
 
@@ -84,8 +84,8 @@ fn check_rust_assertion_macro(
             path,
             macro_node,
             &[
-                ("construct", "Compound boolean condition (`&&`)"),
-                ("macro_name", &macro_name),
+                ("construct", "a compound `&&` condition"),
+                ("callee", &macro_name),
             ],
         ));
     }
@@ -100,8 +100,11 @@ fn check_rust_assertion_macro(
             path,
             macro_node,
             &[
-                ("construct", "Boolean tuple/collection equality"),
-                ("macro_name", &macro_name),
+                (
+                    "construct",
+                    "a comparison against a collection of boolean literals",
+                ),
+                ("callee", &macro_name),
             ],
         ));
     }
@@ -120,7 +123,7 @@ fn check_python_assert_statement(
         return Some(rule.diagnostic_at_node(
             path,
             assert_node,
-            &[("construct", "Compound boolean condition (`and`)")],
+            &[("construct", "a compound `and` condition")],
         ));
     }
 
@@ -129,7 +132,10 @@ fn check_python_assert_statement(
         return Some(rule.diagnostic_at_node(
             path,
             assert_node,
-            &[("construct", "Boolean tuple/collection equality")],
+            &[(
+                "construct",
+                "a comparison against a collection of boolean literals",
+            )],
         ));
     }
 

@@ -18,12 +18,12 @@ const MAX_ASSERTIONS: CountOption = CountOption {
 
 // TODO: In cases like this where the python and rust versions are almost the same, could we factorize this?
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Test function `{func}` contains {count} assertions (maximum allowed is {max}).",
-    rationale: "Tests with excessive assertions verify multiple unrelated behaviors at once and halt at the first failure, masking subsequent checks and complicating diagnosis.",
+    summary: "Test `{function}` contains {count} assertions; the limit is {max_assertions}.",
+    rationale: "A test with many assertions checks several unrelated behaviors at once and stops at the first failure, hiding the others and blurring what the test is about.",
     suggestion: {
-        base: "Assert on a single expected struct/value, split distinct scenarios into separate focused test functions, or parameterize test variations.",
-        Python => "Assert on a single expected object/value, split distinct scenarios into separate `test_*` functions, or parameterize variations with `@pytest.mark.parametrize`.",
-        Rust => "Assert on a single expected struct/value, split distinct scenarios into separate `#[test]` functions, or parameterize cases with `#[rstest]`.",
+        base: "Assert on one expected value or struct, split distinct scenarios into separate tests, or parameterize the variations.",
+        Python => "Assert on one expected value or object, split distinct scenarios into separate `test_*` functions, or parameterize the variations with `@pytest.mark.parametrize`.",
+        Rust => "Assert on one expected value or struct, split distinct scenarios into separate `#[test]` functions, or parameterize the cases with `#[rstest]`.",
     },
 };
 
@@ -41,7 +41,7 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
             impacted_quality: ImpactedQuality::Maintainability,
         },
         doc: RuleDoc {
-            summary: "Limits the number of assertions in one test function.",
+            summary: "Flags test functions with more assertions than the limit.",
             what_it_does: "Counts the assertions in each test function and flags a test with \
                            more than `max-assertions` of them. A `pytest.raises` block counts as \
                            one assertion. Assertions inside nested functions or classes, and in \
@@ -79,9 +79,9 @@ fn check_file(
                 path,
                 &name_node,
                 &[
-                    ("func", &func_name),
+                    ("function", &func_name),
                     ("count", &formatted_count),
-                    ("max", &formatted_max),
+                    ("max_assertions", &formatted_max),
                 ],
             )
         })

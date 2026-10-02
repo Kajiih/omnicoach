@@ -44,9 +44,9 @@ fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
 }
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Command `jj edit {revision}` targets a non-empty described commit.",
-    rationale: "Directly mutating an already-described commit rewrites reviewed history in place and risks tangling unrelated work into an existing change.",
-    suggestion: "Create a child change on top with `jj new {revision}` and squash intentional fixes selectively via `jj squash`.",
+    summary: "`jj edit {revision}` targets a described commit.",
+    rationale: "Editing a described commit rewrites reviewed history in place and tangles unrelated work into an existing change.",
+    suggestion: "Create a child change with `jj new {revision}`, then move the intentional fixes with `jj squash`.",
 };
 
 /// The rule's declaration: blocks running `jj edit <revision>` if the target revision has a
@@ -64,7 +64,7 @@ pub const RULE: CommandRule = CommandRule {
             impacted_quality: ImpactedQuality::Reliability,
         },
         doc: RuleDoc {
-            summary: "Blocks `jj edit` on a commit that already has a description.",
+            summary: "Flags `jj edit` on a commit that already has a description.",
             what_it_does: "Checks shell commands before they run and flags `jj edit <revision>` \
                            (or a bare `jj edit`, which targets `@`) when the target revision \
                            has a non-empty description. Global options such as `-R` are \
@@ -143,7 +143,7 @@ mod tests {
         // Block described commit edit
         let output =
             crate::test_utils::assert_command_rule_snapshot(&RULE, "jj edit d123", &jj_client);
-        insta::assert_snapshot!(output, @"[edit-of-described-commit] Line 1, Col 1: Command `jj edit d123` targets a non-empty described commit.");
+        insta::assert_snapshot!(output, @"[edit-of-described-commit] Line 1, Col 1: `jj edit d123` targets a described commit.");
 
         // Allow empty/anonymous commit edit
         let output_allowed =

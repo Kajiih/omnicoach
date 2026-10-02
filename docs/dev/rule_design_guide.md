@@ -18,7 +18,7 @@ A lint rule is not a broad category (e.g. avoid rules like `async-hygiene` or `t
 A diagnostic that only says "X is banned" causes frustration. Developers need to understand the harm and the idiomatic path forward.
 
 Every rule diagnostic is split into three strictly orthogonal fields—**never repeat information across them**:
-1. **What (`summary`)**: State the factual syntactic or semantic condition observed on the flagged construct (e.g., `"Variable name `{name}` is a single-letter."` or `"Multiline string literal is not wrapped in a dedent helper."`). Do **not** embed the rationale (e.g., *"obscures intent"*, *"bypasses type checking"*) or filler judgment (*"is discouraged"*, *"is prohibited"*) in `summary`.
+1. **What (`summary`)**: State the factual syntactic or semantic condition observed on the flagged construct (e.g., `"Name `{name}` is a single letter."` or `"Multiline string literal is not wrapped in a dedent helper."`). Do **not** embed the rationale (e.g., *"obscures intent"*, *"bypasses type checking"*) or filler judgment (*"is discouraged"*, *"is prohibited"*) in `summary`.
 2. **Why (`rationale`)**: Explain the concrete failure mode or maintenance hazard (flakiness, hidden tracebacks, corrupted runtime values, broken searchability). Do **not** restate what construct was matched or explain how to fix it.
 3. **How (`suggestion`)**: Prescribe a **single canonical pit-of-success replacement** per language so a developer or AI agent can fix the violation autonomously (e.g., `inspect.cleandoc(...)` in Python, `indoc::indoc!` in Rust). Do **not** repeat `"instead of <bad construct>"` or re-state why the original code was harmful.
 

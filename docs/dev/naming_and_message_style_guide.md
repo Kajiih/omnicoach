@@ -77,7 +77,7 @@ The three fields are orthogonal (`rule_design_guide.md` §2). This section fixes
 
 ### 2.5 Doc summary (`RuleDoc::summary`)
 
-One sentence, third person, starting with `Flags` for pattern rules and `Requires` for rules whose fix is "add something": "Flags fixed-duration sleeps in tests.", "Requires a comment on every `suppress(...)` block."
+One sentence, third person, starting with `Flags` for pattern rules and `Requires` for rules whose fix is "add something": "Flags fixed-duration sleeps in tests.", "Requires Python dataclasses to declare `frozen=True`."
 
 ---
 
@@ -92,6 +92,11 @@ Templates use a fixed vocabulary so the same thing has the same name in every me
 | `{class}` | A class, struct or enum defined at the flagged site | `` `{class}` `` |
 | `{name}` | An identifier being named (variable, parameter, field) | `` `{name}` `` |
 | `{suffix}`, `{token}` | The offending part of an identifier | `` `{suffix}` `` |
+| `{stem}` | The identifier without its offending suffix | `` `{stem}` `` |
+| `{expression}` | The matched access, as written in the source | `` `{expression}` `` |
+| `{receiver}`, `{positions}` | A value read by index, and the positions read | `` `{receiver}` ``, bare |
+| `{construct}` | What a packed assertion folds its checks into | bare |
+| `{duplicates}` | Parameters grouped by shared type | bare; each group carries its own backticks, as in `` `source, target: int` `` |
 | `{rule}` | A rule name inside a suppression directive | `` `{rule}` `` |
 | `{revision}` | A VCS revision | `` `{revision}` `` |
 | `{count}` | The observed number | bare |
@@ -142,9 +147,10 @@ The description of a component says what the module does, not what the name alre
 | :--- | :--- |
 | Rule names: kebab-case, no polarity prefix or suffix, at most four words, unique | `tests/registry.rs` |
 | `RULE` / SCREAMING_SNAKE const and snake_case file match the rule name | `tests/registry.rs` |
-| Summary: uppercase start, single sentence ending with `.`, no `'`/`"` quoting, no fix verb, no judgement word | `tests/registry.rs` |
+| Summary: starts with an uppercase letter or a backtick, single sentence ending with `.`, no `'`/`"` quoting, no fix verb, no judgement word | `tests/registry.rs` |
 | Rationale: ends with `.`, no "must" / "should", no fix verb at sentence start | `tests/registry.rs` |
 | Suggestion: ends with `.`, starts with a verb from §2.4 | `tests/registry.rs` |
+| Doc summary: one sentence starting with `Flags` or `Requires` | `tests/registry.rs` |
 | Placeholders drawn from §3 | `tests/registry.rs` |
 | Option and config keys kebab-case; count keys `max-` / `min-`; list keys `banned` / `extend-banned` / `allowed` / `extend-allowed` | `rule_declaration::options` tests, `config` tests |
 | Component name is the PascalCase of the declaring module path | `tests/architecture_conformance.rs` |

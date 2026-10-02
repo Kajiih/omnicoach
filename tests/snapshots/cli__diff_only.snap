@@ -6,8 +6,8 @@ expression: output_diff
 1
 --- stdout ---
 [TEMP_PATH]/test.py:5:5: [nested-function] Function `world` is defined inside another function.
-  Rationale: Nested named functions bloat enclosing scopes and capture ambient state implicitly, increasing cognitive complexity and preventing isolated unit testing.
-  Suggestion: Extract `world` to a module-level private function (`_world`) or use an inline `lambda` for trivial callbacks.
+  Rationale: A nested named function captures the enclosing scope implicitly and cannot be imported or tested on its own.
+  Suggestion: Extract `world` to a module-level private function (`_world`), or use an inline `lambda` for a trivial callback.
 
 For details on a rule, run: omni-code-lint --explain <rule>
 

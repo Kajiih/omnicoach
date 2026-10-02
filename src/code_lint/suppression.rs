@@ -18,9 +18,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 const MISSING_REASON_TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Suppression directive is missing an explanation reason.",
-    rationale: "Suppression directives must include an explanation via '-- <reason>' to ensure code review accountability.",
-    suggestion: "Add '-- <reason>' after the rule names explaining why this suppression is necessary.",
+    summary: "Suppression directive has no `-- reason`.",
+    rationale: "A suppression without a reason cannot be reviewed: nobody can later tell whether it is still justified.",
+    suggestion: "Add `-- <reason>` after the rule names, stating why the finding is acceptable here.",
 };
 
 /// Flags suppression directives missing a non-empty explanation reason.
@@ -55,9 +55,9 @@ const MISSING_SUPPRESSION_REASON: Declaration = Declaration {
 };
 
 const UNUSED_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Suppression directive for rule `{target_rule}` is unused.",
-    rationale: "No violation occurred for this rule; obsolete suppressions cause dead comments and confusion.",
-    suggestion: "Remove `{target_rule}` from the suppression directive.",
+    summary: "Suppression directive for `{rule}` matches no finding.",
+    rationale: "A suppression that silences nothing is a dead comment; it misleads the reader into thinking the rule still fires here.",
+    suggestion: "Remove `{rule}` from the suppression directive.",
 };
 
 /// Flags suppression directives when no violation occurred for the specified rule.
@@ -98,9 +98,9 @@ const UNUSED_SUPPRESSION: Declaration = Declaration {
 };
 
 const UNKNOWN_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Unknown or unsuppressible rule `{target_rule}` in suppression directive.",
-    rationale: "The specified rule is either unknown to Omni or is a suppression audit that cannot be suppressed inline.",
-    suggestion: "Verify the rule name (`--list-rules`), or disable suppression audits in `.omnilint.toml` rather than inline.",
+    summary: "Suppression directive names `{rule}`, which is unknown or cannot be suppressed inline.",
+    rationale: "The name is not a rule Omni knows, or it is a suppression audit, which inline directives cannot silence; either way the directive does nothing.",
+    suggestion: "Verify the rule name with `--list-rules`, or disable suppression audits in `.omnilint.toml`.",
 };
 
 /// Flags suppression directives targeting unknown or non-suppressible rules.
@@ -134,9 +134,9 @@ const UNKNOWN_SUPPRESSION_RULE: Declaration = Declaration {
 };
 
 const BLANKET_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Blanket suppression directives without rule names are banned.",
-    rationale: "A directive without bracketed rule names (e.g. `[rule-name]`) suppresses no findings, yet reads as if it silenced every check on the line or in the file.",
-    suggestion: "Specify the explicit rule names in brackets, e.g. `[rule-name] -- reason`.",
+    summary: "Suppression directive names no rule.",
+    rationale: "A directive without bracketed rule names suppresses nothing, yet it reads as if it silenced every check on the line or in the file.",
+    suggestion: "Specify the rule names in brackets, as in `[rule-name] -- reason`.",
 };
 
 /// Flags blanket suppression directives that omit explicit rule names.
@@ -460,7 +460,7 @@ fn audit_single_directive(
             if !suppressible_rules.contains(target_rule.as_str()) {
                 diagnostics.push(
                     UNKNOWN_SUPPRESSION_RULE
-                        .render_diagnostic(&[("target_rule", target_rule)], location.clone()),
+                        .render_diagnostic(&[("rule", target_rule)], location.clone()),
                 );
             }
         }
@@ -476,7 +476,7 @@ fn audit_single_directive(
             {
                 diagnostics.push(
                     UNUSED_SUPPRESSION
-                        .render_diagnostic(&[("target_rule", target_rule)], location.clone()),
+                        .render_diagnostic(&[("rule", target_rule)], location.clone()),
                 );
             }
         }

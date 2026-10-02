@@ -31,9 +31,9 @@ const BANNED: ListOption = ListOption {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Dynamic attribute reflection call `{callee}()`.",
-    rationale: "Runtime attribute reflection erases static attribute types to `Any`, hides symbol references from refactoring tools, and `hasattr` can silently swallow unexpected property exceptions.",
-    suggestion: "Access attributes directly on a typed object, use a `Mapping` lookup (`dict.get`), or define a structural `Protocol`.",
+    summary: "An attribute is accessed dynamically with `{callee}()`.",
+    rationale: "Runtime reflection erases the attribute's static type to `Any`, hides the reference from refactoring tools, and `hasattr` can swallow exceptions raised by properties.",
+    suggestion: "Access the attribute directly on a typed object, use a `Mapping` lookup (`dict.get`), or define a structural `Protocol`.",
 };
 
 /// The rule's declaration.

@@ -37,9 +37,9 @@ const BANNED: ListOption = ListOption {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Mock interaction assertion `{callee}(...)` in test.",
-    rationale: "Asserting on mock call counts or argument lists (`assert_called*`) couples tests to internal implementation wiring rather than observable behavior.",
-    suggestion: "Assert on returned values or observable state transitions on an in-memory Fake.",
+    summary: "Test asserts on mock calls with `{callee}()`.",
+    rationale: "Asserting on call counts or argument lists ties the test to the implementation's wiring rather than to its observable behavior, so a harmless refactor fails the test and a wrong result can pass it.",
+    suggestion: "Assert on the returned value or on the state of an in-memory fake.",
 };
 
 /// The rule's declaration.

@@ -5,9 +5,9 @@ expression: output
 --- exit code ---
 1
 --- stdout ---
-VCS_Context:1:1: [edit-of-described-commit] Command `jj edit @` targets a non-empty described commit.
-  Rationale: Directly mutating an already-described commit rewrites reviewed history in place and risks tangling unrelated work into an existing change.
-  Suggestion: Create a child change on top with `jj new @` and squash intentional fixes selectively via `jj squash`.
+VCS_Context:1:1: [edit-of-described-commit] `jj edit @` targets a described commit.
+  Rationale: Editing a described commit rewrites reviewed history in place and tangles unrelated work into an existing change.
+  Suggestion: Create a child change with `jj new @`, then move the intentional fixes with `jj squash`.
 
 For details on a rule, run: omni-command-lint --explain <rule>
 

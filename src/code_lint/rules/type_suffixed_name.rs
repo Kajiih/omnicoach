@@ -25,9 +25,9 @@ const BANNED: ListOption = ListOption {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Identifier `{name}` ends with type suffix `{actual_suffix}`.",
-    rationale: "Encoding container or primitive types in variable names duplicates static type annotations and becomes misleading when the underlying type changes.",
-    suggestion: "Rename `{name}` to a semantic or domain-plural noun such as `{base_name}` (e.g., `users`, `name`).",
+    summary: "Name `{name}` ends with the type suffix `{suffix}`.",
+    rationale: "A type encoded in a name duplicates the annotation and turns misleading when the type changes.",
+    suggestion: "Rename `{name}` to a domain noun such as `{stem}`.",
 };
 
 /// The rule's declaration.
@@ -44,7 +44,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             impacted_quality: ImpactedQuality::Maintainability,
         },
         doc: RuleDoc {
-            summary: "Flags variable names that end with a type suffix such as `_list` or `_str`.",
+            summary: "Flags names that end with a type suffix such as `_list` or `_str`.",
             what_it_does: "Flags variables, parameters, loop and pattern bindings, and \
                            constants whose name ends, ignoring case, with a type suffix: \
                            `_list`, `_arr`, `_dict`, `_map`, `_vec`, `_str`, `_int`, `_bool`, \

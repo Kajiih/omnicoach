@@ -37,22 +37,22 @@ const BANNED: ListOption = ListOption {
 };
 
 const SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Wall-clock or async sleep call `{call}()` in test.",
-    rationale: "Sleeping for fixed durations slows down test execution and introduces timing-dependent flakiness under load.",
+    summary: "Test calls `{callee}()`.",
+    rationale: "Sleeping in a test slows the suite and makes the outcome depend on timing: the test passes on a fast machine and fails under load.",
     suggestion: {
-        base: "Synchronize on deterministic primitives (events, channels, conditions) or advance an injected virtual clock (`clock.sleep(...)`).",
-        Python => "Synchronize on deterministic signals (`anyio.Event`, `asyncio.Event`, or a queue) or advance an injected virtual clock (`clock.sleep(...)`).",
-        Rust => "Synchronize on deterministic primitives (`tokio::sync::Notify`, channels, `Condvar`) or pause time with `tokio::time::pause()`.",
+        base: "Wait on a deterministic signal (an event, a channel, a condition) or advance an injected clock.",
+        Python => "Wait on an `asyncio.Event`, an `anyio.Event` or a queue, or advance an injected clock (`clock.sleep(...)`).",
+        Rust => "Wait on a `tokio::sync::Notify`, a channel or a `Condvar`, or pause time with `tokio::time::pause()`.",
     },
 };
 
 const ZERO_SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Zero-duration sleep call `{call}({arg})` in test.",
-    rationale: "Using a zero-duration sleep to advance background work or yield execution in tests relies on scheduler tick counting and timer side effects.",
+    summary: "Test calls `{callee}()` with a zero duration.",
+    rationale: "A zero-duration sleep yields to the scheduler in the hope that background work completes; how many ticks that takes varies between runs and runtimes.",
     suggestion: {
-        base: "Synchronize on an explicit event or queue, or use an explicit scheduler yield primitive.",
-        Python => "Synchronize on an explicit primitive (`asyncio.Event`, `asyncio.Queue`), or use `await anyio.lowlevel.checkpoint()` when testing with AnyIO.",
-        Rust => "Use `tokio::task::yield_now().await` to yield control to the async executor explicitly.",
+        base: "Wait on an explicit event or queue, or call the runtime's explicit yield primitive.",
+        Python => "Wait on an `asyncio.Event` or `asyncio.Queue`, or call `await anyio.lowlevel.checkpoint()` under AnyIO.",
+        Rust => "Wait on an explicit signal, or call `tokio::task::yield_now().await` to yield once explicitly.",
     },
 };
 
@@ -146,15 +146,14 @@ pub const ZERO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
     check: check_zero_sleep,
 };
 
-/// Returns the trimmed argument string if the call is a zero-duration sleep (e.g. `sleep(0)`, `sleep(Duration::ZERO)`).
-fn zero_duration_arg(call_match: &CallMatch<'_>) -> Option<String> {
+/// Returns true if the call's single argument is a literal zero duration, such as `sleep(0)` or
+/// `sleep(Duration::ZERO)`.
+fn has_zero_duration_argument(call_match: &CallMatch<'_>) -> bool {
     let [argument] = call_match.arguments.as_slice() else {
-        return None;
+        return false;
     };
-    let arg_text = argument.text();
-    let trimmed = arg_text.trim();
     matches!(
-        trimmed,
+        argument.text().trim(),
         "0" | "0.0"
             | "0."
             | "Duration::ZERO"
@@ -163,7 +162,6 @@ fn zero_duration_arg(call_match: &CallMatch<'_>) -> Option<String> {
             | "Duration::from_secs(0)"
             | "Duration::from_millis(0)"
     )
-    .then(|| trimmed.to_string())
 }
 
 fn check_sleep(
@@ -174,9 +172,9 @@ fn check_sleep(
 ) -> Vec<Diagnostic> {
     calls::find_banned_calls(file, banned)
         .into_iter()
-        .filter(|call_match| zero_duration_arg(call_match).is_none())
+        .filter(|call_match| !has_zero_duration_argument(call_match))
         .map(|call_match| {
-            rule.diagnostic_at_node(path, &call_match.node, &[("call", &call_match.callee)])
+            rule.diagnostic_at_node(path, &call_match.node, &[("callee", &call_match.callee)])
         })
         .collect()
 }
@@ -189,13 +187,9 @@ fn check_zero_sleep(
 ) -> Vec<Diagnostic> {
     calls::find_banned_calls(file, banned)
         .into_iter()
-        .filter_map(|call_match| {
-            let zero_arg = zero_duration_arg(&call_match)?;
-            Some(rule.diagnostic_at_node(
-                path,
-                &call_match.node,
-                &[("call", &call_match.callee), ("arg", &zero_arg)],
-            ))
+        .filter(has_zero_duration_argument)
+        .map(|call_match| {
+            rule.diagnostic_at_node(path, &call_match.node, &[("callee", &call_match.callee)])
         })
         .collect()
 }

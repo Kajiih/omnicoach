@@ -22,9 +22,9 @@ const ALLOWED: ListOption = ListOption {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Variable name `{name}` is a single-letter.",
-    rationale: "Single-letter variable names obscure domain intent, reduce code readability, and break grep/searchability by matching common characters indiscriminately across the codebase.",
-    suggestion: "Rename `{name}` to a descriptive noun representing its domain role in an explicit and self explanatory way.",
+    summary: "Name `{name}` is a single letter.",
+    rationale: "A single-letter name says nothing about the role of the value and matches almost everything in a search.",
+    suggestion: "Rename `{name}` to a noun that states its role.",
 };
 
 /// The rule's declaration.

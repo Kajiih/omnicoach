@@ -77,9 +77,9 @@ const BANNED: ListOption = ListOption {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Dynamic mock or monkeypatch call `{callee}(...)` in test.",
-    rationale: "Dynamic mocks and monkeypatching (`unittest.mock`, `MagicMock`, `patch`, `monkeypatch`) couple tests to internal call wiring and continue passing even when real dependency signatures or contracts change.",
-    suggestion: "Inject a lightweight in-memory Fake (e.g., `FakeRepository`, `FakeHttpClient`) implementing the target `Protocol`.",
+    summary: "Test mocks or patches with `{callee}()`.",
+    rationale: "A dynamic mock or patch couples the test to the internal call wiring and keeps passing when the real dependency's signature or contract changes.",
+    suggestion: "Inject an in-memory fake (such as `FakeRepository` or `FakeHttpClient`) that implements the dependency's `Protocol`.",
 };
 
 /// The rule's declaration.

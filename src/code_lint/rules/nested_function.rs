@@ -10,9 +10,9 @@ use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Function `{func_name}` is defined inside another function.",
-    rationale: "Nested named functions bloat enclosing scopes and capture ambient state implicitly, increasing cognitive complexity and preventing isolated unit testing.",
-    suggestion: "Extract `{func_name}` to a module-level private function (`_{func_name}`) or use an inline `lambda` for trivial callbacks.",
+    summary: "Function `{function}` is defined inside another function.",
+    rationale: "A nested named function captures the enclosing scope implicitly and cannot be imported or tested on its own.",
+    suggestion: "Extract `{function}` to a module-level private function (`_{function}`), or use an inline `lambda` for a trivial callback.",
 };
 
 /// The rule's declaration.
@@ -54,7 +54,7 @@ pub const RULE: CodeRule = CodeRule {
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     ast::python::find_nested_functions(file)
         .into_iter()
-        .map(|(func, func_name)| rule.diagnostic_at_node(path, &func, &[("func_name", &func_name)]))
+        .map(|(func, func_name)| rule.diagnostic_at_node(path, &func, &[("function", &func_name)]))
         .collect()
 }
 

@@ -6,18 +6,11 @@ Items here represent design areas and technical directions to evaluate rather th
 
 ---
 
-## Random
-- Review the names of the rules, of the configuration, etc, to make them totally aligned on what the are, explicit and self explanatory, and coherent together.
-- Also review the violation message, so they correctly explain what is the issue and why it is one rather than just explaining what the code does, and that the suggestion correctly point to correct solutions, so the user (or agent) can fix it autonomously. They should push to a single direction, which is the pit of success, even if it seems pedantic. Use `ruff` documentation as a reference and improve on it.
-  - Write a **Violation Message Style Guide** and review all violation messages (`summary`, `rationale`, `suggestion`) so they concisely state the issue (`summary`), explain why it is harmful rather than just restating what the code does (`rationale`), and point to a single canonical "pit of success" solution so a user or agent can fix it autonomously (`suggestion`). Use `ruff` documentation as a reference and improve on it.
-  - Reviewed violation message that we can use as reference
-    - [bare_multiline_string.rs](/usr/local/google/home/paquerot/Documents/dev_projects/custom_lints/src/code_lint/rules/bare_multiline_string.rs)
-
 ## Architecture & Conformance
 
 Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/architecture.rs` (graph definition) and `tests/architecture_conformance.rs` (source-tree conformance).
 
-- Review our architecure, component, abstraction, modules, etc names as well to align and have the explicit and self explanatory.
+- **Contract modules named one letter away from their registries**: `code_lint::rule` (the `CodeRule` contract) and `code_lint::rules` (the registry) yield the components `CodeLintRule` and `CodeLintRules`; `command_lint` has the same pair. Investigate renaming the contract modules (for example `code_lint::contract` → `CodeLintContract`) so the DAG reads unambiguously. Deferred from the naming review (`decisions/010_naming_and_message_conventions.md`) because it is a module move, not a naming fix.
 - **Conformance CST Edge Cases (Watch List)**:
   - *Current*: `summarize_rust_file` skips `macro_definition` bodies (production macros `architecture_component!` and `rule_test!` expand either to a doc attribute or inside `#[cfg(test)]`) and assumes paths do not start with a root-anchored leading `::` (`::omni::...` or `::ast_grep_core::...`).
   - *Target*: If production `macro_rules!` macros calling cross-component helpers (`$crate::...`) are introduced outside `src/lib.rs`, or if root-anchored `::` paths appear, extend `summarize_rust_file` to scan `macro_rule` body token trees and normalize leading `::` prefixes.
