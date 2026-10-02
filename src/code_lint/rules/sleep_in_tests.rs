@@ -97,8 +97,6 @@ pub const SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
                 Example {
                     language: SupportLang::Python,
                     flagged: indoc::indoc! {r#"
-                        import time
-
                         def test_session_expires(sessions):
                             sessions.open("alice", ttl=30)
                             time.sleep(31)
@@ -186,8 +184,6 @@ pub const ZERO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
                 Example {
                     language: SupportLang::Python,
                     flagged: indoc::indoc! {r#"
-                        import asyncio
-
                         async def test_publish_notifies_subscriber(bus, subscriber):
                             bus.publish("order.created")
                             await asyncio.sleep(0)

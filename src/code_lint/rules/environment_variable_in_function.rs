@@ -118,9 +118,6 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Example {
                     language: SupportLang::Python,
                     flagged: indoc::indoc! {r#"
-                        import os
-
-
                         def connect_database() -> Connection:
                             return psycopg.connect(os.environ["DATABASE_URL"])
                     "#},
@@ -133,14 +130,12 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Example {
                     language: SupportLang::Rust,
                     flagged: indoc::indoc! {r#"
-                        use std::env;
-
                         fn connect_database() -> Result<Connection, Error> {
-                            let database_url = env::var("DATABASE_URL")?;
+                            let database_url = std::env::var("DATABASE_URL")?;
                             Connection::open(&database_url)
                         }
                     "#},
-                    flagged_span: r#"env::var("DATABASE_URL")"#,
+                    flagged_span: r#"std::env::var("DATABASE_URL")"#,
                     fixed: indoc::indoc! {r"
                         fn connect_database(database_url: &str) -> Result<Connection, Error> {
                             Connection::open(database_url)
