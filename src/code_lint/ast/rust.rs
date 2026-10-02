@@ -1257,7 +1257,7 @@ mod tests {
     #[test]
     fn test_summarize_rust_file_extracts_production_structure_and_paths() {
         let source = indoc::indoc! {r#"
-            architecture_component!(CodeSyntaxAdapters);
+            architecture_component!(CodeLintAst);
 
             mod detail;
             pub mod public_child;
@@ -1297,7 +1297,7 @@ mod tests {
         assert_eq!(
             (summary.architecture_components, summary.visible_uses),
             (
-                vec!["CodeSyntaxAdapters".to_string()],
+                vec!["CodeLintAst".to_string()],
                 vec![VisibleUseDeclaration {
                     line: 11,
                     declaration_text: "pub use self::detail::Exported;".to_string(),

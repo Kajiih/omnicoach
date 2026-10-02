@@ -1,6 +1,6 @@
 //! Test utilities and helpers for snapshot testing.
 
-architecture_component!(TestingHarness);
+architecture_component!(TestUtils);
 
 use crate::code_lint::ast::{ParsedFile, detect_language};
 use crate::code_lint::rule::CodeRule;

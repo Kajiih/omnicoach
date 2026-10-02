@@ -385,7 +385,7 @@ static ARCHITECTURE_CONFORMANCE_RULES: LazyLock<Vec<ForbiddenDependencyRule>> =
                 continue;
             };
 
-            // 2a. Multi-root sibling isolation (e.g. `FoundationPrimitives`, `ApplicationBinaries`)
+            // 2a. Multi-root sibling isolation (e.g. `Bin`)
             if roots.len() > 1 {
                 for root in roots {
                     let siblings = roots
@@ -645,6 +645,60 @@ fn test_all_source_files_declare_architecture_component() {
     );
 }
 
+/// The `PascalCase` of a module path: `code_lint::ast` → `CodeLintAst`.
+fn pascal_case(module_path: &str) -> String {
+    module_path
+        .split([':', '_'])
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut characters = segment.chars();
+            characters.next().map_or_else(String::new, |first| {
+                first.to_ascii_uppercase().to_string() + characters.as_str()
+            })
+        })
+        .collect()
+}
+
+/// The module a component is named after: its root, or the parent its roots share when it
+/// spans several files (`bin::ast_dumper`, `bin::omni_code_lint`, … → `bin`).
+fn naming_module(roots: &[String]) -> Option<&str> {
+    if let [root] = roots {
+        return Some(root);
+    }
+    let shared = parent_module(roots.first()?)?;
+    roots
+        .iter()
+        .all(|root| parent_module(root) == Some(shared))
+        .then_some(shared)
+}
+
+fn parent_module(module_path: &str) -> Option<&str> {
+    module_path.rsplit_once("::").map(|(parent, _)| parent)
+}
+
+/// A component is named after its module: the `PascalCase` of its root module path, or of the
+/// parent its roots share when it spans several files (`bin::*` → `Bin`).
+#[test]
+fn test_components_are_named_after_their_modules() {
+    let violations: Vec<String> = discover_component_roots(&DECLARED_COMPONENTS)
+        .iter()
+        .filter(|(component, roots)| {
+            naming_module(roots).map(pascal_case).as_deref() != Some(component.as_ref())
+        })
+        .map(|(component, roots)| {
+            format!(
+                "`{component}` is declared by `{}`; a component is the PascalCase of its module path",
+                roots.join("`, `")
+            )
+        })
+        .collect();
+    assert!(
+        violations.is_empty(),
+        "Components not named after their modules:\n{}",
+        violations.join("\n")
+    );
+}
+
 #[test]
 fn test_architecture_conformance() {
     assert_src_complies_with(&ARCHITECTURE_CONFORMANCE_RULES);
@@ -744,7 +798,7 @@ fn test_second_path_detection_allows_private_child_facades_and_rejects_duplicate
 fn test_relative_path_boundary_allows_intra_component_and_rejects_cross_component() {
     let declared_components = BTreeMap::from([(
         "code_lint::ast".to_owned(),
-        ArchitectureComponent::CodeSyntaxAdapters,
+        ArchitectureComponent::CodeLintAst,
     )]);
     let child_source = indoc::indoc! {r#"
         // Allowed: child `code_lint::ast::rust` referencing parent root `code_lint::ast`
@@ -885,7 +939,7 @@ fn test_namespace_validator_accepts_pure_routers_and_rejects_code_or_orphan_rout
         SourceFileEntry::from_source(
             "src/code_lint/ast.rs",
             "code_lint::ast",
-            "architecture_component!(CodeSyntaxAdapters);\npub struct ParsedFile;\n",
+            "architecture_component!(CodeLintAst);\npub struct ParsedFile;\n",
         ),
     ];
     assert!(validate_component_declarations_and_routers(&valid_entries, false).is_empty());
@@ -899,7 +953,7 @@ fn test_namespace_validator_accepts_pure_routers_and_rejects_code_or_orphan_rout
         SourceFileEntry::from_source(
             "src/code_lint/ast.rs",
             "code_lint::ast",
-            "architecture_component!(CodeSyntaxAdapters);\n",
+            "architecture_component!(CodeLintAst);\n",
         ),
         SourceFileEntry::from_source(
             "src/orphan_router.rs",

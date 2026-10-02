@@ -1,6 +1,6 @@
 //! Diagnostic representation, serialization, and reporting.
 
-architecture_component!(FoundationPrimitives);
+architecture_component!(Diagnostic);
 
 use ast_grep_language::SupportLang;
 use serde::{Deserialize, Serialize};
