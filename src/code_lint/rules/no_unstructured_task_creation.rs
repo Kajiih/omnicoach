@@ -34,7 +34,7 @@ const BANNED_CALLS: ListOption = ListOption {
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Unstructured background task call `{callee}()`.",
-    rationale: "Fire-and-forget tasks outlive their spawning scope and silently drop unhandled exceptions when not awaited, leaking resources on cancellation or shutdown.",
+    rationale: "Tasks spawned outside a task group are not bound to an enclosing lexical scope: if a sibling operation fails or the caller is cancelled before awaiting them, they continue running orphaned in the background.",
     suggestion: "Spawn concurrent tasks within an `asyncio.TaskGroup` (`async with asyncio.TaskGroup() as tg: tg.create_task(...)`) or `anyio.create_task_group()` so task lifetimes are bounded to the enclosing block.",
 };
 
@@ -54,24 +54,25 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags asyncio tasks spawned outside a task group.",
             what_it_does: "Flags Python calls that start a background task with no enclosing \
-                           scope: `asyncio.create_task`, `asyncio.ensure_future`, a bare \
+                           task group: `asyncio.create_task`, `asyncio.ensure_future`, a bare \
                            `create_task` or `ensure_future`, `loop.create_task`, \
                            `event_loop.create_task`, and `.create_task` on the result of a call, \
                            such as `asyncio.get_running_loop().create_task(...)`. Calls on a \
                            task group, such as `tg.create_task(...)` or `tg.start_soon(...)`, \
                            are not flagged. The rule matches the call alone: a task that is \
-                           stored and awaited later is flagged too. It runs on source and test \
-                           files.",
-            why_is_this_bad: "A task started this way is not tied to the code that started \
-                              it. The event loop keeps only a weak reference to it, so an \
-                              unreferenced task can be garbage-collected before it finishes. If \
-                              nobody awaits it, its exception is only logged when the task is \
-                              destroyed, and it keeps running after its caller returns, fails \
-                              or is cancelled.\n\n\
+                           stored in a variable and awaited later is flagged too. It runs on \
+                           source and test files.",
+            why_is_this_bad: "A task started with `create_task` or `ensure_future` is not \
+                              bound to a lexical scope. Even when assigned to a variable and \
+                              awaited later, if an earlier statement raises or the caller is \
+                              cancelled before reaching that `await`, the task is not \
+                              cancelled and keeps running in the background; conversely, if the \
+                              task fails early, its exception sits unobserved until the caller \
+                              reaches `await task` (or is lost entirely if unreferenced).\n\n\
                               Start concurrent work inside `async with asyncio.TaskGroup() as \
                               tg:` or `anyio.create_task_group()`: the block waits for every \
-                              task, cancels the others when one fails, and raises their \
-                              errors.",
+                              task on exit, cancels sibling tasks immediately when one fails, \
+                              and propagates their errors.",
             references: &[
                 Reference {
                     title: "Python docs: asyncio.create_task",

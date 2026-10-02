@@ -48,10 +48,10 @@ const SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
 
 const ZERO_SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Zero-duration sleep call `{call}({arg})` in test.",
-    rationale: "Using a zero-duration sleep to yield execution to the scheduler obscures intent and relies on side effects of the timer subsystem.",
+    rationale: "Using a zero-duration sleep to advance background work or yield execution in tests relies on scheduler tick counting and timer side effects.",
     suggestion: {
-        base: "Use an explicit scheduler yield or checkpoint primitive.",
-        Python => "Use `await anyio.lowlevel.checkpoint()` to yield control to the event loop explicitly.",
+        base: "Synchronize on an explicit event or queue, or use an explicit scheduler yield primitive.",
+        Python => "Synchronize on an explicit primitive (`asyncio.Event`, `asyncio.Queue`), or use `await anyio.lowlevel.checkpoint()` when testing with AnyIO.",
         Rust => "Use `tokio::task::yield_now().await` to yield control to the async executor explicitly.",
     },
 };
@@ -119,15 +119,17 @@ pub const NO_ZERO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
                            and `Duration::ZERO`, `Duration::from_secs(0)` or \
                            `Duration::from_millis(0)` in Rust. Other spellings of zero, such as \
                            a variable holding `0`, and calls with more than one argument are not \
-                           flagged. Python is checked too, including `asyncio.sleep(0)`, even \
-                           though the asyncio documentation presents it as a way to yield.",
-            why_is_this_bad: "A zero-duration sleep is used for its side effect: letting other \
-                              tasks run. The code says \"wait for no time\" when it means \"yield \
-                              to the scheduler\", and whether it yields depends on how the \
-                              runtime treats a zero timer. Tokio, for example, does not guarantee \
-                              that `sleep(Duration::ZERO)` yields at all.\n\n\
-                              Use the explicit yield primitive: `tokio::task::yield_now().await` \
-                              in Rust, `await anyio.lowlevel.checkpoint()` in Python.",
+                           flagged. Python is checked too, including `asyncio.sleep(0)`.",
+            why_is_this_bad: "In a test, a zero-duration sleep is used for its side effect: \
+                              letting another task advance by one scheduler turn. If that task \
+                              later gains a second `await` point, a single `sleep(0)` is no \
+                              longer enough, and whether a zero timer yields at all depends on \
+                              the runtime (`tokio::time::sleep(Duration::ZERO)` does not \
+                              guarantee a yield).\n\n\
+                              Wait on an explicit signal (`asyncio.Event`, `asyncio.Queue`) or \
+                              use the runtime's dedicated yield primitive \
+                              (`tokio::task::yield_now().await` in Rust, \
+                              `await anyio.lowlevel.checkpoint()` in AnyIO).",
             references: &[
                 Reference {
                     title: "tokio::task::yield_now",

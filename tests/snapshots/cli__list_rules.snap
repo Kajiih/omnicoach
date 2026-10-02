@@ -29,7 +29,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `prefer-timedelta-over-seconds` (python, rust): Flags variable names that carry a time unit, such as `timeout_secs` or `delay_ms`.
 - `prefer-tuple-unpacking` (python, rust): Flags a value read at several literal positions instead of being unpacked once.
 - `single-letter-variable-name` (python, rust): Flags names made of a single letter.
-- `unknown-suppression-rule` (python, rust): Flags suppression directives that name a rule Omni does not know.
+- `unknown-suppression-rule` (python, rust): Flags suppression directives that name an unknown or unsuppressible rule.
 - `unused-suppression` (python, rust): Flags suppression directives that suppress no finding.
 
 --- stderr ---

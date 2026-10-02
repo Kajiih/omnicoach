@@ -4,20 +4,17 @@
 
 use crate::code_lint::ast::{
     self, AstNode, ParsedFile, is_import_binding, is_structural_definition, is_trait_impl_member,
-    is_unaliased_import_binding,
 };
 use std::collections::HashSet;
 
 /// Collects all binding nodes in `file` whose identifier names are locally authored and
-/// eligible for renaming (excluding unaliased imports and trait/override contract members).
+/// eligible for renaming (excluding imports and trait/override contract members).
 #[must_use]
 pub fn collect_renameable_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
     let lang = file.lang();
     ast::collect_bindings(file)
         .into_iter()
-        .filter(|node| {
-            !is_unaliased_import_binding(node, lang) && !is_trait_impl_member(node, lang)
-        })
+        .filter(|node| !is_import_binding(node, lang) && !is_trait_impl_member(node, lang))
         .collect()
 }
 

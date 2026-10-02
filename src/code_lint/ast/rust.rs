@@ -30,18 +30,6 @@ pub fn is_import_binding_parent(parent_kind: &str) -> bool {
     )
 }
 
-/// Returns true if a Rust node of `parent_kind` makes a child identifier an import binding
-/// carrying no local alias.
-///
-/// `use_as_clause` is excluded precisely because it introduces one.
-#[must_use]
-pub fn is_unaliased_import_binding_parent(parent_kind: &str) -> bool {
-    matches!(
-        parent_kind,
-        "use_declaration" | "use_list" | "scoped_identifier"
-    )
-}
-
 /// Returns true if a Rust node of `parent_kind` declares a structural definition name.
 #[must_use]
 pub fn is_structural_definition_parent(parent_kind: &str) -> bool {
