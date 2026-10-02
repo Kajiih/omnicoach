@@ -57,7 +57,7 @@ where
 
 /// Configuration settings for path context detection (e.g. test paths).
 #[derive(Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ContextConfig {
     /// Glob patterns used to identify test files, compiled at load.
     #[serde(
@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn test_custom_test_patterns_replace_defaults() {
-        let context: ContextConfig = toml::from_str(r#"test_patterns = ["**/spec/**"]"#).unwrap();
+        let context: ContextConfig = toml::from_str(r#"test-patterns = ["**/spec/**"]"#).unwrap();
         let config = Config {
             context,
             ..Default::default()
@@ -186,7 +186,7 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::test_patterns("test_patterns = [\"src/[\"]")]
+    #[case::test_patterns("test-patterns = [\"src/[\"]")]
     fn test_invalid_glob_is_config_error(#[case] toml_content: &str) {
         let error = toml::from_str::<ContextConfig>(toml_content).unwrap_err();
         assert!(error.to_string().contains("src/["), "{error}");

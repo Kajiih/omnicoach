@@ -11,13 +11,13 @@ use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
-const BANNED_CALLS: ListOption = ListOption {
+const BANNED: ListOption = ListOption {
     kind: ListKind::Deny,
     doc: "Cast functions flagged when called.",
     default: FilterListDefaults {
         base: &["cast", "typing.cast", "typing_extensions.cast"],
         extend: &[],
-        exempt: &[],
+        remove: &[],
     },
 };
 
@@ -33,7 +33,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         name: RuleName("type-cast"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python],
-        options: RuleOptions::code_rule(BANNED_CALLS),
+        options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::TYPE_CHECKER_BYPASS],
             precision: Precision::Exact,

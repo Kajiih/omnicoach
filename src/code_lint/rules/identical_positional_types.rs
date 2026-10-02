@@ -14,7 +14,7 @@ use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const MIN_POSITIONAL_PARAMETERS: CountOption = CountOption {
-    key: "min_positional_parameters",
+    key: "min-positional-parameters",
     doc: "Minimum positional parameters, excluding `self` and `cls`, for a function to be checked.",
     default: LanguageDefaults::new(3, &[]),
 };
@@ -41,7 +41,7 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags Python functions whose positional parameters share a type annotation.",
             what_it_does: "Flags a function in Python source files (test files are not \
-                           checked) that has at least `min_positional_parameters` positional \
+                           checked) that has at least `min-positional-parameters` positional \
                            parameters of which two or more have the same type annotation. A \
                            leading `self` or `cls`, keyword-only parameters (after `*` or \
                            `*args`), `*args` and `**kwargs` are not counted. Annotations are \

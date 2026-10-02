@@ -12,7 +12,7 @@ use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
-const BANNED_CALLS: ListOption = ListOption {
+const BANNED: ListOption = ListOption {
     kind: ListKind::Deny,
     doc: "Environment variable accesses flagged inside functions.",
     default: FilterListDefaults {
@@ -55,7 +55,7 @@ const BANNED_CALLS: ListOption = ListOption {
                 ],
             ),
         ],
-        exempt: &[],
+        remove: &[],
     },
 };
 
@@ -75,7 +75,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         name: RuleName("environment-variable-in-function"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
-        options: RuleOptions::code_rule(BANNED_CALLS),
+        options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::GLOBAL_STATE],
             precision: Precision::Heuristic,

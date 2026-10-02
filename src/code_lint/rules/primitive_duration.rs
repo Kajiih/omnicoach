@@ -11,7 +11,7 @@ use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
-const BANNED_SUFFIXES: ListOption = ListOption {
+const BANNED: ListOption = ListOption {
     kind: ListKind::Deny,
     doc: "Time-unit suffixes flagged at the end of an identifier.",
     default: FilterListDefaults {
@@ -20,7 +20,7 @@ const BANNED_SUFFIXES: ListOption = ListOption {
             "_days", "_millis", "_ms", "_micros", "_us", "_nanos", "_ns",
         ],
         extend: &[],
-        exempt: &[],
+        remove: &[],
     },
 };
 
@@ -40,7 +40,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         name: RuleName("primitive-duration"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
-        options: RuleOptions::code_rule(BANNED_SUFFIXES),
+        options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::TYPE_ENCODED_NAMES, Topic::DURATIONS],
             precision: Precision::Heuristic,

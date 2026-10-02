@@ -1,10 +1,10 @@
-//! Rule selection: resolves `select`, `ignore` and `per_file_ignores` into the tag-free
+//! Rule selection: resolves `select`, `ignore` and `per-file-ignores` into the tag-free
 //! [`RuleName`] sets on [`Config`].
 //!
 //! Selectors are resolved once, at load, with this precedence: on each of a rule's
 //! branches the nearest selector wins, the rule name being the leaf of every branch.
 //! When branches disagree, `ignore` wins. With no verdict, the rule is on only if `select` is
-//! absent. `per_file_ignores` is a later, subtract-only stage. This is the only module that
+//! absent. `per-file-ignores` is a later, subtract-only stage. This is the only module that
 //! parses selector strings.
 
 architecture_component!(RuleSelection);
@@ -30,7 +30,7 @@ pub enum Location {
     Select,
     /// The `ignore` list.
     Ignore,
-    /// A `per_file_ignores` pattern.
+    /// A `per-file-ignores` pattern.
     PerFile(String),
 }
 
@@ -39,7 +39,7 @@ impl fmt::Display for Location {
         match self {
             Self::Select => formatter.write_str("`select`"),
             Self::Ignore => formatter.write_str("`ignore`"),
-            Self::PerFile(pattern) => write!(formatter, "`per_file_ignores.\"{pattern}\"`"),
+            Self::PerFile(pattern) => write!(formatter, "`per-file-ignores.\"{pattern}\"`"),
         }
     }
 }
@@ -90,8 +90,8 @@ pub enum ConfigError {
          remove it from one list"
     )]
     Conflict(&'static str),
-    /// A `per_file_ignores` pattern that is not a valid glob.
-    #[error("invalid glob `{pattern}` in `per_file_ignores`: {source}")]
+    /// A `per-file-ignores` pattern that is not a valid glob.
+    #[error("invalid glob `{pattern}` in `per-file-ignores`: {source}")]
     Glob {
         /// The pattern as written.
         pattern: String,
@@ -117,7 +117,7 @@ pub enum ConfigError {
 
 /// The raw `.omnilint.toml` table before selector and rule-option validation.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct RawConfig {
     select: Option<Vec<String>>,
     #[serde(default)]
@@ -542,7 +542,7 @@ mod tests {
             .iter()
             .map(|rule| rule.name.0)
             .collect();
-        let config = parse_config("[per_file_ignores]\n\"tests/**\" = [\"heuristic\"]").unwrap();
+        let config = parse_config("[per-file-ignores]\n\"tests/**\" = [\"heuristic\"]").unwrap();
         assert_eq!(
             enabled(&config, "tests/test_module.py"),
             all_except(&heuristic)
@@ -554,7 +554,7 @@ mod tests {
     fn per_file_ignores_apply_after_selection_by_rule_name() {
         let rule = rules_tagged("heuristic").unwrap()[0].name.0;
         let config = parse_config(&format!(
-            "select = [\"{rule}\"]\n[per_file_ignores]\n\"tests/**\" = [\"heuristic\"]"
+            "select = [\"{rule}\"]\n[per-file-ignores]\n\"tests/**\" = [\"heuristic\"]"
         ))
         .unwrap();
         assert!(enabled(&config, "tests/test_module.py").is_empty());
@@ -595,34 +595,31 @@ mod tests {
          values: reliability, maintainability"
     )]
     #[case::typo_in_per_file(
-        "[per_file_ignores]\n\"tests/**\" = [\"heurstic\"]",
-        "unknown selector `heurstic` in `per_file_ignores.\"tests/**\"`; did you mean \
+        "[per-file-ignores]\n\"tests/**\" = [\"heurstic\"]",
+        "unknown selector `heurstic` in `per-file-ignores.\"tests/**\"`; did you mean \
          `heuristic`?"
     )]
     #[case::invalid_glob(
-        "[per_file_ignores]\n\"src/[\" = [\"testing\"]",
-        "invalid glob `src/[` in `per_file_ignores`: "
+        "[per-file-ignores]\n\"src/[\" = [\"testing\"]",
+        "invalid glob `src/[` in `per-file-ignores`: "
     )]
     #[case::unknown_rule(
-        "[rules.too-many-assertion]\nmax_assertions = 3",
+        "[rules.too-many-assertion]\nmax-assertions = 3",
         "`rules.too-many-assertion`: unknown rule; did you mean `too-many-assertions`?"
     )]
     #[case::unknown_key(
         "[rules.too-many-assertions]\nmax = 3",
-        "`rules.too-many-assertions.max`: unknown key; did you mean `max_assertions`?"
-    )]
-    #[case::renamed_enforcement_mode_key(
-        "[rules.type-cast]\nmode = \"ban\"",
-        "`rules.type-cast.mode`: unknown key; did you mean `enforcement_mode`?"
+        "`rules.too-many-assertions.max`: unknown key; expected one of `enforcement-mode`, \
+         `max-assertions`, `python`, `rust`"
     )]
     #[case::wrong_type(
-        "[rules.too-many-assertions.rust]\nmax_assertions = \"5\"",
-        "`rules.too-many-assertions.rust.max_assertions`: expected a non-negative integer, \
+        "[rules.too-many-assertions.rust]\nmax-assertions = \"5\"",
+        "`rules.too-many-assertions.rust.max-assertions`: expected a non-negative integer, \
          found \"5\""
     )]
     #[case::unknown_enforcement_mode(
-        "[rules.type-cast]\nenforcement_mode = \"warn\"",
-        "`rules.type-cast.enforcement_mode`: expected `ban` or `require-explanation`, \
+        "[rules.type-cast]\nenforcement-mode = \"warn\"",
+        "`rules.type-cast.enforcement-mode`: expected `ban` or `require-explanation`, \
          found \"warn\""
     )]
     #[case::unsupported_language(
@@ -631,22 +628,22 @@ mod tests {
          python"
     )]
     #[case::enforcement_mode_on_audit(
-        "[rules.unused-suppression]\nenforcement_mode = \"ban\"",
-        "`rules.unused-suppression.enforcement_mode`: this rule has no enforcement mode; it \
+        "[rules.unused-suppression]\nenforcement-mode = \"ban\"",
+        "`rules.unused-suppression.enforcement-mode`: this rule has no enforcement mode; it \
          always reports every finding"
     )]
     #[case::enforcement_mode_on_command_rule(
-        "[rules.edit-of-described-commit]\nenforcement_mode = \"ban\"",
-        "`rules.edit-of-described-commit.enforcement_mode`: this rule has no enforcement \
+        "[rules.edit-of-described-commit]\nenforcement-mode = \"ban\"",
+        "`rules.edit-of-described-commit.enforcement-mode`: this rule has no enforcement \
          mode; it always reports every finding"
     )]
     #[case::unknown_top_level_key(
         r#"selct = ["testing"]"#,
-        "TOML parse error at line 1, column 1\n  |\n1 | selct = [\"testing\"]\n  | ^^^^^\nunknown field `selct`, expected one of `select`, `ignore`, `per_file_ignores`, `rules`, `context`"
+        "TOML parse error at line 1, column 1\n  |\n1 | selct = [\"testing\"]\n  | ^^^^^\nunknown field `selct`, expected one of `select`, `ignore`, `per-file-ignores`, `rules`, `context`"
     )]
     #[case::unknown_context_key(
-        "[context]\ntest_paterns = []",
-        "TOML parse error at line 2, column 1\n  |\n2 | test_paterns = []\n  | ^^^^^^^^^^^^\nunknown field `test_paterns`, expected `test_patterns`"
+        "[context]\ntest-paterns = []",
+        "TOML parse error at line 2, column 1\n  |\n2 | test-paterns = []\n  | ^^^^^^^^^^^^\nunknown field `test-paterns`, expected `test-patterns`"
     )]
     fn invalid_configs_are_rejected_loudly(#[case] config_toml: &str, #[case] message: &str) {
         let error = parse_config(config_toml).unwrap_err().to_string();
@@ -656,9 +653,9 @@ mod tests {
     #[test]
     fn valid_rule_options_are_stored_per_rule() {
         let config = parse_config(
-            "[rules.too-many-assertions]\nmax_assertions = 6\n\
-             [rules.too-many-assertions.rust]\nmax_assertions = 8\n\
-             [rules.abbreviated-name]\nallowed = [\"ctx\"]",
+            "[rules.too-many-assertions]\nmax-assertions = 6\n\
+             [rules.too-many-assertions.rust]\nmax-assertions = 8\n\
+             [rules.abbreviated-name]\nextend-banned = [\"ctx\"]",
         )
         .unwrap();
         let mut configured: Vec<_> = config.rule_overrides.keys().map(|name| name.0).collect();

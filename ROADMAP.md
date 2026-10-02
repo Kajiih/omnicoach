@@ -145,7 +145,7 @@ Design rationale: [ADR 007](decisions/007_rule_taxonomy_and_selection.md) (taxon
   - *Target*: Add Example / Use-instead sections sourced from a marked subset of test cases per language, so rendered examples are always executed as tests.
 - **Discovery & Documentation Follow-ups**:
   - JSON output for discovery commands (`--format json` for `--list-rules` / `--explain`), and `tags` on JSON diagnostics. Include per-language message overrides (`summary` / `rationale` / `suggestion`), not just the base text.
-  - Path-aware status in `explain` (evaluating `per_file_ignores` for a given file path).
+  - Path-aware status in `explain` (evaluating `per-file-ignores` for a given file path).
   - Ready-to-paste `[rules.<name>]` TOML block in `--explain` (in addition to the current bullet list rendered from `DeclaredOptions`), guarded by a round-trip test that parses the rendered TOML back into `Config` and compares effective values per language.
   - Generated in-repo rule catalog guarded by a golden-file drift test.
   - Styled Markdown rendering in the terminal.

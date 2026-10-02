@@ -11,7 +11,7 @@ use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
-const BANNED_SUFFIXES: ListOption = ListOption {
+const BANNED: ListOption = ListOption {
     kind: ListKind::Deny,
     doc: "Type suffixes flagged at the end of an identifier.",
     default: FilterListDefaults {
@@ -20,7 +20,7 @@ const BANNED_SUFFIXES: ListOption = ListOption {
             "_num", "_float", "_byte",
         ],
         extend: &[],
-        exempt: &[],
+        remove: &[],
     },
 };
 
@@ -36,7 +36,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         name: RuleName("type-suffixed-name"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
-        options: RuleOptions::code_rule(BANNED_SUFFIXES),
+        options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::TYPE_ENCODED_NAMES],
             precision: Precision::Heuristic,

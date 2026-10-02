@@ -12,13 +12,13 @@ use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
-const BANNED_CALLS: ListOption = ListOption {
+const BANNED: ListOption = ListOption {
     kind: ListKind::Deny,
     doc: "Logging calls flagged inside an `except` block.",
     default: FilterListDefaults {
         base: &["logging.error"],
         extend: &[],
-        exempt: &[],
+        remove: &[],
     },
 };
 
@@ -34,7 +34,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         name: RuleName("error-log-in-except"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python],
-        options: RuleOptions::code_rule(BANNED_CALLS),
+        options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::LOGGING, Topic::ERROR_HANDLING],
             precision: Precision::Exact,

@@ -30,21 +30,21 @@ Create a `.omnilint.toml` file at the root of your project workspace.
 ### Framework Rule Design: Enforcement Modes
 
 Every rule in Omni is built on a unified enforcement framework:
-- **`enforcement_mode = "ban"`** (default for most rules): Prohibits the pattern. Violations can only be bypassed using explicit `# omni:ignore[rule] -- <reason>` directives.
-- **`enforcement_mode = "require-explanation"`**: Permits the pattern as long as it is accompanied by an adjacent or inline substantive explanatory comment.
+- **`enforcement-mode = "ban"`** (default for most rules): Prohibits the pattern. Violations can only be bypassed using explicit `# omni:ignore[rule] -- <reason>` directives.
+- **`enforcement-mode = "require-explanation"`**: Permits the pattern as long as it is accompanied by an adjacent or inline substantive explanatory comment.
 
 You can configure enforcement mode globally or per-language for any code rule (suppression audits and command rules reject it):
 
 ```toml
 [rules.type-cast]
-enforcement_mode = "ban" # default: strictly banned
+enforcement-mode = "ban" # default: strictly banned
 
 [rules.sleep-in-tests]
-enforcement_mode = "require-explanation" # permitted only when documented with an explanation comment
+enforcement-mode = "require-explanation" # permitted only when documented with an explanation comment
 
 # Language-specific mode overrides
 [rules.single-letter-name.python]
-enforcement_mode = "require-explanation"
+enforcement-mode = "require-explanation"
 ```
 
 ### Global Selection & File Scoping
@@ -59,7 +59,7 @@ select = ["testing", "type-cast"]
 ignore = ["test-doubles"]
 
 # Per-file rule ignores using glob patterns, applied after `select` / `ignore`
-[per_file_ignores]
+[per-file-ignores]
 "tests/**" = ["single-letter-name", "heuristic"]
 ```
 

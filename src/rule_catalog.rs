@@ -189,10 +189,6 @@ fn configuration_lines(options: &DeclaredOptions) -> Vec<String> {
                     "- `{}` (list of strings): items added to the default.",
                     list.kind.extend_key()
                 ),
-                format!(
-                    "- `{}` (list of strings): items removed from the default.",
-                    list.kind.remove_key()
-                ),
             ]),
         }
     }
@@ -224,7 +220,7 @@ fn list_default(defaults: &FilterListDefaults) -> String {
     let added = defaults.extend.iter().map(|&(language, items)| {
         format!("{} adds {}", support_lang_name(language), quoted(items))
     });
-    let removed = defaults.exempt.iter().map(|&(language, items)| {
+    let removed = defaults.remove.iter().map(|&(language, items)| {
         format!("{} removes {}", support_lang_name(language), quoted(items))
     });
     let parts: Vec<String> = std::iter::once(base).chain(added).chain(removed).collect();

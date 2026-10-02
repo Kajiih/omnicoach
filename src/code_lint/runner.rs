@@ -493,7 +493,7 @@ mod tests {
 
         let declaration = rules::type_cast::RULE.declaration;
         let table: toml::Value =
-            toml::from_str(r#"enforcement_mode = "require-explanation""#).expect("valid TOML");
+            toml::from_str(r#"enforcement-mode = "require-explanation""#).expect("valid TOML");
         let overrides = RuleOverrides::parse(
             declaration.name.0,
             &declaration.options.declared(),
