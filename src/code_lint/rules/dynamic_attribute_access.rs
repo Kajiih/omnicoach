@@ -11,7 +11,7 @@ use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
-const BANNED_FUNCTIONS: ListOption = ListOption {
+const BANNED: ListOption = ListOption {
     kind: ListKind::Deny,
     doc: "Reflection functions flagged when called.",
     default: FilterListDefaults {
@@ -26,7 +26,7 @@ const BANNED_FUNCTIONS: ListOption = ListOption {
             "builtins.delattr",
         ],
         extend: &[],
-        exempt: &[],
+        remove: &[],
     },
 };
 
@@ -42,7 +42,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         name: RuleName("dynamic-attribute-access"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python],
-        options: RuleOptions::code_rule(BANNED_FUNCTIONS),
+        options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::TYPE_CHECKER_BYPASS],
             precision: Precision::Exact,

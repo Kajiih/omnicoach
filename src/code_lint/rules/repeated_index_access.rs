@@ -12,13 +12,13 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 const MIN_POSITIONS: CountOption = CountOption {
-    key: "min_positions",
+    key: "min-positions",
     doc: "Minimum distinct positions read from one value for it to be flagged.",
     default: LanguageDefaults::new(2, &[]),
 };
 
 const MAX_PLACEHOLDERS: CountOption = CountOption {
-    key: "max_placeholders",
+    key: "max-placeholders",
     doc: "Maximum `_` placeholders the unpacking may need; sparser reads call for a named \
           record rather than unpacking.",
     default: LanguageDefaults::new(2, &[]),
@@ -54,8 +54,8 @@ pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
         doc: RuleDoc {
             summary: "Flags a value read at several literal positions instead of being unpacked once.",
             what_it_does: "Groups positional reads by value within one function and flags \
-                           the value when at least `min_positions` distinct positions are \
-                           read and unpacking them would need at most `max_placeholders` `_` \
+                           the value when at least `min-positions` distinct positions are \
+                           read and unpacking them would need at most `max-placeholders` `_` \
                            placeholders (`row[0], row[7]` is left alone by default). In \
                            Python, a read is an index by a decimal integer literal, negative \
                            allowed (`point[0]`, `xs[-1]`), on a name, attribute or index \

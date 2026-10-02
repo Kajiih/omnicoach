@@ -11,7 +11,7 @@ use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
-const BANNED_METHODS: ListOption = ListOption {
+const BANNED: ListOption = ListOption {
     kind: ListKind::Deny,
     doc: "Mock assertion methods flagged when called.",
     default: FilterListDefaults {
@@ -32,7 +32,7 @@ const BANNED_METHODS: ListOption = ListOption {
             "$OBJ.assert_not_awaited",
         ],
         extend: &[],
-        exempt: &[],
+        remove: &[],
     },
 };
 
@@ -48,7 +48,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         name: RuleName("mock-call-assertion"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python],
-        options: RuleOptions::code_rule(BANNED_METHODS),
+        options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::TEST_ASSERTIONS, Topic::TEST_DOUBLES],
             precision: Precision::Exact,

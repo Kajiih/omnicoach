@@ -17,7 +17,7 @@ pub struct FilterListDefaults {
     /// Language-specific items added to the base defaults.
     pub extend: &'static [(SupportLang, &'static [&'static str])],
     /// Language-specific items removed from the base defaults.
-    pub exempt: &'static [(SupportLang, &'static [&'static str])],
+    pub remove: &'static [(SupportLang, &'static [&'static str])],
 }
 
 impl FilterListDefaults {
@@ -30,7 +30,7 @@ impl FilterListDefaults {
                 set.extend(items.iter().map(|&item| item.to_string()));
             }
         }
-        for &(target_lang, items) in self.exempt {
+        for &(target_lang, items) in self.remove {
             if target_lang == lang {
                 for &item in items {
                     set.remove(item);
@@ -83,7 +83,7 @@ pub enum EnforcementMode {
 
 impl EnforcementMode {
     /// The key setting a code rule's enforcement mode under `[rules.<name>]`.
-    pub const KEY: &'static str = "enforcement_mode";
+    pub const KEY: &'static str = "enforcement-mode";
 
     /// What each mode does, for `--explain`.
     pub const DOC: &'static str = "`ban` flags every occurrence; `require-explanation` accepts \
@@ -143,7 +143,7 @@ impl OptionsDeclaration for () {
 /// A non-negative integer option, such as the maximum number of assertions in one test.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CountOption {
-    /// The TOML key, naming what is counted (`max_assertions`, not `max`).
+    /// The TOML key, naming what is counted (`max-assertions`, not `max`).
     pub key: &'static str,
     /// One sentence saying what the value bounds.
     pub doc: &'static str,
@@ -171,12 +171,12 @@ impl OptionsDeclaration for CountOption {
 }
 
 /// Whether a list option holds the items a rule flags or the items it accepts. The kind
-/// fixes the option's three keys, so a rule declares at most one list option.
+/// fixes the option's two keys, so a rule declares at most one list option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListKind {
-    /// Items the rule flags: `banned`, `extend_banned` and `allowed`.
+    /// Items the rule flags: `banned` and `extend-banned`.
     Deny,
-    /// Items the rule accepts: `allowed`, `extend_allowed` and `banned`.
+    /// Items the rule accepts: `allowed` and `extend-allowed`.
     Allow,
 }
 
@@ -194,17 +194,8 @@ impl ListKind {
     #[must_use]
     pub const fn extend_key(self) -> &'static str {
         match self {
-            Self::Deny => "extend_banned",
-            Self::Allow => "extend_allowed",
-        }
-    }
-
-    /// The key whose items are removed from the defaults.
-    #[must_use]
-    pub const fn remove_key(self) -> &'static str {
-        match self {
-            Self::Deny => "allowed",
-            Self::Allow => "banned",
+            Self::Deny => "extend-banned",
+            Self::Allow => "extend-allowed",
         }
     }
 }
@@ -233,18 +224,13 @@ impl OptionsDeclaration for ListOption {
     }
 
     /// The replacing items (language table, else rule table, else defaults), plus every
-    /// added item, minus every removed one.
+    /// added item.
     fn resolve(self, language: SupportLang, overrides: Option<&RuleOverrides>) -> HashSet<String> {
         let mut items = layers(overrides, language)
             .find_map(|values| values.list.replace.clone())
             .unwrap_or_else(|| self.default.resolve_default_for_lang(language));
         for values in layers(overrides, language) {
             items.extend(values.list.extend.iter().cloned());
-        }
-        for values in layers(overrides, language) {
-            for item in &values.list.remove {
-                items.remove(item);
-            }
         }
         items
     }
@@ -279,7 +265,7 @@ impl<First: OptionsDeclaration, Second: OptionsDeclaration> OptionsDeclaration f
 pub enum OptionSpec {
     /// A count, under one key.
     Count(CountOption),
-    /// A list, under the three keys of its kind.
+    /// A list, under the two keys of its kind.
     List(ListOption),
 }
 
@@ -289,11 +275,7 @@ impl OptionSpec {
     pub fn keys(self) -> Vec<&'static str> {
         match self {
             Self::Count(option) => vec![option.key],
-            Self::List(option) => vec![
-                option.kind.replace_key(),
-                option.kind.extend_key(),
-                option.kind.remove_key(),
-            ],
+            Self::List(option) => vec![option.kind.replace_key(), option.kind.extend_key()],
         }
     }
 }
@@ -302,7 +284,7 @@ impl OptionSpec {
 /// A key that is not declared here is rejected at load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuleOptions<Options: OptionsDeclaration> {
-    /// The default `enforcement_mode`, or `None` if the rule rejects the key because its
+    /// The default `enforcement-mode`, or `None` if the rule rejects the key because its
     /// runner always reports every finding.
     pub enforcement_mode: Option<LanguageDefaults<EnforcementMode>>,
     /// The rule's own options.
@@ -310,7 +292,7 @@ pub struct RuleOptions<Options: OptionsDeclaration> {
 }
 
 impl<Options: OptionsDeclaration> RuleOptions<Options> {
-    /// A code rule with `options` and an `enforcement_mode` defaulting to `ban`.
+    /// A code rule with `options` and an `enforcement-mode` defaulting to `ban`.
     #[must_use]
     pub const fn code_rule(options: Options) -> Self {
         Self {
@@ -348,7 +330,7 @@ impl<Options: OptionsDeclaration> RuleOptions<Options> {
 }
 
 impl RuleOptions<()> {
-    /// A rule that accepts no options, not even `enforcement_mode`.
+    /// A rule that accepts no options, not even `enforcement-mode`.
     #[must_use]
     pub const fn none() -> Self {
         Self {
@@ -362,7 +344,7 @@ impl RuleOptions<()> {
 /// what `--explain` documents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeclaredOptions {
-    /// The default `enforcement_mode`, or `None` if the rule rejects the key.
+    /// The default `enforcement-mode`, or `None` if the rule rejects the key.
     pub enforcement_mode: Option<LanguageDefaults<EnforcementMode>>,
     /// The rule's own options, in declaration order.
     pub options: Vec<OptionSpec>,
@@ -380,12 +362,11 @@ impl DeclaredOptions {
     }
 }
 
-/// The items one table puts in place of, adds to or removes from a list's defaults.
+/// The items one table puts in place of, or adds to, a list's defaults.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ListOverride {
     replace: Option<HashSet<String>>,
     extend: HashSet<String>,
-    remove: HashSet<String>,
 }
 
 /// The validated values of one `[rules.<name>]` table or one of its language tables.
@@ -414,7 +395,7 @@ pub enum OptionProblem {
         (None, keys) => format!("expected one of `{}`", keys.join("`, `")),
     })]
     UnknownKey {
-        /// The closest accepted key, if it looks like a typo or a renamed key.
+        /// The closest accepted key, if it looks like a typo.
         suggestion: Option<&'static str>,
         /// Every accepted key.
         expected: Vec<&'static str>,
@@ -433,7 +414,7 @@ pub enum OptionProblem {
         /// The languages the rule analyzes, comma-separated.
         analyzed: String,
     },
-    /// `enforcement_mode` on a rule whose runner always reports every finding.
+    /// `enforcement-mode` on a rule whose runner always reports every finding.
     #[error("this rule has no enforcement mode; it always reports every finding")]
     EnforcementModeRejected,
 }
@@ -442,7 +423,7 @@ pub enum OptionProblem {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("`{key_path}`: {problem}")]
 pub struct RuleOptionsError {
-    /// The dotted path to the entry, e.g. `rules.too-many-assertions.rust.max_assertions`.
+    /// The dotted path to the entry, e.g. `rules.too-many-assertions.rust.max-assertions`.
     pub key_path: String,
     /// What is wrong with it.
     pub problem: OptionProblem,
@@ -454,7 +435,7 @@ impl RuleOverrides {
     /// # Errors
     ///
     /// Returns [`RuleOptionsError`] on an undeclared key, a value of the wrong type, a table
-    /// for a language the rule does not analyze, or `enforcement_mode` on a rule that
+    /// for a language the rule does not analyze, or `enforcement-mode` on a rule that
     /// rejects it.
     pub fn parse(
         rule_name: &str,
@@ -545,10 +526,6 @@ impl OptionValues {
                     self.list.extend = parse_items(value).map_err(error)?;
                     return Ok(());
                 }
-                OptionSpec::List(list) if key == list.kind.remove_key() => {
-                    self.list.remove = parse_items(value).map_err(error)?;
-                    return Ok(());
-                }
                 OptionSpec::Count(_) | OptionSpec::List(_) => {}
             }
         }
@@ -559,7 +536,7 @@ impl OptionValues {
                 .map(|&language| support_lang_name(language)),
         );
         Err(error(OptionProblem::UnknownKey {
-            suggestion: suggest_key(key, &expected),
+            suggestion: closest_match(key, expected.iter().copied()),
             expected,
         }))
     }
@@ -575,18 +552,6 @@ fn layers(
         .and_then(move |overrides| overrides.for_language(language))
         .into_iter()
         .chain(overrides.map(|overrides| &overrides.global))
-}
-
-/// The accepted key closest to `key`: a likely typo, or else a key that contains `key` as a
-/// word, which is what a key renamed to an explicit name looks like (`max` →
-/// `max_assertions`, `mode` → `enforcement_mode`).
-fn suggest_key(key: &str, accepted: &[&'static str]) -> Option<&'static str> {
-    closest_match(key, accepted.iter().copied()).or_else(|| {
-        accepted
-            .iter()
-            .copied()
-            .find(|candidate| candidate.split('_').any(|word| word == key))
-    })
 }
 
 fn language_named(key: &str) -> Option<SupportLang> {
@@ -653,7 +618,7 @@ mod tests {
     use super::*;
 
     const LIMIT: CountOption = CountOption {
-        key: "max_items",
+        key: "max-items",
         doc: "Maximum items.",
         default: LanguageDefaults::new(4, &[(SupportLang::Rust, 6)]),
     };
@@ -664,7 +629,7 @@ mod tests {
         default: FilterListDefaults {
             base: &["default_one", "common_ok"],
             extend: &[],
-            exempt: &[],
+            remove: &[],
         },
     };
 
@@ -672,9 +637,9 @@ mod tests {
         kind: ListKind::Allow,
         doc: "Allowed words.",
         default: FilterListDefaults {
-            base: &["default_base", "revoked", "rust_revoked"],
+            base: &["default_base"],
             extend: &[(SupportLang::Rust, &["rust_extra"])],
-            exempt: &[],
+            remove: &[],
         },
     };
 
@@ -686,7 +651,6 @@ mod tests {
         options: LIMIT,
     };
     const DENYING_RULE: RuleOptions<ListOption> = RuleOptions::code_rule(DENY);
-    const ALLOWING_RULE: RuleOptions<ListOption> = RuleOptions::code_rule(ALLOW);
 
     const BOTH_LANGUAGES: &[SupportLang] = &[SupportLang::Python, SupportLang::Rust];
 
@@ -708,7 +672,7 @@ mod tests {
         const DEFAULTS: FilterListDefaults = FilterListDefaults {
             base: &["common", "shared", "temp"],
             extend: &[(SupportLang::Rust, &["rust_only"])],
-            exempt: &[(SupportLang::Rust, &["temp"])],
+            remove: &[(SupportLang::Rust, &["temp"])],
         };
 
         let python_defaults = DEFAULTS.resolve_default_for_lang(SupportLang::Python);
@@ -727,9 +691,9 @@ mod tests {
     #[rstest]
     #[case::python_default("", SupportLang::Python, 4)]
     #[case::rust_default("", SupportLang::Rust, 6)]
-    #[case::rule_table("max_items = 5", SupportLang::Rust, 5)]
-    #[case::other_language_table("max_items = 5\n[rust]\nmax_items = 10", SupportLang::Python, 5)]
-    #[case::language_table("max_items = 5\n[rust]\nmax_items = 10", SupportLang::Rust, 10)]
+    #[case::rule_table("max-items = 5", SupportLang::Rust, 5)]
+    #[case::other_language_table("max-items = 5\n[rust]\nmax-items = 10", SupportLang::Python, 5)]
+    #[case::language_table("max-items = 5\n[rust]\nmax-items = 10", SupportLang::Rust, 10)]
     fn count_prefers_language_then_rule_table_then_default(
         #[case] toml_content: &str,
         #[case] language: SupportLang,
@@ -742,9 +706,9 @@ mod tests {
     #[rstest]
     #[case::python_default("", SupportLang::Python, EnforcementMode::Ban)]
     #[case::rust_default("", SupportLang::Rust, EnforcementMode::RequireExplanation)]
-    #[case::rule_table("enforcement_mode = \"ban\"", SupportLang::Rust, EnforcementMode::Ban)]
+    #[case::rule_table("enforcement-mode = \"ban\"", SupportLang::Rust, EnforcementMode::Ban)]
     #[case::language_table(
-        "enforcement_mode = \"ban\"\n[python]\nenforcement_mode = \"require-explanation\"",
+        "enforcement-mode = \"ban\"\n[python]\nenforcement-mode = \"require-explanation\"",
         SupportLang::Python,
         EnforcementMode::RequireExplanation
     )]
@@ -760,69 +724,53 @@ mod tests {
         );
     }
 
-    #[test]
-    fn deny_list_replaces_then_extends_then_removes() {
+    #[rstest]
+    #[case::deny(
+        DENY,
+        indoc::indoc! {r#"
+            extend-banned = ["global_bad"]
+
+            [rust]
+            extend-banned = ["rust_bad"]
+
+            [python]
+            banned = ["py_only_bad"]
+        "#},
+        &["default_one", "common_ok", "global_bad", "rust_bad"],
+        &["py_only_bad", "global_bad"]
+    )]
+    #[case::allow(
+        ALLOW,
+        indoc::indoc! {r#"
+            extend-allowed = ["global_allowed"]
+
+            [rust]
+            extend-allowed = ["rust_allowed"]
+
+            [python]
+            allowed = ["py_only_allowed"]
+        "#},
+        &["default_base", "rust_extra", "global_allowed", "rust_allowed"],
+        &["py_only_allowed", "global_allowed"]
+    )]
+    fn list_replaces_from_the_nearest_table_then_extends_from_every_table(
+        #[case] option: ListOption,
+        #[case] toml_content: &str,
+        #[case] rust_expected: &[&str],
+        #[case] python_expected: &[&str],
+    ) {
         let overrides = parse(
-            &DENYING_RULE.declared(),
+            &RuleOptions::code_rule(option).declared(),
             BOTH_LANGUAGES,
-            indoc::indoc! {r#"
-                allowed = ["common_ok"]
-                extend_banned = ["global_bad"]
-                enforcement_mode = "require-explanation"
-
-                [rust]
-                allowed = ["rust_ok"]
-                extend_banned = ["rust_bad"]
-
-                [python]
-                banned = ["py_only_bad"]
-            "#},
+            toml_content,
         )
         .unwrap();
 
-        let rust = DENY.resolve(SupportLang::Rust, Some(&overrides));
-        let python = DENY.resolve(SupportLang::Python, Some(&overrides));
+        let rust = option.resolve(SupportLang::Rust, Some(&overrides));
+        let python = option.resolve(SupportLang::Python, Some(&overrides));
         assert_eq!(
             (rust, python),
-            (
-                words(&["default_one", "global_bad", "rust_bad"]),
-                words(&["py_only_bad", "global_bad"])
-            )
-        );
-    }
-
-    #[test]
-    fn allow_list_replaces_then_extends_then_removes() {
-        let overrides = parse(
-            &ALLOWING_RULE.declared(),
-            BOTH_LANGUAGES,
-            indoc::indoc! {r#"
-                banned = ["revoked"]
-                extend_allowed = ["global_allowed"]
-
-                [rust]
-                banned = ["rust_revoked"]
-                extend_allowed = ["rust_allowed"]
-
-                [python]
-                allowed = ["py_only_allowed"]
-            "#},
-        )
-        .unwrap();
-
-        let rust = ALLOW.resolve(SupportLang::Rust, Some(&overrides));
-        let python = ALLOW.resolve(SupportLang::Python, Some(&overrides));
-        assert_eq!(
-            (rust, python),
-            (
-                words(&[
-                    "default_base",
-                    "rust_extra",
-                    "global_allowed",
-                    "rust_allowed"
-                ]),
-                words(&["py_only_allowed", "global_allowed"])
-            )
+            (words(rust_expected), words(python_expected))
         );
     }
 
@@ -832,7 +780,7 @@ mod tests {
         let overrides = parse(
             &RuleOptions::code_rule(pair).declared(),
             BOTH_LANGUAGES,
-            "max_items = 9\nbanned = [\"only\"]",
+            "max-items = 9\nbanned = [\"only\"]",
         )
         .unwrap();
         assert_eq!(
@@ -862,21 +810,15 @@ mod tests {
     #[case::typo(
         WITH_COUNT.declared(),
         BOTH_LANGUAGES,
-        "max_itemz = 5",
-        "`rules.some-rule.max_itemz`: unknown key; did you mean `max_items`?"
-    )]
-    #[case::renamed_key(
-        WITH_COUNT.declared(),
-        BOTH_LANGUAGES,
-        "[rust]\nmode = \"ban\"",
-        "`rules.some-rule.rust.mode`: unknown key; did you mean `enforcement_mode`?"
+        "max-itemz = 5",
+        "`rules.some-rule.max-itemz`: unknown key; did you mean `max-items`?"
     )]
     #[case::unrelated_key(
         DENYING_RULE.declared(),
         &[SupportLang::Python],
         "colour = 1",
-        "`rules.some-rule.colour`: unknown key; expected one of `enforcement_mode`, `banned`, \
-         `extend_banned`, `allowed`, `python`"
+        "`rules.some-rule.colour`: unknown key; expected one of `enforcement-mode`, `banned`, \
+         `extend-banned`, `python`"
     )]
     #[case::no_options(
         RuleOptions::none().declared(),
@@ -887,26 +829,26 @@ mod tests {
     #[case::count_wrong_type(
         WITH_COUNT.declared(),
         BOTH_LANGUAGES,
-        "max_items = \"five\"",
-        "`rules.some-rule.max_items`: expected a non-negative integer, found \"five\""
+        "max-items = \"five\"",
+        "`rules.some-rule.max-items`: expected a non-negative integer, found \"five\""
     )]
     #[case::negative_count(
         WITH_COUNT.declared(),
         BOTH_LANGUAGES,
-        "max_items = -1",
-        "`rules.some-rule.max_items`: expected a non-negative integer, found -1"
+        "max-items = -1",
+        "`rules.some-rule.max-items`: expected a non-negative integer, found -1"
     )]
     #[case::list_wrong_type(
         DENYING_RULE.declared(),
         BOTH_LANGUAGES,
-        "extend_banned = [\"ok\", 3]",
-        "`rules.some-rule.extend_banned`: expected an array of strings, found array"
+        "extend-banned = [\"ok\", 3]",
+        "`rules.some-rule.extend-banned`: expected an array of strings, found array"
     )]
     #[case::enforcement_mode_wrong_value(
         WITH_COUNT.declared(),
         BOTH_LANGUAGES,
-        "enforcement_mode = \"bann\"",
-        "`rules.some-rule.enforcement_mode`: expected `ban` or `require-explanation`, \
+        "enforcement-mode = \"bann\"",
+        "`rules.some-rule.enforcement-mode`: expected `ban` or `require-explanation`, \
          found \"bann\""
     )]
     #[case::language_not_a_table(
@@ -918,14 +860,14 @@ mod tests {
     #[case::unsupported_language(
         WITH_COUNT.declared(),
         &[SupportLang::Python],
-        "[rust]\nmax_items = 1",
+        "[rust]\nmax-items = 1",
         "`rules.some-rule.rust`: this rule does not analyze this language; it analyzes python"
     )]
     #[case::enforcement_mode_rejected(
         RuleOptions::none().declared(),
         BOTH_LANGUAGES,
-        "enforcement_mode = \"ban\"",
-        "`rules.some-rule.enforcement_mode`: this rule has no enforcement mode; it always \
+        "enforcement-mode = \"ban\"",
+        "`rules.some-rule.enforcement-mode`: this rule has no enforcement mode; it always \
          reports every finding"
     )]
     fn invalid_options_are_rejected_with_their_key_path(

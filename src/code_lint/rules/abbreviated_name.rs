@@ -23,7 +23,7 @@ const BANNED: ListOption = ListOption {
         // In Rust, `str` is a primitive type keyword rather than an abbreviation, and it is
         // load-bearing in conventional conversion names (`as_str`, `to_str`, `from_str`).
         // Hungarian `_str` type suffixes remain covered by type-suffixed-name.
-        exempt: &[(SupportLang::Rust, &["str"])],
+        remove: &[(SupportLang::Rust, &["str"])],
     },
 };
 

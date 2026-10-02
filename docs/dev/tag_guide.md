@@ -110,7 +110,7 @@ Each rule declares **one** primary quality from the ISO/IEC 25010:2023 product-q
   - `select = ["jj"]`, `ignore = ["vcs"]` → jj rules on, other vcs rules off.
   - `select = ["testing"]`, `ignore = ["test-doubles"]` → `mock-call-assertion` (on both `test-assertions` and `test-doubles`) is off.
 - **A rule name beats any tag**: `ignore = ["testing"]`, `select = ["sleep-in-tests"]` keeps that one rule.
-- `per_file_ignores` only removes rules, after the main selection.
+- `per-file-ignores` only removes rules, after the main selection.
 - **Errors, never silence:**
   - an unknown label (with "did you mean");
   - a facet label;

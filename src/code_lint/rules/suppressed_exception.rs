@@ -13,13 +13,13 @@ use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
-const BANNED_CALLS: ListOption = ListOption {
+const BANNED: ListOption = ListOption {
     kind: ListKind::Deny,
     doc: "Exception suppression calls flagged when called.",
     default: FilterListDefaults {
         base: &["suppress", "contextlib.suppress"],
         extend: &[],
-        exempt: &[],
+        remove: &[],
     },
 };
 
@@ -40,7 +40,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 EnforcementMode::RequireExplanation,
                 &[],
             )),
-            options: BANNED_CALLS,
+            options: BANNED,
         },
         classification: Classification {
             topics: &[Topic::ERROR_HANDLING],
@@ -58,7 +58,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                            words and ten characters, and a bare tool directive such as \
                            `# noqa: SIM105` or `# type: ignore` does not count. Comments inside \
                            the `with` body do not count. A `suppress(...)` call outside a `with` \
-                           statement is not flagged. With `enforcement_mode = \"ban\"`, every \
+                           statement is not flagged. With `enforcement-mode = \"ban\"`, every \
                            such block is flagged, commented or not.",
             why_is_this_bad: "`suppress` silently discards an exception. The code does not say \
                               why that failure is harmless, so a reader cannot tell an \

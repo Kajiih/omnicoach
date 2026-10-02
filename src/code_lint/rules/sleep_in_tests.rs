@@ -12,7 +12,7 @@ use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
-const BANNED_CALLS: ListOption = ListOption {
+const BANNED: ListOption = ListOption {
     kind: ListKind::Deny,
     doc: "Sleep calls flagged in tests.",
     default: FilterListDefaults {
@@ -32,7 +32,7 @@ const BANNED_CALLS: ListOption = ListOption {
                 ],
             ),
         ],
-        exempt: &[],
+        remove: &[],
     },
 };
 
@@ -62,7 +62,7 @@ pub const SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
         name: RuleName("sleep-in-tests"),
         template: &SLEEP_TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
-        options: RuleOptions::code_rule(BANNED_CALLS),
+        options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::TEST_TIMING],
             precision: Precision::Exact,
@@ -105,7 +105,7 @@ pub const ZERO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
         name: RuleName("zero-sleep-in-tests"),
         template: &ZERO_SLEEP_TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
-        options: RuleOptions::code_rule(BANNED_CALLS),
+        options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::TEST_TIMING],
             precision: Precision::Exact,

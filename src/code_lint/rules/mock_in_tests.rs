@@ -11,7 +11,7 @@ use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
-const BANNED_MOCKS: ListOption = ListOption {
+const BANNED: ListOption = ListOption {
     kind: ListKind::Deny,
     doc: "Mocking and monkeypatching calls flagged in tests.",
     default: FilterListDefaults {
@@ -72,7 +72,7 @@ const BANNED_MOCKS: ListOption = ListOption {
             "monkeypatch.delitem",
         ],
         extend: &[],
-        exempt: &[],
+        remove: &[],
     },
 };
 
@@ -88,7 +88,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         name: RuleName("mock-in-tests"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python],
-        options: RuleOptions::code_rule(BANNED_MOCKS),
+        options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::TEST_DOUBLES],
             precision: Precision::Exact,

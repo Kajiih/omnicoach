@@ -11,7 +11,7 @@ use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const MAX_ASSERTIONS: CountOption = CountOption {
-    key: "max_assertions",
+    key: "max-assertions",
     doc: "Maximum assertions allowed in one test function.",
     default: LanguageDefaults::new(4, &[]),
 };
@@ -43,7 +43,7 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
         doc: RuleDoc {
             summary: "Limits the number of assertions in one test function.",
             what_it_does: "Counts the assertions in each test function and flags a test with \
-                           more than `max_assertions` of them. A `pytest.raises` block counts as \
+                           more than `max-assertions` of them. A `pytest.raises` block counts as \
                            one assertion. Assertions inside nested functions or classes, and in \
                            helpers that are not tests, are not counted.",
             why_is_this_bad: "A test with many assertions usually checks several behaviours at \

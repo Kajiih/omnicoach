@@ -114,9 +114,9 @@ The vocabulary grows the same way as the verb list: when a message needs a thing
 | Deny list | `banned` replaces the default; `extend-banned` adds to it | `[rules.abbreviated-name] extend-banned = ["tmp"]` |
 | Allow list | `allowed` replaces the default; `extend-allowed` adds to it | `[rules.bare-multiline-string.rust] extend-allowed = ["rule_test"]` |
 
-There is no "remove from the default" key: to drop one default item, replace the list. If that becomes a recurring need, it will be a `remove-banned` / `remove-allowed` key mapped to the `remove` field `ListOverride` already has.
+There is no "remove from the default" key: to drop one default item, replace the list. If that becomes a recurring need, it will be a `remove-banned` / `remove-allowed` key, parsed into a `remove` field on `ListOverride` and applied after `extend`.
 
-Inside the code the three list operations are called **replace**, **extend**, **remove**, everywhere (`ListOverride`, `--explain` rendering, docs). The Rust consts holding a rule's default list are `BANNED` or `ALLOWED`.
+Inside the code the two list operations are called **replace** and **extend**, everywhere (`ListOverride`, `--explain` rendering, docs); the compile-time per-language defaults use the same vocabulary (`FilterListDefaults::{extend, remove}`). The Rust consts holding a rule's default list are `BANNED` or `ALLOWED`.
 
 ---
 

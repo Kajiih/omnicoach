@@ -11,7 +11,7 @@ use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
-const ALLOWED_WRAPPERS: ListOption = ListOption {
+const ALLOWED: ListOption = ListOption {
     kind: ListKind::Allow,
     doc: "Functions and macros accepted as dedenting a multiline string.",
     default: FilterListDefaults {
@@ -34,7 +34,7 @@ const ALLOWED_WRAPPERS: ListOption = ListOption {
                 ],
             ),
         ],
-        exempt: &[],
+        remove: &[],
     },
 };
 
@@ -54,7 +54,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         name: RuleName("bare-multiline-string"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
-        options: RuleOptions::code_rule(ALLOWED_WRAPPERS),
+        options: RuleOptions::code_rule(ALLOWED),
         classification: Classification {
             topics: &[Topic::LITERALS],
             precision: Precision::Exact,

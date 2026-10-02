@@ -1,2 +1,2 @@
 [rules.bare-multiline-string.rust]
-extend_allowed = ["rule_test", "crate::test_utils::rule_test"]
+extend-allowed = ["rule_test", "crate::test_utils::rule_test"]

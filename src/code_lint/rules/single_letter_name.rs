@@ -17,7 +17,7 @@ const ALLOWED: ListOption = ListOption {
     default: FilterListDefaults {
         base: &["i", "j", "x", "f"],
         extend: &[(SupportLang::Rust, &["c"])],
-        exempt: &[],
+        remove: &[],
     },
 };
 
