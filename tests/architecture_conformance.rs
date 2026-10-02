@@ -17,7 +17,7 @@ use omni::code_lint::ast::rust::{
 use strum::VariantArray;
 
 /// The only modules allowed to handle raw ast-grep types.
-const AST_GREP_OWNERS: &[&str] = &["code_lint::ast", "command_lint::rule", "bin::ast_dumper"];
+const AST_GREP_OWNERS: &[&str] = &["code_lint::ast", "command_lint::command", "bin::ast_dumper"];
 
 /// Cached structural and dependency summary of a single `.rs` file under `src/`.
 #[derive(Debug, Clone)]

@@ -106,10 +106,12 @@ define_architecture! {
     // --- Command Safety Domain (`command_lint`) ---
     /// The jj client: repository state queries for command rules (`command_lint::vcs`).
     CommandLintVcs      => [],
-    /// The command rule contract and intercepted command schemas (`command_lint::rule`).
-    CommandLintRule     => [CommandLintVcs, RuleDeclaration],
+    /// The intercepted command parser: shell input to commands and their arguments (`command_lint::command`).
+    CommandLintCommand  => [],
+    /// The command rule contract: a declaration and a check over one intercepted command (`command_lint::contract`).
+    CommandLintContract => [CommandLintCommand, CommandLintVcs, RuleDeclaration],
     /// Concrete command safety linting rules (`command_lint::rules`).
-    CommandLintRules    => [CommandLintRule, RuleDeclaration],
+    CommandLintRules    => [CommandLintContract, RuleDeclaration],
     /// Command linting orchestration and interception runner (`command_lint::runner`).
     CommandLintRunner   => [CommandLintRules, Config],
 
@@ -121,7 +123,7 @@ define_architecture! {
 
     // --- Test Harness & Entrypoints ---
     /// The `rule_test!` harness and snapshot fixtures (`test_utils`).
-    TestUtils           => [CodeLintContract, CommandLintRule],
+    TestUtils           => [CodeLintContract, CommandLintContract],
     /// CLI entrypoints (`bin::*`).
     Bin                 => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog],
 }

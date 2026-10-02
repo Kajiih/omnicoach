@@ -2,7 +2,7 @@
 
 architecture_component!(CommandLintRunner);
 
-use crate::command_lint::rule::InterceptedCommand;
+use crate::command_lint::command::InterceptedCommand;
 use crate::command_lint::rules::COMMAND_RULES;
 use crate::command_lint::vcs::JjCliClient;
 use crate::config::Config;
