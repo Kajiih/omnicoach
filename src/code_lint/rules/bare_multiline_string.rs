@@ -51,7 +51,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// The rule's declaration.
 pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
-        name: RuleName("prefer-dedent-for-multiline-strings"),
+        name: RuleName("bare-multiline-string"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
         options: RuleOptions::code_rule(ALLOWED_WRAPPERS),

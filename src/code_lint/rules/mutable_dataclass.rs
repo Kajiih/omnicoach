@@ -1,0 +1,141 @@
+//! Flags Python dataclasses defined without `frozen=True`.
+
+use crate::code_lint::ast::ParsedFile;
+use crate::code_lint::ast::python::extract_classes;
+use crate::code_lint::rule::{CodeRule, RuleTarget};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::rule_declaration::{
+    Classification, Consensus, Declaration, ImpactedQuality, Precision, Reference, RuleDoc,
+    RuleOptions, Topic,
+};
+use ast_grep_language::SupportLang;
+use std::path::Path;
+
+const TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Dataclass `{class}` is defined without `frozen=True`.",
+    rationale: "A mutable dataclass lets any holder change it in place, so a value shared between two owners changes under one of them, and it cannot be hashed by value.",
+    suggestion: "Add `frozen=True` to the `@dataclass` decorator, or state `frozen=False` when in-place mutation is needed.",
+};
+
+/// The rule's declaration.
+pub const RULE: CodeRule = CodeRule {
+    declaration: Declaration {
+        name: RuleName("mutable-dataclass"),
+        template: &TEMPLATE,
+        languages: &[SupportLang::Python],
+        options: RuleOptions::code_rule(()),
+        classification: Classification {
+            topics: &[Topic::RECORD_TYPES],
+            precision: Precision::Exact,
+            consensus: Consensus::Opinionated,
+            impacted_quality: ImpactedQuality::Reliability,
+        },
+        doc: RuleDoc {
+            summary: "Requires Python dataclasses to declare `frozen=True`.",
+            what_it_does: "Flags a class decorated with `@dataclass` or \
+                           `@dataclasses.dataclass` that does not pass `frozen`, in all \
+                           Python files, tests included. An explicit `frozen=False` counts as \
+                           a deliberate choice and is not reported. The decorator is matched \
+                           by name, not by import: a bare `@dataclass` is checked whatever \
+                           module it comes from, while other decorators, such as \
+                           `@attrs.define`, are not.",
+            why_is_this_bad: "A default dataclass is mutable: any code holding an instance can \
+                              change its fields, so a value passed to a function or stored in a \
+                              cache can change behind the owner's back, and the instance cannot \
+                              be hashed by value.\n\n\
+                              Write `@dataclass(frozen=True)` and derive modified copies with \
+                              `dataclasses.replace`. When in-place mutation is really needed, \
+                              say so with `frozen=False`.",
+            references: &[Reference {
+                title: "Python docs: dataclasses",
+                url: "https://docs.python.org/3/library/dataclasses.html",
+            }],
+        },
+    },
+    target: RuleTarget::All,
+    check: check_file,
+};
+
+fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
+    extract_classes(file)
+        .into_iter()
+        .filter(|class| {
+            class
+                .dataclass_decorator()
+                .is_some_and(|decorator| !decorator.has_arg("frozen"))
+        })
+        .map(|class| rule.diagnostic_at_node(path, &class.name_node, &[("class", &class.name)]))
+        .collect()
+}
+
+#[cfg(test)]
+crate::test_utils::rule_test!(
+    RULE,
+    {
+        Python => {
+            pass: [
+                unqualified_frozen_allowed => r#"
+                    from dataclasses import dataclass
+
+                    @dataclass(frozen=True, slots=True)
+                    class ValidModel:
+                        id: str
+                "#,
+                qualified_frozen_allowed => r#"
+                    import dataclasses
+
+                    @dataclasses.dataclass(frozen=True)
+                    class ValidQualifiedModel:
+                        id: str
+                "#,
+                explicit_mutable_opt_out_allowed => r#"
+                    from dataclasses import dataclass
+
+                    @dataclass(frozen=False)
+                    class ExplicitMutable:
+                        id: str
+                "#,
+                undecorated_class_exempt => r#"
+                    class RegularClass:
+                        pass
+                "#,
+                other_decorator_class_exempt => r#"
+                    @other_decorator
+                    class DecoratedClass:
+                        pass
+                "#,
+            ],
+            fail: [
+                bare_unqualified_dataclass => r#"
+                    from dataclasses import dataclass
+
+                    @dataclass
+                    class BareModel:
+                        id: str
+                "# => "BareModel",
+                empty_parens_qualified_dataclass => r#"
+                    import dataclasses
+
+                    @dataclasses.dataclass()
+                    class EmptyParensModel:
+                        id: str
+                "# => "EmptyParensModel",
+                slots_without_frozen => r#"
+                    from dataclasses import dataclass
+
+                    @dataclass(slots=True)
+                    class MissingFrozen:
+                        id: str
+                "# => "MissingFrozen",
+                stacked_decorators_with_dataclass => r#"
+                    from dataclasses import dataclass
+
+                    @other_decorator
+                    @dataclass
+                    class StackedModel:
+                        id: str
+                "# => "StackedModel",
+            ],
+        },
+    }
+);

@@ -37,7 +37,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// The rule's declaration.
 pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
-        name: RuleName("prefer-timedelta-over-seconds"),
+        name: RuleName("primitive-duration"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
         options: RuleOptions::code_rule(BANNED_SUFFIXES),

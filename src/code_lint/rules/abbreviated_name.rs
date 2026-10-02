@@ -22,7 +22,7 @@ const BANNED: ListOption = ListOption {
         extend: &[],
         // In Rust, `str` is a primitive type keyword rather than an abbreviation, and it is
         // load-bearing in conventional conversion names (`as_str`, `to_str`, `from_str`).
-        // Hungarian `_str` type suffixes remain covered by no-hungarian-notation.
+        // Hungarian `_str` type suffixes remain covered by type-suffixed-name.
         exempt: &[(SupportLang::Rust, &["str"])],
     },
 };
@@ -73,7 +73,7 @@ fn split_segments(name: &str) -> Vec<String> {
 /// The rule's declaration.
 pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
-        name: RuleName("banned-abbreviations"),
+        name: RuleName("abbreviated-name"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
         options: RuleOptions::code_rule(BANNED),

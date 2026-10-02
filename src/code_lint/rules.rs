@@ -3,48 +3,50 @@ architecture_component!(CodeLintRules);
 
 use crate::code_lint::rule::AnyCodeRule;
 
-pub mod banned_abbreviations;
-pub mod enforce_frozen_slots_dataclass;
-pub mod flat_scope_enforced;
-pub mod max_test_assertions;
-pub mod no_assertion_packing;
-pub mod no_dynamic_attribute_access;
-pub mod no_env_in_functions;
-pub mod no_hungarian_notation;
-pub mod no_identical_positional_types;
-pub mod no_logging_error_in_except;
-pub mod no_mock_assertions;
-pub mod no_mocks_in_tests;
-pub mod no_sleep_in_tests;
-pub mod no_typing_cast;
-pub mod no_uncommented_suppress;
-pub mod no_unstructured_task_creation;
-pub mod prefer_dedent_for_multiline_strings;
-pub mod prefer_timedelta_over_seconds;
-pub mod prefer_tuple_unpacking;
-pub mod single_letter_variable_name;
+pub mod abbreviated_name;
+pub mod bare_multiline_string;
+pub mod dynamic_attribute_access;
+pub mod environment_variable_in_function;
+pub mod error_log_in_except;
+pub mod identical_positional_types;
+pub mod mock_call_assertion;
+pub mod mock_in_tests;
+pub mod mutable_dataclass;
+pub mod nested_function;
+pub mod packed_assertion;
+pub mod primitive_duration;
+pub mod repeated_index_access;
+pub mod single_letter_name;
+pub mod sleep_in_tests;
+pub mod suppressed_exception;
+pub mod too_many_assertions;
+pub mod type_cast;
+pub mod type_suffixed_name;
+pub mod unslotted_dataclass;
+pub mod unstructured_task;
 
 /// Every registered code rule.
 pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
-    &no_unstructured_task_creation::RULE,
-    &no_sleep_in_tests::NO_SLEEP_IN_TESTS,
-    &no_sleep_in_tests::NO_ZERO_SLEEP_IN_TESTS,
-    &max_test_assertions::RULE,
-    &no_assertion_packing::RULE,
-    &no_mocks_in_tests::RULE,
-    &no_mock_assertions::RULE,
-    &no_logging_error_in_except::RULE,
-    &no_uncommented_suppress::RULE,
-    &no_typing_cast::RULE,
-    &no_dynamic_attribute_access::RULE,
-    &flat_scope_enforced::RULE,
-    &single_letter_variable_name::RULE,
-    &banned_abbreviations::RULE,
-    &no_hungarian_notation::RULE,
-    &prefer_timedelta_over_seconds::RULE,
-    &no_identical_positional_types::RULE,
-    &no_env_in_functions::RULE,
-    &enforce_frozen_slots_dataclass::RULE,
-    &prefer_dedent_for_multiline_strings::RULE,
-    &prefer_tuple_unpacking::RULE,
+    &unstructured_task::RULE,
+    &sleep_in_tests::SLEEP_IN_TESTS,
+    &sleep_in_tests::ZERO_SLEEP_IN_TESTS,
+    &too_many_assertions::RULE,
+    &packed_assertion::RULE,
+    &mock_in_tests::RULE,
+    &mock_call_assertion::RULE,
+    &error_log_in_except::RULE,
+    &suppressed_exception::RULE,
+    &type_cast::RULE,
+    &dynamic_attribute_access::RULE,
+    &nested_function::RULE,
+    &single_letter_name::RULE,
+    &abbreviated_name::RULE,
+    &type_suffixed_name::RULE,
+    &primitive_duration::RULE,
+    &identical_positional_types::RULE,
+    &environment_variable_in_function::RULE,
+    &mutable_dataclass::RULE,
+    &unslotted_dataclass::RULE,
+    &bare_multiline_string::RULE,
+    &repeated_index_access::RULE,
 ];

@@ -1,4 +1,4 @@
-//! Flags compound boolean conditions (`&&`, `and`) and boolean tuple equality packing in test assertions (`no-assertion-packing`).
+//! Flags compound boolean conditions (`&&`, `and`) and boolean tuple equality packing in test assertions (`packed-assertion`).
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
@@ -27,7 +27,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// The rule's declaration.
 pub const RULE: CodeRule = CodeRule {
     declaration: Declaration {
-        name: RuleName("no-assertion-packing"),
+        name: RuleName("packed-assertion"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
         options: RuleOptions::code_rule(()),

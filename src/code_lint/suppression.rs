@@ -39,8 +39,8 @@ const MISSING_SUPPRESSION_REASON: Declaration = Declaration {
         summary: "Requires every suppression directive to give a reason.",
         what_it_does: "Flags `omni:ignore` and `omni:disable-file` directives that do not \
                        end with `-- <reason>`, or whose reason is empty. For example, \
-                       `# omni:ignore [flat-scope-enforced]` is flagged, while \
-                       `# omni:ignore [flat-scope-enforced] -- required for fixture` is not.",
+                       `# omni:ignore [nested-function]` is flagged, while \
+                       `# omni:ignore [nested-function] -- required for fixture` is not.",
         why_is_this_bad: "A suppression switches a check off, and only its author knows \
                           why. Without a reason, a reviewer cannot tell a deliberate \
                           exception from a shortcut, and a later reader cannot tell whether \
@@ -119,7 +119,7 @@ const UNKNOWN_SUPPRESSION_RULE: Declaration = Declaration {
         summary: "Flags suppression directives that name an unknown or unsuppressible rule.",
         what_it_does: "Flags each rule name in an `omni:ignore` or `omni:disable-file` \
                        directive that is not a code rule known to Omni, such as the typo \
-                       `[flat-scope-enforce]`. The suppression audits themselves \
+                       `[nested-functions]`. The suppression audits themselves \
                        (`missing-suppression-reason`, `unused-suppression`, \
                        `unknown-suppression-rule` and `blanket-suppression`) cannot be \
                        suppressed by a directive, so naming one is flagged too.",
@@ -156,7 +156,7 @@ const BLANKET_SUPPRESSION: Declaration = Declaration {
         what_it_does: "Flags `omni:ignore` and `omni:disable-file` directives with no \
                        bracketed rule list, an empty list `[]`, or an unclosed `[`. For \
                        example, `# omni:ignore -- legacy code` is flagged, while \
-                       `# omni:ignore [flat-scope-enforced] -- legacy code` is not. Such a \
+                       `# omni:ignore [nested-function] -- legacy code` is not. Such a \
                        directive suppresses no finding.",
         why_is_this_bad: "Omni has no catch-all suppression: a directive silences only \
                           the rules it names. A directive without names does nothing, yet \
@@ -226,7 +226,7 @@ struct ParsedDirective {
     span: SourceSpan,
     /// The 1-indexed line and column coordinate where the directive comment resides.
     coord: LineColumn,
-    /// Rule names targeted by the directive (e.g. `["single-letter-variable-name"]`).
+    /// Rule names targeted by the directive (e.g. `["single-letter-name"]`).
     target_rules: Vec<String>,
     /// Optional explanatory reason provided after `--`.
     reason: Option<String>,
@@ -490,13 +490,13 @@ mod tests {
 
     #[test]
     fn test_parse_valid_inline_directive_same_line() {
-        let content = "let a = 1; // omni:ignore [single-letter-variable-name] -- math variable";
+        let content = "let a = 1; // omni:ignore [single-letter-name] -- math variable";
         let file = ParsedFile::new(content, SupportLang::Rust);
         let tracker = SuppressionTracker::from_file(&file, content);
 
         assert_eq!(tracker.directives.len(), 1);
         let directive = &tracker.directives[0];
-        assert_eq!(directive.target_rules, vec!["single-letter-variable-name"]);
+        assert_eq!(directive.target_rules, vec!["single-letter-name"]);
         assert_eq!(
             (directive.reason.as_deref(), directive.is_blanket),
             (Some("math variable"), false)
@@ -509,14 +509,13 @@ mod tests {
 
     #[test]
     fn test_parse_valid_inline_directive_preceding_line() {
-        let content =
-            "# omni:ignore [flat-scope-enforced] -- required for fixture\ndef inner(): pass";
+        let content = "# omni:ignore [nested-function] -- required for fixture\ndef inner(): pass";
         let file = ParsedFile::new(content, SupportLang::Python);
         let tracker = SuppressionTracker::from_file(&file, content);
 
         assert_eq!(tracker.directives.len(), 1);
         let directive = &tracker.directives[0];
-        assert_eq!(directive.target_rules, vec!["flat-scope-enforced"]);
+        assert_eq!(directive.target_rules, vec!["nested-function"]);
         assert_eq!(
             (directive.reason.as_deref(), directive.is_blanket),
             (Some("required for fixture"), false)
@@ -532,7 +531,7 @@ mod tests {
 
     #[test]
     fn test_parse_file_level_directive() {
-        let content = "# omni:disable-file [flat-scope-enforced, single-letter-variable-name] -- legacy generated file\ndef foo(): pass";
+        let content = "# omni:disable-file [nested-function, single-letter-name] -- legacy generated file\ndef foo(): pass";
         let file = ParsedFile::new(content, SupportLang::Python);
         let tracker = SuppressionTracker::from_file(&file, content);
 
@@ -540,7 +539,7 @@ mod tests {
         let directive = &tracker.directives[0];
         assert_eq!(
             directive.target_rules,
-            vec!["flat-scope-enforced", "single-letter-variable-name"]
+            vec!["nested-function", "single-letter-name"]
         );
         assert_eq!(directive.reason.as_deref(), Some("legacy generated file"));
         assert_eq!(directive.placement, DirectivePlacement::File);

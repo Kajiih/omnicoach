@@ -53,7 +53,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// non-empty description.
 pub const RULE: CommandRule = CommandRule {
     declaration: Declaration {
-        name: RuleName("no-edits-on-described-commits"),
+        name: RuleName("edit-of-described-commit"),
         template: &TEMPLATE,
         languages: &[],
         options: RuleOptions::none(),
@@ -143,7 +143,7 @@ mod tests {
         // Block described commit edit
         let output =
             crate::test_utils::assert_command_rule_snapshot(&RULE, "jj edit d123", &jj_client);
-        insta::assert_snapshot!(output, @"[no-edits-on-described-commits] Line 1, Col 1: Command `jj edit d123` targets a non-empty described commit.");
+        insta::assert_snapshot!(output, @"[edit-of-described-commit] Line 1, Col 1: Command `jj edit d123` targets a non-empty described commit.");
 
         // Allow empty/anonymous commit edit
         let output_allowed =

@@ -45,7 +45,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// The rule's declaration.
 pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
-        name: RuleName("no-mock-assertions"),
+        name: RuleName("mock-call-assertion"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python],
         options: RuleOptions::code_rule(BANNED_METHODS),

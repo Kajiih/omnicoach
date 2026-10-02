@@ -11,7 +11,7 @@ Items here represent design areas and technical directions to evaluate rather th
 - Also review the violation message, so they correctly explain what is the issue and why it is one rather than just explaining what the code does, and that the suggestion correctly point to correct solutions, so the user (or agent) can fix it autonomously. They should push to a single direction, which is the pit of success, even if it seems pedantic. Use `ruff` documentation as a reference and improve on it.
   - Write a **Violation Message Style Guide** and review all violation messages (`summary`, `rationale`, `suggestion`) so they concisely state the issue (`summary`), explain why it is harmful rather than just restating what the code does (`rationale`), and point to a single canonical "pit of success" solution so a user or agent can fix it autonomously (`suggestion`). Use `ruff` documentation as a reference and improve on it.
   - Reviewed violation message that we can use as reference
-    - [prefer_dedent_for_multiline_strings.rs](/usr/local/google/home/paquerot/Documents/dev_projects/custom_lints/src/code_lint/rules/prefer_dedent_for_multiline_strings.rs)
+    - [bare_multiline_string.rs](/usr/local/google/home/paquerot/Documents/dev_projects/custom_lints/src/code_lint/rules/bare_multiline_string.rs)
 
 ## Architecture & Conformance
 
@@ -32,10 +32,10 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
   - *Investigation & Design Questions*:
     - Investigate how high-throughput linters dispatch rules. (e.g. Ruff's `Checker` uses a single AST walk with match arms and $O(1)$ bitset checks; Biome groups subscriptions by `SyntaxKind`; Clippy fuses passes into combined callbacks).
     - Can we establish a rule interest declaration (e.g. target node kinds) early in the trait lifecycle without breaking existing rule independence?
-    - How do we handle rules that need multi-stage context (like `no_env_in_functions` traversing upward or `max_test_assertions` counting inner blocks) within a unified traversal?
+    - How do we handle rules that need multi-stage context (like `environment_variable_in_function` traversing upward or `too_many_assertions` counting inner blocks) within a unified traversal?
   - *Trigger*: When the code rule registry approaches ~30–40 rules, or when rule evaluation time exceeds parse time.
 - **Rule Naming Canonicalization (`heck`)**:
-  - *Target*: Support case-insensitive and format-tolerant rule selection (matching `SingleLetterVariableName`, `single-letter-variable-name`, and `single_letter_variable_name` interchangeably).
+  - *Target*: Support case-insensitive and format-tolerant rule selection (matching `SingleLetterName`, `single-letter-name`, and `single_letter_name` interchangeably).
   - *Trigger*: When adding declarative AST rule files or multi-rule alias configurations.
 - **Rule Autofix Engine (`diffy` / `similar`)**:
   - *Target*: Extend `CodeRule` and `CommandRule` with optional auto-fix transformations. Support `--fix` and `--fix --dry-run` with in-memory unified diff previews before writing changes to disk.
@@ -43,10 +43,10 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
 - **Multiline Decorator & Attribute Span Awareness for `omni:ignore`**:
   - *Current*: `compute_effective_target_line` in `src/code_lint/suppression.rs` advances `end_target_line` across contiguous lines starting with `@`, `#[`, `//`, or `#`, handling single-line decorators and attributes. However, multiline decorators or attributes whose continuation lines do not start with `@` or `#[` stop the line scan early.
   - *Target*: Use AST decorated/attributed node spans in the suppression resolver so `omni:ignore` placed above a multiline decorator/attribute block suppresses diagnostics on the underlying declaration.
-- **Generic Container Base-Type Matching (`no-identical-positional-types`)**:
+- **Generic Container Base-Type Matching (`identical-positional-types`)**:
   - *Current*: Positional parameter types are compared by exact formatted annotation string (`dict[str, int]` != `dict[str, float]`).
   - *Target*: Optionally normalize or group generic collection/mapping containers (`dict[...]`, `Mapping[...]`, `list[...]`, `Sequence[...]`) so multiple positional mappings or sequences are flagged even when their inner type arguments differ.
-- **Escaping Nested Scopes (`no-env-in-functions`)**:
+- **Escaping Nested Scopes (`environment-variable-in-function`)**:
   - *Current*: The boundary exemption (`main`, `from_env`, ...) is inherited by every scope declared inside it, which is correct for nested functions and closures but also exempts a class declared inside a boundary whose methods later escape (returned, registered as a callback).
   - *Target*: Treat a `class` / `impl` declared inside a boundary as a barrier that resets the exemption, once a real-world occurrence justifies the added language-specific complexity.
 - **Import-Aware Qualified Call Resolution (`src/code_lint/semantic/calls.rs`)**:
@@ -57,8 +57,8 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
 
 Source: Python Tip of the Week #069 "Prefer constants over wild values" (go/python-tips/069) and the legacy linter `IndexingInsteadOfUnpackingRule` (`scratch/legacy_reference/legacy_lints.py`). Candidates to prioritize, not commitments.
 
-- **`prefer-tuple-unpacking`** (Python, Rust — tip `#unpack`) — **implemented**, design in `docs/dev/prefer_tuple_unpacking/`. Follow-ups:
-  - *Named record for sparse positional access*: reads needing more `_` placeholders than `prefer-tuple-unpacking` allows (`row[0]`, `row[7]`) → `NamedTuple` / dataclass / struct (or `csv.DictReader` for CSV rows).
+- **`repeated-index-access`** (Python, Rust — tip `#unpack`) — **implemented**, design in `docs/dev/prefer_tuple_unpacking/`. Follow-ups:
+  - *Named record for sparse positional access*: reads needing more `_` placeholders than `repeated-index-access` allows (`row[0]`, `row[7]`) → `NamedTuple` / dataclass / struct (or `csv.DictReader` for CSV rows).
   - *Tuple-returning functions*: functions returning tuples of ≥3 elements → `NamedTuple` / dataclass / struct.
   - *Multi-field tuple structs* (Rust): tuple structs with ≥2 fields → named-field struct (tuple structs reserved for newtypes).
   - *`re.Match` group indexing* (Python): `m[1]`, `m[2]` → `a, b = m.groups()`.
@@ -76,10 +76,10 @@ Source: Python Tip of the Week #069 "Prefer constants over wild values" (go/pyth
 - **`no-repeated-literals`** (Python, Rust — tip core rule and `#no_magic`):
   - *Detection*: The same string or numeric literal appearing ≥N times in one file. Exempt `0`, `1`, `-1`, `''`, very short strings, docstrings, and annotations (the tip's own `_ZERO` / `_COMMA` / `TWO` counter-examples). Minimum count and string length via `LanguageDefaults` thresholds.
   - *Blocker*: Per-file aggregation cannot satisfy `rule_test!`'s repeated-occurrence check (`assert_every_occurrence_reported` expects exactly two diagnostics at mirrored spans). Requires a per-file opt-out in the harness first (see `docs/dev/rule_design_guide.md` §6). Guardrail: make it a per-case opt-out, and have `tests/registry.rs` require at least one fully checked `fail` case per language, so the opt-out cannot hide a rule that stops after its first match.
-- **Time-unit literal arithmetic** (extension of `prefer-timedelta-over-seconds` — tip `#rationale`):
+- **Time-unit literal arithmetic** (extension of `primitive-duration` — tip `#rationale`):
   - *Detection*: `24 * 60 * 60`, `60 * 60`, `86400`, `3600` → `timedelta` / `Duration`.
 - **Import alias conventions** (`import x as y`, `use x as y`):
-  - *Context*: Naming rules (`single-letter-variable-name`, `banned-abbreviations`, `no-hungarian-notation`, `prefer-timedelta-over-seconds`) skip all imports, including aliased imports.
+  - *Context*: Naming rules (`single-letter-name`, `abbreviated-name`, `type-suffixed-name`, `primitive-duration`) skip all imports, including aliased imports.
   - *Investigation*: Evaluate how much is already covered by Ruff's `flake8-import-conventions` (`ICN001` `unconventional-import-alias`, `ICN002` `banned-import-alias`) and Pylint (`PLC0414` `useless-import-alias`), and whether a dedicated multi-language import-alias rule is warranted in Omni.
 - *Not pursued*: magic numbers in comparisons (covered by Ruff `PLR2004`), bare HTTP status codes (too narrow), path composition (Ruff `PTH`), test correspondence-signaling and same-value/different-meaning constants (require semantic understanding).
 

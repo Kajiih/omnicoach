@@ -488,7 +488,7 @@ pub struct PythonClassInfo<'a> {
     pub body_node: Option<AstNode<'a>>,
 }
 
-impl PythonClassInfo<'_> {
+impl<'a> PythonClassInfo<'a> {
     /// Returns true if the class inherits from any base whose terminal name matches `target`.
     #[must_use]
     pub fn inherits_from(&self, target: &str) -> bool {
@@ -498,6 +498,18 @@ impl PythonClassInfo<'_> {
                     .name
                     .strip_suffix(target)
                     .is_some_and(|prefix| prefix.ends_with('.'))
+        })
+    }
+
+    /// The `@dataclass` or `@dataclasses.dataclass` decorator, matched by name rather than by
+    /// import, if the class carries one.
+    #[must_use]
+    pub fn dataclass_decorator(&self) -> Option<&DecoratorInfo<'a>> {
+        self.decorators.iter().find(|decorator| {
+            matches!(
+                decorator.path.as_str(),
+                "dataclass" | "dataclasses.dataclass"
+            )
         })
     }
 }

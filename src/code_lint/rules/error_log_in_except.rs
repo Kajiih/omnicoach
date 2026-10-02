@@ -31,7 +31,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// The rule's declaration.
 pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
-        name: RuleName("no-logging-error-in-except"),
+        name: RuleName("error-log-in-except"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python],
         options: RuleOptions::code_rule(BANNED_CALLS),

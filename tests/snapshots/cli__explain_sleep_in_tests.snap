@@ -5,13 +5,13 @@ expression: "output.replace(binary, \"<binary>\")"
 --- exit code ---
 0
 --- stdout ---
-# no-sleep-in-tests
+# sleep-in-tests
 
 Status: enabled (default)
 
 ## What it does
 
-Flags wall-clock and async sleep calls in test files: `time.sleep`, `asyncio.sleep`, `anyio.sleep` and `trio.sleep` in Python, `std::thread::sleep` and `tokio::time::sleep` in Rust, and a bare `sleep`. Calls on an injected object, such as `fake_clock.sleep(10)`, are not flagged. Zero-duration sleeps are left to `no-zero-sleep-in-tests`.
+Flags wall-clock and async sleep calls in test files: `time.sleep`, `asyncio.sleep`, `anyio.sleep` and `trio.sleep` in Python, `std::thread::sleep` and `tokio::time::sleep` in Rust, and a bare `sleep`. Calls on an injected object, such as `fake_clock.sleep(10)`, are not flagged. Zero-duration sleeps are left to `zero-sleep-in-tests`.
 
 ## Why is this bad?
 
@@ -29,7 +29,7 @@ Wait on the event itself (an event, a channel, a condition variable), or inject 
 
 ## Configuration
 
-Keys under `[rules.no-sleep-in-tests]`, or `[rules.no-sleep-in-tests.<language>]` for one language:
+Keys under `[rules.sleep-in-tests]`, or `[rules.sleep-in-tests.<language>]` for one language:
 
 - `enforcement_mode` (`ban` or `require-explanation`, default `ban`): `ban` flags every occurrence; `require-explanation` accepts an occurrence explained by an adjacent comment.
 - `banned` (list of strings, default `sleep`; python adds `time.sleep`, `asyncio.sleep`, `anyio.sleep`, `trio.sleep`; rust adds `thread::sleep`, `std::thread::sleep`, `time::sleep`, `tokio::time::sleep`): Sleep calls flagged in tests.

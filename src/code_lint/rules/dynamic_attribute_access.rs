@@ -39,7 +39,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// The rule's declaration.
 pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
-        name: RuleName("no-dynamic-attribute-access"),
+        name: RuleName("dynamic-attribute-access"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python],
         options: RuleOptions::code_rule(BANNED_FUNCTIONS),
