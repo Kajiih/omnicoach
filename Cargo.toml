@@ -32,7 +32,7 @@ private_intra_doc_links = "deny"
 [dependencies]
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-toml = "1.1"
+toml = { version = "1.1", features = ["preserve_order"] }
 ast-grep-core = "0.45" # SOTA structural search using tree-sitter
 ast-grep-language = "0.45"
 shell-words = "1.1" # Safe shell tokenization for cmd guard

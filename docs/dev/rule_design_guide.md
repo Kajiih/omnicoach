@@ -45,7 +45,7 @@ The architectural antipattern is usually language-agnostic; the solution is almo
 ## 5. Extensibility Over Dogma
 Static rules should establish sane defaults while respecting domain vocabulary.
 
-* **Allowlists & Denylists**: Name-checking rules (abbreviations, type suffixes) must let a project replace or extend the default list. Certain terms may be primitive keywords in one language or valid domain acronyms in a specific codebase (e.g., `str` is a primitive in Rust, not an abbreviation).
+* **Allowlists & Denylists**: Name-checking rules (abbreviations, type suffixes) must let a project replace, extend, or remove items from the default list. Certain terms may be primitive keywords in one language or valid domain acronyms in a specific codebase (e.g., `str` is a primitive in Rust, not an abbreviation).
 * **Thresholds**: Numeric bounds (e.g., maximum assertions per test) must be configurable so teams can adjust the strictness without disabling the rule entirely.
 
 ---

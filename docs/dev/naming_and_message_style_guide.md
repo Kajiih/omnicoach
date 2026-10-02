@@ -116,12 +116,12 @@ The vocabulary grows the same way as the verb list: when a message needs a thing
 | Context | kebab-case | `test-patterns` |
 | Enforcement mode | key `enforcement-mode`, values `ban` / `require-explanation` | |
 | Count | `max-<noun>` or `min-<noun>`, the noun being what is counted | `max-assertions`, `min-positional-parameters`, `min-positions`, `max-placeholders` |
-| Deny list | `banned` replaces the default; `extend-banned` adds to it | `[rules.abbreviated-name] extend-banned = ["tmp"]` |
-| Allow list | `allowed` replaces the default; `extend-allowed` adds to it | `[rules.bare-multiline-string.rust] extend-allowed = ["rule_test"]` |
+| Deny list | `banned` replaces the inherited set; `extend-banned` adds to it; `remove-banned` removes from it | `[rules.abbreviated-name.rust] remove-banned = ["str"]` |
+| Allow list | `allowed` replaces the inherited set; `extend-allowed` adds to it; `remove-allowed` removes from it | `[rules.bare-multiline-string.rust] extend-allowed = ["rule_test"]` |
 
-There is no "remove from the default" key: to drop one default item, replace the list. If that becomes a recurring need, it will be a `remove-banned` / `remove-allowed` key, parsed into a `remove` field on `ListOverride` and applied after `extend`.
+Each list option accepts those three operations (`replace`, `extend`, `remove`), keeping the list's noun (`banned` or `allowed`) instead of flipping polarity. Resolution starts from the rule's declared default for the file's language, applies `[rules.<name>]`, and then applies `[rules.<name>.<language>]`; within each table, `replace` runs first, then `extend`, then `remove`.
 
-Inside the code the two list operations are called **replace** and **extend**, everywhere (`ListOverride`, `--explain` rendering, docs); the compile-time per-language defaults use the same vocabulary (`FilterListDefaults::{extend, remove}`). The Rust consts holding a rule's default list are `BANNED` or `ALLOWED`.
+Inside the code the three list operations are called **replace**, **extend** and **remove**, everywhere (`ListKind`, `ListOverride`, `FilterListDefaults`, `--explain` rendering, docs). The Rust consts holding a rule's default list are `BANNED` or `ALLOWED`.
 
 ---
 
@@ -152,5 +152,5 @@ The description of a component says what the module does, not what the name alre
 | Suggestion: ends with `.`, starts with a verb from §2.4 | `tests/registry.rs` |
 | Doc summary: one sentence starting with `Flags` or `Requires` | `tests/registry.rs` |
 | Placeholders drawn from §3 | `tests/registry.rs` |
-| Option and config keys kebab-case; count keys `max-` / `min-`; list keys `banned` / `extend-banned` / `allowed` / `extend-allowed` | `rule_declaration::options` tests, `config` tests |
+| Option and config keys kebab-case; count keys `max-` / `min-`; list keys `banned` / `extend-banned` / `remove-banned` / `allowed` / `extend-allowed` / `remove-allowed` | `rule_declaration::options` tests, `config` tests |
 | Component name is the PascalCase of the declaring module path | `tests/architecture_conformance.rs` |
