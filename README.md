@@ -106,3 +106,9 @@ def make_handler():
 ```python
 # omni:disable-file [nested-function, single-letter-name] -- generated schema
 ```
+
+---
+
+## 🤝 Contributing
+
+To add a rule, follow [docs/dev/adding_a_rule.md](docs/dev/adding_a_rule.md).
