@@ -61,13 +61,14 @@ impl<T: Copy + 'static> LanguageDefaults<T> {
     /// Resolves the compile-time default value for a specific language.
     #[must_use]
     pub fn resolve_default_for_lang(&self, lang: SupportLang) -> T {
-        for &(target_lang, value) in self.overrides {
-            if target_lang == lang {
-                return value;
-            }
-        }
-        self.base
+        language_override(self.overrides, lang).unwrap_or(self.base)
     }
+}
+
+fn language_override<T: Copy>(entries: &[(SupportLang, T)], language: SupportLang) -> Option<T> {
+    entries
+        .iter()
+        .find_map(|&(target_lang, value)| (target_lang == language).then_some(value))
 }
 
 /// Enforcement mode for rules targeting sensitive language constructs
@@ -122,8 +123,8 @@ pub trait OptionsDeclaration: Copy + 'static {
     /// Every declared option, in declaration order, for validation and `--explain`.
     fn specs(self) -> Vec<OptionSpec>;
 
-    /// The values for a file in `language`: each comes from the language table, else the
-    /// rule table, else the declared default for the language.
+    /// The values for a file in `language`, resolved across the declared default for
+    /// `language`, the rule table, and the language table.
     fn resolve(self, language: SupportLang, overrides: Option<&RuleOverrides>) -> Self::Resolved;
 }
 
@@ -171,17 +172,17 @@ impl OptionsDeclaration for CountOption {
 }
 
 /// Whether a list option holds the items a rule flags or the items it accepts. The kind
-/// fixes the option's two keys, so a rule declares at most one list option.
+/// fixes the option's three keys, so a rule declares at most one list option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListKind {
-    /// Items the rule flags: `banned` and `extend-banned`.
+    /// Items the rule flags: `banned`, `extend-banned` and `remove-banned`.
     Deny,
-    /// Items the rule accepts: `allowed` and `extend-allowed`.
+    /// Items the rule accepts: `allowed`, `extend-allowed` and `remove-allowed`.
     Allow,
 }
 
 impl ListKind {
-    /// The key whose items replace the defaults.
+    /// The key whose items replace the inherited set.
     #[must_use]
     pub const fn replace_key(self) -> &'static str {
         match self {
@@ -190,12 +191,21 @@ impl ListKind {
         }
     }
 
-    /// The key whose items are added to the defaults.
+    /// The key whose items are added to the inherited set.
     #[must_use]
     pub const fn extend_key(self) -> &'static str {
         match self {
             Self::Deny => "extend-banned",
             Self::Allow => "extend-allowed",
+        }
+    }
+
+    /// The key whose items are removed from the inherited set.
+    #[must_use]
+    pub const fn remove_key(self) -> &'static str {
+        match self {
+            Self::Deny => "remove-banned",
+            Self::Allow => "remove-allowed",
         }
     }
 }
@@ -223,14 +233,15 @@ impl OptionsDeclaration for ListOption {
         vec![OptionSpec::List(self)]
     }
 
-    /// The replacing items (language table, else rule table, else defaults), plus every
-    /// added item.
+    /// Starts with the declared default for `language`, then applies the rule table and the
+    /// language table in order (`replace`, then `extend`, then `remove` within each table).
     fn resolve(self, language: SupportLang, overrides: Option<&RuleOverrides>) -> HashSet<String> {
-        let mut items = layers(overrides, language)
-            .find_map(|values| values.list.replace.clone())
-            .unwrap_or_else(|| self.default.resolve_default_for_lang(language));
-        for values in layers(overrides, language) {
-            items.extend(values.list.extend.iter().cloned());
+        let mut items = self.default.resolve_default_for_lang(language);
+        if let Some(overrides) = overrides {
+            overrides.global.list.apply_to(&mut items);
+            if let Some(language_values) = overrides.for_language(language) {
+                language_values.list.apply_to(&mut items);
+            }
         }
         items
     }
@@ -265,7 +276,7 @@ impl<First: OptionsDeclaration, Second: OptionsDeclaration> OptionsDeclaration f
 pub enum OptionSpec {
     /// A count, under one key.
     Count(CountOption),
-    /// A list, under the two keys of its kind.
+    /// A list, under the three keys of its kind.
     List(ListOption),
 }
 
@@ -275,7 +286,11 @@ impl OptionSpec {
     pub fn keys(self) -> Vec<&'static str> {
         match self {
             Self::Count(option) => vec![option.key],
-            Self::List(option) => vec![option.kind.replace_key(), option.kind.extend_key()],
+            Self::List(option) => vec![
+                option.kind.replace_key(),
+                option.kind.extend_key(),
+                option.kind.remove_key(),
+            ],
         }
     }
 }
@@ -323,14 +338,7 @@ impl<Options: OptionsDeclaration> RuleOptions<Options> {
         language: SupportLang,
         overrides: Option<&RuleOverrides>,
     ) -> EnforcementMode {
-        layers(overrides, language)
-            .find_map(|values| values.enforcement_mode)
-            .unwrap_or_else(|| {
-                self.enforcement_mode
-                    .map_or(EnforcementMode::Ban, |default| {
-                        default.resolve_default_for_lang(language)
-                    })
-            })
+        resolve_enforcement_mode(self.enforcement_mode, language, overrides)
     }
 }
 
@@ -365,13 +373,123 @@ impl DeclaredOptions {
             .chain(self.options.iter().flat_map(|option| option.keys()))
             .collect()
     }
+
+    /// The enforcement mode for a file in `language`; `ban` for a rule that declares none.
+    #[must_use]
+    pub fn enforcement_mode(
+        &self,
+        language: SupportLang,
+        overrides: Option<&RuleOverrides>,
+    ) -> EnforcementMode {
+        resolve_enforcement_mode(self.enforcement_mode, language, overrides)
+    }
+
+    /// Serializes a `[rules.<rule_name>]` TOML snippet expressing the rule's default options,
+    /// or `None` when the rule accepts no options.
+    #[must_use]
+    pub fn default_toml(
+        &self,
+        rule_name: crate::diagnostic::RuleName,
+        languages: &[SupportLang],
+    ) -> Option<String> {
+        let mut rule_table = toml::Table::new();
+        if let Some(default) = self.enforcement_mode {
+            rule_table.insert(
+                EnforcementMode::KEY.into(),
+                <&str>::from(default.base).into(),
+            );
+        }
+        for option in &self.options {
+            match option {
+                OptionSpec::Count(count) => {
+                    rule_table.insert(count.key.into(), toml_count(count.default.base));
+                }
+                OptionSpec::List(list) => {
+                    rule_table.insert(
+                        list.kind.replace_key().into(),
+                        list.default.base.to_vec().into(),
+                    );
+                }
+            }
+        }
+        if rule_table.is_empty() {
+            return None;
+        }
+        for &language in languages {
+            let mut lang_table = toml::Table::new();
+            if let Some(default) = self.enforcement_mode
+                && let Some(mode) = language_override(default.overrides, language)
+            {
+                lang_table.insert(EnforcementMode::KEY.into(), <&str>::from(mode).into());
+            }
+            for option in &self.options {
+                match option {
+                    OptionSpec::Count(count) => {
+                        if let Some(value) = language_override(count.default.overrides, language) {
+                            lang_table.insert(count.key.into(), toml_count(value));
+                        }
+                    }
+                    OptionSpec::List(list) => {
+                        for (key, entries) in [
+                            (list.kind.extend_key(), list.default.extend),
+                            (list.kind.remove_key(), list.default.remove),
+                        ] {
+                            if let Some(items) = language_override(entries, language) {
+                                lang_table.insert(key.into(), items.to_vec().into());
+                            }
+                        }
+                    }
+                }
+            }
+            if !lang_table.is_empty() {
+                rule_table.insert(
+                    support_lang_name(language).into(),
+                    toml::Value::Table(lang_table),
+                );
+            }
+        }
+        let rules = toml::Table::from_iter([(rule_name.0.into(), toml::Value::Table(rule_table))]);
+        let root = toml::Table::from_iter([("rules".into(), toml::Value::Table(rules))]);
+        toml::to_string(&root).ok()
+    }
 }
 
-/// The items one table puts in place of, or adds to, a list's defaults.
+fn toml_count(count: usize) -> toml::Value {
+    toml::Value::Integer(i64::try_from(count).unwrap_or(i64::MAX))
+}
+
+fn resolve_enforcement_mode(
+    default: Option<LanguageDefaults<EnforcementMode>>,
+    language: SupportLang,
+    overrides: Option<&RuleOverrides>,
+) -> EnforcementMode {
+    layers(overrides, language)
+        .find_map(|values| values.enforcement_mode)
+        .unwrap_or_else(|| {
+            default.map_or(EnforcementMode::Ban, |default| {
+                default.resolve_default_for_lang(language)
+            })
+        })
+}
+
+/// The items one table puts in place of, adds to, or removes from the inherited list.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ListOverride {
     replace: Option<HashSet<String>>,
     extend: HashSet<String>,
+    remove: HashSet<String>,
+}
+
+impl ListOverride {
+    fn apply_to(&self, items: &mut HashSet<String>) {
+        if let Some(replacement) = &self.replace {
+            items.clone_from(replacement);
+        }
+        items.extend(self.extend.iter().cloned());
+        for item in &self.remove {
+            items.remove(item);
+        }
+    }
 }
 
 /// The validated values of one `[rules.<name>]` table or one of its language tables.
@@ -529,6 +647,10 @@ impl OptionValues {
                 }
                 OptionSpec::List(list) if key == list.kind.extend_key() => {
                     self.list.extend = parse_items(value).map_err(error)?;
+                    return Ok(());
+                }
+                OptionSpec::List(list) if key == list.kind.remove_key() => {
+                    self.list.remove = parse_items(value).map_err(error)?;
                     return Ok(());
                 }
                 OptionSpec::Count(_) | OptionSpec::List(_) => {}
@@ -733,32 +855,38 @@ mod tests {
     #[case::deny(
         DENY,
         indoc::indoc! {r#"
-            extend-banned = ["global_bad"]
+            extend-banned = ["global_bad", "rust_ok"]
+            remove-banned = ["common_ok"]
 
             [rust]
             extend-banned = ["rust_bad"]
+            remove-banned = ["rust_ok"]
 
             [python]
-            banned = ["py_only_bad"]
+            banned = ["py_only_bad", "py_dropped"]
+            extend-banned = ["py_extra"]
+            remove-banned = ["py_dropped"]
         "#},
-        &["default_one", "common_ok", "global_bad", "rust_bad"],
-        &["py_only_bad", "global_bad"]
+        &["default_one", "global_bad", "rust_bad"],
+        &["py_only_bad", "py_extra"]
     )]
     #[case::allow(
         ALLOW,
         indoc::indoc! {r#"
-            extend-allowed = ["global_allowed"]
+            extend-allowed = ["global_allowed", "rust_revoked"]
+            remove-allowed = ["default_base"]
 
             [rust]
-            extend-allowed = ["rust_allowed"]
+            extend-allowed = ["rust_allowed", "default_base"]
+            remove-allowed = ["rust_revoked"]
 
             [python]
             allowed = ["py_only_allowed"]
         "#},
         &["default_base", "rust_extra", "global_allowed", "rust_allowed"],
-        &["py_only_allowed", "global_allowed"]
+        &["py_only_allowed"]
     )]
-    fn list_replaces_from_the_nearest_table_then_extends_from_every_table(
+    fn list_applies_global_table_then_language_table(
         #[case] option: ListOption,
         #[case] toml_content: &str,
         #[case] rust_expected: &[&str],
@@ -823,7 +951,7 @@ mod tests {
         &[SupportLang::Python],
         "colour = 1",
         "`rules.some-rule.colour`: unknown key; expected one of `enforcement-mode`, `banned`, \
-         `extend-banned`, `python`"
+         `extend-banned`, `remove-banned`, `python`"
     )]
     #[case::no_options(
         RuleOptions::none().declared(),

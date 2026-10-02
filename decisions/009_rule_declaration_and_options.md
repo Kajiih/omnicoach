@@ -49,24 +49,24 @@ const MAX_ASSERTIONS: CountOption = CountOption {
 Two option structs exist in `rule_declaration`, and together with `()` and `(First, Second)` they implement `OptionsDeclaration`:
 
 - `()` — no rule-specific options (`Resolved = ()`, `Param<'a> = ()`).
-- `CountOption { key, doc, default: LanguageDefaults<usize> }` (`Resolved = usize`, `Param<'a> = usize`). Keys name what is counted (`max_assertions`, `min_positional_parameters`), never a bare `max` or `min`.
-- `ListOption { kind: ListKind, doc, default: FilterListDefaults }` (`Resolved = HashSet<String>`, `Param<'a> = &'a HashSet<String>`). `ListKind::Deny` fixes the keys `banned`, `extend_banned`, `allowed`; `ListKind::Allow` fixes `allowed`, `extend_allowed`, `banned`. Because the kind fixes the keys, a rule declares at most one list; a registry test enforces it.
+- `CountOption { key, doc, default: LanguageDefaults<usize> }` (`Resolved = usize`, `Param<'a> = usize`). Keys name what is counted (`max-assertions`, `min-positional-parameters`), never a bare `max` or `min`.
+- `ListOption { kind: ListKind, doc, default: FilterListDefaults }` (`Resolved = HashSet<String>`, `Param<'a> = &'a HashSet<String>`). `ListKind::Deny` fixes the keys `banned`, `extend-banned`, `remove-banned`; `ListKind::Allow` fixes `allowed`, `extend-allowed`, `remove-allowed`. Because the kind fixes the keys, a rule declares at most one list; a registry test enforces it.
 - `(First, Second)` — a pair of option declarations (`Resolved = (First::Resolved, Second::Resolved)`, `Param<'a> = (First::Param<'a>, Second::Param<'a>)`).
 
-`RuleOptions<Options> { enforcement_mode: Option<LanguageDefaults<EnforcementMode>>, options: Options }` is the rule's whole surface under `[rules.<name>]` and `[rules.<name>.<language>]`. `RuleOptions::code_rule(options)` wraps `options` with `enforcement_mode` defaulting to `ban`; `RuleOptions::none()` rejects every key, including `enforcement_mode`, and is used by suppression audits and command rules, whose runners never honour a mode. `RuleOptions::declared(&self) -> DeclaredOptions` converts the typed `Options` into a `Vec<OptionSpec>` for config validation and `--explain`.
+`RuleOptions<Options> { enforcement_mode: Option<LanguageDefaults<EnforcementMode>>, options: Options }` is the rule's whole surface under `[rules.<name>]` and `[rules.<name>.<language>]`. `RuleOptions::code_rule(options)` wraps `options` with `enforcement-mode` defaulting to `ban`; `RuleOptions::none()` rejects every key, including `enforcement-mode`, and is used by suppression audits and command rules, whose runners never honour a mode. `RuleOptions::declared(&self) -> DeclaredOptions` converts the typed `Options` into a `Vec<OptionSpec>` for config validation and `--explain`.
 
 ### 2.3. Enforcement mode is an ordinary option
 
-The key is `enforcement_mode`. Every code rule declares a default (`ban`, except `no-uncommented-suppress` which defaults to `require-explanation`), and `--explain` documents it for every code rule. There is no rule-specific handling in the runner: `CodeRule::check_file` resolves the mode for the file and drops explained findings in `require-explanation`.
+The key is `enforcement-mode`. Every code rule declares a default (`ban`, except `suppressed-exception` which defaults to `require-explanation`), and `--explain` documents it for every code rule. There is no rule-specific handling in the runner: `CodeRule::check_file` resolves the mode for the file and drops explained findings in `require-explanation`.
 
 ### 2.4. Validation happens once, at load
 
 `rule_selection::parse_config` reads `[rules]` as a raw TOML table and, for each entry, looks the rule up in the registry (`ConfigError::UnknownRule`, with a did-you-mean) and calls `RuleOverrides::parse(name, &rule.options, rule.languages, value)`. The walker rejects, with the full key path:
 
-- an undeclared key (`rules.max-test-assertions.max`: unknown key; did you mean `max_assertions`?). The suggestion uses edit distance first, then whole-word containment, so a renamed key (`mode` → `enforcement_mode`) is suggested too;
+- an undeclared key (`rules.too-many-assertions.max`: unknown key; did you mean `max-assertions`?);
 - a value of the wrong type (`expected a non-negative integer, found "5"`);
 - a table for a language the rule does not analyze;
-- `enforcement_mode` on a rule that declares none.
+- `enforcement-mode` on a rule that declares none.
 
 The result is `Config.rule_overrides: HashMap<RuleName, RuleOverrides>`, typed values and nothing else. No string-keyed lookup survives past load.
 
@@ -79,16 +79,16 @@ The result is `Config.rule_overrides: HashMap<RuleName, RuleOverrides>`, typed v
 - a rule with `Options = (CountOption, CountOption)` receives `(usize, usize)` by value;
 - a rule with `Options = ListOption` receives `&HashSet<String>` by reference.
 
-Precedence is language table, then rule table, then the declared per-language default; list additions and removals apply from every layer. Because the check function receives only `Options::Param<'a>`, a rule cannot read an option it did not declare, and a signature mismatch fails to compile with `E0308` at `check: check_file`.
+For scalar options (`enforcement-mode` and `CountOption`), precedence is language table, then rule table, then the declared per-language default. For `ListOption`, resolution starts with the declared default for the language and applies the rule table and then the language table in order (`replace`, then `extend`, then `remove` within each table). Because the check function receives only `Options::Param<'a>`, a rule cannot read an option it did not declare, and a signature mismatch fails to compile with `E0308` at `check: check_file`.
 
 ### 2.6. `--explain` renders the declaration
 
-`RuleCatalog` renders the `## Configuration` section from `DeclaredOptions`: one bullet per key with its type, per-language defaults and doc, under the rule's `[rules.<name>]` heading. Rule prose no longer states defaults. Rules whose `RuleOptions` is `none()` get no section.
+`RuleCatalog` renders the `## Configuration` section from `DeclaredOptions`: one bullet per key with its type, per-language defaults and doc, followed by a ready-to-paste `[rules.<name>]` TOML block (guarded by a round-trip test over every registered rule). Rule prose no longer states defaults. Rules whose `RuleOptions` is `none()` get no section.
 
 ## 3. Consequences
 
 - Runtime, validation and `--explain` read the same const, so keys, types and defaults cannot drift between them.
 - A rule cannot read an undeclared option: `check` receives only the resolved value of the `Options` type declared in `RULE`.
 - Zero-sized detector structs, `Detector`, `CodeDetector` and `CommandDetector` traits, and per-rule `impl` blocks are gone; every rule is a single `const` struct literal plus a private `check_file` / `check_command` function.
-- Breaking for users: `mode` → `enforcement_mode`; `max` / `min` → explicit names; `enforcement_mode` on an audit or command rule is now an error; unknown top-level or `[context]` keys are rejected.
+- Breaking for users: `mode` → `enforcement-mode`; `max` / `min` → explicit names; `enforcement-mode` on an audit or command rule is now an error; unknown top-level or `[context]` keys are rejected.
 - A JSON Schema generated from the declarations stays on the roadmap.

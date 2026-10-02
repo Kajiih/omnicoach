@@ -52,7 +52,40 @@ fn validate_rule(rule: &DeclaredRule) {
     }
 }
 
-fn validate_options(name: &str, options: &DeclaredOptions) {
+fn validate_option_languages<T>(
+    name: &str,
+    rule_languages: &[ast_grep_language::SupportLang],
+    label: &str,
+    entries: &[(ast_grep_language::SupportLang, T)],
+) {
+    if rule_languages.len() <= 1 {
+        assert!(
+            entries.is_empty(),
+            "Single-language rule {name} must declare its `{label}` default in `base`, not per-language"
+        );
+    }
+    let mut seen_langs = HashSet::new();
+    for (lang, _) in entries {
+        assert!(
+            seen_langs.insert(lang),
+            "Rule {name} has duplicate `{label}` override for {lang:?}"
+        );
+        assert!(
+            rule_languages.contains(lang),
+            "Rule {name} declares `{label}` override for {lang:?}, which is not in its languages"
+        );
+    }
+}
+
+fn validate_options(rule: &DeclaredRule) {
+    let name = rule.name.0;
+    let options = &rule.options;
+    if rule.languages.is_empty() {
+        assert!(
+            options.keys().is_empty(),
+            "Rule {name} has no languages and must not declare options"
+        );
+    }
     let lists = options
         .options
         .iter()
@@ -80,6 +113,33 @@ fn validate_options(name: &str, options: &DeclaredOptions) {
             "Rule {name} declares the key `{key}` twice"
         );
     }
+    if let Some(default) = options.enforcement_mode {
+        validate_option_languages(
+            name,
+            rule.languages,
+            EnforcementMode::KEY,
+            default.overrides,
+        );
+    }
+    for option in &options.options {
+        match option {
+            OptionSpec::Count(count) => {
+                validate_option_languages(name, rule.languages, count.key, count.default.overrides);
+            }
+            OptionSpec::List(list) => {
+                for (key, entries) in [
+                    (list.kind.extend_key(), list.default.extend),
+                    (list.kind.remove_key(), list.default.remove),
+                ] {
+                    validate_option_languages(name, rule.languages, key, entries);
+                    assert!(
+                        entries.iter().all(|(_, items)| !items.is_empty()),
+                        "Rule {name} has an empty `{key}` slice in `FilterListDefaults`"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[rstest]
@@ -89,7 +149,7 @@ fn validate_options(name: &str, options: &DeclaredOptions) {
 fn test_registry_integrity(#[case] rules: Vec<DeclaredRule>) {
     for rule in &rules {
         validate_rule(rule);
-        validate_options(rule.name.0, &rule.options);
+        validate_options(rule);
     }
 }
 

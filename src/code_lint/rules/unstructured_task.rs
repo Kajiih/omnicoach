@@ -15,19 +15,16 @@ const BANNED: ListOption = ListOption {
     kind: ListKind::Deny,
     doc: "Task creation calls flagged when called.",
     default: FilterListDefaults {
-        base: &[],
-        extend: &[(
-            SupportLang::Python,
-            &[
-                "create_task",
-                "ensure_future",
-                "asyncio.create_task",
-                "asyncio.ensure_future",
-                "loop.create_task",
-                "event_loop.create_task",
-                "$LOOP($$$LOOP_ARGS).create_task",
-            ],
-        )],
+        base: &[
+            "create_task",
+            "ensure_future",
+            "asyncio.create_task",
+            "asyncio.ensure_future",
+            "loop.create_task",
+            "event_loop.create_task",
+            "$LOOP($$$LOOP_ARGS).create_task",
+        ],
+        extend: &[],
         remove: &[],
     },
 };

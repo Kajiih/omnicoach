@@ -155,6 +155,14 @@ fn render_rule(rule: &RegisteredRule) -> String {
             String::new(),
         ]);
         lines.extend(configuration);
+        if let Some(toml_block) = rule.options.default_toml(rule.name, rule.languages) {
+            lines.extend([
+                String::new(),
+                "```toml".to_owned(),
+                toml_block.trim_end().to_owned(),
+                "```".to_owned(),
+            ]);
+        }
     }
     if !doc.references.is_empty() {
         lines.extend([String::new(), "## References".to_owned(), String::new()]);
@@ -205,6 +213,10 @@ fn configuration_lines(options: &DeclaredOptions) -> Vec<String> {
                 format!(
                     "- `{}` (list of strings): items added to the default.",
                     list.kind.extend_key()
+                ),
+                format!(
+                    "- `{}` (list of strings): items removed from the default.",
+                    list.kind.remove_key()
                 ),
             ]),
         }
@@ -361,5 +373,86 @@ mod tests {
             explain("testing").unwrap_err().to_string(),
             "unknown rule `testing`"
         );
+    }
+
+    fn configuration_toml_block(rendered: &str) -> Option<&str> {
+        let (_, after_heading) = rendered.split_once("\n## Configuration\n")?;
+        let section = after_heading.split("\n## ").next().unwrap_or(after_heading);
+        let (_, after_fence) = section
+            .split_once("\n```toml\n")
+            .expect("`## Configuration` section must contain a ```toml block");
+        let (block, _) = after_fence
+            .split_once("\n```\n")
+            .expect("```toml block must be closed");
+        Some(block)
+    }
+
+    type ResolvedLanguageOptions = (
+        ast_grep_language::SupportLang,
+        EnforcementMode,
+        Vec<usize>,
+        Vec<std::collections::BTreeSet<String>>,
+    );
+
+    fn resolved_rule_options(
+        rule: &RegisteredRule,
+        overrides: Option<&crate::rule_declaration::RuleOverrides>,
+    ) -> Option<Vec<ResolvedLanguageOptions>> {
+        use crate::rule_declaration::OptionsDeclaration as _;
+
+        if rule.options.keys().is_empty() {
+            return None;
+        }
+        Some(
+            rule.languages
+                .iter()
+                .map(|&language| {
+                    let mode = rule.options.enforcement_mode(language, overrides);
+                    let mut counts = Vec::new();
+                    let mut lists = Vec::new();
+                    for option in &rule.options.options {
+                        match option {
+                            OptionSpec::Count(count) => {
+                                counts.push(count.resolve(language, overrides));
+                            }
+                            OptionSpec::List(list) => {
+                                lists.push(list.resolve(language, overrides).into_iter().collect());
+                            }
+                        }
+                    }
+                    (language, mode, counts, lists)
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn explain_toml_block_round_trips_to_default_options_for_every_rule() {
+        use crate::rule_selection::parse_config;
+
+        for rule in registered_rules() {
+            let rendered = explain(rule.name.0).unwrap();
+            let round_tripped = configuration_toml_block(&rendered).map(|toml_block| {
+                let config = parse_config(toml_block).unwrap_or_else(|error| {
+                    panic!(
+                        "Rule {} rendered invalid TOML block:\n{toml_block}\nError: {error}",
+                        rule.name
+                    )
+                });
+                let overrides = config.rule_overrides.get(&rule.name).unwrap_or_else(|| {
+                    panic!(
+                        "Rule {} TOML block did not populate `rule_overrides`",
+                        rule.name
+                    )
+                });
+                resolved_rule_options(rule, Some(overrides)).unwrap()
+            });
+            assert_eq!(
+                round_tripped,
+                resolved_rule_options(rule, None),
+                "Rule {} `--explain` TOML block did not round-trip to its declared defaults",
+                rule.name
+            );
+        }
     }
 }
