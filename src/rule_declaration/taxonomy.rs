@@ -179,13 +179,13 @@ impl Topic {
         synonyms: &[],
     };
 
-    /// Structural size and nesting of code units.
-    // TODO: Make it more obvious that it not algorithmic complexity, with a different name
-    pub(crate) const COMPLEXITY: Self = Self {
-        label: "complexity",
+    /// Nesting depth and scope structure of code units.
+    pub(crate) const NESTING: Self = Self {
+        label: "nesting",
         parent: None,
-        description: "Structural size and nesting of code units.",
-        scope_note: "Nesting depth and scope structure. Not naming or \"readability\" in general.",
+        description: "Nesting depth and scope structure of code units.",
+        scope_note: "Nested functions, closures and scope depth. Not naming or \"readability\" \
+                     in general.",
         synonyms: &[],
     };
 
@@ -218,13 +218,13 @@ impl Topic {
         synonyms: &[],
     };
 
-    /// `async`/`await`, tasks and event loops.
-    // TOODO: WHy not the name "concurrency?"
-    pub(crate) const ASYNC: Self = Self {
-        label: "async",
+    /// Concurrent execution: coroutines, tasks and threads.
+    pub(crate) const CONCURRENCY: Self = Self {
+        label: "concurrency",
         parent: None,
-        description: "`async`/`await`, tasks and event loops.",
-        scope_note: "Coroutines, tasks and their lifetimes. Not OS threads.",
+        description: "Concurrent execution: coroutines, tasks and threads.",
+        scope_note: "Spawning, awaiting and joining concurrent work and its lifetimes. Not \
+                     sleeping or waiting in tests (see `test-timing`).",
         synonyms: &[],
     };
 

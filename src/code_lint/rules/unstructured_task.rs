@@ -46,7 +46,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         languages: &[SupportLang::Python],
         options: RuleOptions::code_rule(BANNED),
         classification: Classification {
-            topics: &[Topic::ASYNC],
+            topics: &[Topic::CONCURRENCY],
             precision: Precision::Heuristic,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Reliability,
