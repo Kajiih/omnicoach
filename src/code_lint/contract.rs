@@ -28,10 +28,19 @@ pub enum RuleTarget {
 /// A rule that analyzes source files: its declaration, the files it runs on, and the function
 /// that finds its violations.
 ///
+/// A rule file exposes one `pub const` `CodeRule` per rule, listed in `CODE_RULES`
+/// (`src/code_lint/rules.rs`), and ends with a `rule_test!` suite.
+///
 /// `check` receives the rule's options already resolved for the file, typed by the
 /// declaration: `()` without options, `usize` for a [`crate::rule_declaration::CountOption`],
 /// `&HashSet<String>` for a [`crate::rule_declaration::ListOption`], a tuple for a pair. A check function
 /// whose last parameter does not match the declared options does not compile.
+///
+/// Rules express policy, not plumbing. `check` queries the [`ParsedFile`] through named
+/// `code_lint::ast` and `code_lint::semantic` helpers (or [`Self::check_banned_calls`]) and
+/// anchors findings on an [`AstNode`] with [`Self::diagnostic_at_node`]. `AstNode` exposes
+/// text and location but no tree navigation, so a rule needing a new structural fact adds a
+/// named helper to `code_lint::ast` rather than walking the tree itself.
 #[derive(Clone, Copy)]
 pub struct CodeRule<Options: OptionsDeclaration = ()> {
     /// Name, template, languages, options, classification and doc.
