@@ -1,4 +1,4 @@
-//! Declarations of generic rules targeting multiple languages.
+//! Flags names made of a single letter.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeRule, RuleTarget};
@@ -30,7 +30,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// The rule's declaration.
 pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
-        name: RuleName("single-letter-variable-name"),
+        name: RuleName("single-letter-name"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
         options: RuleOptions::code_rule(ALLOWED),

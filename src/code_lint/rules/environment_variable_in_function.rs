@@ -1,4 +1,4 @@
-//! Enforces that environment variables are only accessed at module/static scope or explicit configuration boundaries (`no-env-in-functions`).
+//! Enforces that environment variables are only accessed at module/static scope or explicit configuration boundaries (`environment-variable-in-function`).
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
@@ -72,7 +72,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// The rule's declaration.
 pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
-        name: RuleName("no-env-in-functions"),
+        name: RuleName("environment-variable-in-function"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
         options: RuleOptions::code_rule(BANNED_CALLS),

@@ -1,8 +1,4 @@
-//! Rule: `no-uncommented-suppress`
-//!
-//! Enforces that calls to `contextlib.suppress(...)` or `suppress(...)` used as context managers
-//! in Python `with` statements are accompanied by an adjacent explanatory comment
-//! documenting why ignoring the exception is benign.
+//! Flags `contextlib.suppress` blocks, by default only those without an explanatory comment.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::is_with_context_manager;
@@ -36,7 +32,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// The rule's declaration.
 pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
-        name: RuleName("no-uncommented-suppress"),
+        name: RuleName("suppressed-exception"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python],
         options: RuleOptions {

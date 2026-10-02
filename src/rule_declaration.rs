@@ -74,7 +74,7 @@ fn edit_distance(left: &str, right: &str) -> usize {
 /// type of the values a code rule's check function receives.
 #[derive(Debug, Clone, Copy)]
 pub struct Declaration<Options: OptionsDeclaration = ()> {
-    /// The rule's name, e.g. `RuleName("max-test-assertions")`.
+    /// The rule's name, e.g. `RuleName("too-many-assertions")`.
     pub name: RuleName,
     /// The single message template of the rule's findings.
     pub template: &'static ViolationTemplate,

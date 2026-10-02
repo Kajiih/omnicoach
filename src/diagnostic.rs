@@ -333,7 +333,7 @@ impl SourceLocation {
 /// An alert diagnostic containing a rule violation payload and its source location.
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
-    /// The rule name (e.g., "no-edits-on-described-commits").
+    /// The rule name (e.g., "edit-of-described-commit").
     pub rule_name: RuleName,
     /// The detailed explanation and description of the rule violation.
     pub message: ViolationMessage,

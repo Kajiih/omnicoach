@@ -9,7 +9,7 @@ A lint rule is not a broad category (e.g. avoid rules like `async-hygiene` or `t
 
 * **Why Granularity Matters**: Configuration, CI blocking, and suppressions operate at the rule level. If two distinct antipatterns share a rule name, teams cannot suppress or configure one without affecting the other.
 * **The Split Test**: If two violations differ in **why** they are bad or **how** to fix them, they are separate rules.
-  * *Example*: Wall-clock `sleep(5)` causes flaky tests and slow CI (`no-sleep-in-tests`). Zero-duration `sleep(0)` is an attempt to yield to the scheduler (`no-zero-sleep-in-tests`). Different rationales and remedies mean different rules.
+  * *Example*: Wall-clock `sleep(5)` causes flaky tests and slow CI (`sleep-in-tests`). Zero-duration `sleep(0)` is an attempt to yield to the scheduler (`zero-sleep-in-tests`). Different rationales and remedies mean different rules.
 * **When to Parameterize**: If the concept, rationale, and fix are identical across syntax variations (e.g., compound boolean assertions vs. tuple equality packing), keep them under one rule and parameterize the message.
 
 ---
@@ -21,6 +21,8 @@ Every rule diagnostic is split into three strictly orthogonal fields—**never r
 1. **What (`summary`)**: State the factual syntactic or semantic condition observed on the flagged construct (e.g., `"Variable name `{name}` is a single-letter."` or `"Multiline string literal is not wrapped in a dedent helper."`). Do **not** embed the rationale (e.g., *"obscures intent"*, *"bypasses type checking"*) or filler judgment (*"is discouraged"*, *"is prohibited"*) in `summary`.
 2. **Why (`rationale`)**: Explain the concrete failure mode or maintenance hazard (flakiness, hidden tracebacks, corrupted runtime values, broken searchability). Do **not** restate what construct was matched or explain how to fix it.
 3. **How (`suggestion`)**: Prescribe a **single canonical pit-of-success replacement** per language so a developer or AI agent can fix the violation autonomously (e.g., `inspect.cleandoc(...)` in Python, `indoc::indoc!` in Rust). Do **not** repeat `"instead of <bad construct>"` or re-state why the original code was harmful.
+
+The wording of each field (sentence form, tense, quoting, placeholders) and the naming of rules, keys and components are fixed by `naming_and_message_style_guide.md`.
 
 ---
 
@@ -43,7 +45,7 @@ The architectural antipattern is usually language-agnostic; the solution is almo
 ## 5. Extensibility Over Dogma
 Static rules should establish sane defaults while respecting domain vocabulary.
 
-* **Allowlists & Denylists**: Name-checking rules (abbreviations, type suffixes) must support extension and exemption. Certain terms may be primitive keywords in one language or valid domain acronyms in a specific codebase (e.g., `str` is a primitive in Rust, not an abbreviation).
+* **Allowlists & Denylists**: Name-checking rules (abbreviations, type suffixes) must let a project replace or extend the default list. Certain terms may be primitive keywords in one language or valid domain acronyms in a specific codebase (e.g., `str` is a primitive in Rust, not an abbreviation).
 * **Thresholds**: Numeric bounds (e.g., maximum assertions per test) must be configurable so teams can adjust the strictness without disabling the rule entirely.
 
 ---
@@ -59,7 +61,7 @@ All rule unit tests in `src/code_lint/rules/*.rs` must use `crate::test_utils::r
   * Add `=> r#"..."#` when the flagged construct is an inner AST slice inside setup syntax: `case_name => r#"fn build() { let bad = "..."; }"# => r#""...""#`.
   * Leading block indentation is normalized automatically across lines `2..N`, so expected inner snippets can always be written with clean `indoc!`-dedented multiline strings.
   * Each `fail` case is also run with its code repeated twice in one file and must report both occurrences, so a rule that stops after its first match (`find` instead of `find_all`, early `return`, stray `break`) fails.
-  * A `fail` case asserts exactly one diagnostic; multi-node cases are not supported. Known cases that would need them if revisited: flagged constructs nested inside flagged constructs (a `def` inside a nested `def` in `flat-scope-enforced`), rules reporting every occurrence inside one node (the legacy linter `QuoteWrappedPlaceholderRule`, `DocstringOptionalArgRule`, `BannedTypeAnnotationsRule`), and rules aggregating per file, which would need an opt-out from the repeated-occurrence check (the `no-repeated-literals` candidate in `ROADMAP.md`). Per-scope aggregation fits as long as each `fail` case sits in its own scope (`prefer-tuple-unpacking` wraps its cases in a `def` / `fn`).
+  * A `fail` case asserts exactly one diagnostic; multi-node cases are not supported. Known cases that would need them if revisited: flagged constructs nested inside flagged constructs (a `def` inside a nested `def` in `nested-function`), rules reporting every occurrence inside one node (the legacy linter `QuoteWrappedPlaceholderRule`, `DocstringOptionalArgRule`, `BannedTypeAnnotationsRule`), and rules aggregating per file, which would need an opt-out from the repeated-occurrence check (the `no-repeated-literals` candidate in `ROADMAP.md`). Per-scope aggregation fits as long as each `fail` case sits in its own scope (`repeated-index-access` wraps its cases in a `def` / `fn`).
 * **Minimum Required Cases**:
   1. **Core Antipattern (`fail`)**: The primary construct the rule flags.
   2. **Canonical Fix & Syntactic Exemptions (`pass`)**: The recommended pit-of-success replacement (e.g. `inspect.cleandoc`, `indoc::indoc!`, docstrings) to prove the suggested fix passes the rule.

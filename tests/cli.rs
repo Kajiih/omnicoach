@@ -161,8 +161,8 @@ fn test_code_lint_invalid_config() {
 #[case::list_rules("omni-code-lint", &["--list-rules"], "list_rules")]
 #[case::tag_typo("omni-code-lint", &["--list-rules", "--tag", "tesing"], "tag_typo")]
 #[case::tag_without_list("omni-code-lint", &["--tag", "testing"], "tag_without_list")]
-#[case::explain("omni-code-lint", &["--explain", "no-sleep-in-tests"], "explain_no_sleep")]
-#[case::explain_typo("omni-command-lint", &["--explain", "no-sleep-in-test"], "explain_typo")]
+#[case::explain("omni-code-lint", &["--explain", "sleep-in-tests"], "explain_sleep_in_tests")]
+#[case::explain_typo("omni-command-lint", &["--explain", "sleep-in-test"], "explain_typo")]
 #[case::format_typo("omni-code-lint", &["--format", "jsno", "."], "format_typo")]
 #[case::command_lint_needs_cmd("omni-command-lint", &[], "command_lint_needs_cmd")]
 fn test_discovery_and_cli_errors(
@@ -177,7 +177,7 @@ fn test_discovery_and_cli_errors(
 /// Both binaries serve the same rule catalog.
 #[rstest::rstest]
 #[case::list_rules(&["--list-rules"])]
-#[case::explain(&["--explain", "no-edits-on-described-commits"])]
+#[case::explain(&["--explain", "edit-of-described-commit"])]
 fn test_discovery_is_identical_across_binaries(#[case] args: &[&str]) {
     let code_lint = run_and_sanitize_cli("omni-code-lint", args, None, &[]);
     let command_lint = run_and_sanitize_cli("omni-command-lint", args, None, &[]);

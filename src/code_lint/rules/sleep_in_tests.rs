@@ -1,4 +1,4 @@
-//! Flags wall-clock/async `sleep` calls (`no-sleep-in-tests`) and zero-duration sleeps (`no-zero-sleep-in-tests`) in test files.
+//! Flags wall-clock/async `sleep` calls (`sleep-in-tests`) and zero-duration sleeps (`zero-sleep-in-tests`) in test files.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeRule, RuleTarget};
@@ -56,10 +56,10 @@ const ZERO_SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
     },
 };
 
-/// The `no-sleep-in-tests` rule's declaration.
-pub const NO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
+/// The `sleep-in-tests` rule's declaration.
+pub const SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
-        name: RuleName("no-sleep-in-tests"),
+        name: RuleName("sleep-in-tests"),
         template: &SLEEP_TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
         options: RuleOptions::code_rule(BANNED_CALLS),
@@ -76,7 +76,7 @@ pub const NO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
                            `std::thread::sleep` and `tokio::time::sleep` in Rust, and a bare \
                            `sleep`. Calls on an injected object, such as `fake_clock.sleep(10)`, \
                            are not flagged. Zero-duration sleeps are left to \
-                           `no-zero-sleep-in-tests`.",
+                           `zero-sleep-in-tests`.",
             why_is_this_bad: "A fixed sleep guesses how long another thread, task or process \
                               needs. Too short, and the test fails when the machine is loaded: \
                               the test is flaky. Too long, and every run pays the full delay. \
@@ -99,10 +99,10 @@ pub const NO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
     check: check_sleep,
 };
 
-/// The `no-zero-sleep-in-tests` rule's declaration.
-pub const NO_ZERO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
+/// The `zero-sleep-in-tests` rule's declaration.
+pub const ZERO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
-        name: RuleName("no-zero-sleep-in-tests"),
+        name: RuleName("zero-sleep-in-tests"),
         template: &ZERO_SLEEP_TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
         options: RuleOptions::code_rule(BANNED_CALLS),
@@ -114,7 +114,7 @@ pub const NO_ZERO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags zero-duration sleeps used to yield in tests.",
-            what_it_does: "Flags the same sleep calls as `no-sleep-in-tests` when their single \
+            what_it_does: "Flags the same sleep calls as `sleep-in-tests` when their single \
                            argument is a literal zero duration: `0`, `0.0` or `0.` in Python, \
                            and `Duration::ZERO`, `Duration::from_secs(0)` or \
                            `Duration::from_millis(0)` in Rust. Other spellings of zero, such as \
@@ -201,7 +201,7 @@ fn check_zero_sleep(
 }
 
 #[cfg(test)]
-crate::test_utils::rule_test!(tests_no_sleep: NO_SLEEP_IN_TESTS, {
+crate::test_utils::rule_test!(tests_no_sleep: SLEEP_IN_TESTS, {
     Python => {
         pass: [
             zero_duration_sleep_handled_separately => r"
@@ -320,7 +320,7 @@ crate::test_utils::rule_test!(tests_no_sleep: NO_SLEEP_IN_TESTS, {
 });
 
 #[cfg(test)]
-crate::test_utils::rule_test!(tests_no_zero_sleep: NO_ZERO_SLEEP_IN_TESTS, {
+crate::test_utils::rule_test!(tests_no_zero_sleep: ZERO_SLEEP_IN_TESTS, {
     Python => {
         pass: [
             non_zero_sleep => r"

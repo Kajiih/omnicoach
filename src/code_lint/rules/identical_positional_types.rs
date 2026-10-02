@@ -1,4 +1,4 @@
-//! Enforces keyword-only parameters when a function has multiple positional parameters of identical type (`no-identical-positional-types`).
+//! Enforces keyword-only parameters when a function has multiple positional parameters of identical type (`identical-positional-types`).
 
 use crate::code_lint::ast::python::{
     PythonFunctionSignature, PythonParameterInfo, extract_function_signatures, has_decorator,
@@ -28,7 +28,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// The rule's declaration.
 pub const RULE: CodeRule<CountOption> = CodeRule {
     declaration: Declaration {
-        name: RuleName("no-identical-positional-types"),
+        name: RuleName("identical-positional-types"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python],
         options: RuleOptions::code_rule(MIN_POSITIONAL_PARAMETERS),

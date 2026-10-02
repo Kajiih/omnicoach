@@ -1,16 +1,4 @@
-//! Rule: `no-typing-cast`
-//!
-//! Flags calls to `typing.cast(...)`, `typing_extensions.cast(...)`, or `cast(...)` in Python production code.
-//! `cast()` bypasses static type verification without runtime validation, masking underlying type errors and bugs.
-//!
-//! By default, `cast` is completely banned (`enforcement_mode = "ban"`).
-//! When configured with `enforcement_mode = "require-explanation"`, `cast()` is permitted if accompanied by
-//! an adjacent explanatory comment.
-//! In all modes, legitimate uses can be justified via `# omni:ignore[no-typing-cast] -- <explanation>`.
-
-// TODO: Remove this case with legitimate uses from the documentation because it's the same thing for every rule. Generalize to the whole project.
-// TODO: Also remove the documentation of modes as it's the same for all rules
-// TODO: Also remove from every violation template, they should not suggest to ignore.
+//! Flags `typing.cast` calls in Python source files.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::rule::{CodeRule, RuleTarget};
@@ -42,7 +30,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// The rule's declaration.
 pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
-        name: RuleName("no-typing-cast"),
+        name: RuleName("type-cast"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python],
         options: RuleOptions::code_rule(BANNED_CALLS),

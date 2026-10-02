@@ -258,7 +258,7 @@ fn rust_files(directory: &Path) -> Vec<PathBuf> {
     paths
 }
 
-/// Computes the crate-relative module path of a source file (e.g. `code_lint::rules::banned_abbreviations`).
+/// Computes the crate-relative module path of a source file (e.g. `code_lint::rules::abbreviated_name`).
 fn module_path_for_file(path: &Path) -> String {
     let relative_path = path
         .strip_prefix(source_root_directory())

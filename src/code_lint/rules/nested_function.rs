@@ -18,7 +18,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// The rule's declaration.
 pub const RULE: CodeRule = CodeRule {
     declaration: Declaration {
-        name: RuleName("flat-scope-enforced"),
+        name: RuleName("nested-function"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python],
         options: RuleOptions::code_rule(()),

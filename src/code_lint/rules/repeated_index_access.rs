@@ -1,4 +1,4 @@
-//! Flags tuple elements read by literal position instead of being unpacked once (`prefer-tuple-unpacking`).
+//! Flags tuple elements read by literal position instead of being unpacked once (`repeated-index-access`).
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile, ScopePositionalReads};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
@@ -41,7 +41,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// The rule's declaration.
 pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
     declaration: Declaration {
-        name: RuleName("prefer-tuple-unpacking"),
+        name: RuleName("repeated-index-access"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
         options: RuleOptions::code_rule((MIN_POSITIONS, MAX_PLACEHOLDERS)),

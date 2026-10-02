@@ -567,8 +567,8 @@ mod tests {
         "unknown selector `tesing` in `select`; did you mean `testing`?"
     )]
     #[case::typo_rule(
-        r#"select = ["no-sleep-in-test"]"#,
-        "unknown selector `no-sleep-in-test` in `select`; did you mean `no-sleep-in-tests`?"
+        r#"select = ["sleep-in-test"]"#,
+        "unknown selector `sleep-in-test` in `select`; did you mean `sleep-in-tests`?"
     )]
     #[case::wrong_case(
         r#"ignore = ["Testing"]"#,
@@ -604,30 +604,30 @@ mod tests {
         "invalid glob `src/[` in `per_file_ignores`: "
     )]
     #[case::unknown_rule(
-        "[rules.max-test-assertion]\nmax_assertions = 3",
-        "`rules.max-test-assertion`: unknown rule; did you mean `max-test-assertions`?"
+        "[rules.too-many-assertion]\nmax_assertions = 3",
+        "`rules.too-many-assertion`: unknown rule; did you mean `too-many-assertions`?"
     )]
     #[case::unknown_key(
-        "[rules.max-test-assertions]\nmax = 3",
-        "`rules.max-test-assertions.max`: unknown key; did you mean `max_assertions`?"
+        "[rules.too-many-assertions]\nmax = 3",
+        "`rules.too-many-assertions.max`: unknown key; did you mean `max_assertions`?"
     )]
     #[case::renamed_enforcement_mode_key(
-        "[rules.no-typing-cast]\nmode = \"ban\"",
-        "`rules.no-typing-cast.mode`: unknown key; did you mean `enforcement_mode`?"
+        "[rules.type-cast]\nmode = \"ban\"",
+        "`rules.type-cast.mode`: unknown key; did you mean `enforcement_mode`?"
     )]
     #[case::wrong_type(
-        "[rules.max-test-assertions.rust]\nmax_assertions = \"5\"",
-        "`rules.max-test-assertions.rust.max_assertions`: expected a non-negative integer, \
+        "[rules.too-many-assertions.rust]\nmax_assertions = \"5\"",
+        "`rules.too-many-assertions.rust.max_assertions`: expected a non-negative integer, \
          found \"5\""
     )]
     #[case::unknown_enforcement_mode(
-        "[rules.no-typing-cast]\nenforcement_mode = \"warn\"",
-        "`rules.no-typing-cast.enforcement_mode`: expected `ban` or `require-explanation`, \
+        "[rules.type-cast]\nenforcement_mode = \"warn\"",
+        "`rules.type-cast.enforcement_mode`: expected `ban` or `require-explanation`, \
          found \"warn\""
     )]
     #[case::unsupported_language(
-        "[rules.no-typing-cast.rust]\nbanned = []",
-        "`rules.no-typing-cast.rust`: this rule does not analyze this language; it analyzes \
+        "[rules.type-cast.rust]\nbanned = []",
+        "`rules.type-cast.rust`: this rule does not analyze this language; it analyzes \
          python"
     )]
     #[case::enforcement_mode_on_audit(
@@ -636,8 +636,8 @@ mod tests {
          always reports every finding"
     )]
     #[case::enforcement_mode_on_command_rule(
-        "[rules.no-edits-on-described-commits]\nenforcement_mode = \"ban\"",
-        "`rules.no-edits-on-described-commits.enforcement_mode`: this rule has no enforcement \
+        "[rules.edit-of-described-commit]\nenforcement_mode = \"ban\"",
+        "`rules.edit-of-described-commit.enforcement_mode`: this rule has no enforcement \
          mode; it always reports every finding"
     )]
     #[case::unknown_top_level_key(
@@ -656,13 +656,13 @@ mod tests {
     #[test]
     fn valid_rule_options_are_stored_per_rule() {
         let config = parse_config(
-            "[rules.max-test-assertions]\nmax_assertions = 6\n\
-             [rules.max-test-assertions.rust]\nmax_assertions = 8\n\
-             [rules.banned-abbreviations]\nallowed = [\"ctx\"]",
+            "[rules.too-many-assertions]\nmax_assertions = 6\n\
+             [rules.too-many-assertions.rust]\nmax_assertions = 8\n\
+             [rules.abbreviated-name]\nallowed = [\"ctx\"]",
         )
         .unwrap();
         let mut configured: Vec<_> = config.rule_overrides.keys().map(|name| name.0).collect();
         configured.sort_unstable();
-        assert_eq!(configured, ["banned-abbreviations", "max-test-assertions"]);
+        assert_eq!(configured, ["abbreviated-name", "too-many-assertions"]);
     }
 }

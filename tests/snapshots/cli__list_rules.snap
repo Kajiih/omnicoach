@@ -5,31 +5,32 @@ expression: "output.replace(binary, \"<binary>\")"
 --- exit code ---
 0
 --- stdout ---
-- `banned-abbreviations` (python, rust): Flags names that contain a banned abbreviation such as `ctx` or `msg`.
+- `abbreviated-name` (python, rust): Flags names that contain a banned abbreviation such as `ctx` or `msg`.
+- `bare-multiline-string` (python, rust): Flags multiline string literals that are not wrapped in a dedent helper.
 - `blanket-suppression` (python, rust): Flags suppression directives that name no rule.
-- `enforce-frozen-slots-dataclass` (python): Requires Python dataclasses to declare `frozen=True` and `slots=True`.
-- `flat-scope-enforced` (python): Flags Python functions defined inside other functions.
-- `max-test-assertions` (python, rust): Limits the number of assertions in one test function.
+- `dynamic-attribute-access` (python): Flags `getattr`, `hasattr`, `setattr` and `delattr` calls in Python.
+- `edit-of-described-commit` (command): Blocks `jj edit` on a commit that already has a description.
+- `environment-variable-in-function` (python, rust): Flags environment variable access inside functions.
+- `error-log-in-except` (python): Flags `logging.error` calls inside Python `except` blocks.
+- `identical-positional-types` (python): Flags Python functions whose positional parameters share a type annotation.
 - `missing-suppression-reason` (python, rust): Requires every suppression directive to give a reason.
-- `no-assertion-packing` (python, rust): Flags assertions that pack several checks into one condition.
-- `no-dynamic-attribute-access` (python): Flags `getattr`, `hasattr`, `setattr` and `delattr` calls in Python.
-- `no-edits-on-described-commits` (command): Blocks `jj edit` on a commit that already has a description.
-- `no-env-in-functions` (python, rust): Flags environment variable access inside functions.
-- `no-hungarian-notation` (python, rust): Flags variable names that end with a type suffix such as `_list` or `_str`.
-- `no-identical-positional-types` (python): Flags Python functions whose positional parameters share a type annotation.
-- `no-logging-error-in-except` (python): Flags `logging.error` calls inside Python `except` blocks.
-- `no-mock-assertions` (python): Flags assertions on how a mock was called in Python tests.
-- `no-mocks-in-tests` (python): Flags dynamic mocks and monkeypatching in Python tests.
-- `no-sleep-in-tests` (python, rust): Flags fixed-duration sleeps in tests.
-- `no-typing-cast` (python): Flags `typing.cast` calls in Python production code.
-- `no-uncommented-suppress` (python): Requires a comment explaining each `contextlib.suppress` block.
-- `no-unstructured-task-creation` (python): Flags asyncio tasks spawned outside a task group.
-- `no-zero-sleep-in-tests` (python, rust): Flags zero-duration sleeps used to yield in tests.
-- `prefer-dedent-for-multiline-strings` (python, rust): Flags multiline string literals that are not wrapped in a dedent helper.
-- `prefer-timedelta-over-seconds` (python, rust): Flags variable names that carry a time unit, such as `timeout_secs` or `delay_ms`.
-- `prefer-tuple-unpacking` (python, rust): Flags a value read at several literal positions instead of being unpacked once.
-- `single-letter-variable-name` (python, rust): Flags names made of a single letter.
+- `mock-call-assertion` (python): Flags assertions on how a mock was called in Python tests.
+- `mock-in-tests` (python): Flags dynamic mocks and monkeypatching in Python tests.
+- `mutable-dataclass` (python): Requires Python dataclasses to declare `frozen=True`.
+- `nested-function` (python): Flags Python functions defined inside other functions.
+- `packed-assertion` (python, rust): Flags assertions that pack several checks into one condition.
+- `primitive-duration` (python, rust): Flags variable names that carry a time unit, such as `timeout_secs` or `delay_ms`.
+- `repeated-index-access` (python, rust): Flags a value read at several literal positions instead of being unpacked once.
+- `single-letter-name` (python, rust): Flags names made of a single letter.
+- `sleep-in-tests` (python, rust): Flags fixed-duration sleeps in tests.
+- `suppressed-exception` (python): Requires a comment explaining each `contextlib.suppress` block.
+- `too-many-assertions` (python, rust): Limits the number of assertions in one test function.
+- `type-cast` (python): Flags `typing.cast` calls in Python production code.
+- `type-suffixed-name` (python, rust): Flags variable names that end with a type suffix such as `_list` or `_str`.
 - `unknown-suppression-rule` (python, rust): Flags suppression directives that name an unknown or unsuppressible rule.
+- `unslotted-dataclass` (python): Requires Python dataclasses to declare `slots=True`.
+- `unstructured-task` (python): Flags asyncio tasks spawned outside a task group.
 - `unused-suppression` (python, rust): Flags suppression directives that suppress no finding.
+- `zero-sleep-in-tests` (python, rust): Flags zero-duration sleeps used to yield in tests.
 
 --- stderr ---

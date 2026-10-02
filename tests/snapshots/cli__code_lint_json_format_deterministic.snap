@@ -7,7 +7,7 @@ expression: output
 --- stdout ---
 [
   {
-    "rule_name": "flat-scope-enforced",
+    "rule_name": "nested-function",
     "message": {
       "summary": "Function `inner` is defined inside another function.",
       "rationale": "Nested named functions bloat enclosing scopes and capture ambient state implicitly, increasing cognitive complexity and preventing isolated unit testing.",

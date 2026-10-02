@@ -1,4 +1,4 @@
-//! Enforces a maximum number of assertions per test function (`max-test-assertions`).
+//! Enforces a maximum number of assertions per test function (`too-many-assertions`).
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};
@@ -30,7 +30,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// The rule's declaration.
 pub const RULE: CodeRule<CountOption> = CodeRule {
     declaration: Declaration {
-        name: RuleName("max-test-assertions"),
+        name: RuleName("too-many-assertions"),
         template: &TEMPLATE,
         languages: &[SupportLang::Python, SupportLang::Rust],
         options: RuleOptions::code_rule(MAX_ASSERTIONS),

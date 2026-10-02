@@ -36,14 +36,14 @@ Every rule in Omni is built on a unified enforcement framework:
 You can configure enforcement mode globally or per-language for any code rule (suppression audits and command rules reject it):
 
 ```toml
-[rules.no-typing-cast]
+[rules.type-cast]
 enforcement_mode = "ban" # default: strictly banned
 
-[rules.no-sleep-in-tests]
+[rules.sleep-in-tests]
 enforcement_mode = "require-explanation" # permitted only when documented with an explanation comment
 
 # Language-specific mode overrides
-[rules.single-letter-variable-name.python]
+[rules.single-letter-name.python]
 enforcement_mode = "require-explanation"
 ```
 
@@ -52,7 +52,7 @@ enforcement_mode = "require-explanation"
 ```toml
 # Select tags (topics, facet values such as `heuristic`, or languages) and rule names.
 # A topic includes its subtopics: `testing` covers `test-timing`, `test-doubles`, ...
-select = ["testing", "no-typing-cast"]
+select = ["testing", "type-cast"]
 
 # The nearest selector wins along a topic path, so `testing` rules stay on except the
 # `test-doubles` ones. A rule name beats any tag.
@@ -60,7 +60,7 @@ ignore = ["test-doubles"]
 
 # Per-file rule ignores using glob patterns, applied after `select` / `ignore`
 [per_file_ignores]
-"tests/**" = ["single-letter-variable-name", "heuristic"]
+"tests/**" = ["single-letter-name", "heuristic"]
 ```
 
 Unknown labels, facet names (`precision`) and a selector in both `select` and `ignore` fail at config load. Tags, their meaning and the full topic tree are in [docs/dev/tag_guide.md](docs/dev/tag_guide.md).
@@ -74,7 +74,7 @@ Both binaries document every rule, code and command alike:
 ```bash
 omni-code-lint --list-rules              # every rule, with its languages and summary
 omni-code-lint --list-rules --tag testing # the rules `select = ["testing"]` would select
-omni-code-lint --explain no-sleep-in-tests # one rule: what it does, why, configuration, tags, status
+omni-code-lint --explain sleep-in-tests # one rule: what it does, why, configuration, tags, status
 ```
 
 `--explain` also reports whether the rule is on under the `.omnilint.toml` of the current directory, and which selector decided it.
@@ -87,15 +87,15 @@ Suppression directives require explicit bracketed rule targets and a `-- <reason
 
 ### Inline Suppression (`omni:ignore`)
 ```python
-task = asyncio.create_task(loop())  # omni:ignore [no-unstructured-task-creation] -- top-level daemon lifecycle
+task = asyncio.create_task(loop())  # omni:ignore [unstructured-task] -- top-level daemon lifecycle
 ```
 ```rust
-let x = 1; // omni:ignore [single-letter-variable-name] -- 2D vector coordinate
+let x = 1; // omni:ignore [single-letter-name] -- 2D vector coordinate
 ```
 
 ### Preceding-Line Suppression (`omni:ignore`)
 ```python
-# omni:ignore [flat-scope-enforced] -- factory requires localized closure
+# omni:ignore [nested-function] -- factory requires localized closure
 @dataclass
 def make_handler():
     def helper(): pass
@@ -104,5 +104,5 @@ def make_handler():
 
 ### File-Level Suppression (`omni:disable-file`)
 ```python
-# omni:disable-file [flat-scope-enforced, single-letter-variable-name] -- generated schema
+# omni:disable-file [nested-function, single-letter-name] -- generated schema
 ```

@@ -442,7 +442,7 @@ pub enum OptionProblem {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("`{key_path}`: {problem}")]
 pub struct RuleOptionsError {
-    /// The dotted path to the entry, e.g. `rules.max-test-assertions.rust.max_assertions`.
+    /// The dotted path to the entry, e.g. `rules.too-many-assertions.rust.max_assertions`.
     pub key_path: String,
     /// What is wrong with it.
     pub problem: OptionProblem,

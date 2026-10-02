@@ -50,7 +50,7 @@ The registry (`CODE_RULES`, `SUPPRESSION_AUDITS` or `COMMAND_RULES`) lists the r
 ### 2.1 Topics: most specific, at least one
 
 - List **only the most specific topics**. Ancestors are implied: `TestTiming` already makes the rule a `testing` rule. Listing both fails a test that tells you which one to remove.
-- A rule may carry **several topics on different branches** when it is genuinely about both subjects (`no-logging-error-in-except` is `logging` and `error-handling`).
+- A rule may carry **several topics on different branches** when it is genuinely about both subjects (`error-log-in-except` is `logging` and `error-handling`).
   - Consequence: with `ignore = ["error-handling"]` the rule is off even if `logging` is selected. Ignore wins when branches disagree.
 - **Topic = what is inspected; Impacted quality = what breaks**.
   - A topic names a **code construct, API or domain** (`durations`, `async`, `jj`, or future `sql`, `subprocess`, `crypto`).
@@ -64,17 +64,17 @@ The registry (`CODE_RULES`, `SUPPRESSION_AUDITS` or `COMMAND_RULES`) lists the r
 
 - A threshold that can only cause **missed** findings does not make a rule heuristic. Only a proxy that **adds** findings does.
 - **Design proxy vs. rule bug:** an incidental implementation defect or single-file AST lack of import resolution (tracked under *Rule Defects* in `ROADMAP.md`) is a bug to fix, not a reason to classify the rule as `heuristic`.
-- `exact`: `no-typing-cast` (it flags `cast` calls, which is what it claims), `single-letter-variable-name` (the claim *is* "the name is one character").
-- `heuristic`: `banned-abbreviations` (segment matching flags real words like `cat`), `max-test-assertions` (a count stands in for "several behaviours"), `no-unstructured-task-creation` (it also flags tasks that are stored and awaited), `no-env-in-functions` (guesses entrypoint boundaries from a function-name allowlist), `prefer-tuple-unpacking` (integer subscripting `x[0]` is a proxy for indexing a tuple).
+- `exact`: `type-cast` (it flags `cast` calls, which is what it claims), `single-letter-name` (the claim *is* "the name is one character").
+- `heuristic`: `abbreviated-name` (segment matching flags real words like `cat`), `too-many-assertions` (a count stands in for "several behaviours"), `unstructured-task` (it also flags tasks that are stored and awaited), `environment-variable-in-function` (guesses entrypoint boundaries from a function-name allowlist), `repeated-index-access` (integer subscripting `x[0]` is a proxy for indexing a tuple).
 
 ### 2.3 Consensus: `opinionated` or `unopinionated`
 
 > **Test:** name one ordinary situation where the flagged code is correct and appropriate. If you can → `opinionated`.
 
 - The meaning is "reasonable people disagree" (DEF2). The test is how to check it consistently.
-- A real failure mode does **not** make a rule unopinionated. `no-mocks-in-tests` prevents false-green tests, yet whole testing schools use mocks.
-- `unopinionated`: `no-sleep-in-tests`, `unknown-suppression-rule`.
-- `opinionated`: `no-mocks-in-tests`, `prefer-timedelta-over-seconds` (`timeout_ms` is standard at config boundaries), `enforce-frozen-slots-dataclass` (mutable dataclasses are ordinary Python).
+- A real failure mode does **not** make a rule unopinionated. `mock-in-tests` prevents false-green tests, yet whole testing schools use mocks.
+- `unopinionated`: `sleep-in-tests`, `unknown-suppression-rule`.
+- `opinionated`: `mock-in-tests`, `primitive-duration` (`timeout_ms` is standard at config boundaries), `mutable-dataclass` (mutable dataclasses are ordinary Python).
 - Expect most Omni rules to be opinionated. Omni exists to go beyond the default Ruff and Clippy sets.
 
 ### 2.4 Impacted quality
@@ -92,8 +92,8 @@ Each rule declares **one** primary quality from the ISO/IEC 25010:2023 product-q
 > **Test (`reliability` vs `maintainability`):** does the flagged code or command have a *mechanism that leads to wrong behaviour*: a product bug, a flaky or false-green test, a suppression that silently does something unintended, or a command that mutates/corrupts state or history in place? If yes → `reliability`.
 
 - Readability, searchability, refactoring-brittleness and diagnosability costs do **not** count as `reliability`. Without this boundary every rule qualifies.
-- `reliability`: `no-typing-cast` (hides a type error until runtime), `unused-suppression` (will hide a future real violation), `no-mocks-in-tests` (false-green tests when real collaborator diverges), `no-zero-sleep-in-tests` (relies on timer-subsystem side effects for scheduler yielding), `no-edits-on-described-commits` (silently rewrites a described commit).
-- `maintainability`: `single-letter-variable-name`, `max-test-assertions` (a worse failure report, but recoverable by re-running), `no-mock-assertions` (asserting on call wiring couples the test to implementation details, making refactors brittle rather than false-green).
+- `reliability`: `type-cast` (hides a type error until runtime), `unused-suppression` (will hide a future real violation), `mock-in-tests` (false-green tests when real collaborator diverges), `zero-sleep-in-tests` (relies on timer-subsystem side effects for scheduler yielding), `edit-of-described-commit` (silently rewrites a described commit).
+- `maintainability`: `single-letter-name`, `too-many-assertions` (a worse failure report, but recoverable by re-running), `mock-call-assertion` (asserting on call wiring couples the test to implementation details, making refactors brittle rather than false-green).
 
 ### 2.5 What goes in the rule's docs instead
 
@@ -108,8 +108,8 @@ Each rule declares **one** primary quality from the ISO/IEC 25010:2023 product-q
 - A topic selects its descendants: `select = ["vcs"]` includes `jj` rules.
 - **Nearest wins along one branch, ignore wins across branches**:
   - `select = ["jj"]`, `ignore = ["vcs"]` → jj rules on, other vcs rules off.
-  - `select = ["testing"]`, `ignore = ["test-doubles"]` → `no-mock-assertions` (on both `test-assertions` and `test-doubles`) is off.
-- **A rule name beats any tag**: `ignore = ["testing"]`, `select = ["no-sleep-in-tests"]` keeps that one rule.
+  - `select = ["testing"]`, `ignore = ["test-doubles"]` → `mock-call-assertion` (on both `test-assertions` and `test-doubles`) is off.
+- **A rule name beats any tag**: `ignore = ["testing"]`, `select = ["sleep-in-tests"]` keeps that one rule.
 - `per_file_ignores` only removes rules, after the main selection.
 - **Errors, never silence:**
   - an unknown label (with "did you mean");
@@ -127,7 +127,7 @@ A topic is admitted when **all** of these hold. The number of rules it has is **
 1. **It names a subject**: a construct, API or domain (`durations`, `async`, `jj`). It is not a quality every rule could claim (`style`, `safety`, `readability`), and not a facet value.
 2. **It passes the all-and-some test under its parent**: *all* rules that deserve the child also deserve the parent, now and for plausible future rules.
    - ✅ `jj → vcs`: every jj rule is a vcs rule.
-   - ❌ `naming → style`: `prefer-timedelta-over-seconds` is a naming rule motivated by unit bugs, not taste.
+   - ❌ `naming → style`: `primitive-duration` is detected through names but motivated by unit bugs, not taste.
    - "Related to" is not enough. Use a *see also* note instead of a parent link.
 3. **It has a one-line `description` (`Topic::description`) and a `scope_note` (`Topic::scope_note`)** that says what it includes and excludes, and names neighbours with a similar word (`error-handling` includes `contextlib.suppress`; `suppression-directives` covers `omni:` comments only).
 4. **Its label is kebab-case, unabbreviated where practical, and unique** across rules, topics, values and synonyms.

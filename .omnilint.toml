@@ -1,2 +1,2 @@
-[rules.prefer-dedent-for-multiline-strings.rust]
+[rules.bare-multiline-string.rust]
 extend_allowed = ["rule_test", "crate::test_utils::rule_test"]
