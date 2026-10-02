@@ -52,7 +52,7 @@ Static rules should establish sane defaults while respecting domain vocabulary.
 
 ## 6. Where the Mechanics Live
 
-This guide is about *why*. The contracts live next to the code, so they cannot drift from it:
+This guide is about *why*. For the steps to add a rule, follow [adding_a_rule.md](adding_a_rule.md). The contracts live next to the code, so they cannot drift from it:
 
 | Topic | Reference |
 | :--- | :--- |
