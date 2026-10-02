@@ -33,13 +33,25 @@ use ast_grep_core::AstGrep;
 use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_language::SupportLang;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Type alias for an in-memory source document parsed by `ast-grep`.
 pub(in crate::code_lint::ast) type SourceDoc = StrDoc<SupportLang>;
 
 /// Internal type alias for a raw `ast-grep` syntax tree node.
 pub(in crate::code_lint::ast) type RawNode<'a> = ast_grep_core::Node<'a, SourceDoc>;
+
+/// Returns the language of `path` from its extension, or `None` if Omni does not analyze it.
+#[must_use]
+pub fn detect_language(path: &Path) -> Option<SupportLang> {
+    path.extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .and_then(|extension| match extension {
+            "py" => Some(SupportLang::Python),
+            "rs" => Some(SupportLang::Rust),
+            _ => None,
+        })
+}
 
 /// A parsed source file encapsulating the language and syntax tree.
 ///

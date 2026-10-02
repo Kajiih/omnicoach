@@ -4,7 +4,7 @@
 architecture_component!(CodeRuleContracts);
 
 use crate::code_lint::ast::{AstNode, ParsedFile};
-use crate::code_lint::semantic::{bindings, calls};
+use crate::code_lint::semantic::{bindings, calls, comments::CommentIndex};
 use crate::diagnostic::{Diagnostic, RuleName};
 use crate::rule_declaration::{
     Declaration, DeclaredRule, EnforcementMode, OptionsDeclaration, RuleOverrides,
@@ -46,6 +46,9 @@ pub struct CodeRule<Options: OptionsDeclaration = ()> {
 impl<Options: OptionsDeclaration> CodeRule<Options> {
     /// Finds the rule's violations in `file`, with its options resolved for the file's
     /// language from `overrides` (the rule's `[rules.<name>]` configuration, if any).
+    ///
+    /// In [`EnforcementMode::RequireExplanation`], violations explained by an adjacent comment
+    /// are dropped.
     #[must_use]
     pub fn check_file(
         &self,
@@ -58,19 +61,22 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
             .options
             .options
             .resolve(file.lang(), overrides);
-        (self.check)(self, path, file, Options::as_param(&options))
-    }
-
-    /// The enforcement mode for a file in `language`.
-    #[must_use]
-    pub fn enforcement_mode(
-        &self,
-        language: SupportLang,
-        overrides: Option<&RuleOverrides>,
-    ) -> EnforcementMode {
-        self.declaration
+        let mut diagnostics = (self.check)(self, path, file, Options::as_param(&options));
+        let mode = self
+            .declaration
             .options
-            .enforcement_mode(language, overrides)
+            .enforcement_mode(file.lang(), overrides);
+        if mode == EnforcementMode::RequireExplanation && !diagnostics.is_empty() {
+            let index = CommentIndex::from_file(file);
+            diagnostics.retain(|diagnostic| {
+                !index.has_explanation_for_span(
+                    file,
+                    diagnostic.location.span,
+                    diagnostic.location.line,
+                )
+            });
+        }
+        diagnostics
     }
 
     /// Renders this rule's violation template at the given AST node using the node's language.
@@ -146,12 +152,6 @@ pub trait AnyCodeRule: Send + Sync {
     }
     /// The files the rule runs on.
     fn target(&self) -> RuleTarget;
-    /// The enforcement mode for a file in `language`, given the rule's configuration.
-    fn enforcement_mode(
-        &self,
-        language: SupportLang,
-        overrides: Option<&RuleOverrides>,
-    ) -> EnforcementMode;
     /// Finds the rule's violations in `file`, given the rule's configuration.
     fn check_file(
         &self,
@@ -176,14 +176,6 @@ impl<Options: OptionsDeclaration + Send + Sync> AnyCodeRule for CodeRule<Options
 
     fn target(&self) -> RuleTarget {
         self.target
-    }
-
-    fn enforcement_mode(
-        &self,
-        language: SupportLang,
-        overrides: Option<&RuleOverrides>,
-    ) -> EnforcementMode {
-        Self::enforcement_mode(self, language, overrides)
     }
 
     fn check_file(

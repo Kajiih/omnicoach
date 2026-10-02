@@ -2,13 +2,12 @@
 
 architecture_component!(TestingHarness);
 
-use crate::code_lint::ast::ParsedFile;
+use crate::code_lint::ast::{ParsedFile, detect_language};
 use crate::code_lint::rule::CodeRule;
-use crate::code_lint::semantic::comments::CommentIndex;
 use crate::command_lint::rule::CommandRule;
 use crate::command_lint::vcs::JjClient;
 use crate::diagnostic::Diagnostic;
-use crate::rule_declaration::{EnforcementMode, OptionsDeclaration};
+use crate::rule_declaration::OptionsDeclaration;
 use ast_grep_language::SupportLang;
 use std::fmt::Write;
 use std::path::Path;
@@ -44,24 +43,10 @@ pub fn run_code_rule<Options: OptionsDeclaration>(
     filename: &str,
 ) -> Vec<Diagnostic> {
     let path = Path::new(filename);
-    let lang = match path.extension().and_then(|extension| extension.to_str()) {
-        Some("py") => SupportLang::Python,
-        Some("rs") => SupportLang::Rust,
-        _ => panic!("run_code_rule: unsupported extension in test file '{filename}'"),
-    };
-    let file = ParsedFile::new(source, lang);
-    let mut diags = rule.check_file(path, &file, None);
-    if rule.enforcement_mode(lang, None) == EnforcementMode::RequireExplanation {
-        let index = CommentIndex::from_file(&file);
-        diags.retain(|diagnostic| {
-            !index.has_explanation_for_span(
-                &file,
-                diagnostic.location.span,
-                diagnostic.location.line,
-            )
-        });
-    }
-    diags
+    let lang = detect_language(path).unwrap_or_else(|| {
+        panic!("run_code_rule: unsupported extension in test file '{filename}'")
+    });
+    rule.check_file(path, &ParsedFile::new(source, lang), None)
 }
 
 /// Helper to execute `check_command` on a [`CommandRule`] and return its formatted diagnostics snapshot.

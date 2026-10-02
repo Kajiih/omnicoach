@@ -2,34 +2,24 @@
 
 architecture_component!(CodeLintRunner);
 
-use crate::code_lint::ast::{self, ParsedFile};
+use crate::code_lint::ast::{self, ParsedFile, detect_language};
 use crate::code_lint::rule::{AnyCodeRule, RuleTarget};
 use crate::code_lint::rules::CODE_RULES;
-use crate::code_lint::semantic::comments::CommentIndex;
 use crate::code_lint::suppression::{SUPPRESSION_AUDITS, SuppressionTracker};
 use crate::config::Config;
 use crate::diagnostic::Diagnostic;
-use crate::rule_declaration::EnforcementMode;
 use ast_grep_language::SupportLang;
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Helper to detect language from file extension.
-#[must_use]
-pub fn detect_language(path: &Path) -> Option<SupportLang> {
-    path.extension()
-        .and_then(std::ffi::OsStr::to_str)
-        .and_then(|extension| match extension {
-            "py" => Some(SupportLang::Python),
-            "rs" => Some(SupportLang::Rust),
-            _ => None,
-        })
-}
-
-/// Returns true if `rule` should be evaluated on `path` given its language and test-file context.
-fn should_evaluate_rule(
+/// Returns true if `rule` runs on `path`: it is enabled there, analyzes `lang`, and its
+/// [`RuleTarget`] matches.
+///
+/// `has_inline_tests` says whether a non-test file holds inline tests (Rust `#[cfg(test)]`),
+/// which `TestsOnly` rules check.
+fn is_rule_applicable(
     rule: &dyn AnyCodeRule,
     path: &Path,
     lang: SupportLang,
@@ -37,14 +27,13 @@ fn should_evaluate_rule(
     has_inline_tests: bool,
     config: &Config,
 ) -> bool {
-    if !config.is_rule_enabled_for_path(rule.name(), path) || !rule.supports_language(lang) {
-        return false;
-    }
-    match rule.target() {
-        RuleTarget::SourceOnly => !is_test,
-        RuleTarget::TestsOnly => is_test || has_inline_tests,
-        RuleTarget::All => true,
-    }
+    config.is_rule_enabled_for_path(rule.name(), path)
+        && rule.supports_language(lang)
+        && match rule.target() {
+            RuleTarget::SourceOnly => !is_test,
+            RuleTarget::TestsOnly => is_test || has_inline_tests,
+            RuleTarget::All => true,
+        }
 }
 
 /// Filters rule diagnostics according to `RuleTarget` and inline `#[cfg(test)]` / `#[test]` byte ranges.
@@ -76,29 +65,6 @@ fn filter_diagnostics_by_target(
     }
 }
 
-/// Returns true if a code rule may produce diagnostics for the given path and language context
-/// prior to AST parsing.
-///
-/// For `RuleTarget::TestsOnly`, Python source files (`!is_test`) cannot produce diagnostics because
-/// Omni does not support inline Python tests. Rust source files, however, can declare inline test
-/// modules (`#[cfg(test)]`), so `TestsOnly` rules remain eligible until AST ranges are inspected.
-#[must_use]
-fn is_rule_candidate_for_path(
-    rule: &dyn AnyCodeRule,
-    path: &Path,
-    lang: SupportLang,
-    is_test: bool,
-    config: &Config,
-) -> bool {
-    config.is_rule_enabled_for_path(rule.name(), path)
-        && rule.supports_language(lang)
-        && match rule.target() {
-            RuleTarget::SourceOnly => !is_test,
-            RuleTarget::TestsOnly => is_test || lang == SupportLang::Rust,
-            RuleTarget::All => true,
-        }
-}
-
 /// Returns true if any active suppression hygiene rule is enabled and applicable to `path`,
 /// and the file content contains a suppression directive prefix (`"omni:"`).
 #[must_use]
@@ -120,6 +86,7 @@ fn has_active_suppression_audit(
 ///
 /// Skips Tree-sitter parsing when neither standard code rules nor active suppression audit
 /// directives can produce findings for the file given its language, test-path status, and config.
+/// Before parsing, any Rust file may hold inline tests; Omni has no inline Python tests.
 #[must_use]
 fn should_skip_ast_parse(
     path: &Path,
@@ -128,9 +95,10 @@ fn should_skip_ast_parse(
     is_test: bool,
     config: &Config,
 ) -> bool {
+    let may_have_inline_tests = lang == SupportLang::Rust;
     let has_code_rules = CODE_RULES
         .iter()
-        .any(|&rule| is_rule_candidate_for_path(rule, path, lang, is_test, config));
+        .any(|&rule| is_rule_applicable(rule, path, lang, is_test, may_have_inline_tests, config));
 
     !has_code_rules && !has_active_suppression_audit(path, lang, content, config)
 }
@@ -160,27 +128,15 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
     let has_inline_tests = !inline_test_ranges.is_empty();
     let mut raw_diagnostics = Vec::new();
     let mut evaluated_rules = HashSet::new();
-    let mut comment_index = None;
 
     for &rule in CODE_RULES {
-        if !should_evaluate_rule(rule, path, lang, is_test, has_inline_tests, config) {
+        if !is_rule_applicable(rule, path, lang, is_test, has_inline_tests, config) {
             continue;
         }
         evaluated_rules.insert(rule.name().0);
         let overrides = config.rule_overrides.get(&rule.name());
-        let mut rule_diagnostics = rule.check_file(path, &file, overrides);
-        if rule.enforcement_mode(lang, overrides) == EnforcementMode::RequireExplanation {
-            let index = comment_index.get_or_insert_with(|| CommentIndex::from_file(&file));
-            rule_diagnostics.retain(|diagnostic| {
-                !index.has_explanation_for_span(
-                    &file,
-                    diagnostic.location.span,
-                    diagnostic.location.line,
-                )
-            });
-        }
         raw_diagnostics.extend(filter_diagnostics_by_target(
-            rule_diagnostics,
+            rule.check_file(path, &file, overrides),
             rule.target(),
             is_test,
             &inline_test_ranges,
@@ -382,65 +338,66 @@ mod tests {
         "no-logging-error-in-except",
         "service.py",
         SupportLang::Python,
-        false,
+        (false, false),
         true
     )]
     #[case::python_rule_on_rust_file(
         "no-logging-error-in-except",
         "service.rs",
         SupportLang::Rust,
-        false,
+        (false, false),
         false
     )]
-    #[case::tests_only_python_in_test_path(
+    #[case::tests_only_on_test_file(
         "no-sleep-in-tests",
         "test_service.py",
         SupportLang::Python,
-        true,
+        (true, false),
         true
     )]
-    #[case::tests_only_python_in_source_path(
+    #[case::tests_only_on_source_file(
         "no-sleep-in-tests",
         "service.py",
         SupportLang::Python,
-        false,
+        (false, false),
         false
     )]
-    #[case::tests_only_rust_source_path_eligible_for_inline_cfg_test(
+    #[case::tests_only_on_source_file_with_inline_tests(
         "no-sleep-in-tests",
         "service.rs",
         SupportLang::Rust,
-        false,
+        (false, true),
         true
     )]
-    #[case::source_only_on_production_file(
+    #[case::source_only_on_source_file(
         "no-env-in-functions",
         "service.rs",
         SupportLang::Rust,
-        false,
+        (false, false),
         true
     )]
-    #[case::source_only_skipped_on_test_file(
+    #[case::source_only_on_test_file(
         "no-env-in-functions",
         "tests/test_service.rs",
         SupportLang::Rust,
-        true,
+        (true, false),
         false
     )]
-    fn test_is_rule_candidate(
+    fn test_is_rule_applicable(
         #[case] rule_name: &str,
         #[case] path: &str,
         #[case] lang: SupportLang,
-        #[case] is_test: bool,
+        #[case] (is_test, has_inline_tests): (bool, bool),
         #[case] expected: bool,
     ) {
         let config = Config::default();
         assert_eq!(
-            is_rule_candidate_for_path(
+            is_rule_applicable(
                 code_rule_named(rule_name),
                 Path::new(path),
                 lang,
                 is_test,
+                has_inline_tests,
                 &config
             ),
             expected
