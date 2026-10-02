@@ -23,7 +23,7 @@ pub const RULE: CodeRule = CodeRule {
         languages: &[SupportLang::Python],
         options: RuleOptions::code_rule(()),
         classification: Classification {
-            topics: &[Topic::COMPLEXITY],
+            topics: &[Topic::NESTING],
             precision: Precision::Exact,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Maintainability,

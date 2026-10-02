@@ -53,7 +53,7 @@ The registry (`CODE_RULES`, `SUPPRESSION_AUDITS` or `COMMAND_RULES`) lists the r
 - A rule may carry **several topics on different branches** when it is genuinely about both subjects (`error-log-in-except` is `logging` and `error-handling`).
   - Consequence: with `ignore = ["error-handling"]` the rule is off even if `logging` is selected. Ignore wins when branches disagree.
 - **Topic = what is inspected; Impacted quality = what breaks**.
-  - A topic names a **code construct, API or domain** (`durations`, `async`, `jj`, or future `sql`, `subprocess`, `crypto`).
+  - A topic names a **code construct, API or domain** (`durations`, `concurrency`, `jj`, or future `sql`, `subprocess`, `crypto`).
   - A software quality (`reliability`, `maintainability`, `security`, `performance-efficiency`, `safety`) names the **consequence of a violation** and belongs in *Impacted quality* (§2.4), **never in Topic**.
   - For example, a SQL-injection rule has topic `sql` and impacted quality `security`; an N+1 query rule has topic `sql` and impacted quality `performance-efficiency`.
 - **Tests-only is not a topic.** "Runs only on test files" is the derived *File scope*. `testing` means "about test-code practice".
@@ -124,7 +124,7 @@ Each rule declares **one** primary quality from the ISO/IEC 25010:2023 product-q
 
 A topic is admitted when **all** of these hold. The number of rules it has is **not** a criterion: a one-rule topic is fine.
 
-1. **It names a subject**: a construct, API or domain (`durations`, `async`, `jj`). It is not a quality every rule could claim (`style`, `safety`, `readability`), and not a facet value.
+1. **It names a subject**: a construct, API or domain (`durations`, `concurrency`, `jj`). It is not a quality every rule could claim (`style`, `safety`, `readability`), and not a facet value.
 2. **It passes the all-and-some test under its parent**: *all* rules that deserve the child also deserve the parent, now and for plausible future rules.
    - ✅ `jj → vcs`: every jj rule is a vcs rule.
    - ❌ `naming → style`: `primitive-duration` is detected through names but motivated by unit bugs, not taste.
@@ -171,11 +171,11 @@ There are no aliases for old labels: renaming a topic breaks configs that name i
 | `durations` | — | | How spans of time are represented. | Representing lengths of time and their units. Not sleeping/waiting (see `test-timing`) or wall-clock dates. |
 | `record-types` | — | | Declaring named records (`dataclass`, `NamedTuple`, `struct`). | Field-bundle declarations, mutability and slots. Not enums or protocols. |
 | `literals` | — | | How literal values are written in code. | Writing string and number literals (multiline strings, magic numbers). Not identifiers or formatting APIs. |
-| `complexity` | — | | Structural size and nesting of code units. | Nesting depth and scope structure. Not naming or "readability" in general. |
+| `nesting` | — | | Nesting depth and scope structure of code units. | Nested functions, closures and scope depth. Not naming or "readability" in general. |
 | `global-state` | — | | Process-wide state read or written implicitly. | Reading or writing ambient process-wide state (environment variables, globals). Not file or network I/O. |
 | `error-handling` | — | | Raising, catching, swallowing and reporting errors. | Exceptions and `Result`s, including `contextlib.suppress`. Not `omni:` directives (see `suppression-directives`). |
 | `logging` | — | | Use of logging APIs. | Log calls and their arguments. Not `print` or metrics. |
-| `async` | — | | `async`/`await`, tasks and event loops. | Coroutines, tasks and their lifetimes. Not OS threads. |
+| `concurrency` | — | | Concurrent execution: coroutines, tasks and threads. | Spawning, awaiting and joining concurrent work and its lifetimes. Not sleeping or waiting in tests (see `test-timing`). |
 | `suppression-directives` | — | | Hygiene of `omni:` suppression comments. | `omni:` directives that silence Omni. Not `contextlib.suppress` (see `error-handling`). |
 
 ---
