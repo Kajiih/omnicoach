@@ -33,9 +33,9 @@ const BANNED: ListOption = ListOption {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Unstructured background task call `{callee}()`.",
-    rationale: "Tasks spawned outside a task group are not bound to an enclosing lexical scope: if a sibling operation fails or the caller is cancelled before awaiting them, they continue running orphaned in the background.",
-    suggestion: "Spawn concurrent tasks within an `asyncio.TaskGroup` (`async with asyncio.TaskGroup() as tg: tg.create_task(...)`) or `anyio.create_task_group()` so task lifetimes are bounded to the enclosing block.",
+    summary: "`{callee}()` spawns a task outside a task group.",
+    rationale: "A task spawned outside a task group is bound to no scope: when a sibling fails or the caller is cancelled before awaiting it, it keeps running orphaned in the background.",
+    suggestion: "Spawn the task inside an `asyncio.TaskGroup` (`async with asyncio.TaskGroup() as group: group.create_task(...)`) or an `anyio.create_task_group()` block, so its lifetime ends with the block.",
 };
 
 /// The rule's declaration.

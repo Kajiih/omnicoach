@@ -60,12 +60,12 @@ const BANNED: ListOption = ListOption {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Environment variable access `{call}` inside function `{func_name}`.",
-    rationale: "Reading ambient environment variables inside functions introduces hidden global state and causes cross-test pollution during parallel test execution.",
+    summary: "Function `{function}` accesses an environment variable through `{expression}`.",
+    rationale: "An environment variable accessed inside a function is hidden global state: the function's behavior depends on the process, and parallel tests that set the variable pollute each other.",
     suggestion: {
-        base: "Load environment variables at composition boundaries (`main`, `from_env`) and pass a typed configuration parameter into `{func_name}`.",
-        Python => "Load environment variables at composition boundaries (`main`, `from_env`, or module/class scope) and pass a typed configuration parameter into `{func_name}`.",
-        Rust => "Load environment variables at composition boundaries (`main`, `from_env`, or a module-level `LazyLock`) and pass a typed configuration parameter into `{func_name}`.",
+        base: "Load environment variables at the composition root (`main`, `from_env`) and pass a typed configuration value into `{function}`.",
+        Python => "Load environment variables at the composition root (`main`, `from_env`, or module scope) and pass a typed configuration value into `{function}`.",
+        Rust => "Load environment variables at the composition root (`main`, `from_env`, or a `LazyLock`) and pass a typed configuration value into `{function}`.",
     },
 };
 
@@ -158,11 +158,11 @@ fn check_file(
             lang,
             is_exempt_boundary_function,
         ) {
-            let expr = format!("{}()", call_match.callee);
+            let expression = format!("{}()", call_match.callee);
             diagnostics.push(rule.diagnostic_at_node(
                 path,
                 &call_match.node,
-                &[("call", &expr), ("expr", &expr), ("func_name", &func_name)],
+                &[("expression", &expression), ("function", &func_name)],
             ));
         }
     }
@@ -177,7 +177,7 @@ fn check_file(
                 diagnostics.push(rule.diagnostic_at_node(
                     path,
                     &subscript_node,
-                    &[("call", label), ("expr", label), ("func_name", &func_name)],
+                    &[("expression", label), ("function", &func_name)],
                 ));
             }
         }

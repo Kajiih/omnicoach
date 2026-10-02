@@ -22,9 +22,9 @@ const BANNED: ListOption = ListOption {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Type cast call `{callee}()`.",
-    rationale: "`typing.cast()` forces the type checker to accept a target type without runtime validation, silently masking type mismatches and upstream bugs.",
-    suggestion: "Narrow the type at runtime with `isinstance()` or a `TypeGuard` function, or model the contract with a `Protocol`.",
+    summary: "A value is cast with `{callee}()`.",
+    rationale: "A cast makes the type checker accept the target type without any runtime check, so a wrong assumption upstream is carried forward silently.",
+    suggestion: "Narrow the type at runtime with `isinstance()` or a `TypeGuard`, or model the contract with a `Protocol`.",
 };
 
 /// The rule's declaration.
@@ -41,7 +41,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             impacted_quality: ImpactedQuality::Reliability,
         },
         doc: RuleDoc {
-            summary: "Flags `typing.cast` calls in Python production code.",
+            summary: "Flags `typing.cast` calls in Python source files.",
             what_it_does: "Flags calls to `typing.cast`, `typing_extensions.cast` and a bare \
                            `cast` in Python source files; test files are not checked. Calls are \
                            matched by how they are written, not by where the name was imported \

@@ -28,9 +28,9 @@ const BANNED: ListOption = ListOption {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Identifier `{name}` contains abbreviated token `{token}`.",
-    rationale: "Ambiguous shorthand tokens (`ctx`, `mgr`, `val`, `cfg`) force readers to guess domain vocabulary and fragment codebase searchability.",
-    suggestion: "Rename `{name}` using full, self-explanatory domain words (e.g., `context`, `manager`, `value`, `config`).",
+    summary: "Name `{name}` contains the abbreviation `{token}`.",
+    rationale: "An ambiguous shorthand forces the reader to guess the word it stands for and fragments searches across the codebase.",
+    suggestion: "Rename `{name}` to spell out `{token}` in full.",
 };
 
 /// Helper to split identifiers into sub-word segments.
@@ -84,7 +84,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             impacted_quality: ImpactedQuality::Maintainability,
         },
         doc: RuleDoc {
-            summary: "Flags names that contain a banned abbreviation such as `ctx` or `msg`.",
+            summary: "Flags names that contain an abbreviation such as `ctx` or `msg`.",
             what_it_does: "Splits each name the code defines into words, at underscores and \
                            at lowercase-to-uppercase or digit-to-uppercase boundaries, and \
                            flags the name if any word is a banned abbreviation, ignoring case. \
@@ -127,7 +127,7 @@ fn check_file(
                 diagnostics.push(rule.diagnostic_at_node(
                     path,
                     &node,
-                    &[("name", &name), ("token", &segment), ("segment", &segment)],
+                    &[("name", &name), ("token", &segment)],
                 ));
                 // Flag each node at most once
                 break;

@@ -23,9 +23,9 @@ const BANNED: ListOption = ListOption {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Call to `{call}(...)` inside an `except` block.",
-    rationale: "Calling `logging.error` inside an `except` block either drops the active traceback (obscuring the root cause) or requires redundant `exc_info=True` boilerplate instead of the canonical `logging.exception`.",
-    suggestion: "Replace with `logging.exception(...)` to capture and attach the active exception traceback automatically.",
+    summary: "`{callee}()` is called inside an `except` block.",
+    rationale: "Logging at error level inside an `except` block drops the active traceback unless `exc_info=True` is repeated at every call, so the root cause is lost.",
+    suggestion: "Replace the call with `logging.exception(...)`, which attaches the active traceback automatically.",
 };
 
 /// The rule's declaration.
@@ -42,7 +42,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             impacted_quality: ImpactedQuality::Reliability,
         },
         doc: RuleDoc {
-            summary: "Flags `logging.error` calls inside Python `except` blocks.",
+            summary: "Flags error-level logging calls inside Python `except` blocks.",
             what_it_does: "Flags calls to `logging.error(...)` anywhere inside an `except` \
                            block, including bare `except:` and nested blocks such as an `if` \
                            within the handler. Calls in the `try`, `else` and `finally` blocks, \
@@ -77,7 +77,7 @@ fn check_file(
     calls::find_banned_calls(file, banned)
         .into_iter()
         .filter(|matched| crate::code_lint::ast::python::is_inside_except_clause(&matched.node))
-        .map(|matched| rule.diagnostic_at_node(path, &matched.node, &[("call", &matched.callee)]))
+        .map(|matched| rule.diagnostic_at_node(path, &matched.node, &[("callee", &matched.callee)]))
         .collect()
 }
 

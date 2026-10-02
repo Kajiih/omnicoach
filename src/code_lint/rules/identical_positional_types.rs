@@ -20,9 +20,9 @@ const MIN_POSITIONAL_PARAMETERS: CountOption = CountOption {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Function `{func_name}` has {count} positional parameters (>= {min_args}) with identical types ({duplicates}).",
-    rationale: "Multiple positional parameters sharing the same type allow callers to accidentally transpose arguments (e.g., `transfer(target_id, source_id)`) without triggering static type errors.",
-    suggestion: "Insert a keyword-only separator `*` in `{func_name}` (e.g., `def {func_name}(*, ...)`) so callers must pass these arguments by name.",
+    summary: "Function `{function}` has several positional parameters of the same type ({duplicates}).",
+    rationale: "When positional parameters share a type, a caller can swap the arguments (`transfer(target_id, source_id)`) and no type checker will notice.",
+    suggestion: "Insert a keyword-only separator `*` in `{function}` (`def {function}(*, ...)`) so callers pass these arguments by name.",
 };
 
 /// The rule's declaration.
@@ -145,26 +145,11 @@ fn check_function_signature(
         .map(|(type_annotation, params)| format!("`{}: {type_annotation}`", params.join(", ")))
         .collect::<Vec<_>>()
         .join(", ");
-    let all_params = duplicate_groups
-        .iter()
-        .flat_map(|(_, params)| params.iter().map(String::as_str))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let formatted_count = positional_params.len().to_string();
-    let formatted_min_args = min_args.to_string();
 
     Some(rule.diagnostic_at_node(
         path,
         &signature.name_node,
-        &[
-            ("func", func_name),
-            ("func_name", func_name),
-            ("count", &formatted_count),
-            ("min_args", &formatted_min_args),
-            ("duplicates", &duplicates),
-            ("params", &all_params),
-        ],
+        &[("function", func_name), ("duplicates", &duplicates)],
     ))
 }
 

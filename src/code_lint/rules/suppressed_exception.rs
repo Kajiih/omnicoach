@@ -24,9 +24,9 @@ const BANNED: ListOption = ListOption {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Exception suppression `suppress(...)` has no explanatory comment.",
-    rationale: "Silently swallowing exceptions without documenting why the failure is benign hides unexpected bugs and leaves maintainers unable to distinguish intentional ignoring from accidental masking.",
-    suggestion: "Add an inline or directly preceding `# comment` explaining why the suppressed exception is safe to ignore.",
+    summary: "An exception is silenced with `{callee}()`.",
+    rationale: "Silencing an exception without a recorded reason hides unexpected failures and leaves the next reader unable to tell intentional ignoring from accidental masking.",
+    suggestion: "Replace the block with an explicit `except` handler, or add a comment on the `{callee}(...)` line explaining why ignoring the exception is safe.",
 };
 
 /// The rule's declaration.
@@ -49,7 +49,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             impacted_quality: ImpactedQuality::Maintainability,
         },
         doc: RuleDoc {
-            summary: "Requires a comment explaining each `contextlib.suppress` block.",
+            summary: "Flags `contextlib.suppress` blocks, by default only those without an explanatory comment.",
             what_it_does: "Flags `suppress(...)` and `contextlib.suppress(...)` used as a context \
                            manager in a Python `with` statement, unless a comment explains it. \
                            The comment can trail the `suppress(...)` line, trail any line of a \
@@ -86,7 +86,7 @@ fn check_file(
     calls::find_banned_calls(file, banned_calls)
         .into_iter()
         .filter(|matched| is_with_context_manager(&matched.node))
-        .map(|matched| rule.diagnostic_at_node(path, &matched.node, &[]))
+        .map(|matched| rule.diagnostic_at_node(path, &matched.node, &[("callee", &matched.callee)]))
         .collect()
 }
 

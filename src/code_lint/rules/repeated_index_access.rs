@@ -25,12 +25,8 @@ const MAX_PLACEHOLDERS: CountOption = CountOption {
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: {
-        base: "`{receiver}` is read by index at positions {positions}.",
-        Python => "`{receiver}` is indexed with literal positions {positions}.",
-        Rust => "Tuple fields {positions} of `{receiver}` are read by index.",
-    },
-    rationale: "Positional indices hide what each element means, and every index site misreads or breaks when the tuple layout changes.",
+    summary: "`{receiver}` is read by index at positions {positions}.",
+    rationale: "A positional index hides what the element means, and every index site misreads or breaks when the layout changes.",
     suggestion: {
         base: "Unpack the value once into named variables.",
         Python => "Unpack once into named variables (`x, y = point`, or `x, y, *_ = point` when the sequence can be longer); return a `NamedTuple` or dataclass when the tuple crosses a function boundary.",
