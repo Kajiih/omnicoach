@@ -57,7 +57,7 @@ Two option structs exist in `rule_declaration`, and together with `()` and `(Fir
 
 ### 2.3. Enforcement mode is an ordinary option
 
-The key is `enforcement_mode`. Every code rule declares a default (`ban`, except `no-uncommented-suppress` which defaults to `require-explanation`), and `--explain` documents it for every code rule. There is no rule-specific handling in the runner beyond reading `rule.enforcement_mode(lang, overrides)`.
+The key is `enforcement_mode`. Every code rule declares a default (`ban`, except `no-uncommented-suppress` which defaults to `require-explanation`), and `--explain` documents it for every code rule. There is no rule-specific handling in the runner: `CodeRule::check_file` resolves the mode for the file and drops explained findings in `require-explanation`.
 
 ### 2.4. Validation happens once, at load
 
