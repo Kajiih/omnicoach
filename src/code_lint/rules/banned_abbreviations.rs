@@ -91,12 +91,12 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                            Only whole words match: `strategy` and \
                            `category` are not flagged, `handle_msg` and `TaskRes` are. \
                            Checked names: variables, parameters, loop and pattern bindings, \
-                           functions, classes, structs, enums, traits, type aliases, constants \
-                           and import aliases (`import os as os_cfg`). Not checked: unaliased \
-                           imports, attributes (`self.ctx = ...`), struct fields, and names \
-                           imposed by a contract (Python methods marked `@override`, members \
-                           of a Rust `impl Trait for Type` block), although the parameters of \
-                           those methods are still checked.",
+                           functions, classes, structs, enums, traits, type aliases and \
+                           constants. Not checked: imports (including aliased imports such as \
+                           `import os as os_cfg`), attributes (`self.ctx = ...`), struct \
+                           fields, and names imposed by a contract (Python methods marked \
+                           `@override`, members of a Rust `impl Trait for Type` block), \
+                           although the parameters of those methods are still checked.",
             why_is_this_bad: "An abbreviation makes the reader guess: `res` can be a result, a \
                               response or a resource, `ch` a channel or a character. Different \
                               authors also shorten the same word differently (`cfg`, `conf`, \
@@ -159,6 +159,9 @@ crate::test_utils::rule_test!(
                 unaliased_from_import_exempt => r#"
                     from os import path
                 "#,
+                aliased_import_exempt => r#"
+                    import os as os_cfg
+                "#,
                 override_method_contract_exempt => r#"
                     from typing import override
 
@@ -169,9 +172,6 @@ crate::test_utils::rule_test!(
                 "#,
             ],
             fail: [
-                aliased_import_abbreviation => r#"
-                    import os as os_cfg
-                "# => "os_cfg",
                 camel_case_class_name => r#"
                     class TaskRes:
                         pass
@@ -226,6 +226,9 @@ crate::test_utils::rule_test!(
                     use std::fmt::Result;
                     use std::error::Error;
                 "#,
+                aliased_import_exempt => r#"
+                    use std::collections::HashMap as my_cfg;
+                "#,
                 trait_impl_associated_type_exempt => r#"
                     impl Decoder for Wrapper {
                         type Err = ();
@@ -238,9 +241,6 @@ crate::test_utils::rule_test!(
                 "#,
             ],
             fail: [
-                aliased_import_abbreviation => r#"
-                    use std::collections::HashMap as my_cfg;
-                "# => "my_cfg",
                 camel_case_struct_name => r#"
                     struct MyRes;
                 "# => "MyRes",

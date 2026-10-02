@@ -49,19 +49,9 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
 - **Escaping Nested Scopes (`no-env-in-functions`)**:
   - *Current*: The boundary exemption (`main`, `from_env`, ...) is inherited by every scope declared inside it, which is correct for nested functions and closures but also exempts a class declared inside a boundary whose methods later escape (returned, registered as a callback).
   - *Target*: Treat a `class` / `impl` declared inside a boundary as a barrier that resets the exemption, once a real-world occurrence justifies the added language-specific complexity.
-
-## Rule Defects
-
-Behaviour that contradicts a rule's own documentation or intent.
-
-- **`no-logging-error-in-except` flags `exc_info=True`**: that call keeps the traceback, contradicting the rationale ("lost traceback"). Exempt it, or reword the rule as "prefer `.exception`".
-- **`prefer-dedent-for-multiline-strings` flags `textwrap.dedent`**: the module doc and summary allow a dedent helper, but the defaults omit it and a test flags it.
-- **Call matching ignores imports** (`src/code_lint/semantic/calls.rs`): callees are matched by bare name, so `sqlalchemy.cast`, `ctypes.cast` or httpx `patch` are flagged. Resolve the import origin.
-- **`no-unstructured-task-creation` flags stored, awaited tasks**: the documented hazard (GC of an unreferenced task) does not apply when the task is kept and awaited.
-- **`no-zero-sleep-in-tests` Python half**: the asyncio docs endorse `asyncio.sleep(0)` as a yield; the hazard is Rust-specific (tokio `sleep(ZERO)` is not guaranteed to yield). Reconsider the Python scope.
-- **`unknown-suppression-rule` rejects suppression-audit names**: `SUPPRESSIBLE_RULES` holds only the code rules, so naming one of the four suppression audits in a directive is reported as unknown. Decide whether audits are suppressible, then align the list.
-- **`no-mocks-in-tests` misses bare decorators**: only calls are matched, so `@mock.patch.object` without parentheses is not flagged.
-- **Aliased imports are handled inconsistently**: `no-hungarian-notation` and `prefer-timedelta-over-seconds` skip import aliases, while `banned-abbreviations` flags them. Pick one behaviour for all naming rules.
+- **Import-Aware Qualified Call Resolution (`src/code_lint/semantic/calls.rs`)**:
+  - *Current*: Banned calls are matched syntactically by call-site name (like `ast-grep` and the legacy linter), as documented in each rule's `what_it_does`. A bare call imported from an unrelated library (`from sqlalchemy import cast`, `from httpx import patch`) is flagged, while an aliased module call (`import typing as t; t.cast(...)`) is missed.
+  - *Target*: Evaluate adding a per-file scope and import symbol table (modeled on Ruff's `SemanticModel::resolve_qualified_name`) that resolves imported and aliased callees to their canonical qualified path while distinguishing module imports from local parameter/fixture receivers (`mocker.patch`, `monkeypatch.setattr`, `loop.create_task`).
 
 ## Candidate Rules
 
@@ -88,6 +78,9 @@ Source: Python Tip of the Week #069 "Prefer constants over wild values" (Python 
   - *Blocker*: Per-file aggregation cannot satisfy `rule_test!`'s repeated-occurrence check (`assert_every_occurrence_reported` expects exactly two diagnostics at mirrored spans). Requires a per-file opt-out in the harness first (see `docs/dev/rule_design_guide.md` §6). Guardrail: make it a per-case opt-out, and have `tests/registry.rs` require at least one fully checked `fail` case per language, so the opt-out cannot hide a rule that stops after its first match.
 - **Time-unit literal arithmetic** (extension of `prefer-timedelta-over-seconds` — tip `#rationale`):
   - *Detection*: `24 * 60 * 60`, `60 * 60`, `86400`, `3600` → `timedelta` / `Duration`.
+- **Import alias conventions** (`import x as y`, `use x as y`):
+  - *Context*: Naming rules (`single-letter-variable-name`, `banned-abbreviations`, `no-hungarian-notation`, `prefer-timedelta-over-seconds`) skip all imports, including aliased imports.
+  - *Investigation*: Evaluate how much is already covered by Ruff's `flake8-import-conventions` (`ICN001` `unconventional-import-alias`, `ICN002` `banned-import-alias`) and Pylint (`PLC0414` `useless-import-alias`), and whether a dedicated multi-language import-alias rule is warranted in Omni.
 - *Not pursued*: magic numbers in comparisons (covered by Ruff `PLR2004`), bare HTTP status codes (too narrow), path composition (Ruff `PTH`), test correspondence-signaling and same-value/different-meaning constants (require semantic understanding).
 
 ---

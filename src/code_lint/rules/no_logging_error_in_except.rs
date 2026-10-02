@@ -24,7 +24,7 @@ const BANNED_CALLS: ListOption = ListOption {
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Call to `{call}(...)` inside an `except` block.",
-    rationale: "Logging inside an `except` block without exception context drops the active traceback, obscuring the root cause during debugging.",
+    rationale: "Calling `logging.error` inside an `except` block either drops the active traceback (obscuring the root cause) or requires redundant `exc_info=True` boilerplate instead of the canonical `logging.exception`.",
     suggestion: "Replace with `logging.exception(...)` to capture and attach the active exception traceback automatically.",
 };
 
@@ -52,12 +52,12 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                            as `logger.error(...)` is not flagged. A call passing \
                            `exc_info=True` is flagged too.",
             why_is_this_bad: "Inside an `except` block, the exception being handled is the \
-                              most useful thing to log. `logging.error` records only the \
-                              message, so the log loses the traceback: the exception type and \
-                              where it was raised. Whoever reads the log later has to guess the \
-                              root cause.\n\n\
+                              most useful thing to log. By default `logging.error` records only \
+                              the message and drops the traceback, while passing \
+                              `exc_info=True` duplicates what `logging.exception` already \
+                              expresses directly.\n\n\
                               Use `logging.exception(...)`, which logs at error level and \
-                              attaches the active traceback.",
+                              attaches the active traceback by default.",
             references: &[Reference {
                 title: "Python docs: logging.exception",
                 url: "https://docs.python.org/3/library/logging.html#logging.exception",

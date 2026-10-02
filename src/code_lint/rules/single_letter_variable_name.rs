@@ -46,10 +46,10 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                            parameters (including lambda and closure parameters), loop, \
                            comprehension, `except ... as`, walrus and pattern bindings, and \
                            function, class and constant names, except the allowed ones; `_` \
-                           is never flagged. Unaliased \
-                           imports, members of a Rust `impl Trait for Type` block, Python \
-                           methods marked `@override`, type parameters such as `T`, and \
-                           references to existing names are not checked.",
+                           is never flagged. Imports (including aliased imports), members of a \
+                           Rust `impl Trait for Type` block, Python methods marked \
+                           `@override`, type parameters such as `T`, and references to \
+                           existing names are not checked.",
             why_is_this_bad: "A single letter says nothing about what the value is, so the \
                               reader has to trace where it comes from, and the meaning gets \
                               lost as the scope grows. Single letters are also impossible to \
@@ -107,6 +107,9 @@ crate::test_utils::rule_test!(
                 "#,
                 wildcard_ignored => r#"
                     _ = 1
+                "#,
+                aliased_import_exempt => r#"
+                    import os as a
                 "#,
             ],
             fail: [

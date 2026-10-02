@@ -1,4 +1,4 @@
-//! Enforces wrapping multiline string literals in a dedent helper (`textwrap.dedent`, `indoc!`, etc.).
+//! Enforces wrapping multiline string literals in a dedent helper (`inspect.cleandoc`, `indoc!`, etc.).
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::rule::{CodeRule, RuleTarget};

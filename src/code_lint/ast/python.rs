@@ -27,18 +27,6 @@ pub(super) fn is_import_binding_parent(parent_kind: &str) -> bool {
     )
 }
 
-/// Returns true if a Python node of `parent_kind` makes a child identifier an import binding
-/// carrying no local alias.
-///
-/// `aliased_import` is excluded precisely because it introduces one.
-#[must_use]
-pub(super) fn is_unaliased_import_binding_parent(parent_kind: &str) -> bool {
-    matches!(
-        parent_kind,
-        "import_statement" | "import_from_statement" | "dotted_name"
-    )
-}
-
 /// Returns true if a Python node of `parent_kind` declares a structural definition name.
 #[must_use]
 pub(super) fn is_structural_definition_parent(parent_kind: &str) -> bool {

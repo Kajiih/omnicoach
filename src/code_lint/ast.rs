@@ -299,21 +299,6 @@ pub fn is_import_binding(node: &AstNode<'_>, lang: SupportLang) -> bool {
     dispatch_lang!(lang, is_import_binding_parent(parent_kind.as_ref()), false)
 }
 
-/// Returns true if the node represents an unaliased import binding (an external symbol
-/// imported directly without a local `as` alias).
-#[must_use]
-pub fn is_unaliased_import_binding(node: &AstNode<'_>, lang: SupportLang) -> bool {
-    let Some(parent) = node.raw.parent() else {
-        return false;
-    };
-    let parent_kind = parent.kind();
-    dispatch_lang!(
-        lang,
-        is_unaliased_import_binding_parent(parent_kind.as_ref()),
-        false
-    )
-}
-
 /// Returns true if the node represents a structural type, class, or function definition name.
 #[must_use]
 pub fn is_structural_definition(node: &AstNode<'_>, lang: SupportLang) -> bool {

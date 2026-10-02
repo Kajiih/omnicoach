@@ -98,9 +98,9 @@ const UNUSED_SUPPRESSION: Declaration = Declaration {
 };
 
 const UNKNOWN_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Unknown rule `{target_rule}` in suppression directive.",
-    rationale: "The specified rule is not registered as a suppressible rule in Omni.",
-    suggestion: "Verify the rule name spelling or check if the rule is registered.",
+    summary: "Unknown or unsuppressible rule `{target_rule}` in suppression directive.",
+    rationale: "The specified rule is either unknown to Omni or is a suppression audit that cannot be suppressed inline.",
+    suggestion: "Verify the rule name (`--list-rules`), or disable suppression audits in `.omnilint.toml` rather than inline.",
 };
 
 /// Flags suppression directives targeting unknown or non-suppressible rules.
@@ -116,7 +116,7 @@ const UNKNOWN_SUPPRESSION_RULE: Declaration = Declaration {
         impacted_quality: ImpactedQuality::Reliability,
     },
     doc: RuleDoc {
-        summary: "Flags suppression directives that name a rule Omni does not know.",
+        summary: "Flags suppression directives that name an unknown or unsuppressible rule.",
         what_it_does: "Flags each rule name in an `omni:ignore` or `omni:disable-file` \
                        directive that is not a code rule known to Omni, such as the typo \
                        `[flat-scope-enforce]`. The suppression audits themselves \
