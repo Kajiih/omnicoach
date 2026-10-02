@@ -4,7 +4,7 @@ architecture_component!(TestUtils);
 
 use crate::code_lint::ast::{ParsedFile, detect_language};
 use crate::code_lint::contract::CodeRule;
-use crate::command_lint::rule::CommandRule;
+use crate::command_lint::contract::CommandRule;
 use crate::command_lint::vcs::JjClient;
 use crate::diagnostic::Diagnostic;
 use crate::rule_declaration::OptionsDeclaration;
@@ -56,7 +56,7 @@ pub fn assert_command_rule_snapshot(
     command_input: &str,
     client: &dyn JjClient,
 ) -> String {
-    let cmd = crate::command_lint::rule::InterceptedCommand::parse_all(command_input).remove(0);
+    let cmd = crate::command_lint::command::InterceptedCommand::parse_all(command_input).remove(0);
     let diags = rule.check_command(&cmd, client);
     format_diagnostics_for_test(&diags)
 }

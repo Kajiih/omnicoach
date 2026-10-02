@@ -83,7 +83,8 @@ Rule files are the highest-level policy code in the codebase: they state *what* 
 | `Config` | `config` | Project configuration (`.omnilint.toml`) and resolved rule/path state (`Config`, `ContextConfig`) |
 | `CodeLintAst` / `CommandLintVcs` | `code_lint::ast`, `command_lint::vcs` | Syntax and VCS adapters; `code_lint::ast` encapsulates `ast_grep_core` |
 | `CodeLintSemantic` | `code_lint::semantic::{bindings,calls,comments}` | Cross-language semantic engines |
-| `CodeLintContract` / `CommandLintRule` | `code_lint::contract`, `command_lint::rule` | Rule contracts (`CodeRule`, `AnyCodeRule`, `CommandRule`) |
+| `CodeLintContract` / `CommandLintContract` | `code_lint::contract`, `command_lint::contract` | Rule contracts (`CodeRule`, `AnyCodeRule`, `CommandRule`) |
+| `CommandLintCommand` | `command_lint::command` | Intercepted command parser (`InterceptedCommand`, `ParsedArgs`, `ProgramCliSchema`) |
 | `CodeLintSuppression` | `code_lint::suppression` | Inline comment suppression tracker and directive policies |
 | `CodeLintRules` / `CommandLintRules` | `code_lint::rules::*`, `command_lint::rules::*` | Concrete lint rules and static registries (`CODE_RULES`, `COMMAND_RULES`) |
 | `CodeLintRunner` / `CommandLintRunner` | `code_lint::runner`, `command_lint::runner` | Multi-file and command orchestration runners |

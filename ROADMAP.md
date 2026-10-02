@@ -10,7 +10,6 @@ Items here represent design areas and technical directions to evaluate rather th
 
 Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/architecture.rs` (graph definition) and `tests/architecture_conformance.rs` (source-tree conformance).
 
-- **Contract modules named one letter away from their registries**: `code_lint::rule` (the `CodeRule` contract) and `code_lint::rules` (the registry) yield the components `CodeLintRule` and `CodeLintRules`; `command_lint` has the same pair. Investigate renaming the contract modules (for example `code_lint::contract` → `CodeLintContract`) so the DAG reads unambiguously. Deferred from the naming review (`decisions/010_naming_and_message_conventions.md`) because it is a module move, not a naming fix.
 - **Conformance CST Edge Cases (Watch List)**:
   - *Current*: `summarize_rust_file` skips `macro_definition` bodies (production macros `architecture_component!` and `rule_test!` expand either to a doc attribute or inside `#[cfg(test)]`) and assumes paths do not start with a root-anchored leading `::` (`::omni::...` or `::ast_grep_core::...`).
   - *Target*: If production `macro_rules!` macros calling cross-component helpers (`$crate::...`) are introduced outside `src/lib.rs`, or if root-anchored `::` paths appear, extend `summarize_rust_file` to scan `macro_rule` body token trees and normalize leading `::` prefixes.

@@ -2,7 +2,8 @@
 
 // TODO: Consider if we should replace this rule with a no edit on bookmarked commit?
 
-use crate::command_lint::rule::{CommandRule, InterceptedCommand, ProgramCliSchema};
+use crate::command_lint::command::{InterceptedCommand, ProgramCliSchema};
+use crate::command_lint::contract::CommandRule;
 use crate::command_lint::vcs::JjClient;
 use crate::diagnostic::{
     Diagnostic, RuleName, SourceLocation, SourceSpan, ViolationTemplate, violation_template,
