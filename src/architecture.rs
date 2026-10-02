@@ -3,6 +3,22 @@
 //! Defines [`ArchitectureComponent`], [`ComponentDefinition`], and [`ARCHITECTURE_GRAPH`],
 //! providing compile-time validation for [`crate::architecture_component!`] declarations
 //! across the codebase and the canonical topology for `tests/architecture_conformance.rs`.
+//!
+//! The `define_architecture!` block at the end of this file is the single list of components
+//! and their allowed dependencies; design rationale is in
+//! `decisions/006_architectural_dag_and_conformance.md`. `tests/architecture_conformance.rs`
+//! enforces:
+//! - **Naming**: a component is named after its module path (`code_lint::ast` →
+//!   `CodeLintAst`), and every source file declares its component.
+//! - **Reachability**: a module only imports from components its component depends on.
+//! - **Sibling isolation**: rule files inherit their parent's component and never import
+//!   from sibling rules; shared logic moves down to `code_lint::semantic` or `code_lint::ast`.
+//! - **Single public path**: every item has one canonical path. Cross-component imports use
+//!   `crate::`; `super::` / `self::` stay within a component subtree. A visible re-export is
+//!   allowed only from a private direct child (`mod child; pub use self::child::Item;`), and a
+//!   `macro_rules!` macro declares its path with `pub(crate) use name;` next to its definition
+//!   (`#[macro_export]` only in `src/lib.rs`).
+//! - **Encapsulation**: only `code_lint::ast` uses `ast_grep_core`.
 
 architecture_component!(Architecture);
 

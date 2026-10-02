@@ -123,14 +123,26 @@ impl LanguageText {
     }
 }
 
-/// A declarative template for constructing `ViolationMessage`s.
+/// A declarative template for constructing [`ViolationMessage`]s.
+///
+/// Each rule has exactly one template, declared with `violation_template!`. Its three
+/// fields are orthogonal and never repeat each other:
+/// - [`summary`](Self::summary): what was observed on the flagged construct, as a fact.
+/// - [`rationale`](Self::rationale): the concrete failure mode it causes.
+/// - [`suggestion`](Self::suggestion): the single canonical fix, specialized per language.
+///
+/// Any field may override its `base` text per language. `{placeholder}`s are filled in when
+/// the rule renders a finding ([`Self::render_for_lang`]). Why the fields are split is
+/// explained in `docs/dev/rule_design_guide.md` §2; their wording and the closed
+/// placeholder list are fixed by `docs/dev/naming_and_message_style_guide.md` §2–3 and
+/// checked by `tests/registry.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViolationTemplate {
-    /// Summary template.
+    /// Summary template: the observed fact, e.g. ``"Test calls `{callee}()`."``.
     pub summary: LanguageText,
-    /// Rationale template.
+    /// Rationale template: the failure mode, never the matched construct or the fix.
     pub rationale: LanguageText,
-    /// Suggestion template.
+    /// Suggestion template: the canonical replacement, never a restatement of the problem.
     pub suggestion: LanguageText,
 }
 

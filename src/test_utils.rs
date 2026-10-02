@@ -245,12 +245,63 @@ fn dummy_filename(lang: SupportLang) -> &'static str {
 
 /// Declarative macro generating the complete `#[cfg(test)] mod tests` suite for a [`CodeRule`].
 ///
-/// Expands every `pass` and `fail` entry into an independent `#[rstest::rstest]` `#[case]`,
-/// generates a `language_completeness` test verifying all the rule's declared languages and
-/// a `documented_examples` test running the examples of the rule's doc.
+/// Every rule file ends with one invocation; bespoke `#[test]` / `#[rstest]` functions and
+/// hand-written `mod tests` blocks in rule files are rejected by `tests/registry.rs`:
+/// ```rust,ignore
+/// #[cfg(test)]
+/// crate::test_utils::rule_test!(SLEEP_IN_TESTS, {
+///     Python => {
+///         pass: [injected_clock => "fake_clock.sleep(10)"],
+///         fail: [
+///             time_sleep => "time.sleep(1)",
+///             inside_a_test => "
+///                 def test_retry():
+///                     time.sleep(1)
+///             " => "time.sleep(1)",
+///         ],
+///     },
+///     Rust => { /* one block per declared language */ },
+/// });
+/// ```
 ///
-/// Each `fail` entry accepts at most one expected snippet (`=> r#"..."#`) and must produce
-/// exactly one diagnostic, so every case exercises a single flagged node.
+/// # What it generates
+///
+/// - A `pass` / `fail` `#[rstest]` case per entry, named after it.
+/// - `language_completeness`: every language in the rule's declaration has a block.
+/// - `documented_examples`: the doc's [`crate::rule_declaration::Example`]s, checked by
+///   [`assert_documented_examples`].
+///
+/// # How a `fail` case is checked
+///
+/// - It must produce exactly one diagnostic. Multi-node cases are not supported; known cases
+///   that would need them are nested flagged constructs (a `def` inside a nested `def` in
+///   `nested-function`), rules reporting every occurrence inside one node, and per-file
+///   aggregation (the `no-repeated-literals` candidate in `ROADMAP.md`). Per-scope
+///   aggregation fits when each case sits in its own scope (`repeated-index-access`).
+/// - Without `=> r#"..."#`, the whole snippet must be the flagged node. With it, the finding
+///   must span exactly that inner slice. Leading indentation of lines `2..N` is normalized,
+///   so the slice can be written as a clean `indoc!` string.
+/// - The code is also run repeated twice in one file and must report both occurrences, so
+///   a rule that stops after its first match (`find` instead of `find_all`, early `return`,
+///   stray `break`) fails.
+///
+/// # Writing cases
+///
+/// - At minimum: the core antipattern (`fail`) and the canonical fix from the template's
+///   suggestion (`pass`).
+/// - One behaviour per case (one banned pattern, one exemption, one construct), named after
+///   it, so a failing case name pinpoints the regression.
+/// - An exemption `pass` case must be flagged if the exemption were removed; confirm once by
+///   disabling the exemption and watching the case fail.
+/// - An accepted false negative is a `pass` case named `known_gap_*` with a `ROADMAP.md`
+///   entry, so fixing it forces the case to be updated.
+/// - Do not re-test option parsing or per-language resolution: `rule_declaration` tests it
+///   centrally. Do not snapshot template prose: `tests/registry.rs` checks templates, and
+///   snapshots are reserved for CLI output (`tests/cli.rs`).
+/// - When a case cannot be expressed (e.g. a module-level construct broken by the
+///   repeated-occurrence check), unit-test the `ast` / `semantic` helper that computes the
+///   fact. Change the harness only for a whole class of rules, with a guardrail so the
+///   change cannot hide regressions.
 macro_rules! rule_test {
     ($rule:expr, { $($body:tt)* }) => {
         $crate::test_utils::rule_test!(tests: $rule, { $($body)* });

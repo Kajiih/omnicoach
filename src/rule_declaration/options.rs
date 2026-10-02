@@ -282,6 +282,11 @@ impl OptionSpec {
 
 /// Everything a rule accepts under `[rules.<name>]` and `[rules.<name>.<language>]`.
 /// A key that is not declared here is rejected at load.
+///
+/// A code rule declares its [`CountOption`] / [`ListOption`] consts next to its declaration
+/// and passes them to [`Self::code_rule`]; its check function then receives the values as
+/// [`OptionsDeclaration::Param`]. `--explain` renders every key, doc and default from this
+/// declaration, so the rule's prose never repeats them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuleOptions<Options: OptionsDeclaration> {
     /// The default `enforcement-mode`, or `None` if the rule rejects the key because its

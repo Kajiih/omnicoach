@@ -8,6 +8,11 @@ use strum::{EnumIter, EnumMessage, IntoStaticStr};
 ///
 /// Each topic is declared once, as an associated `const` on [`Topic`]. The consts are
 /// `pub(crate)` so that a topic no rule uses fails the `dead_code` lint.
+///
+/// Admit a topic only when it (1) names a subject (not a quality), (2) passes the
+/// all-and-some test under its parent, (3) has a `description` and an includes/excludes
+/// `scope_note`, (4) has a unique `kebab-case` label, and (5) has at least one rule
+/// (`docs/dev/tag_guide.md` §4). Add a matching row to `tag_guide.md` §5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Topic {
     /// The topic's canonical `kebab-case` label, e.g. `test-timing`.
@@ -240,6 +245,10 @@ impl Topic {
 }
 
 /// Precision facet: can the rule flag correct code?
+///
+/// **Test:** does the rule's *design* use a syntactic proxy for the target construct or its
+/// exemption boundary, so that it can flag code that is correct? If yes → [`Self::Heuristic`].
+/// Worked examples and edge cases: `docs/dev/tag_guide.md` §2.2.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, EnumIter, IntoStaticStr, EnumMessage,
 )]
@@ -252,6 +261,9 @@ pub enum Precision {
 }
 
 /// Consensus facet: do reasonable people disagree with the rule?
+///
+/// **Test:** name one ordinary situation where the flagged code is correct and appropriate.
+/// If you can → [`Self::Opinionated`]. Worked examples: `docs/dev/tag_guide.md` §2.3.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, EnumIter, IntoStaticStr, EnumMessage,
 )]
@@ -264,6 +276,11 @@ pub enum Consensus {
 }
 
 /// Impacted quality facet (ISO/IEC 25010): what software quality suffers when violated.
+///
+/// **Test:** does the flagged code or command have a *mechanism that leads to wrong
+/// behaviour* (a bug, a flaky or false-green test, a wrong suppression, a command that
+/// corrupts state or history)? If yes → [`Self::Reliability`]. Worked examples and when to
+/// add another ISO/IEC 25010 value: `docs/dev/tag_guide.md` §2.4.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, EnumIter, IntoStaticStr, EnumMessage,
 )]
@@ -278,7 +295,8 @@ pub enum ImpactedQuality {
 /// A rule's declared classification: one mandatory field per declared facet.
 ///
 /// Derived facets (languages, analyzed input, file scope) have no field, and `topics` lists
-/// only the most specific topics.
+/// only the most specific topics. How to classify a rule, and when to add a [`Topic`], is
+/// in `docs/dev/tag_guide.md` §2 and §4.
 ///
 /// A valid classification:
 /// ```

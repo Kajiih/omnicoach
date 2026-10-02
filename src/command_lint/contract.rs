@@ -10,6 +10,10 @@ use crate::rule_declaration::Declaration;
 
 /// A rule that analyzes intercepted shell commands: its declaration and the function that
 /// finds its violations.
+///
+/// A command rule file exposes one `pub const` `CommandRule`, listed in `COMMAND_RULES`
+/// (`src/command_lint/rules.rs`). It declares `languages: &[]`, `RuleOptions::none()`, and
+/// `examples: &[]` (command rules have no `rule_test!` harness yet).
 #[derive(Clone, Copy)]
 pub struct CommandRule {
     /// Name, template, options, classification and doc; command rules analyze no language.

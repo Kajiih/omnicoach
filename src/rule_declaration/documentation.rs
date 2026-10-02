@@ -18,30 +18,48 @@ pub struct Reference {
 ///
 /// The rule's tests check both as strictly as `rule_test!` cases: the flagged snippet yields
 /// exactly one finding spanning `flagged_span`, also when repeated, and the fixed one none.
+///
+/// Examples are documentation written for the reader, rendered by `--explain`. They
+/// deliberately overlap the `rule_test!` `pass` / `fail` cases and never replace them, so
+/// editing an example for readability cannot drop coverage.
+///
+/// Write both snippets as short, realistic `indoc::indoc!` raw strings. They are
+/// self-contained bodies: include an import or `use` only when the fix introduces or
+/// replaces it (`inspect.cleandoc`, `Duration`, `timedelta`), or when the definition
+/// syntax requires it (`@dataclass`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Example {
     /// The language both snippets are written in.
     pub language: SupportLang,
     /// Code the rule flags once.
     pub flagged: &'static str,
-    /// The part of `flagged` the finding spans; not rendered.
+    /// The part of `flagged` the finding spans; not rendered. It plays the role of a
+    /// `rule_test!` case's `=> r#"..."#` span.
     pub flagged_span: &'static str,
-    /// The same code following the rule's suggestion.
+    /// The same code rewritten as the rule's template `suggestion` prescribes.
     pub fixed: &'static str,
 }
 
-/// A rule's user-facing documentation. A missing section does not compile (`E0063`).
+/// A rule's user-facing documentation, rendered by `--explain`. A missing section does not
+/// compile (`E0063`).
+///
+/// Option defaults are rendered from the rule's options declaration, so the prose never
+/// repeats them. Wording rules for `summary` are in
+/// `docs/dev/naming_and_message_style_guide.md` §2.5, checked by `tests/registry.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuleDoc {
-    /// One sentence for rule lists, ending with a period.
+    /// One sentence for rule lists, opening with `Flags` (pattern rules) or `Requires`
+    /// (rules whose fix adds something) and ending with a period.
     pub summary: &'static str,
-    /// What the rule flags, in a few sentences.
+    /// What the rule flags, in a few sentences: the covered constructs and the explicit
+    /// exemptions.
     pub what_it_does: &'static str,
     /// Why the flagged code is a problem: the authoritative, longer rationale.
     pub why_is_this_bad: &'static str,
     /// Links to backing or related documents.
     pub references: &'static [Reference],
-    /// One example per analyzed language; empty for rules without a code harness.
+    /// Exactly one [`Example`] per analyzed language (checked by `tests/registry.rs`);
+    /// empty for rules without a code harness.
     pub examples: &'static [Example],
 }
 
