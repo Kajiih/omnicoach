@@ -4,7 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
+    Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
@@ -66,6 +66,38 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 title: "Making Wrong Code Look Wrong (Joel Spolsky)",
                 url: "https://www.joelonsoftware.com/2005/05/11/making-wrong-code-look-wrong/",
             }],
+            examples: &[
+                Example {
+                    language: SupportLang::Python,
+                    flagged: indoc::indoc! {r"
+                        def rank_players(matches):
+                            scores_dict = tally_scores(matches)
+                            return sorted(scores_dict, key=scores_dict.get, reverse=True)
+                    "},
+                    flagged_span: "scores_dict",
+                    fixed: indoc::indoc! {r"
+                        def rank_players(matches):
+                            scores = tally_scores(matches)
+                            return sorted(scores, key=scores.get, reverse=True)
+                    "},
+                },
+                Example {
+                    language: SupportLang::Rust,
+                    flagged: indoc::indoc! {r"
+                        fn rank_players(matches: &[Match]) -> Vec<PlayerId> {
+                            let scores_map = tally_scores(matches);
+                            rank_by_score(&scores_map)
+                        }
+                    "},
+                    flagged_span: "scores_map",
+                    fixed: indoc::indoc! {r"
+                        fn rank_players(matches: &[Match]) -> Vec<PlayerId> {
+                            let scores = tally_scores(matches);
+                            rank_by_score(&scores)
+                        }
+                    "},
+                },
+            ],
         },
     },
     target: RuleTarget::All,

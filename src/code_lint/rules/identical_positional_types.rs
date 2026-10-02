@@ -7,8 +7,8 @@ use crate::code_lint::ast::{AstNode, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, CountOption, Declaration, ImpactedQuality, LanguageDefaults,
-    Precision, Reference, RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality,
+    LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -62,6 +62,20 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
             references: &[Reference {
                 title: "PEP 3102: Keyword-Only Arguments",
                 url: "https://peps.python.org/pep-3102/",
+            }],
+            examples: &[Example {
+                language: SupportLang::Python,
+                flagged: indoc::indoc! {r"
+                    def transfer(source_id: str, target_id: str, amount: int) -> None:
+                        ledger.debit(source_id, amount)
+                        ledger.credit(target_id, amount)
+                "},
+                flagged_span: "transfer",
+                fixed: indoc::indoc! {r"
+                    def transfer(*, source_id: str, target_id: str, amount: int) -> None:
+                        ledger.debit(source_id, amount)
+                        ledger.credit(target_id, amount)
+                "},
             }],
         },
     },

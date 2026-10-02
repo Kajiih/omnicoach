@@ -24,17 +24,26 @@ pub struct RuleDoc {
     pub what_it_does: &'static str,
     pub why_is_this_bad: &'static str,
     pub references: &'static [Reference],
+    pub examples: &'static [Example],
 }
 
 pub struct Reference {
     pub title: &'static str,
     pub url: &'static str,
 }
+
+pub struct Example {
+    pub language: SupportLang,
+    pub flagged: &'static str,
+    pub flagged_span: &'static str,
+    pub fixed: &'static str,
+}
 ```
 
 - **Two-Tier Summaries (`DI10`)**: `summary` is strictly one sentence on one line, ending with a period. It is used in `--list-rules` outputs. `what_it_does` is a comprehensive multi-sentence description detailing covered constructs and explicit exemptions, displayed under `## What it does` in `--explain`.
 - **Compile-Time Completeness**: Omitting a field from `RuleDoc` is a compile error (`E0063`).
 - **Incremental Content Rollout (`DI12`)**: A `RuleDoc::TODO` placeholder allows progressive rollout across existing rules while maintaining compile-time completeness. Automated style linter tests enforce formatting on all non-placeholder docs.
+- **Executed Examples (`D42`, added after the initial decision)**: Each code rule documents exactly one flagged/fixed pair per declared language, rendered by `--explain` under `## Example` with a "Use instead:" fix (the Ruff layout). The pairs live in `RuleDoc` rather than in marked `rule_test!` cases, so the doc reads as prose next to the rule; `rule_test!` generates a `documented_examples` test that checks each pair with the same assertions as its `fail` / `pass` cases (exactly one finding spanning `flagged_span`, also when the snippet is repeated, and none on the fix), so a rendered example cannot drift from the rule. Examples deliberately overlap the `rule_test!` cases rather than replace them: docs get edited for readability, and that must never drop coverage. Suppression audits and command rules have no harness to run examples and declare none.
 
 ### 2.2. Discovery CLI Flags (`DI8`, `DI9`, `DI14`, `D50`)
 
@@ -86,7 +95,7 @@ pub enum OutputFormat {
 
 ## 4. Non-Goals & Future Roadmap
 
-- **Rule Examples (`D42`)**: In-doc code examples (good/bad snippets) are deferred to a dedicated roadmap item.
+- **Examples for Suppression Audits and Command Rules**: Deferred to roadmap until a harness can execute them (code rule examples are now decided in §2.1).
 - **Subcommands (`rules`, `explain`)**: Kept as flags (`--list-rules`, `--explain`) for now; CLI subcommands deferred to roadmap.
 - **JSON Output for Discovery**: `--format json` for `--list-rules` / `--explain` deferred to roadmap.
 - **Path-Aware Status in `explain`**: Status reports global config resolution; evaluating specific `per_file_ignores` for a supplied file path is deferred to roadmap.

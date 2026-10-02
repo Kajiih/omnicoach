@@ -4,7 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
+    Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
@@ -83,6 +83,21 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                     url: "https://docs.python.org/3/library/asyncio-task.html#task-groups",
                 },
             ],
+            examples: &[Example {
+                language: SupportLang::Python,
+                flagged: indoc::indoc! {r"
+                    async def refresh_dashboards(dashboards):
+                        for dashboard in dashboards:
+                            asyncio.create_task(dashboard.refresh())
+                "},
+                flagged_span: "asyncio.create_task(dashboard.refresh())",
+                fixed: indoc::indoc! {r"
+                    async def refresh_dashboards(dashboards):
+                        async with asyncio.TaskGroup() as group:
+                            for dashboard in dashboards:
+                                group.create_task(dashboard.refresh())
+                "},
+            }],
         },
     },
     target: RuleTarget::All,

@@ -5,7 +5,7 @@ use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls::{self, CallMatch};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
+    Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
@@ -93,6 +93,48 @@ pub const SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
                     url: "https://testing.googleblog.com/2016/05/flaky-tests-at-google-and-how-we.html",
                 },
             ],
+            examples: &[
+                Example {
+                    language: SupportLang::Python,
+                    flagged: indoc::indoc! {r#"
+                        import time
+
+                        def test_session_expires(sessions):
+                            sessions.open("alice", ttl=30)
+                            time.sleep(31)
+                            assert not sessions.is_active("alice")
+                    "#},
+                    flagged_span: "time.sleep(31)",
+                    fixed: indoc::indoc! {r#"
+                        def test_session_expires(sessions, fake_clock):
+                            sessions.open("alice", ttl=30)
+                            fake_clock.advance(31)
+                            assert not sessions.is_active("alice")
+                    "#},
+                },
+                Example {
+                    language: SupportLang::Rust,
+                    flagged: indoc::indoc! {r#"
+                        #[tokio::test]
+                        async fn test_session_expires() {
+                            let sessions = SessionStore::with_ttl(Duration::from_secs(30));
+                            sessions.open("alice");
+                            tokio::time::sleep(Duration::from_secs(31)).await;
+                            assert!(!sessions.is_active("alice"));
+                        }
+                    "#},
+                    flagged_span: "tokio::time::sleep(Duration::from_secs(31))",
+                    fixed: indoc::indoc! {r#"
+                        #[tokio::test(start_paused = true)]
+                        async fn test_session_expires() {
+                            let sessions = SessionStore::with_ttl(Duration::from_secs(30));
+                            sessions.open("alice");
+                            tokio::time::advance(Duration::from_secs(31)).await;
+                            assert!(!sessions.is_active("alice"));
+                        }
+                    "#},
+                },
+            ],
         },
     },
     target: RuleTarget::TestsOnly,
@@ -138,6 +180,48 @@ pub const ZERO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
                 Reference {
                     title: "asyncio.sleep (Python documentation)",
                     url: "https://docs.python.org/3/library/asyncio-task.html#asyncio.sleep",
+                },
+            ],
+            examples: &[
+                Example {
+                    language: SupportLang::Python,
+                    flagged: indoc::indoc! {r#"
+                        import asyncio
+
+                        async def test_publish_notifies_subscriber(bus, subscriber):
+                            bus.publish("order.created")
+                            await asyncio.sleep(0)
+                            assert subscriber.received == ["order.created"]
+                    "#},
+                    flagged_span: "asyncio.sleep(0)",
+                    fixed: indoc::indoc! {r#"
+                        async def test_publish_notifies_subscriber(bus, subscriber):
+                            bus.publish("order.created")
+                            await subscriber.delivered.wait()
+                            assert subscriber.received == ["order.created"]
+                    "#},
+                },
+                Example {
+                    language: SupportLang::Rust,
+                    flagged: indoc::indoc! {r#"
+                        #[tokio::test]
+                        async fn test_publish_notifies_subscriber() {
+                            let (bus, subscriber) = spawn_bus();
+                            bus.publish("order.created");
+                            tokio::time::sleep(Duration::ZERO).await;
+                            assert_eq!(subscriber.received(), ["order.created"]);
+                        }
+                    "#},
+                    flagged_span: "tokio::time::sleep(Duration::ZERO)",
+                    fixed: indoc::indoc! {r#"
+                        #[tokio::test]
+                        async fn test_publish_notifies_subscriber() {
+                            let (bus, subscriber) = spawn_bus();
+                            bus.publish("order.created");
+                            tokio::task::yield_now().await;
+                            assert_eq!(subscriber.received(), ["order.created"]);
+                        }
+                    "#},
                 },
             ],
         },
@@ -195,7 +279,7 @@ fn check_zero_sleep(
 }
 
 #[cfg(test)]
-crate::test_utils::rule_test!(tests_no_sleep: SLEEP_IN_TESTS, {
+crate::test_utils::rule_test!(tests_sleep_in_tests: SLEEP_IN_TESTS, {
     Python => {
         pass: [
             zero_duration_sleep_handled_separately => r"
@@ -314,7 +398,7 @@ crate::test_utils::rule_test!(tests_no_sleep: SLEEP_IN_TESTS, {
 });
 
 #[cfg(test)]
-crate::test_utils::rule_test!(tests_no_zero_sleep: ZERO_SLEEP_IN_TESTS, {
+crate::test_utils::rule_test!(tests_zero_sleep_in_tests: ZERO_SLEEP_IN_TESTS, {
     Python => {
         pass: [
             non_zero_sleep => r"

@@ -5,7 +5,7 @@ use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
+    Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
@@ -114,6 +114,40 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 title: "Rust docs: std::env::set_var (safety)",
                 url: "https://doc.rust-lang.org/std/env/fn.set_var.html",
             }],
+            examples: &[
+                Example {
+                    language: SupportLang::Python,
+                    flagged: indoc::indoc! {r#"
+                        import os
+
+
+                        def connect_database() -> Connection:
+                            return psycopg.connect(os.environ["DATABASE_URL"])
+                    "#},
+                    flagged_span: r#"os.environ["DATABASE_URL"]"#,
+                    fixed: indoc::indoc! {r"
+                        def connect_database(database_url: str) -> Connection:
+                            return psycopg.connect(database_url)
+                    "},
+                },
+                Example {
+                    language: SupportLang::Rust,
+                    flagged: indoc::indoc! {r#"
+                        use std::env;
+
+                        fn connect_database() -> Result<Connection, Error> {
+                            let database_url = env::var("DATABASE_URL")?;
+                            Connection::open(&database_url)
+                        }
+                    "#},
+                    flagged_span: r#"env::var("DATABASE_URL")"#,
+                    fixed: indoc::indoc! {r"
+                        fn connect_database(database_url: &str) -> Result<Connection, Error> {
+                            Connection::open(database_url)
+                        }
+                    "},
+                },
+            ],
         },
     },
     target: RuleTarget::SourceOnly,

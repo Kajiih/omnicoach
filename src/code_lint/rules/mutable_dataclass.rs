@@ -5,8 +5,8 @@ use crate::code_lint::ast::python::extract_classes;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, ImpactedQuality, Precision, Reference, RuleDoc,
-    RuleOptions, Topic,
+    Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
+    RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
 use std::path::Path;
@@ -49,6 +49,26 @@ pub const RULE: CodeRule = CodeRule {
             references: &[Reference {
                 title: "Python docs: dataclasses",
                 url: "https://docs.python.org/3/library/dataclasses.html",
+            }],
+            examples: &[Example {
+                language: SupportLang::Python,
+                flagged: indoc::indoc! {r"
+                    from dataclasses import dataclass
+
+                    @dataclass(slots=True)
+                    class Invoice:
+                        number: str
+                        amount_cents: int
+                "},
+                flagged_span: "Invoice",
+                fixed: indoc::indoc! {r"
+                    from dataclasses import dataclass
+
+                    @dataclass(frozen=True, slots=True)
+                    class Invoice:
+                        number: str
+                        amount_cents: int
+                "},
             }],
         },
     },

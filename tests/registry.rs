@@ -106,6 +106,46 @@ fn test_code_rules_declare_supported_languages() {
     }
 }
 
+/// Code rule examples are executed by `rule_test!`, so each declared language gets exactly one.
+#[test]
+fn test_code_rules_document_one_example_per_language() {
+    for rule in CODE_RULES.iter().map(|rule| rule.declaration()) {
+        let example_languages: Vec<_> = rule
+            .doc
+            .examples
+            .iter()
+            .map(|example| example.language)
+            .collect();
+        assert_eq!(
+            example_languages.len(),
+            rule.languages.len(),
+            "Rule {} must document exactly one example per declared language",
+            rule.name
+        );
+        assert!(
+            rule.languages
+                .iter()
+                .all(|language| example_languages.contains(language)),
+            "Rule {} must document an example for each declared language, got {example_languages:?}",
+            rule.name
+        );
+    }
+}
+
+/// Nothing executes the examples of suppression audits and command rules, so they declare none.
+#[test]
+fn test_rules_without_an_example_harness_document_no_examples() {
+    let audits = SUPPRESSION_AUDITS.iter().map(Declaration::declared);
+    let command_rules = COMMAND_RULES.iter().map(|rule| rule.declaration.declared());
+    for rule in audits.chain(command_rules) {
+        assert!(
+            rule.doc.examples.is_empty(),
+            "Rule {} has no harness running its examples and must document none",
+            rule.name
+        );
+    }
+}
+
 fn rule_sources(relative_dir: &str) -> Vec<(std::path::PathBuf, String)> {
     let rules_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_dir);
     let entries = std::fs::read_dir(rules_dir).expect("rule directory must be readable");
@@ -137,8 +177,15 @@ fn rule_test_convention_violation(source: &str) -> Option<&'static str> {
         return Some("must not use assert_code_rule_snapshot; use rule_test!(...) instead");
     }
     let pre_macro = source.split("rule_test!(").next().unwrap_or(source);
+    // Multiline raw strings hold doc example snippets, whose `#[test]` is not a bespoke test.
+    let mut in_raw_string = false;
     if pre_macro.lines().any(|line| {
         let trimmed = line.trim();
+        if in_raw_string {
+            in_raw_string = !(trimmed.starts_with("\"}") || trimmed.starts_with("\"#}"));
+            return false;
+        }
+        in_raw_string = trimmed.ends_with("r\"") || trimmed.ends_with("r#\"");
         trimmed == "#[test]" || trimmed == "#[rstest]" || trimmed.starts_with("#[rstest(")
     }) {
         return Some("must not define bespoke #[test] functions outside rule_test!(...)");

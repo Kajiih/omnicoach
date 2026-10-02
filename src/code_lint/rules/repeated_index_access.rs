@@ -4,8 +4,8 @@ use crate::code_lint::ast::{self, AstNode, ParsedFile, ScopePositionalReads};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, CountOption, Declaration, ImpactedQuality, LanguageDefaults,
-    Precision, Reference, RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality,
+    LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
 use std::collections::BTreeSet;
@@ -85,6 +85,36 @@ pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
                 Reference {
                     title: "The Rust Programming Language: The Tuple Type",
                     url: "https://doc.rust-lang.org/book/ch03-02-data-types.html#the-tuple-type",
+                },
+            ],
+            examples: &[
+                Example {
+                    language: SupportLang::Python,
+                    flagged: indoc::indoc! {r"
+                        def render_marker(location):
+                            return map_marker(latitude=location[0], longitude=location[1])
+                    "},
+                    flagged_span: "location[0]",
+                    fixed: indoc::indoc! {r"
+                        def render_marker(location):
+                            latitude, longitude = location
+                            return map_marker(latitude=latitude, longitude=longitude)
+                    "},
+                },
+                Example {
+                    language: SupportLang::Rust,
+                    flagged: indoc::indoc! {r"
+                        fn elapsed(interval: (Instant, Instant)) -> Duration {
+                            interval.1 - interval.0
+                        }
+                    "},
+                    flagged_span: "interval.1",
+                    fixed: indoc::indoc! {r"
+                        fn elapsed(interval: (Instant, Instant)) -> Duration {
+                            let (start, end) = interval;
+                            end - start
+                        }
+                    "},
                 },
             ],
         },

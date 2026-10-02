@@ -4,7 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
+    Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
@@ -129,6 +129,22 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                     url: "https://martinfowler.com/articles/mocksArentStubs.html",
                 },
             ],
+            examples: &[Example {
+                language: SupportLang::Python,
+                flagged: indoc::indoc! {r#"
+                    def test_register_user():
+                        repository = MagicMock()
+                        register_user(repository, "alice@example.com")
+                        assert repository.save.called
+                "#},
+                flagged_span: "MagicMock()",
+                fixed: indoc::indoc! {r#"
+                    def test_register_user():
+                        repository = FakeUserRepository()
+                        register_user(repository, "alice@example.com")
+                        assert "alice@example.com" in repository.users
+                "#},
+            }],
         },
     },
     target: RuleTarget::TestsOnly,

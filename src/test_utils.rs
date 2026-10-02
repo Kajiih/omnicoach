@@ -214,6 +214,25 @@ fn normalize_span_indentation(code: &str, span_start: usize, raw_slice: &str) ->
     normalized
 }
 
+/// Asserts each of the rule's documented examples exactly like a `rule_test!` case: the flagged
+/// snippet as a `fail` case expecting its `flagged_span`, the fixed snippet as a `pass` case.
+///
+/// # Panics
+/// Panics as [`assert_rule_fail`] and [`assert_rule_pass`] do.
+#[track_caller]
+pub fn assert_documented_examples<Options: OptionsDeclaration>(rule: &CodeRule<Options>) {
+    for example in rule.declaration.doc.examples {
+        assert_rule_fail(
+            rule,
+            example.language,
+            "documented example",
+            example.flagged,
+            Some(example.flagged_span),
+        );
+        assert_rule_pass(rule, example.language, "documented fix", example.fixed);
+    }
+}
+
 fn dummy_filename(lang: SupportLang) -> &'static str {
     match lang {
         SupportLang::Python => "test.py",
@@ -226,8 +245,9 @@ fn dummy_filename(lang: SupportLang) -> &'static str {
 
 /// Declarative macro generating the complete `#[cfg(test)] mod tests` suite for a [`CodeRule`].
 ///
-/// Expands every `pass` and `fail` entry into an independent `#[rstest::rstest]` `#[case]`
-/// and generates a `language_completeness` test verifying all the rule's declared languages.
+/// Expands every `pass` and `fail` entry into an independent `#[rstest::rstest]` `#[case]`,
+/// generates a `language_completeness` test verifying all the rule's declared languages and
+/// a `documented_examples` test running the examples of the rule's doc.
 ///
 /// Each `fail` entry accepts at most one expected snippet (`=> r#"..."#`) and must produce
 /// exactly one diagnostic, so every case exercises a single flagged node.
@@ -259,6 +279,11 @@ macro_rules! rule_test {
                     &$rule,
                     &[$( ::ast_grep_language::SupportLang::$lang ),+],
                 );
+            }
+
+            #[test]
+            fn documented_examples() {
+                $crate::test_utils::assert_documented_examples(&$rule);
             }
 
             #[rstest::rstest]

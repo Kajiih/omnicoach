@@ -11,7 +11,7 @@ mod documentation;
 mod options;
 mod taxonomy;
 
-pub use self::documentation::{Reference, RuleDoc};
+pub use self::documentation::{Example, Reference, RuleDoc};
 pub use self::options::{
     CountOption, DeclaredOptions, EnforcementMode, FilterListDefaults, LanguageDefaults, ListKind,
     ListOption, OptionProblem, OptionSpec, OptionsDeclaration, RuleOptions, RuleOptionsError,

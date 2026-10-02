@@ -51,6 +51,7 @@ const MISSING_SUPPRESSION_REASON: Declaration = Declaration {
             title: "Ruff: Error suppression",
             url: "https://docs.astral.sh/ruff/linter/#error-suppression",
         }],
+        examples: &[],
     },
 };
 
@@ -94,6 +95,7 @@ const UNUSED_SUPPRESSION: Declaration = Declaration {
             title: "Ruff: unused-noqa (RUF100)",
             url: "https://docs.astral.sh/ruff/rules/unused-noqa/",
         }],
+        examples: &[],
     },
 };
 
@@ -130,6 +132,7 @@ const UNKNOWN_SUPPRESSION_RULE: Declaration = Declaration {
                           Fix the name (`--list-rules` prints every rule name), or remove \
                           it from the directive.",
         references: &[],
+        examples: &[],
     },
 };
 
@@ -168,6 +171,7 @@ const BLANKET_SUPPRESSION: Declaration = Declaration {
             title: "Ruff: blanket-noqa (PGH004)",
             url: "https://docs.astral.sh/ruff/rules/blanket-noqa/",
         }],
+        examples: &[],
     },
 };
 

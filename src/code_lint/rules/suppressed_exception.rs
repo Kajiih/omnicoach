@@ -6,8 +6,9 @@ use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, EnforcementMode, FilterListDefaults, ImpactedQuality,
-    LanguageDefaults, ListKind, ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, Declaration, EnforcementMode, Example, FilterListDefaults,
+    ImpactedQuality, LanguageDefaults, ListKind, ListOption, Precision, Reference, RuleDoc,
+    RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
 use std::collections::HashSet;
@@ -70,6 +71,19 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             references: &[Reference {
                 title: "Python docs: contextlib.suppress",
                 url: "https://docs.python.org/3/library/contextlib.html#contextlib.suppress",
+            }],
+            examples: &[Example {
+                language: SupportLang::Python,
+                flagged: indoc::indoc! {r"
+                    with suppress(FileNotFoundError):
+                        os.remove(lock_path)
+                "},
+                flagged_span: "suppress(FileNotFoundError)",
+                fixed: indoc::indoc! {r"
+                    # The cleanup job may already have removed the lock file.
+                    with suppress(FileNotFoundError):
+                        os.remove(lock_path)
+                "},
             }],
         },
     },

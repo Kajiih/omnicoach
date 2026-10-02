@@ -4,7 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
+    Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
@@ -106,6 +106,34 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 title: "Google Python Style Guide: Naming",
                 url: "https://google.github.io/styleguide/pyguide.html#316-naming",
             }],
+            examples: &[
+                Example {
+                    language: SupportLang::Python,
+                    flagged: indoc::indoc! {r"
+                        def send_alert(notifier, msg):
+                            notifier.publish(msg)
+                    "},
+                    flagged_span: "msg",
+                    fixed: indoc::indoc! {r"
+                        def send_alert(notifier, message):
+                            notifier.publish(message)
+                    "},
+                },
+                Example {
+                    language: SupportLang::Rust,
+                    flagged: indoc::indoc! {r"
+                        fn send_alert(notifier: &Notifier, msg: &str) {
+                            notifier.publish(msg);
+                        }
+                    "},
+                    flagged_span: "msg",
+                    fixed: indoc::indoc! {r"
+                        fn send_alert(notifier: &Notifier, message: &str) {
+                            notifier.publish(message);
+                        }
+                    "},
+                },
+            ],
         },
     },
     target: RuleTarget::All,
