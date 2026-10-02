@@ -80,9 +80,9 @@ const UNUSED_SUPPRESSION: Declaration = Declaration {
                        own line (extended over any decorators, attributes or comments to the \
                        first line of the declaration they belong to), or the whole file. A \
                        rule that is disabled in the configuration, or \
-                       does not run on that file, produces no finding and is therefore \
-                       reported too. Unknown rule names and directives without rule names \
-                       are left to `unknown-suppression-rule` and `blanket-suppression`.",
+                       does not run on that file, is not checked. Unknown rule names and \
+                       directives without rule names are left to `unknown-suppression-rule` \
+                       and `blanket-suppression`.",
         why_is_this_bad: "A suppression that matches nothing is stale: the code was fixed \
                           or moved, or the directive sits on the wrong line. It misleads \
                           readers into thinking the line breaks a rule, and it keeps \
@@ -135,7 +135,7 @@ const UNKNOWN_SUPPRESSION_RULE: Declaration = Declaration {
 
 const BLANKET_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Blanket suppression directives without rule names are banned.",
-    rationale: "Directives must explicitly target rule names in brackets (e.g. `[rule-name]`) to prevent unintended rule suppression.",
+    rationale: "A directive without bracketed rule names (e.g. `[rule-name]`) suppresses no findings, yet reads as if it silenced every check on the line or in the file.",
     suggestion: "Specify the explicit rule names in brackets, e.g. `[rule-name] -- reason`.",
 };
 
@@ -333,14 +333,16 @@ impl SuppressionTracker {
 
     /// Audits all parsed directives and emits suppression diagnostics according to configuration.
     ///
-    /// `suppressible_rules` holds the names of every registered non-suppression code rule; it is
-    /// supplied by the caller so this module stays independent of the rule registry.
+    /// `suppressible_rules` holds the names of every registered non-suppression code rule, while
+    /// `evaluated_rules` holds the subset that actually ran on `path`; both are supplied by the
+    /// caller so this module stays independent of the rule registry.
     #[must_use]
     pub fn audit(
         &self,
         path: &Path,
         config: &Config,
         suppressible_rules: &HashSet<&'static str>,
+        evaluated_rules: &HashSet<&'static str>,
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for directive in &self.directives {
@@ -349,6 +351,7 @@ impl SuppressionTracker {
                 path,
                 config,
                 suppressible_rules,
+                evaluated_rules,
                 &mut diagnostics,
             );
         }
@@ -437,6 +440,7 @@ fn audit_single_directive(
     path: &Path,
     config: &Config,
     suppressible_rules: &HashSet<&'static str>,
+    evaluated_rules: &HashSet<&'static str>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let location = SourceLocation::file_span(path, directive.span, directive.coord);
@@ -464,7 +468,7 @@ fn audit_single_directive(
 
     if !directive.is_blanket && config.is_rule_enabled_for_path(UNUSED_SUPPRESSION.name, path) {
         for target_rule in &directive.target_rules {
-            if suppressible_rules.contains(target_rule.as_str())
+            if evaluated_rules.contains(target_rule.as_str())
                 && directive
                     .matched_count
                     .get(target_rule)

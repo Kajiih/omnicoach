@@ -31,8 +31,6 @@ const ALLOWED_WRAPPERS: ListOption = ListOption {
                     "indoc::printdoc",
                     "eprintdoc",
                     "indoc::eprintdoc",
-                    "rule_test",
-                    "crate::rule_test",
                 ],
             ),
         ],
