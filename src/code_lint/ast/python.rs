@@ -634,6 +634,25 @@ pub struct PythonFunctionSignature<'a> {
     pub return_type_node: Option<AstNode<'a>>,
 }
 
+impl PythonFunctionSignature<'_> {
+    /// Returns true if the function is exempt from signature annotation rules (data-model dunder
+    /// methods other than `__init__`/`__new__`, functions decorated with `@override`, `@overload`,
+    /// `@abstractmethod`, or `@fixture`, or methods on `Protocol` or `ABC` classes).
+    #[must_use]
+    pub fn is_exempt_from_signature_rules(&self) -> bool {
+        is_exempt_dunder_method(&self.name)
+            || has_exempt_signature_decorator(&self.node)
+            || is_in_protocol_or_abc_class(&self.node)
+    }
+
+    /// Returns true if the function is exempt from body-usage parameter rules (signature-exempt
+    /// functions or stub bodies consisting only of `...`, `pass`, or `raise NotImplementedError`).
+    #[must_use]
+    pub fn is_exempt_from_body_usage_rules(&self) -> bool {
+        self.is_exempt_from_signature_rules() || is_stub_function_body(&self.node)
+    }
+}
+
 /// Internal helper struct for extracted parameter parts.
 struct ParsedParamParts<'a> {
     name_node: AstNode<'a>,
@@ -835,7 +854,7 @@ pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSigna
     signatures
 }
 
-/// Controls how deeply [`collect_type_constructors`] traverses a Python type annotation.
+/// Controls how deeply [`collect_mutable_collection_types`] traverses a Python type annotation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnnotationTraversalDepth {
     /// Unwraps only transparent wrappers (`|`, `Optional`, `Union`, `Annotated[T, ...]`,
@@ -865,17 +884,34 @@ fn is_std_type_constructor(path: &str, terminal: &str, targets: &[&str]) -> bool
 }
 
 /// Returns true if `(path, terminal)` is a concrete mutable collection constructor (`list`, `dict`,
-/// `set`, `typing.List`, `typing.Dict`, `typing.Set`, etc.).
+/// `set`, `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, `typing.Set`, etc.).
 ///
-/// Unqualified `Set` and `collections.abc.Set` are excluded because `from collections.abc import Set`
-/// is the standard PEP 585 abstract set interface, whereas `typing.Set` aliases concrete `builtins.set`.
-#[must_use]
-pub fn is_concrete_collection_constructor(path: &str, terminal: &str) -> bool {
+/// Qualified `collections.abc.Set` is excluded because it is the abstract set ABC, whereas
+/// unqualified `Set` and `typing.Set` are flagged as concrete (per Ruff `PYI025`, `collections.abc.Set`
+/// should be imported `as AbstractSet`).
+fn is_concrete_collection_constructor(path: &str, terminal: &str) -> bool {
     match terminal {
         "list" | "List" | "dict" | "Dict" | "set" => is_std_type_constructor_prefix(path, terminal),
-        "Set" => matches!(path, "typing.Set" | "typing_extensions.Set"),
+        "Set" => matches!(
+            path,
+            "Set" | "typing.Set" | "typing_extensions.Set" | "builtins.Set"
+        ),
         _ => false,
     }
+}
+
+/// Returns true if `file` contains an unaliased `from collections.abc import Set` statement.
+#[must_use]
+pub fn has_unaliased_collections_abc_set_import(file: &ParsedFile) -> bool {
+    file.grep.root().dfs().any(|node| {
+        node.kind() == "import_from_statement"
+            && node
+                .field("module_name")
+                .is_some_and(|module_node| module_node.text() == "collections.abc")
+            && node
+                .field_children("name")
+                .any(|imported| imported.kind() == "dotted_name" && imported.text() == "Set")
+    })
 }
 
 /// Extracts `(base_node, type_argument_nodes)` from a Python `generic_type` or expression-fallback
@@ -1017,7 +1053,7 @@ fn collect_type_constructors_raw<F>(
                 && is_std_type_constructor_prefix(&base_path, &base_terminal)
             {
                 match base_terminal.as_str() {
-                    t if SINGLE_ARG_COVARIANT_CONTAINERS.contains(&t) => {
+                    terminal_name if SINGLE_ARG_COVARIANT_CONTAINERS.contains(&terminal_name) => {
                         if let Some(first_arg) = type_args.first() {
                             collect_type_constructors_raw(first_arg, depth, predicate, out);
                         }
@@ -1055,8 +1091,7 @@ fn collect_type_constructors_raw<F>(
 
 /// Collects matching type constructor strings (in source order, deduplicated) from a Python
 /// type annotation node according to `depth` and `predicate(full_path, terminal_name)`.
-#[must_use]
-pub fn collect_type_constructors<F>(
+fn collect_type_constructors<F>(
     type_node: &AstNode<'_>,
     depth: AnnotationTraversalDepth,
     predicate: F,
@@ -1069,22 +1104,59 @@ where
     out
 }
 
-/// Collects concrete mutable collection constructors (`list`, `dict`, `set`, etc.) from `type_node`.
+/// Collects concrete mutable collection constructors (`list`, `dict`, `set`, `Set`, etc.) from `type_node`.
 ///
-/// Traverses transparent wrappers and covariant container positions (`AnnotationTraversalDepth::CovariantPositions`).
+/// If `abc_set_imported` is true (`from collections.abc import Set` is present in the file),
+/// unqualified `Set` is treated as the abstract `collections.abc.Set` rather than concrete `typing.Set`.
 #[must_use]
-pub fn collect_concrete_collection_types(type_node: &AstNode<'_>) -> Vec<String> {
+pub fn collect_concrete_collection_types(
+    type_node: &AstNode<'_>,
+    abc_set_imported: bool,
+) -> Vec<String> {
     collect_type_constructors(
         type_node,
         AnnotationTraversalDepth::CovariantPositions,
-        is_concrete_collection_constructor,
+        |full_path, terminal| {
+            if abc_set_imported && full_path == "Set" {
+                return false;
+            }
+            is_concrete_collection_constructor(full_path, terminal)
+        },
+    )
+}
+
+/// Collects abstract mutable collection constructors (`MutableSequence`, `MutableMapping`, `MutableSet`)
+/// from `type_node` according to `depth`.
+#[must_use]
+pub fn collect_mutable_collection_types(
+    type_node: &AstNode<'_>,
+    depth: AnnotationTraversalDepth,
+) -> Vec<String> {
+    collect_type_constructors(type_node, depth, |full_path, terminal| {
+        matches!(
+            terminal,
+            "MutableSequence" | "MutableMapping" | "MutableSet"
+        ) && is_std_type_constructor_prefix(full_path, terminal)
+    })
+}
+
+/// Collects specific read-only abstract collection constructors (`Sequence`, `Collection`)
+/// from `type_node`, unwrapping only transparent wrappers (`AnnotationTraversalDepth::TransparentWrappersOnly`).
+#[must_use]
+pub fn collect_specific_collection_types(type_node: &AstNode<'_>) -> Vec<String> {
+    collect_type_constructors(
+        type_node,
+        AnnotationTraversalDepth::TransparentWrappersOnly,
+        |full_path, terminal| {
+            matches!(terminal, "Sequence" | "Collection")
+                && is_std_type_constructor_prefix(full_path, terminal)
+        },
     )
 }
 
 /// Returns true if `func_name` is a Python Data Model dunder method with a fixed signature
 /// (all `__*__` methods except constructors `__init__` and `__new__`).
-#[must_use]
-pub fn is_exempt_dunder_method(func_name: &str) -> bool {
+fn is_exempt_dunder_method(func_name: &str) -> bool {
     func_name.starts_with("__")
         && func_name.ends_with("__")
         && func_name.len() > 4
@@ -1093,8 +1165,7 @@ pub fn is_exempt_dunder_method(func_name: &str) -> bool {
 
 /// Returns true if `func_node` is decorated with `@override`, `@overload`, `@abstractmethod`,
 /// or `@fixture` (`@pytest.fixture`).
-#[must_use]
-pub fn has_exempt_signature_decorator(func_node: &AstNode<'_>) -> bool {
+fn has_exempt_signature_decorator(func_node: &AstNode<'_>) -> bool {
     has_decorator(func_node, |terminal| {
         matches!(
             terminal,
@@ -1114,9 +1185,11 @@ fn is_protocol_or_abc_class_raw(class_node: &RawNode<'_>) -> bool {
             continue;
         }
         if child.kind() == "keyword_argument" {
-            let is_abc_meta = child.field("name").is_some_and(|n| n.text() == "metaclass")
-                && child.field("value").is_some_and(|v| {
-                    let (_, terminal) = resolve_path_and_terminal_raw(&v);
+            let is_abc_meta = child
+                .field("name")
+                .is_some_and(|name_node| name_node.text() == "metaclass")
+                && child.field("value").is_some_and(|value_node| {
+                    let (_, terminal) = resolve_path_and_terminal_raw(&value_node);
                     terminal == "ABCMeta"
                 });
             if is_abc_meta {
@@ -1127,7 +1200,11 @@ fn is_protocol_or_abc_class_raw(class_node: &RawNode<'_>) -> bool {
         let base_expr = if matches!(child.kind().as_ref(), "subscript" | "generic_type") {
             child
                 .field("value")
-                .or_else(|| child.children().find(|c| c.is_named() && !c.is_extra()))
+                .or_else(|| {
+                    child
+                        .children()
+                        .find(|inner| inner.is_named() && !inner.is_extra())
+                })
                 .unwrap_or(child)
         } else {
             child
@@ -1142,8 +1219,7 @@ fn is_protocol_or_abc_class_raw(class_node: &RawNode<'_>) -> bool {
 
 /// Returns true if `node` (a method `function_definition` or class attribute node) is directly
 /// enclosed in a `Protocol` or `ABC` class definition.
-#[must_use]
-pub fn is_in_protocol_or_abc_class(node: &AstNode<'_>) -> bool {
+fn is_in_protocol_or_abc_class(node: &AstNode<'_>) -> bool {
     for ancestor in node.raw.ancestors() {
         match ancestor.kind().as_ref() {
             "function_definition" | "lambda" => return false,
@@ -1154,52 +1230,53 @@ pub fn is_in_protocol_or_abc_class(node: &AstNode<'_>) -> bool {
     false
 }
 
-/// Returns true if `stmt` is an `expression_statement` wrapping a string literal (docstring).
-fn is_docstring_statement_raw(stmt: &RawNode<'_>) -> bool {
-    stmt.kind() == "expression_statement"
-        && stmt
+/// Returns true if `statement` is an `expression_statement` wrapping a string literal (docstring).
+fn is_docstring_statement_raw(statement: &RawNode<'_>) -> bool {
+    statement.kind() == "expression_statement"
+        && statement
             .children()
-            .find(|c| c.is_named() && !c.is_extra())
+            .find(|child| child.is_named() && !child.is_extra())
             .is_some_and(|child| child.kind() == "string")
 }
 
-/// Returns true if `stmt` is `pass`, `...`, or `raise NotImplementedError` / `raise NotImplementedError(...)`.
-fn is_stub_statement_raw(stmt: &RawNode<'_>) -> bool {
-    match stmt.kind().as_ref() {
+/// Returns true if `statement` is `pass`, `...`, or `raise NotImplementedError` / `raise NotImplementedError(...)`.
+fn is_stub_statement_raw(statement: &RawNode<'_>) -> bool {
+    match statement.kind().as_ref() {
         "pass_statement" => true,
-        "expression_statement" => stmt
+        "expression_statement" => statement
             .children()
-            .find(|c| c.is_named() && !c.is_extra())
+            .find(|child| child.is_named() && !child.is_extra())
             .is_some_and(|child| child.kind() == "ellipsis"),
-        "raise_statement" => stmt.children().any(|child| match child.kind().as_ref() {
-            "identifier" => child.text() == "NotImplementedError",
-            "call" => child.field("function").is_some_and(|func| {
-                let (_, terminal) = resolve_path_and_terminal_raw(&func);
-                terminal == "NotImplementedError"
+        "raise_statement" => statement
+            .children()
+            .any(|child| match child.kind().as_ref() {
+                "identifier" => child.text() == "NotImplementedError",
+                "call" => child.field("function").is_some_and(|func| {
+                    let (_, terminal) = resolve_path_and_terminal_raw(&func);
+                    terminal == "NotImplementedError"
+                }),
+                _ => false,
             }),
-            _ => false,
-        }),
         _ => false,
     }
 }
 
 /// Returns true if `func_node` has a stub body consisting only of an optional docstring and
 /// `...`, `pass`, or `raise NotImplementedError`.
-#[must_use]
-pub fn is_stub_function_body(func_node: &AstNode<'_>) -> bool {
+fn is_stub_function_body(func_node: &AstNode<'_>) -> bool {
     let Some(body) = func_node.raw.field("body") else {
         return false;
     };
-    let stmts: Vec<_> = body
+    let statements: Vec<_> = body
         .children()
         .filter(|child| {
             child.is_named() && !child.is_extra() && !is_comment_kind(child.kind().as_ref())
         })
         .collect();
-    let remaining = if stmts.first().is_some_and(is_docstring_statement_raw) {
-        &stmts[1..]
+    let remaining = if statements.first().is_some_and(is_docstring_statement_raw) {
+        &statements[1..]
     } else {
-        &stmts[..]
+        &statements[..]
     };
     remaining.is_empty() || (remaining.len() == 1 && is_stub_statement_raw(&remaining[0]))
 }
@@ -1558,18 +1635,18 @@ fn is_write_target(node: &RawNode<'_>) -> bool {
     false
 }
 
-/// If `node` mutates a collection receiver in place (`recv.append(...)`, `recv[k] = v`,
-/// `del recv[k]`, `recv += ...`), returns that `recv` node.
+/// If `node` mutates a collection receiver in place (`receiver.append(...)`, `receiver[k] = v`,
+/// `del receiver[k]`, `receiver += ...`), returns that `receiver` node.
 fn in_place_mutated_receiver<'a>(node: &RawNode<'a>) -> Option<RawNode<'a>> {
     match node.kind().as_ref() {
         "call" => {
-            let func = node.field("function")?;
-            if func.kind() != "attribute" {
+            let function_node = node.field("function")?;
+            if function_node.kind() != "attribute" {
                 return None;
             }
-            let method = func.field("attribute")?;
+            let method = function_node.field("attribute")?;
             if MUTATING_METHODS.contains(&method.text().as_ref()) {
-                func.field("object")
+                function_node.field("object")
             } else {
                 None
             }
@@ -1585,8 +1662,8 @@ fn called_terminal_name(node: &RawNode<'_>) -> Option<String> {
     if node.kind() != "call" {
         return None;
     }
-    let func = node.field("function")?;
-    let (_, terminal) = resolve_path_and_terminal_raw(&func);
+    let function_node = node.field("function")?;
+    let (_, terminal) = resolve_path_and_terminal_raw(&function_node);
     (!terminal.is_empty()).then_some(terminal)
 }
 
@@ -1612,17 +1689,17 @@ pub fn collect_locally_mutated_return_functions(
             bindings_to_callee.insert(left.text().into_owned(), callee_name);
         }
 
-        if let Some(recv) = in_place_mutated_receiver(&node) {
-            if let Some(callee_name) = called_terminal_name(&recv) {
+        if let Some(receiver) = in_place_mutated_receiver(&node) {
+            if let Some(callee_name) = called_terminal_name(&receiver) {
                 mutated_functions.insert(callee_name);
-            } else if recv.kind() == "identifier" {
-                mutated_identifiers.insert(recv.text().into_owned());
+            } else if receiver.kind() == "identifier" {
+                mutated_identifiers.insert(receiver.text().into_owned());
             }
         }
     }
 
-    for var_name in mutated_identifiers {
-        if let Some(callee_name) = bindings_to_callee.remove(&var_name) {
+    for variable_name in mutated_identifiers {
+        if let Some(callee_name) = bindings_to_callee.remove(&variable_name) {
             mutated_functions.insert(callee_name);
         }
     }
@@ -1638,6 +1715,8 @@ pub struct PythonAnnotatedAttribute<'a> {
     pub name: String,
     /// Type annotation AST node (`type`).
     pub type_node: AstNode<'a>,
+    /// True if any method in the enclosing class mutates this attribute in place.
+    pub is_mutated_in_class: bool,
 }
 
 /// Walks `node` (without entering nested `class_definition`s) and records attribute names
@@ -1650,13 +1729,14 @@ fn collect_mutated_class_attr_names_rec(
     if node.kind() == "class_definition" {
         return;
     }
-    if let Some(recv) = in_place_mutated_receiver(node)
-        && recv.kind() == "attribute"
-        && let (Some(obj), Some(attr)) = (recv.field("object"), recv.field("attribute"))
+    if let Some(receiver) = in_place_mutated_receiver(node)
+        && receiver.kind() == "attribute"
+        && let (Some(object_node), Some(attribute_node)) =
+            (receiver.field("object"), receiver.field("attribute"))
     {
-        let obj_text = obj.text();
-        if matches!(obj_text.as_ref(), "self" | "cls") || obj_text == class_name {
-            out.insert(attr.text().into_owned());
+        let object_text = object_node.text();
+        if matches!(object_text.as_ref(), "self" | "cls") || object_text == class_name {
+            out.insert(attribute_node.text().into_owned());
         }
     }
     for child in node.children() {
@@ -1665,7 +1745,7 @@ fn collect_mutated_class_attr_names_rec(
 }
 
 /// Walks statements in `__init__` (without entering nested functions/classes/lambdas) and
-/// collects public `self.<attr>: <type>` annotations not in `mutated_attrs`.
+/// collects public `self.<attr>: <type>` annotations.
 fn collect_init_annotated_attrs_rec<'a>(
     node: &RawNode<'a>,
     class_name: &str,
@@ -1681,15 +1761,19 @@ fn collect_init_annotated_attrs_rec<'a>(
     if node.kind() == "assignment"
         && let (Some(left), Some(type_node)) = (node.field("left"), node.field("type"))
         && left.kind() == "attribute"
-        && left.field("object").is_some_and(|obj| obj.text() == "self")
-        && let Some(attr) = left.field("attribute")
+        && left
+            .field("object")
+            .is_some_and(|object_node| object_node.text() == "self")
+        && let Some(attribute_node) = left.field("attribute")
     {
-        let attr_name = attr.text().into_owned();
-        if !attr_name.starts_with('_') && !mutated_attrs.contains(&attr_name) {
+        let attr_name = attribute_node.text().into_owned();
+        if !attr_name.starts_with('_') {
+            let is_mutated_in_class = mutated_attrs.contains(&attr_name);
             out.push(PythonAnnotatedAttribute {
                 class_name: class_name.to_owned(),
                 name: attr_name,
                 type_node: AstNode::from_raw(type_node),
+                is_mutated_in_class,
             });
         }
     }
@@ -1698,11 +1782,12 @@ fn collect_init_annotated_attrs_rec<'a>(
     }
 }
 
-/// Collects unmutated public (`!name.starts_with('_')`) annotated class and `__init__` attributes.
+/// Collects public (`!name.starts_with('_')`) annotated class and `__init__` attributes,
+/// recording whether each attribute is mutated in place within its class.
 ///
-/// Skips `Protocol` and `ABC` classes and attributes mutated in place within their class.
+/// Skips `Protocol` and `ABC` classes.
 #[must_use]
-pub fn collect_unmutated_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotatedAttribute<'_>> {
+pub fn collect_public_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotatedAttribute<'_>> {
     let mut out = Vec::new();
     for class_node in file.grep.root().dfs() {
         if class_node.kind() != "class_definition" || is_protocol_or_abc_class_raw(&class_node) {
@@ -1723,17 +1808,21 @@ pub fn collect_unmutated_class_attributes(file: &ParsedFile) -> Vec<PythonAnnota
 
         for child in body.children() {
             if child.kind() == "expression_statement"
-                && let Some(assign) = child.children().find(|c| c.is_named() && !c.is_extra())
+                && let Some(assign) = child
+                    .children()
+                    .find(|inner| inner.is_named() && !inner.is_extra())
                 && assign.kind() == "assignment"
                 && let (Some(left), Some(type_node)) = (assign.field("left"), assign.field("type"))
                 && left.kind() == "identifier"
             {
                 let attr_name = left.text().into_owned();
-                if !attr_name.starts_with('_') && !mutated_attrs.contains(&attr_name) {
+                if !attr_name.starts_with('_') {
+                    let is_mutated_in_class = mutated_attrs.contains(&attr_name);
                     out.push(PythonAnnotatedAttribute {
                         class_name: class_name.clone(),
                         name: attr_name,
                         type_node: AstNode::from_raw(type_node),
+                        is_mutated_in_class,
                     });
                 }
             } else {
@@ -1742,14 +1831,16 @@ pub fn collect_unmutated_class_attributes(file: &ParsedFile) -> Vec<PythonAnnota
                 } else {
                     Some(child)
                 };
-                if let Some(func) = func_candidate
-                    && func.kind() == "function_definition"
-                    && func.field("name").is_some_and(|n| n.text() == "__init__")
-                    && let Some(init_body) = func.field("body")
+                if let Some(function_node) = func_candidate
+                    && function_node.kind() == "function_definition"
+                    && function_node
+                        .field("name")
+                        .is_some_and(|method_name| method_name.text() == "__init__")
+                    && let Some(init_body) = function_node.field("body")
                 {
-                    for stmt in init_body.children() {
+                    for statement in init_body.children() {
                         collect_init_annotated_attrs_rec(
-                            &stmt,
+                            &statement,
                             &class_name,
                             &mutated_attrs,
                             &mut out,
@@ -1760,6 +1851,501 @@ pub fn collect_unmutated_class_attributes(file: &ParsedFile) -> Vec<PythonAnnota
         }
     }
     out
+}
+
+/// Read-only methods available on `Sequence`, `Mapping`, or `Set` (`collections.abc`).
+const READONLY_COLLECTION_METHODS: &[&str] = &[
+    "count",
+    "index",
+    "get",
+    "keys",
+    "values",
+    "items",
+    "isdisjoint",
+    "issubset",
+    "issuperset",
+    "copy",
+    "__contains__",
+    "__len__",
+    "__iter__",
+    "__getitem__",
+    "__reversed__",
+];
+
+/// Builtin functions that read or iterate a collection without mutating it in place or
+/// retaining a mutable alias to the outer container.
+const SAFE_READONLY_BUILTINS: &[&str] = &[
+    "len",
+    "max",
+    "min",
+    "sum",
+    "sorted",
+    "list",
+    "tuple",
+    "set",
+    "frozenset",
+    "dict",
+    "bool",
+    "any",
+    "all",
+    "enumerate",
+    "zip",
+    "reversed",
+    "iter",
+    "map",
+    "filter",
+    "repr",
+    "str",
+    "hash",
+    "id",
+    "type",
+    "isinstance",
+    "issubclass",
+    "print",
+    "range",
+    "next",
+];
+
+/// Builtin functions that consume an `Iterable` in a single pass.
+const SINGLE_PASS_ITERABLE_BUILTINS: &[&str] = &[
+    "sum",
+    "min",
+    "max",
+    "any",
+    "all",
+    "sorted",
+    "list",
+    "tuple",
+    "set",
+    "frozenset",
+    "dict",
+    "enumerate",
+    "zip",
+    "iter",
+    "map",
+    "filter",
+];
+
+/// Returns true if a nested `function_definition` or `lambda` declares a parameter named `parameter_name`.
+fn scope_shadows_parameter(scope_node: &RawNode<'_>, parameter_name: &str) -> bool {
+    let Some(params) = scope_node.field("parameters") else {
+        return false;
+    };
+    params
+        .children()
+        .filter_map(|child| parse_param_parts(&child))
+        .any(|parts| parts.name == parameter_name)
+}
+
+/// Unwraps enclosing `parenthesized_expression` nodes around `node`, returning `(outermost_expr, parent)`.
+fn unwrap_parenthesized_with_parent<'a>(node: &RawNode<'a>) -> Option<(RawNode<'a>, RawNode<'a>)> {
+    let mut expr = node.clone();
+    while let Some(parent) = expr.parent() {
+        if parent.kind() == "parenthesized_expression" {
+            expr = parent;
+        } else {
+            return Some((expr, parent));
+        }
+    }
+    None
+}
+
+/// Returns true if `ident_node` (`identifier`) is a variable reference rather than an attribute
+/// name (`obj.x`), keyword argument name (`f(x=1)`), or declaration name.
+fn is_variable_reference(ident_node: &RawNode<'_>) -> bool {
+    let Some(parent) = ident_node.parent() else {
+        return false;
+    };
+    match parent.kind().as_ref() {
+        "attribute" => !parent
+            .field("attribute")
+            .is_some_and(|attr_node| attr_node.range() == ident_node.range()),
+        "keyword_argument" => !parent
+            .field("name")
+            .is_some_and(|name_node| name_node.range() == ident_node.range()),
+        "function_definition" | "class_definition" => !parent
+            .field("name")
+            .is_some_and(|name_node| name_node.range() == ident_node.range()),
+        "parameters"
+        | "lambda_parameters"
+        | "typed_parameter"
+        | "default_parameter"
+        | "typed_default_parameter"
+        | "list_splat_pattern"
+        | "dictionary_splat_pattern" => parent
+            .field("value")
+            .is_some_and(|value_node| value_node.range() == ident_node.range()),
+        _ => true,
+    }
+}
+
+/// Returns true if `call_node` is a direct call to a builtin in `SAFE_READONLY_BUILTINS`.
+fn is_safe_readonly_builtin_call(call_node: &RawNode<'_>) -> bool {
+    call_node.kind() == "call"
+        && call_node.field("function").is_some_and(|function_node| {
+            function_node.kind() == "identifier"
+                && SAFE_READONLY_BUILTINS.contains(&function_node.text().as_ref())
+        })
+}
+
+/// Returns true if `node` sits inside a boolean test position (`if`, `elif`, `while`, `assert`, or `bool(...)`).
+fn is_in_boolean_context(node: &RawNode<'_>) -> bool {
+    let mut current = node.clone();
+    while let Some(parent) = current.parent() {
+        match parent.kind().as_ref() {
+            "parenthesized_expression" | "boolean_operator" | "not_operator" => {
+                current = parent;
+            }
+            "if_statement" | "elif_clause" | "while_statement" => {
+                return parent
+                    .field("condition")
+                    .is_some_and(|condition| condition.range() == current.range());
+            }
+            "assert_statement" => return true,
+            "argument_list" => {
+                return parent.parent().is_some_and(|call_node| {
+                    call_node.kind() == "call"
+                        && call_node
+                            .field("function")
+                            .is_some_and(|func_node| func_node.text() == "bool")
+                });
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Returns true if `expr` is the middle condition child of a Python `conditional_expression` (`a if cond else b`).
+fn is_conditional_expression_condition(cond_expr: &RawNode<'_>, expr: &RawNode<'_>) -> bool {
+    let mut named = cond_expr
+        .children()
+        .filter(|child| child.is_named() && !child.is_extra());
+    let _consequence = named.next();
+    named
+        .next()
+        .is_some_and(|condition| condition.range() == expr.range())
+}
+
+/// Returns true if `ident_node` is used in a strictly read-only, non-escaping position.
+fn is_safe_readonly_parameter_reference(ident_node: &RawNode<'_>) -> bool {
+    if is_write_target(ident_node) {
+        return false;
+    }
+    let Some((expr, parent)) = unwrap_parenthesized_with_parent(ident_node) else {
+        return false;
+    };
+    match parent.kind().as_ref() {
+        "attribute" => {
+            parent
+                .field("object")
+                .is_some_and(|object_node| object_node.range() == expr.range())
+                && parent.field("attribute").is_some_and(|attr_node| {
+                    READONLY_COLLECTION_METHODS.contains(&attr_node.text().as_ref())
+                })
+                && unwrap_parenthesized_with_parent(&parent).is_some_and(|(attr_expr, grand)| {
+                    grand.kind() == "call"
+                        && grand
+                            .field("function")
+                            .is_some_and(|func_node| func_node.range() == attr_expr.range())
+                })
+        }
+        "subscript" => !is_write_target(&parent),
+        "argument_list" => parent
+            .parent()
+            .is_some_and(|call_node| is_safe_readonly_builtin_call(&call_node)),
+        "keyword_argument" => parent.parent().is_some_and(|arguments| {
+            arguments.kind() == "argument_list"
+                && arguments
+                    .parent()
+                    .is_some_and(|call_node| is_safe_readonly_builtin_call(&call_node))
+        }),
+        "list_splat" | "dictionary_splat" => {
+            unwrap_parenthesized_with_parent(&parent).is_some_and(|(_, grand)| {
+                matches!(
+                    grand.kind().as_ref(),
+                    "list" | "tuple" | "set" | "dictionary"
+                ) || (grand.kind() == "argument_list"
+                    && grand
+                        .parent()
+                        .is_some_and(|call_node| is_safe_readonly_builtin_call(&call_node)))
+            })
+        }
+        "for_statement" | "for_in_clause" => parent
+            .field("right")
+            .is_some_and(|right| right.range() == expr.range()),
+        "comparison_operator" | "not_operator" | "binary_operator" | "assert_statement" => true,
+        "boolean_operator" => is_in_boolean_context(&parent),
+        "if_statement" | "elif_clause" | "while_statement" => parent
+            .field("condition")
+            .is_some_and(|condition| condition.range() == expr.range()),
+        "conditional_expression" => is_conditional_expression_condition(&parent, &expr),
+        _ => false,
+    }
+}
+
+fn check_parameter_mutated_or_escaping_rec(node: &RawNode<'_>, parameter_name: &str) -> bool {
+    if node.kind() == "type" {
+        return false;
+    }
+    if matches!(node.kind().as_ref(), "function_definition" | "lambda")
+        && scope_shadows_parameter(node, parameter_name)
+    {
+        return false;
+    }
+    if node.kind() == "identifier"
+        && node.text() == parameter_name
+        && is_variable_reference(node)
+        && !is_safe_readonly_parameter_reference(node)
+    {
+        return true;
+    }
+    node.children()
+        .any(|child| check_parameter_mutated_or_escaping_rec(&child, parameter_name))
+}
+
+/// Returns true if `parameter_name` is mutated in place or escapes (aliased, returned, yielded,
+/// or passed to an unknown function/method) anywhere in `func_node`'s body.
+#[must_use]
+pub fn is_parameter_mutated_or_escaping(func_node: &AstNode<'_>, parameter_name: &str) -> bool {
+    let Some(body) = func_node.raw.field("body") else {
+        return false;
+    };
+    check_parameter_mutated_or_escaping_rec(&body, parameter_name)
+}
+
+/// Minimum read-only `collections.abc` capability required by a parameter's usages inside
+/// its function body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ParameterCollectionCapability {
+    /// Parameter is never referenced in the function body.
+    Unused,
+    /// Parameter is only iterated once at top-level depth (`Iterable` suffices).
+    Iterable,
+    /// Parameter uses `len(x)`, `v in x`, truthiness (`if x:`), or multi-pass iteration (`Collection` suffices).
+    Collection,
+    /// Parameter uses indexing/slicing, `reversed(x)`, `.index()`/`.count()`, pattern matching, or escapes (`Sequence` required).
+    Sequence,
+}
+
+#[derive(Default)]
+struct CapabilityTracker {
+    iteration_count: usize,
+    needs_collection: bool,
+    needs_sequence: bool,
+}
+
+/// Inspects a `comparison_operator` node containing `expr` and updates `tracker`.
+fn record_comparison_capability(
+    comp_node: &RawNode<'_>,
+    expr: &RawNode<'_>,
+    tracker: &mut CapabilityTracker,
+) {
+    let has_in_operator = comp_node
+        .children()
+        .any(|child| matches!(child.kind().as_ref(), "in" | "not in"));
+    let is_identity_check = comp_node
+        .children()
+        .any(|child| matches!(child.kind().as_ref(), "is" | "is not"));
+    let last_named = comp_node
+        .children()
+        .filter(|child| child.is_named() && !child.is_extra())
+        .last();
+    if has_in_operator && last_named.is_some_and(|last| last.range() == expr.range()) {
+        tracker.needs_collection = true;
+    } else if !is_identity_check {
+        tracker.needs_sequence = true;
+    }
+}
+
+/// Updates `tracker` for a single variable reference `ident_node` at `loop_or_closure_depth`.
+fn record_reference_capability(
+    ident_node: &RawNode<'_>,
+    loop_or_closure_depth: usize,
+    tracker: &mut CapabilityTracker,
+) {
+    if is_write_target(ident_node) {
+        tracker.needs_sequence = true;
+        return;
+    }
+    let Some((expr, parent)) = unwrap_parenthesized_with_parent(ident_node) else {
+        tracker.needs_sequence = true;
+        return;
+    };
+    match parent.kind().as_ref() {
+        "for_statement" | "for_in_clause"
+            if parent
+                .field("right")
+                .is_some_and(|right| right.range() == expr.range()) =>
+        {
+            tracker.iteration_count += 1;
+            if loop_or_closure_depth > 0 {
+                tracker.needs_collection = true;
+            }
+        }
+        "list_splat" => {
+            if let Some((_, grand)) = unwrap_parenthesized_with_parent(&parent)
+                && matches!(grand.kind().as_ref(), "list" | "tuple" | "set")
+            {
+                tracker.iteration_count += 1;
+                if loop_or_closure_depth > 0 {
+                    tracker.needs_collection = true;
+                }
+            } else {
+                tracker.needs_sequence = true;
+            }
+        }
+        "argument_list" => {
+            let Some(call_node) = parent.parent() else {
+                tracker.needs_sequence = true;
+                return;
+            };
+            let Some(func_node) = call_node.field("function") else {
+                tracker.needs_sequence = true;
+                return;
+            };
+            if func_node.kind() != "identifier" {
+                tracker.needs_sequence = true;
+                return;
+            }
+            match func_node.text().as_ref() {
+                "len" | "bool" => tracker.needs_collection = true,
+                name if SINGLE_PASS_ITERABLE_BUILTINS.contains(&name) => {
+                    tracker.iteration_count += 1;
+                    if loop_or_closure_depth > 0 {
+                        tracker.needs_collection = true;
+                    }
+                }
+                _ => tracker.needs_sequence = true,
+            }
+        }
+        "comparison_operator" => record_comparison_capability(&parent, &expr, tracker),
+        "not_operator" => tracker.needs_collection = true,
+        "boolean_operator" => {
+            if is_in_boolean_context(&parent) {
+                tracker.needs_collection = true;
+            } else {
+                tracker.needs_sequence = true;
+            }
+        }
+        "if_statement" | "elif_clause" | "while_statement"
+            if parent
+                .field("condition")
+                .is_some_and(|condition| condition.range() == expr.range()) =>
+        {
+            tracker.needs_collection = true;
+        }
+        "conditional_expression" if is_conditional_expression_condition(&parent, &expr) => {
+            tracker.needs_collection = true;
+        }
+        _ => tracker.needs_sequence = true,
+    }
+}
+
+fn analyze_capability_rec(
+    node: &RawNode<'_>,
+    parameter_name: &str,
+    loop_or_closure_depth: usize,
+    tracker: &mut CapabilityTracker,
+) {
+    if tracker.needs_sequence || node.kind() == "type" {
+        return;
+    }
+    match node.kind().as_ref() {
+        "function_definition" | "lambda" => {
+            if scope_shadows_parameter(node, parameter_name) {
+                return;
+            }
+            for child in node.children() {
+                analyze_capability_rec(&child, parameter_name, loop_or_closure_depth + 1, tracker);
+            }
+            return;
+        }
+        "for_statement" => {
+            let right_range = node.field("right").map(|right| right.range());
+            for child in node.children() {
+                let child_depth = if right_range.as_ref() == Some(&child.range()) {
+                    loop_or_closure_depth
+                } else {
+                    loop_or_closure_depth + 1
+                };
+                analyze_capability_rec(&child, parameter_name, child_depth, tracker);
+            }
+            return;
+        }
+        "while_statement" => {
+            for child in node.children() {
+                analyze_capability_rec(&child, parameter_name, loop_or_closure_depth + 1, tracker);
+            }
+            return;
+        }
+        "list_comprehension"
+        | "set_comprehension"
+        | "dictionary_comprehension"
+        | "generator_expression" => {
+            let mut seen_first_for_clause = false;
+            for child in node.children() {
+                if child.kind() == "for_in_clause" && !seen_first_for_clause {
+                    seen_first_for_clause = true;
+                    let right_range = child.field("right").map(|right| right.range());
+                    for clause_child in child.children() {
+                        let clause_depth = if right_range.as_ref() == Some(&clause_child.range()) {
+                            loop_or_closure_depth
+                        } else {
+                            loop_or_closure_depth + 1
+                        };
+                        analyze_capability_rec(
+                            &clause_child,
+                            parameter_name,
+                            clause_depth,
+                            tracker,
+                        );
+                    }
+                } else {
+                    analyze_capability_rec(
+                        &child,
+                        parameter_name,
+                        loop_or_closure_depth + 1,
+                        tracker,
+                    );
+                }
+            }
+            return;
+        }
+        "identifier" if node.text() == parameter_name && is_variable_reference(node) => {
+            record_reference_capability(node, loop_or_closure_depth, tracker);
+            return;
+        }
+        _ => {}
+    }
+
+    for child in node.children() {
+        analyze_capability_rec(&child, parameter_name, loop_or_closure_depth, tracker);
+    }
+}
+
+/// Determines the minimum read-only collection capability (`Iterable`, `Collection`, or `Sequence`)
+/// required by `parameter_name` across `func_node`'s body.
+#[must_use]
+pub fn analyze_parameter_collection_capability(
+    func_node: &AstNode<'_>,
+    parameter_name: &str,
+) -> ParameterCollectionCapability {
+    let Some(body) = func_node.raw.field("body") else {
+        return ParameterCollectionCapability::Unused;
+    };
+    let mut tracker = CapabilityTracker::default();
+    analyze_capability_rec(&body, parameter_name, 0, &mut tracker);
+
+    if tracker.needs_sequence {
+        ParameterCollectionCapability::Sequence
+    } else if tracker.needs_collection || tracker.iteration_count > 1 {
+        ParameterCollectionCapability::Collection
+    } else if tracker.iteration_count == 1 {
+        ParameterCollectionCapability::Iterable
+    } else {
+        ParameterCollectionCapability::Unused
+    }
 }
 
 /// Returns the position a `subscript` reads, if its index is a single literal.
@@ -2211,7 +2797,7 @@ mod tests {
     #[rstest::rstest]
     #[case::a1_bare_concrete("def f(x: list, y: dict, z: typing.List) -> None: pass", &[&["list"][..], &["dict"][..], &["typing.List"][..]])]
     #[case::a2_pep585_generic("def f(x: list[int], y: dict[str, int], z: set[str]) -> None: pass", &[&["list"][..], &["dict"][..], &["set"][..]])]
-    #[case::a3_pep484_qualified("def f(x: typing.List[int], y: typing.Dict[str, int], z: typing.Set[str]) -> None: pass", &[&["typing.List"][..], &["typing.Dict"][..], &["typing.Set"][..]])]
+    #[case::a3_pep484_qualified_and_unqualified("def f(x: typing.List[int], y: typing.Dict[str, int], z: typing.Set[str], w: Set[str]) -> None: pass", &[&["typing.List"][..], &["typing.Dict"][..], &["typing.Set"][..], &["Set"][..]])]
     #[case::a4_pep604_union("def f(x: list[int] | None, y: int | list[str] | set[int]) -> None: pass", &[&["list"][..], &["list", "set"][..]])]
     #[case::a5_qualified_pep604_union("def f(x: typing.List[int] | None) -> None: pass", &[&["typing.List"][..]])]
     #[case::a6_optional_and_union("def f(x: Optional[list[int]], y: Union[list[int], str, None]) -> None: pass", &[&["list"][..], &["list"][..]])]
@@ -2225,26 +2811,33 @@ mod tests {
     #[case::a14_callable_contravariant_param_ignored("def f(cb: Callable[[list[int]], None]) -> None: pass", &[&[][..]])]
     #[case::a15_invariant_mutable_outer_ignored("def f(x: MutableMapping[str, list[int]], y: MutableSequence[list[int]]) -> None: pass", &[&[][..], &[][..]])]
     #[case::a16_unknown_generic_ignored("def f(x: CustomBox[list[int]]) -> None: pass", &[&[][..]])]
-    #[case::a17_abstract_collections_pass("def f(a: Sequence[int], b: Mapping[str, int], c: AbstractSet[str], d: collections.abc.Set[str], e: Set[str]) -> None: pass", &[&[][..], &[][..], &[][..], &[][..], &[][..]])]
+    #[case::a17_abstract_collections_pass("def f(a: Sequence[int], b: Mapping[str, int], c: AbstractSet[str], d: collections.abc.Set[str]) -> None: pass", &[&[][..], &[][..], &[][..], &[][..]])]
+    #[case::a17b_unaliased_collections_abc_set_import("from collections.abc import Set\ndef f(a: Set[str], b: typing.Set[str]) -> None: pass", &[&[][..], &["typing.Set"][..]])]
     #[case::a18_immutable_builtins_pass("def f(a: tuple[int, ...], b: frozenset[str], c: bytes, d: str) -> None: pass", &[&[][..], &[][..], &[][..], &[][..]])]
     fn test_collect_concrete_collection_types_matrix_a(
         #[case] source: &str,
         #[case] expected_per_param: &[&[&str]],
     ) {
         let file = ParsedFile::new(source, SupportLang::Python);
+        let abc_set_imported = has_unaliased_collections_abc_set_import(&file);
         let sigs = extract_function_signatures(&file);
         assert_eq!(sigs.len(), 1);
         let actual: Vec<Vec<String>> = sigs[0]
             .parameters
             .iter()
-            .map(|param| {
-                let type_node = param.type_node.as_ref().expect("param should be typed");
-                collect_concrete_collection_types(type_node)
+            .map(|parameter| {
+                let type_node = parameter.type_node.as_ref().expect("param should be typed");
+                collect_concrete_collection_types(type_node, abc_set_imported)
             })
             .collect();
         let expected: Vec<Vec<String>> = expected_per_param
             .iter()
-            .map(|slice| slice.iter().map(|s| (*s).to_string()).collect())
+            .map(|slice| {
+                slice
+                    .iter()
+                    .map(|expected_name| (*expected_name).to_string())
+                    .collect()
+            })
             .collect();
         assert_eq!(actual, expected);
     }

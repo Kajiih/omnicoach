@@ -20,6 +20,9 @@ expression: "output.replace(binary, \"<binary>\")"
 - `missing-suppression-reason` (python, rust): Requires every suppression directive to give a reason.
 - `mock-call-assertion` (python): Flags assertions on how a mock was called in Python tests.
 - `mock-in-tests` (python): Flags dynamic mocks and monkeypatching in Python tests.
+- `mutable-collection-attribute` (python): Flags public Python class and instance attributes annotated with `MutableSequence`, `MutableMapping`, or `MutableSet` when never mutated in the class.
+- `mutable-collection-parameter` (python): Flags Python function parameters annotated with `MutableSequence`, `MutableMapping`, or `MutableSet` when the function never mutates them.
+- `mutable-collection-return` (python): Flags Python function return annotations using `MutableSequence`, `MutableMapping`, or `MutableSet` without an explanation or local caller mutation.
 - `mutable-dataclass` (python): Requires Python dataclasses to declare `frozen=True`.
 - `nested-function` (python): Flags Python functions defined inside other functions.
 - `packed-assertion` (python, rust): Flags assertions that pack several checks into one condition.
@@ -27,6 +30,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `repeated-index-access` (python, rust): Flags a value read at several literal positions instead of being unpacked once.
 - `single-letter-name` (python, rust): Flags names made of a single letter.
 - `sleep-in-tests` (python, rust): Flags fixed-duration sleeps in tests.
+- `specific-collection-parameter` (python): Flags Python function parameters annotated with `Sequence` or `Collection` when the body only uses `Collection` or `Iterable` operations.
 - `suppressed-exception` (python): Flags `contextlib.suppress` blocks, by default only those without an explanatory comment.
 - `too-many-assertions` (python, rust): Flags test functions with more assertions than the limit.
 - `type-cast` (python): Flags `typing.cast` calls in Python source files.
