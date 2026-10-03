@@ -2,6 +2,7 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
+use crate::code_lint::semantic::bindings;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
@@ -50,7 +51,9 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                            `_list`, `_arr`, `_dict`, `_map`, `_vec`, `_str`, `_int`, `_bool`, \
                            `_set`, `_ptr`, `_num`, `_float` or `_byte` by default \
                            (`users_dict`, `MY_INT`). A name that is only the suffix, such as \
-                           `_list`, is not flagged. Functions, classes, structs, enums, \
+                           `_list`, is not flagged, nor is a boolean predicate name starting \
+                           with `is_` or `has_` (`is_dict`), whose type word names what is \
+                           tested. Functions, classes, structs, enums, \
                            traits, type aliases, imports (aliased or not) and members of a \
                            Rust `impl Trait for Type` block are not checked; neither are \
                            attributes (`self.users_dict = ...`) or struct fields.",
@@ -104,13 +107,36 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
     check: check_file,
 };
 
+/// Prefixes of boolean predicate names (`is_dict`, `has_str`), whose trailing type word names
+/// what is tested rather than the variable's own type.
+const PREDICATE_PREFIXES: [&str; 2] = ["is_", "has_"];
+
 fn check_file(
     rule: &CodeRule<ListOption>,
     path: &Path,
     file: &ParsedFile,
     banned: &HashSet<String>,
 ) -> Vec<Diagnostic> {
-    rule.check_banned_suffixes(path, file, banned)
+    bindings::find_suffixed_bindings(file, banned)
+        .into_iter()
+        .filter(|matched| {
+            let name = matched.name.to_ascii_lowercase();
+            !PREDICATE_PREFIXES
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+        })
+        .map(|matched| {
+            rule.diagnostic_at_node(
+                path,
+                &matched.node,
+                &[
+                    ("name", &matched.name),
+                    ("suffix", &matched.actual_suffix),
+                    ("stem", &matched.base_name),
+                ],
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -139,6 +165,12 @@ crate::test_utils::rule_test!(
                 "#,
                 exact_suffix_exempt => r#"
                     _list = []
+                "#,
+                predicate_name_exempt => r#"
+                    def summarize(base):
+                        is_typed_dict = base.name == "TypedDict"
+                        has_str = any(isinstance(arg, str) for arg in base.args)
+                        return is_typed_dict, has_str
                 "#,
             ],
             fail: [
@@ -183,6 +215,12 @@ crate::test_utils::rule_test!(
                 trait_impl_const_exempt => r#"
                     impl ExternalTrait for MyStruct {
                         const DEFAULT_INT: i32 = 42;
+                    }
+                "#,
+                predicate_name_exempt => r#"
+                    fn run(node: &Node) {
+                        let is_vec = node.kind() == "vec";
+                        let has_map = node.children().any(|child| child.kind() == "map");
                     }
                 "#,
             ],

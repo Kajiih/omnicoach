@@ -1894,7 +1894,7 @@ pub fn collect_public_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotated
             continue;
         };
         let class_name = name_node.text().into_owned();
-        let is_typed_dict_class = is_typed_dict_class_raw(&class_node);
+        let is_typed_dict = is_typed_dict_class_raw(&class_node);
 
         let mut mutated_attrs = HashSet::new();
         for child in body.children() {
@@ -1918,7 +1918,7 @@ pub fn collect_public_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotated
                         name: attr_name,
                         type_node: AstNode::from_raw(type_node),
                         is_mutated_in_class,
-                        is_typed_dict_key: is_typed_dict_class,
+                        is_typed_dict_key: is_typed_dict,
                     });
                 }
             } else {
