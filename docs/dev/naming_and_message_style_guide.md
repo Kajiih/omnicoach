@@ -95,7 +95,7 @@ Templates use a fixed vocabulary so the same thing has the same name in every me
 | `{name}` | An identifier being named (variable, parameter, field) | `` `{name}` `` |
 | `{suffix}`, `{token}` | The offending part of an identifier | `` `{suffix}` `` |
 | `{stem}` | The identifier without its offending suffix | `` `{stem}` `` |
-| `{expression}` | The matched access, as written in the source | `` `{expression}` `` |
+| `{expression}` | The flagged expression (an access, a literal), as written in the source | `` `{expression}` `` |
 | `{replacement}` | The canonical replacement the suggestion proposes, computed per finding | `` `{replacement}` `` |
 | `{receiver}`, `{positions}` | A value read by index, and the positions read | `` `{receiver}` ``, bare |
 | `{construct}` | What a packed assertion folds its checks into | bare |

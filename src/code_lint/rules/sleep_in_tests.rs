@@ -244,6 +244,9 @@ fn has_zero_duration_argument(call_match: &CallMatch<'_>) -> bool {
     )
 }
 
+/// Template placeholder naming the sleep call.
+const CALLEE: &str = "callee";
+
 fn check_sleep(
     rule: &CodeRule<ListOption>,
     path: &Path,
@@ -254,7 +257,7 @@ fn check_sleep(
         .into_iter()
         .filter(|call_match| !has_zero_duration_argument(call_match))
         .map(|call_match| {
-            rule.diagnostic_at_node(path, &call_match.node, &[("callee", &call_match.callee)])
+            rule.diagnostic_at_node(path, &call_match.node, &[(CALLEE, &call_match.callee)])
         })
         .collect()
 }
@@ -269,7 +272,7 @@ fn check_zero_sleep(
         .into_iter()
         .filter(has_zero_duration_argument)
         .map(|call_match| {
-            rule.diagnostic_at_node(path, &call_match.node, &[("callee", &call_match.callee)])
+            rule.diagnostic_at_node(path, &call_match.node, &[(CALLEE, &call_match.callee)])
         })
         .collect()
 }

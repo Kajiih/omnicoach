@@ -27,6 +27,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `packed-assertion` (python, rust): Flags assertions that pack several checks into one condition.
 - `primitive-duration` (python, rust): Flags durations held as plain numbers, detected by a time-unit suffix such as `timeout_secs` or `delay_ms`.
 - `repeated-index-access` (python, rust): Flags a value read at several literal positions instead of being unpacked once.
+- `repeated-literal` (python, rust): Flags a string or number literal repeated inline in one file instead of being named once.
 - `single-letter-name` (python, rust): Flags names made of a single letter.
 - `sleep-in-tests` (python, rust): Flags fixed-duration sleeps in tests.
 - `specific-collection-parameter` (python): Flags Python function parameters annotated with `Sequence` or `Collection` when the body only uses `Collection` or `Iterable` operations.

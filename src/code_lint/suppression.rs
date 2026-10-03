@@ -438,6 +438,9 @@ fn directive_matches_line(placement: &DirectivePlacement, diagnostic_line: usize
     }
 }
 
+/// Template placeholder for the rule named in a directive.
+const RULE_PLACEHOLDER: &str = "rule";
+
 /// Audits a single `ParsedDirective` for blanket usage, missing reason, unknown rule names, and unused targets.
 fn audit_single_directive(
     directive: &ParsedDirective,
@@ -464,7 +467,7 @@ fn audit_single_directive(
             if !suppressible_rules.contains(target_rule.as_str()) {
                 diagnostics.push(
                     UNKNOWN_SUPPRESSION_RULE
-                        .render_diagnostic(&[("rule", target_rule)], location.clone()),
+                        .render_diagnostic(&[(RULE_PLACEHOLDER, target_rule)], location.clone()),
                 );
             }
         }
@@ -480,7 +483,7 @@ fn audit_single_directive(
             {
                 diagnostics.push(
                     UNUSED_SUPPRESSION
-                        .render_diagnostic(&[("rule", target_rule)], location.clone()),
+                        .render_diagnostic(&[(RULE_PLACEHOLDER, target_rule)], location.clone()),
                 );
             }
         }

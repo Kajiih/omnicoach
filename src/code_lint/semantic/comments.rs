@@ -139,12 +139,15 @@ pub fn clean_explanation(text: &str) -> &str {
         .trim()
 }
 
+/// Minimum words in an explanation; a `TODO` / `FIXME` note needs that many after its marker.
+const MIN_EXPLANATION_WORDS: usize = 3;
+
 /// Checks if an explanation text is substantive (at least 3 words and 10 non-whitespace chars).
 #[must_use]
 pub fn is_substantive_explanation(text: &str) -> bool {
     let words = text.split_whitespace().count();
     let chars = text.chars().filter(|c| !c.is_whitespace()).count();
-    if words < 3 || chars < 10 {
+    if words < MIN_EXPLANATION_WORDS || chars < 10 {
         return false;
     }
 
@@ -155,7 +158,7 @@ pub fn is_substantive_explanation(text: &str) -> bool {
     let starts_with_fixme = text
         .get(..5)
         .is_some_and(|sub| sub.eq_ignore_ascii_case("fixme"));
-    if (starts_with_todo || starts_with_fixme) && words <= 3 {
+    if (starts_with_todo || starts_with_fixme) && words <= MIN_EXPLANATION_WORDS {
         return false;
     }
 
