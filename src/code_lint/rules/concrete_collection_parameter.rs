@@ -2,9 +2,8 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    PythonFunctionSignature, PythonParameterKind, collect_concrete_collection_types,
-    extract_function_signatures, has_exempt_signature_decorator, is_exempt_dunder_method,
-    is_in_protocol_or_abc_class,
+    PythonParameterKind, collect_concrete_collection_types, extract_function_signatures,
+    has_unaliased_collections_abc_set_import,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
@@ -39,11 +38,13 @@ pub const RULE: CodeRule = CodeRule {
             what_it_does: "Flags non-variadic parameters of functions and methods in Python \
                            source files (test files are not checked) whose type annotation uses \
                            a concrete mutable collection constructor (`list`, `dict`, `set`, \
-                           `typing.List`, `typing.Dict`, or `typing.Set`), either at the top \
-                           level or inside transparent wrappers (`|`, `Optional`, `Union`, \
-                           `Annotated`) and covariant container positions (`Sequence[list[T]]`, \
-                           `Mapping[K, list[V]]`, `tuple[...]`, `Awaitable[...]`, and `Callable` \
-                           return types). Contravariant `Callable` parameter lists and invariant \
+                           `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, or `typing.Set`), \
+                           either at the top level or inside transparent wrappers (`|`, \
+                           `Optional`, `Union`, `Annotated`) and covariant container positions \
+                           (`Sequence[list[T]]`, `Mapping[K, list[V]]`, `tuple[...]`, \
+                           `Awaitable[...]`, and `Callable` return types). Unqualified `Set` is \
+                           exempt only when `from collections.abc import Set` is present in the \
+                           file. Contravariant `Callable` parameter lists and invariant \
                            `MutableSequence` or `MutableMapping` type arguments are not \
                            flagged. Dunder methods other than `__init__` and `__new__`, methods \
                            on `Protocol` or `ABC` classes, and functions decorated with \
@@ -54,9 +55,9 @@ pub const RULE: CodeRule = CodeRule {
                               rejects callers holding a `tuple[str, ...]`, a `Sequence[str]` \
                               parameter, or a `list[SubStr]`, forcing defensive `list(...)` \
                               copies.\n\n\
-                              Annotate read-only parameters with `Sequence`, `Mapping`, or `Set` \
-                              from `collections.abc` (or `Collection` / `Iterable`), and \
-                              in-place mutating parameters with `MutableSequence`, \
+                              Annotate read-only parameters with `Sequence`, `Mapping`, or \
+                              `AbstractSet` (`from collections.abc import Set as AbstractSet`), \
+                              and in-place mutating parameters with `MutableSequence`, \
                               `MutableMapping`, or `MutableSet`.",
             references: &[Reference {
                 title: "PEP 585: Type Hinting Generics In Standard Collections",
@@ -82,16 +83,11 @@ pub const RULE: CodeRule = CodeRule {
     check: check_file,
 };
 
-fn is_exempt_function(signature: &PythonFunctionSignature<'_>) -> bool {
-    is_exempt_dunder_method(&signature.name)
-        || has_exempt_signature_decorator(&signature.node)
-        || is_in_protocol_or_abc_class(&signature.node)
-}
-
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
+    let abc_set_imported = has_unaliased_collections_abc_set_import(file);
     let mut diagnostics = Vec::new();
     for signature in extract_function_signatures(file) {
-        if is_exempt_function(&signature) {
+        if signature.is_exempt_from_signature_rules() {
             continue;
         }
         for param in &signature.parameters {
@@ -101,7 +97,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             let Some(ref type_node) = param.type_node else {
                 continue;
             };
-            let matched = collect_concrete_collection_types(type_node);
+            let matched = collect_concrete_collection_types(type_node, abc_set_imported);
             if matched.is_empty() {
                 continue;
             }
@@ -129,15 +125,19 @@ crate::test_utils::rule_test!(
         Python => {
             pass: [
                 abstract_collections => r#"
-                    from collections.abc import Mapping, Sequence, Set
-                    from typing import AbstractSet
+                    from collections.abc import Mapping, Sequence, Set as AbstractSet
 
                     def process(
                         items: Sequence[int],
                         lookup: Mapping[str, int],
-                        tags: Set[str],
-                        legacy_tags: AbstractSet[str],
+                        tags: AbstractSet[str],
                     ) -> None:
+                        pass
+                "#,
+                unaliased_collections_abc_set_detected => r#"
+                    from collections.abc import Set
+
+                    def process(tags: Set[str]) -> None:
                         pass
                 "#,
                 immutable_concrete_builtins => r#"
@@ -235,6 +235,12 @@ crate::test_utils::rule_test!(
                     def process(tags: typing.Set[str]) -> None:
                         pass
                 "# => "typing.Set[str]",
+                pep484_unqualified_typing_set => r#"
+                    from typing import Set
+
+                    def process(extra: Set[int]) -> None:
+                        pass
+                "# => "Set[int]",
                 pep604_union_consolidates_multiple_concrete_types => r#"
                     def process(items: list[int] | set[str] | None = None) -> None:
                         pass

@@ -2,9 +2,8 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    PythonFunctionSignature, collect_concrete_collection_types,
-    collect_locally_mutated_return_functions, extract_function_signatures,
-    has_exempt_signature_decorator, is_exempt_dunder_method, is_in_protocol_or_abc_class,
+    collect_concrete_collection_types, extract_function_signatures,
+    has_unaliased_collections_abc_set_import,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
@@ -18,7 +17,7 @@ use std::path::Path;
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Return annotation of `{function}` uses concrete collection type `{expression}` (`{token}`).",
     rationale: "Returning an invariant concrete collection type such as `list`, `dict`, or `set` exposes mutability across the boundary and forces callers holding a `Sequence` or `Mapping` to copy before returning.",
-    suggestion: "Replace `{token}` in the return annotation of `{function}` with `Sequence`, `Mapping`, or `Set` from `collections.abc` (or `tuple` / `frozenset`), or add a comment on `{function}` explaining why callers need a mutable collection.",
+    suggestion: "Replace `{token}` in the return annotation of `{function}` with `Sequence`, `Mapping`, or `AbstractSet` from `collections.abc` (or `MutableSequence`, `MutableMapping`, or `MutableSet` when mutated by callers), or add a comment on `{function}` explaining why callers need a concrete collection.",
 };
 
 /// The rule's declaration.
@@ -44,27 +43,27 @@ pub const RULE: CodeRule = CodeRule {
             summary: "Flags Python function return annotations using concrete mutable collection types such as `list`, `dict`, or `set` without an explanation.",
             what_it_does: "Flags functions and methods in Python source files (test files are \
                            not checked) whose return annotation uses a concrete mutable \
-                           collection constructor (`list`, `dict`, `set`, `typing.List`, \
-                           `typing.Dict`, or `typing.Set`), either at the top level or inside \
-                           transparent wrappers (`|`, `Optional`, `Union`, `Annotated`) and \
-                           covariant container positions (`Sequence[list[T]]`, \
-                           `Mapping[K, list[V]]`, `Awaitable[list[T]]`). Functions whose return \
-                           value is mutated in place by a caller in the same file, or whose \
-                           header carries a substantive explanation comment (under the default \
-                           `require-explanation` mode), are not flagged. Dunder methods other \
-                           than `__init__` and `__new__`, methods on `Protocol` or `ABC` \
-                           classes, and functions decorated with `@override`, `@overload`, \
-                           `@abstractmethod`, or `@fixture` are exempt.",
+                           collection constructor (`list`, `dict`, `set`, `List`, `Dict`, `Set`, \
+                           `typing.List`, `typing.Dict`, or `typing.Set`), either at the top \
+                           level or inside transparent wrappers (`|`, `Optional`, `Union`, \
+                           `Annotated`) and covariant container positions (`Sequence[list[T]]`, \
+                           `Mapping[K, list[V]]`, `Awaitable[list[T]]`). Unqualified `Set` is \
+                           exempt only when `from collections.abc import Set` is present in the \
+                           file. Functions whose header carries a substantive explanation \
+                           comment (under the default `require-explanation` mode) are not \
+                           flagged. Dunder methods other than `__init__` and `__new__`, methods \
+                           on `Protocol` or `ABC` classes, and functions decorated with \
+                           `@override`, `@overload`, `@abstractmethod`, or `@fixture` are exempt.",
             why_is_this_bad: "Returning a concrete `list`, `dict`, or `set` exposes internal \
                               state to in-place caller mutation and locks the implementation \
                               into returning an invariant mutable container even when it could \
                               otherwise return a cached `tuple`, a `Sequence` view, or a \
                               parameter directly without copying.\n\n\
                               Annotate read-only return values with `Sequence`, `Mapping`, or \
-                              `Set` from `collections.abc` (or `tuple` / `frozenset`). When a \
-                              function intentionally returns a fresh mutable buffer for callers \
-                              to mutate in place, document that contract in a comment on the \
-                              function header.",
+                              `AbstractSet` (`from collections.abc import Set as AbstractSet`), \
+                              and caller-mutated return values with `MutableSequence`, \
+                              `MutableMapping`, or `MutableSet` (or document why a concrete \
+                              collection is returned in a comment on the function header).",
             references: &[Reference {
                 title: "PEP 585: Type Hinting Generics In Standard Collections",
                 url: "https://peps.python.org/pep-0585/",
@@ -89,24 +88,18 @@ pub const RULE: CodeRule = CodeRule {
     check: check_file,
 };
 
-fn is_exempt_function(signature: &PythonFunctionSignature<'_>) -> bool {
-    is_exempt_dunder_method(&signature.name)
-        || has_exempt_signature_decorator(&signature.node)
-        || is_in_protocol_or_abc_class(&signature.node)
-}
-
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    let locally_mutated = collect_locally_mutated_return_functions(file);
+    let abc_set_imported = has_unaliased_collections_abc_set_import(file);
     let mut diagnostics = Vec::new();
 
     for signature in extract_function_signatures(file) {
-        if is_exempt_function(&signature) || locally_mutated.contains(&signature.name) {
+        if signature.is_exempt_from_signature_rules() {
             continue;
         }
         let Some(ref return_type_node) = signature.return_type_node else {
             continue;
         };
-        let matched = collect_concrete_collection_types(return_type_node);
+        let matched = collect_concrete_collection_types(return_type_node, abc_set_imported);
         if matched.is_empty() {
             continue;
         }
@@ -133,7 +126,7 @@ crate::test_utils::rule_test!(
         Python => {
             pass: [
                 abstract_return_types => r#"
-                    from collections.abc import Iterable, Mapping, Sequence, Set
+                    from collections.abc import Iterable, Mapping, Sequence, Set as AbstractSet
 
                     def get_users() -> Sequence[str]:
                         return ["alice"]
@@ -141,11 +134,17 @@ crate::test_utils::rule_test!(
                     def get_counts() -> Mapping[str, int]:
                         return {"a": 1}
 
-                    def get_tags() -> Set[str]:
+                    def get_tags() -> AbstractSet[str]:
                         return {"v1"}
 
                     def stream_ids() -> Iterable[int]:
                         return [1, 2]
+                "#,
+                unaliased_collections_abc_set_detected => r#"
+                    from collections.abc import Set
+
+                    def get_tags() -> Set[str]:
+                        return {"v1"}
                 "#,
                 immutable_concrete_return_types => r#"
                     def get_coords() -> tuple[int, ...]:
@@ -165,21 +164,6 @@ crate::test_utils::rule_test!(
                         @staticmethod
                         def make_batch() -> list[int]:
                             return []
-                "#,
-                locally_mutated_via_variable_binding => r#"
-                    def make_buf() -> list[int]:
-                        return []
-
-                    def caller() -> None:
-                        buf = make_buf()
-                        buf.append(1)
-                "#,
-                locally_mutated_directly_on_call => r#"
-                    def make_map() -> dict[str, int]:
-                        return {}
-
-                    def caller() -> None:
-                        make_map()["k"] = 1
                 "#,
                 override_overload_abstract_protocol_dunder_exempt => r#"
                     import abc
@@ -210,6 +194,12 @@ crate::test_utils::rule_test!(
                     def get_users() -> list[str]:
                         return ["alice"]
                 "# => "list[str]",
+                unqualified_typing_set_return => r#"
+                    from typing import Set
+
+                    def get_tags() -> Set[str]:
+                        return {"a"}
+                "# => "Set[str]",
                 union_and_optional_concrete_return => r#"
                     from typing import Optional
 

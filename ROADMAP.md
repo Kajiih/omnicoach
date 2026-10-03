@@ -59,6 +59,10 @@ Source: Python Tip of the Week #069 "Prefer constants over wild values" (go/pyth
   - *Receiver rebinding*: `a = p[0]; p = nxt(); b = p[1]` groups two different values as one receiver (both languages). Needs binding awareness (split the group at each rebinding).
   - *Shadowing*: a closure parameter (`|t| t.1`) or comprehension variable reusing the receiver's name is grouped with the outer receiver (both languages).
   - *Receiver normalization*: receivers are grouped by source text, so `(t).0` vs `t.0`, `len((xs))` vs `len(xs)`, and chains split across lines are not recognized as the same receiver.
+- **Signature & attribute collection type rules** (`concrete-collection-parameter`, `concrete-collection-return`, `concrete-collection-attribute`, `mutable-collection-parameter`, `mutable-collection-return`, `mutable-collection-attribute`, `specific-collection-parameter` — Python) — **implemented**, design in `docs/dev/signature_collection_types/`. Follow-ups:
+  - *Type alias resolution*: `type IntList = list[int]` or `IntList: TypeAlias = list[int]` used in annotations is treated as an unknown generic/identifier until per-file type-alias resolution is added.
+  - *Cross-file caller and subclass mutation tracking*: return and attribute mutation checks (`collect_locally_mutated_return_functions`, `collect_public_class_attributes`) operate within a single file (`G3`); cross-module mutations rely on the default `require-explanation` mode.
+  - *Dedicated `unaliased-collections-abc-set-import` rule*: evaluate whether to also flag `from collections.abc import Set` without `as AbstractSet` (overlapping Ruff `PYI025`).
 - **`no-manual-enum-name-map`** (Python, Rust — tip `#protobufs`):
   - *Detection*: A dict literal where every entry is `'NAME': X.Y.NAME` (string key equals the value's last attribute). Suggest `Enum.Value(name)` (protobuf), `Enum[name]`, or `Enum.__members__`.
   - *Rust*: `match` arms mapping `"Alpha" => Kind::Alpha` → derive `strum::EnumString`.

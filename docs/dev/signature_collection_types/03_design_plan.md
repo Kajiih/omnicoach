@@ -152,25 +152,29 @@ Verified against `tree-sitter-python` 0.25.0 (see §4.1 for exact CST node shape
 
 ### 3.1 Three-Tier Rule Scope & Execution Order (`P1`)
 
-All 3 tiers (5 rules total) are in scope and will be implemented in this exact sequence:
+All 3 tiers (7 rules total) are in scope and implemented in this sequence:
 
-1. **Tier 1 — Concrete Collection Rules**:
+1. **Tier 1 — Concrete Collection Rules (`list`, `dict`, `set`, `List`, `Dict`, `Set`)**:
    - `concrete-collection-parameter` (Default: `EnforcementMode::Ban`, `Precision::Exact`)
    - `concrete-collection-return` (Default: `EnforcementMode::RequireExplanation`, `Precision::Heuristic`)
    - `concrete-collection-attribute` (Default: `EnforcementMode::RequireExplanation`, `Precision::Heuristic`)
-2. **Tier 2 — Mutable Collection Rule**:
+   - **Ruff `PYI025` (`unaliased-collections-abc-set-import`) alignment**: Unqualified `Set` is flagged as concrete (`typing.Set` = `builtins.set`) unless `from collections.abc import Set` (unaliased) is present in the file (`has_unaliased_collections_abc_set_import`). All rule suggestions and documentation recommend `AbstractSet` (`from collections.abc import Set as AbstractSet`) rather than unaliased `Set`.
+   - **Always flag concrete mutable collections even when mutated**: Tier 1 rules flag `list`, `dict`, and `set` regardless of mutation, recommending `Sequence`/`Mapping`/`AbstractSet` when read-only or `MutableSequence`/`MutableMapping`/`MutableSet` when mutated in place (or an explanation comment on returns/attributes).
+2. **Tier 2 — Mutable Collection Rules (`MutableSequence`, `MutableMapping`, `MutableSet`)**:
    - `mutable-collection-parameter` (Default: `EnforcementMode::Ban`, `Precision::Heuristic`)
-3. **Tier 3 — Overly Specific Collection Rule**:
+   - `mutable-collection-return` (Default: `EnforcementMode::RequireExplanation`, `Precision::Heuristic`)
+   - `mutable-collection-attribute` (Default: `EnforcementMode::RequireExplanation`, `Precision::Heuristic`)
+3. **Tier 3 — Overly Specific Collection Rule (`Sequence`, `Collection`)**:
    - `specific-collection-parameter` (Default: `EnforcementMode::RequireExplanation`, `Precision::Heuristic`)
 
-### 3.2 Nested Container Variance Analysis (`P2` — Why `T-Covariant` for Tier 1 and `T-Wrapper` for Tiers 2–3)
+### 3.2 Nested Container Variance Analysis (`P2` — Why `T-Covariant` vs. `T-Wrapper`)
 
-Whether we can check inside nested containers is determined strictly by type variance and dataflow soundness:
+Whether we check inside nested containers is determined strictly by type variance and dataflow soundness:
 
-1. **Tier 1 (`concrete-collection-parameter`, `concrete-collection-return`, `concrete-collection-attribute`) uses `T-Covariant`**:
-   - At any covariant target root (parameter, return, or read-only attribute), replacing a concrete `list[T]` with `Sequence[T]`, `dict[K, V]` with `Mapping[K, V]`, or `set[T]` with `AbstractSet[T]` inside a nested type parameter `P` is **logically sound if and only if every enclosing type constructor along the path from the root to `P` is covariant in that parameter position**:
+1. **Tier 1 (`concrete-collection-*`) and Tier 2 Return/Attribute (`mutable-collection-return`, `mutable-collection-attribute`) use `T-Covariant`**:
+   - At any covariant target root (parameter, return, or read-only attribute), replacing a concrete `list[T]` or `MutableSequence[T]` with `Sequence[T]`, `dict[K, V]` or `MutableMapping[K, V]` with `Mapping[K, V]`, or `set[T]` or `MutableSet[T]` with `AbstractSet[T]` inside a nested type parameter `P` is **logically sound if and only if every enclosing type constructor along the path from the root to `P` is covariant in that parameter position**:
      - **Transparent wrappers (all type args except `Annotated` metadata `1..`)**: `T1 | T2`, `Union[...]`, `Optional[T]`, `Annotated[T, ...]`, `ClassVar[T]`, `Final[T]`, `Required[T]`, `NotRequired[T]`, `ReadOnly[T]`.
-     - **Single-parameter covariant containers (arg 0)**: `Sequence[T]`, `Collection[T]`, `Iterable[T]`, `Iterator[T]`, `Reversible[T]`, `Container[T]`, `AsyncIterable[T]`, `AsyncIterator[T]`, `Awaitable[T]`, `AbstractSet[T]`, `Set[T]` (`collections.abc.Set` / `typing.Set` when abstract), `frozenset[T]`.
+     - **Single-parameter covariant containers (arg 0)**: `Sequence[T]`, `Collection[T]`, `Iterable[T]`, `Iterator[T]`, `Reversible[T]`, `Container[T]`, `AsyncIterable[T]`, `AsyncIterator[T]`, `Awaitable[T]`, `AbstractSet[T]`, `Set[T]` (`collections.abc.Set`), `frozenset[T]`.
      - **Tuples (all non-ellipsis type args)**: `tuple[T, ...]` and `tuple[T1, T2, ...]`.
      - **Mappings (arg 1 `V_co` only)**: `Mapping[K, V_co]` is invariant in `K` (arg 0) and covariant in `V_co` (arg 1). In Python's type system (`mypy` and `pyright`), `dict[str, list[int]] <: Mapping[str, list[int]] <: Mapping[str, Sequence[int]]`, so widening `Mapping[str, list[int]]` → `Mapping[str, Sequence[int]]` is 100% sound and zero-copy for callers holding `dict[str, list[int]]`.
      - **Callables (arg 1 `Ret_co` only)**: `Callable[[Arg1, ...], Ret_co]` is contravariant in its parameter list (arg 0) and covariant in its return type `Ret_co` (arg 1).
@@ -180,35 +184,33 @@ Whether we can check inside nested containers is determined strictly by type var
      - `Callable[[list[int]], R]` parameter list (arg 0): **contravariant** (`Callable[[Sequence[int]], R]` is a narrower subtype that rejects valid callbacks).
      - `MutableSequence[T]`, `MutableMapping[K, V]`, `MutableSet[T]`: **invariant** (`dict[str, list[int]]` is *not* a subtype of `MutableMapping[str, Sequence[int]]`).
      - Any unknown/user-defined generic `CustomGeneric[T]`: `TypeVar` is invariant by default in Python.
-2. **Tiers 2 & 3 (`mutable-collection-parameter` and `specific-collection-parameter`) use `T-Wrapper`**:
+2. **Parameter Body-Usage Rules (`mutable-collection-parameter` and `specific-collection-parameter`) use `T-Wrapper`**:
    - Both rules rely on intra-procedural syntactic tracking of operations on the bound parameter symbol `x` (`x.append(...)`, `x[0]`, `len(x)`).
-   - If a parameter has a nested type like `x: Sequence[MutableSequence[int]]`, mutations happen on extracted inner elements (`for row in x: row.append(1)`), not on `x` itself. Without element-level alias/type inference across loops and unpackings, inspecting nested containers for body usage would be unsound. Therefore, Tiers 2 and 3 unwrap only transparent wrappers (`|`, `Optional`, `Union`, `Annotated[T, ...]`).
+   - If a parameter has a nested type like `x: Sequence[MutableSequence[int]]`, mutations happen on extracted inner elements (`for row in x: row.append(1)`), not on `x` itself. Without element-level alias/type inference across loops and unpackings, inspecting nested containers for body usage would be unsound. Therefore, parameter body-usage rules unwrap only transparent wrappers (`|`, `Optional`, `Union`, `Annotated[T, ...]`).
 
-### 3.3 Why Tier 2 (`mutable-collection-parameter`) and Tier 3 (`specific-collection-parameter`) Are Parameter-Only
+### 3.3 Why Tier 1 & Tier 2 Span Parameters, Returns, and Attributes, While Tier 3 Is Parameter-Only
 
-A critical architectural question is why Tier 1 spans **parameters, returns, and attributes**, whereas Tier 2 (`mutable-collection-parameter`) and Tier 3 (`specific-collection-parameter`) target **parameters**:
-
-1. **Consumer vs. Producer Asymmetry (Why Return Types Cannot Use Function-Body Usage Analysis)**:
-   - For a **parameter** `def f(x: MutableSequence[int]):`, the function body of `f` is the **consumer** of `x`. Inspecting `f`'s body tells us everything `f` does to `x`.
-   - For a **return type** `def f() -> MutableSequence[int]:` or `def f() -> Sequence[int]:`, the function body of `f` is the **producer**, while the **consumers** are all external callers across the codebase!
-   - Inspecting `f`'s body cannot determine how callers use the returned value: `f` may mutate a local list `result.append(1)` while building it and then `return result`, which does *not* make the return contract mutable. Conversely, for Tier 3, returning `-> Sequence[int]` instead of `-> Iterable[int]` is *strictly better* for callers (Postel's Law: accept general, return specific read-only ABCs so callers get `len()` and indexing without copying).
-2. **What if someone writes `MutableSequence`, `MutableMapping`, or `MutableSet` on a Return Type or Attribute?**:
-   - On a **return type** (`def f() -> MutableSequence[int]:`) or a **public unmutated class attribute** (`class C: items: MutableSequence[int]`), `MutableSequence` has the **exact same invariance and mutability exposure** as `list[int]`: it prevents returning or passing a `tuple` or `Sequence[int]` without copying!
-   - Furthermore, if `concrete-collection-return` and `concrete-collection-attribute` only flagged `list`/`dict`/`set`, a developer could "fix" `-> list[int]` or `items: list[int]` on a read-only dataclass by changing it to `-> MutableSequence[int]` or `items: MutableSequence[int]`, silencing the linter while leaving the type invariant!
-   - Wait — should `concrete-collection-return` / `concrete-collection-attribute` remain focused strictly on concrete types (`list`, `dict`, `set`), while we document why `mutable-collection-parameter` is parameter-only?
-   - Yes: on parameters, `MutableSequence` is the valid replacement when `f` mutates `x` in place (`concrete-collection-parameter` tells the user to use `Sequence` or `MutableSequence`, and `mutable-collection-parameter` catches `MutableSequence` when `f` doesn't actually mutate `x`). On returns and attributes, concrete `list`/`dict`/`set` are the primary real-world anti-pattern (~99% of cases), and `concrete-collection-return` / `concrete-collection-attribute` always recommend `Sequence` / `Mapping` / `Set` (never `Mutable*`) or an explanation comment.
-3. **Why Tier 3 (`specific-collection-parameter`) Must Never Apply to Attributes**:
-   - Lowering a class/dataclass attribute `self.items: Sequence[int]` to `Iterable[int]` allows callers to construct the object with a **single-use generator/iterator** (`Order(items=(x for x in range(5)))`). The first method call that iterates `self.items` permanently exhausts the attribute, causing all subsequent reads of `self.items` to silently see an empty collection!
+1. **Tier 1 (`concrete-collection-*`) vs. Tier 2 (`mutable-collection-*`) Separation of Concerns**:
+   - In Tier 1, concrete `list`, `dict`, and `set` annotations are **always** flagged — even when mutated in place — because mutated collections should still use abstract `MutableSequence`, `MutableMapping`, or `MutableSet` rather than concrete `list`, `dict`, or `set` (or carry an explanation comment on returns/attributes).
+   - In Tier 2, `MutableSequence`, `MutableMapping`, and `MutableSet` are checked against actual mutation:
+     - `mutable-collection-parameter`: checks whether the function body mutates the parameter or lets it escape (`is_parameter_mutated_or_escaping`).
+     - `mutable-collection-return`: checks whether any caller in the same file mutates the returned collection in place (`collect_locally_mutated_return_functions`) or whether the function header explains why external callers require a mutable return (`EnforcementMode::RequireExplanation`).
+     - `mutable-collection-attribute`: checks whether any method in the class mutates `self.<name>` or `cls.<name>` in place (`attribute.is_mutated_in_class` from `collect_public_class_attributes`) or whether a comment explains why the public attribute is mutable (`EnforcementMode::RequireExplanation`).
+2. **Why Tier 3 (`specific-collection-parameter`) Is Parameter-Only**:
+   - For a **return type**, returning `-> Sequence[int]` instead of `-> Iterable[int]` is strictly better for callers (Postel's Law: accept general, return specific read-only ABCs so callers get `len()` and indexing without copying).
+   - For a **class/dataclass attribute**, lowering `self.items: Sequence[int]` to `Iterable[int]` allows callers to construct the object with a **single-use generator/iterator** (`Order(items=(x for x in range(5)))`). The first method call that iterates `self.items` permanently exhausts the attribute, causing all subsequent reads of `self.items` to silently see an empty collection!
 
 ### 3.4 Default `EnforcementMode` & False-Positive Workarounds (`P3`)
 
 | Rule | Default `EnforcementMode` | `Precision` | Why & Workarounds |
 | :--- | :--- | :--- | :--- |
-| `concrete-collection-parameter` | `Ban` | `Exact` | A parameter should always use an abstract collection (`Sequence`/`Mapping`/`Set` if read-only, `MutableSequence`/`MutableMapping`/`MutableSet` if mutated). |
-| `concrete-collection-return` | `RequireExplanation` | `Heuristic` | Allows returning a freshly owned mutable `list`/`dict`/`set` when documented with a normal comment on the `def` (or when mutated by a caller in the same file). |
-| `concrete-collection-attribute` | `RequireExplanation` | `Heuristic` | Exempts private `_attr` and attributes mutated by the class's own methods; allows publicly mutable attributes when documented with a comment. |
+| `concrete-collection-parameter` | `Ban` | `Exact` | A parameter should always use an abstract collection (`Sequence`/`Mapping`/`AbstractSet` if read-only, `MutableSequence`/`MutableMapping`/`MutableSet` if mutated). |
+| `concrete-collection-return` | `RequireExplanation` | `Heuristic` | Allows returning a concrete `list`/`dict`/`set` when documented with a comment on the `def`. |
+| `concrete-collection-attribute` | `RequireExplanation` | `Heuristic` | Exempts private `_attr`; allows public concrete collection attributes when documented with a comment. |
 | `mutable-collection-parameter` | `Ban` | `Heuristic` | Conservatively exempts any parameter that is mutated in place or escapes to an unknown function, attribute, variable, or return. |
-| `specific-collection-parameter` | `RequireExplanation` | `Heuristic` | Fixes all 6 the legacy linter bugs (truthiness, multi-pass iteration, `reversed`, `.index`/`.count`, `match`, helper forwarding) and allows documenting intentional `Sequence`/`Collection` contracts (e.g., deterministic ordering or eager materialization) with a comment. |
+| `mutable-collection-return` | `RequireExplanation` | `Heuristic` | Exempts functions whose return value is mutated in place by a caller in the same file; allows external caller mutation contracts when documented with a comment on the `def`. |
+| `mutable-collection-attribute` | `RequireExplanation` | `Heuristic` | Exempts private `_attr` and attributes mutated by any method of the class; allows externally mutated public attributes when documented with a comment. |
+| `specific-collection-parameter` | `RequireExplanation` | `Heuristic` | Fixes all 6 the legacy linter bugs (truthiness, multi-pass iteration, `reversed`, `.index`/`.count`, `match`, helper forwarding) and allows documenting intentional `Sequence`/`Collection` contracts with a comment. |
 
 ### 3.5 Diagnostic Granularity (`P4`)
 
@@ -251,7 +253,9 @@ graph TD
     R2["rules::concrete_collection_return"]
     R3["rules::concrete_collection_attribute"]
     R4["rules::mutable_collection_parameter"]
-    R5["rules::specific_collection_parameter"]
+    R5["rules::mutable_collection_return"]
+    R6["rules::mutable_collection_attribute"]
+    R7["rules::specific_collection_parameter"]
     P["ast::python (collection annotation, mutation & capability extractors)"]
     T["ast::python data structs"]
     R1 --> P
@@ -259,6 +263,8 @@ graph TD
     R3 --> P
     R4 --> P
     R5 --> P
+    R6 --> P
+    R7 --> P
     P --> T
 ```
 
@@ -266,8 +272,8 @@ All tree-sitter node navigation lives inside [src/code_lint/ast/python.rs](../..
 
 ### 4.3 Shared AST Extractors in `src/code_lint/ast/python.rs`
 
-1. **Variance-Aware Annotation Traversal (`collect_type_constructors`)**:
-   - Supports two traversal modes via an enum `TraversalDepth { TransparentWrappersOnly, CovariantPositions }`:
+1. **Variance-Aware Annotation Traversal (`collect_type_constructors`) & `from collections.abc import Set` Detection (`has_unaliased_collections_abc_set_import`)**:
+   - Supports two traversal modes via an enum `AnnotationTraversalDepth { TransparentWrappersOnly, CovariantPositions }`:
      - Both modes unwrap `type`, `union_type`, `binary_operator("|")`, `parenthesized_expression`, `Optional[T]`, `Union[T1, T2, ...]`, `Annotated[T, ...]` (arg 0 only), and class/typed-dict qualifiers `ClassVar[T]`, `Final[T]`, `Required[T]`, `NotRequired[T]`, `ReadOnly[T]` (arg 0 only).
      - `CovariantPositions` additionally recurses into:
        - All type args of `Sequence`, `Collection`, `Iterable`, `Iterator`, `Reversible`, `Container`, `AsyncIterable`, `AsyncIterator`, `Awaitable`, `AbstractSet`, `Set`, `frozenset`, `tuple`, `Tuple`, `list`, `List`, `set`.
@@ -279,16 +285,16 @@ All tree-sitter node navigation lives inside [src/code_lint/ast/python.rs](../..
    - Respects lexical shadowing in nested `function_definition` and `lambda` parameters.
    - Detects in-place mutation (`MUTATING_COLLECTION_METHODS`, subscript writes/aug-assigns/deletes, augmented assignments `x += ...`).
    - Detects escaping/aliasing (passing `x` to any callee outside `SAFE_READONLY_BUILTINS`, assigning `x` to an attribute/variable/container, or returning/yielding `x`).
-3. **Single-Pass Parameter Capability Analyzer (`analyze_parameter_collection_capabilities`)**:
+3. **Single-Pass Parameter Capability Analyzer (`analyze_parameter_collection_capability`)**:
    - For `specific-collection-parameter`, walks `function_definition.body` tracking loop/comprehension/closure nesting depth:
      - Marks `escapes_or_mutated = true` if `x` is mutated, reassigned, returned, yielded, stored, or passed to an unknown function/method.
      - Marks `needs_sequence = true` if `x` is indexed/sliced (`x[...]`), matched in a `list_pattern`/`sequence_pattern`, accessed via `.index`/`.count`/unknown attributes, or passed to `reversed(x)`.
      - Marks `needs_collection = true` if `x` is passed to `len(x)`, used in `in`/`not in`, checked for truthiness (`if x:`, `not x`, `bool(x)`, `x and y`, `x or y`, `while x:`, ternary condition), or iterated when `iteration_count > 1` or `loop_nesting_depth > 0`.
      - Counts `iteration_count` across `for ... in x`, comprehensions over `x`, star-unpacking `*x`, and single-pass iterable builtins (`iter`, `list`, `tuple`, `set`, `frozenset`, `dict`, `sorted`, `sum`, `min`, `max`, `any`, `all`, `enumerate`, `zip`, `map`, `filter`).
-4. **Intra-Class Attribute Mutation Detector (`collect_concrete_class_attributes`)**:
-   - Collects public (`!attr_name.starts_with('_')`) annotated attributes in `class_definition` bodies and `__init__` methods (`self.attr: T`), exempting any attribute where a method in the class mutates `self.<attr>` or `<ClassName>.<attr>`.
-5. **Intra-File Return Mutation Detector (`collect_concrete_return_annotations`)**:
-   - Collects functions with concrete collection return annotations, exempting any function whose return value is mutated in place at a call site within the same file (`fn(...).<mutating_method>(...)`, `fn(...)[k] = v`, or `v = fn(...); v.<mutating_method>(...)`).
+4. **Public Class Attribute & Intra-Class Mutation Collector (`collect_public_class_attributes`)**:
+   - Collects public (`!attr_name.starts_with('_')`) annotated attributes in `class_definition` bodies and `__init__` methods (`self.attr: T`), recording `is_mutated_in_class: bool` whenever any method in the class mutates `self.<attr>`, `cls.<attr>`, or `<ClassName>.<attr>`.
+5. **Intra-File Return Mutation Collector (`collect_locally_mutated_return_functions`)**:
+   - Collects function/method names whose return value is mutated in place at a call site within the same file (`fn(...).<mutating_method>(...)`, `fn(...)[k] = v`, or `v = fn(...); v.<mutating_method>(...)`).
 
 ---
 
@@ -298,15 +304,17 @@ Verified against [naming_and_message_style_guide.md](../naming_and_message_style
 - All rule names are `kebab-case`, ≤ 4 words, naming the flagged pattern without polarity prefixes.
 - All summaries are 1 declarative sentence ending with `.`, with no fix verbs or judgement words.
 - All rationales explain the harm without `must` / `should` or leading fix verbs.
-- All suggestions start with `Replace` (in `SUGGESTION_VERBS`).
+- All suggestions start with `Replace` (in `SUGGESTION_VERBS`) and recommend `AbstractSet` (`from collections.abc import Set as AbstractSet`) rather than unaliased `Set`.
 - Placeholders use `{name}`, `{function}`, `{class}`, `{expression}`, and `{token}` from the existing `PLACEHOLDERS` list in [tests/registry.rs](../../../tests/registry.rs#L325-L341) (zero new placeholder vocabulary entries needed).
 
 | Tier | Rule Name | File | Default Mode | Summary / Rationale / Suggestion |
 | :--- | :--- | :--- | :--- | :--- |
-| **1a** | `concrete-collection-parameter` | `concrete_collection_parameter.rs` | `Ban` (`Precision::Exact`) | - **Summary**: ``Parameter `{name}` of `{function}` is annotated with concrete collection type `{expression}` (`{token}`).``<br>- **Rationale**: ``Concrete mutable collection types such as `list`, `dict`, and `set` are invariant in their type arguments and reject read-only inputs such as `tuple`, `frozenset`, or subtype sequences.``<br>- **Suggestion**: ``Replace `{token}` in `{name}` with a read-only abstract collection from `collections.abc` (`Sequence`, `Mapping`, or `Set`), or with `MutableSequence`, `MutableMapping`, or `MutableSet` when `{function}` mutates `{name}` in place.`` |
-| **1b** | `concrete-collection-return` | `concrete_collection_return.rs` | `RequireExplanation` (`Precision::Heuristic`) | - **Summary**: ``Return annotation of `{function}` uses concrete collection type `{expression}` (`{token}`).``<br>- **Rationale**: ``Returning an invariant concrete collection type such as `list`, `dict`, or `set` exposes mutability across the boundary and forces callers holding a `Sequence` or `Mapping` to copy before returning.``<br>- **Suggestion**: ``Replace `{token}` in the return annotation of `{function}` with `Sequence`, `Mapping`, or `Set` from `collections.abc` (or `tuple` / `frozenset`), or add a comment on `{function}` explaining why callers need a mutable collection.`` |
-| **1c** | `concrete-collection-attribute` | `concrete_collection_attribute.rs` | `RequireExplanation` (`Precision::Heuristic`) | - **Summary**: ``Attribute `{name}` of `{class}` is annotated with concrete collection type `{expression}` (`{token}`).``<br>- **Rationale**: ``A public or dataclass attribute typed as `list`, `dict`, or `set` rejects `Sequence`, `Mapping`, or `tuple` arguments in synthesized constructors and exposes internal state to in-place caller mutation.``<br>- **Suggestion**: ``Replace `{token}` on `{name}` with `Sequence`, `Mapping`, or `Set` from `collections.abc` (or `tuple` / `frozenset`), prefix internal mutable state with `_`, or add a comment explaining why `{name}` is publicly mutable.`` |
-| **2** | `mutable-collection-parameter` | `mutable_collection_parameter.rs` | `Ban` (`Precision::Heuristic`) | - **Summary**: ``Parameter `{name}` of `{function}` is annotated with mutable collection type `{expression}` (`{token}`) but never mutated in `{function}`.``<br>- **Rationale**: ``Annotating a read-only parameter as `MutableSequence`, `MutableMapping`, or `MutableSet` makes its type invariant and prevents callers from passing immutable collections such as `tuple` or `MappingProxyType`.``<br>- **Suggestion**: ``Replace `{token}` in `{name}` with its read-only counterpart from `collections.abc` (`Sequence`, `Mapping`, or `Set`).`` |
+| **1a** | `concrete-collection-parameter` | `concrete_collection_parameter.rs` | `Ban` (`Precision::Exact`) | - **Summary**: ``Parameter `{name}` of `{function}` is annotated with concrete collection type `{expression}` (`{token}`).``<br>- **Rationale**: ``Concrete mutable collection types such as `list`, `dict`, and `set` are invariant in their type arguments and reject read-only inputs such as `tuple`, `frozenset`, or subtype sequences.``<br>- **Suggestion**: ``Replace `{token}` in `{name}` with a read-only abstract collection from `collections.abc` (`Sequence`, `Mapping`, or `AbstractSet`), or with `MutableSequence`, `MutableMapping`, or `MutableSet` when `{function}` mutates `{name}` in place.`` |
+| **1b** | `concrete-collection-return` | `concrete_collection_return.rs` | `RequireExplanation` (`Precision::Heuristic`) | - **Summary**: ``Return annotation of `{function}` uses concrete collection type `{expression}` (`{token}`).``<br>- **Rationale**: ``Returning an invariant concrete collection type such as `list`, `dict`, or `set` exposes mutability across the boundary and forces callers holding a `Sequence` or `Mapping` to copy before returning.``<br>- **Suggestion**: ``Replace `{token}` in the return annotation of `{function}` with `Sequence`, `Mapping`, or `AbstractSet` from `collections.abc` (or `MutableSequence`, `MutableMapping`, or `MutableSet` when mutated by callers), or add a comment on `{function}` explaining why callers need a concrete collection.`` |
+| **1c** | `concrete-collection-attribute` | `concrete_collection_attribute.rs` | `RequireExplanation` (`Precision::Heuristic`) | - **Summary**: ``Attribute `{name}` of `{class}` is annotated with concrete collection type `{expression}` (`{token}`).``<br>- **Rationale**: ``A public or dataclass attribute typed as `list`, `dict`, or `set` rejects `Sequence`, `Mapping`, or `tuple` arguments in synthesized constructors and exposes internal state to in-place caller mutation.``<br>- **Suggestion**: ``Replace `{token}` on `{name}` with `Sequence`, `Mapping`, or `AbstractSet` from `collections.abc` (or `MutableSequence`, `MutableMapping`, or `MutableSet` when mutated in `{class}`), prefix internal mutable state with `_`, or add a comment explaining why `{name}` uses a concrete collection.`` |
+| **2a** | `mutable-collection-parameter` | `mutable_collection_parameter.rs` | `Ban` (`Precision::Heuristic`) | - **Summary**: ``Parameter `{name}` of `{function}` is annotated with mutable collection type `{expression}` (`{token}`) but never mutated in `{function}`.``<br>- **Rationale**: ``Annotating a read-only parameter as `MutableSequence`, `MutableMapping`, or `MutableSet` makes its type invariant and prevents callers from passing immutable collections such as `tuple` or `MappingProxyType`.``<br>- **Suggestion**: ``Replace `{token}` in `{name}` with its read-only counterpart from `collections.abc` (`Sequence`, `Mapping`, or `AbstractSet`).`` |
+| **2b** | `mutable-collection-return` | `mutable_collection_return.rs` | `RequireExplanation` (`Precision::Heuristic`) | - **Summary**: ``Return annotation of `{function}` uses mutable collection type `{expression}` (`{token}`) without an explanation or local caller mutation.``<br>- **Rationale**: ``Returning `MutableSequence`, `MutableMapping`, or `MutableSet` exposes mutability across the boundary and prevents returning immutable collections (`tuple`, `MappingProxyType`) or read-only parameter views directly.``<br>- **Suggestion**: ``Replace `{token}` in the return annotation of `{function}` with `Sequence`, `Mapping`, or `AbstractSet` from `collections.abc`, or add a comment on `{function}` explaining why callers need a mutable collection.`` |
+| **2c** | `mutable-collection-attribute` | `mutable_collection_attribute.rs` | `RequireExplanation` (`Precision::Heuristic`) | - **Summary**: ``Attribute `{name}` of `{class}` is annotated with mutable collection type `{expression}` (`{token}`) but never mutated in `{class}`.``<br>- **Rationale**: ``A public or dataclass attribute typed as `MutableSequence`, `MutableMapping`, or `MutableSet` rejects immutable collections (`tuple`, `Sequence`, `Mapping`) in synthesized constructors and exposes mutability on the instance.``<br>- **Suggestion**: ``Replace `{token}` on `{name}` with `Sequence`, `Mapping`, or `AbstractSet` from `collections.abc`, prefix internal mutable state with `_`, or add a comment explaining why `{name}` uses a mutable collection.`` |
 | **3** | `specific-collection-parameter` | `specific_collection_parameter.rs` | `RequireExplanation` (`Precision::Heuristic`) | - **Summary**: ``Parameter `{name}` of `{function}` is annotated with `{expression}` (`{token}`) but only uses `{class}` operations.``<br>- **Rationale**: ``Requiring a narrower collection interface than `{function}` uses restricts callers from passing compatible inputs such as sets, dictionary views, or lazy iterables without materializing a sequence.``<br>- **Suggestion**: ``Replace `{token}` in `{name}` with `{class}` from `collections.abc`, or add a comment on `{function}` explaining why the narrower interface is part of the contract.`` |
 
 ---
@@ -317,13 +325,13 @@ Each task follows **Audit → RED (failing test cases from §2) → GREEN (minim
 
 | Task | Tier | Scope | Verification |
 | :--- | :--- | :--- | :--- |
-| **T1** | **Tier 1 Foundation** | Shared variance-aware AST annotation extractor (`collect_type_constructors` with `CovariantPositions` and `TransparentWrappersOnly`) & exemption helpers (`Protocol`, `ABC`, `@override`, `@overload`, `@abstractmethod`, `@pytest.fixture`, stub body, dunders) in [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs) + unit tests covering Matrix A (`A1`–`A18`). | `cargo test --lib code_lint::ast::python` |
+| **T1** | **Tier 1 Foundation** | Shared variance-aware AST annotation extractor (`collect_type_constructors` with `CovariantPositions` and `TransparentWrappersOnly`), `has_unaliased_collections_abc_set_import`, & exemption helpers (`Protocol`, `ABC`, `@override`, `@overload`, `@abstractmethod`, `@pytest.fixture`, stub body, dunders) in [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs) + unit tests covering Matrix A (`A1`–`A18`). | `cargo test --lib code_lint::ast::python` |
 | **T2** | **Tier 1a (Concrete Parameter)** | Implement `concrete-collection-parameter` ([src/code_lint/rules/concrete_collection_parameter.rs](../../../src/code_lint/rules/concrete_collection_parameter.rs)) + register in `rules.rs` + `rule_test!` suite covering Matrix A & Matrix B (`B1`–`B9`). | `cargo test` (incl. `registry`, `cli`) |
-| **T3** | **Tier 1b (Concrete Return)** | Implement `concrete-collection-return` ([src/code_lint/rules/concrete_collection_return.rs](../../../src/code_lint/rules/concrete_collection_return.rs)) with intra-file caller mutation exemption and `RequireExplanation` default + `rule_test!` suite covering Matrix C (`C1`–`C7`). | `cargo test` |
-| **T4** | **Tier 1c (Concrete Attribute)** | Implement `concrete-collection-attribute` ([src/code_lint/rules/concrete_collection_attribute.rs](../../../src/code_lint/rules/concrete_collection_attribute.rs)) with private `_attr` and intra-class mutation exemptions and `RequireExplanation` default + `rule_test!` suite covering Matrix D (`D1`–`D8`). | `cargo test` |
-| **T5** | **Tier 2 (Mutable Parameter)** | Implement intra-procedural parameter mutation & escape detector in [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs) + `mutable-collection-parameter` ([src/code_lint/rules/mutable_collection_parameter.rs](../../../src/code_lint/rules/mutable_collection_parameter.rs)) + `rule_test!` suite covering Matrix E (`E1`–`E17`). | `cargo test` |
+| **T3** | **Tier 1b (Concrete Return)** | Implement `concrete-collection-return` ([src/code_lint/rules/concrete_collection_return.rs](../../../src/code_lint/rules/concrete_collection_return.rs)) with `RequireExplanation` default + `rule_test!` suite covering Matrix C. | `cargo test` |
+| **T4** | **Tier 1c (Concrete Attribute)** | Implement `concrete-collection-attribute` ([src/code_lint/rules/concrete_collection_attribute.rs](../../../src/code_lint/rules/concrete_collection_attribute.rs)) with private `_attr` exemption and `RequireExplanation` default + `rule_test!` suite covering Matrix D. | `cargo test` |
+| **T5** | **Tier 2 (Mutable Parameter, Return, Attribute)** | Implement intra-procedural parameter mutation & escape detector, intra-file return mutation detector, and intra-class attribute mutation detector in [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs) + `mutable-collection-parameter`, `mutable-collection-return`, and `mutable-collection-attribute` + `rule_test!` suites. | `cargo test` |
 | **T6** | **Tier 3 (Overly Specific Parameter)** | Implement capability lattice analyzer in [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs) + `specific-collection-parameter` ([src/code_lint/rules/specific_collection_parameter.rs](../../../src/code_lint/rules/specific_collection_parameter.rs)) with `RequireExplanation` default + `rule_test!` suite covering Matrix F (`F1`–`F12`). | `cargo test` |
-| **T7** | **Docs & Catalog** | Update `README.md` rule catalog and `ROADMAP.md` marking the signature & attribute collection type rules complete. | `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` |
+| **T7** | **Docs & Catalog** | Update `ROADMAP.md` and `tests/snapshots/cli__list_rules.snap` marking the signature & attribute collection type rules complete. | `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` |
 
 ---
 

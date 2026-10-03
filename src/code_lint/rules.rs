@@ -14,6 +14,9 @@ pub mod error_log_in_except;
 pub mod identical_positional_types;
 pub mod mock_call_assertion;
 pub mod mock_in_tests;
+pub mod mutable_collection_attribute;
+pub mod mutable_collection_parameter;
+pub mod mutable_collection_return;
 pub mod mutable_dataclass;
 pub mod nested_function;
 pub mod packed_assertion;
@@ -21,6 +24,7 @@ pub mod primitive_duration;
 pub mod repeated_index_access;
 pub mod single_letter_name;
 pub mod sleep_in_tests;
+pub mod specific_collection_parameter;
 pub mod suppressed_exception;
 pub mod too_many_assertions;
 pub mod type_cast;
@@ -55,4 +59,8 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &concrete_collection_parameter::RULE,
     &concrete_collection_return::RULE,
     &concrete_collection_attribute::RULE,
+    &mutable_collection_parameter::RULE,
+    &mutable_collection_return::RULE,
+    &mutable_collection_attribute::RULE,
+    &specific_collection_parameter::RULE,
 ];
