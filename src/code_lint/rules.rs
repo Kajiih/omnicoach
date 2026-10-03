@@ -18,6 +18,7 @@ pub mod mutable_collection_attribute;
 pub mod mutable_collection_parameter;
 pub mod mutable_collection_return;
 pub mod mutable_dataclass;
+pub mod mutable_module_constant;
 pub mod nested_function;
 pub mod packed_assertion;
 pub mod primitive_duration;
@@ -65,4 +66,5 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &mutable_collection_attribute::RULE,
     &specific_collection_parameter::RULE,
     &repeated_literal::RULE,
+    &mutable_module_constant::RULE,
 ];
