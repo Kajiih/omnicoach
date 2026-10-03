@@ -49,6 +49,7 @@ The three fields are orthogonal (`rule_design_guide.md` §2). This section fixes
 * No judgement words: "banned", "forbidden", "discouraged", "illegal", "must". The rule's existence is the judgement.
 * No "e.g." / "i.e."; write "such as" or "for example".
 * Numbers, thresholds and defaults are placeholders, never literals, so the message stays true when the option changes.
+* The enforcement mode is configuration too: messages never state the default mode or offer "add a comment" as a fix, because that is false in `ban` mode. A rule doc may say what excuses a finding *in* `require-explanation` mode.
 
 ### 2.2 `summary`: the fact
 
@@ -74,6 +75,7 @@ The three fields are orthogonal (`rule_design_guide.md` §2). This section fixes
 * Imperative mood, starts with a verb from the current list: `Wrap`, `Replace`, `Rename`, `Split`, `Add`, `Remove`, `Move`, `Pass`, `Wait`, `Destructure`, `Unpack`, `Insert`, `Spawn`, `Create`, `Load`, `Narrow`, `Assert`, `Inject`, `Specify`, `Verify`, `Extract`, `Synchronize`, `Access`. The list grows when a fix needs a verb that is not in it (see the introduction).
 * One canonical replacement per language, idiomatic to that language. The base text is language-neutral; per-language variants replace it entirely.
 * Does not repeat "instead of `<bad construct>`" and does not re-explain the harm.
+* Claims no more certainty than the rule has. When the replacement is inferred heuristically, the summary hedges ("appears to") and the suggestion is conditional on intent ("if `{function}` is not meant to mutate `{name}`"). When the rule cannot know the right replacement, the suggestion states the criterion and names `{replacement}` only as an example ("such as").
 
 ### 2.5 Doc summary (`RuleDoc::summary`)
 
@@ -94,6 +96,7 @@ Templates use a fixed vocabulary so the same thing has the same name in every me
 | `{suffix}`, `{token}` | The offending part of an identifier | `` `{suffix}` `` |
 | `{stem}` | The identifier without its offending suffix | `` `{stem}` `` |
 | `{expression}` | The matched access, as written in the source | `` `{expression}` `` |
+| `{replacement}` | The canonical replacement the suggestion proposes, computed per finding | `` `{replacement}` `` |
 | `{receiver}`, `{positions}` | A value read by index, and the positions read | `` `{receiver}` ``, bare |
 | `{construct}` | What a packed assertion folds its checks into | bare |
 | `{duplicates}` | Parameters grouped by shared type | bare; each group carries its own backticks, as in `` `source, target: int` `` |

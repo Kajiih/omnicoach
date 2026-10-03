@@ -1,9 +1,9 @@
-//! Flags public Python class and instance attributes annotated with concrete mutable collection types without an explanation (`concrete-collection-attribute`).
+//! Flags public Python class and instance attributes annotated with concrete mutable collection types (`concrete-collection-attribute`).
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     collect_concrete_collection_types, collect_public_class_attributes,
-    has_unaliased_collections_abc_set_import,
+    has_unaliased_collections_abc_set_import, read_only_collection_replacements,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
@@ -15,9 +15,9 @@ use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Attribute `{name}` of `{class}` is annotated with concrete collection type `{expression}` (`{token}`).",
-    rationale: "A public or dataclass attribute typed as `list`, `dict`, or `set` rejects `Sequence`, `Mapping`, or `tuple` arguments in synthesized constructors and exposes internal state to in-place caller mutation.",
-    suggestion: "Replace `{token}` on `{name}` with `Sequence`, `Mapping`, or `AbstractSet` from `collections.abc` (or `MutableSequence`, `MutableMapping`, or `MutableSet` when mutated in `{class}`), prefix internal mutable state with `_`, or add a comment explaining why `{name}` uses a concrete collection.",
+    summary: "Attribute `{name}` of `{class}` has annotation `{expression}`, which contains concrete collection type `{token}`.",
+    rationale: "A public attribute typed as `list`, `dict`, or `set` turns assigning a `tuple`, `Sequence`, or `Mapping` (including through a dataclass constructor) into a type error and exposes internal state to in-place caller mutation.",
+    suggestion: "Replace `{token}` on `{name}` with the `collections.abc` type that states what users of `{class}` may do with it, such as `{replacement}` for read-only access or its `Mutable` counterpart for in-place mutation, or prefix internal state with `_`.",
 };
 
 /// The rule's declaration.
@@ -49,21 +49,21 @@ pub const RULE: CodeRule = CodeRule {
                            or `typing.Set`), including inside `ClassVar`, `Final`, `Optional`, \
                            `Union`, `|`, and covariant containers. Unqualified `Set` is exempt \
                            only when `from collections.abc import Set` is present in the file. \
-                           Private attributes starting with `_`, attributes on `Protocol` or \
-                           `ABC` classes, and attributes with a substantive explanation comment \
-                           (under the default `require-explanation` mode) are not flagged.",
+                           Private attributes starting with `_` and attributes on `Protocol` or \
+                           `ABC` classes are not flagged. In `require-explanation` mode, a \
+                           comment on or above the attribute line excuses the finding.",
             why_is_this_bad: "On a `@dataclass` or public class interface, annotating a field as \
                               `items: list[str]` forces callers constructing the class to pass a \
                               concrete `list` rather than a `tuple` or an upstream `Sequence[str]` \
                               parameter, and exposes a mutable container on the instance even \
                               when `@dataclass(frozen=True)` is used.\n\n\
-                              Annotate read-only public fields with `Sequence`, `Mapping`, or \
-                              `AbstractSet` (`from collections.abc import Set as AbstractSet`), \
-                              and in-place mutated public fields with `MutableSequence`, \
-                              `MutableMapping`, or `MutableSet`. If the attribute holds internal \
-                              mutable state, prefix its name with `_`; if external callers \
-                              intentionally require a concrete collection, document that in a \
-                              comment on the attribute.",
+                              Choose the annotation as a contract: `Sequence`, `Mapping`, or `Set` \
+                              (imported as `AbstractSet`) for read-only fields, and their \
+                              `Mutable` counterparts for fields mutated in place. Internal mutable \
+                              state belongs in a `_`-prefixed attribute. A public concrete \
+                              collection is a deliberate exception. The message names the \
+                              read-only counterpart of the flagged type; it does not check how \
+                              the attribute is used.",
             references: &[Reference {
                 title: "PEP 585: Type Hinting Generics In Standard Collections",
                 url: "https://peps.python.org/pep-0585/",
@@ -102,6 +102,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             continue;
         }
         let token = matched.join(", ");
+        let replacement = read_only_collection_replacements(&matched);
         let expression = attribute.type_node.text();
         diagnostics.push(rule.diagnostic_at_node(
             path,
@@ -111,6 +112,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                 ("class", &attribute.class_name),
                 ("expression", expression.as_ref()),
                 ("token", &token),
+                ("replacement", &replacement),
             ],
         ));
     }
@@ -159,12 +161,14 @@ crate::test_utils::rule_test!(
                     def compute() -> None:
                         local_items: list[int] = [1, 2]
                 "#,
-                protocol_and_abc_classes_exempt => r#"
-                    import abc
+                protocol_class_exempt => r#"
                     from typing import Protocol
 
                     class HasItems(Protocol):
                         items: list[str]
+                "#,
+                abc_class_exempt => r#"
+                    import abc
 
                     class AbstractStore(abc.ABC):
                         records: dict[str, int]

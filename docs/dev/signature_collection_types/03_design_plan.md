@@ -2,7 +2,7 @@
 
 This document records **Phase 3 (Design / Plan)** for porting the legacy linter's collection type annotation rules to Omni. It builds on validated [01_understand.md](01_understand.md) (G1–G5, NG1–NG4, D1–D5, Q1–Q8) and validated [02_sota_and_references.md](02_sota_and_references.md), and incorporates user feedback on execution order, nested container variance, mutation rule scope, and false-positive mitigation for overly specific collection types.
 
-> Status: **UPDATED — Ready for Final Phase 3 Validation**
+> Status: **VALIDATED and implemented.** Phase 6 changed some decisions (see [06_review_and_audit.md](06_review_and_audit.md) §3). They are corrected inline below, except the §5 message templates, which are superseded by the rule sources.
 
 ---
 
@@ -13,8 +13,8 @@ This document records **Phase 3 (Design / Plan)** for porting the legacy linter'
 | ID | Journey | Acceptance Criteria |
 | :--- | :--- | :--- |
 | **CUJ1 (Concrete Parameter)** | A Python developer writes `def process(items: list[int] \| None, nested: Sequence[dict[str, int]]) -> None:`. | 1 diagnostic per offending parameter annotation (`items` and `nested`), naming the parameter and function, explaining invariance/caller lock-in, and suggesting `Sequence` / `Mapping` (or `MutableSequence` / `MutableMapping` when mutated in place). Zero diagnostics after changing to read-only ABCs. |
-| **CUJ2 (Concrete Return Type)** | A developer writes `def get_tags(self) -> list[str]: return self._tags` without an explanation comment. | Flagged by `concrete-collection-return`, suggesting `Sequence[str]` (or adding an explanatory comment when returning a freshly owned mutable list under `require-explanation` mode). If a caller in the same file mutates `get_tags()` (`get_tags().sort()`), or if an explanatory comment is present, zero diagnostics. |
-| **CUJ3 (Concrete Public/Dataclass Attribute)** | A developer writes `@dataclass(frozen=True) class Config: hosts: list[str]`. | Flagged by `concrete-collection-attribute` on `hosts: list[str]`, suggesting `Sequence[str]` so callers can construct `Config` with tuples or upstream `Sequence[str]` parameters without copying. Private attributes (`_hosts: list[str]`) and attributes mutated by methods of the class (`self.hosts.append(...)`) produce zero diagnostics. |
+| **CUJ2 (Concrete Return Type)** | A developer writes `def get_tags(self) -> list[str]: return self._tags` without an explanation comment. | Flagged by `concrete-collection-return`, suggesting `collections.abc.Sequence` (or adding an explanatory comment when returning a freshly owned mutable list under `require-explanation` mode). Zero diagnostics only with an explanatory comment: a caller that mutates `get_tags()` in the same file does not exempt the concrete type (it exempts `MutableSequence` returns under `mutable-collection-return`). |
+| **CUJ3 (Concrete Public/Dataclass Attribute)** | A developer writes `@dataclass(frozen=True) class Config: hosts: list[str]`. | Flagged by `concrete-collection-attribute` on `hosts: list[str]`, suggesting `collections.abc.Sequence` so callers can construct `Config` with tuples or upstream `Sequence[str]` parameters without copying. Private attributes (`_hosts: list[str]`) produce zero diagnostics. Attributes mutated by methods of the class are still flagged (use `MutableSequence` or explain); the mutation exemption belongs to `mutable-collection-attribute`. |
 | **CUJ4 (Unused Mutable Parameter)** | A developer writes `def summarize(counts: MutableMapping[str, int]) -> int: return sum(counts.values())`. | Flagged by `mutable-collection-parameter` on `MutableMapping[str, int]`, noting `counts` is never mutated in `summarize` and suggesting `Mapping`. If `counts["total"] = 0` or `helper(counts)` is added, zero diagnostics. |
 | **CUJ5 (Overly Specific Read-Only Parameter)** | A developer writes `def total(prices: Sequence[float]) -> float: return sum(prices)` without an explanation comment. | Flagged by `specific-collection-parameter`, noting `prices` is only iterated once and suggesting `Iterable` (or `Collection` when `len(prices)` / `x in prices` / `if prices:` / multi-pass iteration is used). Adding an explanatory comment (under `require-explanation` mode) or using `prices[0]` / `reversed(prices)` / `helper(prices)` produces zero diagnostics. |
 | **CUJ6 (Exempt Contracts & Stubs)** | A developer writes a `Protocol` method, `@override` method, `@overload` signature, `@abstractmethod`, or stub (`...` / `pass` / `raise NotImplementedError`). | Zero false positives across all rules. |
@@ -49,7 +49,7 @@ Verified against `tree-sitter-python` 0.25.0 (see §4.1 for exact CST node shape
 | **A8** | `x: Annotated[list[int], "meta"]`, `x: typing.Annotated[set[str], Doc("...")]` | `generic_type` or `subscript` with base `Annotated` | **FLAG** | Unwraps first type argument (`list[int]`, `set[str]`) and ignores metadata arguments `1..`. |
 | **A9** | `x: Annotated[Sequence[int], list]` | `generic_type("Annotated", [Sequence[int], list])` | **PASS** | `list` is in metadata position (arg 1), not the underlying type (arg 0). |
 | **A10** | `x: ClassVar[list[str]]`, `x: Final[dict[str, int]]`, `x: Required[list[int]]`, `x: NotRequired[set[str]]`, `x: ReadOnly[list[int]]` | `generic_type` or `subscript` with qualifier base | **FLAG** | Unwraps first type argument `T`. |
-| **A11** | `x: Sequence[list[int]]`, `x: Collection[set[str]]`, `x: Iterable[dict[str, int]]`, `x: AbstractSet[tuple[int, ...]]`, `x: Awaitable[list[int]]`, `x: tuple[str, list[int]]`, `x: tuple[list[int], ...]` | Covariant single/tuple generic container wrapping concrete collection | **FLAG** (`list`, `set`, `dict`) | **Covariant outer container**: `Sequence`, `Collection`, `Iterable`, `Iterator`, `Reversible`, `Container`, `AsyncIterable`, `AsyncIterator`, `Awaitable`, `AbstractSet`, `Set`, `frozenset`, and `tuple` are covariant in all element type parameters. `list[list[int]]` is a valid subtype of `Sequence[Sequence[int]]`. |
+| **A11** | `x: Sequence[list[int]]`, `x: Collection[set[str]]`, `x: Iterable[dict[str, int]]`, `x: AbstractSet[tuple[int, ...]]`, `x: Awaitable[list[int]]`, `x: tuple[str, list[int]]`, `x: tuple[list[int], ...]` | Covariant single/tuple generic container wrapping concrete collection | **FLAG** (`list`, `set`, `dict`) | **Covariant outer container**: `Sequence`, `Collection`, `Iterable`, `Iterator`, `Reversible`, `Container`, `AsyncIterable`, `AsyncIterator`, `Awaitable`, `AbstractSet` (`collections.abc.Set`), `frozenset`, and `tuple` are covariant in all element type parameters. A concrete outer container (`list[set[str]]`) is flagged once, without recursing into its invariant arguments (Phase 6, B2). |
 | **A12** | `x: Mapping[str, list[int]]` | `generic_type("Mapping", [str, list[int]])` | **FLAG** (`list`) | **Covariant value parameter**: `Mapping[K, V_co]` is covariant in its 2nd type argument `V_co` (arg index 1). Because `dict[str, list[int]] <: Mapping[str, list[int]] <: Mapping[str, Sequence[int]]`, callers holding `dict[str, list[int]]` can pass it directly to `Mapping[str, Sequence[int]]` in both Mypy and Pyright! |
 | **A13** | `cb: Callable[[int], list[str]]` | `generic_type("Callable", [list([int]), list[str]])` | **FLAG** (`list`) | **Covariant return parameter of `Callable`**: `Callable[[...], Ret_co]` is covariant in its 2nd type argument `Ret_co` (arg index 1). |
 | **A14** | `cb: Callable[[list[int]], None]` | `generic_type("Callable", [list([subscript]), none])` | **PASS** | **Contravariant parameter position**: `Callable` is contravariant in its parameter list (arg index 0). `Callable[[Sequence[int]], None]` is a *narrower subtype* of `Callable[[list[int]], None]`, which would reject valid callbacks like `def cb(xs: list[int]): xs.sort()`. |
@@ -71,7 +71,7 @@ Verified against `tree-sitter-python` 0.25.0 (see §4.1 for exact CST node shape
 | **B5** | `@overload` declaration | `@overload def f(items: list[int]) -> int: ...` | **PASS** (checked on implementation) |
 | **B6** | `@abstractmethod` | `@abstractmethod def f(self, items: list[int]) -> None:` | **PASS** |
 | **B7** | Enclosing class is `Protocol` or `ABC` | `class P(Protocol): def f(self, items: list[int]) -> None: ...` | **PASS** |
-| **B8** | `@pytest.fixture` / `@fixture` | `@pytest.fixture def items(raw: list[int]) -> None:` | **PASS** (DI fixture signature matched by parameter name/type) |
+| **B8** | `@pytest.fixture` / `@fixture` | `@pytest.fixture def items(raw: list[int]) -> None:` | **PASS** (DI fixture signature matched by parameter name/type). The rules are source-only, so this only matters for fixtures defined outside test files. |
 | **B9** | Fixed-signature Python data-model dunders (`__eq__`, `__contains__`, etc.) | `def __eq__(self, other: list[int]) -> bool:` | **PASS** (`__init__` and `__new__` are **not** exempt and are still checked!) |
 
 ---
@@ -85,7 +85,7 @@ Verified against `tree-sitter-python` 0.25.0 (see §4.1 for exact CST node shape
 | **C3** | Abstract return type (`Sequence`, `Mapping`, `AbstractSet`, `Iterable`, `Iterator`) | `def get_users() -> Sequence[str]:` | **PASS** | Covariant read-only return contract. |
 | **C4** | Runtime-immutable concrete return type (`tuple`, `frozenset`) | `def get_users() -> tuple[str, ...]:` | **PASS** | Covariant and runtime-immutable. |
 | **C5** | **Explained concrete return type** (under `require-explanation` mode) | `# Caller sorts and appends to the returned buffer in place.\ndef make_buffer() -> list[str]: return []` | **PASS** | Substantive header/inline comment documents why the caller needs a mutable concrete return value. |
-| **C6** | **Intra-file caller mutates returned value** | `def make_buf() -> list[int]: ...` + `buf = make_buf(); buf.append(1)` (or `make_buf().sort()`, `self.make_buf()[0] = 1`) in same file | **PASS** | Local caller proves the return value is mutated in place. |
+| **C6** | **Intra-file caller mutates returned value** | `def make_buf() -> list[int]: ...` + `buf = make_buf(); buf.append(1)` (or `make_buf().sort()`, `self.make_buf()[0] = 1`) in same file | **FLAG** | Tier 1 always flags (§3.1). The caller-mutation exemption moved to Tier 2b (`mutable-collection-return`), where it decides between `MutableSequence` and `Sequence`. |
 | **C7** | `@override` / `@overload` / `@abstractmethod` / `Protocol` / `ABC` / dunders | `@override def items(self) -> list[str]:` | **PASS** | Fixed by external contract. |
 
 ---
@@ -96,9 +96,9 @@ Verified against `tree-sitter-python` 0.25.0 (see §4.1 for exact CST node shape
 | :--- | :--- | :--- | :--- | :--- |
 | **D1** | Public `@dataclass` or class attribute (`items: list[str]`, `config: dict[str, int]`, `tags: set[str]`) | `@dataclass(frozen=True)\nclass Order:\n    items: list[str]` | **FLAG** | Forces callers of `Order(items=...)` to pass a concrete `list` instead of `Sequence[str]` / `tuple`, and exposes a mutable field. |
 | **D2** | Public `ClassVar`, `Final`, `Optional`, or covariant nested attribute | `class C:\n    DEFAULT_TAGS: ClassVar[set[str]]\n    matrix: Sequence[list[int]]` | **FLAG** | Public class attribute with concrete mutable collection type. |
-| **D3** | Public instance attribute annotated in `__init__` | `class C:\n    def __init__(self) -> None:\n        self.items: list[str] = []` (never mutated in `C`) | **FLAG** | Public instance attribute never mutated by `C`'s methods. |
+| **D3** | Public instance attribute annotated in `__init__` | `class C:\n    def __init__(self) -> None:\n        self.items: list[str] = []` | **FLAG** | Public instance attribute with a concrete mutable collection type. |
 | **D4** | **Private / internal attribute (`_attr`)** | `class C:\n    _cache: dict[str, int]\n    def __init__(self) -> None:\n        self._items: list[str] = []` | **PASS** | Leading underscore marks internal implementation state, not public constructor/interface contract. |
-| **D5** | **Intra-class mutated attribute (`self.attr.append(...)`, `self.attr[k] = v`, `del self.attr[k]`, `self.attr += ...`, `Cls.attr.add(...)`)** | `class Bag:\n    items: list[str]\n    def add(self, x: str) -> None:\n        self.items.append(x)` | **PASS** | Class methods mutate `self.items` in place, so typing `items: Sequence[str]` would fail Mypy inside `Bag.add`. |
+| **D5** | **Intra-class mutated attribute (`self.attr.append(...)`, `self.attr[k] = v`, `del self.attr[k]`, `self.attr += ...`, `Cls.attr.add(...)`)** | `class Bag:\n    items: list[str]\n    def add(self, x: str) -> None:\n        self.items.append(x)` | **FLAG** | Tier 1 always flags (§3.1): a mutated attribute should be `MutableSequence[str]`. The intra-class mutation exemption moved to Tier 2c (`mutable-collection-attribute`). |
 | **D6** | **Explained public concrete attribute** (under `require-explanation` mode) | `class State:\n    # Callers append pending tasks directly to this queue.\n    queue: list[str]` | **PASS** | Substantive comment explains why public mutability is intentional. |
 | **D7** | Module-level or function-local variable annotation | `items: list[int] = []` (at module top-level or inside `def f(): x: list[int] = []`) | **PASS** | Not a class/instance attribute (local implementation variable). |
 | **D8** | `Protocol` or `ABC` class attributes | `class P(Protocol):\n    items: list[str]` | **PASS** | Structural protocol / abstract contract. |
@@ -134,7 +134,7 @@ Verified against `tree-sitter-python` 0.25.0 (see §4.1 for exact CST node shape
 | ID | Case | Code inside `def f(x: Sequence[int]):` (or `Collection[int]`) | Ideal Outcome | How Omni Fixes the legacy linter's Bugs |
 | :--- | :--- | :--- | :--- | :--- |
 | **F1** | Single `for` loop or single comprehension | `for item in x: total += item` (or `return [v * 2 for v in x]`) | **FLAG** → suggest `Iterable` | `x` is only iterated in a single pass. |
-| **F2** | Single call to iterable-consuming builtin (`sum`, `min`, `max`, `any`, `all`, `sorted`, `list`, `tuple`, `set`, `frozenset`, `dict`, `enumerate`, `zip`, `iter`) | `return sum(x)` | **FLAG** → suggest `Iterable` | Builtin consumes an `Iterable` in a single pass. |
+| **F2** | Single call to iterable-consuming builtin (`sum`, `min`, `max`, `any`, `all`, `sorted`, `list`, `tuple`, `set`, `frozenset`, `dict`, `enumerate`, `zip`, `iter`, `map`, `filter`) | `return sum(x)` | **FLAG** → suggest `Iterable` | Builtin consumes an `Iterable` in a single pass. |
 | **F3** | `len(x)` or `v in x` / `v not in x` (without indexing) | `if 1 in x: return len(x)` | **FLAG** `Sequence` → suggest `Collection` (**PASS** if already `Collection`) | Requires `Sized` / `Container` (`Collection`), not `Sequence`. |
 | **F4** | **Truthiness check** (`if x:`, `if not x:`, `bool(x)`, `x and y`, `while x:`, `a if x else b`) + single iteration | `if not x: return 0\nreturn sum(x)` | **FLAG** `Sequence` → suggest `Collection`; **PASS** if already `Collection` (must **never** suggest `Iterable`!) | **Fixes the legacy linter Bug #1**: `bool(generator)` is always `True` even when empty! Truthiness on a collection requires `__len__` (`Collection`). |
 | **F5** | **Multi-pass iteration** (two loops/consumers, or iteration nested inside a loop/comprehension/closure) | `return min(x) + max(x)` or `for r in rows:\n    for v in x: ...` | **FLAG** `Sequence` → suggest `Collection`; **PASS** if already `Collection` (must **never** suggest `Iterable`!) | **Fixes the legacy linter Bug #2**: an `Iterable` can be a single-use iterator/generator that exhausts on the first pass and silently yields empty on the second pass! `Collection` guarantees repeatable iteration. |
@@ -156,10 +156,10 @@ All 3 tiers (7 rules total) are in scope and implemented in this sequence:
 
 1. **Tier 1 — Concrete Collection Rules (`list`, `dict`, `set`, `List`, `Dict`, `Set`)**:
    - `concrete-collection-parameter` (Default: `EnforcementMode::Ban`, `Precision::Exact`)
-   - `concrete-collection-return` (Default: `EnforcementMode::RequireExplanation`, `Precision::Heuristic`)
+   - `concrete-collection-return` (Default: `EnforcementMode::RequireExplanation`, `Precision::Exact` since Phase 6, M4)
    - `concrete-collection-attribute` (Default: `EnforcementMode::RequireExplanation`, `Precision::Heuristic`)
-   - **Ruff `PYI025` (`unaliased-collections-abc-set-import`) alignment**: Unqualified `Set` is flagged as concrete (`typing.Set` = `builtins.set`) unless `from collections.abc import Set` (unaliased) is present in the file (`has_unaliased_collections_abc_set_import`). All rule suggestions and documentation recommend `AbstractSet` (`from collections.abc import Set as AbstractSet`) rather than unaliased `Set`.
-   - **Always flag concrete mutable collections even when mutated**: Tier 1 rules flag `list`, `dict`, and `set` regardless of mutation, recommending `Sequence`/`Mapping`/`AbstractSet` when read-only or `MutableSequence`/`MutableMapping`/`MutableSet` when mutated in place (or an explanation comment on returns/attributes).
+   - **Ruff `PYI025` (`unaliased-collections-abc-set-import`) alignment**: Unqualified `Set` is flagged as concrete (`typing.Set` = `builtins.set`) unless `from collections.abc import Set` (unaliased) is present in the file (`has_unaliased_collections_abc_set_import`). Suggestions name the fully qualified `collections.abc.Set` (`{replacement}` placeholder, Phase 6 M1), and docs recommend importing it as `AbstractSet`.
+   - **Always flag concrete mutable collections even when mutated**: Tier 1 rules flag `list`, `dict`, and `set` regardless of mutation, recommending `Sequence`/`Mapping`/`Set` from `collections.abc` when read-only or `MutableSequence`/`MutableMapping`/`MutableSet` when mutated in place (or an explanation comment on returns/attributes).
 2. **Tier 2 — Mutable Collection Rules (`MutableSequence`, `MutableMapping`, `MutableSet`)**:
    - `mutable-collection-parameter` (Default: `EnforcementMode::Ban`, `Precision::Heuristic`)
    - `mutable-collection-return` (Default: `EnforcementMode::RequireExplanation`, `Precision::Heuristic`)
@@ -171,7 +171,7 @@ All 3 tiers (7 rules total) are in scope and implemented in this sequence:
 
 Whether we check inside nested containers is determined strictly by type variance and dataflow soundness:
 
-1. **Tier 1 (`concrete-collection-*`) and Tier 2 Return/Attribute (`mutable-collection-return`, `mutable-collection-attribute`) use `T-Covariant`**:
+1. **Tier 1 (`concrete-collection-*`) uses `T-Covariant`** (Tier 2 return/attribute originally did too; Phase 6 B2 moved all of Tier 2 to `T-Wrapper`, item 2, because mutation is only tracked on the annotated value itself):
    - At any covariant target root (parameter, return, or read-only attribute), replacing a concrete `list[T]` or `MutableSequence[T]` with `Sequence[T]`, `dict[K, V]` or `MutableMapping[K, V]` with `Mapping[K, V]`, or `set[T]` or `MutableSet[T]` with `AbstractSet[T]` inside a nested type parameter `P` is **logically sound if and only if every enclosing type constructor along the path from the root to `P` is covariant in that parameter position**:
      - **Transparent wrappers (all type args except `Annotated` metadata `1..`)**: `T1 | T2`, `Union[...]`, `Optional[T]`, `Annotated[T, ...]`, `ClassVar[T]`, `Final[T]`, `Required[T]`, `NotRequired[T]`, `ReadOnly[T]`.
      - **Single-parameter covariant containers (arg 0)**: `Sequence[T]`, `Collection[T]`, `Iterable[T]`, `Iterator[T]`, `Reversible[T]`, `Container[T]`, `AsyncIterable[T]`, `AsyncIterator[T]`, `Awaitable[T]`, `AbstractSet[T]`, `Set[T]` (`collections.abc.Set`), `frozenset[T]`.
@@ -179,12 +179,12 @@ Whether we check inside nested containers is determined strictly by type varianc
      - **Mappings (arg 1 `V_co` only)**: `Mapping[K, V_co]` is invariant in `K` (arg 0) and covariant in `V_co` (arg 1). In Python's type system (`mypy` and `pyright`), `dict[str, list[int]] <: Mapping[str, list[int]] <: Mapping[str, Sequence[int]]`, so widening `Mapping[str, list[int]]` → `Mapping[str, Sequence[int]]` is 100% sound and zero-copy for callers holding `dict[str, list[int]]`.
      - **Callables (arg 1 `Ret_co` only)**: `Callable[[Arg1, ...], Ret_co]` is contravariant in its parameter list (arg 0) and covariant in its return type `Ret_co` (arg 1).
      - **Generators / Coroutines**: `Generator[YieldT, SendT, ReturnT]` and `Coroutine[YieldT, SendT, ReturnT]` are covariant in `YieldT` (arg 0) and `ReturnT` (arg 2), and contravariant in `SendT` (arg 1); `AsyncGenerator[YieldT, SendT]` is covariant in `YieldT` (arg 0).
-     - **Concrete outer containers (`list[T]`, `set[T]`, `dict[K, V]`)**: When the outer container itself is being widened to a covariant ABC (`list[list[int]]` → `Sequence[Sequence[int]]`), its element/value position also becomes covariant.
    - **Where `T-Covariant` MUST STOP (logically unsound to recurse)**:
      - `Callable[[list[int]], R]` parameter list (arg 0): **contravariant** (`Callable[[Sequence[int]], R]` is a narrower subtype that rejects valid callbacks).
      - `MutableSequence[T]`, `MutableMapping[K, V]`, `MutableSet[T]`: **invariant** (`dict[str, list[int]]` is *not* a subtype of `MutableMapping[str, Sequence[int]]`).
+     - **Concrete outer containers (`list[T]`, `set[T]`, `dict[K, V]`)**: **invariant**. The outer type is already flagged, and whether its arguments can widen depends on the replacement the user picks (`MutableSequence[T]` keeps them invariant), so they are not inspected (Phase 6 B2; the original plan recursed here).
      - Any unknown/user-defined generic `CustomGeneric[T]`: `TypeVar` is invariant by default in Python.
-2. **Parameter Body-Usage Rules (`mutable-collection-parameter` and `specific-collection-parameter`) use `T-Wrapper`**:
+2. **Tier 2 (`mutable-collection-*`) and Tier 3 (`specific-collection-parameter`) use `T-Wrapper`**:
    - Both rules rely on intra-procedural syntactic tracking of operations on the bound parameter symbol `x` (`x.append(...)`, `x[0]`, `len(x)`).
    - If a parameter has a nested type like `x: Sequence[MutableSequence[int]]`, mutations happen on extracted inner elements (`for row in x: row.append(1)`), not on `x` itself. Without element-level alias/type inference across loops and unpackings, inspecting nested containers for body usage would be unsound. Therefore, parameter body-usage rules unwrap only transparent wrappers (`|`, `Optional`, `Union`, `Annotated[T, ...]`).
 
@@ -205,7 +205,7 @@ Whether we check inside nested containers is determined strictly by type varianc
 | Rule | Default `EnforcementMode` | `Precision` | Why & Workarounds |
 | :--- | :--- | :--- | :--- |
 | `concrete-collection-parameter` | `Ban` | `Exact` | A parameter should always use an abstract collection (`Sequence`/`Mapping`/`AbstractSet` if read-only, `MutableSequence`/`MutableMapping`/`MutableSet` if mutated). |
-| `concrete-collection-return` | `RequireExplanation` | `Heuristic` | Allows returning a concrete `list`/`dict`/`set` when documented with a comment on the `def`. |
+| `concrete-collection-return` | `RequireExplanation` | `Exact` | Allows returning a concrete `list`/`dict`/`set` when documented with a comment on the `def`. |
 | `concrete-collection-attribute` | `RequireExplanation` | `Heuristic` | Exempts private `_attr`; allows public concrete collection attributes when documented with a comment. |
 | `mutable-collection-parameter` | `Ban` | `Heuristic` | Conservatively exempts any parameter that is mutated in place or escapes to an unknown function, attribute, variable, or return. |
 | `mutable-collection-return` | `RequireExplanation` | `Heuristic` | Exempts functions whose return value is mutated in place by a caller in the same file; allows external caller mutation contracts when documented with a comment on the `def`. |
@@ -276,8 +276,8 @@ All tree-sitter node navigation lives inside [src/code_lint/ast/python.rs](../..
    - Supports two traversal modes via an enum `AnnotationTraversalDepth { TransparentWrappersOnly, CovariantPositions }`:
      - Both modes unwrap `type`, `union_type`, `binary_operator("|")`, `parenthesized_expression`, `Optional[T]`, `Union[T1, T2, ...]`, `Annotated[T, ...]` (arg 0 only), and class/typed-dict qualifiers `ClassVar[T]`, `Final[T]`, `Required[T]`, `NotRequired[T]`, `ReadOnly[T]` (arg 0 only).
      - `CovariantPositions` additionally recurses into:
-       - All type args of `Sequence`, `Collection`, `Iterable`, `Iterator`, `Reversible`, `Container`, `AsyncIterable`, `AsyncIterator`, `Awaitable`, `AbstractSet`, `Set`, `frozenset`, `tuple`, `Tuple`, `list`, `List`, `set`.
-       - Arg 1 (value type `V`, 0-indexed `1`) of `Mapping`, `dict`, `Dict`.
+       - Arg 0 of `Sequence`, `Collection`, `Iterable`, `Iterator`, `Reversible`, `Container`, `AsyncIterable`, `AsyncIterator`, `Awaitable`, `AbstractSet`, `Set`, `frozenset`, `FrozenSet`, and all args of `tuple`, `Tuple` (Phase 6 B2 removed `list`, `List`, `set`).
+       - Arg 1 (value type `V`, 0-indexed `1`) of `Mapping` (Phase 6 B2 removed `dict`, `Dict`).
        - Arg 1 (return type `Ret`, 0-indexed `1`) of `Callable`.
        - Args 0 and 2 (`YieldT` and `ReturnT`) of `Generator` and `Coroutine`, and arg 0 (`YieldT`) of `AsyncGenerator`.
      - Works uniformly across both `generic_type` and expression-fallback `subscript` nodes.
@@ -304,8 +304,8 @@ Verified against [naming_and_message_style_guide.md](../naming_and_message_style
 - All rule names are `kebab-case`, ≤ 4 words, naming the flagged pattern without polarity prefixes.
 - All summaries are 1 declarative sentence ending with `.`, with no fix verbs or judgement words.
 - All rationales explain the harm without `must` / `should` or leading fix verbs.
-- All suggestions start with `Replace` (in `SUGGESTION_VERBS`) and recommend `AbstractSet` (`from collections.abc import Set as AbstractSet`) rather than unaliased `Set`.
-- Placeholders use `{name}`, `{function}`, `{class}`, `{expression}`, and `{token}` from the existing `PLACEHOLDERS` list in [tests/registry.rs](../../../tests/registry.rs#L325-L341) (zero new placeholder vocabulary entries needed).
+- All suggestions start with `Replace` (in `SUGGESTION_VERBS`). Since Phase 6 (B1, M1) they name one fully qualified replacement through the `{replacement}` placeholder (`collections.abc.Sequence`, `collections.abc.Mapping`, `collections.abc.Set`, or `collections.abc.Collection` / `collections.abc.Iterable` for Tier 3).
+- Placeholders use `{name}`, `{function}`, `{class}`, `{expression}`, and `{token}` from the existing `PLACEHOLDERS` list in [tests/registry.rs](../../../tests/registry.rs), plus `{replacement}`, added in Phase 6. The templates below are the Phase 3 drafts; the final text lives in the rule sources.
 
 | Tier | Rule Name | File | Default Mode | Summary / Rationale / Suggestion |
 | :--- | :--- | :--- | :--- | :--- |

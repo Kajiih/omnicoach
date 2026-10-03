@@ -1,6 +1,5 @@
 ---
 source: tests/cli.rs
-assertion_line: 174
 expression: "output.replace(binary, \"<binary>\")"
 ---
 --- exit code ---
@@ -11,7 +10,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `blanket-suppression` (python, rust): Flags suppression directives that name no rule.
 - `concrete-collection-attribute` (python): Flags public Python class and instance attributes annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
 - `concrete-collection-parameter` (python): Flags Python function parameters annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
-- `concrete-collection-return` (python): Flags Python function return annotations using concrete mutable collection types such as `list`, `dict`, or `set` without an explanation.
+- `concrete-collection-return` (python): Flags Python function return annotations using concrete mutable collection types such as `list`, `dict`, or `set`.
 - `dynamic-attribute-access` (python): Flags `getattr`, `hasattr`, `setattr` and `delattr` calls in Python.
 - `edit-of-described-commit` (command): Flags `jj edit` on a commit that already has a description.
 - `environment-variable-in-function` (python, rust): Flags environment variable access inside functions.
@@ -22,7 +21,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `mock-in-tests` (python): Flags dynamic mocks and monkeypatching in Python tests.
 - `mutable-collection-attribute` (python): Flags public Python class and instance attributes annotated with `MutableSequence`, `MutableMapping`, or `MutableSet` when never mutated in the class.
 - `mutable-collection-parameter` (python): Flags Python function parameters annotated with `MutableSequence`, `MutableMapping`, or `MutableSet` when the function never mutates them.
-- `mutable-collection-return` (python): Flags Python function return annotations using `MutableSequence`, `MutableMapping`, or `MutableSet` without an explanation or local caller mutation.
+- `mutable-collection-return` (python): Flags Python function return annotations using `MutableSequence`, `MutableMapping`, or `MutableSet` when no caller in the file mutates the result.
 - `mutable-dataclass` (python): Requires Python dataclasses to declare `frozen=True`.
 - `nested-function` (python): Flags Python functions defined inside other functions.
 - `packed-assertion` (python, rust): Flags assertions that pack several checks into one condition.

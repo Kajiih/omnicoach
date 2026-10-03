@@ -2,7 +2,7 @@
 
 This document records the execution of **Phase 4 (TDD Implementation)** for the 7 Python collection type annotation rules designed in [03_design_plan.md](03_design_plan.md).
 
-> Status: **COMPLETE — Ready for User Validation before Phase 5 (Cleanup)**
+> Status: **COMPLETE and validated.** Phase 6 corrections (traversal, exemptions, templates, precision) are listed in [06_review_and_audit.md](06_review_and_audit.md) §3.
 
 ---
 
@@ -24,6 +24,7 @@ This document records the execution of **Phase 4 (TDD Implementation)** for the 
 
 1. **Tier 2 Expanded to Full 3-Rule Symmetry (`mutable-collection-parameter`, `mutable-collection-return`, `mutable-collection-attribute`)**:
    - Per user review of Ruff `PYI025` (`unaliased-collections-abc-set-import`) and the legacy linter's `SignatureMutableTypeRule`, Tier 1 (`concrete-collection-*`) always flags concrete `list`/`dict`/`set` even when mutated (directing mutated cases to `MutableSequence`/`MutableMapping`/`MutableSet`), while Tier 2 (`mutable-collection-*`) checks `MutableSequence`/`MutableMapping`/`MutableSet` across parameters, return types, and public attributes using intra-function, intra-file caller, and intra-class mutation analysis.
+   - As a result, the caller-mutation (03 C6, CUJ2) and intra-class mutation (03 D5, CUJ3) exemptions planned for `concrete-collection-return` and `concrete-collection-attribute` were implemented in `mutable-collection-return` and `mutable-collection-attribute` instead. This deviation was only recorded in Phase 6 (D1), when 03 was corrected.
 2. **Header Comment Range on Decorated Definitions ([src/code_lint/ast/statements.rs](../../../src/code_lint/ast/statements.rs))**:
    - Discovered during `concrete-collection-return` testing that `tree-sitter-python` wraps decorated functions in `decorated_definition`, which has no direct `"body"` field (`"body"` is on its `"definition"` child). Delegating `decorated_definition` to `statement.field("definition")` in `header_line_range` ensures body comments inside decorated functions are never mistaken for header explanations.
 3. **Self-Dogfooding Naming Compliance**:

@@ -15,9 +15,9 @@ use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Parameter `{name}` of `{function}` is annotated with `{expression}` (`{token}`) but only uses `{class}` operations.",
-    rationale: "Requiring a narrower collection interface than `{function}` uses restricts callers from passing compatible inputs such as sets, dictionary views, or lazy iterables without materializing a sequence.",
-    suggestion: "Replace `{token}` in `{name}` with `{class}` from `collections.abc`, or add a comment on `{function}` explaining why the narrower interface is part of the contract.",
+    summary: "Parameter `{name}` of `{function}` has annotation `{expression}`, but `{function}` appears to need only `{replacement}` operations on `{name}`.",
+    rationale: "Requiring a narrower collection interface than `{function}` uses rejects compatible inputs, such as sets and dictionary views where a `Collection` suffices or generators where an `Iterable` suffices, unless callers first copy them into a sequence.",
+    suggestion: "Replace `{token}` in `{name}` with `{replacement}` unless the narrower interface is a deliberate part of the contract of `{function}`.",
 };
 
 /// The rule's declaration.
@@ -50,7 +50,8 @@ pub const RULE: CodeRule = CodeRule {
                            - Suggests `Iterable` when the parameter is only iterated once at \
                              top-level depth (`for x in param`, a single comprehension, or a \
                              single iterable builtin such as `sum`, `min`, `max`, `any`, `all`, \
-                             `sorted`, `list`, `tuple`, `set`, `dict`, `enumerate`, or `zip`).\n\
+                             `sorted`, `list`, `tuple`, `set`, `frozenset`, `dict`, `enumerate`, \
+                             `zip`, `iter`, `map`, or `filter`).\n\
                            - Suggests `Collection` (for `Sequence` parameters) when the parameter \
                              is checked for length (`len(param)`), membership (`v in param`), \
                              truthiness (`if param:`, `if not param:`, `bool(param)`), or \
@@ -59,15 +60,21 @@ pub const RULE: CodeRule = CodeRule {
                            Parameters that are indexed or sliced (`param[0]`), reversed \
                            (`reversed(param)`), queried via `.index()` or `.count()`, matched \
                            in a `match` statement, unused, or passed to another function or \
-                           method are not flagged. Defaults to `require-explanation` mode so \
-                           intentional `Sequence` contracts can be documented with a comment.",
+                           method are not flagged. Stub bodies, methods on `Protocol` or `ABC` \
+                           classes, dunder methods other than `__init__`, `__new__`, and \
+                           `__call__`, and functions decorated with `@override`, `@overload`, \
+                           `@abstractmethod`, `@fixture`, or `@<function>.register` are exempt. \
+                           In `require-explanation` mode, a comment on the line above the \
+                           header excuses the finding.",
             why_is_this_bad: "Annotating a parameter as `Sequence[T]` when the function only \
                               iterates over it once prevents callers from passing a `set[T]`, \
                               `dict.keys()`, `dict.values()`, or a generator expression without \
                               materializing an intermediate `list` or `tuple`.\n\n\
-                              Use `Iterable[T]` for single-pass iteration, `Collection[T]` when \
-                              `len()`, `in`, truthiness, or multi-pass iteration is required, or \
-                              add a comment explaining why `Sequence[T]` is part of the API contract.",
+                              `Iterable[T]` states single-pass iteration and `Collection[T]` \
+                              states `len()`, `in`, truthiness, or multi-pass iteration. Keep \
+                              `Sequence[T]` only as a deliberate contract, for example to \
+                              reserve indexing for a later version. The suggested interface \
+                              comes from a syntactic analysis of the function body.",
             references: &[Reference {
                 title: "Python collections.abc — Collections Abstract Base Classes",
                 url: "https://docs.python.org/3/library/collections.abc.html",
@@ -113,20 +120,20 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             }
             let capability =
                 analyze_parameter_collection_capability(&signature.node, &parameter.name);
-            let suggested_class = match capability {
+            let replacement = match capability {
                 ParameterCollectionCapability::Unused | ParameterCollectionCapability::Sequence => {
                     continue;
                 }
                 ParameterCollectionCapability::Collection => {
-                    if !matched
+                    let annotates_sequence = matched
                         .iter()
-                        .any(|type_name| type_name.as_str() == "Sequence")
-                    {
+                        .any(|type_path| type_path.rsplit('.').next() == Some("Sequence"));
+                    if !annotates_sequence {
                         continue;
                     }
-                    "Collection"
+                    "collections.abc.Collection"
                 }
-                ParameterCollectionCapability::Iterable => "Iterable",
+                ParameterCollectionCapability::Iterable => "collections.abc.Iterable",
             };
             let token = matched.join(", ");
             let expression = type_node.text();
@@ -138,7 +145,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                     ("function", &signature.name),
                     ("expression", expression.as_ref()),
                     ("token", &token),
-                    ("class", suggested_class),
+                    ("replacement", replacement),
                 ],
             ));
         }
@@ -152,44 +159,59 @@ crate::test_utils::rule_test!(
     {
         Python => {
             pass: [
-                // F3/F4/F5: Collection parameter that uses Collection operations passes
-                f3_f4_f5_collection_parameter_using_collection_ops => r"
+                collection_parameter_with_len => r"
                     from collections.abc import Collection
 
-                    def count_matches(items: Collection[int]) -> int:
-                        if not items:
-                            return 0
-                        if 1 in items:
-                            return len(items)
-                        return min(items) + max(items)
+                    def size(items: Collection[int]) -> int:
+                        return len(items)
                 ",
 
-                // F6: reversed(x) requires Sequence (Iterable and Collection are not Reversible)
-                f6_reversed_requires_sequence => r"
+                collection_parameter_with_membership => r"
+                    from collections.abc import Collection
+
+                    def has_one(items: Collection[int]) -> bool:
+                        return 1 in items
+                ",
+
+                collection_parameter_with_truthiness_check => r"
+                    from collections.abc import Collection
+
+                    def total_or_zero(items: Collection[int]) -> int:
+                        if not items:
+                            return 0
+                        return sum(items)
+                ",
+
+                collection_parameter_with_multiple_passes => r"
+                    from collections.abc import Collection
+
+                    def span(items: Collection[int]) -> int:
+                        return max(items) - min(items)
+                ",
+
+                // Iterable and Collection are not Reversible.
+                reversed_requires_sequence => r"
                     from collections.abc import Sequence
 
                     def backwards(items: Sequence[int]) -> list[int]:
                         return list(reversed(items))
                 ",
 
-                // F7: .index(v) and .count(v) require Sequence
-                f7_index_and_count_require_sequence => r"
+                index_and_count_require_sequence => r"
                     from collections.abc import Sequence
 
                     def occurrences(items: Sequence[int]) -> int:
                         return items.count(0) + items.index(1)
                 ",
 
-                // F8: Indexing or slicing requires Sequence
-                f8_indexing_and_slicing_require_sequence => r"
+                indexing_requires_sequence => r"
                     from collections.abc import Sequence
 
                     def head(items: Sequence[int]) -> int:
                         return items[0]
                 ",
 
-                // F9: Sequence match pattern requires Sequence
-                f9_sequence_match_pattern => r"
+                sequence_match_pattern_requires_sequence => r"
                     from collections.abc import Sequence
 
                     def first_or_zero(items: Sequence[int]) -> int:
@@ -200,19 +222,21 @@ crate::test_utils::rule_test!(
                                 return 0
                 ",
 
-                // F10: Helper forwarding / escape exempts parameter
-                f10_helper_forwarding_and_escape_exempt => r#"
+                passed_to_method_exempt => r#"
                     from collections.abc import Sequence
 
                     def forward(items: Sequence[str]) -> str:
                         return ", ".join(items)
+                "#,
+
+                passed_to_unknown_function_exempt => r"
+                    from collections.abc import Sequence
 
                     def delegate(items: Sequence[int]) -> int:
                         return helper(items)
-                "#,
+                ",
 
-                // F11: Explained Sequence / Collection parameter under require-explanation mode
-                f11_explained_sequence_parameter_passes => r"
+                explained_sequence_parameter => r"
                     from collections.abc import Sequence
 
                     # Sequence required to preserve deterministic ordering of layers.
@@ -220,28 +244,70 @@ crate::test_utils::rule_test!(
                         return [layer.strip() for layer in layers]
                 ",
 
-                // F12: Unused parameter, stub body, @override, @overload, Protocol, ABC, @fixture, dunders
-                f12_unused_stub_and_contract_exemptions => r"
-                    from typing import Protocol, override
+                unused_parameter_not_flagged => r"
                     from collections.abc import Sequence
 
                     def unused_param(items: Sequence[int]) -> int:
                         return 42
+                ",
 
-                    def stub_func(items: Sequence[int]) -> None: ...
+                protocol_class_exempt => r"
+                    from typing import Protocol
+                    from collections.abc import Sequence
 
                     class Runner(Protocol):
-                        def run(self, items: Sequence[int]) -> int: ...
+                        def run(self, items: Sequence[int]) -> int:
+                            return sum(items)
+                ",
 
-                    class ConcreteRunner:
+                abc_class_exempt => r"
+                    import abc
+                    from collections.abc import Sequence
+
+                    class BaseRunner(abc.ABC):
+                        def run(self, items: Sequence[int]) -> int:
+                            return sum(items)
+                ",
+
+                override_exempt => r"
+                    from typing import override
+                    from collections.abc import Sequence
+
+                    class ConcreteRunner(Base):
                         @override
                         def run(self, items: Sequence[int]) -> int:
                             return sum(items)
                 ",
+
+                overload_exempt => r"
+                    from typing import overload
+                    from collections.abc import Sequence
+
+                    @overload
+                    def run(items: Sequence[int]) -> int:
+                        return sum(items)
+                ",
+
+                abstractmethod_exempt => r"
+                    from abc import abstractmethod
+                    from collections.abc import Sequence
+
+                    class Runner:
+                        @abstractmethod
+                        def run(self, items: Sequence[int]) -> int:
+                            return sum(items)
+                ",
+
+                data_model_dunder_exempt => r"
+                    from collections.abc import Sequence
+
+                    class Vector:
+                        def __eq__(self, other: Sequence[int]) -> bool:
+                            return sum(other) == 0
+                ",
             ],
             fail: [
-                // F1: Single for loop or single comprehension -> suggest Iterable
-                f1_single_loop_on_sequence_suggests_iterable => r"
+                single_loop_on_sequence_suggests_iterable => r"
                     from collections.abc import Sequence
 
                     def sum_loop(items: Sequence[int]) -> int:
@@ -251,23 +317,21 @@ crate::test_utils::rule_test!(
                         return total
                 " => "Sequence[int]",
 
-                f1_single_comprehension_on_collection_suggests_iterable => r"
+                single_comprehension_on_collection_suggests_iterable => r"
                     from collections.abc import Collection
 
                     def double_all(items: Collection[int]) -> list[int]:
                         return [value * 2 for value in items]
                 " => "Collection[int]",
 
-                // F2: Single call to iterable-consuming builtin -> suggest Iterable
-                f2_single_pass_iterable_builtin_suggests_iterable => r"
+                single_pass_iterable_builtin_suggests_iterable => r"
                     from collections.abc import Sequence
 
                     def total(prices: Sequence[float]) -> float:
                         return sum(prices)
                 " => "Sequence[float]",
 
-                // F3: len(x) or v in x on Sequence -> suggest Collection
-                f3_len_and_contains_on_sequence_suggest_collection => r"
+                len_and_contains_on_sequence_suggest_collection => r"
                     from collections.abc import Sequence
 
                     def size_if_present(items: Sequence[int]) -> int:
@@ -276,8 +340,8 @@ crate::test_utils::rule_test!(
                         return 0
                 " => "Sequence[int]",
 
-                // F4: Truthiness check + single iteration on Sequence -> suggest Collection (never Iterable!)
-                f4_truthiness_plus_iteration_suggests_collection => r"
+                // A truthiness check needs `__len__`, so never Iterable.
+                truthiness_plus_iteration_suggests_collection => r"
                     from collections.abc import Sequence
 
                     def average_or_zero(prices: Sequence[float]) -> float:
@@ -286,15 +350,15 @@ crate::test_utils::rule_test!(
                         return sum(prices)
                 " => "Sequence[float]",
 
-                // F5: Multi-pass iteration (two consumers or nested loop) on Sequence -> suggest Collection (never Iterable!)
-                f5_multipass_two_consumers_suggests_collection => r"
+                // A second pass would exhaust a one-shot iterator, so never Iterable.
+                multipass_two_consumers_suggests_collection => r"
                     from collections.abc import Sequence
 
                     def span(items: Sequence[int]) -> int:
                         return max(items) - min(items)
                 " => "Sequence[int]",
 
-                f5_nested_inner_loop_suggests_collection => r"
+                nested_inner_loop_suggests_collection => r"
                     from collections.abc import Iterable, Sequence
 
                     def nested_loop(items: Sequence[int], rows: Iterable[int]) -> int:
@@ -304,6 +368,13 @@ crate::test_utils::rule_test!(
                                 total += row * value
                         return total
                 " => "Sequence[int]",
+
+                qualified_typing_sequence_suggests_collection => r"
+                    import typing
+
+                    def size(items: typing.Sequence[int]) -> int:
+                        return len(items)
+                " => "typing.Sequence[int]",
             ]
         }
     }

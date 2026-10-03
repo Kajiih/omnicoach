@@ -2,7 +2,8 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    AnnotationTraversalDepth, collect_mutable_collection_types, collect_public_class_attributes,
+    collect_mutable_collection_types, collect_public_class_attributes,
+    read_only_collection_replacements,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
@@ -14,9 +15,9 @@ use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Attribute `{name}` of `{class}` is annotated with mutable collection type `{expression}` (`{token}`) but never mutated in `{class}`.",
-    rationale: "A public or dataclass attribute typed as `MutableSequence`, `MutableMapping`, or `MutableSet` rejects immutable collections (`tuple`, `Sequence`, `Mapping`) in synthesized constructors and exposes mutability on the instance.",
-    suggestion: "Replace `{token}` on `{name}` with `Sequence`, `Mapping`, or `AbstractSet` from `collections.abc`, prefix internal mutable state with `_`, or add a comment explaining why `{name}` uses a mutable collection.",
+    summary: "Attribute `{name}` of `{class}` has annotation `{expression}`, which contains mutable collection type `{token}`, but no method of `{class}` appears to mutate `{name}`.",
+    rationale: "A public attribute typed as `MutableSequence`, `MutableMapping`, or `MutableSet` turns assigning a read-only collection (`tuple`, `Sequence`, `Mapping`) into a type error and exposes mutability on the instance.",
+    suggestion: "Replace `{token}` on `{name}` with `{replacement}` if code outside `{class}` is not meant to mutate `{name}`, or prefix internal mutable state with `_`.",
 };
 
 /// The rule's declaration.
@@ -44,23 +45,26 @@ pub const RULE: CodeRule = CodeRule {
                            (`items: MutableSequence[str]`) and `__init__` instance attributes \
                            (`self.items: MutableSequence[str]`) in Python source files (test \
                            files are not checked) whose type annotation uses `MutableSequence`, \
-                           `MutableMapping`, or `MutableSet` (including inside `ClassVar`, \
-                           `Final`, `Optional`, `Union`, `|`, and covariant containers) when no \
-                           method of the class mutates `self.<name>` or `cls.<name>` in place. \
-                           Private attributes starting with `_`, attributes mutated in any \
-                           method of the class, attributes on `Protocol` or `ABC` classes, and \
-                           attributes with a substantive explanation comment (under the default \
-                           `require-explanation` mode) are not flagged.",
+                           `MutableMapping`, or `MutableSet` (at the top level or inside \
+                           `ClassVar`, `Final`, `Optional`, `Union`, or `|`) when no method of \
+                           the class mutates `self.<name>` or `cls.<name>` in place. Nested \
+                           types such as `Sequence[MutableMapping[K, V]]` are not checked, \
+                           because mutation of the elements is not tracked. Private attributes \
+                           starting with `_`, attributes mutated in any method of the class, \
+                           and attributes on `Protocol` or `ABC` classes are not flagged. In \
+                           `require-explanation` mode, a comment on or above the attribute line \
+                           excuses the finding.",
             why_is_this_bad: "On a `@dataclass` or public class interface, annotating a read-only \
                               field as `MutableSequence`, `MutableMapping`, or `MutableSet` \
                               makes its type invariant, rejects `tuple` or `Sequence` arguments \
                               in synthesized constructors, and exposes a mutable container on \
                               the instance.\n\n\
-                              Use `Sequence`, `Mapping`, or `AbstractSet` (`from collections.abc \
-                              import Set as AbstractSet`) for read-only public fields. If the \
-                              attribute is mutated by external callers by design, document that \
-                              in a comment on the attribute; if it holds internal mutable state, \
-                              prefix its name with `_`.",
+                              A mutable public attribute is a contract that outside code may \
+                              mutate it, so it is a deliberate choice. Otherwise, `Sequence`, \
+                              `Mapping`, or `Set` (imported as `AbstractSet`) state a read-only \
+                              field, and internal mutable state belongs in a `_`-prefixed \
+                              attribute. Only methods of the class are checked for mutation; \
+                              code outside the class is not.",
             references: &[Reference {
                 title: "Python collections.abc — Collections Abstract Base Classes",
                 url: "https://docs.python.org/3/library/collections.abc.html",
@@ -97,14 +101,12 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         if attribute.is_mutated_in_class {
             continue;
         }
-        let matched = collect_mutable_collection_types(
-            &attribute.type_node,
-            AnnotationTraversalDepth::CovariantPositions,
-        );
+        let matched = collect_mutable_collection_types(&attribute.type_node);
         if matched.is_empty() {
             continue;
         }
         let token = matched.join(", ");
+        let replacement = read_only_collection_replacements(&matched);
         let expression = attribute.type_node.text();
         diagnostics.push(rule.diagnostic_at_node(
             path,
@@ -114,6 +116,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                 ("class", &attribute.class_name),
                 ("expression", expression.as_ref()),
                 ("token", &token),
+                ("replacement", &replacement),
             ],
         ));
     }
@@ -165,16 +168,29 @@ crate::test_utils::rule_test!(
                         # Callers append emitted events directly to this buffer during traversal.
                         events: MutableSequence[str]
                 "#,
-                protocol_and_abc_classes_exempt => r#"
-                    import abc
+                protocol_class_exempt => r#"
                     from collections.abc import MutableSequence
                     from typing import Protocol
 
                     class HasBuffer(Protocol):
                         buffer: MutableSequence[str]
+                "#,
+                abc_class_exempt => r#"
+                    import abc
+                    from collections.abc import MutableSequence
 
                     class BaseCollector(abc.ABC):
                         items: MutableSequence[str]
+                "#,
+                nested_mutable_elements_not_checked => r#"
+                    from collections.abc import MutableMapping, Sequence
+
+                    class Table:
+                        rows: Sequence[MutableMapping[str, int]]
+
+                        def bump(self) -> None:
+                            for row in self.rows:
+                                row["hits"] += 1
                 "#,
             ],
             fail: [
@@ -202,12 +218,6 @@ crate::test_utils::rule_test!(
                         def __init__(self) -> None:
                             self.tags: MutableSet[str] = set()
                 "# => "MutableSet[str]",
-                covariant_nested_sequence_of_mutable_mappings => r#"
-                    from collections.abc import MutableMapping, Sequence
-
-                    class Table:
-                        rows: Sequence[MutableMapping[str, int]]
-                "# => "Sequence[MutableMapping[str, int]]",
             ],
         },
     }

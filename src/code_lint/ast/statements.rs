@@ -43,7 +43,8 @@ pub(super) fn find_enclosing_statement<'a>(node: &RawNode<'a>) -> Option<RawNode
 /// statement's body, where the body is the first direct child that is itself a statement
 /// container: Python's `:`-introduced `block`, or Rust's braced `block` /
 /// `declaration_list`. A statement with no such child (a simple statement) is entirely
-/// header.
+/// header. A Python `decorated_definition` spans from its first decorator to the end of the
+/// wrapped definition's header.
 ///
 /// Extra nodes are skipped. Tree-sitter admits trivia such as comments as `extra` nodes
 /// anywhere in the tree, so a comment sitting between the header and the body is a direct
@@ -55,7 +56,7 @@ pub(super) fn find_enclosing_statement<'a>(node: &RawNode<'a>) -> Option<RawNode
 pub(super) fn header_line_range(statement: &RawNode<'_>) -> RangeInclusive<usize> {
     let lang = *statement.lang();
     let start_line = statement.start_pos().line() + 1;
-    if let Some(definition) = statement.field("definition") {
+    if let Some(definition) = dispatch_lang!(lang, decorated_definition(statement), None) {
         return start_line..=*header_line_range(&definition).end();
     }
     let mut header_end_line = start_line;
@@ -167,6 +168,18 @@ mod tests {
             CONFIG: dict[str, str] = build()
         "},
         SupportLang::Python, "call", "build", "expression_statement", 1..=1
+    )]
+    // A decorated definition's header runs from its first decorator to the end of the
+    // definition's own header.
+    #[case::python_decorated_function(
+        indoc! {r"
+            @staticmethod
+            def build(
+                items,
+            ) -> list[str]:
+                return []
+        "},
+        SupportLang::Python, "generic_type", "list", "decorated_definition", 1..=4
     )]
     // Rust: a braced block is a body just like a Python suite, so the header stops before it.
     #[case::rust_let_with_block_value(

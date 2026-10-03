@@ -2,8 +2,8 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    AnnotationTraversalDepth, PythonParameterKind, collect_mutable_collection_types,
-    extract_function_signatures, is_parameter_mutated_or_escaping,
+    PythonParameterKind, collect_mutable_collection_types, extract_function_signatures,
+    is_parameter_mutated_or_escaping, read_only_collection_replacements,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
@@ -15,9 +15,9 @@ use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Parameter `{name}` of `{function}` is annotated with mutable collection type `{expression}` (`{token}`) but never mutated in `{function}`.",
+    summary: "Parameter `{name}` of `{function}` has annotation `{expression}`, which contains mutable collection type `{token}`, but `{function}` does not appear to mutate `{name}`.",
     rationale: "Annotating a read-only parameter as `MutableSequence`, `MutableMapping`, or `MutableSet` makes its type invariant and prevents callers from passing immutable collections such as `tuple` or `MappingProxyType`.",
-    suggestion: "Replace `{token}` in `{name}` with its read-only counterpart from `collections.abc` (`Sequence`, `Mapping`, or `AbstractSet`).",
+    suggestion: "Replace `{token}` in `{name}` with `{replacement}` if `{function}` is not meant to mutate `{name}`.",
 };
 
 /// The rule's declaration.
@@ -44,18 +44,22 @@ pub const RULE: CodeRule = CodeRule {
                            subscript writes, `del`, or augmented assignment), aliased, returned, \
                            yielded, or passed to an unknown function or method are not flagged. \
                            Stub bodies (`...`, `pass`, `raise NotImplementedError`), methods on \
-                           `Protocol` or `ABC` classes, dunder methods other than `__init__` and \
-                           `__new__`, and functions decorated with `@override`, `@overload`, \
-                           `@abstractmethod`, or `@fixture` are exempt.",
+                           `Protocol` or `ABC` classes, dunder methods other than `__init__`, \
+                           `__new__`, and `__call__`, and functions decorated with `@override`, \
+                           `@overload`, `@abstractmethod`, `@fixture`, or `@<function>.register` \
+                           are exempt. Once fixed, `specific-collection-parameter` may suggest a \
+                           still broader interface for a parameter that is only iterated.",
             why_is_this_bad: "`MutableSequence`, `MutableMapping`, and `MutableSet` are \
                               invariant in their type arguments and require a mutable container \
                               at call sites. Requiring `MutableSequence[int]` when the function \
                               only iterates or indexes the parameter rejects `tuple[int, ...]`, \
                               `Sequence[int]`, and covariant subtypes (`list[bool]`), and \
                               misleads callers into expecting in-place mutation.\n\n\
-                              Use `Sequence`, `Mapping`, or `AbstractSet` (`from collections.abc \
-                              import Set as AbstractSet`) whenever the parameter is not mutated \
-                              in place.",
+                              Whether a function may mutate its argument is part of its \
+                              contract: use `Sequence`, `Mapping`, or `Set` (imported as \
+                              `AbstractSet`) unless mutating the argument is the point of the \
+                              function. The mutation check is syntactic, so confirm that intent \
+                              before applying the suggested read-only type.",
             references: &[Reference {
                 title: "Python collections.abc — Collections Abstract Base Classes",
                 url: "https://docs.python.org/3/library/collections.abc.html",
@@ -95,10 +99,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             let Some(ref type_node) = parameter.type_node else {
                 continue;
             };
-            let matched = collect_mutable_collection_types(
-                type_node,
-                AnnotationTraversalDepth::TransparentWrappersOnly,
-            );
+            let matched = collect_mutable_collection_types(type_node);
             if matched.is_empty() {
                 continue;
             }
@@ -106,6 +107,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                 continue;
             }
             let token = matched.join(", ");
+            let replacement = read_only_collection_replacements(&matched);
             let expression = type_node.text();
             diagnostics.push(rule.diagnostic_at_node(
                 path,
@@ -115,6 +117,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                     ("function", &signature.name),
                     ("expression", expression.as_ref()),
                     ("token", &token),
+                    ("replacement", &replacement),
                 ],
             ));
         }
@@ -128,8 +131,7 @@ crate::test_utils::rule_test!(
     {
         Python => {
             pass: [
-                // E5: Mutating method calls on MutableSequence, MutableMapping, MutableSet
-                e5_mutating_sequence_methods => r#"
+                mutating_sequence_methods => r#"
                     from collections.abc import MutableSequence
 
                     def append_item(items: MutableSequence[int]) -> None:
@@ -139,7 +141,7 @@ crate::test_utils::rule_test!(
                         items.sort()
                 "#,
 
-                e5_mutating_mapping_and_set_methods => r#"
+                mutating_mapping_and_set_methods => r#"
                     from collections.abc import MutableMapping, MutableSet
 
                     def update_map(counts: MutableMapping[str, int], tags: MutableSet[str]) -> None:
@@ -147,8 +149,7 @@ crate::test_utils::rule_test!(
                         tags.discard("draft")
                 "#,
 
-                // E6: Subscript or slice write
-                e6_subscript_and_slice_write => r"
+                subscript_and_slice_write => r"
                     from collections.abc import MutableSequence
 
                     def overwrite(items: MutableSequence[int], other: MutableSequence[int]) -> None:
@@ -156,24 +157,21 @@ crate::test_utils::rule_test!(
                         other[1:3] = [2, 3]
                 ",
 
-                // E7: Subscript augmented write
-                e7_subscript_augmented_write => r"
+                subscript_augmented_write => r"
                     from collections.abc import MutableMapping
 
                     def increment(counts: MutableMapping[str, int]) -> None:
                         counts['hits'] += 1
                 ",
 
-                // E8: Subscript deletion
-                e8_subscript_deletion => r"
+                subscript_deletion => r"
                     from collections.abc import MutableSequence
 
                     def drop_first(items: MutableSequence[int]) -> None:
                         del items[0]
                 ",
 
-                // E9: Augmented assignment on parameter
-                e9_augmented_assignment_on_parameter => r"
+                augmented_assignment_on_parameter => r"
                     from collections.abc import MutableSequence, MutableSet
 
                     def extend_in_place(items: MutableSequence[int], tags: MutableSet[str]) -> None:
@@ -181,17 +179,21 @@ crate::test_utils::rule_test!(
                         tags |= {'ready'}
                 ",
 
-                // E11: Passed to unknown function or method
-                e11_passed_to_unknown_callee => r"
+                passed_to_unknown_function => r"
                     from collections.abc import MutableSequence
 
-                    def delegate(items: MutableSequence[int], target: list[int]) -> None:
+                    def delegate(items: MutableSequence[int]) -> None:
                         helper(items)
-                        target.extend(items)
                 ",
 
-                // E12: Stored in variable, attribute, or container
-                e12_stored_in_attribute_or_container => r"
+                passed_to_method_argument => r"
+                    from collections.abc import MutableSequence
+
+                    def delegate(items: MutableSequence[int]) -> None:
+                        registry.register(items)
+                ",
+
+                stored_in_attribute => r"
                     from collections.abc import MutableSequence
 
                     class Holder:
@@ -199,16 +201,37 @@ crate::test_utils::rule_test!(
                             self.items = items
                 ",
 
-                // E13: Returned or yielded
-                e13_returned_or_yielded => r"
+                aliased_to_local_variable => r"
+                    from collections.abc import MutableSequence
+
+                    def fill(items: MutableSequence[int]) -> None:
+                        buffer = items
+                        buffer.append(1)
+                ",
+
+                stored_in_container => r"
+                    from collections.abc import MutableSequence
+
+                    def bundle(items: MutableSequence[int]) -> None:
+                        batches = [items]
+                        consume(batches)
+                ",
+
+                returned => r"
                     from collections.abc import MutableSequence
 
                     def passthrough(items: MutableSequence[int]) -> MutableSequence[int]:
                         return items
                 ",
 
-                // E14: Mutated inside nested closure / function
-                e14_mutated_inside_nested_closure => r"
+                yielded => r"
+                    from collections.abc import Iterator, MutableSequence
+
+                    def emit(items: MutableSequence[int]) -> Iterator[MutableSequence[int]]:
+                        yield items
+                ",
+
+                mutated_inside_nested_closure => r"
                     from collections.abc import MutableSequence
 
                     def outer(items: MutableSequence[int]) -> None:
@@ -217,8 +240,16 @@ crate::test_utils::rule_test!(
                         inner()
                 ",
 
-                // E16: Stub body (..., pass, raise NotImplementedError)
-                e16_stub_bodies_exempt => r#"
+                shadowing_nested_def_default_captures_parameter => r"
+                    from collections.abc import MutableSequence
+
+                    def outer(items: MutableSequence[int]):
+                        def inner(items=items) -> None:
+                            items.append(1)
+                        return inner
+                ",
+
+                stub_bodies_exempt => r#"
                     from collections.abc import MutableSequence
 
                     def stub_ellipsis(items: MutableSequence[int]) -> None: ...
@@ -231,54 +262,55 @@ crate::test_utils::rule_test!(
                         raise NotImplementedError("subclass must implement")
                 "#,
 
-                // E17: Protocol, ABC, @override, @overload, @abstractmethod
-                e17_protocol_and_override_exempt => r"
-                    from typing import Protocol, override
+                protocol_class_exempt => r"
+                    from typing import Protocol
                     from collections.abc import MutableSequence
 
                     class Sink(Protocol):
                         def handle(self, items: MutableSequence[int]) -> None:
-                            return None
+                            print(len(items))
+                ",
 
-                    class Impl:
+                override_exempt => r"
+                    from typing import override
+                    from collections.abc import MutableSequence
+
+                    class Impl(Base):
                         @override
                         def handle(self, items: MutableSequence[int]) -> None:
                             print(len(items))
                 ",
             ],
             fail: [
-                // E1: Read-only iteration & indexing
-                e1_readonly_iteration_and_indexing => r"
+                readonly_iteration_and_indexing => r"
                     from collections.abc import MutableSequence
 
                     def first_plus_sum(items: MutableSequence[int]) -> int:
                         return sum(value for value in items) + items[0]
                 " => "MutableSequence[int]",
 
-                // E2: Read-only methods on Sequence, Mapping, and Set
-                e2_readonly_sequence_methods => r"
+                readonly_sequence_methods => r"
                     from collections.abc import MutableSequence
 
                     def inspect_sequence(items: MutableSequence[int]) -> int:
                         return items.count(1) + items.index(2)
                 " => "MutableSequence[int]",
 
-                e2_readonly_mapping_methods => r#"
+                readonly_mapping_methods => r#"
                     from collections.abc import MutableMapping
 
                     def inspect_mapping(counts: MutableMapping[str, int]) -> int:
                         return counts.get("a", 0) + len(counts.keys())
                 "# => "MutableMapping[str, int]",
 
-                e2_readonly_set_methods => r#"
+                readonly_set_methods => r#"
                     from collections.abc import MutableSet
 
                     def inspect_set(tags: MutableSet[str]) -> bool:
                         return tags.isdisjoint({"skip"})
                 "# => "MutableSet[str]",
 
-                // E3: Non-mutating builtins
-                e3_safe_readonly_builtins => r"
+                safe_readonly_builtins => r"
                     from collections.abc import MutableSequence
 
                     def stats(items: MutableSequence[int]) -> int:
@@ -296,8 +328,7 @@ crate::test_utils::rule_test!(
                         )
                 " => "MutableSequence[int]",
 
-                // E4: enumerate, zip, reversed, iter
-                e4_readonly_iteration_wrappers => r"
+                readonly_iteration_wrappers => r"
                     from collections.abc import MutableSequence
 
                     def weighted_total(items: MutableSequence[int]) -> int:
@@ -307,16 +338,15 @@ crate::test_utils::rule_test!(
                         return total
                 " => "MutableSequence[int]",
 
-                // E10: Nested element mutation (mutates x[0], not outer container x)
-                e10_nested_element_mutation_flags_outer => r"
+                // Mutating `rows[0]` mutates an element, not the outer container.
+                nested_element_mutation_flags_outer => r"
                     from collections.abc import MutableSequence
 
                     def append_to_first_row(rows: MutableSequence[list[int]]) -> None:
                         rows[0].append(1)
                 " => "MutableSequence[list[int]]",
 
-                // E15: Shadowed parameter in nested function
-                e15_shadowed_inner_parameter_still_flags_outer => r"
+                shadowed_inner_parameter_still_flags_outer => r"
                     from collections.abc import MutableSequence
 
                     def outer(items: MutableSequence[int]) -> int:

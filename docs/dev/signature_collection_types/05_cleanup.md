@@ -2,7 +2,7 @@
 
 This document records **Phase 5 (Cleanup & Simplification)** for the 7 Python collection type annotation rules in [04_execution_log.md](04_execution_log.md).
 
-> Status: **COMPLETE — Ready for User Validation before Phase 6 (Review & Audit)**
+> Status: **COMPLETE and validated.** See the §2 correction.
 
 ---
 
@@ -18,5 +18,6 @@ This document records **Phase 5 (Cleanup & Simplification)** for the 7 Python co
 
 ## 2. Test Suite Audit
 
-- Verified all 7 rule test suites use `crate::test_utils::rule_test!` with one behavior per named case, zero redundant multi-diagnostic test scaffolds, and 100% pass/fail coverage of Matrices A–F.
+- Verified all 7 rule test suites use `crate::test_utils::rule_test!` with zero redundant multi-diagnostic test scaffolds.
+- *Correction (Phase 6, D2)*: this audit originally also claimed "one behavior per named case and 100% pass/fail coverage of Matrices A–F". That was false: several exemption cases were bundled, some were vacuous, and the capability and mutation analyses had no direct tests (06 T1–T5). Phase 6 split the cases and added unit tests. A mutation check now confirms that disabling any exemption fails its named case.
 - Verified `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `cargo doc --no-deps --document-private-items` pass with zero warnings.
