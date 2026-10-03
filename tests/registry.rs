@@ -568,6 +568,37 @@ fn test_placeholders_use_the_shared_vocabulary() {
     }
 }
 
+/// Guide §2.1: whether a comment excuses a finding depends on the configured mode, so a rule
+/// declaring one leaves it to the generated hint and `EnforcementMode::DOC`.
+#[test]
+fn test_rules_with_a_mode_leave_comment_explanations_to_the_framework() {
+    for rule in all_declared_rules()
+        .into_iter()
+        .filter(|rule| rule.options.enforcement_mode.is_some())
+    {
+        let name = rule.name.0;
+        let template = rule.template;
+        let doc = rule.doc;
+        let template_fields = [template.summary, template.rationale, template.suggestion];
+        let fields = template_fields.iter().flat_map(texts).chain([
+            doc.summary,
+            doc.what_it_does,
+            doc.why_is_this_bad,
+        ]);
+        for text in fields {
+            assert!(
+                !text.contains("require-explanation"),
+                "Rule {name}: `{text}` names the `require-explanation` mode, which is configurable"
+            );
+            assert!(
+                words(text).all(|word| !word.contains("comment")),
+                "Rule {name}: `{text}` describes comment explanations, which depend on the \
+                 configured mode"
+            );
+        }
+    }
+}
+
 /// True if `text` is a single sentence closed by a period.
 fn is_one_sentence(text: &str) -> bool {
     text.ends_with('.') && !text.contains(". ")

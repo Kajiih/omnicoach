@@ -31,7 +31,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `single-letter-name` (python, rust): Flags names made of a single letter.
 - `sleep-in-tests` (python, rust): Flags fixed-duration sleeps in tests.
 - `specific-collection-parameter` (python): Flags Python function parameters annotated with `Sequence` or `Collection` when the body only uses `Collection` or `Iterable` operations.
-- `suppressed-exception` (python): Flags `contextlib.suppress` blocks, by default only those without an explanatory comment.
+- `suppressed-exception` (python): Flags `contextlib.suppress` blocks.
 - `too-many-assertions` (python, rust): Flags test functions with more assertions than the limit.
 - `type-cast` (python): Flags `typing.cast` calls in Python source files.
 - `type-suffixed-name` (python, rust): Flags names that end with a type suffix such as `_list` or `_str`.

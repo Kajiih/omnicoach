@@ -88,7 +88,19 @@ impl EnforcementMode {
 
     /// What each mode does, for `--explain`.
     pub const DOC: &'static str = "`ban` flags every occurrence; `require-explanation` accepts \
-                                   an occurrence explained by an adjacent comment.";
+                                   an occurrence explained by a comment at the end of its line \
+                                   or in the comment lines directly above it. A comment at the \
+                                   end of any header line of the enclosing statement, or directly \
+                                   above that header (above the first decorator, if any), also \
+                                   counts and excuses every finding on that header, from any rule \
+                                   in this mode; the body of a block statement is not part of its \
+                                   header. The comment needs at least three words; a bare tool \
+                                   directive such as `noqa` or `type: ignore` does not count, but \
+                                   a reason written after it does.";
+
+    /// How to excuse a finding in `require-explanation` mode, shown with each finding.
+    pub const EXPLANATION_HINT: &'static str =
+        "Explain why in a comment at the end of the flagged line or directly above it.";
 }
 
 /// Every language the linter analyzes.

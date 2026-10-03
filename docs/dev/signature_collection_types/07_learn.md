@@ -14,7 +14,7 @@ Process and principles only; the code, tests, and docs 01–06 hold the technica
 
 4. **Check prior art at the level of each token, not only the concept.** The concept had references; the meaning of unqualified `Set` did not, and Ruff `PYI025` showed the plan was wrong. For each name a rule classifies, look up how established linters treat it before fixing the semantics.
 5. **Sharing a predicate changes every consumer.** Extracting `has_imposed_signature()` changed `identical-positional-types` (`__call__` checked, `.register` exempt). When a refactor shares logic, list the behavior changes for each consumer and add a case for each.
-6. **Messages describe the rule, not its configuration.** The first wording said "by default" and offered "add a comment", which is false once a user sets `ban`. Anything a user can configure (thresholds, lists, mode) stays out of static text or becomes a placeholder; a mode-dependent hint belongs to the framework (ROADMAP: mode-aware explanation hint).
+6. **Messages describe the rule, not its configuration.** The first wording said "by default" and offered "add a comment", which is false once a user sets `ban`. Anything a user can configure (thresholds, lists, mode) stays out of static text or becomes a placeholder; a mode-dependent hint belongs to the framework (implemented afterwards, `docs/dev/explanation_hint/plan.md`).
 
 ## 3. Review
 

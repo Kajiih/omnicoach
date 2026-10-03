@@ -63,9 +63,7 @@ pub const RULE: CodeRule = CodeRule {
                            method are not flagged. Stub bodies, methods on `Protocol` or `ABC` \
                            classes, dunder methods other than `__init__`, `__new__`, and \
                            `__call__`, and functions decorated with `@override`, `@overload`, \
-                           `@abstractmethod`, `@fixture`, or `@<function>.register` are exempt. \
-                           In `require-explanation` mode, a comment on the line above the \
-                           header excuses the finding.",
+                           `@abstractmethod`, `@fixture`, or `@<function>.register` are exempt.",
             why_is_this_bad: "Annotating a parameter as `Sequence[T]` when the function only \
                               iterates over it once prevents callers from passing a `set[T]`, \
                               `dict.keys()`, `dict.values()`, or a generator expression without \

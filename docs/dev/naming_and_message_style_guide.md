@@ -49,7 +49,7 @@ The three fields are orthogonal (`rule_design_guide.md` §2). This section fixes
 * No judgement words: "banned", "forbidden", "discouraged", "illegal", "must". The rule's existence is the judgement.
 * No "e.g." / "i.e."; write "such as" or "for example".
 * Numbers, thresholds and defaults are placeholders, never literals, so the message stays true when the option changes.
-* The enforcement mode is configuration too: messages never state the default mode or offer "add a comment" as a fix, because that is false in `ban` mode. A rule doc may say what excuses a finding *in* `require-explanation` mode.
+* The enforcement mode is configuration too: a rule that declares one (nearly every code rule, through `RuleOptions::code_rule`) never uses a word containing "comment" or names `require-explanation` in its template or doc, because a comment excuses nothing in `ban` mode. In `require-explanation` mode, `CodeRule::check_file` adds `EnforcementMode::EXPLANATION_HINT` to each finding, and `--explain` prints the placement rules from `EnforcementMode::DOC`. Enforced by `tests/registry.rs`; documented fixes must also pass in `ban` mode (`assert_documented_examples`). A future rule about comments themselves would need this check narrowed.
 
 ### 2.2 `summary`: the fact
 

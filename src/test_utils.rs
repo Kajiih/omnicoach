@@ -9,7 +9,9 @@ use crate::code_lint::contract::CodeRule;
 use crate::command_lint::contract::CommandRule;
 use crate::command_lint::vcs::JjClient;
 use crate::diagnostic::Diagnostic;
-use crate::rule_declaration::OptionsDeclaration;
+use crate::rule_declaration::{
+    Declaration, EnforcementMode, LanguageDefaults, OptionsDeclaration, RuleOptions,
+};
 use ast_grep_language::SupportLang;
 use std::fmt::Write;
 use std::path::Path;
@@ -349,6 +351,9 @@ fn normalize_span_indentation(code: &str, span_start: usize, raw_slice: &str) ->
 /// Asserts each of the rule's documented examples exactly like a `rule_test!` case: the flagged
 /// snippet as a `fail` case expecting its `flagged_span`, the fixed snippet as a `pass` case.
 ///
+/// For a rule with an enforcement mode, the fixed snippet must also pass in `ban` mode, so a
+/// documented fix never relies on an explanatory comment.
+///
 /// # Panics
 /// Panics as [`assert_rule_fail`] and [`assert_rule_pass`] do.
 #[track_caller]
@@ -356,6 +361,25 @@ pub fn assert_documented_examples<Options: OptionsDeclaration>(
     rule: &CodeRule<Options>,
     repeat: RepeatCheck,
 ) {
+    let declaration = &rule.declaration;
+    let banned = CodeRule {
+        declaration: Declaration {
+            name: declaration.name,
+            template: declaration.template,
+            languages: declaration.languages,
+            options: RuleOptions {
+                enforcement_mode: declaration
+                    .options
+                    .enforcement_mode
+                    .map(|_| LanguageDefaults::new(EnforcementMode::Ban, &[])),
+                options: declaration.options.options,
+            },
+            classification: declaration.classification,
+            doc: declaration.doc,
+        },
+        target: rule.target,
+        check: rule.check,
+    };
     for example in rule.declaration.doc.examples {
         assert_rule_fail(
             rule,
@@ -366,6 +390,12 @@ pub fn assert_documented_examples<Options: OptionsDeclaration>(
             repeat,
         );
         assert_rule_pass(rule, example.language, "documented fix", example.fixed);
+        assert_rule_pass(
+            &banned,
+            example.language,
+            "documented fix in `ban` mode",
+            example.fixed,
+        );
     }
 }
 

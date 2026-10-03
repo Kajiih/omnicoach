@@ -1,4 +1,4 @@
-//! Flags `contextlib.suppress` blocks, by default only those without an explanatory comment.
+//! Flags `contextlib.suppress` blocks (`suppressed-exception`).
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::is_with_context_manager;
@@ -27,7 +27,7 @@ const BANNED: ListOption = ListOption {
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "An exception is silenced with `{callee}()`.",
     rationale: "Silencing an exception without a recorded reason hides unexpected failures and leaves the next reader unable to tell intentional ignoring from accidental masking.",
-    suggestion: "Replace the block with an explicit `except` handler, or add a comment on the `{callee}(...)` line explaining why ignoring the exception is safe.",
+    suggestion: "Replace the block with an explicit `except` handler.",
 };
 
 /// The rule's declaration.
@@ -50,24 +50,16 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             impacted_quality: ImpactedQuality::Maintainability,
         },
         doc: RuleDoc {
-            summary: "Flags `contextlib.suppress` blocks, by default only those without an explanatory comment.",
+            summary: "Flags `contextlib.suppress` blocks.",
             what_it_does: "Flags `suppress(...)` and `contextlib.suppress(...)` used as a context \
-                           manager in a Python `with` statement, unless a comment explains it. \
-                           The comment can trail the `suppress(...)` line, trail any line of a \
-                           multi-line `with (...)` header, or sit in the block of comment lines \
-                           directly above the statement. It must be substantive: at least three \
-                           words and ten characters, and a bare tool directive such as \
-                           `# noqa: SIM105` or `# type: ignore` does not count. Comments inside \
-                           the `with` body do not count. A `suppress(...)` call outside a `with` \
-                           statement is not flagged. With `enforcement-mode = \"ban\"`, every \
-                           such block is flagged, commented or not.",
+                           manager in a Python `with` statement. A `suppress(...)` call outside \
+                           a `with` statement is not flagged.",
             why_is_this_bad: "`suppress` silently discards an exception. The code does not say \
                               why that failure is harmless, so a reader cannot tell an \
                               intentional ignore from a bug being hidden, and a later change \
                               that makes the exception meaningful goes unnoticed.\n\n\
-                              State why the exception is safe to ignore in a comment next to \
-                              the `with` statement, for example \
-                              `# The file may already have been removed by the cleanup job.`",
+                              An explicit `except` handler keeps the ignored case visible and \
+                              can record it, for example with a debug log.",
             references: &[Reference {
                 title: "Python docs: contextlib.suppress",
                 url: "https://docs.python.org/3/library/contextlib.html#contextlib.suppress",
@@ -79,11 +71,12 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                         os.remove(lock_path)
                 "},
                 flagged_span: "suppress(FileNotFoundError)",
-                fixed: indoc::indoc! {r"
-                    # The cleanup job may already have removed the lock file.
-                    with suppress(FileNotFoundError):
+                fixed: indoc::indoc! {r#"
+                    try:
                         os.remove(lock_path)
-                "},
+                    except FileNotFoundError:
+                        logger.debug("Lock file %s was already removed by the cleanup job.", lock_path)
+                "#},
             }],
         },
     },
