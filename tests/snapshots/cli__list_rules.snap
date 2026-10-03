@@ -23,6 +23,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `mutable-collection-parameter` (python): Flags Python function parameters annotated with `MutableSequence`, `MutableMapping`, or `MutableSet` when the function never mutates them.
 - `mutable-collection-return` (python): Flags Python function return annotations using `MutableSequence`, `MutableMapping`, or `MutableSet` when no caller in the file mutates the result.
 - `mutable-dataclass` (python): Requires Python dataclasses to declare `frozen=True`.
+- `mutable-module-constant` (python): Flags Python module-level constants whose type annotation or value is a mutable collection.
 - `nested-function` (python): Flags Python functions defined inside other functions.
 - `packed-assertion` (python, rust): Flags assertions that pack several checks into one condition.
 - `primitive-duration` (python, rust): Flags durations held as plain numbers, detected by a time-unit suffix such as `timeout_secs` or `delay_ms`.

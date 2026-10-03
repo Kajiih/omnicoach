@@ -1152,6 +1152,9 @@ pub fn collect_concrete_collection_types(
     )
 }
 
+/// Abstract mutable collection constructors in `collections.abc` and `typing`.
+const MUTABLE_COLLECTION_ABCS: &[&str] = &["MutableSequence", "MutableMapping", "MutableSet"];
+
 /// Collects abstract mutable collection constructors (`MutableSequence`, `MutableMapping`,
 /// `MutableSet`) from `type_node`, unwrapping only transparent wrappers.
 ///
@@ -1162,12 +1165,7 @@ pub fn collect_mutable_collection_types(type_node: &AstNode<'_>) -> Vec<String> 
     collect_type_constructors(
         type_node,
         AnnotationTraversalDepth::TransparentWrappersOnly,
-        |full_path, terminal| {
-            matches!(
-                terminal,
-                "MutableSequence" | "MutableMapping" | "MutableSet"
-            ) && is_std_type_constructor_prefix(full_path, terminal)
-        },
+        |full_path, terminal| is_std_type_constructor(full_path, terminal, MUTABLE_COLLECTION_ABCS),
     )
 }
 
@@ -1179,10 +1177,33 @@ pub fn collect_specific_collection_types(type_node: &AstNode<'_>) -> Vec<String>
         type_node,
         AnnotationTraversalDepth::TransparentWrappersOnly,
         |full_path, terminal| {
-            matches!(terminal, "Sequence" | "Collection")
-                && is_std_type_constructor_prefix(full_path, terminal)
+            is_std_type_constructor(full_path, terminal, &["Sequence", "Collection"])
         },
     )
+}
+
+/// Formats deduplicated collection replacements for `type_paths`, mapping dictionary-like types
+/// to `mapping`, set-like types to `set`, and sequence-like types to `sequence`.
+fn format_collection_replacements(
+    type_paths: &[String],
+    mapping: &'static str,
+    set: &'static str,
+    sequence: &'static str,
+) -> String {
+    let mut replacements: Vec<&str> = Vec::new();
+    for type_path in type_paths {
+        let terminal = type_path.rsplit('.').next().unwrap_or(type_path);
+        let replacement = match terminal {
+            "dict" | "Dict" | "defaultdict" | "DefaultDict" | "Counter" | "OrderedDict"
+            | "MutableMapping" => mapping,
+            "set" | "Set" | "MutableSet" => set,
+            _ => sequence,
+        };
+        if !replacements.contains(&replacement) {
+            replacements.push(replacement);
+        }
+    }
+    replacements.join(", ")
 }
 
 /// Returns the read-only `collections.abc` replacements of collection `type_paths`, joined with `", "`.
@@ -1192,20 +1213,165 @@ pub fn collect_specific_collection_types(type_node: &AstNode<'_>) -> Vec<String>
 /// `MutableSet` become `collections.abc.Set`. Duplicates are removed.
 #[must_use]
 pub fn read_only_collection_replacements(type_paths: &[String]) -> String {
-    let mut replacements: Vec<&str> = Vec::new();
-    for type_path in type_paths {
-        let terminal = type_path.rsplit('.').next().unwrap_or(type_path);
-        let replacement = match terminal {
-            "dict" | "Dict" | "defaultdict" | "DefaultDict" | "Counter" | "OrderedDict"
-            | "MutableMapping" => "collections.abc.Mapping",
-            "set" | "Set" | "MutableSet" => "collections.abc.Set",
-            _ => "collections.abc.Sequence",
+    format_collection_replacements(
+        type_paths,
+        "collections.abc.Mapping",
+        "collections.abc.Set",
+        "collections.abc.Sequence",
+    )
+}
+
+/// Returns the immutable constant collection replacements for `type_paths`, joined with `", "`.
+///
+/// Sequence types (`list`, `deque`, `MutableSequence`) become `tuple`; set types (`set`,
+/// `MutableSet`) become `frozenset`; and mapping types (`dict`, `defaultdict`, `Counter`,
+/// `OrderedDict`, `MutableMapping`) become `frozendict`. Duplicates are removed.
+#[must_use]
+pub fn immutable_constant_collection_replacements(type_paths: &[String]) -> String {
+    format_collection_replacements(type_paths, "frozendict", "frozenset", "tuple")
+}
+
+/// A Python module-level constant whose type annotation or initializer uses a mutable collection.
+pub struct PythonMutableModuleConstant<'a> {
+    /// Constant identifier name (e.g. `"ALLOWED"` or `"_PORTS"`).
+    pub name: String,
+    /// Matched mutable collection type constructors (e.g. `["list"]`, `["MutableSequence"]`).
+    pub matched_types: Vec<String>,
+    /// The AST node to highlight: the `type` annotation node when the annotation is mutable,
+    /// or the RHS initializer expression node when the value is mutable.
+    pub target_node: AstNode<'a>,
+}
+
+/// Returns true if `type_node` specifies a read-only `Mapping` contract (optionally wrapped in
+/// transparent wrappers such as `Final[...]`, `Optional[...]`, or `Annotated[...]`).
+fn has_read_only_mapping_annotation(type_node: &RawNode<'_>) -> bool {
+    let mut matched = Vec::new();
+    collect_type_constructors_raw(
+        type_node,
+        AnnotationTraversalDepth::TransparentWrappersOnly,
+        &|full_path, terminal| is_std_type_constructor(full_path, terminal, &["Mapping"]),
+        &mut matched,
+    );
+    !matched.is_empty()
+}
+
+/// Returns true if `(path, terminal)` is a runtime mutable collection constructor (`list`, `dict`,
+/// `set`, or the `collections` containers `defaultdict`, `deque`, `Counter`, `OrderedDict`).
+fn is_runtime_mutable_collection_constructor(path: &str, terminal: &str) -> bool {
+    match terminal {
+        "list" | "dict" | "set" => {
+            path == terminal || path.strip_suffix(terminal) == Some("builtins.")
+        }
+        "defaultdict" | "deque" | "Counter" | "OrderedDict" => {
+            path == terminal || path.strip_suffix(terminal) == Some("collections.")
+        }
+        _ => false,
+    }
+}
+
+/// Returns the mutable collection constructor name if `right` is a mutable collection literal,
+/// comprehension, or constructor call.
+fn mutable_collection_initializer_type(
+    right: &RawNode<'_>,
+    is_read_only_mapping: bool,
+) -> Option<String> {
+    match right.kind().as_ref() {
+        "list" | "list_comprehension" => Some("list".to_owned()),
+        "set" | "set_comprehension" => Some("set".to_owned()),
+        "dictionary" | "dictionary_comprehension" if !is_read_only_mapping => {
+            Some("dict".to_owned())
+        }
+        "call" => {
+            let callee = right.field("function")?;
+            let callee_base = if callee.kind() == "subscript" {
+                callee.field("value")?
+            } else {
+                callee
+            };
+            let (path, terminal) = resolve_path_and_terminal_raw(&callee_base);
+            if is_read_only_mapping && terminal == "dict" {
+                return None;
+            }
+            is_runtime_mutable_collection_constructor(&path, &terminal).then_some(path)
+        }
+        _ => None,
+    }
+}
+
+/// Collects Python module-level constants whose type annotation or initializer value uses a
+/// mutable collection.
+#[must_use]
+pub fn collect_mutable_module_constants(file: &ParsedFile) -> Vec<PythonMutableModuleConstant<'_>> {
+    let abc_set_imported = has_unaliased_collections_abc_set_import(file);
+    let mut out = Vec::new();
+    for node in file.grep.root().dfs() {
+        if node.kind() != "assignment" {
+            continue;
+        }
+        let is_top_level = node
+            .parent()
+            .filter(|statement| statement.kind() == "expression_statement")
+            .is_some_and(|statement| is_module_level(&statement));
+        if !is_top_level {
+            continue;
+        }
+        let Some(left) = node.field("left") else {
+            continue;
         };
-        if !replacements.contains(&replacement) {
-            replacements.push(replacement);
+        if left.kind() != "identifier" {
+            continue;
+        }
+        let name = left.text().into_owned();
+        if name.starts_with("__") && name.ends_with("__") {
+            continue;
+        }
+        let type_node = node.field("type");
+        let is_final = type_node.as_ref().is_some_and(has_final_annotation);
+        if !is_constant_name(&name) && !is_final {
+            continue;
+        }
+
+        if let Some(ref annotation) = type_node {
+            let mut matched = Vec::new();
+            collect_type_constructors_raw(
+                annotation,
+                AnnotationTraversalDepth::CovariantPositions,
+                &|full_path, terminal| {
+                    if abc_set_imported && full_path == "Set" {
+                        return false;
+                    }
+                    is_concrete_collection_constructor(full_path, terminal)
+                        || is_std_type_constructor(full_path, terminal, MUTABLE_COLLECTION_ABCS)
+                },
+                &mut matched,
+            );
+            if !matched.is_empty() {
+                out.push(PythonMutableModuleConstant {
+                    name,
+                    matched_types: matched,
+                    target_node: AstNode::from_raw(annotation.clone()),
+                });
+                continue;
+            }
+        }
+
+        let Some(right) = node.field("right").map(without_parentheses) else {
+            continue;
+        };
+        let is_read_only_mapping = type_node
+            .as_ref()
+            .is_some_and(has_read_only_mapping_annotation);
+        if let Some(matched_type) =
+            mutable_collection_initializer_type(&right, is_read_only_mapping)
+        {
+            out.push(PythonMutableModuleConstant {
+                name,
+                matched_types: vec![matched_type],
+                target_node: AstNode::from_raw(right),
+            });
         }
     }
-    replacements.join(", ")
+    out
 }
 
 /// Returns true if `func_name` is a Python Data Model dunder method with a fixed signature
@@ -2659,6 +2825,22 @@ const CONSTANT_TRANSPARENT_STATEMENTS: &[&str] = &[
     "with_statement",
 ];
 
+/// Returns true if `statement` sits at module level, possibly inside the bodies of
+/// [`CONSTANT_TRANSPARENT_STATEMENTS`].
+fn is_module_level(statement: &RawNode<'_>) -> bool {
+    let mut container = statement.parent();
+    while let Some(node) = container {
+        match node.kind().as_ref() {
+            "module" => return true,
+            "block" => {}
+            kind if CONSTANT_TRANSPARENT_STATEMENTS.contains(&kind) => {}
+            _ => return false,
+        }
+        container = node.parent();
+    }
+    false
+}
+
 /// Returns true if `statement` sits at module or class level, possibly inside the bodies of
 /// [`CONSTANT_TRANSPARENT_STATEMENTS`].
 fn is_module_or_class_level(statement: &RawNode<'_>) -> bool {
@@ -2682,6 +2864,36 @@ fn is_module_or_class_level(statement: &RawNode<'_>) -> bool {
     false
 }
 
+/// Returns true if `type_node` is `Final` or `Final[...]` (qualified or unqualified, optionally
+/// wrapped in `Annotated[..., ...]`).
+fn has_final_annotation(type_node: &RawNode<'_>) -> bool {
+    let mut current = type_node.clone();
+    loop {
+        while matches!(current.kind().as_ref(), "type" | "parenthesized_expression") {
+            let Some(inner) = current
+                .children()
+                .find(|child| child.is_named() && !child.is_extra())
+            else {
+                return false;
+            };
+            current = inner;
+        }
+        if matches!(current.kind().as_ref(), "generic_type" | "subscript")
+            && let Some((base_node, type_args)) = extract_generic_base_and_args(&current)
+        {
+            let (base_path, base_terminal) = resolve_path_and_terminal_raw(&base_node);
+            if is_std_type_constructor(&base_path, &base_terminal, &["Annotated"])
+                && let Some(first_arg) = type_args.into_iter().next()
+            {
+                current = first_arg;
+                continue;
+            }
+            return base_terminal == "Final";
+        }
+        return resolve_path_and_terminal_raw(&current).1 == "Final";
+    }
+}
+
 /// Returns true if an `assignment` defines a module- or class-level constant: an
 /// `UPPER_SNAKE_CASE` name or a `Final` annotation.
 fn is_constant_assignment(assignment: &RawNode<'_>) -> bool {
@@ -2691,16 +2903,7 @@ fn is_constant_assignment(assignment: &RawNode<'_>) -> bool {
         .is_some_and(|statement| is_module_or_class_level(&statement));
     let is_final = assignment
         .field("type")
-        .and_then(|annotation| annotation.children().find(RawNode::is_named))
-        .is_some_and(|annotation| {
-            // `Final[int]` is a `generic_type`, `typing.Final[int]` a `subscript`.
-            let base = match annotation.kind().as_ref() {
-                "subscript" => annotation.field("value"),
-                "generic_type" => annotation.children().find(RawNode::is_named),
-                _ => Some(annotation.clone()),
-            };
-            base.is_some_and(|base| resolve_path_and_terminal_raw(&base).1 == "Final")
-        });
+        .is_some_and(|type_node| has_final_annotation(&type_node));
     let is_constant_target = assignment
         .field("left")
         .is_some_and(|target| target.kind() == "identifier" && is_constant_name(&target.text()));
@@ -2711,7 +2914,9 @@ fn is_constant_assignment(assignment: &RawNode<'_>) -> bool {
 fn without_parentheses(node: RawNode<'_>) -> RawNode<'_> {
     let mut node = node;
     while node.kind() == "parenthesized_expression" {
-        let inner = node.children().find(RawNode::is_named);
+        let inner = node
+            .children()
+            .find(|child| child.is_named() && !child.is_extra());
         let Some(inner) = inner else { break };
         node = inner;
     }
@@ -3268,6 +3473,78 @@ mod tests {
     fn test_read_only_collection_replacements(#[case] type_paths: &[&str], #[case] expected: &str) {
         let type_paths: Vec<String> = type_paths.iter().map(|path| (*path).to_string()).collect();
         assert_eq!(read_only_collection_replacements(&type_paths), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::sequence_kinds(&["list", "typing.List", "collections.deque", "Deque", "MutableSequence"], "tuple")]
+    #[case::mapping_kinds(
+        &["dict", "Dict", "defaultdict", "typing.DefaultDict", "collections.Counter", "OrderedDict", "MutableMapping"],
+        "frozendict"
+    )]
+    #[case::set_kinds(&["set", "typing.Set", "MutableSet"], "frozenset")]
+    #[case::mixed_in_order(&["set", "list", "set"], "frozenset, tuple")]
+    fn test_immutable_constant_collection_replacements(
+        #[case] type_paths: &[&str],
+        #[case] expected: &str,
+    ) {
+        let type_paths: Vec<String> = type_paths.iter().map(|path| (*path).to_string()).collect();
+        assert_eq!(
+            immutable_constant_collection_replacements(&type_paths),
+            expected
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::annotated_list(
+        "ALLOWED: list[str] = (\"a\",)",
+        &[("ALLOWED", &["list"][..], "list[str]")]
+    )]
+    #[case::bare_final_dict(
+        "from typing import Final\nPORTS: Final = {\"http\": 80}",
+        &[("PORTS", &["dict"][..], "{\"http\": 80}")]
+    )]
+    #[case::mapping_exempts_dict_literal(
+        "from collections.abc import Mapping\nPORTS: Mapping[str, int] = {\"http\": 80}",
+        &[]
+    )]
+    #[case::mapping_does_not_exempt_defaultdict(
+        "from collections import defaultdict\nfrom collections.abc import Mapping\nCOUNTS: Mapping[str, int] = defaultdict(int)",
+        &[("COUNTS", &["defaultdict"][..], "defaultdict(int)")]
+    )]
+    #[case::multiline_parenthesized_with_comment(
+        "ALLOWED = (\n    # Default roles\n    [\"admin\"]\n)",
+        &[("ALLOWED", &["list"][..], "[\"admin\"]")]
+    )]
+    #[case::annotated_wrapped_final_on_lowercase(
+        "from typing import Annotated, Final\nallowed: Annotated[Final[list[str]], \"doc\"] = [\"a\"]",
+        &[("allowed", &["list"][..], "Annotated[Final[list[str]], \"doc\"]")]
+    )]
+    fn test_collect_mutable_module_constants(
+        #[case] source: &str,
+        #[case] expected: &[(&str, &[&str], &str)],
+    ) {
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let collected: Vec<_> = collect_mutable_module_constants(&file)
+            .into_iter()
+            .map(|constant| {
+                (
+                    constant.name,
+                    constant.matched_types,
+                    constant.target_node.text().into_owned(),
+                )
+            })
+            .collect();
+        let expected: Vec<(String, Vec<String>, String)> = expected
+            .iter()
+            .map(|(name, types, span)| {
+                (
+                    (*name).to_string(),
+                    types.iter().map(|item| (*item).to_string()).collect(),
+                    (*span).to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(collected, expected);
     }
 
     #[rstest::rstest]
