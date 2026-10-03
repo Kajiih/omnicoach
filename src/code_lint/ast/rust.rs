@@ -11,6 +11,13 @@ pub fn is_statement_container(kind: &str) -> bool {
     matches!(kind, "source_file" | "block" | "declaration_list")
 }
 
+/// Returns the definition wrapped by a decorator statement. Rust has none: attributes
+/// (`#[...]`) are sibling nodes of the item they annotate, not wrappers around it.
+#[must_use]
+pub const fn decorated_definition<'a>(_statement: &RawNode<'a>) -> Option<RawNode<'a>> {
+    None
+}
+
 /// Returns true for Rust comment node kinds.
 ///
 /// Rust distinguishes `//` from `/* */`. Doc comments are not separate kinds: `/// text`

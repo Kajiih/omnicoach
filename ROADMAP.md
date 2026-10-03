@@ -15,7 +15,18 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
   - *Target*: If production `macro_rules!` macros calling cross-component helpers (`$crate::...`) are introduced outside `src/lib.rs`, or if root-anchored `::` paths appear, extend `summarize_rust_file` to scan `macro_rule` body token trees and normalize leading `::` prefixes.
 - **Non-transitive DAG edges**: every edge is transitive today, so a component reaches everything its dependencies reach. A "private" edge (a dependency that dependents do not inherit) would let the graph express isolation rules that currently need bespoke conformance checks.
 - **Compiler-enforced subtree visibility (`pub(in crate::...)` / `pub(super)`)**: tighten item visibility to `pub(in crate::code_lint)`, `pub(in crate::command_lint)`, or `pub(super)` wherever component boundaries align with a directory subtree, so cross-domain access fails in `rustc` (`E0603`) before conformance tests run.
+- **Validated Tree-sitter node kinds and field names**:
+  - *Current*: `src/code_lint/ast/python.rs`, `rust.rs` and `statements.rs` compare node kinds and field names as plain strings (`node.kind() == "function_definition"`, `node.field("body")`). A typo compiles and silently never matches; only behavioural `rule_test!` cases catch it, when one exercises the branch. These files carry `omni:disable-file [repeated-literal]` until this is resolved (design: `docs/dev/repeated_literal/`).
+  - *Investigate, then pick one* (a new dependency is acceptable):
+    - **(c) Typed CST via `type-sitter`** (generated node/field types from each grammar's `node-types.json`): compile-time checking. Key question: interop with `ast-grep` 0.45, which owns parsing and wraps nodes in its own `Node` type and pins its own `tree-sitter` version; check whether the inner `tree_sitter::Node` is reachable and version-compatible, and the migration cost of about 4k lines of AST helpers.
+    - **(d) Grammar-conformance test**: parse the `ast` modules with Omni's own Rust parser, collect the string literals used as node kinds and field names, and assert each exists via `Language::id_for_node_kind` / `Language::field_id_for_name` (reachable through `SupportLang::get_ts_language()`). No dependency or migration; heuristic extraction limited to the call shapes it recognises.
+  - *Then*: remove the `repeated-literal` file-level disables if the chosen option makes the strings typed or validated.
 - **Standalone crate extraction**: once the DAG design items above settle (or when a second project needs it), evaluate extracting the declarative architecture and conformance engine into a standalone publishable crate (zero-dependency `define_architecture!` / `architecture_component!` macros in `[dependencies]`, CST conformance runner behind a `check` feature in `[dev-dependencies]`), moving `summarize_rust_file` out of `src/code_lint/ast/rust.rs`.
+- **Pre-existing Python collector defects** (found in the signature collection review, `docs/dev/signature_collection_types/06_review_and_audit.md`):
+  - `parse_param_parts`: four near-copies, a dead `field("name")` lookup, and an unreachable `dfs()` fallback.
+  - `is_nested_function_raw` treats methods of a class defined inside a function as nested functions.
+  - `is_docstring_raw` accepts any string expression statement, not only the first statement of a body.
+  - Safe-builtin checks match by name, so shadowed `len`/`list` are trusted.
 
 ## Rule Engine & Declarative Rules
 
@@ -44,6 +55,9 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
 - **Import-Aware Qualified Call Resolution (`src/code_lint/semantic/calls.rs`)**:
   - *Current*: Banned calls are matched syntactically by call-site name (like `ast-grep` and the legacy linter), as documented in each rule's `what_it_does`. A bare call imported from an unrelated library (`from sqlalchemy import cast`, `from httpx import patch`) is flagged, while an aliased module call (`import typing as t; t.cast(...)`) is missed.
   - *Target*: Evaluate adding a per-file scope and import symbol table (modeled on Ruff's `SemanticModel::resolve_qualified_name`) that resolves imported and aliased callees to their canonical qualified path while distinguishing module imports from local parameter/fixture receivers (`mocker.patch`, `monkeypatch.setattr`, `loop.create_task`).
+- **Mode-Aware Explanation Hint**:
+  - *Current*: Whether an adjacent comment excuses a finding depends on the effective enforcement mode, which users can change, so templates and docs cannot state it truthfully. The signature collection rules no longer mention the comment alternative; `suppressed-exception` still hardcodes "or add a comment" in its suggestion and "by default" in its docs.
+  - *Target*: In `src/code_lint/contract.rs` (where `RequireExplanation` diagnostics are filtered), append a generated hint such as "or explain it in an adjacent comment" to the suggestion only when the effective mode is `require-explanation`. Have `--explain` document where the comment goes (line above the header, on or above the attribute), possibly via a per-rule explanation-location field, then migrate `suppressed-exception`.
 
 ## Candidate Rules
 
@@ -63,6 +77,13 @@ Source: Python Tip of the Week #069 "Prefer constants over wild values" (Python 
   - *Type alias resolution*: `type IntList = list[int]` or `IntList: TypeAlias = list[int]` used in annotations is treated as an unknown generic/identifier until per-file type-alias resolution is added.
   - *Cross-file caller and subclass mutation tracking*: return and attribute mutation checks (`collect_locally_mutated_return_functions`, `collect_public_class_attributes`) operate within a single file (`G3`); cross-module mutations rely on the default `require-explanation` mode.
   - *Dedicated `unaliased-collections-abc-set-import` rule*: evaluate whether to also flag `from collections.abc import Set` without `as AbstractSet` (overlapping Ruff `PYI025`).
+  - *Import alias and string annotation resolution*: `import typing as t` (`t.List`), `from typing import List as L`, and string annotations (`"list[int]"`) are not resolved (pass cases `known_gap_typing_module_alias_not_resolved`, `known_gap_string_annotation_not_parsed`). A local `class Set` is still treated as `typing.Set`.
+  - *More concrete containers*: `collections.defaultdict`, `deque`, `Counter`, and `OrderedDict` are not flagged.
+  - *Callee resolution for returned values*: `collect_locally_mutated_return_functions` matches callees by bare name, so mutating `cfg.get(...)` exempts every function named `get` in the file (pass case `known_gap_same_named_callee_exempts_function`).
+  - *Header-wide explanation scope*: one `RequireExplanation` comment above a `def` silences every finding on that header, across rules. Framework-wide behavior; per-rule scoping would need comment-to-rule association.
+  - *Exemption scope*: `Protocol`/`ABC` classes exempt all their methods, including concrete helpers. Private classes and `TypedDict` attributes are checked. Property setters (`@x.setter`) are not exempt.
+  - *Unified use-site classifier*: `is_safe_readonly_parameter_reference` (mutation) and `record_reference_capability` (capability) classify the same uses separately and can diverge. Merge into one `classify_use`; the `python.rs` unit tests cover both.
+  - *Body walk cost*: body walkers recurse without a depth bound and run once per parameter, and each rule rebuilds the same file-wide data. Share one per-function use index if profiling shows a cost.
 - **`no-manual-enum-name-map`** (Python, Rust — tip `#protobufs`):
   - *Detection*: A dict literal where every entry is `'NAME': X.Y.NAME` (string key equals the value's last attribute). Suggest `Enum.Value(name)` (protobuf), `Enum[name]`, or `Enum.__members__`.
   - *Rust*: `match` arms mapping `"Alpha" => Kind::Alpha` → derive `strum::EnumString`.

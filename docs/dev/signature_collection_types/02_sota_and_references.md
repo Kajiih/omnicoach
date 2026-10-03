@@ -110,28 +110,28 @@ Inspecting CPython's `collections.abc` hierarchy and `typeshed` definitions esta
 
 | Need | Existing Building Block | Location |
 | :--- | :--- | :--- |
-| Extracting Python function signatures & parameters | `extract_function_signatures`, `PythonFunctionSignature`, `PythonParameterInfo`, `PythonParameterKind` | [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs#L571-L832) |
-| Skipping `*args` and `**kwargs` | `PythonParameterInfo::is_variadic()` (retained specifically for the legacy linter signature rules) | [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs#L614-L619) |
-| Skipping `self` and `cls` receivers | `PythonParameterKind::Receiver` | [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs#L574-L575) |
-| Checking `@override`, `@overload`, `@abstractmethod`, `@fixture` decorators | `has_decorator(func_node, ...)` and `has_override_decorator` | [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs#L835-L838), [src/code_lint/rules/identical_positional_types.rs](../../../src/code_lint/rules/identical_positional_types.rs#L96-L103) |
-| Checking `Protocol` and `ABC` enclosing classes | `extract_classes`, `PythonClassInfo::inherits_from("Protocol")`, `inherits_from("ABC")` | [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs#L486-L569) |
-| Write-target detection (`x[i] = ...`, `del x[i]`, `x += ...`) | `is_write_target`, `TARGET_CONTAINER_KINDS`, `MUTATING_METHODS` | [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs#L1141-L1183) |
+| Extracting Python function signatures & parameters | `extract_function_signatures`, `PythonFunctionSignature`, `PythonParameterInfo`, `PythonParameterKind` | [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs) |
+| Skipping `*args` and `**kwargs` | `PythonParameterInfo::is_variadic()` (retained specifically for the legacy linter signature rules) | [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs) |
+| Skipping `self` and `cls` receivers | `PythonParameterKind::Receiver` | [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs) |
+| Checking `@override`, `@overload`, `@abstractmethod`, `@fixture` decorators | `has_decorator(func_node, ...)` and `has_override_decorator` | [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs), [src/code_lint/rules/identical_positional_types.rs](../../../src/code_lint/rules/identical_positional_types.rs) |
+| Checking `Protocol` and `ABC` enclosing classes | `extract_classes`, `PythonClassInfo::inherits_from("Protocol")`, `inherits_from("ABC")` | [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs) |
+| Write-target detection (`x[i] = ...`, `del x[i]`, `x += ...`) | `is_write_target`, `TARGET_CONTAINER_KINDS`, `MUTATING_METHODS` | [src/code_lint/ast/python.rs](../../../src/code_lint/ast/python.rs) |
 | Classification topics | `Topic::STATIC_TYPING` | [src/rule_declaration.rs](../../../src/rule_declaration.rs) |
 
 ### 2.2 Registry & Style Constraints ([tests/registry.rs](../../../tests/registry.rs))
 
 Every rule added to `src/code_lint/rules/` is validated by [tests/registry.rs](../../../tests/registry.rs) and [naming_and_message_style_guide.md](../naming_and_message_style_guide.md):
-1. **Rule name grammar** ([tests/registry.rs](../../../tests/registry.rs#L224-L250)):
+1. **Rule name grammar** ([tests/registry.rs](../../../tests/registry.rs)):
    - `kebab-case`, **at most 4 words** (`MAX_RULE_NAME_WORDS = 4`).
    - Must **name the flagged pattern**, never the fix or policy (`no-`, `prefer-`, `enforce-`, `banned-`, `max-`, `min-`, `-enforced` are forbidden).
    - File stem must be the `snake_case` of a rule declared in the file, and single-rule files expose `pub const RULE`.
-2. **Template fields** ([tests/registry.rs](../../../tests/registry.rs#L291-L530)):
+2. **Template fields** ([tests/registry.rs](../../../tests/registry.rs)):
    - `summary`: 1 sentence ending with `.`, starts with uppercase or backtick, no single/double quotes outside backticks, no fix verbs (`use`, `replace`, `add`, `rename`, `remove`), no judgement words (`banned`, `forbidden`, `discouraged`, `illegal`, `must`), no `e.g.`/`i.e.`.
    - `rationale`: 1–2 sentences ending with `.`, no `should` / `must`, does not start with a fix verb.
    - `suggestion`: 1–2 sentences ending with `.`, starts with an allowed verb from `SUGGESTION_VERBS` (`Replace`, `Narrow`, `Specify`, etc. — or extend the list if a new verb is needed).
    - `RuleDoc::summary`: 1 sentence starting with `Flags ` or `Requires `.
-3. **Placeholders** ([tests/registry.rs](../../../tests/registry.rs#L325-L341)):
-   - Current shared placeholders include `{function}`, `{class}`, `{name}`, `{expression}`, `{token}`, etc. If a new placeholder (such as `{annotation}` or `{replacement}`) is needed, [naming_and_message_style_guide.md](../naming_and_message_style_guide.md#L105) explicitly instructs: *"when a message needs a thing none of these names, add a row here and an entry in the vocabulary test, in the same change."*
+3. **Placeholders** ([tests/registry.rs](../../../tests/registry.rs)):
+   - Current shared placeholders include `{function}`, `{class}`, `{name}`, `{expression}`, `{token}`, etc. If a new placeholder (such as `{annotation}` or `{replacement}`) is needed, [naming_and_message_style_guide.md](../naming_and_message_style_guide.md) explicitly instructs: *"when a message needs a thing none of these names, add a row here and an entry in the vocabulary test, in the same change."*
 4. **Test harness (`rule_test!`)**:
    - Every `fail` test case must produce **exactly 1 diagnostic** (and 2 when duplicated by the harness). Therefore, if a rule emits **1 diagnostic per offending parameter** (or 1 consolidated diagnostic per function), each `fail` test snippet must trigger exactly 1 diagnostic.
 

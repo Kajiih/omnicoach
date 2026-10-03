@@ -1,6 +1,7 @@
 //! AST helper predicates and structural extractors for Python.
 
 use crate::code_lint::ast::{AstNode, ParsedFile, PositionalRead, RawNode, ScopePositionalReads};
+use std::collections::{HashMap, HashSet};
 
 /// Returns true for Python node kinds that hold statements as direct children.
 ///
@@ -8,6 +9,17 @@ use crate::code_lint::ast::{AstNode, ParsedFile, PositionalRead, RawNode, ScopeP
 #[must_use]
 pub(super) fn is_statement_container(kind: &str) -> bool {
     matches!(kind, "module" | "block")
+}
+
+/// Returns the `def` or `class` wrapped by a `decorated_definition` statement, so its header
+/// spans from the first decorator to the end of the definition's own header.
+#[must_use]
+pub(super) fn decorated_definition<'a>(statement: &RawNode<'a>) -> Option<RawNode<'a>> {
+    if statement.kind() == "decorated_definition" {
+        statement.field("definition")
+    } else {
+        None
+    }
 }
 
 /// Returns true for Python comment node kinds.
@@ -635,14 +647,20 @@ pub struct PythonFunctionSignature<'a> {
 }
 
 impl PythonFunctionSignature<'_> {
-    /// Returns true if the function is exempt from signature annotation rules (data-model dunder
-    /// methods other than `__init__`/`__new__`, functions decorated with `@override`, `@overload`,
-    /// `@abstractmethod`, or `@fixture`, or methods on `Protocol` or `ABC` classes).
+    /// Returns true if the function's signature is imposed from outside: a data-model dunder
+    /// method other than `__init__`, `__new__`, and `__call__`, or a function decorated with
+    /// `@override`, `@overload`, `@abstractmethod`, `@fixture`, or `@<function>.register`.
+    #[must_use]
+    pub fn has_imposed_signature(&self) -> bool {
+        is_exempt_dunder_method(&self.name) || has_exempt_signature_decorator(&self.node)
+    }
+
+    /// Returns true if the function is exempt from signature annotation rules: its signature
+    /// is imposed ([`Self::has_imposed_signature`]) or it is a method of a `Protocol` or `ABC`
+    /// class.
     #[must_use]
     pub fn is_exempt_from_signature_rules(&self) -> bool {
-        is_exempt_dunder_method(&self.name)
-            || has_exempt_signature_decorator(&self.node)
-            || is_in_protocol_or_abc_class(&self.node)
+        self.has_imposed_signature() || is_in_protocol_or_abc_class(&self.node)
     }
 
     /// Returns true if the function is exempt from body-usage parameter rules (signature-exempt
@@ -854,15 +872,16 @@ pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSigna
     signatures
 }
 
-/// Controls how deeply [`collect_mutable_collection_types`] traverses a Python type annotation.
+/// Controls how deeply [`collect_type_constructors`] traverses a Python type annotation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnnotationTraversalDepth {
+enum AnnotationTraversalDepth {
     /// Unwraps only transparent wrappers (`|`, `Optional`, `Union`, `Annotated[T, ...]`,
     /// `ClassVar[T]`, `Final[T]`, `Required[T]`, `NotRequired[T]`, `ReadOnly[T]`).
     TransparentWrappersOnly,
-    /// Unwraps transparent wrappers and recurses into known covariant generic type parameter
-    /// positions (`Sequence[T]`, `Mapping[K, V]` value `V`, `tuple[...]`, `Awaitable[T]`,
-    /// `Callable[[...], Ret]` return `Ret`, `Generator`/`Coroutine` yield & return, etc.).
+    /// Unwraps transparent wrappers and recurses into covariant type parameter positions of
+    /// read-only containers (`Sequence[T]`, `Mapping[K, V]` value `V`, `tuple[...]`,
+    /// `Awaitable[T]`, `Callable[[...], Ret]` return `Ret`, `Generator`/`Coroutine` yield and
+    /// return). Invariant containers (`list`, `dict`, `set`, `Mutable*`) are not entered.
     CovariantPositions,
 }
 
@@ -892,10 +911,7 @@ fn is_std_type_constructor(path: &str, terminal: &str, targets: &[&str]) -> bool
 fn is_concrete_collection_constructor(path: &str, terminal: &str) -> bool {
     match terminal {
         "list" | "List" | "dict" | "Dict" | "set" => is_std_type_constructor_prefix(path, terminal),
-        "Set" => matches!(
-            path,
-            "Set" | "typing.Set" | "typing_extensions.Set" | "builtins.Set"
-        ),
+        "Set" => matches!(path, "Set" | "typing.Set" | "typing_extensions.Set"),
         _ => false,
     }
 }
@@ -987,9 +1003,6 @@ const SINGLE_ARG_COVARIANT_CONTAINERS: &[&str] = &[
     "Set",
     "frozenset",
     "FrozenSet",
-    "list",
-    "List",
-    "set",
 ];
 
 /// Recursively collects matching type constructor paths from `node` according to `depth`.
@@ -1063,7 +1076,7 @@ fn collect_type_constructors_raw<F>(
                             collect_type_constructors_raw(arg, depth, predicate, out);
                         }
                     }
-                    "Mapping" | "dict" | "Dict" | "Callable" => {
+                    "Mapping" | "Callable" => {
                         if let Some(second_arg) = type_args.get(1) {
                             collect_type_constructors_raw(second_arg, depth, predicate, out);
                         }
@@ -1125,23 +1138,27 @@ pub fn collect_concrete_collection_types(
     )
 }
 
-/// Collects abstract mutable collection constructors (`MutableSequence`, `MutableMapping`, `MutableSet`)
-/// from `type_node` according to `depth`.
+/// Collects abstract mutable collection constructors (`MutableSequence`, `MutableMapping`,
+/// `MutableSet`) from `type_node`, unwrapping only transparent wrappers.
+///
+/// Nested positions (`Sequence[MutableMapping[K, V]]`) are not collected: mutation is only
+/// tracked on the annotated value itself, so a nested mutable type cannot be judged.
 #[must_use]
-pub fn collect_mutable_collection_types(
-    type_node: &AstNode<'_>,
-    depth: AnnotationTraversalDepth,
-) -> Vec<String> {
-    collect_type_constructors(type_node, depth, |full_path, terminal| {
-        matches!(
-            terminal,
-            "MutableSequence" | "MutableMapping" | "MutableSet"
-        ) && is_std_type_constructor_prefix(full_path, terminal)
-    })
+pub fn collect_mutable_collection_types(type_node: &AstNode<'_>) -> Vec<String> {
+    collect_type_constructors(
+        type_node,
+        AnnotationTraversalDepth::TransparentWrappersOnly,
+        |full_path, terminal| {
+            matches!(
+                terminal,
+                "MutableSequence" | "MutableMapping" | "MutableSet"
+            ) && is_std_type_constructor_prefix(full_path, terminal)
+        },
+    )
 }
 
 /// Collects specific read-only abstract collection constructors (`Sequence`, `Collection`)
-/// from `type_node`, unwrapping only transparent wrappers (`AnnotationTraversalDepth::TransparentWrappersOnly`).
+/// from `type_node`, unwrapping only transparent wrappers.
 #[must_use]
 pub fn collect_specific_collection_types(type_node: &AstNode<'_>) -> Vec<String> {
     collect_type_constructors(
@@ -1154,22 +1171,46 @@ pub fn collect_specific_collection_types(type_node: &AstNode<'_>) -> Vec<String>
     )
 }
 
+/// Returns the read-only `collections.abc` replacements of collection `type_paths`, joined with `", "`.
+///
+/// `list` and `MutableSequence` become `collections.abc.Sequence`, `dict` and `MutableMapping`
+/// become `collections.abc.Mapping`, and `set` and `MutableSet` become `collections.abc.Set`.
+/// Duplicates are removed.
+#[must_use]
+pub fn read_only_collection_replacements(type_paths: &[String]) -> String {
+    let mut replacements: Vec<&str> = Vec::new();
+    for type_path in type_paths {
+        let terminal = type_path.rsplit('.').next().unwrap_or(type_path);
+        let replacement = match terminal {
+            "dict" | "Dict" | "MutableMapping" => "collections.abc.Mapping",
+            "set" | "Set" | "MutableSet" => "collections.abc.Set",
+            _ => "collections.abc.Sequence",
+        };
+        if !replacements.contains(&replacement) {
+            replacements.push(replacement);
+        }
+    }
+    replacements.join(", ")
+}
+
 /// Returns true if `func_name` is a Python Data Model dunder method with a fixed signature
-/// (all `__*__` methods except constructors `__init__` and `__new__`).
+/// (all `__*__` methods except constructors `__init__` and `__new__`, and `__call__`, whose
+/// signature is designed by the class author).
 fn is_exempt_dunder_method(func_name: &str) -> bool {
     func_name.starts_with("__")
         && func_name.ends_with("__")
         && func_name.len() > 4
-        && !matches!(func_name, "__init__" | "__new__")
+        && !matches!(func_name, "__init__" | "__new__" | "__call__")
 }
 
 /// Returns true if `func_node` is decorated with `@override`, `@overload`, `@abstractmethod`,
-/// or `@fixture` (`@pytest.fixture`).
+/// `@fixture` (`@pytest.fixture`), or `@<function>.register` (`functools.singledispatch`
+/// implementations, which dispatch on their annotations).
 fn has_exempt_signature_decorator(func_node: &AstNode<'_>) -> bool {
     has_decorator(func_node, |terminal| {
         matches!(
             terminal,
-            "override" | "overload" | "abstractmethod" | "fixture"
+            "override" | "overload" | "abstractmethod" | "fixture" | "register"
         )
     })
 }
@@ -1249,9 +1290,10 @@ fn is_stub_statement_raw(statement: &RawNode<'_>) -> bool {
             .is_some_and(|child| child.kind() == "ellipsis"),
         "raise_statement" => statement
             .children()
-            .any(|child| match child.kind().as_ref() {
-                "identifier" => child.text() == "NotImplementedError",
-                "call" => child.field("function").is_some_and(|func| {
+            .find(|child| child.is_named() && !child.is_extra())
+            .is_some_and(|operand| match operand.kind().as_ref() {
+                "identifier" => operand.text() == "NotImplementedError",
+                "call" => operand.field("function").is_some_and(|func| {
                     let (_, terminal) = resolve_path_and_terminal_raw(&func);
                     terminal == "NotImplementedError"
                 }),
@@ -1269,9 +1311,7 @@ fn is_stub_function_body(func_node: &AstNode<'_>) -> bool {
     };
     let statements: Vec<_> = body
         .children()
-        .filter(|child| {
-            child.is_named() && !child.is_extra() && !is_comment_kind(child.kind().as_ref())
-        })
+        .filter(|child| child.is_named() && !child.is_extra())
         .collect();
     let remaining = if statements.first().is_some_and(is_docstring_statement_raw) {
         &statements[1..]
@@ -1669,38 +1709,50 @@ fn called_terminal_name(node: &RawNode<'_>) -> Option<String> {
 
 /// Collects function or method names whose return values are mutated in place in `file`.
 ///
-/// Matches direct call mutations (`fn().append(...)`, `fn()[0] = 1`) and local bindings (`buf = fn(); buf.append(...)`).
+/// Matches direct call mutations (`fn().append(...)`, `fn()[0] = 1`) and local bindings
+/// (`buf = fn(); buf.append(...)`, `(buf := fn())`). A binding only counts in the function
+/// (or module) scope that assigns it. Callees are matched by name only, so a mutated
+/// `obj.get()` result also exempts an unrelated function named `get`.
 #[must_use]
-pub fn collect_locally_mutated_return_functions(
-    file: &ParsedFile,
-) -> std::collections::HashSet<String> {
-    let mut mutated_functions = std::collections::HashSet::new();
-    let mut bindings_to_callee: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    let mut mutated_identifiers: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+pub fn collect_locally_mutated_return_functions(file: &ParsedFile) -> HashSet<String> {
+    // A binding is keyed by its enclosing function (`None` at module level) and its name.
+    type ScopedName = (Option<usize>, String);
+    let enclosing_function = |node: &RawNode<'_>| {
+        node.ancestors()
+            .find(|ancestor| ancestor.kind() == "function_definition")
+            .map(|function_node| function_node.range().start)
+    };
+    let mut mutated_functions = HashSet::new();
+    let mut bindings_to_callee: HashMap<ScopedName, String> = HashMap::new();
+    let mut mutated_identifiers: HashSet<ScopedName> = HashSet::new();
 
     for node in file.grep.root().dfs() {
-        if node.kind() == "assignment"
-            && let (Some(left), Some(right)) = (node.field("left"), node.field("right"))
-            && left.kind() == "identifier"
-            && let Some(callee_name) = called_terminal_name(&right)
+        let binding = match node.kind().as_ref() {
+            "assignment" => node.field("left").zip(node.field("right")),
+            "named_expression" => node.field("name").zip(node.field("value")),
+            _ => None,
+        };
+        if let Some((target, value)) = binding
+            && target.kind() == "identifier"
+            && let Some(callee_name) = called_terminal_name(&value)
         {
-            bindings_to_callee.insert(left.text().into_owned(), callee_name);
+            let scoped_name = (enclosing_function(&node), target.text().into_owned());
+            bindings_to_callee.insert(scoped_name, callee_name);
         }
 
         if let Some(receiver) = in_place_mutated_receiver(&node) {
             if let Some(callee_name) = called_terminal_name(&receiver) {
                 mutated_functions.insert(callee_name);
             } else if receiver.kind() == "identifier" {
-                mutated_identifiers.insert(receiver.text().into_owned());
+                mutated_identifiers
+                    .insert((enclosing_function(&receiver), receiver.text().into_owned()));
             }
         }
     }
 
-    for variable_name in mutated_identifiers {
-        if let Some(callee_name) = bindings_to_callee.remove(&variable_name) {
-            mutated_functions.insert(callee_name);
+    for scoped_name in &mutated_identifiers {
+        if let Some(callee_name) = bindings_to_callee.get(scoped_name) {
+            mutated_functions.insert(callee_name.clone());
         }
     }
 
@@ -1724,7 +1776,7 @@ pub struct PythonAnnotatedAttribute<'a> {
 fn collect_mutated_class_attr_names_rec(
     node: &RawNode<'_>,
     class_name: &str,
-    out: &mut std::collections::HashSet<String>,
+    out: &mut HashSet<String>,
 ) {
     if node.kind() == "class_definition" {
         return;
@@ -1749,7 +1801,7 @@ fn collect_mutated_class_attr_names_rec(
 fn collect_init_annotated_attrs_rec<'a>(
     node: &RawNode<'a>,
     class_name: &str,
-    mutated_attrs: &std::collections::HashSet<String>,
+    mutated_attrs: &HashSet<String>,
     out: &mut Vec<PythonAnnotatedAttribute<'a>>,
 ) {
     if matches!(
@@ -1801,7 +1853,7 @@ pub fn collect_public_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotated
         };
         let class_name = name_node.text().into_owned();
 
-        let mut mutated_attrs = std::collections::HashSet::new();
+        let mut mutated_attrs = HashSet::new();
         for child in body.children() {
             collect_mutated_class_attr_names_rec(&child, &class_name, &mut mutated_attrs);
         }
@@ -2091,7 +2143,10 @@ fn check_parameter_mutated_or_escaping_rec(node: &RawNode<'_>, parameter_name: &
     if matches!(node.kind().as_ref(), "function_definition" | "lambda")
         && scope_shadows_parameter(node, parameter_name)
     {
-        return false;
+        // Defaults are evaluated in the enclosing scope; only the body is shadowed.
+        return node.field("parameters").is_some_and(|params| {
+            check_parameter_mutated_or_escaping_rec(&params, parameter_name)
+        });
     }
     if node.kind() == "identifier"
         && node.text() == parameter_name
@@ -2254,6 +2309,10 @@ fn analyze_capability_rec(
     match node.kind().as_ref() {
         "function_definition" | "lambda" => {
             if scope_shadows_parameter(node, parameter_name) {
+                // Defaults are evaluated in the enclosing scope; only the body is shadowed.
+                if let Some(params) = node.field("parameters") {
+                    analyze_capability_rec(&params, parameter_name, loop_or_closure_depth, tracker);
+                }
                 return;
             }
             for child in node.children() {
@@ -2814,6 +2873,11 @@ mod tests {
     #[case::a17_abstract_collections_pass("def f(a: Sequence[int], b: Mapping[str, int], c: AbstractSet[str], d: collections.abc.Set[str]) -> None: pass", &[&[][..], &[][..], &[][..], &[][..]])]
     #[case::a17b_unaliased_collections_abc_set_import("from collections.abc import Set\ndef f(a: Set[str], b: typing.Set[str]) -> None: pass", &[&[][..], &["typing.Set"][..]])]
     #[case::a18_immutable_builtins_pass("def f(a: tuple[int, ...], b: frozenset[str], c: bytes, d: str) -> None: pass", &[&[][..], &[][..], &[][..], &[][..]])]
+    #[case::a19_invariant_concrete_outer_not_recursed("def f(x: list[set[str]], y: dict[str, list[int]]) -> None: pass", &[&["list"][..], &["dict"][..]])]
+    #[case::a20_typed_dict_qualifiers("def f(x: NotRequired[list[int]], y: ReadOnly[dict[str, int]]) -> None: pass", &[&["list"][..], &["dict"][..]])]
+    #[case::a21_generator_yield_and_return_positions("def f(a: Generator[list[int], set[str], dict[str, int]], b: Coroutine[None, set[str], list[int]], c: AsyncGenerator[list[int], set[str]]) -> None: pass", &[&["list", "dict"][..], &["list"][..], &["list"][..]])]
+    #[case::a22_iterator_and_abstract_set_covariant("def f(a: Iterable[list[int]], b: Iterator[dict[str, int]], c: AbstractSet[frozenset[int]]) -> None: pass", &[&["list"][..], &["dict"][..], &[][..]])]
+    #[case::a23_qualified_covariant_outer("def f(x: collections.abc.Sequence[list[int]], y: typing.Mapping[str, set[str]]) -> None: pass", &[&["list"][..], &["set"][..]])]
     fn test_collect_concrete_collection_types_matrix_a(
         #[case] source: &str,
         #[case] expected_per_param: &[&[&str]],
@@ -2858,6 +2922,10 @@ mod tests {
         true
     )]
     #[case::real_body("def f(x: list[int]) -> int:\n    return len(x)", false)]
+    #[case::raise_from_not_implemented_cause(
+        "def f(x: list[int]) -> None:\n    raise ValueError() from NotImplementedError",
+        false
+    )]
     fn test_is_stub_function_body(#[case] source: &str, #[case] expected: bool) {
         let file = ParsedFile::new(source, SupportLang::Python);
         let sigs = extract_function_signatures(&file);
@@ -2883,5 +2951,203 @@ mod tests {
         let file = ParsedFile::new(source, SupportLang::Python);
         let sigs = extract_function_signatures(&file);
         assert_eq!(is_in_protocol_or_abc_class(&sigs[0].node), expected);
+    }
+
+    /// Parses `source` and applies `collect` to the annotation of its first function's first parameter.
+    fn collect_from_first_annotation(
+        source: &str,
+        collect: fn(&AstNode<'_>) -> Vec<String>,
+    ) -> Vec<String> {
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let sigs = extract_function_signatures(&file);
+        let type_node = sigs[0].parameters[0]
+            .type_node
+            .as_ref()
+            .expect("param should be typed");
+        collect(type_node)
+    }
+
+    #[rstest::rstest]
+    #[case::unqualified("def f(x: MutableSequence[int]): pass", &["MutableSequence"])]
+    #[case::qualified("def f(x: collections.abc.MutableMapping[str, int]): pass", &["collections.abc.MutableMapping"])]
+    #[case::optional_unwrapped("def f(x: typing.MutableSet[int] | None): pass", &["typing.MutableSet"])]
+    #[case::nested_not_collected("def f(x: Sequence[MutableSequence[int]]): pass", &[])]
+    #[case::unknown_module_ignored("def f(x: mylib.MutableSequence[int]): pass", &[])]
+    fn test_collect_mutable_collection_types(#[case] source: &str, #[case] expected: &[&str]) {
+        assert_eq!(
+            collect_from_first_annotation(source, collect_mutable_collection_types),
+            expected
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::sequence("def f(x: Sequence[int]): pass", &["Sequence"])]
+    #[case::qualified_collection("def f(x: typing.Collection[int]): pass", &["typing.Collection"])]
+    #[case::optional_unwrapped("def f(x: Optional[collections.abc.Sequence[int]]): pass", &["collections.abc.Sequence"])]
+    #[case::nested_not_collected("def f(x: Mapping[str, Sequence[int]]): pass", &[])]
+    #[case::iterable_not_collected("def f(x: Iterable[int]): pass", &[])]
+    fn test_collect_specific_collection_types(#[case] source: &str, #[case] expected: &[&str]) {
+        assert_eq!(
+            collect_from_first_annotation(source, collect_specific_collection_types),
+            expected
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::sequence_kinds(&["list", "typing.List", "MutableSequence"], "collections.abc.Sequence")]
+    #[case::mapping_kinds(&["dict", "Dict", "collections.abc.MutableMapping"], "collections.abc.Mapping")]
+    #[case::set_kinds(&["set", "typing.Set", "MutableSet"], "collections.abc.Set")]
+    #[case::mixed_in_order(&["dict", "list", "dict"], "collections.abc.Mapping, collections.abc.Sequence")]
+    fn test_read_only_collection_replacements(#[case] type_paths: &[&str], #[case] expected: &str) {
+        let type_paths: Vec<String> = type_paths.iter().map(|path| (*path).to_string()).collect();
+        assert_eq!(read_only_collection_replacements(&type_paths), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::unused("def f(x):\n    return 1", ParameterCollectionCapability::Unused)]
+    #[case::single_for(
+        "def f(x):\n    for i in x:\n        print(i)",
+        ParameterCollectionCapability::Iterable
+    )]
+    #[case::single_comprehension(
+        "def f(x):\n    return [i for i in x]",
+        ParameterCollectionCapability::Iterable
+    )]
+    #[case::single_consuming_builtin(
+        "def f(x):\n    return sum(x)",
+        ParameterCollectionCapability::Iterable
+    )]
+    #[case::len(
+        "def f(x):\n    return len(x)",
+        ParameterCollectionCapability::Collection
+    )]
+    #[case::membership(
+        "def f(x):\n    return 1 in x",
+        ParameterCollectionCapability::Collection
+    )]
+    #[case::truthiness(
+        "def f(x):\n    if x:\n        return 1",
+        ParameterCollectionCapability::Collection
+    )]
+    #[case::negation(
+        "def f(x):\n    return not x",
+        ParameterCollectionCapability::Collection
+    )]
+    #[case::two_passes(
+        "def f(x):\n    return sum(x) + max(x)",
+        ParameterCollectionCapability::Collection
+    )]
+    #[case::iteration_inside_loop(
+        "def f(x):\n    for _ in range(3):\n        for i in x:\n            print(i)",
+        ParameterCollectionCapability::Collection
+    )]
+    #[case::index("def f(x):\n    return x[0]", ParameterCollectionCapability::Sequence)]
+    #[case::reversed(
+        "def f(x):\n    return list(reversed(x))",
+        ParameterCollectionCapability::Sequence
+    )]
+    #[case::index_method(
+        "def f(x):\n    return x.index(1)",
+        ParameterCollectionCapability::Sequence
+    )]
+    #[case::pattern_matching(
+        "def f(x):\n    match x:\n        case [a]:\n            return a",
+        ParameterCollectionCapability::Sequence
+    )]
+    #[case::passed_to_unknown_function(
+        "def f(x):\n    return helper(x)",
+        ParameterCollectionCapability::Sequence
+    )]
+    #[case::shadowing_nested_def_default(
+        "def f(x):\n    def g(x=x[0]):\n        return x\n    return g",
+        ParameterCollectionCapability::Sequence
+    )]
+    fn test_analyze_parameter_collection_capability(
+        #[case] source: &str,
+        #[case] expected: ParameterCollectionCapability,
+    ) {
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let sigs = extract_function_signatures(&file);
+        assert_eq!(
+            analyze_parameter_collection_capability(&sigs[0].node, "x"),
+            expected
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::method_mutation("def f(x):\n    x.append(1)", true)]
+    #[case::subscript_write("def f(x):\n    x[0] = 1", true)]
+    #[case::subscript_delete("def f(x):\n    del x[0]", true)]
+    #[case::augmented_assignment("def f(x):\n    x += [1]", true)]
+    #[case::alias("def f(x):\n    y = x\n    return len(y)", true)]
+    #[case::stored_in_container("def f(x):\n    y = [x]\n    return len(y)", true)]
+    #[case::returned("def f(x):\n    return x", true)]
+    #[case::yielded("def f(x):\n    yield x", true)]
+    #[case::passed_to_unknown_function("def f(x):\n    helper(x)", true)]
+    #[case::passed_to_method("def f(x):\n    registry.register(x)", true)]
+    #[case::mutated_in_closure("def f(x):\n    def g():\n        x.append(1)\n    g()", true)]
+    #[case::shadowing_nested_def_default(
+        "def f(x):\n    def g(x=x):\n        x.append(1)\n    g()",
+        true
+    )]
+    #[case::read_only_iteration("def f(x):\n    for i in x:\n        print(i)", false)]
+    #[case::read_only_len("def f(x):\n    return len(x)", false)]
+    #[case::shadowed_by_nested_def(
+        "def f(x):\n    def g(x):\n        x.append(1)\n    g([])",
+        false
+    )]
+    #[case::shadowed_by_lambda(
+        "def f(x):\n    g = lambda x: x.append(1)\n    return len(x)",
+        false
+    )]
+    fn test_is_parameter_mutated_or_escaping(#[case] source: &str, #[case] expected: bool) {
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let sigs = extract_function_signatures(&file);
+        assert_eq!(
+            is_parameter_mutated_or_escaping(&sigs[0].node, "x"),
+            expected
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::direct_call_mutation("make().append(1)", &["make"])]
+    #[case::assigned_then_mutated("def use():\n    items = make()\n    items.append(1)", &["make"])]
+    #[case::walrus_then_mutated("def use():\n    if (items := make()):\n        items.append(1)", &["make"])]
+    #[case::subscript_write("def use():\n    items = make()\n    items[0] = 1", &["make"])]
+    #[case::read_only_use("def use():\n    items = make()\n    return len(items)", &[])]
+    #[case::binding_in_other_function("def a():\n    items = make()\ndef b():\n    items.append(1)", &[])]
+    fn test_collect_locally_mutated_return_functions(
+        #[case] usage: &str,
+        #[case] expected: &[&str],
+    ) {
+        let source = format!("def make():\n    return []\n{usage}");
+        let file = ParsedFile::new(&source, SupportLang::Python);
+        let expected: HashSet<String> = expected.iter().map(|name| (*name).to_string()).collect();
+        assert_eq!(collect_locally_mutated_return_functions(&file), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::class_level("class C:\n    items: list[int]", &[("items", false)])]
+    #[case::private_skipped("class C:\n    _items: list[int]", &[])]
+    #[case::init_attribute("class C:\n    def __init__(self):\n        self.items: list[int] = []", &[("items", false)])]
+    #[case::self_mutation("class C:\n    items: list[int]\n    def add(self):\n        self.items.append(1)", &[("items", true)])]
+    #[case::cls_mutation("class C:\n    items: list[int]\n    @classmethod\n    def add(cls):\n        cls.items.append(1)", &[("items", true)])]
+    #[case::class_name_mutation("class C:\n    items: list[int]\n    def add(self):\n        C.items.append(1)", &[("items", true)])]
+    #[case::subscript_delete("class C:\n    items: list[int]\n    def pop(self):\n        del self.items[0]", &[("items", true)])]
+    #[case::protocol_skipped("class P(Protocol):\n    items: list[int]", &[])]
+    fn test_collect_public_class_attributes(
+        #[case] source: &str,
+        #[case] expected: &[(&str, bool)],
+    ) {
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let actual: Vec<(String, bool)> = collect_public_class_attributes(&file)
+            .into_iter()
+            .map(|attribute| (attribute.name, attribute.is_mutated_in_class))
+            .collect();
+        let expected: Vec<(String, bool)> = expected
+            .iter()
+            .map(|(name, mutated)| ((*name).to_string(), *mutated))
+            .collect();
+        assert_eq!(actual, expected);
     }
 }

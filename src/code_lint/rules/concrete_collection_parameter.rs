@@ -3,7 +3,7 @@
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     PythonParameterKind, collect_concrete_collection_types, extract_function_signatures,
-    has_unaliased_collections_abc_set_import,
+    has_unaliased_collections_abc_set_import, read_only_collection_replacements,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
@@ -15,9 +15,9 @@ use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Parameter `{name}` of `{function}` is annotated with concrete collection type `{expression}` (`{token}`).",
+    summary: "Parameter `{name}` of `{function}` has annotation `{expression}`, which contains concrete collection type `{token}`.",
     rationale: "Concrete mutable collection types such as `list`, `dict`, and `set` are invariant in their type arguments and reject read-only inputs such as `tuple`, `frozenset`, or subtype sequences.",
-    suggestion: "Replace `{token}` in `{name}` with a read-only abstract collection from `collections.abc` (`Sequence`, `Mapping`, or `AbstractSet`), or with `MutableSequence`, `MutableMapping`, or `MutableSet` when `{function}` mutates `{name}` in place.",
+    suggestion: "Replace `{token}` in `{name}` with the most general `collections.abc` type that supports every operation `{function}` performs on `{name}`, such as `{replacement}` for read-only access or its `Mutable` counterpart for in-place mutation.",
 };
 
 /// The rule's declaration.
@@ -44,21 +44,27 @@ pub const RULE: CodeRule = CodeRule {
                            (`Sequence[list[T]]`, `Mapping[K, list[V]]`, `tuple[...]`, \
                            `Awaitable[...]`, and `Callable` return types). Unqualified `Set` is \
                            exempt only when `from collections.abc import Set` is present in the \
-                           file. Contravariant `Callable` parameter lists and invariant \
-                           `MutableSequence` or `MutableMapping` type arguments are not \
-                           flagged. Dunder methods other than `__init__` and `__new__`, methods \
-                           on `Protocol` or `ABC` classes, and functions decorated with \
-                           `@override`, `@overload`, `@abstractmethod`, or `@fixture` are exempt.",
+                           file. Contravariant `Callable` parameter lists and the type arguments \
+                           of invariant containers (`list`, `dict`, `MutableSequence`, \
+                           `MutableMapping`) are not inspected. Dunder methods other than \
+                           `__init__`, `__new__`, and `__call__`, methods on `Protocol` or `ABC` \
+                           classes, and functions decorated with `@override`, `@overload`, \
+                           `@abstractmethod`, `@fixture`, or `@<function>.register` are exempt. \
+                           String annotations and module aliases (`import typing as t`) are not \
+                           resolved.",
             why_is_this_bad: "In Python's type system, `list`, `dict`, and `set` are invariant \
                               in their type parameters and require a mutable concrete container \
                               at call sites. A function annotated with `items: list[str]` \
                               rejects callers holding a `tuple[str, ...]`, a `Sequence[str]` \
                               parameter, or a `list[SubStr]`, forcing defensive `list(...)` \
                               copies.\n\n\
-                              Annotate read-only parameters with `Sequence`, `Mapping`, or \
-                              `AbstractSet` (`from collections.abc import Set as AbstractSet`), \
-                              and in-place mutating parameters with `MutableSequence`, \
-                              `MutableMapping`, or `MutableSet`.",
+                              Choose the annotation from what the function does with the \
+                              parameter: `Iterable` for a single pass, `Collection` for `len()`, \
+                              `in`, or several passes, `Sequence`, `Mapping`, or `Set` (imported \
+                              as `AbstractSet`) for indexed or keyed reads, and their `Mutable` \
+                              counterparts for in-place mutation. The message names the read-only \
+                              counterpart of the flagged type as a starting point; it does not \
+                              inspect how the parameter is used.",
             references: &[Reference {
                 title: "PEP 585: Type Hinting Generics In Standard Collections",
                 url: "https://peps.python.org/pep-0585/",
@@ -102,6 +108,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                 continue;
             }
             let token = matched.join(", ");
+            let replacement = read_only_collection_replacements(&matched);
             let expression = type_node.text();
             diagnostics.push(rule.diagnostic_at_node(
                 path,
@@ -111,6 +118,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                     ("function", &signature.name),
                     ("expression", expression.as_ref()),
                     ("token", &token),
+                    ("replacement", &replacement),
                 ],
             ));
         }
@@ -179,33 +187,43 @@ crate::test_utils::rule_test!(
                     def process(*args: list[int], **kwargs: dict[str, int]) -> None:
                         pass
                 "#,
-                override_overload_abstract_fixture_exempt => r#"
-                    from abc import abstractmethod
-                    from typing import overload, override
-                    import pytest
+                override_exempt => r#"
+                    from typing import override
 
-                    class Service:
+                    class Service(Base):
                         @override
                         def handle(self, items: list[int]) -> None:
                             pass
+                "#,
+                abstractmethod_exempt => r#"
+                    from abc import abstractmethod
 
+                    class Service:
                         @abstractmethod
                         def compute(self, table: dict[str, int]) -> None:
                             pass
+                "#,
+                overload_exempt => r#"
+                    from typing import overload
 
                     @overload
                     def parse(raw: list[str]) -> int: ...
+                "#,
+                pytest_fixture_exempt => r#"
+                    import pytest
 
                     @pytest.fixture
                     def sample_data(seed: list[int]) -> None:
                         pass
                 "#,
-                protocol_and_abc_classes_exempt => r#"
-                    import abc
+                protocol_class_exempt => r#"
                     from typing import Protocol
 
                     class Repository(Protocol):
                         def save_all(self, records: list[str]) -> None: ...
+                "#,
+                abc_class_exempt => r#"
+                    import abc
 
                     class BaseWorker(abc.ABC):
                         def enqueue(self, tasks: list[str]) -> None:
@@ -218,6 +236,27 @@ crate::test_utils::rule_test!(
 
                         def __contains__(self, item: set[str]) -> bool:
                             return False
+                "#,
+                singledispatch_register_exempt => r#"
+                    from functools import singledispatch
+
+                    @singledispatch
+                    def render(value: object) -> str:
+                        return str(value)
+
+                    @render.register
+                    def _(value: list) -> str:
+                        return ", ".join(value)
+                "#,
+                known_gap_string_annotation_not_parsed => r#"
+                    def process(items: "list[int]") -> None:
+                        pass
+                "#,
+                known_gap_typing_module_alias_not_resolved => r#"
+                    import typing as t
+
+                    def process(items: t.List[int]) -> None:
+                        pass
                 "#,
             ],
             fail: [
@@ -268,6 +307,23 @@ crate::test_utils::rule_test!(
                         def __init__(self, items: list[str]) -> None:
                             self._items = items
                 "# => "list[str]",
+                call_dunder_is_checked => r#"
+                    class Pipeline:
+                        def __call__(self, items: list[int]) -> None:
+                            pass
+                "# => "list[int]",
+                new_constructor_is_checked => r#"
+                    class Order:
+                        def __new__(cls, items: list[str]) -> "Order":
+                            return super().__new__(cls)
+                "# => "list[str]",
+                aliased_collections_abc_set_import_still_flags_typing_set => r#"
+                    from collections.abc import Set as AbstractSet
+                    from typing import Set
+
+                    def process(tags: Set[str]) -> None:
+                        pass
+                "# => "Set[str]",
             ],
         },
     }

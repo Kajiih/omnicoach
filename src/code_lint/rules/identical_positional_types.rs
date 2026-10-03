@@ -1,9 +1,9 @@
 //! Enforces keyword-only parameters when a function has multiple positional parameters of identical type (`identical-positional-types`).
 
+use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    PythonFunctionSignature, PythonParameterInfo, extract_function_signatures, has_decorator,
+    PythonFunctionSignature, PythonParameterInfo, extract_function_signatures,
 };
-use crate::code_lint::ast::{AstNode, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -47,9 +47,10 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                            `*args`), `*args` and `**kwargs` are not counted. Annotations are \
                            compared as written, so `dict[str, int]` and `dict[str, float]` \
                            differ, and unannotated parameters count toward the minimum but never \
-                           match each other. Dunder methods other than `__init__` and \
-                           `__new__`, and functions decorated with `@override`, `@overload`, \
-                           `@abstractmethod` or `@fixture`, are exempt because their signature \
+                           match each other. Dunder methods other than `__init__`, `__new__` \
+                           and `__call__`, and functions decorated with `@override`, \
+                           `@overload`, `@abstractmethod`, `@fixture` or `@<function>.register` \
+                           (`functools.singledispatch`), are exempt because their signature \
                            is imposed from outside.",
             why_is_this_bad: "When two positional parameters have the same type, a call that \
                               swaps them, such as `transfer(target_id, source_id, amount)`, \
@@ -82,25 +83,6 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
     target: RuleTarget::SourceOnly,
     check: check_file,
 };
-
-/// Returns true if `func_node` is a Python Data Model dunder method with a fixed runtime positional signature
-/// (all `__*__` methods except constructors `__init__` and `__new__`).
-fn is_exempt_dunder(func_name: &str) -> bool {
-    func_name.starts_with("__")
-        && func_name.ends_with("__")
-        && func_name.len() > 4
-        && !matches!(func_name, "__init__" | "__new__")
-}
-
-/// Returns true if `func_node` is decorated with `@override`, `@overload`, `@abstractmethod`, or `@fixture`.
-fn has_exempt_decorator(func_node: &AstNode<'_>) -> bool {
-    has_decorator(func_node, |terminal| {
-        matches!(
-            terminal,
-            "override" | "overload" | "abstractmethod" | "fixture"
-        )
-    })
-}
 
 /// Groups typed positional parameters by type annotation and returns groups with `>= 2` parameters.
 fn collect_duplicate_type_groups(
@@ -135,7 +117,7 @@ fn check_function_signature(
 ) -> Option<Diagnostic> {
     let func_name = signature.name.as_str();
 
-    if is_exempt_dunder(func_name) || has_exempt_decorator(&signature.node) {
+    if signature.has_imposed_signature() {
         return None;
     }
 
@@ -250,6 +232,17 @@ crate::test_utils::rule_test!(
                         def reconcile(self, source: str, target: str, limit: int) -> None:
                             pass
                 "#,
+                decorator_singledispatch_register_exempt => r#"
+                    from functools import singledispatch
+
+                    @singledispatch
+                    def merge(left: object) -> None:
+                        pass
+
+                    @merge.register
+                    def _(left: str, right: str, limit: int) -> None:
+                        pass
+                "#,
                 distinct_positional_types => r#"
                     def process(user_id: str, count: int, ratio: float) -> None:
                         pass
@@ -278,6 +271,11 @@ crate::test_utils::rule_test!(
                         def __init__(self, host: str, port: int, api_key: str) -> None:
                             pass
                 "# => "__init__",
+                call_dunder_flagged => r#"
+                    class Transfer:
+                        def __call__(self, source_id: str, target_id: str, amount: int) -> None:
+                            pass
+                "# => "__call__",
             ],
         },
     }

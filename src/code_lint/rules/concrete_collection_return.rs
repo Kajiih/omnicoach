@@ -1,9 +1,9 @@
-//! Flags Python function return annotations that use concrete mutable collection types without an explanation (`concrete-collection-return`).
+//! Flags Python function return annotations that use concrete mutable collection types (`concrete-collection-return`).
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     collect_concrete_collection_types, extract_function_signatures,
-    has_unaliased_collections_abc_set_import,
+    has_unaliased_collections_abc_set_import, read_only_collection_replacements,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
@@ -15,9 +15,9 @@ use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Return annotation of `{function}` uses concrete collection type `{expression}` (`{token}`).",
+    summary: "Return annotation `{expression}` of `{function}` contains concrete collection type `{token}`.",
     rationale: "Returning an invariant concrete collection type such as `list`, `dict`, or `set` exposes mutability across the boundary and forces callers holding a `Sequence` or `Mapping` to copy before returning.",
-    suggestion: "Replace `{token}` in the return annotation of `{function}` with `Sequence`, `Mapping`, or `AbstractSet` from `collections.abc` (or `MutableSequence`, `MutableMapping`, or `MutableSet` when mutated by callers), or add a comment on `{function}` explaining why callers need a concrete collection.",
+    suggestion: "Replace `{token}` in the return annotation of `{function}` with the `collections.abc` type that states what callers may do with the result, such as `{replacement}` for a read-only result or its `Mutable` counterpart for a result callers mutate.",
 };
 
 /// The rule's declaration.
@@ -35,12 +35,12 @@ pub const RULE: CodeRule = CodeRule {
         },
         classification: Classification {
             topics: &[Topic::STATIC_TYPING],
-            precision: Precision::Heuristic,
+            precision: Precision::Exact,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Maintainability,
         },
         doc: RuleDoc {
-            summary: "Flags Python function return annotations using concrete mutable collection types such as `list`, `dict`, or `set` without an explanation.",
+            summary: "Flags Python function return annotations using concrete mutable collection types such as `list`, `dict`, or `set`.",
             what_it_does: "Flags functions and methods in Python source files (test files are \
                            not checked) whose return annotation uses a concrete mutable \
                            collection constructor (`list`, `dict`, `set`, `List`, `Dict`, `Set`, \
@@ -49,21 +49,26 @@ pub const RULE: CodeRule = CodeRule {
                            `Annotated`) and covariant container positions (`Sequence[list[T]]`, \
                            `Mapping[K, list[V]]`, `Awaitable[list[T]]`). Unqualified `Set` is \
                            exempt only when `from collections.abc import Set` is present in the \
-                           file. Functions whose header carries a substantive explanation \
-                           comment (under the default `require-explanation` mode) are not \
-                           flagged. Dunder methods other than `__init__` and `__new__`, methods \
-                           on `Protocol` or `ABC` classes, and functions decorated with \
-                           `@override`, `@overload`, `@abstractmethod`, or `@fixture` are exempt.",
+                           file. Dunder methods other than `__init__`, `__new__`, and \
+                           `__call__`, methods on `Protocol` or `ABC` \
+                           classes, and functions decorated with `@override`, `@overload`, \
+                           `@abstractmethod`, `@fixture`, or `@<function>.register` are exempt. \
+                           In `require-explanation` mode, a comment on the line above the header \
+                           (or above the first decorator) excuses the finding; it applies to the \
+                           whole header, so it also excuses other `require-explanation` findings \
+                           on the same header.",
             why_is_this_bad: "Returning a concrete `list`, `dict`, or `set` exposes internal \
                               state to in-place caller mutation and locks the implementation \
                               into returning an invariant mutable container even when it could \
                               otherwise return a cached `tuple`, a `Sequence` view, or a \
                               parameter directly without copying.\n\n\
-                              Annotate read-only return values with `Sequence`, `Mapping`, or \
-                              `AbstractSet` (`from collections.abc import Set as AbstractSet`), \
-                              and caller-mutated return values with `MutableSequence`, \
-                              `MutableMapping`, or `MutableSet` (or document why a concrete \
-                              collection is returned in a comment on the function header).",
+                              Choose the return type as a contract: `Sequence`, `Mapping`, or \
+                              `Set` (imported as `AbstractSet`) for read-only results, and their \
+                              `Mutable` counterparts for results callers are meant to mutate. A \
+                              concrete collection is a deliberate exception, for example when \
+                              callers rely on `list.sort()`. The message names the read-only \
+                              counterpart of the flagged type; it does not know how callers use \
+                              the result.",
             references: &[Reference {
                 title: "PEP 585: Type Hinting Generics In Standard Collections",
                 url: "https://peps.python.org/pep-0585/",
@@ -104,6 +109,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             continue;
         }
         let token = matched.join(", ");
+        let replacement = read_only_collection_replacements(&matched);
         let expression = return_type_node.text();
         diagnostics.push(rule.diagnostic_at_node(
             path,
@@ -112,6 +118,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                 ("function", &signature.name),
                 ("expression", expression.as_ref()),
                 ("token", &token),
+                ("replacement", &replacement),
             ],
         ));
     }
@@ -165,25 +172,35 @@ crate::test_utils::rule_test!(
                         def make_batch() -> list[int]:
                             return []
                 "#,
-                override_overload_abstract_protocol_dunder_exempt => r#"
-                    import abc
-                    from typing import Protocol, overload, override
+                protocol_class_exempt => r#"
+                    from typing import Protocol
 
                     class P(Protocol):
                         def items(self) -> list[str]: ...
+                "#,
+                abstractmethod_exempt => r#"
+                    import abc
 
-                    class Base(abc.ABC):
+                    class Base:
                         @abc.abstractmethod
                         def keys(self) -> set[str]:
                             pass
+                "#,
+                override_exempt => r#"
+                    from typing import override
 
                     class Impl(Base):
                         @override
                         def keys(self) -> set[str]:
                             return set()
-
+                "#,
+                data_model_dunder_exempt => r#"
+                    class Impl:
                         def __dir__(self) -> list[str]:
                             return []
+                "#,
+                overload_exempt => r#"
+                    from typing import overload
 
                     @overload
                     def fetch(x: int) -> list[int]: ...
