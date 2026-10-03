@@ -1,4 +1,4 @@
-//! Enforces that environment variables are only accessed at module/static scope or explicit configuration boundaries (`environment-variable-in-function`).
+//! Enforces that environment variables are only accessed at module/static scope or explicit configuration boundaries.
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};

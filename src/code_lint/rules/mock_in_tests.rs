@@ -167,7 +167,7 @@ crate::test_utils::rule_test!(
         Python => {
             pass: [
                 state_based_fake_repository => r#"
-                    class FakeUserRepository:
+                    class FakeUserRepository(UserRepository):
                         def __init__(self):
                             self.users = {}
 

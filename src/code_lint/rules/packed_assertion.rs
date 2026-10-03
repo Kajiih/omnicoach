@@ -1,4 +1,4 @@
-//! Flags compound boolean conditions (`&&`, `and`) and boolean tuple equality packing in test assertions (`packed-assertion`).
+//! Flags compound boolean conditions (`&&`, `and`) and boolean tuple equality packing in test assertions.
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};

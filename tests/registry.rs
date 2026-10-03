@@ -268,6 +268,25 @@ fn test_rule_files_use_rule_test() {
     }
 }
 
+/// The file name and the registry already carry a rule's name, so its module doc only describes it.
+#[test]
+fn test_rule_module_docs_do_not_repeat_the_rule_name() {
+    let command_sources = rule_sources("src/command_lint/rules");
+    for (path, source) in RULE_SOURCES.iter().chain(&command_sources) {
+        let module_doc: Vec<&str> = source
+            .lines()
+            .take_while(|line| line.starts_with("//!"))
+            .collect();
+        for name in declared_rule_names(source) {
+            assert!(
+                !module_doc.iter().any(|line| line.contains(name)),
+                "{} module doc repeats the rule name `{name}`",
+                path.display()
+            );
+        }
+    }
+}
+
 // The tests below enforce `docs/dev/naming_and_message_style_guide.md` §1, §2 and §3.
 
 /// Every rule the three registries declare.

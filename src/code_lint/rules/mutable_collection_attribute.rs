@@ -1,4 +1,4 @@
-//! Flags public Python class and instance attributes annotated with abstract mutable collection types that are never mutated in the class (`mutable-collection-attribute`).
+//! Flags public Python class and instance attributes annotated with abstract mutable collection types that are never mutated in the class.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{

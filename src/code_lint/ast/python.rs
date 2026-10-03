@@ -124,7 +124,10 @@ fn extract_from_pattern<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>)
             if let Some(name_node) = node.field("name") {
                 extract_from_pattern(&name_node, bindings);
             } else if let Some(first_child) = node.child(0)
-                && first_child.kind() == "identifier"
+                && matches!(
+                    first_child.kind().as_ref(),
+                    "identifier" | "list_splat_pattern" | "dictionary_splat_pattern"
+                )
             {
                 extract_from_pattern(&first_child, bindings);
             }
@@ -488,6 +491,34 @@ pub struct PythonBaseClass<'a> {
     pub name: String,
 }
 
+impl PythonBaseClass<'_> {
+    /// Base class name with any generic type argument subscript (`[...]`) stripped.
+    #[must_use]
+    pub fn unsubscripted_name(&self) -> &str {
+        self.name
+            .split_once('[')
+            .map_or(self.name.as_str(), |(base, _)| base.trim())
+    }
+
+    /// Returns true if this base class can represent a collaborator contract (an interface,
+    /// domain `Protocol`, `ABC`, or concrete base class) rather than a structural marker
+    /// (`object`, `Generic`, or `Protocol` itself).
+    #[must_use]
+    pub fn is_contract_base(&self) -> bool {
+        !matches!(
+            self.unsubscripted_name(),
+            "object"
+                | "builtins.object"
+                | "Generic"
+                | "typing.Generic"
+                | "typing_extensions.Generic"
+                | "Protocol"
+                | "typing.Protocol"
+                | "typing_extensions.Protocol"
+        )
+    }
+}
+
 /// Structured representation of a Python class definition.
 #[derive(Clone)]
 pub struct PythonClassInfo<'a> {
@@ -516,6 +547,27 @@ impl<'a> PythonClassInfo<'a> {
                     .strip_suffix(target)
                     .is_some_and(|prefix| prefix.ends_with('.'))
         })
+    }
+
+    /// Returns true if the class name starts with the word `Fake` (after any leading `_`),
+    /// such as `FakeClient`, `_FakeClient`, `Fake_Client`, `Fake2FA`, or `Fake`, but not
+    /// words where `Fake` is followed by a lowercase letter (`Faker`, `Fakeable`).
+    #[must_use]
+    pub fn is_fake_class_name(&self) -> bool {
+        self.name
+            .trim_start_matches('_')
+            .strip_prefix("Fake")
+            .is_some_and(|rest| {
+                rest.is_empty()
+                    || !rest.starts_with(|character: char| character.is_ascii_lowercase())
+            })
+    }
+
+    /// Returns true if the class declares at least one collaborator contract base class
+    /// (excluding `object`, `Generic[...]`, and `Protocol[...]`).
+    #[must_use]
+    pub fn has_contract_base(&self) -> bool {
+        self.bases.iter().any(PythonBaseClass::is_contract_base)
     }
 
     /// The `@dataclass` or `@dataclasses.dataclass` decorator, matched by name rather than by
@@ -550,8 +602,13 @@ pub fn extract_classes(file: &ParsedFile) -> Vec<PythonClassInfo<'_>> {
         let mut bases = Vec::new();
         if let Some(superclasses) = class_node.field("superclasses") {
             for child in superclasses.children() {
-                let kind = child.kind();
-                if kind != "(" && kind != ")" && kind != "," && kind != "keyword_argument" {
+                if child.is_named()
+                    && !child.is_extra()
+                    && !matches!(
+                        child.kind().as_ref(),
+                        "keyword_argument" | "dictionary_splat"
+                    )
+                {
                     bases.push(PythonBaseClass {
                         name: child.text().to_string(),
                         node: AstNode::from_raw(child),
@@ -3006,6 +3063,2014 @@ pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'
     out
 }
 
+/// A public Python instance attribute annotated inline (`self.<name>: <type>`) inside an instance method.
+#[derive(Clone)]
+pub struct PythonInlinePublicAttributeAnnotation<'a> {
+    /// Name of the enclosing class (`{class}`).
+    pub class_name: String,
+    /// Name of the enclosing instance method (`{function}`).
+    pub method_name: String,
+    /// Public attribute identifier (`{name}`, without `"self."`).
+    pub name: String,
+    /// Source text of the type annotation (`{expression}`, e.g. `"int"` or `"Final[int]"`).
+    pub annotation_text: String,
+    /// Full `assignment` AST node (`self.foo: int = 1` or `self.foo: int`).
+    pub assignment_node: AstNode<'a>,
+}
+
+/// Returns true if `type_node` is an unparameterized `Final` qualifier (`Final`, `typing.Final`,
+/// or `typing_extensions.Final`, optionally wrapped in `Annotated[Final, ...]`), which PEP 591
+/// forbids in a class body without an initializer (`x: Final` is invalid; `x: Final[T]` is valid).
+fn is_bare_final_annotation(type_node: &RawNode<'_>) -> bool {
+    let mut current = type_node.clone();
+    loop {
+        while matches!(current.kind().as_ref(), "type" | "parenthesized_expression") {
+            let Some(inner) = current
+                .children()
+                .find(|child| child.is_named() && !child.is_extra())
+            else {
+                return false;
+            };
+            current = inner;
+        }
+        if matches!(current.kind().as_ref(), "generic_type" | "subscript")
+            && let Some((base_node, type_args)) = extract_generic_base_and_args(&current)
+        {
+            let (base_path, base_terminal) = resolve_path_and_terminal_raw(&base_node);
+            if is_std_type_constructor(&base_path, &base_terminal, &["Annotated"])
+                && let Some(first_arg) = type_args.into_iter().next()
+            {
+                current = first_arg;
+                continue;
+            }
+            return false;
+        }
+        let (path, terminal) = resolve_path_and_terminal_raw(&current);
+        return is_std_type_constructor(&path, &terminal, &["Final"]);
+    }
+}
+
+/// Returns true if `function_node` is an instance method (not decorated with `@staticmethod` or
+/// `@classmethod`) whose first parameter is the receiver `self`.
+fn is_instance_method_with_self_receiver(function_node: &RawNode<'_>) -> bool {
+    let has_non_instance_decorator =
+        extract_decorators_raw(function_node)
+            .iter()
+            .any(|decorator| {
+                matches!(
+                    decorator.terminal_name.as_str(),
+                    "staticmethod" | "classmethod"
+                )
+            });
+    if has_non_instance_decorator {
+        return false;
+    }
+    extract_parameters_raw(function_node)
+        .first()
+        .is_some_and(|parameter| {
+            parameter.kind == PythonParameterKind::Receiver && parameter.name == "self"
+        })
+}
+
+/// Walks statements inside an instance method body (without entering nested functions, classes,
+/// or lambdas) and collects inline `self.<public_attr>: <type>` annotations.
+fn collect_method_inline_public_attr_annotations_rec<'a>(
+    node: &RawNode<'a>,
+    class_name: &str,
+    method_name: &str,
+    out: &mut Vec<PythonInlinePublicAttributeAnnotation<'a>>,
+) {
+    if matches!(
+        node.kind().as_ref(),
+        "function_definition" | "class_definition" | "lambda"
+    ) {
+        return;
+    }
+    if node.kind() == "assignment"
+        && let (Some(left), Some(type_node)) = (node.field("left"), node.field("type"))
+        && left.kind() == "attribute"
+        && left.field("object").is_some_and(|object_node| {
+            object_node.kind() == "identifier" && object_node.text() == "self"
+        })
+        && let Some(attribute_node) = left.field("attribute")
+    {
+        let attribute_name = attribute_node.text().into_owned();
+        if !attribute_name.starts_with('_') && !is_bare_final_annotation(&type_node) {
+            out.push(PythonInlinePublicAttributeAnnotation {
+                class_name: class_name.to_owned(),
+                method_name: method_name.to_owned(),
+                name: attribute_name,
+                annotation_text: type_node.text().into_owned(),
+                assignment_node: AstNode::from_raw(node.clone()),
+            });
+        }
+    }
+    for child in node.children() {
+        collect_method_inline_public_attr_annotations_rec(&child, class_name, method_name, out);
+    }
+}
+
+/// Collects inline type annotations on public instance attributes (`self.<attr>: <type>`) inside
+/// instance methods across `file`.
+///
+/// Only direct instance methods (not decorated with `@staticmethod` or `@classmethod`, and whose
+/// first parameter is the receiver `self`) of a `class_definition` are inspected. Nested functions,
+/// nested classes, and lambdas inside a method are not entered. Private attributes starting with
+/// `_` and unparameterized `Final` annotations (`self.x: Final = 1`) are skipped.
+#[must_use]
+pub fn collect_inline_public_attribute_annotations(
+    file: &ParsedFile,
+) -> Vec<PythonInlinePublicAttributeAnnotation<'_>> {
+    let mut out = Vec::new();
+    for class_node in file.grep.root().dfs() {
+        if class_node.kind() != "class_definition" {
+            continue;
+        }
+        let Some(name_node) = class_node.field("name") else {
+            continue;
+        };
+        let Some(body) = class_node.field("body") else {
+            continue;
+        };
+        let class_name = name_node.text().into_owned();
+
+        for child in body.children() {
+            let function_candidate = if child.kind() == "decorated_definition" {
+                child.field("definition")
+            } else {
+                Some(child)
+            };
+            if let Some(function_node) = function_candidate
+                && function_node.kind() == "function_definition"
+                && is_instance_method_with_self_receiver(&function_node)
+                && let Some(method_name_node) = function_node.field("name")
+                && let Some(method_body) = function_node.field("body")
+            {
+                let method_name = method_name_node.text().into_owned();
+                for statement in method_body.children() {
+                    collect_method_inline_public_attr_annotations_rec(
+                        &statement,
+                        &class_name,
+                        &method_name,
+                        &mut out,
+                    );
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Abstract and immutable collection constructors in `collections.abc`, `typing`, and `builtins`
+/// that have a natural empty value (`()`, `{}`, `frozenset()`).
+const ABSTRACT_AND_IMMUTABLE_COLLECTION_CONSTRUCTORS: &[&str] = &[
+    "Sequence",
+    "MutableSequence",
+    "Mapping",
+    "MutableMapping",
+    "Set",
+    "AbstractSet",
+    "MutableSet",
+    "Collection",
+    "Iterable",
+    "Reversible",
+    "frozenset",
+    "FrozenSet",
+];
+
+/// Returns true if `(path, terminal)` is a concrete or abstract collection type constructor
+/// (excluding `tuple` / `Tuple`, which requires variadic-vs-fixed arity inspection when subscripted).
+fn is_non_tuple_collection_constructor(path: &str, terminal: &str) -> bool {
+    is_concrete_collection_constructor(path, terminal)
+        || is_std_type_constructor(
+            path,
+            terminal,
+            ABSTRACT_AND_IMMUTABLE_COLLECTION_CONSTRUCTORS,
+        )
+}
+
+/// Returns true if `node` (unwrapping `type` and `parenthesized_expression`) is an `ellipsis` (`...`).
+fn is_ellipsis_type_arg(node: &RawNode<'_>) -> bool {
+    let mut current = node.clone();
+    while matches!(current.kind().as_ref(), "type" | "parenthesized_expression") {
+        let Some(inner) = current
+            .children()
+            .find(|child| child.is_named() && !child.is_extra())
+        else {
+            return false;
+        };
+        current = inner;
+    }
+    current.kind() == "ellipsis"
+}
+
+/// Unwraps outer return-annotation envelopes (`type`, `parenthesized_expression`,
+/// `Annotated[T, ...]`, `Awaitable[T]`, and `Coroutine[YieldT, SendT, ReturnT]`).
+fn unwrap_return_envelope<'a>(node: &RawNode<'a>) -> RawNode<'a> {
+    let mut current = node.clone();
+    loop {
+        if matches!(current.kind().as_ref(), "type" | "parenthesized_expression") {
+            let Some(inner) = current
+                .children()
+                .find(|child| child.is_named() && !child.is_extra())
+            else {
+                return current;
+            };
+            current = inner;
+            continue;
+        }
+        if matches!(current.kind().as_ref(), "generic_type" | "subscript")
+            && let Some((base_node, type_args)) = extract_generic_base_and_args(&current)
+        {
+            let (base_path, base_terminal) = resolve_path_and_terminal_raw(&base_node);
+            if is_std_type_constructor(&base_path, &base_terminal, &["Annotated", "Awaitable"])
+                && let Some(first_arg) = type_args.first().cloned()
+            {
+                current = first_arg;
+                continue;
+            }
+            if is_std_type_constructor(&base_path, &base_terminal, &["Coroutine"])
+                && let Some(return_arg) = type_args.get(2).cloned()
+            {
+                current = return_arg;
+                continue;
+            }
+        }
+        return current;
+    }
+}
+
+/// Flattens top-level union constructs (`|`, `Optional[...]`, `Union[...]`, and `Annotated[T, ...]`)
+/// into `branches` and sets `*has_none = true` if `None` (`none`) or `Optional[...]` is part of the union.
+fn collect_union_branches<'a>(
+    node: &RawNode<'a>,
+    has_none: &mut bool,
+    branches: &mut Vec<RawNode<'a>>,
+) {
+    match node.kind().as_ref() {
+        "type" | "parenthesized_expression" | "union_type" => {
+            for child in node.children() {
+                if child.is_named() && !child.is_extra() {
+                    collect_union_branches(&child, has_none, branches);
+                }
+            }
+        }
+        "binary_operator"
+            if node
+                .field("operator")
+                .is_some_and(|operator| operator.text() == "|") =>
+        {
+            if let Some(left) = node.field("left") {
+                collect_union_branches(&left, has_none, branches);
+            }
+            if let Some(right) = node.field("right") {
+                collect_union_branches(&right, has_none, branches);
+            }
+        }
+        "none" => {
+            *has_none = true;
+        }
+        "generic_type" | "subscript" => {
+            let Some((base_node, type_args)) = extract_generic_base_and_args(node) else {
+                branches.push(node.clone());
+                return;
+            };
+            let (base_path, base_terminal) = resolve_path_and_terminal_raw(&base_node);
+            if is_std_type_constructor(&base_path, &base_terminal, &["Optional"]) {
+                *has_none = true;
+                for argument in &type_args {
+                    collect_union_branches(argument, has_none, branches);
+                }
+                return;
+            }
+            if is_std_type_constructor(&base_path, &base_terminal, &["Union"]) {
+                for argument in &type_args {
+                    collect_union_branches(argument, has_none, branches);
+                }
+                return;
+            }
+            if is_std_type_constructor(&base_path, &base_terminal, &["Annotated"]) {
+                if let Some(first_arg) = type_args.first() {
+                    collect_union_branches(first_arg, has_none, branches);
+                }
+                return;
+            }
+            branches.push(node.clone());
+        }
+        _ => {
+            branches.push(node.clone());
+        }
+    }
+}
+
+/// Returns the collection type constructor path (e.g. `"Sequence"`, `"list"`, `"tuple"`) if
+/// `branch` is a collection type, or `None` otherwise.
+///
+/// Bare `tuple`/`Tuple` and variadic `tuple[T, ...]`/`Tuple[T, ...]` are treated as collections;
+/// fixed-length record tuples (`tuple[int, str]`) return `None`.
+fn collection_branch_type_path(branch: &RawNode<'_>) -> Option<String> {
+    match branch.kind().as_ref() {
+        "identifier" | "attribute" => {
+            let (path, terminal) = resolve_path_and_terminal_raw(branch);
+            if is_non_tuple_collection_constructor(&path, &terminal)
+                || is_std_type_constructor(&path, &terminal, &["tuple", "Tuple"])
+            {
+                Some(path)
+            } else {
+                None
+            }
+        }
+        "generic_type" | "subscript" => {
+            let (base_node, type_args) = extract_generic_base_and_args(branch)?;
+            let (base_path, base_terminal) = resolve_path_and_terminal_raw(&base_node);
+            let is_variadic_tuple =
+                is_std_type_constructor(&base_path, &base_terminal, &["tuple", "Tuple"])
+                    && type_args.len() == 2
+                    && is_ellipsis_type_arg(&type_args[1]);
+            if is_non_tuple_collection_constructor(&base_path, &base_terminal) || is_variadic_tuple
+            {
+                Some(base_path)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Collects collection type constructors from a nullable collection return annotation.
+///
+/// Unwraps `Annotated`, `Awaitable`, and `Coroutine` return envelopes and returns the collection
+/// constructors (in source order, deduplicated) when `type_node` is a union containing `None`
+/// in which all non-`None` branches are collection types.
+#[must_use]
+pub fn collect_nullable_collection_return_types(type_node: &AstNode<'_>) -> Vec<String> {
+    let root = unwrap_return_envelope(&type_node.raw);
+    let mut has_none = false;
+    let mut branches = Vec::new();
+    collect_union_branches(&root, &mut has_none, &mut branches);
+
+    if !has_none || branches.is_empty() {
+        return Vec::new();
+    }
+
+    let mut matched = Vec::new();
+    for branch in &branches {
+        let Some(type_path) = collection_branch_type_path(branch) else {
+            return Vec::new();
+        };
+        if !matched.contains(&type_path) {
+            matched.push(type_path);
+        }
+    }
+    matched
+}
+
+/// A Python logger call with an unmatched named PEP 3101 placeholder and positional arguments.
+#[derive(Clone)]
+pub struct UnmatchedLoggerPlaceholder<'a> {
+    /// The full `call` AST node (`logger.info("Order {order_id}", order_id)`).
+    pub call_node: AstNode<'a>,
+    /// Source text of the invoked logger method (`logger.info`, `self.logger.error`).
+    pub callee: String,
+    /// The first unmatched named placeholder root identifier (`order_id`).
+    pub placeholder: String,
+}
+
+/// Method names recognized on logger objects and the `logging` module.
+const LOGGER_METHODS: &[&str] = &[
+    "trace",
+    "debug",
+    "info",
+    "success",
+    "warning",
+    "warn",
+    "error",
+    "critical",
+    "fatal",
+    "exception",
+    "log",
+];
+
+/// Bare variable/module names recognized as logger receivers (`logger.info`, `logging.error`).
+const LOGGER_RECEIVERS: &[&str] = &["logger", "log", "logging"];
+
+/// Attribute names recognized on compound logger receivers (`self.logger.info`, `cls.log.warn`).
+const LOGGER_ATTRIBUTES: &[&str] = &["logger", "log"];
+
+/// If `function` is a logger method access (`logger.info`, `self.logger.error`, `logging.log`),
+/// returns the method name.
+fn extract_logger_method(function: &RawNode<'_>) -> Option<String> {
+    if function.kind() != "attribute" {
+        return None;
+    }
+    let method = function.field("attribute")?.text().into_owned();
+    if !LOGGER_METHODS.contains(&method.as_str()) {
+        return None;
+    }
+    let receiver = function.field("object")?;
+    let is_logger_receiver = match receiver.kind().as_ref() {
+        "identifier" => LOGGER_RECEIVERS.contains(&receiver.text().as_ref()),
+        "attribute" => receiver
+            .field("attribute")
+            .is_some_and(|attribute| LOGGER_ATTRIBUTES.contains(&attribute.text().as_ref())),
+        _ => false,
+    };
+    is_logger_receiver.then_some(method)
+}
+
+/// Returns the inner text of a single plain Python `string` node, excluding f-strings, byte
+/// strings, and template strings.
+fn extract_plain_string_node(node: &RawNode<'_>) -> Option<String> {
+    if node.kind() != "string" || node.children().any(|child| child.kind() == "interpolation") {
+        return None;
+    }
+    let (opening, content) = delimited_string_parts(node);
+    if opening.contains(['f', 'F', 'b', 'B', 't', 'T']) {
+        return None;
+    }
+    Some(content)
+}
+
+/// Extracts the static text of a plain string literal or an implicit `concatenated_string` of
+/// plain string literals.
+fn extract_logger_message_literal(node: &RawNode<'_>) -> Option<String> {
+    match node.kind().as_ref() {
+        "string" => extract_plain_string_node(node),
+        "concatenated_string" => {
+            let mut combined = String::new();
+            for child in node
+                .children()
+                .filter(|child| child.is_named() && !child.is_extra())
+            {
+                combined.push_str(&extract_plain_string_node(&child)?);
+            }
+            (!combined.is_empty()).then_some(combined)
+        }
+        _ => None,
+    }
+}
+
+/// Returns true if `name` is a valid Python identifier (`order_id`, `_item2`).
+fn is_python_identifier(name: &str) -> bool {
+    let mut characters = name.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    let valid_start = first == '_' || first.is_alphabetic();
+    valid_start
+        && characters.all(|character| character == '_' || character.is_alphanumeric())
+        && !first.is_ascii_digit()
+}
+
+/// Validates a PEP 3101 `field_name` (`arg_name("." attribute | "[" index "]")*`) and returns
+/// its root `arg_name` slice.
+fn extract_valid_field_root(field_name: &str) -> Option<&str> {
+    let split_at = field_name.find(['.', '[']).unwrap_or(field_name.len());
+    let root = &field_name[..split_at];
+    let valid_root = root.is_empty()
+        || root.chars().all(|character| character.is_ascii_digit())
+        || is_python_identifier(root);
+    if !valid_root {
+        return None;
+    }
+
+    let mut tail = &field_name[split_at..];
+    while !tail.is_empty() {
+        if let Some(after_dot) = tail.strip_prefix('.') {
+            let end = after_dot.find(['.', '[']).unwrap_or(after_dot.len());
+            if !is_python_identifier(&after_dot[..end]) {
+                return None;
+            }
+            tail = &after_dot[end..];
+        } else if let Some(after_bracket) = tail.strip_prefix('[') {
+            let close = after_bracket.find(']')?;
+            if close == 0 {
+                return None;
+            }
+            tail = &after_bracket[close + 1..];
+        } else {
+            return None;
+        }
+    }
+    Some(root)
+}
+
+/// Parses the `:format_spec` portion of a PEP 3101 replacement field starting at `start`,
+/// appending any nested `{nested_field}` root names to `roots` and returning the byte index
+/// immediately after the outer closing `}`.
+fn parse_format_spec_section<'a>(
+    message: &'a str,
+    start: usize,
+    roots: &mut Vec<&'a str>,
+) -> Option<usize> {
+    let mut cursor = start;
+    while cursor < message.len() {
+        let rest = &message[cursor..];
+        if rest.starts_with('}') {
+            return Some(cursor + 1);
+        }
+        if rest.starts_with('{') {
+            let after_open = &message[cursor + 1..];
+            let close_offset = after_open.find('}')?;
+            let nested_body = &after_open[..close_offset];
+            if nested_body.contains('{') {
+                return None;
+            }
+            let nested_field = nested_body
+                .split_once('!')
+                .map_or(nested_body, |(before, _)| before);
+            if let Some(nested_root) = extract_valid_field_root(nested_field) {
+                roots.push(nested_root);
+            }
+            cursor += 1 + close_offset + 1;
+        } else {
+            cursor += rest.chars().next()?.len_utf8();
+        }
+    }
+    None
+}
+
+/// Parses one `{...}` replacement field whose body starts at `start` (immediately after `{`),
+/// returning the byte index after the matching `}` and the root `arg_name`s found inside it.
+fn parse_replacement_field(message: &str, start: usize) -> Option<(usize, Vec<&str>)> {
+    let mut cursor = start;
+    let mut in_brackets = false;
+    let mut delimiter = None;
+
+    while cursor < message.len() {
+        let character = message[cursor..].chars().next()?;
+        match character {
+            '[' if !in_brackets => in_brackets = true,
+            ']' if in_brackets => in_brackets = false,
+            '{' if !in_brackets => return None,
+            ':' | '}' if !in_brackets => {
+                delimiter = Some((cursor, character));
+                break;
+            }
+            _ => {}
+        }
+        cursor += character.len_utf8();
+    }
+
+    let (delimiter_index, delimiter_char) = delimiter?;
+    let header = &message[start..delimiter_index];
+    let field_name = match header.split_once('!') {
+        Some((before, "r" | "s" | "a")) => Some(before),
+        Some(_) => None,
+        None => Some(header),
+    };
+
+    let mut roots = Vec::new();
+    if let Some(root) = field_name.and_then(extract_valid_field_root) {
+        roots.push(root);
+    }
+
+    if delimiter_char == '}' {
+        return Some((delimiter_index + 1, roots));
+    }
+    let next_cursor = parse_format_spec_section(message, delimiter_index + 1, &mut roots)?;
+    Some((next_cursor, roots))
+}
+
+/// Returns the first named PEP 3101 placeholder root identifier in `message` that is not
+/// present in `keyword_names`, or `None` if `message` has unbalanced braces or all named
+/// placeholders are satisfied.
+fn first_unmatched_named_placeholder(
+    message: &str,
+    keyword_names: &HashSet<String>,
+) -> Option<String> {
+    let mut cursor = 0;
+    let mut first_unmatched: Option<String> = None;
+
+    while cursor < message.len() {
+        let rest = &message[cursor..];
+        if rest.starts_with("{{") || rest.starts_with("}}") {
+            cursor += 2;
+        } else if rest.starts_with('}') {
+            return None;
+        } else if rest.starts_with('{') {
+            let (next_cursor, roots) = parse_replacement_field(message, cursor + 1)?;
+            for root in roots {
+                if first_unmatched.is_none()
+                    && is_python_identifier(root)
+                    && !keyword_names.contains(root)
+                {
+                    first_unmatched = Some(root.to_owned());
+                }
+            }
+            cursor = next_cursor;
+        } else {
+            cursor += rest.chars().next()?.len_utf8();
+        }
+    }
+    first_unmatched
+}
+
+/// Inspects a single `call` node and returns an [`UnmatchedLoggerPlaceholder`] if it is a
+/// logger call passing positional format arguments to a message with an unmatched named
+/// placeholder.
+fn check_logger_call_node<'a>(call_node: &RawNode<'a>) -> Option<UnmatchedLoggerPlaceholder<'a>> {
+    let function = call_node.field("function")?;
+    let method = extract_logger_method(&function)?;
+    let arguments = call_node.field("arguments")?;
+
+    let mut positional_args = Vec::new();
+    let mut keyword_names = HashSet::new();
+
+    for child in arguments
+        .children()
+        .filter(|child| child.is_named() && !child.is_extra())
+    {
+        match child.kind().as_ref() {
+            "dictionary_splat" => return None,
+            "keyword_argument" => {
+                if let Some(name_node) = child.field("name") {
+                    keyword_names.insert(name_node.text().into_owned());
+                }
+            }
+            _ => positional_args.push(child),
+        }
+    }
+
+    let message_index = usize::from(method == "log");
+    if positional_args.len() <= message_index + 1 {
+        return None;
+    }
+
+    let message = extract_logger_message_literal(&positional_args[message_index])?;
+    let placeholder = first_unmatched_named_placeholder(&message, &keyword_names)?;
+
+    Some(UnmatchedLoggerPlaceholder {
+        call_node: AstNode::from_raw(call_node.clone()),
+        callee: function.text().into_owned(),
+        placeholder,
+    })
+}
+
+/// Collects logger calls in `file` that pass positional format arguments to a message literal
+/// containing an unmatched named PEP 3101 placeholder.
+#[must_use]
+pub fn collect_unmatched_logger_placeholders(
+    file: &ParsedFile,
+) -> Vec<UnmatchedLoggerPlaceholder<'_>> {
+    file.grep
+        .root()
+        .dfs()
+        .filter(|node| node.kind() == "call")
+        .filter_map(|node| check_logger_call_node(&node))
+        .collect()
+}
+
+/// A call inside a Python function or method to a sibling function or method defined later in
+/// the same module or class scope.
+#[derive(Clone)]
+pub struct ForwardCall<'a> {
+    /// The `call` expression AST node (`callee(...)` or `self.callee(...)`).
+    pub node: AstNode<'a>,
+    /// Name of the enclosing function or method making the call.
+    pub caller_name: String,
+    /// Name of the called sibling function or method defined later in the scope.
+    pub callee_name: String,
+}
+
+/// One syntactic `def` statement belonging to a [`LogicalFunction`].
+struct FunctionDefPart<'a> {
+    function_node: RawNode<'a>,
+    is_staticmethod: bool,
+}
+
+/// A logical function or method in a scope declaration epoch (grouping `@overload` stubs with
+/// their implementation and `@property` getters with `@<name>.setter` / `@<name>.deleter` at
+/// their first declaration position).
+struct LogicalFunction<'a> {
+    name: String,
+    definition_order: usize,
+    has_overload: bool,
+    has_non_overload_definition: bool,
+    parts: Vec<FunctionDefPart<'a>>,
+}
+
+/// Extracts bound variable identifiers from an assignment or loop target pattern, stopping at
+/// `attribute`, `subscript`, and `type` nodes so `obj.helper = 1` or `arr[helper] = 1` does not
+/// record `helper` as a local variable binding.
+fn extract_local_target_names(node: &RawNode<'_>, out: &mut HashSet<String>) {
+    match node.kind().as_ref() {
+        "attribute" | "subscript" | "type" => {}
+        "identifier" => {
+            let text = node.text();
+            if text != "_" {
+                out.insert(text.into_owned());
+            }
+        }
+        "dotted_name" => {
+            if !node.text().contains('.') {
+                for child in node.children() {
+                    extract_local_target_names(&child, out);
+                }
+            }
+        }
+        "as_pattern" => {
+            if let Some(alias) = node.field("alias") {
+                extract_local_target_names(&alias, out);
+            }
+        }
+        _ => {
+            for child in node.children() {
+                extract_local_target_names(&child, out);
+            }
+        }
+    }
+}
+
+/// Collects local variable, parameter, nested definition, and import bindings directly owned by
+/// `scope_node` (`function_definition`, `lambda`, or comprehension expression), without
+/// descending into nested `function_definition`, `lambda`, or `class_definition` bodies.
+fn collect_local_scope_bindings(
+    scope_node: &RawNode<'_>,
+    excluded_parameter: Option<&str>,
+) -> HashSet<String> {
+    let mut bindings = HashSet::new();
+    let mut globals = HashSet::new();
+
+    if let Some(parameters) = scope_node
+        .field("parameters")
+        .or_else(|| scope_node.field("lambda_parameters"))
+    {
+        let mut parameter_nodes = Vec::new();
+        for child in parameters.children() {
+            if !matches!(child.kind().as_ref(), "(" | ")" | ",") {
+                extract_from_pattern(&child, &mut parameter_nodes);
+            }
+        }
+        for node in parameter_nodes {
+            let text = node.text();
+            if excluded_parameter != Some(text.as_ref()) {
+                bindings.insert(text.into_owned());
+            }
+        }
+    }
+
+    let start_node = scope_node
+        .field("body")
+        .unwrap_or_else(|| scope_node.clone());
+    collect_bindings_in_subtree(&start_node, &mut bindings, &mut globals);
+
+    for global_name in globals {
+        bindings.remove(&global_name);
+    }
+    bindings
+}
+
+/// Walks `node` to collect local bindings and `global` declarations within a single function or
+/// expression scope, stopping at nested scope boundaries.
+fn collect_bindings_in_subtree(
+    node: &RawNode<'_>,
+    bindings: &mut HashSet<String>,
+    globals: &mut HashSet<String>,
+) {
+    let kind = node.kind();
+    match kind.as_ref() {
+        "assignment" | "augmented_assignment" => {
+            if let Some(left) = node.field("left") {
+                extract_local_target_names(&left, bindings);
+            }
+            if let Some(right) = node.field("right") {
+                collect_bindings_in_subtree(&right, bindings, globals);
+            }
+            return;
+        }
+        "for_statement" | "for_in_clause" => {
+            if let Some(left) = node.field("left") {
+                extract_local_target_names(&left, bindings);
+            }
+        }
+        "as_pattern" => {
+            if let Some(alias) = node.field("alias") {
+                extract_local_target_names(&alias, bindings);
+            }
+        }
+        "named_expression" => {
+            if let Some(name_node) = node.field("name") {
+                extract_local_target_names(&name_node, bindings);
+            }
+        }
+        "case_clause" => {
+            for child in node.children() {
+                if child.kind() == "case_pattern" {
+                    let mut pattern_nodes = Vec::new();
+                    extract_from_pattern(&child, &mut pattern_nodes);
+                    for bound in pattern_nodes {
+                        bindings.insert(bound.text().into_owned());
+                    }
+                } else {
+                    collect_bindings_in_subtree(&child, bindings, globals);
+                }
+            }
+            return;
+        }
+        "function_definition" | "class_definition" => {
+            if let Some(name_node) = node.field("name") {
+                bindings.insert(name_node.text().into_owned());
+            }
+            return;
+        }
+        "lambda"
+        | "list_comprehension"
+        | "set_comprehension"
+        | "dictionary_comprehension"
+        | "generator_expression" => {
+            return;
+        }
+        "import_statement" | "import_from_statement" => {
+            let mut imported = Vec::new();
+            extract_from_import(node, &mut imported);
+            for item in imported {
+                bindings.insert(item.text().into_owned());
+            }
+            return;
+        }
+        "global_statement" => {
+            for child in node.children() {
+                if child.kind() == "identifier" {
+                    globals.insert(child.text().into_owned());
+                }
+            }
+            return;
+        }
+        _ => {}
+    }
+
+    for child in node.children() {
+        collect_bindings_in_subtree(&child, bindings, globals);
+    }
+}
+
+/// Extracts comprehension loop variable bindings (`for_in_clause`) owned directly by a
+/// comprehension or generator expression node.
+fn collect_comprehension_bindings(comprehension_node: &RawNode<'_>) -> HashSet<String> {
+    let mut bindings = HashSet::new();
+    for child in comprehension_node.children() {
+        if child.kind() == "for_in_clause"
+            && let Some(left) = child.field("left")
+        {
+            extract_local_target_names(&left, &mut bindings);
+        }
+    }
+    bindings
+}
+
+/// Partitions direct function definitions in `scope_body` (`module` or class `block`) into
+/// declaration epochs, grouping `@overload` stubs with their implementation and `@property`
+/// getters with `@<name>.setter` / `@<name>.deleter` at their first declaration position.
+fn partition_scope_epochs<'a>(scope_body: &RawNode<'a>) -> Vec<Vec<LogicalFunction<'a>>> {
+    let mut epochs: Vec<Vec<LogicalFunction<'a>>> = Vec::new();
+    let mut current_epoch: Vec<LogicalFunction<'a>> = Vec::new();
+    let mut index_by_name: HashMap<String, usize> = HashMap::new();
+    let mut next_order = 0usize;
+
+    for statement in scope_body.children() {
+        let function_node = if statement.kind() == "function_definition" {
+            Some(statement.clone())
+        } else {
+            decorated_definition(&statement).filter(|inner| inner.kind() == "function_definition")
+        };
+        let Some(function_node) = function_node else {
+            continue;
+        };
+        let Some(name_node) = function_node.field("name") else {
+            continue;
+        };
+        let name = name_node.text().into_owned();
+        let decorators = extract_decorators_raw(&statement);
+        let is_overload = decorators
+            .iter()
+            .any(|decorator| decorator.terminal_name == "overload");
+        let is_property_accessor = decorators
+            .iter()
+            .any(|decorator| matches!(decorator.terminal_name.as_str(), "setter" | "deleter"));
+        let is_staticmethod = decorators
+            .iter()
+            .any(|decorator| decorator.terminal_name == "staticmethod");
+        let part = FunctionDefPart {
+            function_node,
+            is_staticmethod,
+        };
+
+        if let Some(&existing_index) = index_by_name.get(&name) {
+            let existing = &mut current_epoch[existing_index];
+            let continues_overload =
+                existing.has_overload && (!existing.has_non_overload_definition || is_overload);
+            if is_property_accessor || continues_overload {
+                existing.has_non_overload_definition |= !is_overload;
+                existing.parts.push(part);
+                continue;
+            }
+            epochs.push(std::mem::take(&mut current_epoch));
+            index_by_name.clear();
+        }
+
+        let index = current_epoch.len();
+        index_by_name.insert(name.clone(), index);
+        current_epoch.push(LogicalFunction {
+            name,
+            definition_order: next_order,
+            has_overload: is_overload,
+            has_non_overload_definition: !is_overload,
+            parts: vec![part],
+        });
+        next_order += 1;
+    }
+
+    if !current_epoch.is_empty() {
+        epochs.push(current_epoch);
+    }
+    epochs
+}
+
+/// Returns the receiver parameter name (`"self"` or `"cls"`) for a class method, or `None` if
+/// the method is a `@staticmethod` or has no receiver parameter.
+fn method_receiver_name(part: &FunctionDefPart<'_>) -> Option<String> {
+    if part.is_staticmethod {
+        return None;
+    }
+    let parameters = extract_parameters_raw(&part.function_node);
+    parameters
+        .first()
+        .filter(|first| first.kind == PythonParameterKind::Receiver)
+        .map(|first| first.name.clone())
+}
+
+/// Context for walking a function or method body to collect sibling calls.
+struct CallWalkContext<'a> {
+    sibling_names: &'a HashSet<&'a str>,
+    receiver_name: Option<&'a str>,
+    is_class: bool,
+}
+
+/// Recursively walks `node` inside a function/method body, tracking scoped local bindings and
+/// recording calls to sibling functions/methods in `out`.
+fn collect_calls_in_body<'a>(
+    node: &RawNode<'a>,
+    context: &CallWalkContext<'_>,
+    active_bindings: &HashSet<String>,
+    out: &mut Vec<(String, AstNode<'a>)>,
+) {
+    let kind = node.kind();
+    match kind.as_ref() {
+        "class_definition" => return,
+        "function_definition" | "lambda" => {
+            let mut inner_bindings = active_bindings.clone();
+            inner_bindings.extend(collect_local_scope_bindings(node, None));
+            if let Some(body) = node.field("body") {
+                collect_calls_in_body(&body, context, &inner_bindings, out);
+            }
+            return;
+        }
+        "list_comprehension"
+        | "set_comprehension"
+        | "dictionary_comprehension"
+        | "generator_expression" => {
+            let mut comprehension_bindings = active_bindings.clone();
+            comprehension_bindings.extend(collect_comprehension_bindings(node));
+            for child in node.children() {
+                collect_calls_in_body(&child, context, &comprehension_bindings, out);
+            }
+            return;
+        }
+        "call" => {
+            if let Some(callee_name) = match_sibling_call(node, context, active_bindings) {
+                out.push((callee_name, AstNode::from_raw(node.clone())));
+            }
+        }
+        _ => {}
+    }
+
+    for child in node.children() {
+        collect_calls_in_body(&child, context, active_bindings, out);
+    }
+}
+
+/// Checks whether `call_node` invokes a sibling function or method in `context.sibling_names`.
+fn match_sibling_call(
+    call_node: &RawNode<'_>,
+    context: &CallWalkContext<'_>,
+    active_bindings: &HashSet<String>,
+) -> Option<String> {
+    let function = call_node.field("function")?;
+    if context.is_class {
+        let receiver = context.receiver_name?;
+        if active_bindings.contains(receiver) || function.kind() != "attribute" {
+            return None;
+        }
+        let object = function.field("object")?;
+        let attribute = function.field("attribute")?;
+        let attribute_text = attribute.text();
+        if object.kind() == "identifier"
+            && object.text() == receiver
+            && context.sibling_names.contains(attribute_text.as_ref())
+        {
+            return Some(attribute_text.into_owned());
+        }
+        None
+    } else {
+        if function.kind() != "identifier" {
+            return None;
+        }
+        let name = function.text();
+        if context.sibling_names.contains(name.as_ref()) && !active_bindings.contains(name.as_ref())
+        {
+            Some(name.into_owned())
+        } else {
+            None
+        }
+    }
+}
+
+/// Returns true if `start` can reach `target` in the directed `call_graph`.
+fn can_reach<'a>(
+    start: &'a str,
+    target: &'a str,
+    call_graph: &HashMap<&'a str, HashSet<&'a str>>,
+) -> bool {
+    let mut visited = HashSet::new();
+    let mut stack = vec![start];
+    while let Some(current) = stack.pop() {
+        if current == target {
+            return true;
+        }
+        if visited.insert(current)
+            && let Some(neighbors) = call_graph.get(current)
+        {
+            stack.extend(neighbors.iter().copied());
+        }
+    }
+    false
+}
+
+/// Evaluates a single declaration epoch of sibling functions or methods and appends any forward
+/// calls to `out`.
+fn evaluate_epoch<'a>(
+    epoch: &[LogicalFunction<'a>],
+    is_class: bool,
+    out: &mut Vec<ForwardCall<'a>>,
+) {
+    let sibling_names: HashSet<&str> = epoch
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect();
+    let order_by_name: HashMap<&str, usize> = epoch
+        .iter()
+        .map(|function| (function.name.as_str(), function.definition_order))
+        .collect();
+
+    let mut calls_by_function: Vec<Vec<(String, AstNode<'a>)>> = Vec::with_capacity(epoch.len());
+    let mut call_graph: HashMap<&str, HashSet<&str>> = HashMap::new();
+
+    for function in epoch {
+        let mut function_calls = Vec::new();
+        for part in &function.parts {
+            let Some(body) = part.function_node.field("body") else {
+                continue;
+            };
+            let receiver = if is_class {
+                method_receiver_name(part)
+            } else {
+                None
+            };
+            let initial_bindings =
+                collect_local_scope_bindings(&part.function_node, receiver.as_deref());
+            let context = CallWalkContext {
+                sibling_names: &sibling_names,
+                receiver_name: receiver.as_deref(),
+                is_class,
+            };
+            collect_calls_in_body(&body, &context, &initial_bindings, &mut function_calls);
+        }
+        let edges = call_graph.entry(function.name.as_str()).or_default();
+        for (callee_name, _) in &function_calls {
+            if let Some(&callee_ref) = sibling_names.get(callee_name.as_str()) {
+                edges.insert(callee_ref);
+            }
+        }
+        calls_by_function.push(function_calls);
+    }
+
+    for (function, function_calls) in epoch.iter().zip(calls_by_function) {
+        if is_class
+            && matches!(
+                function.name.as_str(),
+                "__init__" | "__new__" | "__post_init__"
+            )
+        {
+            continue;
+        }
+        let mut reported_callees: HashSet<String> = HashSet::new();
+        for (callee_name, call_node) in function_calls {
+            let Some(&callee_order) = order_by_name.get(callee_name.as_str()) else {
+                continue;
+            };
+            if callee_order <= function.definition_order {
+                continue;
+            }
+            if can_reach(callee_name.as_str(), function.name.as_str(), &call_graph) {
+                continue;
+            }
+            if reported_callees.insert(callee_name.clone()) {
+                out.push(ForwardCall {
+                    node: call_node,
+                    caller_name: function.name.clone(),
+                    callee_name,
+                });
+            }
+        }
+    }
+}
+
+/// Collects forward sibling calls in module and class scopes across `file`, in source order.
+///
+/// Exempts direct and mutual recursion (strongly connected components in the intra-scope call
+/// graph), class constructor callers (`__init__`, `__new__`, `__post_init__`), locally shadowed
+/// names, `@overload` / `@property` accessor groups, and non-call references. Reports at most
+/// one [`ForwardCall`] per `(caller, callee)` pair per declaration epoch, anchored at the first
+/// offending `call` node.
+#[must_use]
+pub fn collect_forward_calls(file: &ParsedFile) -> Vec<ForwardCall<'_>> {
+    let mut results = Vec::new();
+    let root = file.grep.root();
+
+    for epoch in partition_scope_epochs(&root) {
+        evaluate_epoch(&epoch, false, &mut results);
+    }
+
+    for node in root.dfs() {
+        if node.kind() == "class_definition"
+            && let Some(body) = node.field("body")
+        {
+            for epoch in partition_scope_epochs(&body) {
+                evaluate_epoch(&epoch, true, &mut results);
+            }
+        }
+    }
+
+    results.sort_unstable_by_key(|call| call.node.span().start);
+    results
+}
+
+/// A quote-wrapped format placeholder found in a Python f-string, `.format()` call,
+/// `%`-formatted string, or multi-argument `logging` call.
+#[derive(Clone)]
+pub struct QuoteWrappedPlaceholder<'a> {
+    /// The `string` AST node containing the quote-wrapped placeholder.
+    pub node: AstNode<'a>,
+    /// The quote-wrapped placeholder as written in source (such as `'{x}'`, `\"{}\"` , `'%s'`).
+    pub expression: String,
+    /// The canonical representation-formatted replacement (such as `{x!r}`, `{!r}`, `%r`).
+    pub replacement: String,
+}
+
+/// Active Python string-formatting mechanism for a `string` literal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PythonFormatContext {
+    /// An f-string literal (`f"..."` or `F"..."`).
+    FString,
+    /// Receiver of `.format(...)` / `.format_map(...)` or first argument of `str.format(...)`.
+    StrFormat,
+    /// Left operand of `%` or message argument of a multi-argument `logging` call.
+    Printf,
+}
+
+/// Standard logger method names whose first positional argument (`index 0`) is the format string.
+const LOGGER_MESSAGE_FIRST_METHODS: &[&str] = &[
+    "debug",
+    "info",
+    "warning",
+    "warn",
+    "error",
+    "exception",
+    "critical",
+    "fatal",
+];
+
+/// Common logger receiver paths recognized for printf-style logging calls.
+const PRINTF_LOGGER_RECEIVERS: &[&str] = &[
+    "logging",
+    "logger",
+    "log",
+    "_logger",
+    "_log",
+    "self.logger",
+    "self.log",
+    "cls.logger",
+    "cls.log",
+];
+
+/// SQL statement prefixes that mark a string as a SQL query rather than prose.
+const SQL_STATEMENT_KEYWORDS: &[&str] = &[
+    "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "WITH", "REPLACE", "MERGE",
+    "PRAGMA", "EXPLAIN", "TRUNCATE", "GRANT", "REVOKE",
+];
+
+/// SQL clause or operator tokens that immediately precede a quoted SQL literal.
+const SQL_OPERATOR_KEYWORDS: &[&str] = &[
+    "VALUES", "LIKE", "ILIKE", "RLIKE", "REGEXP", "GLOB", "IN", "WHERE", "SET", "TABLE", "INTO",
+    "FROM", "JOIN",
+];
+
+/// Splits the prefix flags (`f`, `r`, `b`, `u`) from a `string_start` delimiter token.
+fn string_prefix_flags(opening_delimiter: &str) -> &str {
+    opening_delimiter
+        .find(['\'', '"'])
+        .map_or("", |quote_index| &opening_delimiter[..quote_index])
+}
+
+/// Walks upward from a `string` node through enclosing `concatenated_string` and
+/// `parenthesized_expression` nodes to find the expression node bound to its surrounding context.
+fn outermost_string_expression<'a>(string_node: &RawNode<'a>) -> RawNode<'a> {
+    let mut current = string_node.clone();
+    while let Some(parent) = current.parent() {
+        let is_wrapper = matches!(
+            parent.kind().as_ref(),
+            "concatenated_string" | "parenthesized_expression"
+        );
+        if !is_wrapper {
+            break;
+        }
+        current = parent;
+    }
+    current
+}
+
+/// Returns the positional (non-keyword, non-splat) argument nodes of an `argument_list`.
+fn positional_call_arguments<'a>(arguments: &RawNode<'a>) -> Vec<RawNode<'a>> {
+    arguments
+        .children()
+        .filter(|child| {
+            child.is_named()
+                && !child.is_extra()
+                && !matches!(
+                    child.kind().as_ref(),
+                    "keyword_argument" | "list_splat" | "dictionary_splat"
+                )
+        })
+        .collect()
+}
+
+/// Returns true if `context_root` is the receiver of `.format(...)` / `.format_map(...)` or the
+/// first positional argument of `str.format(...)`.
+fn is_str_format_target(context_root: &RawNode<'_>) -> bool {
+    let Some(parent) = context_root.parent() else {
+        return false;
+    };
+    if parent.kind() == "attribute"
+        && parent
+            .field("object")
+            .is_some_and(|object| object.range() == context_root.range())
+        && parent
+            .field("attribute")
+            .is_some_and(|attribute| matches!(attribute.text().as_ref(), "format" | "format_map"))
+        && parent.parent().is_some_and(|grandparent| {
+            grandparent.kind() == "call"
+                && grandparent
+                    .field("function")
+                    .is_some_and(|function| function.range() == parent.range())
+        })
+    {
+        return true;
+    }
+
+    if parent.kind() == "argument_list"
+        && let Some(call_node) = parent.parent()
+        && call_node.kind() == "call"
+        && call_node
+            .field("function")
+            .is_some_and(|function| function.text() == "str.format")
+    {
+        return positional_call_arguments(&parent)
+            .first()
+            .is_some_and(|first| first.range() == context_root.range());
+    }
+
+    false
+}
+
+/// Returns true if `context_root` is the left operand of `%` or the message argument of a
+/// `logging` call that passes at least one trailing format argument.
+fn is_printf_format_target(context_root: &RawNode<'_>) -> bool {
+    let Some(parent) = context_root.parent() else {
+        return false;
+    };
+    if parent.kind() == "binary_operator"
+        && parent
+            .field("operator")
+            .is_some_and(|operator| operator.text() == "%")
+        && parent
+            .field("left")
+            .is_some_and(|left| left.range() == context_root.range())
+    {
+        return true;
+    }
+
+    if parent.kind() != "argument_list" {
+        return false;
+    }
+    let Some(call_node) = parent.parent().filter(|node| node.kind() == "call") else {
+        return false;
+    };
+    let Some(function) = call_node
+        .field("function")
+        .filter(|node| node.kind() == "attribute")
+    else {
+        return false;
+    };
+    let Some(receiver) = function.field("object") else {
+        return false;
+    };
+    let Some(method) = function.field("attribute") else {
+        return false;
+    };
+    if !PRINTF_LOGGER_RECEIVERS.contains(&receiver.text().trim()) {
+        return false;
+    }
+
+    let positional_arguments = positional_call_arguments(&parent);
+    let method_name = method.text();
+    if LOGGER_MESSAGE_FIRST_METHODS.contains(&method_name.as_ref()) {
+        positional_arguments.len() >= 2 && positional_arguments[0].range() == context_root.range()
+    } else if method_name == "log" {
+        positional_arguments.len() >= 3 && positional_arguments[1].range() == context_root.range()
+    } else {
+        false
+    }
+}
+
+/// Determines the active formatting context of a Python `string` node, returning `None` for
+/// raw strings, byte strings, or unformatted string literals.
+fn classify_string_format_context(string_node: &RawNode<'_>) -> Option<PythonFormatContext> {
+    let opening = string_node.child(0)?;
+    let opening_text = opening.text();
+    let prefix = string_prefix_flags(&opening_text);
+    if prefix.contains(['r', 'R', 'b', 'B']) {
+        return None;
+    }
+    if prefix.contains(['f', 'F']) {
+        return Some(PythonFormatContext::FString);
+    }
+    let context_root = outermost_string_expression(string_node);
+    if is_str_format_target(&context_root) {
+        Some(PythonFormatContext::StrFormat)
+    } else if is_printf_format_target(&context_root) {
+        Some(PythonFormatContext::Printf)
+    } else {
+        None
+    }
+}
+
+/// Appends the literal text segments (excluding `{...}` interpolations) of a single `string` node
+/// to `buffer`.
+fn append_string_literal_segments(string_node: &RawNode<'_>, source: &str, buffer: &mut String) {
+    let Some(opening) = string_node.child(0) else {
+        return;
+    };
+    let Some(closing) = string_node.children().last() else {
+        return;
+    };
+    let content_start = opening.range().end;
+    let content_end = closing.range().start;
+    if content_start >= content_end {
+        return;
+    }
+    let mut cursor = content_start;
+    for child in string_node
+        .children()
+        .filter(|child| child.kind() == "interpolation")
+    {
+        let range = child.range();
+        buffer.push_str(source.get(cursor..range.start).unwrap_or_default());
+        cursor = range.end;
+    }
+    buffer.push_str(source.get(cursor..content_end).unwrap_or_default());
+}
+
+/// Strips `.format()` (`{field}`) or `printf` (`%(key)s`) placeholder bodies from `text` so
+/// placeholder identifiers are not mistaken for prose words.
+fn strip_non_fstring_placeholders(text: &str, format_context: PythonFormatContext) -> String {
+    match format_context {
+        PythonFormatContext::FString => text.to_owned(),
+        PythonFormatContext::StrFormat => {
+            let bytes = text.as_bytes();
+            let mut stripped = String::with_capacity(text.len());
+            let mut cursor = 0;
+            let mut index = 0;
+            while index < bytes.len() {
+                let current = bytes[index];
+                let is_escaped = (current == b'{' && bytes.get(index + 1) == Some(&b'{'))
+                    || (current == b'}' && bytes.get(index + 1) == Some(&b'}'));
+                if is_escaped {
+                    index += 2;
+                    continue;
+                }
+                if current == b'{'
+                    && let Some(close_index) = find_str_format_closing_brace(bytes, index)
+                {
+                    stripped.push_str(&text[cursor..index]);
+                    index = close_index + 1;
+                    cursor = index;
+                    continue;
+                }
+                index += 1;
+            }
+            stripped.push_str(&text[cursor..]);
+            stripped
+        }
+        PythonFormatContext::Printf => {
+            let bytes = text.as_bytes();
+            let mut stripped = String::with_capacity(text.len());
+            let mut cursor = 0;
+            let mut index = 0;
+            while index < bytes.len() {
+                let current = bytes[index];
+                if current == b'%' && bytes.get(index + 1) == Some(&b'%') {
+                    index += 2;
+                    continue;
+                }
+                if current == b'%'
+                    && bytes.get(index + 1) == Some(&b'(')
+                    && let Some(close_offset) = text[index + 2..].find(')')
+                {
+                    stripped.push_str(&text[cursor..index]);
+                    let after_paren = index + 2 + close_offset + 1;
+                    let next_index = text[after_paren..]
+                        .chars()
+                        .next()
+                        .map_or(after_paren, |conv| after_paren + conv.len_utf8());
+                    index = next_index;
+                    cursor = index;
+                    continue;
+                }
+                index += 1;
+            }
+            stripped.push_str(&text[cursor..]);
+            stripped
+        }
+    }
+}
+
+/// Returns the combined literal text of all sibling `string` nodes preceding `string_node` in an
+/// enclosing `concatenated_string`.
+fn preceding_concatenated_literal_text(string_node: &RawNode<'_>, source: &str) -> String {
+    let mut prefix = String::new();
+    if let Some(parent) = string_node
+        .parent()
+        .filter(|node| node.kind() == "concatenated_string")
+    {
+        for child in parent.children().filter(|child| child.kind() == "string") {
+            if child.range().start >= string_node.range().start {
+                break;
+            }
+            append_string_literal_segments(&child, source, &mut prefix);
+        }
+    }
+    prefix
+}
+
+/// Returns the combined literal text of `string_node` (or all sibling `string` parts when
+/// enclosed in a `concatenated_string`), with format placeholders excluded.
+fn combined_message_literal_text(
+    string_node: &RawNode<'_>,
+    source: &str,
+    format_context: PythonFormatContext,
+) -> String {
+    let mut combined = String::new();
+    if let Some(parent) = string_node
+        .parent()
+        .filter(|node| node.kind() == "concatenated_string")
+    {
+        for child in parent.children().filter(|child| child.kind() == "string") {
+            append_string_literal_segments(&child, source, &mut combined);
+        }
+    } else {
+        append_string_literal_segments(string_node, source, &mut combined);
+    }
+    strip_non_fstring_placeholders(&combined, format_context)
+}
+
+/// Replaces escape sequences (`\n`, `\t`, `\"`, etc.) with spaces so escape letters are not
+/// mistaken for prose words.
+fn strip_escape_sequences(text: &str) -> String {
+    let mut cleaned = String::with_capacity(text.len());
+    let mut characters = text.chars();
+    while let Some(character) = characters.next() {
+        if character == '\\' {
+            characters.next();
+            cleaned.push(' ');
+        } else {
+            cleaned.push(character);
+        }
+    }
+    cleaned
+}
+
+/// Returns true if `literal_text` contains at least one prose word ($\ge 2$ consecutive ASCII
+/// letters) and does not start with a SQL statement keyword.
+fn is_prose_message_text(literal_text: &str) -> bool {
+    let cleaned = strip_escape_sequences(literal_text);
+    let has_word = cleaned
+        .split(|character: char| !character.is_ascii_alphabetic())
+        .any(|word| word.len() >= 2);
+    if !has_word {
+        return false;
+    }
+    let first_word = cleaned
+        .trim_start_matches(|character: char| character.is_ascii_whitespace() || character == '(')
+        .split(|character: char| !character.is_ascii_alphabetic())
+        .next()
+        .unwrap_or_default();
+    !SQL_STATEMENT_KEYWORDS
+        .iter()
+        .any(|keyword| first_word.eq_ignore_ascii_case(keyword))
+}
+
+/// Surrounding literal text slices for a single placeholder candidate.
+struct PlaceholderNeighbors<'a> {
+    /// Immediate literal text slice preceding the placeholder.
+    before: &'a str,
+    /// Cumulative literal text from the start of the string up to the placeholder.
+    full_before: &'a str,
+    /// Immediate literal text slice following the placeholder.
+    after: &'a str,
+    /// True when `after` is immediately followed by another f-string interpolation.
+    followed_by_interpolation: bool,
+}
+
+/// Extracted quote pair surrounding a placeholder, together with the text before the opening
+/// quote and after the closing quote.
+struct MatchedQuotePair<'a> {
+    opening: &'a str,
+    closing: &'a str,
+    prefix_before: &'a str,
+    suffix_after: &'a str,
+}
+
+/// Checks whether `before` ends with a single or double quote (unescaped or single-backslash
+/// escaped) and `after` starts with the matching quote character.
+fn extract_matching_quote_pair<'a>(
+    before: &'a str,
+    after: &'a str,
+) -> Option<MatchedQuotePair<'a>> {
+    let quote = *before.as_bytes().last()?;
+    if quote != b'\'' && quote != b'"' {
+        return None;
+    }
+    let quote_char = char::from(quote);
+    let without_quote = &before[..before.len() - 1];
+    let trailing_backslashes = without_quote
+        .bytes()
+        .rev()
+        .take_while(|&byte| byte == b'\\')
+        .count();
+    let (opening, prefix_before) = match trailing_backslashes {
+        0 => (&before[before.len() - 1..], without_quote),
+        1 => (
+            &before[before.len() - 2..],
+            &without_quote[..without_quote.len() - 1],
+        ),
+        _ => return None,
+    };
+    if prefix_before.ends_with(quote_char) {
+        return None;
+    }
+
+    let (closing, suffix_after) = if after.starts_with(quote_char) {
+        (&after[..1], &after[1..])
+    } else if after.as_bytes().first() == Some(&b'\\') && after.as_bytes().get(1) == Some(&quote) {
+        (&after[..2], &after[2..])
+    } else {
+        return None;
+    };
+    if suffix_after.starts_with(quote_char) {
+        return None;
+    }
+
+    Some(MatchedQuotePair {
+        opening,
+        closing,
+        prefix_before,
+        suffix_after,
+    })
+}
+
+/// Returns true if `text` has any unclosed single `{` or `[` delimiter (ignoring `{{` and `}}`).
+fn has_unclosed_structured_delimiter(text: &str) -> bool {
+    let mut brace_depth = 0_i32;
+    let mut bracket_depth = 0_i32;
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let current = bytes[index];
+        let is_escaped_brace = (current == b'{' && bytes.get(index + 1) == Some(&b'{'))
+            || (current == b'}' && bytes.get(index + 1) == Some(&b'}'));
+        if is_escaped_brace {
+            index += 2;
+            continue;
+        }
+        match current {
+            b'{' => brace_depth += 1,
+            b'}' => brace_depth = (brace_depth - 1).max(0),
+            b'[' => bracket_depth += 1,
+            b']' => bracket_depth = (bracket_depth - 1).max(0),
+            _ => {}
+        }
+        index += 1;
+    }
+    brace_depth > 0 || bracket_depth > 0
+}
+
+/// Returns true if `prefix_before_quote` and `full_prefix_before_quote` satisfy the left prose
+/// boundary rules (`C4.2`).
+fn has_valid_left_prose_boundary(
+    prefix_before_quote: &str,
+    full_prefix_before_quote: &str,
+) -> bool {
+    let backtick_count = full_prefix_before_quote
+        .bytes()
+        .filter(|&byte| byte == b'`')
+        .count();
+    if backtick_count % 2 != 0 || has_unclosed_structured_delimiter(full_prefix_before_quote) {
+        return false;
+    }
+
+    let starts_at_beginning = prefix_before_quote.is_empty() && full_prefix_before_quote.is_empty();
+    let preceded_by_space_or_paren = prefix_before_quote.ends_with([' ', '\t', '\n', '\r', '('])
+        || prefix_before_quote.ends_with("\\n")
+        || prefix_before_quote.ends_with("\\t")
+        || prefix_before_quote.ends_with("\\r");
+    if !starts_at_beginning && !preceded_by_space_or_paren {
+        return false;
+    }
+
+    let cleaned_prefix = strip_escape_sequences(full_prefix_before_quote);
+    let trimmed = cleaned_prefix.trim_end();
+    let Some(last_char) = trimmed.chars().next_back() else {
+        return true;
+    };
+    if !last_char.is_ascii_alphanumeric() && !matches!(last_char, ':' | ',' | '(' | '.' | '!' | '?')
+    {
+        return false;
+    }
+
+    let before_paren = trimmed.trim_end_matches('(').trim_end();
+    let last_word = before_paren
+        .rsplit(|character: char| !character.is_ascii_alphabetic())
+        .next()
+        .unwrap_or_default();
+    !SQL_OPERATOR_KEYWORDS
+        .iter()
+        .any(|keyword| last_word.eq_ignore_ascii_case(keyword))
+}
+
+/// Returns true if `character` is a sentence punctuation mark allowed immediately after a closing
+/// prose quote.
+const fn is_prose_punctuation(character: char) -> bool {
+    matches!(character, '.' | ',' | ';' | ':' | '!' | '?' | ')')
+}
+
+/// Returns true if `suffix_after_quote` satisfies the right prose boundary rules (`C4.3`).
+fn has_valid_right_prose_boundary(
+    suffix_after_quote: &str,
+    followed_by_interpolation: bool,
+) -> bool {
+    if suffix_after_quote.is_empty() {
+        return !followed_by_interpolation;
+    }
+    if suffix_after_quote.starts_with("\\n")
+        || suffix_after_quote.starts_with("\\t")
+        || suffix_after_quote.starts_with("\\r")
+    {
+        return true;
+    }
+    let mut characters = suffix_after_quote.chars();
+    let Some(first_char) = characters.next() else {
+        return !followed_by_interpolation;
+    };
+    if first_char.is_ascii_whitespace() {
+        return true;
+    }
+    if !is_prose_punctuation(first_char) {
+        return false;
+    }
+    characters
+        .next()
+        .map_or(!followed_by_interpolation, |second_char| {
+            second_char.is_ascii_whitespace()
+                || is_prose_punctuation(second_char)
+                || matches!(second_char, '\'' | '"')
+        })
+}
+
+/// Checks whether a candidate placeholder surrounded by `neighbors` is quote-wrapped in a prose
+/// context (`C3` and `C4.2`–`C4.3`), returning the quote-wrapped expression if so.
+fn match_prose_quoted_placeholder(
+    neighbors: &PlaceholderNeighbors<'_>,
+    placeholder_body: &str,
+) -> Option<String> {
+    let matched = extract_matching_quote_pair(neighbors.before, neighbors.after)?;
+    let full_prefix_before_quote =
+        &neighbors.full_before[..neighbors.full_before.len() - matched.opening.len()];
+    if !has_valid_left_prose_boundary(matched.prefix_before, full_prefix_before_quote) {
+        return None;
+    }
+    if !has_valid_right_prose_boundary(matched.suffix_after, neighbors.followed_by_interpolation) {
+        return None;
+    }
+    Some(format!(
+        "{open}{placeholder_body}{close}",
+        open = matched.opening,
+        close = matched.closing,
+    ))
+}
+
+/// Returns the bare expression text inside an f-string `interpolation` node if it has no
+/// `type_conversion` (`!r`, `!s`, `!a`), no `format_specifier` (`:...`), no debug `=`, and is not
+/// a nested string literal.
+fn bare_fstring_interpolation_expression(interpolation: &RawNode<'_>) -> Option<String> {
+    if interpolation.field("type_conversion").is_some()
+        || interpolation.field("format_specifier").is_some()
+        || interpolation.children().any(|child| child.kind() == "=")
+    {
+        return None;
+    }
+    let expression = interpolation.field("expression")?;
+    if expression.kind() == "string" {
+        return None;
+    }
+    let text = expression.text().trim().to_owned();
+    (!text.is_empty()).then_some(text)
+}
+
+/// Collects quote-wrapped placeholders inside an f-string `string` node.
+fn collect_fstring_quote_wrapped<'a>(
+    string_node: &RawNode<'a>,
+    source: &str,
+    out: &mut Vec<QuoteWrappedPlaceholder<'a>>,
+) {
+    let Some(opening) = string_node.child(0) else {
+        return;
+    };
+    let Some(closing) = string_node.children().last() else {
+        return;
+    };
+    let interpolations: Vec<RawNode<'a>> = string_node
+        .children()
+        .filter(|child| child.kind() == "interpolation")
+        .collect();
+    if interpolations.is_empty() {
+        return;
+    }
+
+    let content_start = opening.range().end;
+    let content_end = closing.range().start;
+    let mut segments: Vec<&str> = Vec::with_capacity(interpolations.len() + 1);
+    let mut cursor = content_start;
+    for interpolation in &interpolations {
+        let range = interpolation.range();
+        segments.push(source.get(cursor..range.start).unwrap_or_default());
+        cursor = range.end;
+    }
+    segments.push(source.get(cursor..content_end).unwrap_or_default());
+
+    let mut cumulative_before = preceding_concatenated_literal_text(string_node, source);
+    for (index, interpolation) in interpolations.iter().enumerate() {
+        let segment_before = segments[index];
+        let after = segments[index + 1];
+        cumulative_before.push_str(segment_before);
+        let before = if index == 0 {
+            cumulative_before.as_str()
+        } else {
+            segment_before
+        };
+        let Some(inner_expression) = bare_fstring_interpolation_expression(interpolation) else {
+            continue;
+        };
+        let neighbors = PlaceholderNeighbors {
+            before,
+            full_before: &cumulative_before,
+            after,
+            followed_by_interpolation: index + 1 < interpolations.len(),
+        };
+        let placeholder_body = format!("{{{inner_expression}}}");
+        if let Some(expression) = match_prose_quoted_placeholder(&neighbors, &placeholder_body) {
+            out.push(QuoteWrappedPlaceholder {
+                node: AstNode::from_raw(string_node.clone()),
+                expression,
+                replacement: format!("{{{inner_expression}!r}}"),
+            });
+        }
+    }
+}
+
+/// Returns true if `field` is a valid `.format()` field name (empty `""`, positional digits, or
+/// an identifier/attribute/index path without operators, whitespace, or conversion specifiers).
+fn is_valid_str_format_field(field: &str) -> bool {
+    if field.is_empty() {
+        return true;
+    }
+    let Some(first_char) = field.chars().next() else {
+        return false;
+    };
+    if !first_char.is_ascii_alphanumeric() && first_char != '_' {
+        return false;
+    }
+    field.chars().all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '[' | ']')
+    })
+}
+
+/// Finds the closing `}` byte offset of an unescaped `.format()` placeholder starting at
+/// `open_index`, returning `None` if an inner `{` or `}}` is encountered first.
+fn find_str_format_closing_brace(bytes: &[u8], open_index: usize) -> Option<usize> {
+    let mut scan = open_index + 1;
+    while scan < bytes.len() {
+        let current = bytes[scan];
+        if current == b'}' && bytes.get(scan + 1) != Some(&b'}') {
+            return Some(scan);
+        }
+        if current == b'{' {
+            return None;
+        }
+        scan += 1;
+    }
+    None
+}
+
+/// Evaluates a single `{...}` span inside a `.format()` string and returns a
+/// [`QuoteWrappedPlaceholder`] when it is a bare field wrapped in prose quotes.
+fn evaluate_str_format_brace_span<'a>(
+    string_node: &RawNode<'a>,
+    content: &str,
+    open_index: usize,
+    close_index: usize,
+) -> Option<QuoteWrappedPlaceholder<'a>> {
+    let raw_field = &content[open_index + 1..close_index];
+    if raw_field.contains(['!', ':', '{', '}']) {
+        return None;
+    }
+    let field = raw_field.trim();
+    if !is_valid_str_format_field(field) {
+        return None;
+    }
+    let before = &content[..open_index];
+    let after = &content[close_index + 1..];
+    let neighbors = PlaceholderNeighbors {
+        before,
+        full_before: before,
+        after,
+        followed_by_interpolation: false,
+    };
+    let placeholder_body = format!("{{{field}}}");
+    let expression = match_prose_quoted_placeholder(&neighbors, &placeholder_body)?;
+    Some(QuoteWrappedPlaceholder {
+        node: AstNode::from_raw(string_node.clone()),
+        expression,
+        replacement: format!("{{{field}!r}}"),
+    })
+}
+
+/// Collects quote-wrapped placeholders inside a `.format()` or `.format_map()` string literal.
+fn collect_str_format_quote_wrapped<'a>(
+    string_node: &RawNode<'a>,
+    content: &str,
+    out: &mut Vec<QuoteWrappedPlaceholder<'a>>,
+) {
+    let bytes = content.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let current = bytes[index];
+        let is_escaped = (current == b'{' && bytes.get(index + 1) == Some(&b'{'))
+            || (current == b'}' && bytes.get(index + 1) == Some(&b'}'));
+        if is_escaped {
+            index += 2;
+            continue;
+        }
+        if current == b'{'
+            && let Some(close_index) = find_str_format_closing_brace(bytes, index)
+        {
+            if let Some(finding) =
+                evaluate_str_format_brace_span(string_node, content, index, close_index)
+            {
+                out.push(finding);
+            }
+            index = close_index + 1;
+            continue;
+        }
+        index += 1;
+    }
+}
+
+/// Parses a bare `%s` or `%(name)s` printf placeholder starting at `&content[percent_index..]`,
+/// returning `(end_index, raw_specifier, replacement)`.
+fn parse_bare_printf_s_placeholder(
+    content: &str,
+    percent_index: usize,
+) -> Option<(usize, &str, String)> {
+    let rest = &content[percent_index + 1..];
+    if rest.starts_with('s') {
+        let end_index = percent_index + 2;
+        return Some((
+            end_index,
+            &content[percent_index..end_index],
+            "%r".to_owned(),
+        ));
+    }
+    let after_open_paren = rest.strip_prefix('(')?;
+    let close_offset = after_open_paren.find(")s")?;
+    let key = &after_open_paren[..close_offset];
+    let is_valid_key = !key.is_empty()
+        && key
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_');
+    if !is_valid_key {
+        return None;
+    }
+    let end_index = percent_index + 2 + close_offset + 2;
+    let raw_specifier = &content[percent_index..end_index];
+    Some((end_index, raw_specifier, format!("%({key})r")))
+}
+
+/// Collects quote-wrapped `%s` and `%(name)s` placeholders inside a printf-formatted string.
+fn collect_printf_quote_wrapped<'a>(
+    string_node: &RawNode<'a>,
+    content: &str,
+    out: &mut Vec<QuoteWrappedPlaceholder<'a>>,
+) {
+    let bytes = content.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let current = bytes[index];
+        if current == b'%' && bytes.get(index + 1) == Some(&b'%') {
+            index += 2;
+            continue;
+        }
+        if current == b'%'
+            && let Some((end_index, raw_specifier, replacement)) =
+                parse_bare_printf_s_placeholder(content, index)
+        {
+            let before = &content[..index];
+            let after = &content[end_index..];
+            let neighbors = PlaceholderNeighbors {
+                before,
+                full_before: before,
+                after,
+                followed_by_interpolation: false,
+            };
+            if let Some(expression) = match_prose_quoted_placeholder(&neighbors, raw_specifier) {
+                out.push(QuoteWrappedPlaceholder {
+                    node: AstNode::from_raw(string_node.clone()),
+                    expression,
+                    replacement,
+                });
+            }
+            index = end_index;
+            continue;
+        }
+        index += 1;
+    }
+}
+
+/// Collects quote-wrapped placeholders in Python f-strings, `.format()` / `.format_map()`
+/// calls, `%`-formatted strings, and multi-argument `logging` calls in `file`, in source order.
+#[must_use]
+pub fn collect_quote_wrapped_placeholders(file: &ParsedFile) -> Vec<QuoteWrappedPlaceholder<'_>> {
+    let source = file.source_text();
+    let mut out = Vec::new();
+    for node in file.grep.root().dfs() {
+        if node.kind() != "string" {
+            continue;
+        }
+        let Some(format_context) = classify_string_format_context(&node) else {
+            continue;
+        };
+        let combined_literal = combined_message_literal_text(&node, &source, format_context);
+        if !is_prose_message_text(&combined_literal) {
+            continue;
+        }
+        match format_context {
+            PythonFormatContext::FString => {
+                collect_fstring_quote_wrapped(&node, &source, &mut out);
+            }
+            PythonFormatContext::StrFormat => {
+                let (_, content) = delimited_string_parts(&node);
+                collect_str_format_quote_wrapped(&node, &content, &mut out);
+            }
+            PythonFormatContext::Printf => {
+                let (_, content) = delimited_string_parts(&node);
+                collect_printf_quote_wrapped(&node, &content, &mut out);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3776,5 +5841,294 @@ mod tests {
             .map(|occurrence| occurrence.value)
             .collect();
         assert_eq!(values, vec![expected]);
+    }
+
+    #[test]
+    fn test_extract_classes_ignores_comments_and_keywords_in_superclasses() {
+        let source = indoc::indoc! {r"
+            class FakeClient(
+                # Not a base class
+                metaclass=ABCMeta,
+            ):
+                pass
+        "};
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let classes = extract_classes(&file);
+        assert_eq!(classes.len(), 1);
+        assert!(classes[0].bases.is_empty());
+        assert!(!classes[0].has_contract_base());
+    }
+
+    #[test]
+    fn test_python_class_info_fake_name_and_contract_base() {
+        let source = indoc::indoc! {r"
+            class FakeClient(HttpClient):
+                pass
+
+            class _FakeGateway(object):
+                pass
+
+            class Fake_Repo(Generic[T]):
+                pass
+
+            class Fake2FA(Protocol):
+                pass
+
+            class FakeExtGeneric(typing_extensions.Generic[T]):
+                pass
+
+            class FakeExtProtocol(typing_extensions.Protocol, **kwargs):
+                pass
+
+            class Fake(ABC):
+                pass
+
+            class Faker:
+                pass
+
+            class Fakeable:
+                pass
+        "};
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let classes = extract_classes(&file);
+        let summary: Vec<(&str, bool, bool)> = classes
+            .iter()
+            .map(|class_info| {
+                (
+                    class_info.name.as_str(),
+                    class_info.is_fake_class_name(),
+                    class_info.has_contract_base(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("FakeClient", true, true),
+                ("_FakeGateway", true, false),
+                ("Fake_Repo", true, false),
+                ("Fake2FA", true, false),
+                ("FakeExtGeneric", true, false),
+                ("FakeExtProtocol", true, false),
+                ("Fake", true, true),
+                ("Faker", false, false),
+                ("Fakeable", false, false),
+            ]
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::init_and_method(
+        "class C:\n    def __init__(self):\n        self.x: int = 1\n    async def reset(self):\n        if True:\n            self.y: str",
+        &[("C", "__init__", "x", "int"), ("C", "reset", "y", "str")]
+    )]
+    #[case::parameterized_final_collected_bare_final_skipped(
+        "class C:\n    def __init__(self):\n        self.a: Final = 1\n        self.b: typing.Final = 2\n        self.c: Annotated[Final, 'm'] = 3\n        self.d: Final[int] = 4",
+        &[("C", "__init__", "d", "Final[int]")]
+    )]
+    #[case::private_and_unannotated_skipped(
+        "class C:\n    def __init__(self):\n        self._p: int = 1\n        self.pub = 2",
+        &[]
+    )]
+    #[case::staticmethod_classmethod_and_nested_func_skipped(
+        "class C:\n    @staticmethod\n    def sm(self):\n        self.a: int = 1\n    @classmethod\n    def cm(cls):\n        cls.b: int = 2\n    def run(self):\n        def inner(self):\n            self.c: int = 3",
+        &[]
+    )]
+    fn test_collect_inline_public_attribute_annotations(
+        #[case] source: &str,
+        #[case] expected: &[(&str, &str, &str, &str)],
+    ) {
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let actual: Vec<(String, String, String, String)> =
+            collect_inline_public_attribute_annotations(&file)
+                .into_iter()
+                .map(|attribute| {
+                    (
+                        attribute.class_name,
+                        attribute.method_name,
+                        attribute.name,
+                        attribute.annotation_text,
+                    )
+                })
+                .collect();
+        let expected: Vec<(String, String, String, String)> = expected
+            .iter()
+            .map(|(class_name, method_name, name, annotation)| {
+                (
+                    (*class_name).to_string(),
+                    (*method_name).to_string(),
+                    (*name).to_string(),
+                    (*annotation).to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::pep604_sequence("def f() -> Sequence[int] | None: pass", &["Sequence"])]
+    #[case::optional_list("def f() -> Optional[list[int]]: pass", &["list"])]
+    #[case::union_mapping("def f() -> typing.Union[typing.Mapping[str, int], None]: pass", &["typing.Mapping"])]
+    #[case::deduplicated_branches("def f() -> list[int] | list[str] | None: pass", &["list"])]
+    #[case::multiple_collection_branches("def f() -> list[int] | set[str] | None: pass", &["list", "set"])]
+    #[case::variadic_tuple("def f() -> tuple[int, ...] | None: pass", &["tuple"])]
+    #[case::bare_tuple("def f() -> tuple | None: pass", &["tuple"])]
+    #[case::fixed_pair_tuple_ignored("def f() -> tuple[int, str] | None: pass", &[])]
+    #[case::single_element_tuple_ignored("def f() -> tuple[int] | None: pass", &[])]
+    #[case::mixed_scalar_and_collection_ignored("def f() -> str | Sequence[str] | None: pass", &[])]
+    #[case::inner_nullable_element_ignored("def f() -> Sequence[int | None]: pass", &[])]
+    #[case::annotated_branch_unwrapped("def f() -> Annotated[Sequence[int], 'meta'] | None: pass", &["Sequence"])]
+    #[case::awaitable_coroutine_envelopes_unwrapped(
+        "def f() -> Awaitable[Coroutine[Any, Any, MutableMapping[str, int] | None]]: pass",
+        &["MutableMapping"]
+    )]
+    fn test_collect_nullable_collection_return_types(
+        #[case] source: &str,
+        #[case] expected: &[&str],
+    ) {
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let signatures = extract_function_signatures(&file);
+        let return_type_node = signatures[0]
+            .return_type_node
+            .as_ref()
+            .expect("function should have return annotation");
+        assert_eq!(
+            collect_nullable_collection_return_types(return_type_node),
+            expected
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::simple_unmatched("Order {order_id} filled", &[], Some("order_id"))]
+    #[case::simple_matched("Order {order_id} filled", &["order_id"], None)]
+    #[case::compound_attribute("Order {order.id} filled", &[], Some("order"))]
+    #[case::compound_subscript("Order {order[id]} filled", &[], Some("order"))]
+    #[case::conversion_and_spec("Order {order_id!r} {amount:.2f}", &["order_id"], Some("amount"))]
+    #[case::positional_empty_and_numbered("Order {} and {0} and {0.id} and {1[key]}", &[], None)]
+    #[case::escaped_double_braces("Literal {{order_id}} value {}", &[], None)]
+    #[case::triple_braces_captures_inner("Literal {{{order_id}}}", &[], Some("order_id"))]
+    #[case::nested_format_spec("Value {:>{width}}", &[], Some("width"))]
+    #[case::non_identifier_braces("Payload {\"order_id\": 1} and {a, b}", &[], None)]
+    #[case::unclosed_opening_brace("Malformed {order_id in input", &[], None)]
+    #[case::unmatched_closing_brace("Malformed {order_id} stray }", &[], None)]
+    fn test_first_unmatched_named_placeholder_parsing(
+        #[case] message: &str,
+        #[case] provided_kwargs: &[&str],
+        #[case] expected: Option<&str>,
+    ) {
+        let keyword_names: HashSet<String> = provided_kwargs
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        let actual = first_unmatched_named_placeholder(message, &keyword_names);
+        assert_eq!(actual.as_deref(), expected);
+    }
+
+    #[test]
+    fn test_collect_unmatched_logger_placeholders_extracts_callee_and_placeholder() {
+        let source = indoc::indoc! {r#"
+            logger.info("Order {order_id} filled", order_id)
+            self.log.error("Peer {peer.id} failed", peer)
+            logging.log(20, "User {user_id} action {action}", action, user_id=1)
+            logger.info("Order {order_id} filled", order_id=1)
+        "#};
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let findings: Vec<(String, String)> = collect_unmatched_logger_placeholders(&file)
+            .into_iter()
+            .map(|item| (item.callee, item.placeholder))
+            .collect();
+        assert_eq!(
+            findings,
+            vec![
+                ("logger.info".to_owned(), "order_id".to_owned()),
+                ("self.log.error".to_owned(), "peer".to_owned()),
+                ("logging.log".to_owned(), "action".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_collect_forward_calls_multiple_callees_and_cycles() {
+        let source = indoc::indoc! {r"
+            def orchestrate(x: int) -> int:
+                first = step_one(x)
+                second = step_two(first)
+                return second + is_even(second)
+
+            def step_one(x: int) -> int:
+                return x + 1
+
+            def step_two(x: int) -> int:
+                return x * 2
+
+            def is_even(n: int) -> bool:
+                return True if n == 0 else is_odd(n - 1)
+
+            def is_odd(n: int) -> bool:
+                return False if n == 0 else is_even(n - 1)
+        "};
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let forward = collect_forward_calls(&file);
+        let summary: Vec<(&str, &str, String)> = forward
+            .iter()
+            .map(|call| {
+                (
+                    call.caller_name.as_str(),
+                    call.callee_name.as_str(),
+                    call.node.text().into_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("orchestrate", "step_one", "step_one(x)".to_string()),
+                ("orchestrate", "step_two", "step_two(first)".to_string()),
+                ("orchestrate", "is_even", "is_even(second)".to_string()),
+            ]
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::fstring_multiple_placeholders(
+        "msg = f\"Copied '{source}' to '{target}'\"",
+        &[("'{source}'", "{source!r}"), ("'{target}'", "{target!r}")]
+    )]
+    #[case::str_format_empty_and_named(
+        "msg = \"Copied '{}' to '{target}'\".format(source, target=dest)",
+        &[("'{}'", "{!r}"), ("'{target}'", "{target!r}")]
+    )]
+    #[case::printf_positional_and_named(
+        "msg = \"Invalid '%s' and '%(key)s'\" % (a, b)",
+        &[("'%s'", "%r"), ("'%(key)s'", "%(key)r")]
+    )]
+    #[case::concatenated_fstring_shares_prose_context(
+        "msg = (\n    \"Failed to load configuration for \"\n    f\"'{service_name}'\"\n)",
+        &[("'{service_name}'", "{service_name!r}")]
+    )]
+    #[case::isolated_str_format_and_printf_ignored(
+        "a = \"'{value}'\".format(value=x)\nb = \"'%(name)s'\" % {\"name\": x}",
+        &[]
+    )]
+    #[case::concatenated_flag_and_backtick_ignored(
+        "a = \"Pass --output=\" f\"'{output_path}'\"\nb = \"Run `mode = \" f\"'{mode}'` in config\"",
+        &[]
+    )]
+    fn test_collect_quote_wrapped_placeholders_python(
+        #[case] python_code: &str,
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let file = ParsedFile::new(python_code, SupportLang::Python);
+        let actual: Vec<(String, String)> = collect_quote_wrapped_placeholders(&file)
+            .into_iter()
+            .map(|item| (item.expression, item.replacement))
+            .collect();
+        let expected: Vec<(String, String)> = expected
+            .iter()
+            .map(|(expression, replacement)| {
+                ((*expression).to_string(), (*replacement).to_string())
+            })
+            .collect();
+        assert_eq!(actual, expected);
     }
 }

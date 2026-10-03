@@ -1,4 +1,4 @@
-//! Flags tuple elements read by literal position instead of being unpacked once (`repeated-index-access`).
+//! Flags tuple elements read by literal position instead of being unpacked once.
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile, ScopePositionalReads};
 use crate::code_lint::contract::{CodeRule, RuleTarget};

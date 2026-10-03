@@ -1,4 +1,4 @@
-//! Enforces keyword-only parameters when a function has multiple positional parameters of identical type (`identical-positional-types`).
+//! Enforces keyword-only parameters when a function has multiple positional parameters of identical type.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{

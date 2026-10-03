@@ -1,4 +1,4 @@
-//! Flags Python function return annotations that use abstract mutable collection types no caller in the file mutates (`mutable-collection-return`).
+//! Flags Python function return annotations that use abstract mutable collection types no caller in the file mutates.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{

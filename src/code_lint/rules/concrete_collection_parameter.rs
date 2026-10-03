@@ -1,4 +1,4 @@
-//! Flags Python function parameters annotated with concrete mutable collection types (`concrete-collection-parameter`).
+//! Flags Python function parameters annotated with concrete mutable collection types.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{

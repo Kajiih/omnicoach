@@ -174,13 +174,14 @@ There are no aliases for old labels: renaming a topic breaks configs that name i
 | `jj` | vcs | `jujutsu` | Rules specific to Jujutsu. | Commands and workflows specific to Jujutsu. Not generic VCS behaviour. |
 | `durations` | — | | How spans of time are represented. | Representing lengths of time and their units. Not sleeping/waiting (see `test-timing`) or wall-clock dates. |
 | `record-types` | — | | Declaring named records (`dataclass`, `NamedTuple`, `struct`). | Field-bundle declarations, mutability and slots. Not enums or protocols. |
-| `literals` | — | | How literal values are written in code. | Writing string and number literals (multiline strings, magic numbers). Not identifiers or formatting APIs. |
+| `literals` | — | | How literal values are written in code. | Writing string and number literals (multiline strings, format placeholders, magic numbers). Not identifiers or logging calls (see `logging`). |
 | `nesting` | — | | Nesting depth and scope structure of code units. | Nested functions, closures and scope depth. Not naming or "readability" in general. |
 | `global-state` | — | | Process-wide state read or written implicitly. | Reading or writing ambient process-wide state (environment variables, globals). Not file or network I/O. |
 | `error-handling` | — | | Raising, catching, swallowing and reporting errors. | Exceptions and `Result`s, including `contextlib.suppress`. Not `omni:` directives (see `suppression-directives`). |
 | `logging` | — | | Use of logging APIs. | Log calls and their arguments. Not `print` or metrics. |
 | `concurrency` | — | | Concurrent execution: coroutines, tasks and threads. | Spawning, awaiting and joining concurrent work and its lifetimes. Not sleeping or waiting in tests (see `test-timing`). |
 | `suppression-directives` | — | | Hygiene of `omni:` suppression comments. | `omni:` directives that silence Omni. Not `contextlib.suppress` (see `error-handling`). |
+| `declaration-order` | — | | Order in which declarations appear in a scope. | Ordering of functions, methods and items within a module or class. Not nesting depth (see `nesting`) or naming. |
 
 ---
 

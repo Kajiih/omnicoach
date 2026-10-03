@@ -1,4 +1,4 @@
-//! Flags a literal repeated inline in one file instead of being named once (`repeated-literal`).
+//! Flags a literal repeated inline in one file instead of being named once.
 
 use crate::code_lint::ast::{self, AstNode, LiteralRole, LiteralValue, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
