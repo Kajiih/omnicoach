@@ -51,7 +51,8 @@ pub const RULE: CodeRule = CodeRule {
                            types such as `Sequence[MutableMapping[K, V]]` are not checked, \
                            because mutation of the elements is not tracked. Private attributes \
                            starting with `_`, attributes mutated in any method of the class, \
-                           and attributes on `Protocol` or `ABC` classes are not flagged.",
+                           attributes on `Protocol` or `ABC` classes, and `TypedDict` keys \
+                           (a `TypedDict` has no methods to mutate them) are not flagged.",
             why_is_this_bad: "On a `@dataclass` or public class interface, annotating a read-only \
                               field as `MutableSequence`, `MutableMapping`, or `MutableSet` \
                               makes its type invariant, rejects `tuple` or `Sequence` arguments \
@@ -96,7 +97,7 @@ pub const RULE: CodeRule = CodeRule {
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for attribute in collect_public_class_attributes(file) {
-        if attribute.is_mutated_in_class {
+        if attribute.is_mutated_in_class || attribute.is_typed_dict_key {
             continue;
         }
         let matched = collect_mutable_collection_types(&attribute.type_node);
@@ -178,6 +179,13 @@ crate::test_utils::rule_test!(
                     from collections.abc import MutableSequence
 
                     class BaseCollector(abc.ABC):
+                        items: MutableSequence[str]
+                "#,
+                typed_dict_keys_exempt => r#"
+                    from collections.abc import MutableSequence
+                    from typing import TypedDict
+
+                    class Payload(TypedDict):
                         items: MutableSequence[str]
                 "#,
                 nested_mutable_elements_not_checked => r#"

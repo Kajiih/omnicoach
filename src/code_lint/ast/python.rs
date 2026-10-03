@@ -654,7 +654,8 @@ pub struct PythonFunctionSignature<'a> {
 impl PythonFunctionSignature<'_> {
     /// Returns true if the function's signature is imposed from outside: a data-model dunder
     /// method other than `__init__`, `__new__`, and `__call__`, or a function decorated with
-    /// `@override`, `@overload`, `@abstractmethod`, `@fixture`, or `@<function>.register`.
+    /// `@override`, `@overload`, `@abstractmethod`, `@fixture`, `@<function>.register`, or
+    /// `@<property>.setter`.
     #[must_use]
     pub fn has_imposed_signature(&self) -> bool {
         is_exempt_dunder_method(&self.name) || has_exempt_signature_decorator(&self.node)
@@ -711,18 +712,18 @@ fn parse_param_parts<'a>(node: &RawNode<'a>) -> Option<ParsedParamParts<'a>> {
             })
         }
         "typed_parameter" => {
-            let name_node = node.field("name").or_else(|| {
-                node.children().find_map(|child| {
-                    if child.kind() == "identifier" {
-                        Some(child)
-                    } else if child.kind() == "list_splat_pattern"
-                        || child.kind() == "dictionary_splat_pattern"
-                    {
-                        child.children().find(|sub| sub.kind() == "identifier")
-                    } else {
-                        None
-                    }
-                })
+            // The grammar gives `typed_parameter` no `name` field: the name is the leading
+            // identifier, wrapped in a splat pattern for `*args: T` and `**kwargs: T`.
+            let name_node = node.children().find_map(|child| {
+                if child.kind() == "identifier" {
+                    Some(child)
+                } else if child.kind() == "list_splat_pattern"
+                    || child.kind() == "dictionary_splat_pattern"
+                {
+                    child.children().find(|sub| sub.kind() == "identifier")
+                } else {
+                    None
+                }
             })?;
             let name = name_node.text().to_string();
             let type_node = node.field("type");
@@ -908,7 +909,9 @@ fn is_std_type_constructor(path: &str, terminal: &str, targets: &[&str]) -> bool
 }
 
 /// Returns true if `(path, terminal)` is a concrete mutable collection constructor (`list`, `dict`,
-/// `set`, `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, `typing.Set`, etc.).
+/// `set`, `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, `typing.Set`, etc.), or a
+/// `collections` container (`defaultdict`, `deque`, `Counter`, `OrderedDict`) or its `typing`
+/// alias (`DefaultDict`, `Deque`).
 ///
 /// Qualified `collections.abc.Set` is excluded because it is the abstract set ABC, whereas
 /// unqualified `Set` and `typing.Set` are flagged as concrete (per Ruff `PYI025`, `collections.abc.Set`
@@ -917,6 +920,12 @@ fn is_concrete_collection_constructor(path: &str, terminal: &str) -> bool {
     match terminal {
         "list" | "List" | "dict" | "Dict" | "set" => is_std_type_constructor_prefix(path, terminal),
         "Set" => matches!(path, "Set" | "typing.Set" | "typing_extensions.Set"),
+        "defaultdict" | "DefaultDict" | "deque" | "Deque" | "Counter" | "OrderedDict" => {
+            path == terminal
+                || path.strip_suffix(terminal).is_some_and(|prefix| {
+                    matches!(prefix, "collections." | "typing." | "typing_extensions.")
+                })
+        }
         _ => false,
     }
 }
@@ -1178,16 +1187,17 @@ pub fn collect_specific_collection_types(type_node: &AstNode<'_>) -> Vec<String>
 
 /// Returns the read-only `collections.abc` replacements of collection `type_paths`, joined with `", "`.
 ///
-/// `list` and `MutableSequence` become `collections.abc.Sequence`, `dict` and `MutableMapping`
-/// become `collections.abc.Mapping`, and `set` and `MutableSet` become `collections.abc.Set`.
-/// Duplicates are removed.
+/// `list`, `deque`, and `MutableSequence` become `collections.abc.Sequence`; `dict`, `defaultdict`,
+/// `Counter`, `OrderedDict`, and `MutableMapping` become `collections.abc.Mapping`; and `set` and
+/// `MutableSet` become `collections.abc.Set`. Duplicates are removed.
 #[must_use]
 pub fn read_only_collection_replacements(type_paths: &[String]) -> String {
     let mut replacements: Vec<&str> = Vec::new();
     for type_path in type_paths {
         let terminal = type_path.rsplit('.').next().unwrap_or(type_path);
         let replacement = match terminal {
-            "dict" | "Dict" | "MutableMapping" => "collections.abc.Mapping",
+            "dict" | "Dict" | "defaultdict" | "DefaultDict" | "Counter" | "OrderedDict"
+            | "MutableMapping" => "collections.abc.Mapping",
             "set" | "Set" | "MutableSet" => "collections.abc.Set",
             _ => "collections.abc.Sequence",
         };
@@ -1209,13 +1219,14 @@ fn is_exempt_dunder_method(func_name: &str) -> bool {
 }
 
 /// Returns true if `func_node` is decorated with `@override`, `@overload`, `@abstractmethod`,
-/// `@fixture` (`@pytest.fixture`), or `@<function>.register` (`functools.singledispatch`
-/// implementations, which dispatch on their annotations).
+/// `@fixture` (`@pytest.fixture`), `@<function>.register` (`functools.singledispatch`
+/// implementations, which dispatch on their annotations), or `@<property>.setter` (whose value
+/// type mirrors the getter's return type).
 fn has_exempt_signature_decorator(func_node: &AstNode<'_>) -> bool {
     has_decorator(func_node, |terminal| {
         matches!(
             terminal,
-            "override" | "overload" | "abstractmethod" | "fixture" | "register"
+            "override" | "overload" | "abstractmethod" | "fixture" | "register" | "setter"
         )
     })
 }
@@ -1223,44 +1234,58 @@ fn has_exempt_signature_decorator(func_node: &AstNode<'_>) -> bool {
 /// Returns true if a Python `class_definition` inherits from `Protocol` or `ABC` or declares
 /// `metaclass=ABCMeta`.
 fn is_protocol_or_abc_class_raw(class_node: &RawNode<'_>) -> bool {
+    let has_abc_metaclass = class_node
+        .field("superclasses")
+        .is_some_and(|superclasses| {
+            superclasses.children().any(|child| {
+                child.kind() == "keyword_argument"
+                    && child
+                        .field("name")
+                        .is_some_and(|name_node| name_node.text() == "metaclass")
+                    && child.field("value").is_some_and(|value_node| {
+                        let (_, terminal) = resolve_path_and_terminal_raw(&value_node);
+                        terminal == "ABCMeta"
+                    })
+            })
+        });
+    has_abc_metaclass
+        || base_class_terminals_raw(class_node)
+            .iter()
+            .any(|terminal| matches!(terminal.as_str(), "Protocol" | "ABC"))
+}
+
+/// Returns true if a Python `class_definition` inherits from `TypedDict`.
+fn is_typed_dict_class_raw(class_node: &RawNode<'_>) -> bool {
+    base_class_terminals_raw(class_node)
+        .iter()
+        .any(|terminal| terminal == "TypedDict")
+}
+
+/// Returns the terminal name of each positional base class of a Python `class_definition`,
+/// unwrapping generic subscripts (`Protocol[T]` yields `Protocol`).
+fn base_class_terminals_raw(class_node: &RawNode<'_>) -> Vec<String> {
     let Some(superclasses) = class_node.field("superclasses") else {
-        return false;
+        return Vec::new();
     };
-    for child in superclasses.children() {
-        if !child.is_named() || child.is_extra() {
-            continue;
-        }
-        if child.kind() == "keyword_argument" {
-            let is_abc_meta = child
-                .field("name")
-                .is_some_and(|name_node| name_node.text() == "metaclass")
-                && child.field("value").is_some_and(|value_node| {
-                    let (_, terminal) = resolve_path_and_terminal_raw(&value_node);
-                    terminal == "ABCMeta"
-                });
-            if is_abc_meta {
-                return true;
-            }
-            continue;
-        }
-        let base_expr = if matches!(child.kind().as_ref(), "subscript" | "generic_type") {
-            child
-                .field("value")
-                .or_else(|| {
-                    child
-                        .children()
-                        .find(|inner| inner.is_named() && !inner.is_extra())
-                })
-                .unwrap_or(child)
-        } else {
-            child
-        };
-        let (_, terminal) = resolve_path_and_terminal_raw(&base_expr);
-        if matches!(terminal.as_str(), "Protocol" | "ABC") {
-            return true;
-        }
-    }
-    false
+    superclasses
+        .children()
+        .filter(|child| child.is_named() && !child.is_extra() && child.kind() != "keyword_argument")
+        .map(|child| {
+            let base_expr = if matches!(child.kind().as_ref(), "subscript" | "generic_type") {
+                child
+                    .field("value")
+                    .or_else(|| {
+                        child
+                            .children()
+                            .find(|inner| inner.is_named() && !inner.is_extra())
+                    })
+                    .unwrap_or(child)
+            } else {
+                child
+            };
+            resolve_path_and_terminal_raw(&base_expr).1
+        })
+        .collect()
 }
 
 /// Returns true if `node` (a method `function_definition` or class attribute node) is directly
@@ -1361,11 +1386,19 @@ pub fn is_with_context_manager(node: &AstNode<'_>) -> bool {
     find_enclosing_with_item(node).is_some() && find_enclosing_with_statement(node).is_some()
 }
 
-/// Returns true if a Python `function_definition` is nested inside another `function_definition`.
+/// Returns true if the nearest enclosing `function_definition` or `class_definition` of a Python
+/// `function_definition` is a `function_definition`. Methods of a class declared inside a function
+/// are therefore not nested; a `def` inside such a method is.
 fn is_nested_function_raw(func_node: &RawNode<'_>) -> bool {
     func_node
         .ancestors()
-        .any(|ancestor| ancestor.kind() == "function_definition")
+        .find(|ancestor| {
+            matches!(
+                ancestor.kind().as_ref(),
+                "function_definition" | "class_definition"
+            )
+        })
+        .is_some_and(|scope| scope.kind() == "function_definition")
 }
 
 /// Finds all nested Python function definitions (`def ...` inside another `def ...`) and returns
@@ -1774,6 +1807,9 @@ pub struct PythonAnnotatedAttribute<'a> {
     pub type_node: AstNode<'a>,
     /// True if any method in the enclosing class mutates this attribute in place.
     pub is_mutated_in_class: bool,
+    /// True if the enclosing class is a `TypedDict`, so the annotation declares a dictionary key.
+    /// A `TypedDict` cannot define methods, so `__init__` attributes are never keys.
+    pub is_typed_dict_key: bool,
 }
 
 /// Walks `node` (without entering nested `class_definition`s) and records attribute names
@@ -1831,6 +1867,7 @@ fn collect_init_annotated_attrs_rec<'a>(
                 name: attr_name,
                 type_node: AstNode::from_raw(type_node),
                 is_mutated_in_class,
+                is_typed_dict_key: false,
             });
         }
     }
@@ -1857,6 +1894,7 @@ pub fn collect_public_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotated
             continue;
         };
         let class_name = name_node.text().into_owned();
+        let is_typed_dict_class = is_typed_dict_class_raw(&class_node);
 
         let mut mutated_attrs = HashSet::new();
         for child in body.children() {
@@ -1880,6 +1918,7 @@ pub fn collect_public_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotated
                         name: attr_name,
                         type_node: AstNode::from_raw(type_node),
                         is_mutated_in_class,
+                        is_typed_dict_key: is_typed_dict_class,
                     });
                 }
             } else {
@@ -3223,6 +3262,8 @@ mod tests {
     #[case::sequence_kinds(&["list", "typing.List", "MutableSequence"], "collections.abc.Sequence")]
     #[case::mapping_kinds(&["dict", "Dict", "collections.abc.MutableMapping"], "collections.abc.Mapping")]
     #[case::set_kinds(&["set", "typing.Set", "MutableSet"], "collections.abc.Set")]
+    #[case::collections_mappings(&["defaultdict", "typing.DefaultDict", "collections.Counter", "OrderedDict"], "collections.abc.Mapping")]
+    #[case::collections_deque(&["collections.deque", "Deque"], "collections.abc.Sequence")]
     #[case::mixed_in_order(&["dict", "list", "dict"], "collections.abc.Mapping, collections.abc.Sequence")]
     fn test_read_only_collection_replacements(#[case] type_paths: &[&str], #[case] expected: &str) {
         let type_paths: Vec<String> = type_paths.iter().map(|path| (*path).to_string()).collect();

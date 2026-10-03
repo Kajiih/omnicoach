@@ -46,8 +46,9 @@ pub const RULE: CodeRule = CodeRule {
                            Stub bodies (`...`, `pass`, `raise NotImplementedError`), methods on \
                            `Protocol` or `ABC` classes, dunder methods other than `__init__`, \
                            `__new__`, and `__call__`, and functions decorated with `@override`, \
-                           `@overload`, `@abstractmethod`, `@fixture`, or `@<function>.register` \
-                           are exempt. Once fixed, `specific-collection-parameter` may suggest a \
+                           `@overload`, `@abstractmethod`, `@fixture`, `@<function>.register`, \
+                           or `@<property>.setter` are exempt. Once fixed, \
+                           `specific-collection-parameter` may suggest a \
                            still broader interface for a parameter that is only iterated.",
             why_is_this_bad: "`MutableSequence`, `MutableMapping`, and `MutableSet` are \
                               invariant in their type arguments and require a mutable container \

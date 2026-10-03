@@ -46,7 +46,9 @@ pub const RULE: CodeRule = CodeRule {
                            Python source files (test files are not checked) whose type \
                            annotation uses a concrete mutable collection constructor (`list`, \
                            `dict`, `set`, `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, \
-                           or `typing.Set`), including inside `ClassVar`, `Final`, `Optional`, \
+                           or `typing.Set`, and the `collections` containers `defaultdict`, \
+                           `deque`, `Counter`, and `OrderedDict` with their `typing` aliases), \
+                           including inside `ClassVar`, `Final`, `Optional`, \
                            `Union`, `|`, and covariant containers. Unqualified `Set` is exempt \
                            only when `from collections.abc import Set` is present in the file. \
                            Private attributes starting with `_` and attributes on `Protocol` or \
@@ -211,6 +213,12 @@ crate::test_utils::rule_test!(
                     class Table:
                         rows: Sequence[dict[str, int]]
                 "# => "Sequence[dict[str, int]]",
+                typed_dict_concrete_key_still_flagged => r#"
+                    from typing import TypedDict
+
+                    class Payload(TypedDict):
+                        items: list[str]
+                "# => "list[str]",
             ],
         },
     }
