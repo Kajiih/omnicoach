@@ -33,9 +33,9 @@ pub const RULE: CodeRule = CodeRule {
             summary: "Flags Python functions defined inside other functions.",
             what_it_does: "Flags every `def` that appears inside the body of another \
                            function or method in Python source files; test files are not \
-                           checked. This includes the methods of a class declared inside a \
-                           function. Top-level functions, methods of top-level classes and \
-                           `lambda` expressions are not flagged.",
+                           checked. Top-level functions, methods of any class (including a \
+                           class declared inside a function) and `lambda` expressions are \
+                           not flagged.",
             why_is_this_bad: "A nested function captures the enclosing function's local \
                               variables implicitly, so its real inputs are not visible in its \
                               signature. It cannot be imported, tested or reused on its own, \
@@ -101,6 +101,13 @@ crate::test_utils::rule_test!(
                     def sort_items(items):
                         return sorted(items, key=lambda item: item.id)
                 "#,
+                method_of_local_class_not_flagged => r#"
+                    def make_handler():
+                        class Handler:
+                            def handle(self, event):
+                                return event
+                        return Handler()
+                "#,
             ],
             fail: [
                 nested_in_function => r#"
@@ -130,6 +137,18 @@ crate::test_utils::rule_test!(
                 "# => r#"
                     def transform(item):
                         return item * 2
+                "#,
+                nested_in_method_of_local_class => r#"
+                    def make_handler():
+                        class Handler:
+                            def handle(self, event):
+                                def parse(raw):
+                                    return raw
+                                return parse(event)
+                        return Handler()
+                "# => r#"
+                    def parse(raw):
+                        return raw
                 "#,
             ],
         },

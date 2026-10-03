@@ -38,7 +38,9 @@ pub const RULE: CodeRule = CodeRule {
             what_it_does: "Flags non-variadic parameters of functions and methods in Python \
                            source files (test files are not checked) whose type annotation uses \
                            a concrete mutable collection constructor (`list`, `dict`, `set`, \
-                           `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, or `typing.Set`), \
+                           `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, or `typing.Set`, \
+                           and the `collections` containers `defaultdict`, `deque`, `Counter`, \
+                           and `OrderedDict` with their `typing` aliases), \
                            either at the top level or inside transparent wrappers (`|`, \
                            `Optional`, `Union`, `Annotated`) and covariant container positions \
                            (`Sequence[list[T]]`, `Mapping[K, list[V]]`, `tuple[...]`, \
@@ -49,9 +51,9 @@ pub const RULE: CodeRule = CodeRule {
                            `MutableMapping`) are not inspected. Dunder methods other than \
                            `__init__`, `__new__`, and `__call__`, methods on `Protocol` or `ABC` \
                            classes, and functions decorated with `@override`, `@overload`, \
-                           `@abstractmethod`, `@fixture`, or `@<function>.register` are exempt. \
-                           String annotations and module aliases (`import typing as t`) are not \
-                           resolved.",
+                           `@abstractmethod`, `@fixture`, `@<function>.register`, or \
+                           `@<property>.setter` are exempt. String annotations and module \
+                           aliases (`import typing as t`) are not resolved.",
             why_is_this_bad: "In Python's type system, `list`, `dict`, and `set` are invariant \
                               in their type parameters and require a mutable concrete container \
                               at call sites. A function annotated with `items: list[str]` \
@@ -203,6 +205,16 @@ crate::test_utils::rule_test!(
                         def compute(self, table: dict[str, int]) -> None:
                             pass
                 "#,
+                property_setter_exempt => r#"
+                    class Basket:
+                        @property
+                        def items(self):
+                            return self._items
+
+                        @items.setter
+                        def items(self, value: list[int]) -> None:
+                            self._items = value
+                "#,
                 overload_exempt => r#"
                     from typing import overload
 
@@ -264,6 +276,24 @@ crate::test_utils::rule_test!(
                     def process(items: list) -> None:
                         pass
                 "# => "list",
+                collections_defaultdict => r#"
+                    from collections import defaultdict
+
+                    def group(index: defaultdict[str, list[int]]) -> None:
+                        pass
+                "# => "defaultdict[str, list[int]]",
+                qualified_collections_counter => r#"
+                    import collections
+
+                    def tally(counts: collections.Counter[str]) -> None:
+                        pass
+                "# => "collections.Counter[str]",
+                typing_deque_alias => r#"
+                    from typing import Deque
+
+                    def drain(queue: Deque[int]) -> None:
+                        pass
+                "# => "Deque[int]",
                 pep585_generic_dict => r#"
                     def process(*, mapping: dict[str, int]) -> None:
                         pass

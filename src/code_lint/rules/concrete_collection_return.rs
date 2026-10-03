@@ -44,7 +44,9 @@ pub const RULE: CodeRule = CodeRule {
             what_it_does: "Flags functions and methods in Python source files (test files are \
                            not checked) whose return annotation uses a concrete mutable \
                            collection constructor (`list`, `dict`, `set`, `List`, `Dict`, `Set`, \
-                           `typing.List`, `typing.Dict`, or `typing.Set`), either at the top \
+                           `typing.List`, `typing.Dict`, or `typing.Set`, and the `collections` \
+                           containers `defaultdict`, `deque`, `Counter`, and `OrderedDict` with \
+                           their `typing` aliases), either at the top \
                            level or inside transparent wrappers (`|`, `Optional`, `Union`, \
                            `Annotated`) and covariant container positions (`Sequence[list[T]]`, \
                            `Mapping[K, list[V]]`, `Awaitable[list[T]]`). Unqualified `Set` is \
@@ -207,6 +209,12 @@ crate::test_utils::rule_test!(
                     def get_users() -> list[str]:
                         return ["alice"]
                 "# => "list[str]",
+                ordered_dict_return => r#"
+                    from collections import OrderedDict
+
+                    def ranking() -> OrderedDict[str, int]:
+                        return OrderedDict()
+                "# => "OrderedDict[str, int]",
                 unqualified_typing_set_return => r#"
                     from typing import Set
 
