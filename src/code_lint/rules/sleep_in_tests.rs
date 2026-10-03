@@ -1,4 +1,4 @@
-//! Flags wall-clock/async `sleep` calls (`sleep-in-tests`) and zero-duration sleeps (`zero-sleep-in-tests`) in test files.
+//! Flags wall-clock/async `sleep` calls and zero-duration sleeps in test files.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};

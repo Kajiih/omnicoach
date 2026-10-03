@@ -1,0 +1,56 @@
+# Rule Batch Playbook
+
+> [!NOTE]
+> How-to for the agent (or person) who leads the creation of several rules at once with one worker agent per rule, standing in for the user during reviews. A single rule follows [adding_a_rule.md](adding_a_rule.md); this playbook only adds what changes when rules are built in parallel. Lessons come from the legacy batch (10 candidates, 6 shipped, 4 dropped; per-rule records in `docs/dev/<slug>/`).
+
+## Roles
+
+- **Lead**: owns scope, shared files, decisions, integration and the final review. Acts as the user for workers, but escalates to the real user any decision that changes scope, drops a rule, or touches the framework.
+- **Worker**: one per rule. Runs the 7 phases (`01_understand.md` … `07_learn.md`) in `docs/dev/<slug>/` and implements the rule.
+- **Reviewers**: two independent, read-only agents per batch: one for code and tests, one for user-facing text and docs. They review the batch as a whole, not rule by rule.
+
+## Phases
+
+### 0. Triage (lead, before spawning workers)
+
+1. **Redundancy gate.** For each candidate, list the Ruff / Clippy / Mypy / Pyright / Pylint rules that already cover it. In the legacy batch, 4 of 10 candidates and 3 sub-checks were fully covered. A dropped candidate still gets `01_understand.md` and `02_references.md`, ending with the exact `pyproject.toml` / `Cargo.toml` configuration that replaces it, plus a *Not pursued* entry in [ROADMAP.md](../../ROADMAP.md) linking that file.
+2. **Language scope.** Decide per rule which languages apply, and record why the others do not ([rule_design_guide.md](rule_design_guide.md)). Workers ported Python rules and never asked; the Rust question came up only after shipping.
+3. **Shared-helper inventory.** Before workers start, list the structural facts several candidates will need (logger-call detection, string literal text, format-placeholder parsing, local bindings, union flattening, collection type names) and grep `src/code_lint/ast/` and `src/code_lint/semantic/` for existing helpers. Assign each new shared fact to one owner (the lead or one worker). Without this step, parallel workers each wrote their own logger matcher, format-field parser and literal extractor in `ast/python.rs`.
+
+### 1–3. Understand, references, design (workers, in parallel)
+
+- Give each worker: the rule slug, the candidate source, the 7-phase list, the shared-helper inventory with owners, and the canonical file to copy conventions from (a recent rule such as `nullable_collection_return.rs`). Workers otherwise copy whichever neighbour they open, and inconsistencies spread (module doc comments, test naming).
+- Review each `01`–`03` as the user would: check numbered decisions, push back on scope creep, and require every exemption to be named (`E1`, `E2`, …) so it can be mutation-tested later.
+- Record the lead's validation in the document itself (status banner `VALIDATED` / `VALIDATED — DROPPED`). Workers leave banners at `PENDING`; fix them before closing the batch.
+
+### 4. Execute (workers, integration serialized)
+
+- Workers may write their rule file in parallel, but **shared files are integrated one rule at a time by the lead**: `ast/python.rs`, `rules.rs`, `taxonomy.rs`, `tag_guide.md`, `tests/snapshots/cli__list_rules.snap`, [ROADMAP.md](../../ROADMAP.md).
+- After each integration run the full verification from [adding_a_rule.md](adding_a_rule.md) step 9, including self-dogfooding (`omni-code-lint .`), which caught naming violations in the new helpers.
+- **Mutation check per exemption.** Disable each named exemption in turn and confirm a test fails. Keep the harness in the lead's scratch space; the legacy batch killed 23/23.
+- Know the harness: `rule_test!` also runs every `fail` case as `{code}\n{code}` in one module and expects exactly the two copies' spans. The second copy redefines every top-level name, so a rule that reasons about the other definitions in a scope (declaration order, redefinitions, same-name grouping) must plan for it in Phase 3. `call-before-definition` bent its semantics to pass (epochs), and a simpler same-name merge had to be reverted. Open design problem: "Rule test harness" in [ROADMAP.md](../../ROADMAP.md).
+
+### 5. Consolidate (lead, new phase)
+
+Parallel workers cannot see each other's helpers, so a consolidation pass is mandatory before review:
+
+1. Diff all new helpers and group them by structural fact.
+2. Merge duplicates into one helper per fact, reusing pre-existing helpers where they exist.
+3. Split modules that grew past readability (the legacy linter added ~2.4k lines to `ast/python.rs`).
+4. Re-run the mutation check: refactors can silently drop an exemption.
+
+### 6. Review (two reviewers, whole batch)
+
+- Ask reviewers explicitly for cross-rule findings: duplicated helpers, inconsistent conventions, overlapping diagnostics between the new rules and existing ones.
+- Split the code review by structural cluster (strings and logging, scopes and bindings, types and classes), not by rule. In the legacy batch, per-rule reviews and the 23/23 mutation check missed 11 behavior bugs that cluster reviewers then found ([python_ast_consolidation](python_ast_consolidation/01_understand.md)).
+- Read-only reviewers cannot run code. Run each repro they claim against the built binary before acting on it.
+- Apply findings, then record each finding and its resolution in every affected `06_review_and_audit.md`.
+
+### 7. Learn (workers draft, lead edits)
+
+Each `07_learn.md` keeps only reusable lessons. Batch-level lessons go into this playbook. Before closing `06`/`07`, grep every backticked identifier against `src/` and recount the cases: docs drafted from worker reports named about 25 helpers and tests that did not exist.
+
+## Tooling constraints
+
+- Repository Markdown: no `file://` links and no backticks around link text (the pre-write hook rejects both); use relative paths.
+- Long batches outlive the context window. Keep one status table per batch (rule, phase, blocking question) so a resumed lead does not depend on memory.

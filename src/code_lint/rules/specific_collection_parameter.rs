@@ -1,4 +1,4 @@
-//! Flags Python function parameters annotated with `Sequence` or `Collection` when a broader `Collection` or `Iterable` interface suffices (`specific-collection-parameter`).
+//! Flags Python function parameters annotated with `Sequence` or `Collection` when a broader `Collection` or `Iterable` interface suffices.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{

@@ -5,13 +5,16 @@ use crate::code_lint::contract::AnyCodeRule;
 
 pub mod abbreviated_name;
 pub mod bare_multiline_string;
+pub mod call_before_definition;
 pub mod concrete_collection_attribute;
 pub mod concrete_collection_parameter;
 pub mod concrete_collection_return;
 pub mod dynamic_attribute_access;
 pub mod environment_variable_in_function;
 pub mod error_log_in_except;
+pub mod fake_without_protocol;
 pub mod identical_positional_types;
+pub mod inline_public_attribute_annotation;
 pub mod mock_call_assertion;
 pub mod mock_in_tests;
 pub mod mutable_collection_attribute;
@@ -20,8 +23,10 @@ pub mod mutable_collection_return;
 pub mod mutable_dataclass;
 pub mod mutable_module_constant;
 pub mod nested_function;
+pub mod nullable_collection_return;
 pub mod packed_assertion;
 pub mod primitive_duration;
+pub mod quote_wrapped_placeholder;
 pub mod repeated_index_access;
 pub mod repeated_literal;
 pub mod single_letter_name;
@@ -31,6 +36,7 @@ pub mod suppressed_exception;
 pub mod too_many_assertions;
 pub mod type_cast;
 pub mod type_suffixed_name;
+pub mod unmatched_logger_placeholder;
 pub mod unslotted_dataclass;
 pub mod unstructured_task;
 
@@ -43,6 +49,7 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &packed_assertion::RULE,
     &mock_in_tests::RULE,
     &mock_call_assertion::RULE,
+    &fake_without_protocol::RULE,
     &error_log_in_except::RULE,
     &suppressed_exception::RULE,
     &type_cast::RULE,
@@ -65,6 +72,11 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &mutable_collection_return::RULE,
     &mutable_collection_attribute::RULE,
     &specific_collection_parameter::RULE,
+    &nullable_collection_return::RULE,
     &repeated_literal::RULE,
     &mutable_module_constant::RULE,
+    &inline_public_attribute_annotation::RULE,
+    &call_before_definition::RULE,
+    &unmatched_logger_placeholder::RULE,
+    &quote_wrapped_placeholder::RULE,
 ];

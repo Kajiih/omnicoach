@@ -179,8 +179,8 @@ impl Topic {
         label: "literals",
         parent: None,
         description: "How literal values are written in code.",
-        scope_note: "Writing string and number literals (multiline strings, magic numbers). Not \
-                     identifiers or formatting APIs.",
+        scope_note: "Writing string and number literals (multiline strings, format placeholders, \
+                     magic numbers). Not identifiers or logging calls (see `logging`).",
         synonyms: &[],
     };
 
@@ -240,6 +240,16 @@ impl Topic {
         description: "Hygiene of `omni:` suppression comments.",
         scope_note: "`omni:` directives that silence Omni. Not `contextlib.suppress` \
                      (see `error-handling`).",
+        synonyms: &[],
+    };
+
+    /// Order in which declarations appear in a scope.
+    pub(crate) const DECLARATION_ORDER: Self = Self {
+        label: "declaration-order",
+        parent: None,
+        description: "Order in which declarations appear in a scope.",
+        scope_note: "Ordering of functions, methods and items within a module or class. Not \
+                     nesting depth (see `nesting`) or naming.",
         synonyms: &[],
     };
 }

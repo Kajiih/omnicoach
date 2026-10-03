@@ -1,4 +1,4 @@
-//! Flags Python function parameters annotated with abstract mutable collection types that are never mutated (`mutable-collection-parameter`).
+//! Flags Python function parameters annotated with abstract mutable collection types that are never mutated.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{

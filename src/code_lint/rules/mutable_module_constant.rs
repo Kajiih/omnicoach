@@ -1,4 +1,4 @@
-//! Flags Python module-level constants whose type annotation or value is a mutable collection (`mutable-module-constant`).
+//! Flags Python module-level constants whose type annotation or value is a mutable collection.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{

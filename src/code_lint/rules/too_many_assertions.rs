@@ -1,4 +1,4 @@
-//! Enforces a maximum number of assertions per test function (`too-many-assertions`).
+//! Enforces a maximum number of assertions per test function.
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};

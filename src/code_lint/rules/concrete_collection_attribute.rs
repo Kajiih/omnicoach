@@ -1,4 +1,4 @@
-//! Flags public Python class and instance attributes annotated with concrete mutable collection types (`concrete-collection-attribute`).
+//! Flags public Python class and instance attributes annotated with concrete mutable collection types.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{

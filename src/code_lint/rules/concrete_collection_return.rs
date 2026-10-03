@@ -1,4 +1,4 @@
-//! Flags Python function return annotations that use concrete mutable collection types (`concrete-collection-return`).
+//! Flags Python function return annotations that use concrete mutable collection types.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{

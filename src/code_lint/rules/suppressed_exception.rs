@@ -1,4 +1,4 @@
-//! Flags `contextlib.suppress` blocks (`suppressed-exception`).
+//! Flags `contextlib.suppress` blocks.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::is_with_context_manager;

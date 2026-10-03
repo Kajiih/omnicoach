@@ -1,7 +1,7 @@
 # Adding a Rule
 
 > [!NOTE]
-> How-to for contributors. Each step says what to do and links to where the contract is documented; nothing here repeats it. Why rules are shaped this way: [rule_design_guide.md](rule_design_guide.md).
+> How-to for contributors. Each step says what to do and links to where the contract is documented; nothing here repeats it. Why rules are shaped this way: [rule_design_guide.md](rule_design_guide.md). Building several rules in parallel: [rule_batch_playbook.md](rule_batch_playbook.md).
 
 The Rust items below are documented in Rustdoc: hover them in your IDE, or run `cargo doc --no-deps --document-private-items --open`.
 

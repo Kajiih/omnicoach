@@ -8,6 +8,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `abbreviated-name` (python, rust): Flags names that contain an abbreviation such as `ctx` or `msg`.
 - `bare-multiline-string` (python, rust): Flags multiline string literals that are not wrapped in a dedent helper.
 - `blanket-suppression` (python, rust): Flags suppression directives that name no rule.
+- `call-before-definition` (python): Flags functions and methods that call a sibling function or method defined later in the same module or class.
 - `concrete-collection-attribute` (python): Flags public Python class and instance attributes annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
 - `concrete-collection-parameter` (python): Flags Python function parameters annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
 - `concrete-collection-return` (python): Flags Python function return annotations using concrete mutable collection types such as `list`, `dict`, or `set`.
@@ -15,7 +16,9 @@ expression: "output.replace(binary, \"<binary>\")"
 - `edit-of-described-commit` (command): Flags `jj edit` on a commit that already has a description.
 - `environment-variable-in-function` (python, rust): Flags environment variable access inside functions.
 - `error-log-in-except` (python): Flags error-level logging calls inside Python `except` blocks.
+- `fake-without-protocol` (python): Requires Python `Fake*` classes to inherit from a `Protocol` or base class.
 - `identical-positional-types` (python): Flags Python functions whose positional parameters share a type annotation.
+- `inline-public-attribute-annotation` (python): Flags public Python instance attributes annotated inline inside methods instead of in the class body.
 - `missing-suppression-reason` (python, rust): Requires every suppression directive to give a reason.
 - `mock-call-assertion` (python): Flags assertions on how a mock was called in Python tests.
 - `mock-in-tests` (python): Flags dynamic mocks and monkeypatching in Python tests.
@@ -25,8 +28,10 @@ expression: "output.replace(binary, \"<binary>\")"
 - `mutable-dataclass` (python): Requires Python dataclasses to declare `frozen=True`.
 - `mutable-module-constant` (python): Flags Python module-level constants whose type annotation or value is a mutable collection.
 - `nested-function` (python): Flags Python functions defined inside other functions.
+- `nullable-collection-return` (python): Flags Python function return annotations that wrap a collection type in `| None` or `Optional`.
 - `packed-assertion` (python, rust): Flags assertions that pack several checks into one condition.
 - `primitive-duration` (python, rust): Flags durations held as plain numbers, detected by a time-unit suffix such as `timeout_secs` or `delay_ms`.
+- `quote-wrapped-placeholder` (python): Flags Python format placeholders wrapped in literal single or double quotes.
 - `repeated-index-access` (python, rust): Flags a value read at several literal positions instead of being unpacked once.
 - `repeated-literal` (python, rust): Flags a string or number literal repeated inline in one file instead of being named once.
 - `single-letter-name` (python, rust): Flags names made of a single letter.
@@ -37,6 +42,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `type-cast` (python): Flags `typing.cast` calls in Python source files.
 - `type-suffixed-name` (python, rust): Flags names that end with a type suffix such as `_list` or `_str`.
 - `unknown-suppression-rule` (python, rust): Flags suppression directives that name an unknown or unsuppressible rule.
+- `unmatched-logger-placeholder` (python): Flags logger calls that pass positional arguments to a message with an unmatched named placeholder.
 - `unslotted-dataclass` (python): Requires Python dataclasses to declare `slots=True`.
 - `unstructured-task` (python): Flags asyncio tasks spawned outside a task group.
 - `unused-suppression` (python, rust): Flags suppression directives that suppress no finding.
