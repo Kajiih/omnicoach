@@ -5,6 +5,8 @@
 //! No module outside `crate::code_lint::ast` imports `ast_grep_core` or accesses raw Tree-sitter
 //! node kinds, field names, or traversal iterators.
 
+// omni:disable-file [repeated-literal] -- Tree-sitter node kinds and field names (see ROADMAP)
+
 architecture_component!(CodeLintAst);
 
 /// Dispatches `$func(args...)` to `ast::python` or `ast::rust` by `$lang`, evaluating
@@ -86,6 +88,15 @@ impl ParsedFile {
     #[must_use]
     pub fn source_text(&self) -> std::borrow::Cow<'_, str> {
         self.grep.root().text()
+    }
+
+    /// Returns whether the parser had to recover from invalid or missing syntax.
+    #[must_use]
+    pub fn has_syntax_error(&self) -> bool {
+        self.grep
+            .root()
+            .dfs()
+            .any(|node| node.is_error() || node.is_missing())
     }
 }
 
@@ -266,6 +277,124 @@ pub struct ScopePositionalReads<'a> {
 #[must_use]
 pub fn collect_positional_reads(file: &ParsedFile) -> Vec<ScopePositionalReads<'_>> {
     dispatch_lang!(file.lang(), collect_positional_reads(file), Vec::new())
+}
+
+/// A literal's normalized value: equal values are the same literal whatever their spelling.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum LiteralValue {
+    /// String content as written between the delimiters (escapes not decoded).
+    Str(String),
+    /// Byte-string content as written between the delimiters.
+    Bytes(String),
+    /// Integer value, with digit separators, base prefix and type suffix resolved.
+    Int(i128),
+    /// Float value as [`f64::to_bits`], with `-0.0` stored as `0.0`.
+    Float(u64),
+}
+
+impl LiteralValue {
+    /// Builds a float value, storing `-0.0` as `0.0` so both spellings compare equal.
+    fn float(value: f64) -> Self {
+        Self::Float(if value == 0.0 { 0.0_f64 } else { value }.to_bits())
+    }
+
+    /// Returns the arithmetic negation of a number, or `None` for strings and overflow.
+    pub(in crate::code_lint::ast) fn negated(&self) -> Option<Self> {
+        match self {
+            Self::Int(value) => value.checked_neg().map(Self::Int),
+            Self::Float(bits) => Some(Self::float(-f64::from_bits(*bits))),
+            Self::Str(_) | Self::Bytes(_) => None,
+        }
+    }
+
+    /// True for values not worth naming: strings shorter than 2 characters or without an
+    /// alphanumeric character (a `\` and the character after it count as one
+    /// non-alphanumeric character); integers -1, 0, 1, 2; floats -1.0, 0.0, 1.0, 2.0.
+    #[must_use]
+    pub fn is_trivial(&self) -> bool {
+        match self {
+            Self::Str(content) | Self::Bytes(content) => {
+                let mut units = 0_usize;
+                let mut has_alphanumeric = false;
+                let mut characters = content.chars();
+                while let Some(character) = characters.next() {
+                    units += 1;
+                    if character == '\\' {
+                        characters.next();
+                    } else if character.is_alphanumeric() {
+                        has_alphanumeric = true;
+                    }
+                }
+                units < 2 || !has_alphanumeric
+            }
+            Self::Int(value) => (-1..=2).contains(value),
+            Self::Float(bits) => [-1.0, 0.0, 1.0, 2.0].contains(&f64::from_bits(*bits)),
+        }
+    }
+}
+
+/// Whether a literal defines a named constant or is used inline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiteralRole {
+    /// The whole value of a named scalar constant (`MAX_RETRIES = 3`, `const JJ: &str = "jj";`).
+    ConstantDefinition,
+    /// Any other position.
+    Inline,
+}
+
+/// A literal that could be replaced by a named constant.
+pub struct LiteralOccurrence<'a> {
+    /// The literal, or for a negative number the node spanning its sign and digits.
+    pub node: AstNode<'a>,
+    /// The normalized value.
+    pub value: LiteralValue,
+    /// Whether the literal defines a constant or is used inline.
+    pub role: LiteralRole,
+}
+
+/// Collects the literals in `file` that could be replaced by a named constant, in source order.
+///
+/// Literals the language requires (annotations, attributes, ABI strings, format strings) and
+/// the parts of composite constant initializers are not collected.
+#[must_use]
+pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'_>> {
+    dispatch_lang!(file.lang(), collect_literal_occurrences(file), Vec::new())
+}
+
+/// Parses an integer literal with digit separators and an optional `0x` / `0o` / `0b` prefix
+/// (any case); `None` on overflow.
+pub(in crate::code_lint::ast) fn parse_integer_literal(text: &str) -> Option<LiteralValue> {
+    let digits = text.replace('_', "");
+    let (radix, digits) = match digits.get(..2) {
+        Some("0x" | "0X") => (16, &digits[2..]),
+        Some("0o" | "0O") => (8, &digits[2..]),
+        Some("0b" | "0B") => (2, &digits[2..]),
+        _ => (10, digits.as_str()),
+    };
+    i128::from_str_radix(digits, radix)
+        .ok()
+        .map(LiteralValue::Int)
+}
+
+/// Parses a decimal float literal with digit separators (`1_000.5`, `1e3`, `.5`).
+pub(in crate::code_lint::ast) fn parse_float_literal(text: &str) -> Option<LiteralValue> {
+    text.replace('_', "").parse().ok().map(LiteralValue::float)
+}
+
+/// Splits a string node whose first and last children are its delimiters into the opening
+/// delimiter (prefix included, e.g. `b"`) and the content between the delimiters.
+pub(in crate::code_lint::ast) fn delimited_string_parts(node: &RawNode<'_>) -> (String, String) {
+    let text = node.text();
+    let opening = node
+        .child(0)
+        .map(|child| child.text().into_owned())
+        .unwrap_or_default();
+    let closing_len = node.children().last().map_or(0, |child| child.text().len());
+    let content = text
+        .get(opening.len()..text.len().saturating_sub(closing_len))
+        .unwrap_or_default()
+        .to_owned();
+    (opening, content)
 }
 
 /// Matches an `ast-grep` call pattern containing `$ARGS` (e.g. `$LOOP($$$LOOP_ARGS).create_task($$$ARGS)`)
@@ -456,5 +585,24 @@ mod tests {
             })
             .collect();
         assert_eq!(argument_texts, vec![vec![expected_argument.to_owned()]]);
+    }
+
+    #[rstest::rstest]
+    #[case::single_char(LiteralValue::Str("a".to_string()), true)]
+    #[case::delimiter(LiteralValue::Str(", ".to_string()), true)]
+    #[case::escaped_newline(LiteralValue::Str("\\n".to_string()), true)]
+    #[case::escaped_crlf(LiteralValue::Bytes("\\r\\n".to_string()), true)]
+    #[case::short_word(LiteralValue::Str("jj".to_string()), false)]
+    #[case::word_with_escape(LiteralValue::Str("a\\n".to_string()), false)]
+    #[case::small_integer(LiteralValue::Int(-1), true)]
+    #[case::integer_two(LiteralValue::Int(2), true)]
+    #[case::integer_minus_two(LiteralValue::Int(-2), false)]
+    #[case::integer_three(LiteralValue::Int(3), false)]
+    #[case::unit_float(LiteralValue::float(-1.0), true)]
+    #[case::float_two(LiteralValue::float(2.0), true)]
+    #[case::half_float(LiteralValue::float(0.5), false)]
+    #[case::raw_regex_class(LiteralValue::Str("\\\\s+".to_string()), false)]
+    fn test_literal_value_is_trivial(#[case] value: LiteralValue, #[case] expected: bool) {
+        assert_eq!(value.is_trivial(), expected);
     }
 }

@@ -100,6 +100,13 @@ pub const RULE: CodeRule = CodeRule {
     check: check_file,
 };
 
+/// Template placeholder naming the packed construct.
+const CONSTRUCT: &str = "construct";
+/// Template placeholder naming the Rust assertion macro.
+const CALLEE: &str = "callee";
+/// `construct` value shared by the Python and Rust boolean collection checks.
+const BOOLEAN_COLLECTION_COMPARISON: &str = "a comparison against a collection of boolean literals";
+
 /// Evaluates a single Rust assertion macro invocation node for packed conditions.
 fn check_rust_assertion_macro(
     rule: &CodeRule,
@@ -116,8 +123,8 @@ fn check_rust_assertion_macro(
             path,
             macro_node,
             &[
-                ("construct", "a compound `&&` condition"),
-                ("callee", &macro_name),
+                (CONSTRUCT, "a compound `&&` condition"),
+                (CALLEE, &macro_name),
             ],
         ));
     }
@@ -132,11 +139,8 @@ fn check_rust_assertion_macro(
             path,
             macro_node,
             &[
-                (
-                    "construct",
-                    "a comparison against a collection of boolean literals",
-                ),
-                ("callee", &macro_name),
+                (CONSTRUCT, BOOLEAN_COLLECTION_COMPARISON),
+                (CALLEE, &macro_name),
             ],
         ));
     }
@@ -155,7 +159,7 @@ fn check_python_assert_statement(
         return Some(rule.diagnostic_at_node(
             path,
             assert_node,
-            &[("construct", "a compound `and` condition")],
+            &[(CONSTRUCT, "a compound `and` condition")],
         ));
     }
 
@@ -164,10 +168,7 @@ fn check_python_assert_statement(
         return Some(rule.diagnostic_at_node(
             path,
             assert_node,
-            &[(
-                "construct",
-                "a comparison against a collection of boolean literals",
-            )],
+            &[(CONSTRUCT, BOOLEAN_COLLECTION_COMPARISON)],
         ));
     }
 

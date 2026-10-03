@@ -1,6 +1,11 @@
 //! AST helper predicates and structural extractors for Python.
 
-use crate::code_lint::ast::{AstNode, ParsedFile, PositionalRead, RawNode, ScopePositionalReads};
+// omni:disable-file [repeated-literal] -- Tree-sitter node kinds and field names (see ROADMAP)
+
+use crate::code_lint::ast::{
+    AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, PositionalRead, RawNode,
+    ScopePositionalReads, delimited_string_parts, parse_float_literal, parse_integer_literal,
+};
 use std::collections::{HashMap, HashSet};
 
 /// Returns true for Python node kinds that hold statements as direct children.
@@ -2537,9 +2542,230 @@ pub fn collect_positional_reads(file: &ParsedFile) -> Vec<ScopePositionalReads<'
     out
 }
 
+/// Calls whose first argument is a name or type the language requires as a string
+/// (`TypeVar("T")`, `cast("Node", value)`).
+const TYPE_NAME_FIRST_ARGUMENT_CALLS: &[&str] = &[
+    "TypeVar",
+    "NewType",
+    "ParamSpec",
+    "TypeVarTuple",
+    "NamedTuple",
+    "TypedDict",
+    "cast",
+];
+
+/// Returns the value of a non-interpolated `string`, `integer` or `float` node, or of a `-`
+/// applied to a number; `None` for anything else, imaginary numbers and overflow.
+fn literal_value(node: &RawNode<'_>) -> Option<LiteralValue> {
+    match node.kind().as_ref() {
+        "string" if !node.children().any(|child| child.kind() == "interpolation") => {
+            let (opening, content) = delimited_string_parts(node);
+            // Raw backslashes are literal: spell them as a plain string would (`r"\d"` is `"\\d"`).
+            let content = if opening.contains(['r', 'R']) {
+                content.replace('\\', "\\\\")
+            } else {
+                content
+            };
+            Some(if opening.contains(['b', 'B']) {
+                LiteralValue::Bytes(content)
+            } else {
+                LiteralValue::Str(content)
+            })
+        }
+        "integer" | "float" if node.text().ends_with(['j', 'J']) => None,
+        "integer" => parse_integer_literal(&node.text()),
+        "float" => parse_float_literal(&node.text()),
+        "unary_operator" if node.field("operator")?.text() == "-" => {
+            let argument = node.field("argument")?;
+            if matches!(argument.kind().as_ref(), "integer" | "float") {
+                literal_value(&argument)?.negated()
+            } else {
+                None
+            }
+        }
+        // `case -4:` spells the negation as a `-` token and a number directly in the pattern.
+        "case_pattern" => {
+            let mut children = node.children();
+            match (children.next(), children.next(), children.next()) {
+                (Some(sign), Some(number), None)
+                    if sign.text() == "-"
+                        && matches!(number.kind().as_ref(), "integer" | "float") =>
+                {
+                    literal_value(&number)?.negated()
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Returns true if `name` is spelled as a constant (`MAX_RETRIES`, `_TIMEOUT_S`).
+fn is_constant_name(name: &str) -> bool {
+    name.chars().any(|character| character.is_ascii_uppercase())
+        && name.chars().all(|character| {
+            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+        })
+}
+
+/// Statements whose bodies stay at the enclosing level for constants: a platform branch or an
+/// `ImportError` fallback at module level still defines module constants.
+const CONSTANT_TRANSPARENT_STATEMENTS: &[&str] = &[
+    "if_statement",
+    "elif_clause",
+    "else_clause",
+    "try_statement",
+    "except_clause",
+    "finally_clause",
+    "with_statement",
+];
+
+/// Returns true if `statement` sits at module or class level, possibly inside the bodies of
+/// [`CONSTANT_TRANSPARENT_STATEMENTS`].
+fn is_module_or_class_level(statement: &RawNode<'_>) -> bool {
+    let mut container = statement.parent();
+    while let Some(node) = container {
+        match node.kind().as_ref() {
+            "module" => return true,
+            "block" => {
+                if node
+                    .parent()
+                    .is_some_and(|owner| owner.kind() == "class_definition")
+                {
+                    return true;
+                }
+            }
+            kind if CONSTANT_TRANSPARENT_STATEMENTS.contains(&kind) => {}
+            _ => return false,
+        }
+        container = node.parent();
+    }
+    false
+}
+
+/// Returns true if an `assignment` defines a module- or class-level constant: an
+/// `UPPER_SNAKE_CASE` name or a `Final` annotation.
+fn is_constant_assignment(assignment: &RawNode<'_>) -> bool {
+    let is_module_or_class_level = assignment
+        .parent()
+        .filter(|statement| statement.kind() == "expression_statement")
+        .is_some_and(|statement| is_module_or_class_level(&statement));
+    let is_final = assignment
+        .field("type")
+        .and_then(|annotation| annotation.children().find(RawNode::is_named))
+        .is_some_and(|annotation| {
+            // `Final[int]` is a `generic_type`, `typing.Final[int]` a `subscript`.
+            let base = match annotation.kind().as_ref() {
+                "subscript" => annotation.field("value"),
+                "generic_type" => annotation.children().find(RawNode::is_named),
+                _ => Some(annotation.clone()),
+            };
+            base.is_some_and(|base| resolve_path_and_terminal_raw(&base).1 == "Final")
+        });
+    let is_constant_target = assignment
+        .field("left")
+        .is_some_and(|target| target.kind() == "identifier" && is_constant_name(&target.text()));
+    is_module_or_class_level && (is_constant_target || is_final)
+}
+
+/// Returns the expression inside any enclosing parentheses (`("x")` is `"x"`).
+fn without_parentheses(node: RawNode<'_>) -> RawNode<'_> {
+    let mut node = node;
+    while node.kind() == "parenthesized_expression" {
+        let inner = node.children().find(RawNode::is_named);
+        let Some(inner) = inner else { break };
+        node = inner;
+    }
+    node
+}
+
+/// Walks `node`, pushing collectable literals to `out` (see [`super::collect_literal_occurrences`]).
+fn collect_literal_occurrences_rec<'a>(node: &RawNode<'a>, out: &mut Vec<LiteralOccurrence<'a>>) {
+    match node.kind().as_ref() {
+        // Annotations and docstrings are not values.
+        "type" => return,
+        "string" if is_docstring_raw(node) => return,
+        "assignment" if is_constant_assignment(node) => {
+            // A scalar constant defines its value; a composite one (`URLS = ["a", "b"]`)
+            // is a named value whose parts are not collected.
+            if let Some(right) = node.field("right").map(without_parentheses)
+                && let Some(value) = literal_value(&right)
+            {
+                out.push(LiteralOccurrence {
+                    node: AstNode::from_raw(right),
+                    value,
+                    role: LiteralRole::ConstantDefinition,
+                });
+            }
+            return;
+        }
+        "subscript"
+            if node
+                .field("value")
+                .is_some_and(|value| resolve_path_and_terminal_raw(&value).1 == "Literal") =>
+        {
+            return;
+        }
+        "call" => {
+            let is_type_name_call = node.field("function").is_some_and(|function| {
+                TYPE_NAME_FIRST_ARGUMENT_CALLS
+                    .contains(&resolve_path_and_terminal_raw(&function).1.as_str())
+            });
+            if is_type_name_call {
+                let arguments = node.field("arguments");
+                let first_argument = arguments
+                    .as_ref()
+                    .and_then(|arguments| arguments.children().find(RawNode::is_named));
+                for argument in arguments.iter().flat_map(RawNode::children) {
+                    let is_first = first_argument
+                        .as_ref()
+                        .is_some_and(|first| first.range() == argument.range());
+                    if !is_first {
+                        collect_literal_occurrences_rec(&argument, out);
+                    }
+                }
+                return;
+            }
+        }
+        _ => {
+            if let Some(value) = literal_value(node) {
+                out.push(LiteralOccurrence {
+                    node: AstNode::from_raw(node.clone()),
+                    value,
+                    role: LiteralRole::Inline,
+                });
+                return;
+            }
+        }
+    }
+    // Interpolated f-strings are templates: their literal parts are not collected, but the
+    // expressions inside `{...}` are walked like any other code.
+    let is_pattern = node.kind().ends_with("_pattern");
+    let mut follows_minus = false;
+    for child in node.children() {
+        // Inside a pattern, `-404` can be a bare `-` token and a number with no node spanning
+        // both: skip the number rather than collect it as `404`.
+        let is_signed_number =
+            follows_minus && matches!(child.kind().as_ref(), "integer" | "float");
+        follows_minus = is_pattern && child.kind() == "-";
+        if !is_signed_number {
+            collect_literal_occurrences_rec(&child, out);
+        }
+    }
+}
+
+/// Collects Python literal occurrences (see [`super::collect_literal_occurrences`]).
+#[must_use]
+pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'_>> {
+    let mut out = Vec::new();
+    collect_literal_occurrences_rec(&file.grep.root(), &mut out);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use LiteralRole::{ConstantDefinition, Inline};
     use ast_grep_language::SupportLang;
 
     #[test]
@@ -3149,5 +3375,88 @@ mod tests {
             .map(|(name, mutated)| ((*name).to_string(), *mutated))
             .collect();
         assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::module_upper_name_defines("MAX = 30", &[("30", ConstantDefinition)])]
+    #[case::class_final_lowercase_defines("class C:\n    limit: Final[int] = -5", &[("-5", ConstantDefinition)])]
+    #[case::aliased_final_defines("timeout: t.Final = 30", &[("30", ConstantDefinition)])]
+    #[case::class_lowercase_is_inline("class C:\n    name = 'cc'", &[("'cc'", Inline)])]
+    #[case::function_level_upper_name_is_inline("def f():\n    MAX = 30", &[("30", Inline)])]
+    #[case::module_if_body_defines("if WIN:\n    RETRIES = 3\nelse:\n    RETRIES = 5", &[("3", ConstantDefinition), ("5", ConstantDefinition)])]
+    #[case::module_except_body_defines("try:\n    import x\nexcept ImportError:\n    LIMIT = 9", &[("9", ConstantDefinition)])]
+    #[case::function_if_body_is_inline("def f():\n    if a:\n        MAX = 30", &[("30", Inline)])]
+    #[case::parenthesized_constant_defines("MSG = (\n    'refused'\n)", &[("'refused'", ConstantDefinition)])]
+    #[case::composite_constant_not_collected("URLS = ['u1', 'u2']\nPAIR = 'aa' 'bb'", &[])]
+    #[case::negation_anchored_on_operator("f(-42, 7 - 42)", &[("-42", Inline), ("7", Inline), ("42", Inline)])]
+    #[case::negative_case_pattern("match m:\n    case [-42, 'xx']:\n        pass", &[("-42", Inline), ("'xx'", Inline)])]
+    #[case::signed_numbers_in_patterns_skipped("match m:\n    case {-404: _} | Resp(code=-404) | -7:\n        pass", &[])]
+    #[case::docstring_skipped("def f():\n    '''Doc.'''\n    return 'rv'", &[("'rv'", Inline)])]
+    #[case::annotations_skipped("def f(a: 'T' = 'dv') -> 'R':\n    v: 'V' = 'vv'", &[("'dv'", Inline), ("'vv'", Inline)])]
+    #[case::literal_type_skipped("v = Literal['y']", &[])]
+    #[case::interpolated_fstring_walked("print(f\"{row['st']} and\", f'plain')", &[("'st'", Inline), ("f'plain'", Inline)])]
+    #[case::imaginary_skipped("z = 2j", &[])]
+    fn test_collect_literal_occurrences_python(
+        #[case] source: &str,
+        #[case] expected: &[(&str, LiteralRole)],
+    ) {
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let actual: Vec<(String, LiteralRole)> = collect_literal_occurrences(&file)
+            .into_iter()
+            .map(|occurrence| (occurrence.node.text().into_owned(), occurrence.role))
+            .collect();
+        let expected: Vec<(String, LiteralRole)> = expected
+            .iter()
+            .map(|(text, role)| ((*text).to_string(), *role))
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    fn test_collect_literal_occurrences_python_skips_type_name_argument(
+        #[values(
+            "TypeVar",
+            "NewType",
+            "ParamSpec",
+            "TypeVarTuple",
+            "NamedTuple",
+            "TypedDict",
+            "typing.cast"
+        )]
+        callee: &str,
+    ) {
+        let file = ParsedFile::new(&format!("t = {callee}('Nm', 'vv')"), SupportLang::Python);
+        let texts: Vec<String> = collect_literal_occurrences(&file)
+            .into_iter()
+            .map(|occurrence| occurrence.node.text().into_owned())
+            .collect();
+        assert_eq!(texts, vec!["'vv'"]);
+    }
+
+    #[rstest::rstest]
+    #[case::quote_style_ignored("'ab'", LiteralValue::Str("ab".to_string()))]
+    #[case::triple_quoted("'''ab'''", LiteralValue::Str("ab".to_string()))]
+    #[case::unicode_prefix("u'ab'", LiteralValue::Str("ab".to_string()))]
+    #[case::bytes("b\"ab\"", LiteralValue::Bytes("ab".to_string()))]
+    #[case::raw_bytes("Rb'ab'", LiteralValue::Bytes("ab".to_string()))]
+    #[case::escapes_kept("'a\\nb'", LiteralValue::Str("a\\nb".to_string()))]
+    #[case::raw_backslash_spelled_plain("r'a\\nb'", LiteralValue::Str("a\\\\nb".to_string()))]
+    #[case::hex("0x1F", LiteralValue::Int(31))]
+    #[case::separators("1_000", LiteralValue::Int(1000))]
+    #[case::exponent("1e3", LiteralValue::Float(1000.0_f64.to_bits()))]
+    #[case::leading_dot(".5", LiteralValue::Float(0.5_f64.to_bits()))]
+    #[case::trailing_dot("3.", LiteralValue::Float(3.0_f64.to_bits()))]
+    #[case::negative_float("-2.5", LiteralValue::Float((-2.5_f64).to_bits()))]
+    #[case::negative_zero("-0.0", LiteralValue::Float(0.0_f64.to_bits()))]
+    fn test_collect_literal_occurrences_python_values(
+        #[case] literal: &str,
+        #[case] expected: LiteralValue,
+    ) {
+        let file = ParsedFile::new(&format!("value = {literal}"), SupportLang::Python);
+        let values: Vec<LiteralValue> = collect_literal_occurrences(&file)
+            .into_iter()
+            .map(|occurrence| occurrence.value)
+            .collect();
+        assert_eq!(values, vec![expected]);
     }
 }

@@ -2,7 +2,9 @@
 
 architecture_component!(TestUtils);
 
-use crate::code_lint::ast::{ParsedFile, detect_language};
+use crate::code_lint::ast::{
+    LiteralValue, ParsedFile, collect_literal_occurrences, detect_language,
+};
 use crate::code_lint::contract::CodeRule;
 use crate::command_lint::contract::CommandRule;
 use crate::command_lint::vcs::JjClient;
@@ -110,11 +112,21 @@ pub fn assert_rule_pass<Options: OptionsDeclaration>(
     );
 }
 
+/// How the repeated-occurrence check of a `fail` case builds the second copy of the code.
+#[derive(Clone, Copy, Debug)]
+pub enum RepeatCheck {
+    /// The second copy is the code unchanged.
+    SameCode,
+    /// The second copy's non-trivial literals get new values, so each copy forms its own
+    /// groups in rules that group equal literals across the file (`repeated-literal`).
+    DistinctLiterals,
+}
+
 /// Asserts that a `fail` test case produces exactly one matching diagnostic.
 ///
 /// Asserts that the produced diagnostic AST span matches `expected_snippet` (or `code.trim()` when
 /// `expected_snippet` is `None`), and that the same span is reported in both copies when `code` is
-/// repeated twice in one file.
+/// repeated twice in one file (the second copy built as `repeat` says).
 ///
 /// # Panics
 /// Panics if diagnostic count, `rule_name`, normalized AST span slice, or repeated-occurrence
@@ -126,6 +138,7 @@ pub fn assert_rule_fail<Options: OptionsDeclaration>(
     case_name: &str,
     code: &str,
     expected_snippet: Option<&str>,
+    repeat: RepeatCheck,
 ) {
     let rule_name = rule.declaration.name.0;
     let filename = dummy_filename(lang);
@@ -154,7 +167,7 @@ pub fn assert_rule_fail<Options: OptionsDeclaration>(
     );
 
     let span = diagnostic.location.span.start..diagnostic.location.span.end;
-    assert_every_occurrence_reported(rule, lang, case_name, code, span);
+    assert_every_occurrence_reported(rule, lang, case_name, code, span, repeat);
 }
 
 /// Repeats `code` twice in one file and asserts the rule flags the same span in both copies,
@@ -166,9 +179,18 @@ fn assert_every_occurrence_reported<Options: OptionsDeclaration>(
     case_name: &str,
     code: &str,
     span: std::ops::Range<usize>,
+    repeat: RepeatCheck,
 ) {
     let rule_name = rule.declaration.name.0;
-    let repeated = format!("{code}\n{code}");
+    let second_copy = match repeat {
+        RepeatCheck::SameCode => code.to_owned(),
+        RepeatCheck::DistinctLiterals => with_distinct_literals(code, lang).unwrap_or_else(|reason| {
+            panic!(
+                "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': cannot give the second copy distinct literals ({reason}); rename a literal in this case.\nSource:\n{code}"
+            )
+        }),
+    };
+    let repeated = format!("{code}\n{second_copy}");
     let offset = code.len() + 1;
     let diags = run_code_rule(rule, &repeated, dummy_filename(lang));
 
@@ -184,6 +206,116 @@ fn assert_every_occurrence_reported<Options: OptionsDeclaration>(
         "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}' did not report every occurrence when the code is repeated twice in one file:\n{}\nSource:\n{repeated}",
         format_diagnostics_for_test(&diags),
     );
+}
+
+/// Returns `code` with every non-trivial literal rewritten in place, with the same byte length,
+/// to a value absent from `code`; `Err` when equal literals would no longer be equal, distinct
+/// ones no longer distinct, or a rewrite no longer parses (binary and octal digits, equal values
+/// spelled differently such as `0xFF` and `255`).
+///
+/// A string toggles the case of its first unescaped ASCII letter, or changes its first digit;
+/// a number changes its first digit after the sign and base prefix (see [`changed_digit`]).
+fn with_distinct_literals(code: &str, lang: SupportLang) -> Result<String, String> {
+    let original = ParsedFile::new(code, lang);
+    let original_occurrences = collect_literal_occurrences(&original);
+    let mut rewritten = code.to_owned();
+    for occurrence in original_occurrences
+        .iter()
+        .filter(|occurrence| !occurrence.value.is_trivial())
+    {
+        let text = occurrence.node.text();
+        let offset = character_to_change(&text, &occurrence.value)
+            .ok_or_else(|| format!("no ASCII letter or digit to change in `{text}`"))?;
+        let position = occurrence.node.span().start + offset;
+        let current = char::from(code.as_bytes()[position]);
+        let replacement = match occurrence.value {
+            LiteralValue::Str(_) | LiteralValue::Bytes(_) if current.is_ascii_lowercase() => {
+                current.to_ascii_uppercase()
+            }
+            LiteralValue::Str(_) | LiteralValue::Bytes(_) if current.is_ascii_uppercase() => {
+                current.to_ascii_lowercase()
+            }
+            _ => changed_digit(current),
+        };
+        rewritten.replace_range(position..=position, &replacement.to_string());
+    }
+
+    let new_file = ParsedFile::new(&rewritten, lang);
+    let old_values: Vec<&LiteralValue> = original_occurrences
+        .iter()
+        .map(|occurrence| &occurrence.value)
+        .collect();
+    let new_values: Vec<LiteralValue> = collect_literal_occurrences(&new_file)
+        .into_iter()
+        .map(|occurrence| occurrence.value)
+        .collect();
+    if new_file.has_syntax_error() || new_values.len() != old_values.len() {
+        return Err("a rewritten literal no longer parses as a literal".to_owned());
+    }
+    for (index, (old, new)) in old_values.iter().zip(&new_values).enumerate() {
+        if !old.is_trivial() && old_values.contains(&new) {
+            return Err(format!("the new value {new:?} already appears in the case"));
+        }
+        for (other_old, other_new) in old_values.iter().zip(&new_values).skip(index + 1) {
+            if (old == other_old) != (new == other_new) {
+                return Err(format!(
+                    "{old:?} and {other_old:?} no longer compare as before"
+                ));
+            }
+        }
+    }
+    Ok(rewritten)
+}
+
+/// Returns the byte offset, within a literal's source `text`, of the character to change: the
+/// first unescaped ASCII letter or digit after a string's opening quote, or the first digit of
+/// a number after its sign and base prefix.
+fn character_to_change(text: &str, value: &LiteralValue) -> Option<usize> {
+    match value {
+        LiteralValue::Str(_) | LiteralValue::Bytes(_) => {
+            let content_start = text.find(['"', '\''])?;
+            let mut is_escaped = false;
+            text[content_start..]
+                .char_indices()
+                .find_map(|(index, character)| {
+                    let is_candidate = !is_escaped && character.is_ascii_alphanumeric();
+                    is_escaped = !is_escaped && character == '\\';
+                    is_candidate.then_some(content_start + index)
+                })
+        }
+        LiteralValue::Int(_) | LiteralValue::Float(_) => {
+            let unsigned_start = text.find(|character: char| character.is_ascii_digit())?;
+            let prefix = text
+                .get(unsigned_start..unsigned_start + 2)
+                .unwrap_or_default();
+            let is_hex = prefix.eq_ignore_ascii_case("0x");
+            let has_base_prefix = is_hex
+                || ["0o", "0b"]
+                    .iter()
+                    .any(|base| prefix.eq_ignore_ascii_case(base));
+            let digits_start = unsigned_start + if has_base_prefix { 2 } else { 0 };
+            let in_digits = text[digits_start..].find(|character: char| {
+                if is_hex {
+                    character.is_ascii_hexdigit()
+                } else {
+                    character.is_ascii_digit()
+                }
+            })?;
+            Some(digits_start + in_digits)
+        }
+    }
+}
+
+/// Returns a different digit: a decimal digit moves into `3..=9` so the number stays
+/// non-trivial (`0`/`1`/`2` and `9` become `3`, others increment), and a hex letter swaps
+/// within its pair (`a`/`b`, `c`/`d`, `e`/`f`).
+fn changed_digit(digit: char) -> char {
+    match digit {
+        '0'..='2' | '9' => '3',
+        '3'..='8' | 'a' | 'c' | 'e' | 'A' | 'C' | 'E' => char::from(digit as u8 + 1),
+        'b' | 'd' | 'f' | 'B' | 'D' | 'F' => char::from(digit as u8 - 1),
+        _ => unreachable!("`{digit}` is not a hex digit"),
+    }
 }
 
 /// Strips the enclosing line's leading indentation from lines `2..N` of a multiline AST slice
@@ -220,7 +352,10 @@ fn normalize_span_indentation(code: &str, span_start: usize, raw_slice: &str) ->
 /// # Panics
 /// Panics as [`assert_rule_fail`] and [`assert_rule_pass`] do.
 #[track_caller]
-pub fn assert_documented_examples<Options: OptionsDeclaration>(rule: &CodeRule<Options>) {
+pub fn assert_documented_examples<Options: OptionsDeclaration>(
+    rule: &CodeRule<Options>,
+    repeat: RepeatCheck,
+) {
     for example in rule.declaration.doc.examples {
         assert_rule_fail(
             rule,
@@ -228,6 +363,7 @@ pub fn assert_documented_examples<Options: OptionsDeclaration>(rule: &CodeRule<O
             "documented example",
             example.flagged,
             Some(example.flagged_span),
+            repeat,
         );
         assert_rule_pass(rule, example.language, "documented fix", example.fixed);
     }
@@ -275,8 +411,7 @@ fn dummy_filename(lang: SupportLang) -> &'static str {
 ///
 /// - It must produce exactly one diagnostic. Multi-node cases are not supported; known cases
 ///   that would need them are nested flagged constructs (a `def` inside a nested `def` in
-///   `nested-function`), rules reporting every occurrence inside one node, and per-file
-///   aggregation (the `no-repeated-literals` candidate in `ROADMAP.md`). Per-scope
+///   `nested-function`) and rules reporting every occurrence inside one node. Per-scope
 ///   aggregation fits when each case sits in its own scope (`repeated-index-access`).
 /// - Without `=> r#"..."#`, the whole snippet must be the flagged node. With it, the finding
 ///   must span exactly that inner slice. Leading indentation of lines `2..N` is normalized,
@@ -284,6 +419,11 @@ fn dummy_filename(lang: SupportLang) -> &'static str {
 /// - The code is also run repeated twice in one file and must report both occurrences, so
 ///   a rule that stops after its first match (`find` instead of `find_all`, early `return`,
 ///   stray `break`) fails.
+/// - Rules grouping equal literals across the file pass `repeat: DistinctLiterals`
+///   ([`RepeatCheck`]): the second copy's literals get new values, so each copy forms its own
+///   groups and the check stays as strict. Write `rule_test!(RULE, repeat: DistinctLiterals, { ... })`.
+///   The case panics when no such rewrite exists (equal values spelled differently such as
+///   `0xFF` and `255`, binary or octal digits); unit-test those values on the `ast` helper.
 ///
 /// # Writing cases
 ///
@@ -303,11 +443,18 @@ fn dummy_filename(lang: SupportLang) -> &'static str {
 ///   fact. Change the harness only for a whole class of rules, with a guardrail so the
 ///   change cannot hide regressions.
 macro_rules! rule_test {
+    ($rule:expr, repeat: $repeat:ident, { $($body:tt)* }) => {
+        $crate::test_utils::rule_test!(tests: $rule, repeat: $repeat, { $($body)* });
+    };
     ($rule:expr, { $($body:tt)* }) => {
-        $crate::test_utils::rule_test!(tests: $rule, { $($body)* });
+        $crate::test_utils::rule_test!(tests: $rule, repeat: SameCode, { $($body)* });
+    };
+    ($mod_name:ident : $rule:expr, { $($body:tt)* }) => {
+        $crate::test_utils::rule_test!($mod_name: $rule, repeat: SameCode, { $($body)* });
     };
     (
         $mod_name:ident : $rule:expr,
+        repeat: $repeat:ident,
         {
             $(
                 $lang:ident => {
@@ -334,7 +481,10 @@ macro_rules! rule_test {
 
             #[test]
             fn documented_examples() {
-                $crate::test_utils::assert_documented_examples(&$rule);
+                $crate::test_utils::assert_documented_examples(
+                    &$rule,
+                    $crate::test_utils::RepeatCheck::$repeat,
+                );
             }
 
             #[rstest::rstest]
@@ -378,9 +528,48 @@ macro_rules! rule_test {
                     case_name,
                     code,
                     expected_snippet,
+                    $crate::test_utils::RepeatCheck::$repeat,
                 );
             }
         }
     };
 }
 pub(crate) use rule_test;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[rstest::rstest]
+    #[case::python_strings_and_numbers(
+        SupportLang::Python,
+        "f('ab', \"ab\", 1_000, -42, 0x1F, 9, 0.5, 2)",
+        "f('Ab', \"Ab\", 3_000, -52, 0x3F, 3, 3.5, 2)"
+    )]
+    #[case::python_hex_letter(SupportLang::Python, "f(0xff)", "f(0xef)")]
+    #[case::rust_suffix_and_escape(
+        SupportLang::Rust,
+        "fn f() { g(30u64, 30, \"\\nab\", b\"by\"); }",
+        "fn f() { g(40u64, 40, \"\\nAb\", b\"By\"); }"
+    )]
+    fn test_with_distinct_literals_rewrites_in_place(
+        #[case] lang: SupportLang,
+        #[case] code: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(with_distinct_literals(code, lang).as_deref(), Ok(expected));
+    }
+
+    #[rstest::rstest]
+    #[case::new_value_already_present("f('ab', 'Ab')", "already appears")]
+    #[case::equal_values_split("f(31, 0x1F)", "no longer compare")]
+    #[case::nothing_to_change("f('日本')", "no ASCII letter or digit")]
+    #[case::binary_digit("f(0b11)", "no longer parses")]
+    fn test_with_distinct_literals_rejects_ambiguous_cases(
+        #[case] code: &str,
+        #[case] reason: &str,
+    ) {
+        let error = with_distinct_literals(code, SupportLang::Python).unwrap_err();
+        assert!(error.contains(reason), "unexpected reason: {error}");
+    }
+}

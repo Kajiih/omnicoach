@@ -172,6 +172,11 @@ fn is_exempt_boundary_function(name: &str, is_top_level: bool) -> bool {
     }
 }
 
+/// Template placeholder for the environment read.
+const EXPRESSION: &str = "expression";
+/// Template placeholder for the enclosing function.
+const FUNCTION: &str = "function";
+
 fn check_file(
     rule: &CodeRule<ListOption>,
     path: &Path,
@@ -191,7 +196,7 @@ fn check_file(
             diagnostics.push(rule.diagnostic_at_node(
                 path,
                 &call_match.node,
-                &[("expression", &expression), ("function", &func_name)],
+                &[(EXPRESSION, &expression), (FUNCTION, &func_name)],
             ));
         }
     }
@@ -206,7 +211,7 @@ fn check_file(
                 diagnostics.push(rule.diagnostic_at_node(
                     path,
                     &subscript_node,
-                    &[("expression", label), ("function", &func_name)],
+                    &[(EXPRESSION, label), (FUNCTION, &func_name)],
                 ));
             }
         }

@@ -22,6 +22,7 @@ pub mod nested_function;
 pub mod packed_assertion;
 pub mod primitive_duration;
 pub mod repeated_index_access;
+pub mod repeated_literal;
 pub mod single_letter_name;
 pub mod sleep_in_tests;
 pub mod specific_collection_parameter;
@@ -63,4 +64,5 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &mutable_collection_return::RULE,
     &mutable_collection_attribute::RULE,
     &specific_collection_parameter::RULE,
+    &repeated_literal::RULE,
 ];

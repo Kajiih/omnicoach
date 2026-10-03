@@ -161,28 +161,33 @@ fn run_vcs_command(
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Jujutsu CLI binary, both spawned and named in errors.
+const JJ_BINARY: &str = "jj";
+/// Git CLI binary, both spawned and named in errors.
+const GIT_BINARY: &str = "git";
+
 fn get_jj_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
-    let mut cmd = Command::new("jj");
+    let mut cmd = Command::new(JJ_BINARY);
     cmd.current_dir(repo_root).arg("diff").arg("--git");
     if is_complex_jj_revset(rev) {
         cmd.arg("-r").arg(rev);
     } else {
         cmd.arg("--from").arg(rev);
     }
-    run_vcs_command(cmd, "Jujutsu", "jj")
+    run_vcs_command(cmd, "Jujutsu", JJ_BINARY)
 }
 
 fn get_git_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
-    let mut cmd = Command::new("git");
+    let mut cmd = Command::new(GIT_BINARY);
     cmd.current_dir(repo_root).args([
         "-c",
         "core.quotepath=false",
-        "diff",
+        "diff", // omni:ignore [repeated-literal] -- Git's subcommand, unrelated to Jujutsu's
         "--src-prefix=a/",
         "--dst-prefix=b/",
         rev,
     ]);
-    run_vcs_command(cmd, "Git", "git")
+    run_vcs_command(cmd, "Git", GIT_BINARY)
 }
 
 /// Commits a parsed file's changed line numbers into `changed_lines` if the file was not deleted.
