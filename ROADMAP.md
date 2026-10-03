@@ -52,9 +52,6 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
 - **Import-Aware Qualified Call Resolution (`src/code_lint/semantic/calls.rs`)**:
   - *Current*: Banned calls are matched syntactically by call-site name (like `ast-grep` and the legacy linter), as documented in each rule's `what_it_does`. A bare call imported from an unrelated library (`from sqlalchemy import cast`, `from httpx import patch`) is flagged, while an aliased module call (`import typing as t; t.cast(...)`) is missed. Type annotations in the collection type rules have the same gap: `t.List` and `from typing import List as L` are not resolved (pass case `known_gap_typing_module_alias_not_resolved`), and a local `class Set` is still treated as `typing.Set`.
   - *Target*: Evaluate adding a per-file scope and import symbol table (modeled on Ruff's `SemanticModel::resolve_qualified_name`) that resolves imported and aliased callees to their canonical qualified path while distinguishing module imports from local parameter/fixture receivers (`mocker.patch`, `monkeypatch.setattr`, `loop.create_task`).
-- **Mode-Aware Explanation Hint**:
-  - *Current*: Whether an adjacent comment excuses a finding depends on the effective enforcement mode, which users can change, so templates and docs cannot state it truthfully. The signature collection rules no longer mention the comment alternative; `suppressed-exception` still hardcodes "or add a comment" in its suggestion and "by default" in its docs.
-  - *Target*: In `src/code_lint/contract.rs` (where `RequireExplanation` diagnostics are filtered), append a generated hint such as "or explain it in an adjacent comment" to the suggestion only when the effective mode is `require-explanation`. Have `--explain` document where the comment goes (line above the header, on or above the attribute), possibly via a per-rule explanation-location field, then migrate `suppressed-exception`.
 
 ## Candidate Rules
 

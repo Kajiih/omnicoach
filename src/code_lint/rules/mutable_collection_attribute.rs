@@ -51,9 +51,7 @@ pub const RULE: CodeRule = CodeRule {
                            types such as `Sequence[MutableMapping[K, V]]` are not checked, \
                            because mutation of the elements is not tracked. Private attributes \
                            starting with `_`, attributes mutated in any method of the class, \
-                           and attributes on `Protocol` or `ABC` classes are not flagged. In \
-                           `require-explanation` mode, a comment on or above the attribute line \
-                           excuses the finding.",
+                           and attributes on `Protocol` or `ABC` classes are not flagged.",
             why_is_this_bad: "On a `@dataclass` or public class interface, annotating a read-only \
                               field as `MutableSequence`, `MutableMapping`, or `MutableSet` \
                               makes its type invariant, rejects `tuple` or `Sequence` arguments \

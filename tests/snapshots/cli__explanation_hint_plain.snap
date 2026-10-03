@@ -1,0 +1,19 @@
+---
+source: tests/cli.rs
+expression: output
+---
+--- exit code ---
+1
+--- stdout ---
+[TEMP_PATH]:4:5: [nested-function] Function `inner` is defined inside another function.
+  Rationale: A nested named function captures the enclosing scope implicitly and cannot be imported or tested on its own.
+  Suggestion: Extract `inner` to a module-level private function (`_inner`), or use an inline `lambda` for a trivial callback.
+
+[TEMP_PATH]:6:10: [suppressed-exception] An exception is silenced with `contextlib.suppress()`.
+  Rationale: Silencing an exception without a recorded reason hides unexpected failures and leaves the next reader unable to tell intentional ignoring from accidental masking.
+  Suggestion: Replace the block with an explicit `except` handler.
+  Or: Explain why in a comment at the end of the flagged line or directly above it.
+
+For details on a rule, run: omni-code-lint --explain <rule>
+
+--- stderr ---

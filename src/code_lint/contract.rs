@@ -57,7 +57,7 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
     /// language from `overrides` (the rule's `[rules.<name>]` configuration, if any).
     ///
     /// In [`EnforcementMode::RequireExplanation`], violations explained by an adjacent comment
-    /// are dropped.
+    /// are dropped, and the others carry [`EnforcementMode::EXPLANATION_HINT`].
     #[must_use]
     pub fn check_file(
         &self,
@@ -84,6 +84,10 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
                     diagnostic.location.line,
                 )
             });
+            for diagnostic in &mut diagnostics {
+                diagnostic.message.explanation_hint =
+                    Some(EnforcementMode::EXPLANATION_HINT.to_owned());
+            }
         }
         diagnostics
     }
@@ -194,5 +198,89 @@ impl<Options: OptionsDeclaration + Send + Sync> AnyCodeRule for CodeRule<Options
         overrides: Option<&RuleOverrides>,
     ) -> Vec<Diagnostic> {
         Self::check_file(self, path, file, overrides)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::{ViolationTemplate, violation_template};
+    use crate::rule_declaration::{
+        Classification, Consensus, ImpactedQuality, LanguageDefaults, Precision, RuleDoc,
+        RuleOptions, Topic,
+    };
+    use rstest::rstest;
+
+    const TEMPLATE: ViolationTemplate = violation_template! {
+        summary: "Function `f` is called.",
+        rationale: "Calling `f` is a test fixture.",
+        suggestion: "Remove the call.",
+    };
+
+    /// Flags every call to `f`.
+    fn check_calls_to_f(
+        rule: &CodeRule,
+        path: &Path,
+        file: &ParsedFile,
+        (): (),
+    ) -> Vec<Diagnostic> {
+        rule.check_banned_calls(path, file, &HashSet::from(["f".to_owned()]))
+    }
+
+    /// A rule flagging calls to `f`, declaring `mode` as its default enforcement mode.
+    fn rule_with_mode(mode: Option<EnforcementMode>) -> CodeRule {
+        CodeRule {
+            declaration: Declaration {
+                name: RuleName("call-to-f"),
+                template: &TEMPLATE,
+                languages: &[SupportLang::Python],
+                options: RuleOptions {
+                    enforcement_mode: mode.map(|mode| LanguageDefaults::new(mode, &[])),
+                    options: (),
+                },
+                classification: Classification {
+                    topics: &[Topic::STATIC_TYPING],
+                    precision: Precision::Exact,
+                    consensus: Consensus::Opinionated,
+                    impacted_quality: ImpactedQuality::Maintainability,
+                },
+                doc: RuleDoc::TODO,
+            },
+            target: RuleTarget::All,
+            check: check_calls_to_f,
+        }
+    }
+
+    #[rstest]
+    #[case::require_explanation_hints_kept_findings_and_drops_explained_ones(
+        Some(EnforcementMode::RequireExplanation),
+        &[(2, Some(EnforcementMode::EXPLANATION_HINT))]
+    )]
+    #[case::ban_adds_no_hint(Some(EnforcementMode::Ban), &[(1, None), (2, None)])]
+    #[case::rule_without_mode_adds_no_hint(None, &[(1, None), (2, None)])]
+    fn test_check_file_sets_explanation_hint_by_mode(
+        #[case] mode: Option<EnforcementMode>,
+        #[case] expected: &[(usize, Option<&str>)],
+    ) {
+        let source = indoc::indoc! {"
+            f()  # The first call is explained by this comment.
+            f()
+        "};
+        let mut diagnostics = rule_with_mode(mode).check_file(
+            Path::new("module.py"),
+            &ParsedFile::new(source, SupportLang::Python),
+            None,
+        );
+        diagnostics.sort_unstable();
+        let actual: Vec<(usize, Option<&str>)> = diagnostics
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.location.line,
+                    diagnostic.message.explanation_hint.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(actual, expected);
     }
 }

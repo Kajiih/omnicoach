@@ -361,3 +361,29 @@ fn test_code_lint_json_format_deterministic() {
     );
     insta::assert_snapshot!(output);
 }
+
+/// `suppressed-exception` defaults to `require-explanation` and `nested-function` to `ban`, so
+/// only the `suppressed-exception` finding carries the explanation hint.
+const EXPLANATION_HINT_CODE: &str = indoc! {r"
+    import contextlib
+
+    def outer():
+        def inner():
+            pass
+        with contextlib.suppress(OSError):
+            inner()
+"};
+
+#[rstest::rstest]
+#[case::plain("plain")]
+#[case::json("json")]
+fn test_code_lint_explanation_hint(#[case] format: &str) {
+    let temp_file = create_temp_file(".py", EXPLANATION_HINT_CODE);
+    let output = run_and_sanitize_cli(
+        "omni-code-lint",
+        &["--format", format, temp_file.path().to_str().unwrap()],
+        None,
+        &[temp_file.path()],
+    );
+    insta::assert_snapshot!(format!("explanation_hint_{format}"), output);
+}

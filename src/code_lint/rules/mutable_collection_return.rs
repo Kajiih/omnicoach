@@ -51,9 +51,7 @@ pub const RULE: CodeRule = CodeRule {
                            matched by function name only. Dunder methods other than `__init__`, \
                            `__new__`, and `__call__`, methods on `Protocol` or `ABC` classes, and \
                            functions decorated with `@override`, `@overload`, `@abstractmethod`, \
-                           `@fixture`, or `@<function>.register` are exempt. In \
-                           `require-explanation` mode, a comment on the line above the header \
-                           excuses the finding.",
+                           `@fixture`, or `@<function>.register` are exempt.",
             why_is_this_bad: "Returning `MutableSequence`, `MutableMapping`, or `MutableSet` \
                               invites callers to mutate the returned collection in place and \
                               forces the implementation to allocate or return a mutable \

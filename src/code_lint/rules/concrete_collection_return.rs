@@ -50,13 +50,9 @@ pub const RULE: CodeRule = CodeRule {
                            `Mapping[K, list[V]]`, `Awaitable[list[T]]`). Unqualified `Set` is \
                            exempt only when `from collections.abc import Set` is present in the \
                            file. Dunder methods other than `__init__`, `__new__`, and \
-                           `__call__`, methods on `Protocol` or `ABC` \
-                           classes, and functions decorated with `@override`, `@overload`, \
-                           `@abstractmethod`, `@fixture`, or `@<function>.register` are exempt. \
-                           In `require-explanation` mode, a comment on the line above the header \
-                           (or above the first decorator) excuses the finding; it applies to the \
-                           whole header, so it also excuses other `require-explanation` findings \
-                           on the same header.",
+                           `__call__`, methods on `Protocol` or `ABC` classes, and functions \
+                           decorated with `@override`, `@overload`, `@abstractmethod`, \
+                           `@fixture`, or `@<function>.register` are exempt.",
             why_is_this_bad: "Returning a concrete `list`, `dict`, or `set` exposes internal \
                               state to in-place caller mutation and locks the implementation \
                               into returning an invariant mutable container even when it could \

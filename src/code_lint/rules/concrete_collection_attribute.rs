@@ -50,8 +50,7 @@ pub const RULE: CodeRule = CodeRule {
                            `Union`, `|`, and covariant containers. Unqualified `Set` is exempt \
                            only when `from collections.abc import Set` is present in the file. \
                            Private attributes starting with `_` and attributes on `Protocol` or \
-                           `ABC` classes are not flagged. In `require-explanation` mode, a \
-                           comment on or above the attribute line excuses the finding.",
+                           `ABC` classes are not flagged.",
             why_is_this_bad: "On a `@dataclass` or public class interface, annotating a field as \
                               `items: list[str]` forces callers constructing the class to pass a \
                               concrete `list` rather than a `tuple` or an upstream `Sequence[str]` \

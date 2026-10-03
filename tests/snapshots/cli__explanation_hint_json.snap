@@ -1,0 +1,46 @@
+---
+source: tests/cli.rs
+expression: output
+---
+--- exit code ---
+1
+--- stdout ---
+[
+  {
+    "rule_name": "nested-function",
+    "message": {
+      "summary": "Function `inner` is defined inside another function.",
+      "rationale": "A nested named function captures the enclosing scope implicitly and cannot be imported or tested on its own.",
+      "suggestion": "Extract `inner` to a module-level private function (`_inner`), or use an inline `lambda` for a trivial callback."
+    },
+    "location": {
+      "context": "[TEMP_PATH]",
+      "span": {
+        "start": 36,
+        "end": 61
+      },
+      "line": 4,
+      "column": 5
+    }
+  },
+  {
+    "rule_name": "suppressed-exception",
+    "message": {
+      "summary": "An exception is silenced with `contextlib.suppress()`.",
+      "rationale": "Silencing an exception without a recorded reason hides unexpected failures and leaves the next reader unable to tell intentional ignoring from accidental masking.",
+      "suggestion": "Replace the block with an explicit `except` handler.",
+      "explanation_hint": "Explain why in a comment at the end of the flagged line or directly above it."
+    },
+    "location": {
+      "context": "[TEMP_PATH]",
+      "span": {
+        "start": 71,
+        "end": 99
+      },
+      "line": 6,
+      "column": 10
+    }
+  }
+]
+
+--- stderr ---

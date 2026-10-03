@@ -26,10 +26,14 @@ pub struct ViolationMessage {
     pub rationale: String,
     /// A suggestion or workaround to resolve the violation.
     pub suggestion: String,
+    /// How to excuse the violation with a comment, set by the framework when the rule's
+    /// enforcement mode accepts one; never part of a rule's template.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explanation_hint: Option<String>,
 }
 
 impl ViolationMessage {
-    /// Constructs a `ViolationMessage` from string-like values.
+    /// Constructs a `ViolationMessage` from string-like values, without an explanation hint.
     #[must_use]
     pub fn new(
         summary: impl Into<String>,
@@ -40,6 +44,7 @@ impl ViolationMessage {
             summary: summary.into(),
             rationale: rationale.into(),
             suggestion: suggestion.into(),
+            explanation_hint: None,
         }
     }
 }
@@ -182,6 +187,7 @@ impl ViolationTemplate {
             summary: self.summary.render(params),
             rationale: self.rationale.render(params),
             suggestion: self.suggestion.render(params),
+            explanation_hint: None,
         }
     }
 
@@ -192,6 +198,7 @@ impl ViolationTemplate {
             summary: self.summary.render_for_lang(lang, params),
             rationale: self.rationale.render_for_lang(lang, params),
             suggestion: self.suggestion.render_for_lang(lang, params),
+            explanation_hint: None,
         }
     }
 }
@@ -445,14 +452,21 @@ pub fn print_diagnostics(diagnostics: &[Diagnostic], format: OutputFormat) -> an
     } else {
         for diagnostic in sorted {
             let location_header = diagnostic.location.format_header();
+            let hint_line = diagnostic
+                .message
+                .explanation_hint
+                .as_ref()
+                .map(|hint| format!("  Or: {hint}\n"))
+                .unwrap_or_default();
 
             println!(
-                "{}: [{}] {}\n  Rationale: {}\n  Suggestion: {}\n",
+                "{}: [{}] {}\n  Rationale: {}\n  Suggestion: {}\n{}",
                 location_header,
                 diagnostic.rule_name,
                 diagnostic.message.summary,
                 diagnostic.message.rationale,
-                diagnostic.message.suggestion
+                diagnostic.message.suggestion,
+                hint_line
             );
         }
     }
