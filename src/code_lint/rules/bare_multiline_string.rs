@@ -63,27 +63,27 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags multiline string literals that are not wrapped in a dedent helper.",
-            what_it_does: "Flags string literals that span several lines and contain a real \
-                           line break. In Python these are triple-quoted strings; strings \
-                           used as a statement on their own, such as docstrings, are not \
-                           flagged. A string anywhere inside a call to `inspect.cleandoc` is \
-                           allowed; `textwrap.dedent` is not allowed by default and must be \
-                           added to the allow list. In Rust, normal, raw, byte and C string \
-                           literals are checked; a normal string whose line breaks are all \
-                           `\\` continuations is not flagged. Strings inside the `indoc` \
-                           macros (`indoc!`, `formatdoc!`, `writedoc!`, `printdoc!`, \
-                           `eprintdoc!`), `#[doc = ...]` attributes and `insta` inline \
-                           snapshots (`@\"...\"`) are allowed. Test files are checked too.",
-            why_is_this_bad: "A multiline literal keeps the source indentation and the line \
-                              break after the opening quote in its value. Indented to match \
-                              the code, the text carries extra spaces that break \
-                              indentation-sensitive content (YAML, Markdown, expected output) \
-                              and shift line and column numbers. Moved to column 0 to avoid \
-                              that, it breaks the visual structure of the surrounding code.\n\n\
-                              Indent the literal with the code and wrap it in a helper that \
-                              strips the common indentation: `inspect.cleandoc(\"\"\"...\"\"\")` \
-                              in Python, `indoc::indoc!` (or `formatdoc!` to interpolate) in \
-                              Rust. Write a single-line literal when the value has one line.",
+            what_it_does: indoc::indoc! {r#"
+                Flags string literals that span several lines and contain a real line break. In
+                Python these are triple-quoted strings; strings used as a statement on their own,
+                such as docstrings, are not flagged. A string anywhere inside a call to
+                `inspect.cleandoc` is allowed; `textwrap.dedent` is not allowed by default and must
+                be added to the allow list. In Rust, normal, raw, byte and C string literals are
+                checked; a normal string whose line breaks are all `\` continuations is not flagged.
+                Strings inside the `indoc` macros (`indoc!`, `formatdoc!`, `writedoc!`, `printdoc!`,
+                `eprintdoc!`), `#[doc = ...]` attributes and `insta` inline snapshots (`@"..."`) are
+                allowed. Test files are checked too."#},
+            why_is_this_bad: indoc::indoc! {r#"
+                A multiline literal keeps the source indentation and the line break after the
+                opening quote in its value. Indented to match the code, the text carries extra
+                spaces that break indentation-sensitive content (YAML, Markdown, expected output)
+                and shift line and column numbers. Moved to column 0 to avoid that, it breaks the
+                visual structure of the surrounding code.
+
+                Indent the literal with the code and wrap it in a helper that strips the common
+                indentation: `inspect.cleandoc("""...""")` in Python, `indoc::indoc!` (or
+                `formatdoc!` to interpolate) in Rust. Write a single-line literal when the value has
+                one line."#},
             references: &[
                 Reference {
                     title: "Python docs: inspect.cleandoc",

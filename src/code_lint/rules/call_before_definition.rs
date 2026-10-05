@@ -34,29 +34,29 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags functions and methods that call a sibling function or method defined \
                       later in the same module or class.",
-            what_it_does: "Checks Python module and class bodies for functions and methods that \
-                           call a sibling function (`helper()`) or method (`self.helper()`, \
-                           `cls.helper()`) whose definition appears later in the same scope. \
-                           At most one finding is reported per caller and callee pair, at the \
-                           first forward call site.\n\n\
-                           Several constructs are not flagged: direct and mutual recursion \
-                           (where two or more functions call each other in a cycle, so one must \
-                           appear first), calls inside class constructors (`__init__`, \
-                           `__new__`, `__post_init__`, which stay at the top of the class), \
-                           calls where the callee name is shadowed by a local variable, \
-                           parameter or import, and non-call references such as type \
-                           annotations, default parameter values, decorators, attribute \
-                           assignments (`self.value = 1`), and first-class function callbacks. \
-                           Top-level module statements are not checked (covered by Ruff \
-                           `F821`). Test files are not checked.",
-            why_is_this_bad: "In a codebase organized bottom-up (leaf helpers first, callers \
-                              and entrypoints such as `main()` at the bottom), a forward call \
-                              breaks sequential reading order: a reader scanning from top to \
-                              bottom encounters a call to a local helper before seeing its \
-                              signature, parameters or docstring, and has to jump down and \
-                              back up to follow the control flow.\n\n\
-                              Move the helper function or method definition above the first \
-                              function or method that calls it.",
+            what_it_does: indoc::indoc! {r"
+                Checks Python module and class bodies for functions and methods that call a sibling
+                function (`helper()`) or method (`self.helper()`, `cls.helper()`) whose definition
+                appears later in the same scope. At most one finding is reported per caller and
+                callee pair, at the first forward call site.
+
+                Several constructs are not flagged: direct and mutual recursion (where two or more
+                functions call each other in a cycle, so one must appear first), calls inside class
+                constructors (`__init__`, `__new__`, `__post_init__`, which stay at the top of the
+                class), calls where the callee name is shadowed by a local variable, parameter or
+                import, and non-call references such as type annotations, default parameter values,
+                decorators, attribute assignments (`self.value = 1`), and first-class function
+                callbacks. Top-level module statements are not checked (covered by Ruff `F821`).
+                Test files are not checked."},
+            why_is_this_bad: indoc::indoc! {r"
+                In a codebase organized bottom-up (leaf helpers first, callers and entrypoints such
+                as `main()` at the bottom), a forward call breaks sequential reading order: a reader
+                scanning from top to bottom encounters a call to a local helper before seeing its
+                signature, parameters or docstring, and has to jump down and back up to follow the
+                control flow.
+
+                Move the helper function or method definition above the first function or method
+                that calls it."},
             references: &[
                 Reference {
                     title: "ESLint: no-use-before-define",

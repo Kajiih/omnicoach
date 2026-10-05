@@ -11,13 +11,20 @@ Status: enabled (default)
 
 ## What it does
 
-Flags wall-clock and async sleep calls in test files: `time.sleep`, `asyncio.sleep`, `anyio.sleep` and `trio.sleep` in Python, `std::thread::sleep` and `tokio::time::sleep` in Rust, and a bare `sleep`. Calls on an injected object, such as `fake_clock.sleep(10)`, are not flagged. Zero-duration sleeps are left to `zero-sleep-in-tests`.
+Flags wall-clock and async sleep calls in test files: `time.sleep`, `asyncio.sleep`,
+`anyio.sleep` and `trio.sleep` in Python, `std::thread::sleep` and
+`tokio::time::sleep` in Rust, and a bare `sleep`. Calls on an injected object, such
+as `fake_clock.sleep(10)`, are not flagged. Zero-duration sleeps are left to
+`zero-sleep-in-tests`.
 
 ## Why is this bad?
 
-A fixed sleep guesses how long another thread, task or process needs. Too short, and the test fails when the machine is loaded: the test is flaky. Too long, and every run pays the full delay. Either way, the test no longer says what it waits for.
+A fixed sleep guesses how long another thread, task or process needs. Too short, and
+the test fails when the machine is loaded: the test is flaky. Too long, and every
+run pays the full delay. Either way, the test no longer says what it waits for.
 
-Wait on the event itself (an event, a channel, a condition variable), or inject a clock that the test advances.
+Wait on the event itself (an event, a channel, a condition variable), or inject a
+clock that the test advances.
 
 ## Example
 

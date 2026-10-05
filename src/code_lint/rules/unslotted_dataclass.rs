@@ -32,21 +32,20 @@ pub const RULE: CodeRule = CodeRule {
         },
         doc: RuleDoc {
             summary: "Requires Python dataclasses to declare `slots=True`.",
-            what_it_does: "Flags a class decorated with `@dataclass` or \
-                           `@dataclasses.dataclass` that does not pass `slots`, in all Python \
-                           files, tests included. An explicit `slots=False` counts as a \
-                           deliberate choice and is not reported. The decorator is matched by \
-                           name, not by import: a bare `@dataclass` is checked whatever module \
-                           it comes from, while other decorators, such as `@attrs.define`, \
-                           are not.",
-            why_is_this_bad: "Without slots, each instance carries a `__dict__` that costs memory \
-                              and silently accepts misspelled attribute assignments, so a typo \
-                              in `instance.nmae = ...` creates a new attribute instead of \
-                              failing.\n\n\
-                              Write `@dataclass(slots=True)` (`slots` needs Python 3.10 or \
-                              later). When dynamic attributes or multiple inheritance with \
-                              other slotted bases are really needed, say so with \
-                              `slots=False`.",
+            what_it_does: indoc::indoc! {r"
+                Flags a class decorated with `@dataclass` or `@dataclasses.dataclass` that does not
+                pass `slots`, in all Python files, tests included. An explicit `slots=False` counts
+                as a deliberate choice and is not reported. The decorator is matched by name, not by
+                import: a bare `@dataclass` is checked whatever module it comes from, while other
+                decorators, such as `@attrs.define`, are not."},
+            why_is_this_bad: indoc::indoc! {r"
+                Without slots, each instance carries a `__dict__` that costs memory and silently
+                accepts misspelled attribute assignments, so a typo in `instance.nmae = ...` creates
+                a new attribute instead of failing.
+
+                Write `@dataclass(slots=True)` (`slots` needs Python 3.10 or later). When dynamic
+                attributes or multiple inheritance with other slotted bases are really needed, say
+                so with `slots=False`."},
             references: &[Reference {
                 title: "Python docs: dataclasses",
                 url: "https://docs.python.org/3/library/dataclasses.html",

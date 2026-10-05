@@ -40,48 +40,41 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags a string or number literal repeated inline in one file instead of \
                       being named once.",
-            what_it_does: "Groups the string, byte-string and number literals of a file by \
-                           value: quote style, raw prefixes, digit separators, base prefixes \
-                           and Rust type suffixes do not matter (`'id'` equals `\"id\"`, \
-                           `1_000` equals `1000`, `30u64` equals `30`), but strings and bytes, \
-                           integers and floats, and a number and its negation are distinct. \
-                           Values not worth naming are ignored: strings shorter than 2 \
-                           characters or without a letter or digit (`\", \"`, `\"\\n\"`), and \
-                           the numbers -1, 0, 1, 2, -1.0, 0.0, 1.0 and 2.0. When a scalar \
-                           constant holds the value (`MAX_RETRIES = 3` or a `Final` at Python \
-                           module or class level, also inside a module-level `if`, `try` or \
-                           `with`; a Rust `const`, non-`mut` `static` or enum discriminant), \
-                           every inline use is flagged once definitions and inline uses reach \
-                           `min-occurrences`; otherwise every inline use after the first is \
-                           flagged once inline uses reach it. Two constants sharing a value \
-                           are not flagged, and a constant whose initializer is not a single \
-                           literal (`HOSTS = [\"a\", \"b\"]`, `Regex::new(\"…\")`) is not \
-                           collected. Positions that are not values are skipped: Python \
-                           docstrings and annotations, Rust tuple positions (`pair.0`). So \
-                           are literals the language requires: Python `Literal[...]` and the \
-                           first argument of `TypeVar`, `NewType`, `ParamSpec`, \
-                           `TypeVarTuple`, `NamedTuple`, `TypedDict` and `cast`; Rust \
-                           attributes, `extern` ABI strings and the arguments of formatting, \
-                           assertion, logging and compile-time macros (`format!`, `println!`, \
-                           `assert_eq!`, `panic!`, `bail!`, `warn!`, `include_str!` and \
-                           similar). Interpolated Python f-strings are templates and skipped, \
-                           but literals inside their `{...}` count, as do `case` and `match` \
-                           patterns and `matches!`. A negative number written as a bare `-` \
-                           token, inside a Rust macro or a Python mapping, keyword or `|` \
-                           pattern, is skipped. Test files and Rust `#[cfg(test)]` and \
-                           `#[test]` code are not checked. The reported count covers only \
-                           the occurrences collected under these rules.",
-            why_is_this_bad: "A literal copied across a file is a value without a name: the \
-                              reader must guess what `\"primary-db\"` or `30` stands for, and \
-                              changing it means finding every copy. Missing one leaves the \
-                              file silently inconsistent, and a search cannot tell the copies \
-                              of this value from an unrelated literal that happens to be \
-                              equal.\n\n\
-                              Extract the value into one named constant and reference it at \
-                              every site, or reuse the constant that already holds it. In a \
-                              Python `case` pattern, match an `Enum` member or class constant \
-                              by dotted name (`case Mode.READ:`): a bare name captures any \
-                              value instead of comparing.",
+            what_it_does: indoc::indoc! {r#"
+                Groups the string, byte-string and number literals of a file by value: quote style,
+                raw prefixes, digit separators, base prefixes and Rust type suffixes do not matter
+                (`'id'` equals `"id"`, `1_000` equals `1000`, `30u64` equals `30`), but strings and
+                bytes, integers and floats, and a number and its negation are distinct. Values not
+                worth naming are ignored: strings shorter than 2 characters or without a letter or
+                digit (`", "`, `"\n"`), and the numbers -1, 0, 1, 2, -1.0, 0.0, 1.0 and 2.0. When a
+                scalar constant holds the value (`MAX_RETRIES = 3` or a `Final` at Python module or
+                class level, also inside a module-level `if`, `try` or `with`; a Rust `const`,
+                non-`mut` `static` or enum discriminant), every inline use is flagged once
+                definitions and inline uses reach `min-occurrences`; otherwise every inline use
+                after the first is flagged once inline uses reach it. Two constants sharing a value
+                are not flagged, and a constant whose initializer is not a single literal
+                (`HOSTS = ["a", "b"]`, `Regex::new("…")`) is not collected. Positions that are not
+                values are skipped: Python docstrings and annotations, Rust tuple positions
+                (`pair.0`). So are literals the language requires: Python `Literal[...]` and the
+                first argument of `TypeVar`, `NewType`, `ParamSpec`, `TypeVarTuple`, `NamedTuple`,
+                `TypedDict` and `cast`; Rust attributes, `extern` ABI strings and the arguments of
+                formatting, assertion, logging and compile-time macros (`format!`, `println!`,
+                `assert_eq!`, `panic!`, `bail!`, `warn!`, `include_str!` and similar). Interpolated
+                Python f-strings are templates and skipped, but literals inside their `{...}` count,
+                as do `case` and `match` patterns and `matches!`. A negative number written as a
+                bare `-` token, inside a Rust macro or a Python mapping, keyword or `|` pattern, is
+                skipped. Test files and Rust `#[cfg(test)]` and `#[test]` code are not checked. The
+                reported count covers only the occurrences collected under these rules."#},
+            why_is_this_bad: indoc::indoc! {r#"
+                A literal copied across a file is a value without a name: the reader must guess what
+                `"primary-db"` or `30` stands for, and changing it means finding every copy. Missing
+                one leaves the file silently inconsistent, and a search cannot tell the copies of
+                this value from an unrelated literal that happens to be equal.
+
+                Extract the value into one named constant and reference it at every site, or reuse
+                the constant that already holds it. In a Python `case` pattern, match an `Enum`
+                member or class constant by dotted name (`case Mode.READ:`): a bare name captures
+                any value instead of comparing."#},
             references: &[
                 Reference {
                     title: "SonarSource RSPEC-1192: String literals should not be duplicated",

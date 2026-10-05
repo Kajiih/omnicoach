@@ -42,20 +42,20 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags `typing.cast` calls in Python source files.",
-            what_it_does: "Flags calls to `typing.cast`, `typing_extensions.cast` and a bare \
-                           `cast` in Python source files; test files are not checked. Calls are \
-                           matched by how they are written, not by where the name was imported \
-                           from: a bare `cast(...)` is flagged even if `cast` comes from another \
-                           library, while a method call such as `pl.col(\"a\").cast(pl.Int64)` \
-                           is not.",
-            why_is_this_bad: "`cast` tells the type checker to trust a type without checking \
-                              it, at analysis time or at runtime. If the value is not what the \
-                              cast claims, the error surfaces later and far from its cause, and \
-                              the type checker can no longer help find it. A cast also stays \
-                              silently wrong when the surrounding code changes.\n\n\
-                              Narrow the type with a check the type checker understands: \
-                              `isinstance()`, a `TypeGuard` or `TypeIs` function, or a \
-                              `Protocol` that describes the contract.",
+            what_it_does: indoc::indoc! {r#"
+                Flags calls to `typing.cast`, `typing_extensions.cast` and a bare `cast` in Python
+                source files; test files are not checked. Calls are matched by how they are written,
+                not by where the name was imported from: a bare `cast(...)` is flagged even if
+                `cast` comes from another library, while a method call such as
+                `pl.col("a").cast(pl.Int64)` is not."#},
+            why_is_this_bad: indoc::indoc! {r"
+                `cast` tells the type checker to trust a type without checking it, at analysis time
+                or at runtime. If the value is not what the cast claims, the error surfaces later
+                and far from its cause, and the type checker can no longer help find it. A cast also
+                stays silently wrong when the surrounding code changes.
+
+                Narrow the type with a check the type checker understands: `isinstance()`, a
+                `TypeGuard` or `TypeIs` function, or a `Protocol` that describes the contract."},
             references: &[Reference {
                 title: "Python docs: typing.cast",
                 url: "https://docs.python.org/3/library/typing.html#typing.cast",

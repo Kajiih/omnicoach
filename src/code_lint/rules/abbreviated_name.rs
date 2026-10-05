@@ -85,25 +85,26 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags names that contain an abbreviation such as `ctx` or `msg`.",
-            what_it_does: "Splits each name the code defines into words, at underscores and \
-                           at lowercase-to-uppercase or digit-to-uppercase boundaries, and \
-                           flags the name if any word is a banned abbreviation, ignoring case. \
-                           Only whole words match: `strategy` and \
-                           `category` are not flagged, `handle_msg` and `TaskRes` are. \
-                           Checked names: variables, parameters, loop and pattern bindings, \
-                           functions, classes, structs, enums, traits, type aliases, \
-                           constants, and attributes where they are declared (Python class-body \
-                           declarations, the first `self.name = ...` in `__init__`, Rust named \
-                           struct fields). Not checked: imports (including aliased imports such \
-                           as `import os as os_cfg`), later attribute writes (`self.ctx = ...` \
-                           outside `__init__`), and names imposed by a contract (Python methods \
-                           marked `@override`, members of a Rust `impl Trait for Type` block), \
-                           although the parameters of those methods are still checked.",
-            why_is_this_bad: "An abbreviation makes the reader guess: `res` can be a result, a \
-                              response or a resource, `ch` a channel or a character. Different \
-                              authors also shorten the same word differently (`cfg`, `conf`, \
-                              `config`), so a search for one spelling misses the others.\n\n\
-                              Spell the word out (`context`, `message`, `result`, `config`).",
+            what_it_does: indoc::indoc! {r"
+                Splits each name the code defines into words, at underscores and at
+                lowercase-to-uppercase or digit-to-uppercase boundaries, and flags the name if any
+                word is a banned abbreviation, ignoring case. Only whole words match: `strategy` and
+                `category` are not flagged, `handle_msg` and `TaskRes` are. Checked names:
+                variables, parameters, loop and pattern bindings, functions, classes, structs,
+                enums, traits, type aliases, constants, and attributes where they are declared
+                (Python class-body declarations, the first `self.name = ...` in `__init__`, Rust
+                named struct fields). Not checked: imports (including aliased imports such as
+                `import os as os_cfg`), later attribute writes (`self.ctx = ...` outside
+                `__init__`), and names imposed by a contract (Python methods marked `@override`,
+                members of a Rust `impl Trait for Type` block), although the parameters of those
+                methods are still checked."},
+            why_is_this_bad: indoc::indoc! {r"
+                An abbreviation makes the reader guess: `res` can be a result, a response or a
+                resource, `ch` a channel or a character. Different authors also shorten the same
+                word differently (`cfg`, `conf`, `config`), so a search for one spelling misses the
+                others.
+
+                Spell the word out (`context`, `message`, `result`, `config`)."},
             references: &[Reference {
                 title: "Google Python Style Guide: Naming",
                 url: "https://google.github.io/styleguide/pyguide.html#316-naming",

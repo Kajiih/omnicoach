@@ -35,38 +35,36 @@ pub const RULE: CodeRule = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags Python function parameters annotated with concrete mutable collection types such as `list`, `dict`, or `set`.",
-            what_it_does: "Flags non-variadic parameters of functions and methods in Python \
-                           source files (test files are not checked) whose type annotation uses \
-                           a concrete mutable collection constructor (`list`, `dict`, `set`, \
-                           `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, or `typing.Set`, \
-                           and the `collections` containers `defaultdict`, `deque`, `Counter`, \
-                           and `OrderedDict` with their `typing` aliases), \
-                           either at the top level or inside transparent wrappers (`|`, \
-                           `Optional`, `Union`, `Annotated`) and covariant container positions \
-                           (`Sequence[list[T]]`, `Mapping[K, list[V]]`, `tuple[...]`, \
-                           `Awaitable[...]`, and `Callable` return types). Unqualified `Set` is \
-                           exempt only when `from collections.abc import Set` is present in the \
-                           file. Contravariant `Callable` parameter lists and the type arguments \
-                           of invariant containers (`list`, `dict`, `MutableSequence`, \
-                           `MutableMapping`) are not inspected. Dunder methods other than \
-                           `__init__`, `__new__`, and `__call__`, methods on `Protocol` or `ABC` \
-                           classes, and functions decorated with `@override`, `@overload`, \
-                           `@abstractmethod`, `@fixture`, `@<function>.register`, or \
-                           `@<property>.setter` are exempt. String annotations and module \
-                           aliases (`import typing as t`) are not resolved.",
-            why_is_this_bad: "In Python's type system, `list`, `dict`, and `set` are invariant \
-                              in their type parameters and require a mutable concrete container \
-                              at call sites. A function annotated with `items: list[str]` \
-                              rejects callers holding a `tuple[str, ...]`, a `Sequence[str]` \
-                              parameter, or a `list[SubStr]`, forcing defensive `list(...)` \
-                              copies.\n\n\
-                              Choose the annotation from what the function does with the \
-                              parameter: `Iterable` for a single pass, `Collection` for `len()`, \
-                              `in`, or several passes, `Sequence`, `Mapping`, or `Set` (imported \
-                              as `AbstractSet`) for indexed or keyed reads, and their `Mutable` \
-                              counterparts for in-place mutation. The message names the read-only \
-                              counterpart of the flagged type as a starting point; it does not \
-                              inspect how the parameter is used.",
+            what_it_does: indoc::indoc! {r"
+                Flags non-variadic parameters of functions and methods in Python source files (test
+                files are not checked) whose type annotation uses a concrete mutable collection
+                constructor (`list`, `dict`, `set`, `List`, `Dict`, `Set`, `typing.List`,
+                `typing.Dict`, or `typing.Set`, and the `collections` containers `defaultdict`,
+                `deque`, `Counter`, and `OrderedDict` with their `typing` aliases), either at the
+                top level or inside transparent wrappers (`|`, `Optional`, `Union`, `Annotated`) and
+                covariant container positions (`Sequence[list[T]]`, `Mapping[K, list[V]]`,
+                `tuple[...]`, `Awaitable[...]`, and `Callable` return types). Unqualified `Set` is
+                exempt only when `from collections.abc import Set` is present in the file.
+                Contravariant `Callable` parameter lists and the type arguments of invariant
+                containers (`list`, `dict`, `MutableSequence`, `MutableMapping`) are not inspected.
+                Dunder methods other than `__init__`, `__new__`, and `__call__`, methods on
+                `Protocol` or `ABC` classes, and functions decorated with `@override`, `@overload`,
+                `@abstractmethod`, `@fixture`, `@<function>.register`, or `@<property>.setter` are
+                exempt. String annotations and module aliases (`import typing as t`) are not
+                resolved."},
+            why_is_this_bad: indoc::indoc! {r"
+                In Python's type system, `list`, `dict`, and `set` are invariant in their type
+                parameters and require a mutable concrete container at call sites. A function
+                annotated with `items: list[str]` rejects callers holding a `tuple[str, ...]`, a
+                `Sequence[str]` parameter, or a `list[SubStr]`, forcing defensive `list(...)`
+                copies.
+
+                Choose the annotation from what the function does with the parameter: `Iterable` for
+                a single pass, `Collection` for `len()`, `in`, or several passes, `Sequence`,
+                `Mapping`, or `Set` (imported as `AbstractSet`) for indexed or keyed reads, and
+                their `Mutable` counterparts for in-place mutation. The message names the read-only
+                counterpart of the flagged type as a starting point; it does not inspect how the
+                parameter is used."},
             references: &[Reference {
                 title: "PEP 585: Type Hinting Generics In Standard Collections",
                 url: "https://peps.python.org/pep-0585/",

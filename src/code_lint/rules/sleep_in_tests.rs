@@ -71,18 +71,19 @@ pub const SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags fixed-duration sleeps in tests.",
-            what_it_does: "Flags wall-clock and async sleep calls in test files: `time.sleep`, \
-                           `asyncio.sleep`, `anyio.sleep` and `trio.sleep` in Python, \
-                           `std::thread::sleep` and `tokio::time::sleep` in Rust, and a bare \
-                           `sleep`. Calls on an injected object, such as `fake_clock.sleep(10)`, \
-                           are not flagged. Zero-duration sleeps are left to \
-                           `zero-sleep-in-tests`.",
-            why_is_this_bad: "A fixed sleep guesses how long another thread, task or process \
-                              needs. Too short, and the test fails when the machine is loaded: \
-                              the test is flaky. Too long, and every run pays the full delay. \
-                              Either way, the test no longer says what it waits for.\n\n\
-                              Wait on the event itself (an event, a channel, a condition \
-                              variable), or inject a clock that the test advances.",
+            what_it_does: indoc::indoc! {r"
+                Flags wall-clock and async sleep calls in test files: `time.sleep`, `asyncio.sleep`,
+                `anyio.sleep` and `trio.sleep` in Python, `std::thread::sleep` and
+                `tokio::time::sleep` in Rust, and a bare `sleep`. Calls on an injected object, such
+                as `fake_clock.sleep(10)`, are not flagged. Zero-duration sleeps are left to
+                `zero-sleep-in-tests`."},
+            why_is_this_bad: indoc::indoc! {r"
+                A fixed sleep guesses how long another thread, task or process needs. Too short, and
+                the test fails when the machine is loaded: the test is flaky. Too long, and every
+                run pays the full delay. Either way, the test no longer says what it waits for.
+
+                Wait on the event itself (an event, a channel, a condition variable), or inject a
+                clock that the test advances."},
             references: &[
                 Reference {
                     title: "Eradicating Non-Determinism in Tests (Martin Fowler)",
@@ -154,22 +155,22 @@ pub const ZERO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags zero-duration sleeps used to yield in tests.",
-            what_it_does: "Flags the same sleep calls as `sleep-in-tests` when their single \
-                           argument is a literal zero duration: `0`, `0.0` or `0.` in Python, \
-                           and `Duration::ZERO`, `Duration::from_secs(0)` or \
-                           `Duration::from_millis(0)` in Rust. Other spellings of zero, such as \
-                           a variable holding `0`, and calls with more than one argument are not \
-                           flagged. Python is checked too, including `asyncio.sleep(0)`.",
-            why_is_this_bad: "In a test, a zero-duration sleep is used for its side effect: \
-                              letting another task advance by one scheduler turn. If that task \
-                              later gains a second `await` point, a single `sleep(0)` is no \
-                              longer enough, and whether a zero timer yields at all depends on \
-                              the runtime (`tokio::time::sleep(Duration::ZERO)` does not \
-                              guarantee a yield).\n\n\
-                              Wait on an explicit signal (`asyncio.Event`, `asyncio.Queue`) or \
-                              use the runtime's dedicated yield primitive \
-                              (`tokio::task::yield_now().await` in Rust, \
-                              `await anyio.lowlevel.checkpoint()` in AnyIO).",
+            what_it_does: indoc::indoc! {r"
+                Flags the same sleep calls as `sleep-in-tests` when their single argument is a
+                literal zero duration: `0`, `0.0` or `0.` in Python, and `Duration::ZERO`,
+                `Duration::from_secs(0)` or `Duration::from_millis(0)` in Rust. Other spellings of
+                zero, such as a variable holding `0`, and calls with more than one argument are not
+                flagged. Python is checked too, including `asyncio.sleep(0)`."},
+            why_is_this_bad: indoc::indoc! {r"
+                In a test, a zero-duration sleep is used for its side effect: letting another task
+                advance by one scheduler turn. If that task later gains a second `await` point, a
+                single `sleep(0)` is no longer enough, and whether a zero timer yields at all
+                depends on the runtime (`tokio::time::sleep(Duration::ZERO)` does not guarantee a
+                yield).
+
+                Wait on an explicit signal (`asyncio.Event`, `asyncio.Queue`) or use the runtime's
+                dedicated yield primitive (`tokio::task::yield_now().await` in Rust,
+                `await anyio.lowlevel.checkpoint()` in AnyIO)."},
             references: &[
                 Reference {
                     title: "tokio::task::yield_now",

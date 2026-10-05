@@ -31,20 +31,19 @@ pub const RULE: CodeRule = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags Python functions defined inside other functions.",
-            what_it_does: "Flags every `def` that appears inside the body of another \
-                           function or method in Python source files; test files are not \
-                           checked. Top-level functions, methods of any class (including a \
-                           class declared inside a function) and `lambda` expressions are \
-                           not flagged.",
-            why_is_this_bad: "A nested function captures the enclosing function's local \
-                              variables implicitly, so its real inputs are not visible in its \
-                              signature. It cannot be imported, tested or reused on its own, \
-                              and it makes the enclosing function longer and harder to \
-                              follow.\n\n\
-                              Move the function to module level, conventionally with a \
-                              leading underscore, and pass what it needs as parameters. A \
-                              `lambda` remains fine for a trivial callback such as a sort \
-                              key.",
+            what_it_does: indoc::indoc! {r"
+                Flags every `def` that appears inside the body of another function or method in
+                Python source files; test files are not checked. Top-level functions, methods of any
+                class (including a class declared inside a function) and `lambda` expressions are
+                not flagged."},
+            why_is_this_bad: indoc::indoc! {r"
+                A nested function captures the enclosing function's local variables implicitly, so
+                its real inputs are not visible in its signature. It cannot be imported, tested or
+                reused on its own, and it makes the enclosing function longer and harder to follow.
+
+                Move the function to module level, conventionally with a leading underscore, and
+                pass what it needs as parameters. A `lambda` remains fine for a trivial callback
+                such as a sort key."},
             references: &[],
             examples: &[Example {
                 language: SupportLang::Python,

@@ -41,27 +41,26 @@ pub const RULE: CodeRule = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags Python function return annotations using `MutableSequence`, `MutableMapping`, or `MutableSet` when no caller in the file mutates the result.",
-            what_it_does: "Flags functions and methods in Python source files (test files are \
-                           not checked) whose return annotation uses `MutableSequence`, \
-                           `MutableMapping`, or `MutableSet` (at the top level or inside \
-                           transparent `|`, `Optional`, `Union`, or `Annotated` wrappers) when \
-                           no caller in the same file mutates the returned collection in place, \
-                           either directly (`make().append(x)`) or through a variable bound in \
-                           the same function (`buf = make()`, `(buf := make())`). Callers are \
-                           matched by function name only. Dunder methods other than `__init__`, \
-                           `__new__`, and `__call__`, methods on `Protocol` or `ABC` classes, and \
-                           functions decorated with `@override`, `@overload`, `@abstractmethod`, \
-                           `@fixture`, or `@<function>.register` are exempt.",
-            why_is_this_bad: "Returning `MutableSequence`, `MutableMapping`, or `MutableSet` \
-                              invites callers to mutate the returned collection in place and \
-                              forces the implementation to allocate or return a mutable \
-                              container, preventing zero-copy returns of `tuple`, `frozenset`, \
-                              or read-only `Sequence` / `Mapping` inputs.\n\n\
-                              A mutable return type is a contract that callers may mutate the \
-                              result, so it is a deliberate choice; otherwise use `Sequence`, \
-                              `Mapping`, or `Set` (imported as `AbstractSet`). Only callers in \
-                              the same file are checked, so the suggestion cannot rule out \
-                              callers elsewhere that rely on mutation.",
+            what_it_does: indoc::indoc! {r"
+                Flags functions and methods in Python source files (test files are not checked)
+                whose return annotation uses `MutableSequence`, `MutableMapping`, or `MutableSet`
+                (at the top level or inside transparent `|`, `Optional`, `Union`, or `Annotated`
+                wrappers) when no caller in the same file mutates the returned collection in place,
+                either directly (`make().append(x)`) or through a variable bound in the same
+                function (`buf = make()`, `(buf := make())`). Callers are matched by function name
+                only. Dunder methods other than `__init__`, `__new__`, and `__call__`, methods on
+                `Protocol` or `ABC` classes, and functions decorated with `@override`, `@overload`,
+                `@abstractmethod`, `@fixture`, or `@<function>.register` are exempt."},
+            why_is_this_bad: indoc::indoc! {r"
+                Returning `MutableSequence`, `MutableMapping`, or `MutableSet` invites callers to
+                mutate the returned collection in place and forces the implementation to allocate or
+                return a mutable container, preventing zero-copy returns of `tuple`, `frozenset`, or
+                read-only `Sequence` / `Mapping` inputs.
+
+                A mutable return type is a contract that callers may mutate the result, so it is a
+                deliberate choice; otherwise use `Sequence`, `Mapping`, or `Set` (imported as
+                `AbstractSet`). Only callers in the same file are checked, so the suggestion cannot
+                rule out callers elsewhere that rely on mutation."},
             references: &[Reference {
                 title: "Python collections.abc — Collections Abstract Base Classes",
                 url: "https://docs.python.org/3/library/collections.abc.html",

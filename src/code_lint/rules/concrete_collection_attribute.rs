@@ -41,30 +41,29 @@ pub const RULE: CodeRule = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags public Python class and instance attributes annotated with concrete mutable collection types such as `list`, `dict`, or `set`.",
-            what_it_does: "Flags public (non-`_`-prefixed) class attributes (`items: list[str]`) \
-                           and `__init__` instance attributes (`self.items: list[str]`) in \
-                           Python source files (test files are not checked) whose type \
-                           annotation uses a concrete mutable collection constructor (`list`, \
-                           `dict`, `set`, `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, \
-                           or `typing.Set`, and the `collections` containers `defaultdict`, \
-                           `deque`, `Counter`, and `OrderedDict` with their `typing` aliases), \
-                           including inside `ClassVar`, `Final`, `Optional`, \
-                           `Union`, `|`, and covariant containers. Unqualified `Set` is exempt \
-                           only when `from collections.abc import Set` is present in the file. \
-                           Private attributes starting with `_` and attributes on `Protocol` or \
-                           `ABC` classes are not flagged.",
-            why_is_this_bad: "On a `@dataclass` or public class interface, annotating a field as \
-                              `items: list[str]` forces callers constructing the class to pass a \
-                              concrete `list` rather than a `tuple` or an upstream `Sequence[str]` \
-                              parameter, and exposes a mutable container on the instance even \
-                              when `@dataclass(frozen=True)` is used.\n\n\
-                              Choose the annotation as a contract: `Sequence`, `Mapping`, or `Set` \
-                              (imported as `AbstractSet`) for read-only fields, and their \
-                              `Mutable` counterparts for fields mutated in place. Internal mutable \
-                              state belongs in a `_`-prefixed attribute. A public concrete \
-                              collection is a deliberate exception. The message names the \
-                              read-only counterpart of the flagged type; it does not check how \
-                              the attribute is used.",
+            what_it_does: indoc::indoc! {r"
+                Flags public (non-`_`-prefixed) class attributes (`items: list[str]`) and `__init__`
+                instance attributes (`self.items: list[str]`) in Python source files (test files are
+                not checked) whose type annotation uses a concrete mutable collection constructor
+                (`list`, `dict`, `set`, `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, or
+                `typing.Set`, and the `collections` containers `defaultdict`, `deque`, `Counter`,
+                and `OrderedDict` with their `typing` aliases), including inside `ClassVar`,
+                `Final`, `Optional`, `Union`, `|`, and covariant containers. Unqualified `Set` is
+                exempt only when `from collections.abc import Set` is present in the file. Private
+                attributes starting with `_` and attributes on `Protocol` or `ABC` classes are not
+                flagged."},
+            why_is_this_bad: indoc::indoc! {r"
+                On a `@dataclass` or public class interface, annotating a field as
+                `items: list[str]` forces callers constructing the class to pass a concrete `list`
+                rather than a `tuple` or an upstream `Sequence[str]` parameter, and exposes a
+                mutable container on the instance even when `@dataclass(frozen=True)` is used.
+
+                Choose the annotation as a contract: `Sequence`, `Mapping`, or `Set` (imported as
+                `AbstractSet`) for read-only fields, and their `Mutable` counterparts for fields
+                mutated in place. Internal mutable state belongs in a `_`-prefixed attribute. A
+                public concrete collection is a deliberate exception. The message names the
+                read-only counterpart of the flagged type; it does not check how the attribute is
+                used."},
             references: &[Reference {
                 title: "PEP 585: Type Hinting Generics In Standard Collections",
                 url: "https://peps.python.org/pep-0585/",
