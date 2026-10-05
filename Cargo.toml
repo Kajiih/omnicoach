@@ -1,9 +1,36 @@
 [package]
-name = "omni"
+name = "omni-lint"
 version = "0.1.0"
 edition = "2024"
-authors = ["Development Team"]
-publish = false
+description = "Lightweight, high-signal static analysis and command linter for Python and Rust"
+license = "MIT"
+repository = "https://github.com/Kajiih/omni-lint"
+readme = "README.md"
+keywords = ["linter", "static-analysis", "ast-grep", "python", "rust"]
+categories = ["development-tools", "command-line-utilities"]
+default-run = "omni-code-lint"
+autobins = false
+include = ["/src/**", "/README.md", "/LICENSE"]
+
+[lib]
+name = "omni"
+path = "src/lib.rs"
+
+[[bin]]
+name = "omni-code-lint"
+path = "src/bin/omni-code-lint.rs"
+
+[[bin]]
+name = "omni-command-lint"
+path = "src/bin/omni-command-lint.rs"
+
+[[example]]
+name = "ast_dumper"
+path = "src/bin/ast_dumper.rs"
+
+[profile.release]
+lto = "fat"
+strip = "symbols"
 
 
 [lints.rust]
