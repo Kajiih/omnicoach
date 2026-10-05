@@ -71,6 +71,10 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
     - *Target*: a repetition that stays strict for these rules. Candidates: a `RepeatCheck::DistinctNames` variant, modeled on `DistinctLiterals`, that renames the second copy's definitions and their references (solves redefinitions, not ordering); isolating each copy in its own scope where the language allows it (a Rust `mod`; Python has no equivalent that keeps module semantics); or requiring both copies' spans to be among the findings rather than equal to them (fits ordering rules, weaker). Today's escape hatch is a unit test on the collector (`rule_test!` docs, "Writing cases"). Rule-side options for `call-before-definition`: `docs/dev/python_ast_consolidation/01_understand.md`.
   - *Multi-diagnostic `fail` cases*: a `fail` case expects exactly one span, so 3+ copies and a constant plus two uses are only unit-tested on the collector (`repeated-literal`). A `fail` case listing several spans would cover them (also needed by `nested-function`).
   - Related: "Examples for suppression audits and command rules" (§5).
+- **Rule dependencies and soundness**:
+  - *Context*: Some rules are only sound together with another rule that owns a neighbouring case. `quote-wrapped-placeholder` leaves SQL to Ruff `S608`; the naming rules skip imports and leave aliases to Ruff `ICN001`/`ICN002` (see "Import alias conventions"); `error-log-in-except` overlaps Ruff `TRY400`/`G201`. These relationships live only in prose (`what_it_does`, design docs, the "Not pursued" list). Nothing checks that the companion is enabled, so disabling it silently opens a gap. Nothing checks either that one rule's suggested fix does not trigger another rule.
+  - *Investigate*: a typed relationship on `Declaration` (for example `relies_on: &[Companion]`, where a companion is an Omni rule or an external `ruff:S608`), validated by a registry test (Omni names exist, no cycles); a warning in `--explain` / configuration loading when a rule is enabled without its companion; and conflict pairs (two rules whose fixes contradict each other). Compare with Ruff's incompatible-rule warnings (`D203`/`D211`, formatter-conflicting rules), ESLint shareable configs, and Clippy lint groups.
+  - Related: "Typed overlap / sources field" (§5).
 
 ## Candidate Rules
 
@@ -136,6 +140,7 @@ Source: Python Tip of the Week #069 "Prefer constants over wild values" (go/pyth
   - `DefineBeforeUseRule` top-level check ([docs/dev/define_before_use/02_references.md](docs/dev/define_before_use/02_references.md)): covered by Ruff `[tool.ruff.lint] extend-select = ["F821", "F823"]` and Pylint `E0601` (`used-before-assignment`).
   - `AvoidOptionalOrNoneRule` Check 1 (`Optional[T]` syntax; [docs/dev/avoid_optional_or_none/02_references.md](docs/dev/avoid_optional_or_none/02_references.md)): covered by Ruff `target-version = "py310"` and `[tool.ruff.lint] extend-select = ["UP007", "UP045", "RUF013", "RUF036"]`; scalar returns, attributes, and parameters under Check 2 are intentionally not flagged.
   - `quote-wrapped-placeholder` for Rust: not extended to Rust because `std::fmt::Debug` (`{:?}`) is not "quoted `Display`" (for structs and enums implementing `Display` + `#[derive(Debug)]`, `{:?}` dumps internal struct layout or unquoted enum variant names rather than quoting the `Display` output, and for strings `{:?}` forces double quotes and Rust escape syntax).
+  - Values formatted into SQL strings (SQL injection): covered by Ruff `[tool.ruff.lint] extend-select = ["S608"]` (`hardcoded-sql-expression`), whose fix is a parameterized query. `quote-wrapped-placeholder` does not special-case SQL.
 
 ---
 
