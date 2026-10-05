@@ -1009,20 +1009,18 @@ fn summarize_rust_node(
                 );
             }
         }
-        "scoped_identifier" | "scoped_type_identifier" => {
-            if is_pure_scoped_path(node) {
-                if node
-                    .parent()
-                    .is_none_or(|parent| !is_pure_scoped_path(&parent))
-                {
-                    summary.referenced_paths.push(RustPathReference {
-                        line: node.start_pos().line() + 1,
-                        raw_path: compact_path_text(node.text().as_ref()),
-                        statement_text: node.text().trim().to_string(),
-                    });
-                }
-                return;
+        "scoped_identifier" | "scoped_type_identifier" if is_pure_scoped_path(node) => {
+            if node
+                .parent()
+                .is_none_or(|parent| !is_pure_scoped_path(&parent))
+            {
+                summary.referenced_paths.push(RustPathReference {
+                    line: node.start_pos().line() + 1,
+                    raw_path: compact_path_text(node.text().as_ref()),
+                    statement_text: node.text().trim().to_string(),
+                });
             }
+            return;
         }
         _ => {}
     }
@@ -1599,8 +1597,8 @@ fn is_trait_or_trait_impl_function(func_node: &RawNode<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostic::Language;
     use LiteralRole::{ConstantDefinition, Inline};
-    use ast_grep_language::SupportLang;
 
     #[test]
     fn test_collect_bindings_rust() {
@@ -1637,7 +1635,7 @@ mod tests {
             const MY_CONST: i32 = 1;
             static MY_STATIC: i32 = 2;
         "};
-        let file = ParsedFile::new(source, SupportLang::Rust);
+        let file = ParsedFile::new(source, Language::Rust);
         let bindings = collect_bindings(&file);
         let names: Vec<String> = bindings
             .iter()
@@ -1685,7 +1683,7 @@ mod tests {
     #[test]
     fn test_collect_bindings_rust_negatives() {
         let source = "fn main() { let x: MyStruct = MyStruct; }";
-        let file = ParsedFile::new(source, SupportLang::Rust);
+        let file = ParsedFile::new(source, Language::Rust);
         let bindings = collect_bindings(&file);
         let names: Vec<String> = bindings
             .iter()

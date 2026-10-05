@@ -942,7 +942,10 @@ fn test_namespace_validator_accepts_pure_routers_and_rejects_code_or_orphan_rout
             "architecture_component!(CodeLintAst);\npub struct ParsedFile;\n",
         ),
     ];
-    assert!(validate_component_declarations_and_routers(&valid_entries, false).is_empty());
+    assert_eq!(
+        validate_component_declarations_and_routers(&valid_entries, false),
+        Vec::<String>::new()
+    );
 
     let impure_and_orphan_entries = [
         SourceFileEntry::from_source(

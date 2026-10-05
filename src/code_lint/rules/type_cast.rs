@@ -2,12 +2,11 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -32,7 +31,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
         name: RuleName("type-cast"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python],
+        languages: &[Language::Python],
         options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::TYPE_CHECKER_BYPASS],
@@ -61,7 +60,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 url: "https://docs.python.org/3/library/typing.html#typing.cast",
             }],
             examples: &[Example {
-                language: SupportLang::Python,
+                language: Language::Python,
                 flagged: indoc::indoc! {r#"
                     def load_port(config: dict[str, object]) -> int:
                         return cast(int, config["port"])

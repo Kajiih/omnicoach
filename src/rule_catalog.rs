@@ -6,7 +6,6 @@ use strum::IntoEnumIterator as _;
 
 use crate::rule_declaration::{
     DeclaredOptions, EnforcementMode, FilterListDefaults, LanguageDefaults, OptionSpec,
-    support_lang_name,
 };
 use crate::rule_selection::{
     ConfigError, Facet, RegisteredRule, UnknownLabel, find_rule, load_rule_status,
@@ -114,7 +113,7 @@ fn render_rule(rule: &RegisteredRule) -> String {
     if !doc.examples.is_empty() {
         lines.extend(["## Example".to_owned(), String::new()]);
         for example in doc.examples {
-            let fence = format!("```{}", support_lang_name(example.language));
+            let fence = format!("```{}", example.language.as_str());
             lines.extend([
                 fence.clone(),
                 example.flagged.trim_end().to_owned(),
@@ -229,7 +228,7 @@ fn per_language<T: Copy>(defaults: LanguageDefaults<T>, render: impl Fn(T) -> St
     let overrides = defaults
         .overrides
         .iter()
-        .map(|&(language, value)| format!(", {}: {}", support_lang_name(language), render(value)));
+        .map(|&(language, value)| format!(", {}: {}", language.as_str(), render(value)));
     std::iter::once(render(defaults.base))
         .chain(overrides)
         .collect()
@@ -246,12 +245,14 @@ fn list_default(defaults: &FilterListDefaults) -> String {
     } else {
         quoted(defaults.base)
     };
-    let added = defaults.extend.iter().map(|&(language, items)| {
-        format!("{} adds {}", support_lang_name(language), quoted(items))
-    });
-    let removed = defaults.remove.iter().map(|&(language, items)| {
-        format!("{} removes {}", support_lang_name(language), quoted(items))
-    });
+    let added = defaults
+        .extend
+        .iter()
+        .map(|&(language, items)| format!("{} adds {}", language.as_str(), quoted(items)));
+    let removed = defaults
+        .remove
+        .iter()
+        .map(|&(language, items)| format!("{} removes {}", language.as_str(), quoted(items)));
     let parts: Vec<String> = std::iter::once(base).chain(added).chain(removed).collect();
     parts.join("; ")
 }
@@ -397,7 +398,7 @@ mod tests {
     }
 
     type ResolvedLanguageOptions = (
-        ast_grep_language::SupportLang,
+        crate::diagnostic::Language,
         EnforcementMode,
         Vec<usize>,
         Vec<std::collections::BTreeSet<String>>,

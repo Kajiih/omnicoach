@@ -2,12 +2,11 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -23,7 +22,7 @@ const BANNED: ListOption = ListOption {
         // In Rust, `str` is a primitive type keyword rather than an abbreviation, and it is
         // load-bearing in conventional conversion names (`as_str`, `to_str`, `from_str`).
         // Hungarian `_str` type suffixes remain covered by type-suffixed-name.
-        remove: &[(SupportLang::Rust, &["str"])],
+        remove: &[(Language::Rust, &["str"])],
     },
 };
 
@@ -75,7 +74,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
         name: RuleName("abbreviated-name"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python, SupportLang::Rust],
+        languages: &[Language::Python, Language::Rust],
         options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::ABBREVIATED_NAMES],
@@ -111,7 +110,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             }],
             examples: &[
                 Example {
-                    language: SupportLang::Python,
+                    language: Language::Python,
                     flagged: indoc::indoc! {r"
                         def send_alert(notifier, msg):
                             notifier.publish(msg)
@@ -123,7 +122,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                     "},
                 },
                 Example {
-                    language: SupportLang::Rust,
+                    language: Language::Rust,
                     flagged: indoc::indoc! {r"
                         fn send_alert(notifier: &Notifier, msg: &str) {
                             notifier.publish(msg);

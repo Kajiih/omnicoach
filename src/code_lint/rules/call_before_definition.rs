@@ -6,12 +6,11 @@ use crate::code_lint::ast::python::{
     PythonFunctionScope, PythonScopeFunction, PythonSiblingCall, collect_function_scopes,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
     RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -26,7 +25,7 @@ pub const RULE: CodeRule = CodeRule {
     declaration: Declaration {
         name: RuleName("call-before-definition"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python],
+        languages: &[Language::Python],
         options: RuleOptions::code_rule(()),
         classification: Classification {
             topics: &[Topic::DECLARATION_ORDER],
@@ -71,7 +70,7 @@ pub const RULE: CodeRule = CodeRule {
                 },
             ],
             examples: &[Example {
-                language: SupportLang::Python,
+                language: Language::Python,
                 flagged: indoc::indoc! {r"
                     def load_port(raw: str) -> int:
                         return parse_int(raw.strip())

@@ -15,13 +15,11 @@ pub use self::documentation::{Example, Reference, RuleDoc};
 pub use self::options::{
     CountOption, DeclaredOptions, EnforcementMode, FilterListDefaults, LanguageDefaults, ListKind,
     ListOption, OptionProblem, OptionSpec, OptionsDeclaration, RuleOptions, RuleOptionsError,
-    RuleOverrides, SUPPORTED_LANGUAGES, support_lang_name,
+    RuleOverrides,
 };
 pub use self::taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
 
-use ast_grep_language::SupportLang;
-
-use crate::diagnostic::{Diagnostic, RuleName, SourceLocation, ViolationTemplate};
+use crate::diagnostic::{Diagnostic, Language, RuleName, SourceLocation, ViolationTemplate};
 
 /// Returns true if `name` is a non-empty `kebab-case` identifier (`[a-z0-9]+(-[a-z0-9]+)*`).
 #[must_use]
@@ -79,7 +77,7 @@ pub struct Declaration<Options: OptionsDeclaration = ()> {
     /// The single message template of the rule's findings.
     pub template: &'static ViolationTemplate,
     /// The languages the rule analyzes; empty for command rules.
-    pub languages: &'static [SupportLang],
+    pub languages: &'static [Language],
     /// Everything the rule accepts under `[rules.<name>]`.
     pub options: RuleOptions<Options>,
     /// The rule's classification.
@@ -116,7 +114,7 @@ impl<Options: OptionsDeclaration> Declaration<Options> {
     #[must_use]
     pub fn render_diagnostic_for_lang(
         &self,
-        language: SupportLang,
+        language: Language,
         params: &[(&str, &str)],
         location: SourceLocation,
     ) -> Diagnostic {
@@ -137,7 +135,7 @@ pub struct DeclaredRule {
     /// The single message template of the rule's findings.
     pub template: &'static ViolationTemplate,
     /// The languages the rule analyzes; empty for command rules.
-    pub languages: &'static [SupportLang],
+    pub languages: &'static [Language],
     /// Everything the rule accepts under `[rules.<name>]`.
     pub options: DeclaredOptions,
     /// The rule's classification.

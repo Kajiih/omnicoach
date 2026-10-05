@@ -5,12 +5,11 @@ use crate::code_lint::ast::python::{
     PythonFunctionSignature, PythonParameterInfo, extract_function_signatures,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality,
     LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const MIN_POSITIONAL_PARAMETERS: CountOption = CountOption {
@@ -30,7 +29,7 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
     declaration: Declaration {
         name: RuleName("identical-positional-types"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python],
+        languages: &[Language::Python],
         options: RuleOptions::code_rule(MIN_POSITIONAL_PARAMETERS),
         classification: Classification {
             topics: &[Topic::STATIC_TYPING, Topic::POSITIONAL_MEANING],
@@ -65,7 +64,7 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                 url: "https://peps.python.org/pep-3102/",
             }],
             examples: &[Example {
-                language: SupportLang::Python,
+                language: Language::Python,
                 flagged: indoc::indoc! {r"
                     def transfer(source_id: str, target_id: str, amount: int) -> None:
                         ledger.debit(source_id, amount)

@@ -3,12 +3,11 @@
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls;
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -19,7 +18,7 @@ const BANNED: ListOption = ListOption {
         base: &[],
         extend: &[
             (
-                SupportLang::Python,
+                Language::Python,
                 &[
                     "os.getenv",
                     "getenv",
@@ -38,7 +37,7 @@ const BANNED: ListOption = ListOption {
                 ],
             ),
             (
-                SupportLang::Rust,
+                Language::Rust,
                 &[
                     "std::env::var",
                     "env::var",
@@ -74,7 +73,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
         name: RuleName("environment-variable-in-function"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python, SupportLang::Rust],
+        languages: &[Language::Python, Language::Rust],
         options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::GLOBAL_STATE],
@@ -114,7 +113,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             }],
             examples: &[
                 Example {
-                    language: SupportLang::Python,
+                    language: Language::Python,
                     flagged: indoc::indoc! {r#"
                         def connect_database() -> Connection:
                             return psycopg.connect(os.environ["DATABASE_URL"])
@@ -126,7 +125,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                     "},
                 },
                 Example {
-                    language: SupportLang::Rust,
+                    language: Language::Rust,
                     flagged: indoc::indoc! {r#"
                         fn connect_database() -> Result<Connection, Error> {
                             let database_url = std::env::var("DATABASE_URL")?;
@@ -199,7 +198,7 @@ fn check_file(
         }
     }
 
-    if lang == SupportLang::Python {
+    if lang == Language::Python {
         for subscript in ast::python::collect_environ_subscripts(file) {
             if let Some(func_name) = ast::enclosing_non_exempt_function_name(
                 &subscript.node,

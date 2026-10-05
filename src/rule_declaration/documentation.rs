@@ -3,7 +3,7 @@
 //! Pure, constant data with no rendering. Fields hold Markdown without `#` headings: the
 //! renderer owns the section headings.
 
-use ast_grep_language::SupportLang;
+use crate::diagnostic::Language;
 
 /// A link to a document backing or related to a rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,7 +30,7 @@ pub struct Reference {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Example {
     /// The language both snippets are written in.
-    pub language: SupportLang,
+    pub language: Language,
     /// Code the rule flags once.
     pub flagged: &'static str,
     /// The part of `flagged` the finding spans; not rendered. It plays the role of a

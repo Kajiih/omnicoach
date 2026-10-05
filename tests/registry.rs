@@ -6,13 +6,13 @@
 use omni::code_lint::rules::CODE_RULES;
 use omni::code_lint::suppression::SUPPRESSION_AUDITS;
 use omni::command_lint::rules::COMMAND_RULES;
-use omni::diagnostic::LanguageText;
+use omni::diagnostic::{Language, LanguageText};
 use omni::rule_declaration::{
-    Declaration, DeclaredOptions, DeclaredRule, EnforcementMode, OptionSpec, SUPPORTED_LANGUAGES,
-    is_kebab_case, support_lang_name,
+    Declaration, DeclaredOptions, DeclaredRule, EnforcementMode, OptionSpec, is_kebab_case,
 };
 use rstest::rstest;
 use std::collections::HashSet;
+use strum::VariantArray as _;
 
 fn validate_rule(rule: &DeclaredRule) {
     let name = rule.name.0;
@@ -54,9 +54,9 @@ fn validate_rule(rule: &DeclaredRule) {
 
 fn validate_option_languages<T>(
     name: &str,
-    rule_languages: &[ast_grep_language::SupportLang],
+    rule_languages: &[Language],
     label: &str,
-    entries: &[(ast_grep_language::SupportLang, T)],
+    entries: &[(Language, T)],
 ) {
     if rule_languages.len() <= 1 {
         assert!(
@@ -96,11 +96,7 @@ fn validate_options(rule: &DeclaredRule) {
         "Rule {name} declares {lists} list options; at most one fits the list keys"
     );
     let reserved: Vec<&str> = std::iter::once(EnforcementMode::KEY)
-        .chain(
-            SUPPORTED_LANGUAGES
-                .iter()
-                .map(|&language| support_lang_name(language)),
-        )
+        .chain(Language::VARIANTS.iter().map(|&language| language.as_str()))
         .collect();
     let mut keys = HashSet::new();
     for key in options.options.iter().flat_map(|option| option.keys()) {

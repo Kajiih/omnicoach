@@ -6,14 +6,13 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::semantic::comments::strip_comment_delimiters;
 use crate::config::Config;
 use crate::diagnostic::{
-    Diagnostic, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationTemplate,
+    Diagnostic, Language, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationTemplate,
     violation_template,
 };
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, ImpactedQuality, Precision, Reference, RuleDoc,
     RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -27,7 +26,7 @@ const MISSING_REASON_TEMPLATE: ViolationTemplate = violation_template! {
 const MISSING_SUPPRESSION_REASON: Declaration = Declaration {
     name: RuleName("missing-suppression-reason"),
     template: &MISSING_REASON_TEMPLATE,
-    languages: &[SupportLang::Python, SupportLang::Rust],
+    languages: &[Language::Python, Language::Rust],
     options: RuleOptions::none(),
     classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
@@ -64,7 +63,7 @@ const UNUSED_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
 const UNUSED_SUPPRESSION: Declaration = Declaration {
     name: RuleName("unused-suppression"),
     template: &UNUSED_SUPPRESSION_TEMPLATE,
-    languages: &[SupportLang::Python, SupportLang::Rust],
+    languages: &[Language::Python, Language::Rust],
     options: RuleOptions::none(),
     classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
@@ -107,7 +106,7 @@ const UNKNOWN_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
 const UNKNOWN_SUPPRESSION_RULE: Declaration = Declaration {
     name: RuleName("unknown-suppression-rule"),
     template: &UNKNOWN_SUPPRESSION_TEMPLATE,
-    languages: &[SupportLang::Python, SupportLang::Rust],
+    languages: &[Language::Python, Language::Rust],
     options: RuleOptions::none(),
     classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
@@ -144,7 +143,7 @@ const BLANKET_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
 const BLANKET_SUPPRESSION: Declaration = Declaration {
     name: RuleName("blanket-suppression"),
     template: &BLANKET_SUPPRESSION_TEMPLATE,
-    languages: &[SupportLang::Python, SupportLang::Rust],
+    languages: &[Language::Python, Language::Rust],
     options: RuleOptions::none(),
     classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
@@ -365,10 +364,8 @@ impl SuppressionTracker {
 fn parse_directive_prefix(stripped: &str) -> Option<(bool, &str)> {
     let (is_file, remainder) = if let Some(rest) = stripped.strip_prefix("omni:disable-file") {
         (true, rest)
-    } else if let Some(rest) = stripped.strip_prefix("omni:ignore") {
-        (false, rest)
     } else {
-        return None;
+        (false, stripped.strip_prefix("omni:ignore")?)
     };
 
     // Require boundary delimiter (whitespace, '[', or '-') after directive prefix
@@ -491,12 +488,12 @@ fn audit_single_directive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ast_grep_language::SupportLang;
+    use crate::diagnostic::Language;
 
     #[test]
     fn test_parse_valid_inline_directive_same_line() {
         let content = "let a = 1; // omni:ignore [single-letter-name] -- math variable";
-        let file = ParsedFile::new(content, SupportLang::Rust);
+        let file = ParsedFile::new(content, Language::Rust);
         let tracker = SuppressionTracker::from_file(&file, content);
 
         assert_eq!(tracker.directives.len(), 1);
@@ -515,7 +512,7 @@ mod tests {
     #[test]
     fn test_parse_valid_inline_directive_preceding_line() {
         let content = "# omni:ignore [nested-function] -- required for fixture\ndef inner(): pass";
-        let file = ParsedFile::new(content, SupportLang::Python);
+        let file = ParsedFile::new(content, Language::Python);
         let tracker = SuppressionTracker::from_file(&file, content);
 
         assert_eq!(tracker.directives.len(), 1);
@@ -537,7 +534,7 @@ mod tests {
     #[test]
     fn test_parse_file_level_directive() {
         let content = "# omni:disable-file [nested-function, single-letter-name] -- legacy generated file\ndef foo(): pass";
-        let file = ParsedFile::new(content, SupportLang::Python);
+        let file = ParsedFile::new(content, Language::Python);
         let tracker = SuppressionTracker::from_file(&file, content);
 
         assert_eq!(tracker.directives.len(), 1);
@@ -553,7 +550,7 @@ mod tests {
     #[test]
     fn test_blanket_directive_detected() {
         let content = "let a = 1; // omni:ignore -- missing brackets";
-        let file = ParsedFile::new(content, SupportLang::Rust);
+        let file = ParsedFile::new(content, Language::Rust);
         let tracker = SuppressionTracker::from_file(&file, content);
 
         assert_eq!(tracker.directives.len(), 1);

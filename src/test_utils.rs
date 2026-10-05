@@ -2,18 +2,15 @@
 
 architecture_component!(TestUtils);
 
-use crate::code_lint::ast::{
-    LiteralValue, ParsedFile, collect_literal_occurrences, detect_language,
-};
+use crate::code_lint::ast::{LiteralValue, ParsedFile, collect_literal_occurrences};
 use crate::code_lint::contract::CodeRule;
 use crate::code_lint::policy::is_trivial_literal;
 use crate::command_lint::contract::CommandRule;
 use crate::command_lint::vcs::JjClient;
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, Language};
 use crate::rule_declaration::{
     Declaration, EnforcementMode, LanguageDefaults, OptionsDeclaration, RuleOptions,
 };
-use ast_grep_language::SupportLang;
 use std::fmt::Write;
 use std::path::Path;
 
@@ -48,7 +45,7 @@ pub fn run_code_rule<Options: OptionsDeclaration>(
     filename: &str,
 ) -> Vec<Diagnostic> {
     let path = Path::new(filename);
-    let lang = detect_language(path).unwrap_or_else(|| {
+    let lang = Language::from_path(path).unwrap_or_else(|| {
         panic!("run_code_rule: unsupported extension in test file '{filename}'")
     });
     rule.check_file(path, &ParsedFile::new(source, lang), None)
@@ -73,7 +70,7 @@ pub fn assert_command_rule_snapshot(
 #[track_caller]
 pub fn assert_language_completeness<Options: OptionsDeclaration>(
     rule: &CodeRule<Options>,
-    tested_languages: &[SupportLang],
+    tested_languages: &[Language],
 ) {
     let rule_name = rule.declaration.name.0;
     let supported = rule.declaration.languages;
@@ -100,7 +97,7 @@ pub fn assert_language_completeness<Options: OptionsDeclaration>(
 #[track_caller]
 pub fn assert_rule_pass<Options: OptionsDeclaration>(
     rule: &CodeRule<Options>,
-    lang: SupportLang,
+    lang: Language,
     case_name: &str,
     code: &str,
 ) {
@@ -137,7 +134,7 @@ pub enum RepeatCheck {
 #[track_caller]
 pub fn assert_rule_fail<Options: OptionsDeclaration>(
     rule: &CodeRule<Options>,
-    lang: SupportLang,
+    lang: Language,
     case_name: &str,
     code: &str,
     expected_snippet: Option<&str>,
@@ -178,7 +175,7 @@ pub fn assert_rule_fail<Options: OptionsDeclaration>(
 #[track_caller]
 fn assert_every_occurrence_reported<Options: OptionsDeclaration>(
     rule: &CodeRule<Options>,
-    lang: SupportLang,
+    lang: Language,
     case_name: &str,
     code: &str,
     span: std::ops::Range<usize>,
@@ -218,7 +215,7 @@ fn assert_every_occurrence_reported<Options: OptionsDeclaration>(
 ///
 /// A string toggles the case of its first unescaped ASCII letter, or changes its first digit;
 /// a number changes its first digit after the sign and base prefix (see [`changed_digit`]).
-fn with_distinct_literals(code: &str, lang: SupportLang) -> Result<String, String> {
+fn with_distinct_literals(code: &str, lang: Language) -> Result<String, String> {
     let original = ParsedFile::new(code, lang);
     let original_occurrences = collect_literal_occurrences(&original);
     let mut rewritten = code.to_owned();
@@ -400,13 +397,10 @@ pub fn assert_documented_examples<Options: OptionsDeclaration>(
     }
 }
 
-fn dummy_filename(lang: SupportLang) -> &'static str {
+fn dummy_filename(lang: Language) -> &'static str {
     match lang {
-        SupportLang::Python => "test.py",
-        SupportLang::Rust => "test.rs",
-        _ => panic!(
-            "rule_test!: no dummy filename mapped for {lang:?}; add one in test_utils::dummy_filename"
-        ),
+        Language::Python => "test.py",
+        Language::Rust => "test.rs",
     }
 }
 
@@ -506,7 +500,7 @@ macro_rules! rule_test {
             fn language_completeness() {
                 $crate::test_utils::assert_language_completeness(
                     &$rule,
-                    &[$( ::ast_grep_language::SupportLang::$lang ),+],
+                    &[$( $crate::diagnostic::Language::$lang ),+],
                 );
             }
 
@@ -522,14 +516,14 @@ macro_rules! rule_test {
             $(
                 $(
                     #[case::$pass_name(
-                        ::ast_grep_language::SupportLang::$lang,
+                        $crate::diagnostic::Language::$lang,
                         stringify!($pass_name),
                         indoc::indoc! { $pass_code },
                     )]
                 )+
             )+
             fn pass(
-                #[case] lang: ::ast_grep_language::SupportLang,
+                #[case] lang: $crate::diagnostic::Language,
                 #[case] case_name: &str,
                 #[case] code: &str,
             ) {
@@ -540,7 +534,7 @@ macro_rules! rule_test {
             $(
                 $(
                     #[case::$fail_name(
-                        ::ast_grep_language::SupportLang::$lang,
+                        $crate::diagnostic::Language::$lang,
                         stringify!($fail_name),
                         indoc::indoc! { $fail_code },
                         None $( .or(Some(indoc::indoc! { $snippet })) )?,
@@ -548,7 +542,7 @@ macro_rules! rule_test {
                 )+
             )+
             fn fail(
-                #[case] lang: ::ast_grep_language::SupportLang,
+                #[case] lang: $crate::diagnostic::Language,
                 #[case] case_name: &str,
                 #[case] code: &str,
                 #[case] expected_snippet: Option<&str>,
@@ -573,18 +567,18 @@ mod tests {
 
     #[rstest::rstest]
     #[case::python_strings_and_numbers(
-        SupportLang::Python,
+        Language::Python,
         "f('ab', \"ab\", 1_000, -42, 0x1F, 9, 0.5, 2)",
         "f('Ab', \"Ab\", 3_000, -52, 0x3F, 3, 3.5, 2)"
     )]
-    #[case::python_hex_letter(SupportLang::Python, "f(0xff)", "f(0xef)")]
+    #[case::python_hex_letter(Language::Python, "f(0xff)", "f(0xef)")]
     #[case::rust_suffix_and_escape(
-        SupportLang::Rust,
+        Language::Rust,
         "fn f() { g(30u64, 30, \"\\nab\", b\"by\"); }",
         "fn f() { g(40u64, 40, \"\\nAb\", b\"By\"); }"
     )]
     fn test_with_distinct_literals_rewrites_in_place(
-        #[case] lang: SupportLang,
+        #[case] lang: Language,
         #[case] code: &str,
         #[case] expected: &str,
     ) {
@@ -600,7 +594,7 @@ mod tests {
         #[case] code: &str,
         #[case] reason: &str,
     ) {
-        let error = with_distinct_literals(code, SupportLang::Python).unwrap_err();
+        let error = with_distinct_literals(code, Language::Python).unwrap_err();
         assert!(error.contains(reason), "unexpected reason: {error}");
     }
 }

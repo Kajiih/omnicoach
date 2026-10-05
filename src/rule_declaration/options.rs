@@ -4,10 +4,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use ast_grep_language::SupportLang;
-use strum::{EnumIter, IntoEnumIterator as _, IntoStaticStr};
+use strum::{EnumIter, IntoEnumIterator as _, IntoStaticStr, VariantArray as _};
 
 use super::closest_match;
+use crate::diagnostic::Language;
 
 /// Compile-time static descriptor for default filter lists (both allowlists and denylists).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,15 +15,15 @@ pub struct FilterListDefaults {
     /// Base items active across all supported languages.
     pub base: &'static [&'static str],
     /// Language-specific items added to the base defaults.
-    pub extend: &'static [(SupportLang, &'static [&'static str])],
+    pub extend: &'static [(Language, &'static [&'static str])],
     /// Language-specific items removed from the base defaults.
-    pub remove: &'static [(SupportLang, &'static [&'static str])],
+    pub remove: &'static [(Language, &'static [&'static str])],
 }
 
 impl FilterListDefaults {
     /// Resolves the default set of strings for a specific language.
     #[must_use]
-    pub fn resolve_default_for_lang(&self, lang: SupportLang) -> HashSet<String> {
+    pub fn resolve_default_for_lang(&self, lang: Language) -> HashSet<String> {
         let mut set: HashSet<String> = self.base.iter().map(|&item| item.to_string()).collect();
         for &(target_lang, items) in self.extend {
             if target_lang == lang {
@@ -48,24 +48,24 @@ pub struct LanguageDefaults<T: Copy + 'static> {
     /// Default value active across all supported languages unless overridden.
     pub base: T,
     /// Language-specific default values that override `base`.
-    pub overrides: &'static [(SupportLang, T)],
+    pub overrides: &'static [(Language, T)],
 }
 
 impl<T: Copy + 'static> LanguageDefaults<T> {
     /// Creates a new static language-aware default descriptor.
     #[must_use]
-    pub const fn new(base: T, overrides: &'static [(SupportLang, T)]) -> Self {
+    pub const fn new(base: T, overrides: &'static [(Language, T)]) -> Self {
         Self { base, overrides }
     }
 
     /// Resolves the compile-time default value for a specific language.
     #[must_use]
-    pub fn resolve_default_for_lang(&self, lang: SupportLang) -> T {
+    pub fn resolve_default_for_lang(&self, lang: Language) -> T {
         language_override(self.overrides, lang).unwrap_or(self.base)
     }
 }
 
-fn language_override<T: Copy>(entries: &[(SupportLang, T)], language: SupportLang) -> Option<T> {
+fn language_override<T: Copy>(entries: &[(Language, T)], language: Language) -> Option<T> {
     entries
         .iter()
         .find_map(|&(target_lang, value)| (target_lang == language).then_some(value))
@@ -103,19 +103,6 @@ impl EnforcementMode {
         "Explain why in a comment at the end of the flagged line or directly above it.";
 }
 
-/// Every language the linter analyzes.
-pub const SUPPORTED_LANGUAGES: &[SupportLang] = &[SupportLang::Python, SupportLang::Rust];
-
-/// Returns the lowercase canonical configuration key for a supported language.
-#[must_use]
-pub const fn support_lang_name(lang: SupportLang) -> &'static str {
-    match lang {
-        SupportLang::Python => "python",
-        SupportLang::Rust => "rust",
-        _ => "",
-    }
-}
-
 /// The options a rule declares, as a typed value: nothing (`()`), one [`CountOption`], one
 /// [`ListOption`], or a pair of declarations.
 ///
@@ -137,7 +124,7 @@ pub trait OptionsDeclaration: Copy + 'static {
 
     /// The values for a file in `language`, resolved across the declared default for
     /// `language`, the rule table, and the language table.
-    fn resolve(self, language: SupportLang, overrides: Option<&RuleOverrides>) -> Self::Resolved;
+    fn resolve(self, language: Language, overrides: Option<&RuleOverrides>) -> Self::Resolved;
 }
 
 impl OptionsDeclaration for () {
@@ -150,7 +137,7 @@ impl OptionsDeclaration for () {
         Vec::new()
     }
 
-    fn resolve(self, _language: SupportLang, _overrides: Option<&RuleOverrides>) {}
+    fn resolve(self, _language: Language, _overrides: Option<&RuleOverrides>) {}
 }
 
 /// A non-negative integer option, such as the maximum number of assertions in one test.
@@ -176,7 +163,7 @@ impl OptionsDeclaration for CountOption {
         vec![OptionSpec::Count(self)]
     }
 
-    fn resolve(self, language: SupportLang, overrides: Option<&RuleOverrides>) -> usize {
+    fn resolve(self, language: Language, overrides: Option<&RuleOverrides>) -> usize {
         layers(overrides, language)
             .find_map(|values| values.counts.get(self.key).copied())
             .unwrap_or_else(|| self.default.resolve_default_for_lang(language))
@@ -247,7 +234,7 @@ impl OptionsDeclaration for ListOption {
 
     /// Starts with the declared default for `language`, then applies the rule table and the
     /// language table in order (`replace`, then `extend`, then `remove` within each table).
-    fn resolve(self, language: SupportLang, overrides: Option<&RuleOverrides>) -> HashSet<String> {
+    fn resolve(self, language: Language, overrides: Option<&RuleOverrides>) -> HashSet<String> {
         let mut items = self.default.resolve_default_for_lang(language);
         if let Some(overrides) = overrides {
             overrides.global.list.apply_to(&mut items);
@@ -274,7 +261,7 @@ impl<First: OptionsDeclaration, Second: OptionsDeclaration> OptionsDeclaration f
         specs
     }
 
-    fn resolve(self, language: SupportLang, overrides: Option<&RuleOverrides>) -> Self::Resolved {
+    fn resolve(self, language: Language, overrides: Option<&RuleOverrides>) -> Self::Resolved {
         let (first, second) = self;
         (
             first.resolve(language, overrides),
@@ -347,7 +334,7 @@ impl<Options: OptionsDeclaration> RuleOptions<Options> {
     #[must_use]
     pub fn enforcement_mode(
         &self,
-        language: SupportLang,
+        language: Language,
         overrides: Option<&RuleOverrides>,
     ) -> EnforcementMode {
         resolve_enforcement_mode(self.enforcement_mode, language, overrides)
@@ -390,7 +377,7 @@ impl DeclaredOptions {
     #[must_use]
     pub fn enforcement_mode(
         &self,
-        language: SupportLang,
+        language: Language,
         overrides: Option<&RuleOverrides>,
     ) -> EnforcementMode {
         resolve_enforcement_mode(self.enforcement_mode, language, overrides)
@@ -402,7 +389,7 @@ impl DeclaredOptions {
     pub fn default_toml(
         &self,
         rule_name: crate::diagnostic::RuleName,
-        languages: &[SupportLang],
+        languages: &[Language],
     ) -> Option<String> {
         let mut rule_table = toml::Table::new();
         if let Some(default) = self.enforcement_mode {
@@ -454,10 +441,7 @@ impl DeclaredOptions {
                 }
             }
             if !lang_table.is_empty() {
-                rule_table.insert(
-                    support_lang_name(language).into(),
-                    toml::Value::Table(lang_table),
-                );
+                rule_table.insert(language.as_str().into(), toml::Value::Table(lang_table));
             }
         }
         let rules = toml::Table::from_iter([(rule_name.0.into(), toml::Value::Table(rule_table))]);
@@ -472,7 +456,7 @@ fn toml_count(count: usize) -> toml::Value {
 
 fn resolve_enforcement_mode(
     default: Option<LanguageDefaults<EnforcementMode>>,
-    language: SupportLang,
+    language: Language,
     overrides: Option<&RuleOverrides>,
 ) -> EnforcementMode {
     layers(overrides, language)
@@ -517,7 +501,7 @@ struct OptionValues {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuleOverrides {
     global: OptionValues,
-    per_language: Vec<(SupportLang, OptionValues)>,
+    per_language: Vec<(Language, OptionValues)>,
 }
 
 /// What is wrong with a `[rules]` entry.
@@ -575,7 +559,7 @@ impl RuleOverrides {
     pub fn parse(
         rule_name: &str,
         declaration: &DeclaredOptions,
-        supported_languages: &[SupportLang],
+        supported_languages: &[Language],
         value: &toml::Value,
     ) -> Result<Self, RuleOptionsError> {
         let rule_path = format!("rules.{rule_name}");
@@ -593,7 +577,7 @@ impl RuleOverrides {
                 Some(_) => {
                     let analyzed: Vec<_> = supported_languages
                         .iter()
-                        .map(|&language| support_lang_name(language))
+                        .map(|&language| language.as_str())
                         .collect();
                     return Err(RuleOptionsError {
                         key_path,
@@ -616,7 +600,7 @@ impl RuleOverrides {
         Ok(overrides)
     }
 
-    fn for_language(&self, language: SupportLang) -> Option<&OptionValues> {
+    fn for_language(&self, language: Language) -> Option<&OptionValues> {
         self.per_language
             .iter()
             .find_map(|(candidate, values)| (*candidate == language).then_some(values))
@@ -629,7 +613,7 @@ impl OptionValues {
     fn set(
         &mut self,
         declaration: &DeclaredOptions,
-        languages: &[SupportLang],
+        languages: &[Language],
         table_path: &str,
         key: &str,
         value: &toml::Value,
@@ -669,11 +653,7 @@ impl OptionValues {
             }
         }
         let mut expected = declaration.keys();
-        expected.extend(
-            languages
-                .iter()
-                .map(|&language| support_lang_name(language)),
-        );
+        expected.extend(languages.iter().map(|&language| language.as_str()));
         Err(error(OptionProblem::UnknownKey {
             suggestion: closest_match(key, expected.iter().copied()),
             expected,
@@ -685,7 +665,7 @@ impl OptionValues {
 /// then the rule table.
 fn layers(
     overrides: Option<&RuleOverrides>,
-    language: SupportLang,
+    language: Language,
 ) -> impl Iterator<Item = &OptionValues> {
     overrides
         .and_then(move |overrides| overrides.for_language(language))
@@ -693,11 +673,11 @@ fn layers(
         .chain(overrides.map(|overrides| &overrides.global))
 }
 
-fn language_named(key: &str) -> Option<SupportLang> {
-    SUPPORTED_LANGUAGES
+fn language_named(key: &str) -> Option<Language> {
+    Language::VARIANTS
         .iter()
         .copied()
-        .find(|&language| support_lang_name(language) == key)
+        .find(|&language| language.as_str() == key)
 }
 
 fn expect_table<'value>(
@@ -759,7 +739,7 @@ mod tests {
     const LIMIT: CountOption = CountOption {
         key: "max-items",
         doc: "Maximum items.",
-        default: LanguageDefaults::new(4, &[(SupportLang::Rust, 6)]),
+        default: LanguageDefaults::new(4, &[(Language::Rust, 6)]),
     };
 
     const DENY: ListOption = ListOption {
@@ -777,7 +757,7 @@ mod tests {
         doc: "Allowed words.",
         default: FilterListDefaults {
             base: &["default_base"],
-            extend: &[(SupportLang::Rust, &["rust_extra"])],
+            extend: &[(Language::Rust, &["rust_extra"])],
             remove: &[],
         },
     };
@@ -785,17 +765,17 @@ mod tests {
     const WITH_COUNT: RuleOptions<CountOption> = RuleOptions {
         enforcement_mode: Some(LanguageDefaults::new(
             EnforcementMode::Ban,
-            &[(SupportLang::Rust, EnforcementMode::RequireExplanation)],
+            &[(Language::Rust, EnforcementMode::RequireExplanation)],
         )),
         options: LIMIT,
     };
     const DENYING_RULE: RuleOptions<ListOption> = RuleOptions::code_rule(DENY);
 
-    const BOTH_LANGUAGES: &[SupportLang] = &[SupportLang::Python, SupportLang::Rust];
+    const BOTH_LANGUAGES: &[Language] = &[Language::Python, Language::Rust];
 
     fn parse(
         declaration: &DeclaredOptions,
-        languages: &[SupportLang],
+        languages: &[Language],
         toml_content: &str,
     ) -> Result<RuleOverrides, RuleOptionsError> {
         let value = toml::Value::Table(toml::from_str(toml_content).unwrap());
@@ -810,17 +790,17 @@ mod tests {
     fn test_filter_list_defaults_resolve() {
         const DEFAULTS: FilterListDefaults = FilterListDefaults {
             base: &["common", "shared", "temp"],
-            extend: &[(SupportLang::Rust, &["rust_only"])],
-            remove: &[(SupportLang::Rust, &["temp"])],
+            extend: &[(Language::Rust, &["rust_only"])],
+            remove: &[(Language::Rust, &["temp"])],
         };
 
-        let python_defaults = DEFAULTS.resolve_default_for_lang(SupportLang::Python);
+        let python_defaults = DEFAULTS.resolve_default_for_lang(Language::Python);
         assert_eq!(
             python_defaults,
             HashSet::from(["common", "shared", "temp"].map(String::from))
         );
 
-        let rust_defaults = DEFAULTS.resolve_default_for_lang(SupportLang::Rust);
+        let rust_defaults = DEFAULTS.resolve_default_for_lang(Language::Rust);
         assert_eq!(
             rust_defaults,
             HashSet::from(["common", "shared", "rust_only"].map(String::from))
@@ -828,14 +808,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case::python_default("", SupportLang::Python, 4)]
-    #[case::rust_default("", SupportLang::Rust, 6)]
-    #[case::rule_table("max-items = 5", SupportLang::Rust, 5)]
-    #[case::other_language_table("max-items = 5\n[rust]\nmax-items = 10", SupportLang::Python, 5)]
-    #[case::language_table("max-items = 5\n[rust]\nmax-items = 10", SupportLang::Rust, 10)]
+    #[case::python_default("", Language::Python, 4)]
+    #[case::rust_default("", Language::Rust, 6)]
+    #[case::rule_table("max-items = 5", Language::Rust, 5)]
+    #[case::other_language_table("max-items = 5\n[rust]\nmax-items = 10", Language::Python, 5)]
+    #[case::language_table("max-items = 5\n[rust]\nmax-items = 10", Language::Rust, 10)]
     fn count_prefers_language_then_rule_table_then_default(
         #[case] toml_content: &str,
-        #[case] language: SupportLang,
+        #[case] language: Language,
         #[case] expected: usize,
     ) {
         let overrides = parse(&WITH_COUNT.declared(), BOTH_LANGUAGES, toml_content).unwrap();
@@ -843,17 +823,17 @@ mod tests {
     }
 
     #[rstest]
-    #[case::python_default("", SupportLang::Python, EnforcementMode::Ban)]
-    #[case::rust_default("", SupportLang::Rust, EnforcementMode::RequireExplanation)]
-    #[case::rule_table("enforcement-mode = \"ban\"", SupportLang::Rust, EnforcementMode::Ban)]
+    #[case::python_default("", Language::Python, EnforcementMode::Ban)]
+    #[case::rust_default("", Language::Rust, EnforcementMode::RequireExplanation)]
+    #[case::rule_table("enforcement-mode = \"ban\"", Language::Rust, EnforcementMode::Ban)]
     #[case::language_table(
         "enforcement-mode = \"ban\"\n[python]\nenforcement-mode = \"require-explanation\"",
-        SupportLang::Python,
+        Language::Python,
         EnforcementMode::RequireExplanation
     )]
     fn enforcement_mode_prefers_language_then_rule_table_then_default(
         #[case] toml_content: &str,
-        #[case] language: SupportLang,
+        #[case] language: Language,
         #[case] expected: EnforcementMode,
     ) {
         let overrides = parse(&WITH_COUNT.declared(), BOTH_LANGUAGES, toml_content).unwrap();
@@ -911,8 +891,8 @@ mod tests {
         )
         .unwrap();
 
-        let rust = option.resolve(SupportLang::Rust, Some(&overrides));
-        let python = option.resolve(SupportLang::Python, Some(&overrides));
+        let rust = option.resolve(Language::Rust, Some(&overrides));
+        let python = option.resolve(Language::Python, Some(&overrides));
         assert_eq!(
             (rust, python),
             (words(rust_expected), words(python_expected))
@@ -931,7 +911,7 @@ mod tests {
         assert_eq!(
             (
                 pair.specs(),
-                pair.resolve(SupportLang::Python, Some(&overrides))
+                pair.resolve(Language::Python, Some(&overrides))
             ),
             (
                 vec![OptionSpec::Count(LIMIT), OptionSpec::List(DENY)],
@@ -944,8 +924,8 @@ mod tests {
     fn missing_overrides_resolve_to_defaults() {
         assert_eq!(
             (
-                LIMIT.resolve(SupportLang::Rust, None),
-                WITH_COUNT.enforcement_mode(SupportLang::Rust, None)
+                LIMIT.resolve(Language::Rust, None),
+                WITH_COUNT.enforcement_mode(Language::Rust, None)
             ),
             (6, EnforcementMode::RequireExplanation)
         );
@@ -960,7 +940,7 @@ mod tests {
     )]
     #[case::unrelated_key(
         DENYING_RULE.declared(),
-        &[SupportLang::Python],
+        &[Language::Python],
         "colour = 1",
         "`rules.some-rule.colour`: unknown key; expected one of `enforcement-mode`, `banned`, \
          `extend-banned`, `remove-banned`, `python`"
@@ -1004,7 +984,7 @@ mod tests {
     )]
     #[case::unsupported_language(
         WITH_COUNT.declared(),
-        &[SupportLang::Python],
+        &[Language::Python],
         "[rust]\nmax-items = 1",
         "`rules.some-rule.rust`: this rule does not analyze this language; it analyzes python"
     )]
@@ -1017,7 +997,7 @@ mod tests {
     )]
     fn invalid_options_are_rejected_with_their_key_path(
         #[case] declaration: DeclaredOptions,
-        #[case] languages: &[SupportLang],
+        #[case] languages: &[Language],
         #[case] toml_content: &str,
         #[case] message: &str,
     ) {

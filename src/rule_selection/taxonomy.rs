@@ -4,14 +4,13 @@
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
-use ast_grep_language::SupportLang;
 use strum::{EnumIter, IntoEnumIterator as _, IntoStaticStr};
 
 use crate::code_lint::contract::RuleTarget;
 use crate::code_lint::rules::CODE_RULES;
 use crate::code_lint::suppression::SUPPRESSION_AUDITS;
 use crate::command_lint::rules::COMMAND_RULES;
-use crate::diagnostic::{RuleName, ViolationTemplate};
+use crate::diagnostic::{Language, RuleName, ViolationTemplate};
 use crate::rule_declaration::{
     Classification, Consensus, DeclaredOptions, DeclaredRule, ImpactedQuality, Precision, RuleDoc,
     Topic, closest_match,
@@ -162,7 +161,7 @@ pub struct RegisteredRule {
     /// What the rule accepts under `[rules.<name>]`.
     pub options: DeclaredOptions,
     /// The languages the rule analyzes; empty for command rules.
-    pub languages: &'static [SupportLang],
+    pub languages: &'static [Language],
     classification: Classification,
     derived: Vec<Derived>,
 }
@@ -170,14 +169,10 @@ pub struct RegisteredRule {
 impl RegisteredRule {
     /// The rule declared by `declared`, with its language facets and the `registry` facets.
     fn new(declared: DeclaredRule, registry: impl IntoIterator<Item = Derived>) -> Self {
-        let languages = declared
-            .languages
-            .iter()
-            .filter_map(|language| match language {
-                SupportLang::Python => Some(Derived::Python),
-                SupportLang::Rust => Some(Derived::Rust),
-                _ => None,
-            });
+        let languages = declared.languages.iter().map(|language| match language {
+            Language::Python => Derived::Python,
+            Language::Rust => Derived::Rust,
+        });
         Self {
             name: declared.name,
             doc: declared.doc,

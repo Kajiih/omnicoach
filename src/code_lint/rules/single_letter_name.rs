@@ -2,12 +2,11 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -16,7 +15,7 @@ const ALLOWED: ListOption = ListOption {
     doc: "Single-letter names accepted as variable names.",
     default: FilterListDefaults {
         base: &["i", "j", "x", "f"],
-        extend: &[(SupportLang::Rust, &["c"])],
+        extend: &[(Language::Rust, &["c"])],
         remove: &[],
     },
 };
@@ -32,7 +31,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
         name: RuleName("single-letter-name"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python, SupportLang::Rust],
+        languages: &[Language::Python, Language::Rust],
         options: RuleOptions::code_rule(ALLOWED),
         classification: Classification {
             topics: &[Topic::ABBREVIATED_NAMES],
@@ -65,7 +64,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             }],
             examples: &[
                 Example {
-                    language: SupportLang::Python,
+                    language: Language::Python,
                     flagged: indoc::indoc! {r"
                         def welcome_new_users(new_users):
                             for u in new_users:
@@ -79,7 +78,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                     "},
                 },
                 Example {
-                    language: SupportLang::Rust,
+                    language: Language::Rust,
                     flagged: indoc::indoc! {r"
                         fn welcome_new_users(new_users: &[User]) {
                             for u in new_users {

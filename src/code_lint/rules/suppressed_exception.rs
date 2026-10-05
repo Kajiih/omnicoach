@@ -4,13 +4,12 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::is_with_context_manager;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls;
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, EnforcementMode, Example, FilterListDefaults,
     ImpactedQuality, LanguageDefaults, ListKind, ListOption, Precision, Reference, RuleDoc,
     RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -35,7 +34,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
         name: RuleName("suppressed-exception"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python],
+        languages: &[Language::Python],
         options: RuleOptions {
             enforcement_mode: Some(LanguageDefaults::new(
                 EnforcementMode::RequireExplanation,
@@ -67,7 +66,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 url: "https://docs.python.org/3/library/contextlib.html#contextlib.suppress",
             }],
             examples: &[Example {
-                language: SupportLang::Python,
+                language: Language::Python,
                 flagged: indoc::indoc! {r"
                     with suppress(FileNotFoundError):
                         os.remove(lock_path)

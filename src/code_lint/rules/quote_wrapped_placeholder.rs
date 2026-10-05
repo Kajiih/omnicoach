@@ -6,12 +6,11 @@ use crate::code_lint::ast::python::{
     extract_valid_field_root,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
     RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -25,7 +24,7 @@ pub const RULE: CodeRule = CodeRule {
     declaration: Declaration {
         name: RuleName("quote-wrapped-placeholder"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python],
+        languages: &[Language::Python],
         options: RuleOptions::code_rule(()),
         classification: Classification {
             topics: &[Topic::LITERALS],
@@ -70,7 +69,7 @@ pub const RULE: CodeRule = CodeRule {
                 },
             ],
             examples: &[Example {
-                language: SupportLang::Python,
+                language: Language::Python,
                 flagged: indoc::indoc! {r#"
                     def parse_port(raw_port: str) -> int:
                         if not raw_port.isdigit():

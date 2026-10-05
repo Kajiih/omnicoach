@@ -7,17 +7,13 @@
 //! The traversal is language-agnostic; the grammar vocabulary it relies on is not, and
 //! lives in [`crate::code_lint::ast::python`] and [`crate::code_lint::ast::rust`].
 
-use crate::code_lint::ast::{ParsedFile, RawNode, dispatch_lang};
-use crate::diagnostic::SourceSpan;
-use ast_grep_language::SupportLang;
+use crate::code_lint::ast::{ParsedFile, RawNode, from_support_lang};
+use crate::diagnostic::{Language, SourceSpan};
 use std::ops::RangeInclusive;
 
 /// Returns true for node kinds that hold statements as direct children in `lang`.
-///
-/// Unsupported languages report no containers, which makes callers behave as though no
-/// enclosing statement exists rather than guessing with another grammar's vocabulary.
-fn is_statement_container(kind: &str, lang: SupportLang) -> bool {
-    dispatch_lang!(lang, is_statement_container(kind), false)
+fn is_statement_container(kind: &str, lang: Language) -> bool {
+    dispatch_lang!(lang, is_statement_container(kind))
 }
 
 /// Returns the innermost statement enclosing `node`.
@@ -27,7 +23,7 @@ fn is_statement_container(kind: &str, lang: SupportLang) -> bool {
 /// rather than from a list of statement kinds keeps every grammar construct covered.
 #[must_use]
 pub(super) fn find_enclosing_statement<'a>(node: &RawNode<'a>) -> Option<RawNode<'a>> {
-    let lang = *node.lang();
+    let lang = from_support_lang(*node.lang());
     std::iter::once(node.clone())
         .chain(node.ancestors())
         .find(|candidate| {
@@ -54,12 +50,12 @@ pub(super) fn find_enclosing_statement<'a>(node: &RawNode<'a>) -> Option<RawNode
 /// the statement itself.
 #[must_use]
 pub(super) fn header_line_range(statement: &RawNode<'_>) -> RangeInclusive<usize> {
-    let lang = *statement.lang();
+    let lang = from_support_lang(*statement.lang());
     let statement_start_line = statement.start_pos().line() + 1;
-    if let Some(definition) = dispatch_lang!(lang, decorated_definition(statement), None) {
+    if let Some(definition) = dispatch_lang!(lang, decorated_definition(statement)) {
         return statement_start_line..=*header_line_range(&definition).end();
     }
-    let start_line = dispatch_lang!(lang, earliest_attribute_start_line(statement), None)
+    let start_line = dispatch_lang!(lang, earliest_attribute_start_line(statement))
         .unwrap_or(statement_start_line);
     let mut header_end_line = statement_start_line;
     for child in statement.children() {

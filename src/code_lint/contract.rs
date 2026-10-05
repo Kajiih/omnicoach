@@ -5,11 +5,10 @@ architecture_component!(CodeLintContract);
 
 use crate::code_lint::ast::{AstNode, ParsedFile};
 use crate::code_lint::semantic::{bindings, calls, comments::CommentIndex};
-use crate::diagnostic::{Diagnostic, RuleName};
+use crate::diagnostic::{Diagnostic, Language, RuleName};
 use crate::rule_declaration::{
     Declaration, DeclaredRule, EnforcementMode, OptionsDeclaration, RuleOverrides,
 };
-use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -158,9 +157,9 @@ pub trait AnyCodeRule: Send + Sync {
     /// The rule's name.
     fn name(&self) -> RuleName;
     /// The languages the rule analyzes.
-    fn languages(&self) -> &'static [SupportLang];
+    fn languages(&self) -> &'static [Language];
     /// Whether the rule analyzes `language`.
-    fn supports_language(&self, language: SupportLang) -> bool {
+    fn supports_language(&self, language: Language) -> bool {
         self.languages().contains(&language)
     }
     /// The files the rule runs on.
@@ -183,7 +182,7 @@ impl<Options: OptionsDeclaration + Send + Sync> AnyCodeRule for CodeRule<Options
         self.declaration.name
     }
 
-    fn languages(&self) -> &'static [SupportLang] {
+    fn languages(&self) -> &'static [Language] {
         self.declaration.languages
     }
 
@@ -233,7 +232,7 @@ mod tests {
             declaration: Declaration {
                 name: RuleName("call-to-f"),
                 template: &TEMPLATE,
-                languages: &[SupportLang::Python],
+                languages: &[Language::Python],
                 options: RuleOptions {
                     enforcement_mode: mode.map(|mode| LanguageDefaults::new(mode, &[])),
                     options: (),
@@ -268,7 +267,7 @@ mod tests {
         "};
         let mut diagnostics = rule_with_mode(mode).check_file(
             Path::new("module.py"),
-            &ParsedFile::new(source, SupportLang::Python),
+            &ParsedFile::new(source, Language::Python),
             None,
         );
         diagnostics.sort_unstable();

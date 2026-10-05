@@ -2,12 +2,11 @@
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, EnforcementMode, Example, ImpactedQuality,
     LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -29,7 +28,7 @@ pub const RULE: CodeRule = CodeRule {
     declaration: Declaration {
         name: RuleName("nullable-collection-return"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python, SupportLang::Rust],
+        languages: &[Language::Python, Language::Rust],
         options: RuleOptions {
             enforcement_mode: Some(LanguageDefaults::new(
                 EnforcementMode::RequireExplanation,
@@ -92,7 +91,7 @@ pub const RULE: CodeRule = CodeRule {
             ],
             examples: &[
                 Example {
-                    language: SupportLang::Python,
+                    language: Language::Python,
                     flagged: indoc::indoc! {r"
                         from collections.abc import Sequence
 
@@ -108,7 +107,7 @@ pub const RULE: CodeRule = CodeRule {
                     "},
                 },
                 Example {
-                    language: SupportLang::Rust,
+                    language: Language::Rust,
                     flagged: indoc::indoc! {r"
                         fn active_tags(&self) -> Option<&[String]> {
                             self.tags.as_deref()
@@ -144,9 +143,8 @@ const RUST_COLLECTION_TYPES: &[&str] = &[
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     match file.lang() {
-        SupportLang::Python => check_python(rule, path, file),
-        SupportLang::Rust => check_rust(rule, path, file),
-        _ => Vec::new(),
+        Language::Python => check_python(rule, path, file),
+        Language::Rust => check_rust(rule, path, file),
     }
 }
 

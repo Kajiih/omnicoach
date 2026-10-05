@@ -2,13 +2,12 @@
 
 architecture_component!(CodeLintRunner);
 
-use crate::code_lint::ast::{self, ParsedFile, detect_language};
+use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{AnyCodeRule, RuleTarget};
 use crate::code_lint::rules::CODE_RULES;
 use crate::code_lint::suppression::{SUPPRESSION_AUDITS, SuppressionTracker};
 use crate::config::Config;
-use crate::diagnostic::Diagnostic;
-use ast_grep_language::SupportLang;
+use crate::diagnostic::{Diagnostic, Language};
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs;
@@ -22,7 +21,7 @@ use std::path::{Path, PathBuf};
 fn is_rule_applicable(
     rule: &dyn AnyCodeRule,
     path: &Path,
-    lang: SupportLang,
+    lang: Language,
     is_test: bool,
     has_inline_tests: bool,
     config: &Config,
@@ -70,7 +69,7 @@ fn filter_diagnostics_by_target(
 #[must_use]
 fn has_active_suppression_audit(
     path: &Path,
-    lang: SupportLang,
+    lang: Language,
     content: &str,
     config: &Config,
 ) -> bool {
@@ -90,12 +89,12 @@ fn has_active_suppression_audit(
 #[must_use]
 fn should_skip_ast_parse(
     path: &Path,
-    lang: SupportLang,
+    lang: Language,
     content: &str,
     is_test: bool,
     config: &Config,
 ) -> bool {
-    let may_have_inline_tests = lang == SupportLang::Rust;
+    let may_have_inline_tests = lang == Language::Rust;
     let has_code_rules = CODE_RULES
         .iter()
         .any(|&rule| is_rule_applicable(rule, path, lang, is_test, may_have_inline_tests, config));
@@ -109,7 +108,7 @@ static SUPPRESSIBLE_RULES: std::sync::LazyLock<HashSet<&'static str>> =
 /// Analyzes the structure of a file and returns diagnostic alerts.
 #[must_use]
 pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic> {
-    let Some(lang) = detect_language(path) else {
+    let Some(lang) = Language::from_path(path) else {
         return Vec::new();
     };
 
@@ -120,7 +119,7 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
     let file = ParsedFile::new(content, lang);
     let mut tracker = SuppressionTracker::from_file(&file, content);
 
-    let inline_test_ranges = if !is_test && lang == SupportLang::Rust {
+    let inline_test_ranges = if !is_test && lang == Language::Rust {
         ast::rust::collect_inline_test_ranges(&file)
     } else {
         Vec::new()
@@ -228,7 +227,7 @@ fn collect_targets(options: &LintOptions) -> anyhow::Result<Vec<LintTarget>> {
                     } else {
                         file_path.starts_with(target)
                     }
-                }) && detect_language(file_path).is_some()
+                }) && Language::from_path(file_path).is_some()
                     && file_path.is_file()
             })
             .map(|(file_path, changed_lines)| LintTarget {
@@ -241,7 +240,7 @@ fn collect_targets(options: &LintOptions) -> anyhow::Result<Vec<LintTarget>> {
         let mut targets = Vec::new();
         for path in &effective_paths {
             if path.is_file() {
-                if detect_language(path).is_some() {
+                if Language::from_path(path).is_some() {
                     targets.push(LintTarget {
                         path: path.clone(),
                         changed_lines: None,
@@ -264,7 +263,7 @@ fn collect_directory_candidates(dir: &Path) -> impl Iterator<Item = LintTarget> 
         .flatten()
         .filter_map(|entry| {
             let path = entry.path();
-            (path.is_file() && detect_language(path).is_some()).then(|| LintTarget {
+            (path.is_file() && Language::from_path(path).is_some()).then(|| LintTarget {
                 path: path.to_path_buf(),
                 changed_lines: None,
             })
@@ -276,7 +275,7 @@ fn lint_single_file(
     config: &Config,
     changed_lines: Option<&HashSet<usize>>,
 ) -> anyhow::Result<Vec<Diagnostic>> {
-    if !path.is_file() || detect_language(path).is_none() {
+    if !path.is_file() || Language::from_path(path).is_none() {
         return Ok(Vec::new());
     }
 
@@ -337,56 +336,56 @@ mod tests {
     #[case::python_rule_on_python_file(
         "error-log-in-except",
         "service.py",
-        SupportLang::Python,
+        Language::Python,
         (false, false),
         true
     )]
     #[case::python_rule_on_rust_file(
         "error-log-in-except",
         "service.rs",
-        SupportLang::Rust,
+        Language::Rust,
         (false, false),
         false
     )]
     #[case::tests_only_on_test_file(
         "sleep-in-tests",
         "test_service.py",
-        SupportLang::Python,
+        Language::Python,
         (true, false),
         true
     )]
     #[case::tests_only_on_source_file(
         "sleep-in-tests",
         "service.py",
-        SupportLang::Python,
+        Language::Python,
         (false, false),
         false
     )]
     #[case::tests_only_on_source_file_with_inline_tests(
         "sleep-in-tests",
         "service.rs",
-        SupportLang::Rust,
+        Language::Rust,
         (false, true),
         true
     )]
     #[case::source_only_on_source_file(
         "environment-variable-in-function",
         "service.rs",
-        SupportLang::Rust,
+        Language::Rust,
         (false, false),
         true
     )]
     #[case::source_only_on_test_file(
         "environment-variable-in-function",
         "tests/test_service.rs",
-        SupportLang::Rust,
+        Language::Rust,
         (true, false),
         false
     )]
     fn test_is_rule_applicable(
         #[case] rule_name: &str,
         #[case] path: &str,
-        #[case] lang: SupportLang,
+        #[case] lang: Language,
         #[case] (is_test, has_inline_tests): (bool, bool),
         #[case] expected: bool,
     ) {
@@ -427,12 +426,7 @@ mod tests {
             Config::default()
         };
         assert_eq!(
-            has_active_suppression_audit(
-                Path::new("main.py"),
-                SupportLang::Python,
-                content,
-                &config
-            ),
+            has_active_suppression_audit(Path::new("main.py"), Language::Python, content, &config),
             expected
         );
     }
@@ -445,7 +439,7 @@ mod tests {
         // Normal file with default config: standard code rules are enabled, do NOT skip
         assert!(!should_skip_ast_parse(
             py_path,
-            SupportLang::Python,
+            Language::Python,
             "x = 1",
             false,
             &config
@@ -455,7 +449,7 @@ mod tests {
         let no_rules_config = config_disabling(code_rule_names().chain(audit_names()));
         assert!(should_skip_ast_parse(
             py_path,
-            SupportLang::Python,
+            Language::Python,
             "x = 1",
             false,
             &no_rules_config
@@ -467,7 +461,7 @@ mod tests {
         let code_with_comment = "# omni:ignore -- missing reason";
         assert!(!should_skip_ast_parse(
             py_path,
-            SupportLang::Python,
+            Language::Python,
             code_with_comment,
             false,
             &suppression_only_config
@@ -476,7 +470,7 @@ mod tests {
         // But if that same file has no suppression comments, skip AST parsing
         assert!(should_skip_ast_parse(
             py_path,
-            SupportLang::Python,
+            Language::Python,
             "x = 1",
             false,
             &suppression_only_config
@@ -508,7 +502,7 @@ mod tests {
 
         let diagnostics_req_doc =
             lint_file(Path::new("main.py"), source_documented, &req_doc_config);
-        assert!(diagnostics_req_doc.is_empty());
+        assert_eq!(diagnostics_req_doc, vec![]);
 
         let diagnostics_req_uncommented =
             lint_file(Path::new("main.py"), source_uncommented, &req_doc_config);
@@ -521,7 +515,7 @@ mod tests {
         let config = config_enabling(&["sleep-in-tests"]);
 
         let prod_diagnostics = lint_file(Path::new("src/daemon.py"), source_prod, &config);
-        assert!(prod_diagnostics.is_empty());
+        assert_eq!(prod_diagnostics, vec![]);
 
         let test_diagnostics = lint_file(Path::new("tests/test_daemon.py"), source_prod, &config);
         assert_eq!(test_diagnostics.len(), 1);
@@ -560,7 +554,7 @@ mod tests {
         assert_eq!(src_diagnostics.len(), 1);
 
         let test_diagnostics = lint_file(Path::new("tests/test_service.py"), source_py, &config);
-        assert!(test_diagnostics.is_empty());
+        assert_eq!(test_diagnostics, vec![]);
     }
 
     #[test]

@@ -3,12 +3,11 @@
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::collect_instance_attribute_annotations;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
     RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -22,7 +21,7 @@ pub const RULE: CodeRule = CodeRule {
     declaration: Declaration {
         name: RuleName("inline-public-attribute-annotation"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python],
+        languages: &[Language::Python],
         options: RuleOptions::code_rule(()),
         classification: Classification {
             topics: &[Topic::STATIC_TYPING],
@@ -65,7 +64,7 @@ pub const RULE: CodeRule = CodeRule {
                 },
             ],
             examples: &[Example {
-                language: SupportLang::Python,
+                language: Language::Python,
                 flagged: indoc::indoc! {r"
                     class Connection:
                         def __init__(self, host: str) -> None:
