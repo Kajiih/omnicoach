@@ -310,6 +310,11 @@ mod tests {
         for (field, text) in texts {
             if text.trim().is_empty() {
                 problems.push(format!("`{field}` is empty"));
+            } else if text.trim() != text {
+                problems.push(format!(
+                    "`{field}` has leading or trailing whitespace; close the `indoc!` string on \
+                     its last line"
+                ));
             }
             if text.lines().any(|line| line.trim_start().starts_with('#')) {
                 problems.push(format!(
@@ -360,8 +365,12 @@ mod tests {
         &["`why_is_this_bad` is empty"]
     )]
     #[case::heading(
-        RuleDoc { why_is_this_bad: "Bad.\n\n## Example\n", ..GOOD },
+        RuleDoc { why_is_this_bad: "Bad.\n\n## Example", ..GOOD },
         &["`why_is_this_bad` has a `#` heading; the renderer owns headings"]
+    )]
+    #[case::trailing_newline(
+        RuleDoc { what_it_does: "Flags things.\n", ..GOOD },
+        &["`what_it_does` has leading or trailing whitespace; close the `indoc!` string on its last line"]
     )]
     fn doc_problems_name_each_problem(#[case] doc: RuleDoc, #[case] expected: &[&str]) {
         assert_eq!(doc_problems(&doc), expected);

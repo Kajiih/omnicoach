@@ -42,17 +42,19 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags test functions with more assertions than the limit.",
-            what_it_does: "Counts the assertions in each test function and flags a test with \
-                           more than `max-assertions` of them. A `pytest.raises` block counts as \
-                           one assertion. Assertions inside nested functions or classes, and in \
-                           helpers that are not tests, are not counted.",
-            why_is_this_bad: "A test with many assertions usually checks several behaviours at \
-                              once. It stops at the first failing assertion, so the later ones \
-                              are never reported, and its name cannot say which behaviour \
-                              broke.\n\n\
-                              Split independent scenarios into separate tests, parameterize \
-                              variations (`@pytest.mark.parametrize`, `#[rstest]`), or compare \
-                              the result against one expected value.",
+            what_it_does: indoc::indoc! {r"
+                Counts the assertions in each test function and flags a test with more than
+                `max-assertions` of them. A `pytest.raises` block counts as one assertion.
+                Assertions inside nested functions or classes, and in helpers that are not tests,
+                are not counted."},
+            why_is_this_bad: indoc::indoc! {r"
+                A test with many assertions usually checks several behaviours at once. It stops at
+                the first failing assertion, so the later ones are never reported, and its name
+                cannot say which behaviour broke.
+
+                Split independent scenarios into separate tests, parameterize variations
+                (`@pytest.mark.parametrize`, `#[rstest]`), or compare the result against one
+                expected value."},
             references: &[Reference {
                 title: "Software Engineering at Google, ch. 12: Test behaviors, not methods",
                 url: "https://abseil.io/resources/swe-book/html/ch12.html",

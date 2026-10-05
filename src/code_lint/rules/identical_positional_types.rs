@@ -40,26 +40,26 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags Python functions whose positional parameters share a type annotation.",
-            what_it_does: "Flags a function in Python source files (test files are not \
-                           checked) that has at least `min-positional-parameters` positional \
-                           parameters of which two or more have the same type annotation. A \
-                           leading `self` or `cls`, keyword-only parameters (after `*` or \
-                           `*args`), `*args` and `**kwargs` are not counted. Annotations are \
-                           compared as written, so `dict[str, int]` and `dict[str, float]` \
-                           differ, and unannotated parameters count toward the minimum but never \
-                           match each other. Dunder methods other than `__init__`, `__new__` \
-                           and `__call__`, and functions decorated with `@override`, \
-                           `@overload`, `@abstractmethod`, `@fixture` or `@<function>.register` \
-                           (`functools.singledispatch`), are exempt because their signature \
-                           is imposed from outside.",
-            why_is_this_bad: "When two positional parameters have the same type, a call that \
-                              swaps them, such as `transfer(target_id, source_id, amount)`, \
-                              still type-checks and reads plausibly in review. The bug shows up \
-                              only at runtime, often as wrong data rather than an error.\n\n\
-                              Make the parameters keyword-only with a `*` separator, for \
-                              example `def transfer(*, source_id: str, target_id: str, amount: \
-                              int)`, so every call names its arguments. Distinct types (such as \
-                              `NewType` wrappers) also let the type checker catch the swap.",
+            what_it_does: indoc::indoc! {r"
+                Flags a function in Python source files (test files are not checked) that has at
+                least `min-positional-parameters` positional parameters of which two or more have
+                the same type annotation. A leading `self` or `cls`, keyword-only parameters (after
+                `*` or `*args`), `*args` and `**kwargs` are not counted. Annotations are compared as
+                written, so `dict[str, int]` and `dict[str, float]` differ, and unannotated
+                parameters count toward the minimum but never match each other. Dunder methods other
+                than `__init__`, `__new__` and `__call__`, and functions decorated with `@override`,
+                `@overload`, `@abstractmethod`, `@fixture` or `@<function>.register`
+                (`functools.singledispatch`), are exempt because their signature is imposed from
+                outside."},
+            why_is_this_bad: indoc::indoc! {r"
+                When two positional parameters have the same type, a call that swaps them, such as
+                `transfer(target_id, source_id, amount)`, still type-checks and reads plausibly in
+                review. The bug shows up only at runtime, often as wrong data rather than an error.
+
+                Make the parameters keyword-only with a `*` separator, for example
+                `def transfer(*, source_id: str, target_id: str, amount: int)`, so every call names
+                its arguments. Distinct types (such as `NewType` wrappers) also let the type checker
+                catch the swap."},
             references: &[Reference {
                 title: "PEP 3102: Keyword-Only Arguments",
                 url: "https://peps.python.org/pep-3102/",

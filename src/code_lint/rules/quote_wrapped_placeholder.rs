@@ -35,31 +35,30 @@ pub const RULE: CodeRule = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags Python format placeholders wrapped in literal single or double quotes.",
-            what_it_does: "Flags bare string-formatted placeholders wrapped in matching single or \
-                           double quotes (`'{x}'`, `\"{x}\"`, `'{}'`, `'{0}'`, `'%s'`, `'%(name)s'`) \
-                           inside Python format strings across all files, tests \
-                           included. Three formatting contexts are inspected: f-strings \
-                           (`f\"...\"`), strings formatted via `.format(...)` or \
-                           `.format_map(...)` (or `str.format(...)`), and strings formatted via \
-                           the `%` operator or passed with format arguments to a logger call \
-                           (`debug`, `info`, `warning`, `warn`, `error`, `exception`, `critical`, \
-                           `fatal`, `log`). Plain unformatted strings, docstrings, raw strings \
-                           (`r\"...\"`), byte strings (`b\"...\"`), placeholders that already \
-                           carry a conversion flag (`!r`, `!s`, `!a`), format specifier (`:...`), \
-                           or debug `=`, non-`%s` printf specifiers (`%r`, `%d`, `%.2f`), \
-                           and structured syntax (HTML attributes, JSON or TOML fragments, \
-                           `key=\"value\"` flags, and backtick code spans) are not flagged.",
-            why_is_this_bad: "Wrapping a default string placeholder in manual quotes fails when \
-                              the runtime value contains the same quote character (`Invalid \
-                              value 'can't'`) or control characters such as newlines and tabs, \
-                              and it turns `None`, booleans, and numbers into quoted strings \
-                              (`'None'`, `'42'`) that look identical to actual strings in logs \
-                              and error messages.\n\n\
-                              Use `repr` formatting (`{x!r}` in f-strings and `.format()`, `%r` \
-                              or `%(name)r` in printf and logger format strings) so strings are \
-                              quoted and escaped automatically via `repr()` while preserving the \
-                              representation of non-string types, or wrap the placeholder in \
-                              backticks (`` `{x}` ``) when formatting a code identifier.",
+            what_it_does: indoc::indoc! {r#"
+                Flags bare string-formatted placeholders wrapped in matching single or double quotes
+                (`'{x}'`, `"{x}"`, `'{}'`, `'{0}'`, `'%s'`, `'%(name)s'`) inside Python format
+                strings across all files, tests included. Three formatting contexts are inspected:
+                f-strings (`f"..."`), strings formatted via `.format(...)` or `.format_map(...)` (or
+                `str.format(...)`), and strings formatted via the `%` operator or passed with format
+                arguments to a logger call (`debug`, `info`, `warning`, `warn`, `error`,
+                `exception`, `critical`, `fatal`, `log`). Plain unformatted strings, docstrings, raw
+                strings (`r"..."`), byte strings (`b"..."`), placeholders that already carry a
+                conversion flag (`!r`, `!s`, `!a`), format specifier (`:...`), or debug `=`,
+                non-`%s` printf specifiers (`%r`, `%d`, `%.2f`), and structured syntax (HTML
+                attributes, JSON or TOML fragments, `key="value"` flags, and backtick code spans)
+                are not flagged."#},
+            why_is_this_bad: indoc::indoc! {r"
+                Wrapping a default string placeholder in manual quotes fails when the runtime value
+                contains the same quote character (`Invalid value 'can't'`) or control characters
+                such as newlines and tabs, and it turns `None`, booleans, and numbers into quoted
+                strings (`'None'`, `'42'`) that look identical to actual strings in logs and error
+                messages.
+
+                Use `repr` formatting (`{x!r}` in f-strings and `.format()`, `%r` or `%(name)r` in
+                printf and logger format strings) so strings are quoted and escaped automatically
+                via `repr()` while preserving the representation of non-string types, or wrap the
+                placeholder in backticks (`` `{x}` ``) when formatting a code identifier."},
             references: &[
                 Reference {
                     title: "PEP 3101: Advanced String Formatting (conversion flags)",

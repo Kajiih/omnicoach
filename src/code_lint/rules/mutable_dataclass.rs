@@ -32,20 +32,20 @@ pub const RULE: CodeRule = CodeRule {
         },
         doc: RuleDoc {
             summary: "Requires Python dataclasses to declare `frozen=True`.",
-            what_it_does: "Flags a class decorated with `@dataclass` or \
-                           `@dataclasses.dataclass` that does not pass `frozen`, in all \
-                           Python files, tests included. An explicit `frozen=False` counts as \
-                           a deliberate choice and is not reported. The decorator is matched \
-                           by name, not by import: a bare `@dataclass` is checked whatever \
-                           module it comes from, while other decorators, such as \
-                           `@attrs.define`, are not.",
-            why_is_this_bad: "A default dataclass is mutable: any code holding an instance can \
-                              change its fields, so a value passed to a function or stored in a \
-                              cache can change behind the owner's back, and the instance cannot \
-                              be hashed by value.\n\n\
-                              Write `@dataclass(frozen=True)` and derive modified copies with \
-                              `dataclasses.replace`. When in-place mutation is really needed, \
-                              say so with `frozen=False`.",
+            what_it_does: indoc::indoc! {r"
+                Flags a class decorated with `@dataclass` or `@dataclasses.dataclass` that does not
+                pass `frozen`, in all Python files, tests included. An explicit `frozen=False`
+                counts as a deliberate choice and is not reported. The decorator is matched by name,
+                not by import: a bare `@dataclass` is checked whatever module it comes from, while
+                other decorators, such as `@attrs.define`, are not."},
+            why_is_this_bad: indoc::indoc! {r"
+                A default dataclass is mutable: any code holding an instance can change its fields,
+                so a value passed to a function or stored in a cache can change behind the owner's
+                back, and the instance cannot be hashed by value.
+
+                Write `@dataclass(frozen=True)` and derive modified copies with
+                `dataclasses.replace`. When in-place mutation is really needed, say so with
+                `frozen=False`."},
             references: &[Reference {
                 title: "Python docs: dataclasses",
                 url: "https://docs.python.org/3/library/dataclasses.html",

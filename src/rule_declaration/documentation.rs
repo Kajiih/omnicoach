@@ -46,6 +46,10 @@ pub struct Example {
 /// Option defaults are rendered from the rule's options declaration, so the prose never
 /// repeats them. Wording rules for `summary` are in
 /// `docs/dev/naming_and_message_style_guide.md` §2.5, checked by `tests/registry.rs`.
+///
+/// Write `what_it_does` and `why_is_this_bad` as `indoc::indoc!` raw strings wrapped at the
+/// source line width, closed on their last line. They are Markdown: a single line break is a
+/// space, and a blank line separates paragraphs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuleDoc {
     /// One sentence for rule lists, opening with `Flags` (pattern rules) or `Requires`

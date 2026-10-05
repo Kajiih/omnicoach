@@ -57,22 +57,22 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags assertions on how a mock was called in Python tests.",
-            what_it_does: "Flags calls to the `unittest.mock` interaction assertions in Python \
-                           test files: `assert_called`, `assert_called_once`, \
-                           `assert_called_with`, `assert_called_once_with`, `assert_any_call`, \
-                           `assert_has_calls` and `assert_not_called`, and their `assert_awaited*` \
-                           / `assert_any_await` / `assert_has_awaits` / `assert_not_awaited` \
-                           counterparts. They are flagged on any object, whether or not it is a \
-                           mock. Other methods whose names start with `assert_`, such as \
-                           `verifier.assert_valid_state()`, are not flagged.",
-            why_is_this_bad: "These assertions check that the code under test made particular \
-                              calls, in a particular way, rather than that it produced the right \
-                              result. The test then encodes the implementation: reordering, \
-                              batching or replacing a call breaks it even when the behaviour is \
-                              unchanged, and it can still pass when the outcome is wrong.\n\n\
-                              Assert on what callers can observe: the returned value, or the \
-                              resulting state of an in-memory fake standing in for the \
-                              dependency.",
+            what_it_does: indoc::indoc! {r"
+                Flags calls to the `unittest.mock` interaction assertions in Python test files:
+                `assert_called`, `assert_called_once`, `assert_called_with`,
+                `assert_called_once_with`, `assert_any_call`, `assert_has_calls` and
+                `assert_not_called`, and their `assert_awaited*` / `assert_any_await` /
+                `assert_has_awaits` / `assert_not_awaited` counterparts. They are flagged on any
+                object, whether or not it is a mock. Other methods whose names start with `assert_`,
+                such as `verifier.assert_valid_state()`, are not flagged."},
+            why_is_this_bad: indoc::indoc! {r"
+                These assertions check that the code under test made particular calls, in a
+                particular way, rather than that it produced the right result. The test then encodes
+                the implementation: reordering, batching or replacing a call breaks it even when the
+                behaviour is unchanged, and it can still pass when the outcome is wrong.
+
+                Assert on what callers can observe: the returned value, or the resulting state of an
+                in-memory fake standing in for the dependency."},
             references: &[Reference {
                 title: "Software Engineering at Google, ch. 13: Test Doubles",
                 url: "https://abseil.io/resources/swe-book/html/ch13.html",

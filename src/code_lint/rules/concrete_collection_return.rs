@@ -41,32 +41,29 @@ pub const RULE: CodeRule = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags Python function return annotations using concrete mutable collection types such as `list`, `dict`, or `set`.",
-            what_it_does: "Flags functions and methods in Python source files (test files are \
-                           not checked) whose return annotation uses a concrete mutable \
-                           collection constructor (`list`, `dict`, `set`, `List`, `Dict`, `Set`, \
-                           `typing.List`, `typing.Dict`, or `typing.Set`, and the `collections` \
-                           containers `defaultdict`, `deque`, `Counter`, and `OrderedDict` with \
-                           their `typing` aliases), either at the top \
-                           level or inside transparent wrappers (`|`, `Optional`, `Union`, \
-                           `Annotated`) and covariant container positions (`Sequence[list[T]]`, \
-                           `Mapping[K, list[V]]`, `Awaitable[list[T]]`). Unqualified `Set` is \
-                           exempt only when `from collections.abc import Set` is present in the \
-                           file. Dunder methods other than `__init__`, `__new__`, and \
-                           `__call__`, methods on `Protocol` or `ABC` classes, and functions \
-                           decorated with `@override`, `@overload`, `@abstractmethod`, \
-                           `@fixture`, or `@<function>.register` are exempt.",
-            why_is_this_bad: "Returning a concrete `list`, `dict`, or `set` exposes internal \
-                              state to in-place caller mutation and locks the implementation \
-                              into returning an invariant mutable container even when it could \
-                              otherwise return a cached `tuple`, a `Sequence` view, or a \
-                              parameter directly without copying.\n\n\
-                              Choose the return type as a contract: `Sequence`, `Mapping`, or \
-                              `Set` (imported as `AbstractSet`) for read-only results, and their \
-                              `Mutable` counterparts for results callers are meant to mutate. A \
-                              concrete collection is a deliberate exception, for example when \
-                              callers rely on `list.sort()`. The message names the read-only \
-                              counterpart of the flagged type; it does not know how callers use \
-                              the result.",
+            what_it_does: indoc::indoc! {r"
+                Flags functions and methods in Python source files (test files are not checked)
+                whose return annotation uses a concrete mutable collection constructor (`list`,
+                `dict`, `set`, `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, or `typing.Set`,
+                and the `collections` containers `defaultdict`, `deque`, `Counter`, and
+                `OrderedDict` with their `typing` aliases), either at the top level or inside
+                transparent wrappers (`|`, `Optional`, `Union`, `Annotated`) and covariant container
+                positions (`Sequence[list[T]]`, `Mapping[K, list[V]]`, `Awaitable[list[T]]`).
+                Unqualified `Set` is exempt only when `from collections.abc import Set` is present
+                in the file. Dunder methods other than `__init__`, `__new__`, and `__call__`,
+                methods on `Protocol` or `ABC` classes, and functions decorated with `@override`,
+                `@overload`, `@abstractmethod`, `@fixture`, or `@<function>.register` are exempt."},
+            why_is_this_bad: indoc::indoc! {r"
+                Returning a concrete `list`, `dict`, or `set` exposes internal state to in-place
+                caller mutation and locks the implementation into returning an invariant mutable
+                container even when it could otherwise return a cached `tuple`, a `Sequence` view,
+                or a parameter directly without copying.
+
+                Choose the return type as a contract: `Sequence`, `Mapping`, or `Set` (imported as
+                `AbstractSet`) for read-only results, and their `Mutable` counterparts for results
+                callers are meant to mutate. A concrete collection is a deliberate exception, for
+                example when callers rely on `list.sort()`. The message names the read-only
+                counterpart of the flagged type; it does not know how callers use the result."},
             references: &[Reference {
                 title: "PEP 585: Type Hinting Generics In Standard Collections",
                 url: "https://peps.python.org/pep-0585/",

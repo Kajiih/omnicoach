@@ -51,15 +51,17 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags `contextlib.suppress` blocks.",
-            what_it_does: "Flags `suppress(...)` and `contextlib.suppress(...)` used as a context \
-                           manager in a Python `with` statement. A `suppress(...)` call outside \
-                           a `with` statement is not flagged.",
-            why_is_this_bad: "`suppress` silently discards an exception. The code does not say \
-                              why that failure is harmless, so a reader cannot tell an \
-                              intentional ignore from a bug being hidden, and a later change \
-                              that makes the exception meaningful goes unnoticed.\n\n\
-                              An explicit `except` handler keeps the ignored case visible and \
-                              can record it, for example with a debug log.",
+            what_it_does: indoc::indoc! {r"
+                Flags `suppress(...)` and `contextlib.suppress(...)` used as a context manager in a
+                Python `with` statement. A `suppress(...)` call outside a `with` statement is not
+                flagged."},
+            why_is_this_bad: indoc::indoc! {r"
+                `suppress` silently discards an exception. The code does not say why that failure is
+                harmless, so a reader cannot tell an intentional ignore from a bug being hidden, and
+                a later change that makes the exception meaningful goes unnoticed.
+
+                An explicit `except` handler keeps the ignored case visible and can record it, for
+                example with a debug log."},
             references: &[Reference {
                 title: "Python docs: contextlib.suppress",
                 url: "https://docs.python.org/3/library/contextlib.html#contextlib.suppress",

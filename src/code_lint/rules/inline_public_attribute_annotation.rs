@@ -32,29 +32,28 @@ pub const RULE: CodeRule = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags public Python instance attributes annotated inline inside methods instead of in the class body.",
-            what_it_does: "Flags annotated assignments to public instance attributes \
-                           (`self.attr: Type = value` or `self.attr: Type`) inside instance \
-                           methods in Python source files (test files are not checked). Only \
-                           direct instance methods whose first parameter is `self` and that are \
-                           not decorated with `@staticmethod` or `@classmethod` are inspected. \
-                           Private attributes starting with `_`, unannotated assignments \
-                           (`self.attr = value`), unparameterized `Final` annotations \
-                           (`self.attr: Final = value`), and field-synthesizing classes \
-                           (`@dataclass`, `attrs` `@define`/`@frozen`/`@mutable`/`@s`, and \
-                           Pydantic `BaseModel`, where a class-body annotation alters `__init__` \
-                           or field validation) are not flagged.",
-            why_is_this_bad: "A public attribute is part of a class's external interface. When \
-                              its type annotation is written inline on `self.attr: Type` inside \
-                              `__init__` or another method, Python's compiler discards the \
-                              annotation at compile time rather than storing it in \
-                              `cls.__annotations__`, so `typing.get_type_hints()` and \
-                              `inspect.get_annotations()` cannot see it, and readers must scan \
-                              method bodies to discover the class's public attributes.\n\n\
-                              Declare `attr: Type` in the class body and assign \
-                              `self.attr = value` without an inline type annotation inside \
-                              methods. Internal state that does not belong to the class's public \
-                              contract can be prefixed with `_` and annotated either in the \
-                              class body or inline.",
+            what_it_does: indoc::indoc! {r"
+                Flags annotated assignments to public instance attributes (`self.attr: Type = value`
+                or `self.attr: Type`) inside instance methods in Python source files (test files are
+                not checked). Only direct instance methods whose first parameter is `self` and that
+                are not decorated with `@staticmethod` or `@classmethod` are inspected. Private
+                attributes starting with `_`, unannotated assignments (`self.attr = value`),
+                unparameterized `Final` annotations (`self.attr: Final = value`), and
+                field-synthesizing classes (`@dataclass`, `attrs`
+                `@define`/`@frozen`/`@mutable`/`@s`, and Pydantic `BaseModel`, where a class-body
+                annotation alters `__init__` or field validation) are not flagged."},
+            why_is_this_bad: indoc::indoc! {r"
+                A public attribute is part of a class's external interface. When its type annotation
+                is written inline on `self.attr: Type` inside `__init__` or another method, Python's
+                compiler discards the annotation at compile time rather than storing it in
+                `cls.__annotations__`, so `typing.get_type_hints()` and `inspect.get_annotations()`
+                cannot see it, and readers must scan method bodies to discover the class's public
+                attributes.
+
+                Declare `attr: Type` in the class body and assign `self.attr = value` without an
+                inline type annotation inside methods. Internal state that does not belong to the
+                class's public contract can be prefixed with `_` and annotated either in the class
+                body or inline."},
             references: &[
                 Reference {
                     title: "PEP 526: Syntax for Variable Annotations — Class and instance variable annotations",

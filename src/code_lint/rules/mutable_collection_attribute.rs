@@ -41,29 +41,28 @@ pub const RULE: CodeRule = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags public Python class and instance attributes annotated with `MutableSequence`, `MutableMapping`, or `MutableSet` when never mutated in the class.",
-            what_it_does: "Flags public (non-`_`-prefixed) class attributes \
-                           (`items: MutableSequence[str]`) and `__init__` instance attributes \
-                           (`self.items: MutableSequence[str]`) in Python source files (test \
-                           files are not checked) whose type annotation uses `MutableSequence`, \
-                           `MutableMapping`, or `MutableSet` (at the top level or inside \
-                           `ClassVar`, `Final`, `Optional`, `Union`, or `|`) when no method of \
-                           the class mutates `self.<name>` or `cls.<name>` in place. Nested \
-                           types such as `Sequence[MutableMapping[K, V]]` are not checked, \
-                           because mutation of the elements is not tracked. Private attributes \
-                           starting with `_`, attributes mutated in any method of the class, \
-                           attributes on `Protocol` or `ABC` classes, and `TypedDict` keys \
-                           (a `TypedDict` has no methods to mutate them) are not flagged.",
-            why_is_this_bad: "On a `@dataclass` or public class interface, annotating a read-only \
-                              field as `MutableSequence`, `MutableMapping`, or `MutableSet` \
-                              makes its type invariant, rejects `tuple` or `Sequence` arguments \
-                              in synthesized constructors, and exposes a mutable container on \
-                              the instance.\n\n\
-                              A mutable public attribute is a contract that outside code may \
-                              mutate it, so it is a deliberate choice. Otherwise, `Sequence`, \
-                              `Mapping`, or `Set` (imported as `AbstractSet`) state a read-only \
-                              field, and internal mutable state belongs in a `_`-prefixed \
-                              attribute. Only methods of the class are checked for mutation; \
-                              code outside the class is not.",
+            what_it_does: indoc::indoc! {r"
+                Flags public (non-`_`-prefixed) class attributes (`items: MutableSequence[str]`) and
+                `__init__` instance attributes (`self.items: MutableSequence[str]`) in Python source
+                files (test files are not checked) whose type annotation uses `MutableSequence`,
+                `MutableMapping`, or `MutableSet` (at the top level or inside `ClassVar`, `Final`,
+                `Optional`, `Union`, or `|`) when no method of the class mutates `self.<name>` or
+                `cls.<name>` in place. Nested types such as `Sequence[MutableMapping[K, V]]` are not
+                checked, because mutation of the elements is not tracked. Private attributes
+                starting with `_`, attributes mutated in any method of the class, attributes on
+                `Protocol` or `ABC` classes, and `TypedDict` keys (a `TypedDict` has no methods to
+                mutate them) are not flagged."},
+            why_is_this_bad: indoc::indoc! {r"
+                On a `@dataclass` or public class interface, annotating a read-only field as
+                `MutableSequence`, `MutableMapping`, or `MutableSet` makes its type invariant,
+                rejects `tuple` or `Sequence` arguments in synthesized constructors, and exposes a
+                mutable container on the instance.
+
+                A mutable public attribute is a contract that outside code may mutate it, so it is a
+                deliberate choice. Otherwise, `Sequence`, `Mapping`, or `Set` (imported as
+                `AbstractSet`) state a read-only field, and internal mutable state belongs in a
+                `_`-prefixed attribute. Only methods of the class are checked for mutation; code
+                outside the class is not."},
             references: &[Reference {
                 title: "Python collections.abc — Collections Abstract Base Classes",
                 url: "https://docs.python.org/3/library/collections.abc.html",

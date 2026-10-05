@@ -45,44 +45,41 @@ pub const RULE: CodeRule = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags function return annotations that wrap a collection type in `| None`, `Optional`, or `Option`.",
-            what_it_does: "Flags functions and methods in source files (test files are not \
-                           checked) whose return annotation makes a collection type nullable. In \
-                           Python, this matches return annotations (or awaited return types inside \
-                           `Awaitable[...]` or `Coroutine[Any, Any, ...]`, or underlying types \
-                           inside `Annotated[..., ...]`) that form a union containing `None` \
-                           (`| None`, `Optional[...]`, or `Union[..., None]`) in which every \
-                           non-`None` branch is a collection type (`Sequence`, `MutableSequence`, \
-                           `Mapping`, `MutableMapping`, `Set`, `AbstractSet`, `MutableSet`, \
-                           `Collection`, `Iterable`, `Iterator`, `Reversible`, `list`, `List`, \
-                           `dict`, `Dict`, `set`, `frozenset`, `FrozenSet`, `deque`, `Deque`, \
-                           `defaultdict`, `DefaultDict`, `Counter`, `OrderedDict`, bare `tuple` / \
-                           `Tuple`, or variadic `tuple[T, ...]` / `Tuple[T, ...]`); fixed-length \
-                           record tuples (`tuple[int, str] | None`), unions mixing a collection \
-                           with a non-collection type, dunder methods other than `__init__`, \
-                           `__new__`, and `__call__`, methods on `Protocol` or `ABC` classes, and \
-                           functions decorated with `@override`, `@overload`, `@abstractmethod`, \
-                           `@fixture`, or `@<function>.register` are exempt. In Rust, this \
-                           matches functions and inherent methods whose return type (or payload \
-                           inside `Result<..., E>` or `Poll<...>`) is `Option<...>` wrapping a \
-                           standard collection (`Vec`, `VecDeque`, `LinkedList`, `HashMap`, \
-                           `BTreeMap`, `HashSet`, `BTreeSet`, `BinaryHeap`) or slice (`&[T]`, \
-                           `&mut [T]`, `Box<[T]>`, `Rc<[T]>`, `Arc<[T]>`, `Cow<'_, [T]>`); \
-                           fixed-size arrays (`Option<[T; N]>`), tuples (`Option<(A, B)>`), \
-                           strings (`Option<String>`, `Option<&str>`), and methods inside `trait` \
-                           or `impl Trait for Type` blocks are exempt.",
-            why_is_this_bad: "A collection type (`Sequence`, `Mapping`, `Set`, `list`, `dict`, \
-                              `Vec<T>`, `&[T]`, `BTreeMap<K, V>`, `HashSet<T>`) already has an \
-                              empty value (`()`, `[]`, `{}`, `Vec::new()`, `&[]`) that represents \
-                              zero elements. Returning `Sequence[T] | None` in Python or \
-                              `Option<Vec<T>>` in Rust splits the empty case across two states, \
-                              forcing every caller to branch on `None` (`for item in get_items() \
-                              or ():` or `if let Some(items) = get_items()`) before iterating, \
-                              indexing, or querying length.\n\n\
-                              Return an empty collection when no items are found so callers can \
-                              iterate and query length unconditionally. A nullable collection \
-                              return is only needed for a three-state contract where `None` \
-                              means something distinct from zero elements, such as a cache miss, \
-                              an unparsed field, or an omitted filter.",
+            what_it_does: indoc::indoc! {r"
+                Flags functions and methods in source files (test files are not checked) whose
+                return annotation makes a collection type nullable. In Python, this matches return
+                annotations (or awaited return types inside `Awaitable[...]` or
+                `Coroutine[Any, Any, ...]`, or underlying types inside `Annotated[..., ...]`) that
+                form a union containing `None` (`| None`, `Optional[...]`, or `Union[..., None]`) in
+                which every non-`None` branch is a collection type (`Sequence`, `MutableSequence`,
+                `Mapping`, `MutableMapping`, `Set`, `AbstractSet`, `MutableSet`, `Collection`,
+                `Iterable`, `Iterator`, `Reversible`, `list`, `List`, `dict`, `Dict`, `set`,
+                `frozenset`, `FrozenSet`, `deque`, `Deque`, `defaultdict`, `DefaultDict`, `Counter`,
+                `OrderedDict`, bare `tuple` / `Tuple`, or variadic `tuple[T, ...]` /
+                `Tuple[T, ...]`); fixed-length record tuples (`tuple[int, str] | None`), unions
+                mixing a collection with a non-collection type, dunder methods other than
+                `__init__`, `__new__`, and `__call__`, methods on `Protocol` or `ABC` classes, and
+                functions decorated with `@override`, `@overload`, `@abstractmethod`, `@fixture`, or
+                `@<function>.register` are exempt. In Rust, this matches functions and inherent
+                methods whose return type (or payload inside `Result<..., E>` or `Poll<...>`) is
+                `Option<...>` wrapping a standard collection (`Vec`, `VecDeque`, `LinkedList`,
+                `HashMap`, `BTreeMap`, `HashSet`, `BTreeSet`, `BinaryHeap`) or slice (`&[T]`,
+                `&mut [T]`, `Box<[T]>`, `Rc<[T]>`, `Arc<[T]>`, `Cow<'_, [T]>`); fixed-size arrays
+                (`Option<[T; N]>`), tuples (`Option<(A, B)>`), strings (`Option<String>`,
+                `Option<&str>`), and methods inside `trait` or `impl Trait for Type` blocks are
+                exempt."},
+            why_is_this_bad: indoc::indoc! {r"
+                A collection type (`Sequence`, `Mapping`, `Set`, `list`, `dict`, `Vec<T>`, `&[T]`,
+                `BTreeMap<K, V>`, `HashSet<T>`) already has an empty value (`()`, `[]`, `{}`,
+                `Vec::new()`, `&[]`) that represents zero elements. Returning `Sequence[T] | None`
+                in Python or `Option<Vec<T>>` in Rust splits the empty case across two states,
+                forcing every caller to branch on `None` (`for item in get_items() or ():` or
+                `if let Some(items) = get_items()`) before iterating, indexing, or querying length.
+
+                Return an empty collection when no items are found so callers can iterate and query
+                length unconditionally. A nullable collection return is only needed for a
+                three-state contract where `None` means something distinct from zero elements, such
+                as a cache miss, an unparsed field, or an omitted filter."},
             references: &[
                 Reference {
                     title: "SonarSource RSPEC-1168: Empty arrays and collections should be returned instead of null",

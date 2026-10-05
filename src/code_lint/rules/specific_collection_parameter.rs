@@ -41,39 +41,36 @@ pub const RULE: CodeRule = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags Python function parameters annotated with `Sequence` or `Collection` when the body only uses `Collection` or `Iterable` operations.",
-            what_it_does: "Flags non-variadic parameters of functions and methods in Python \
-                           source files (test files are not checked) whose type annotation uses \
-                           `Sequence` or `Collection` (at the top level or inside transparent \
-                           `|`, `Optional`, `Union`, or `Annotated` wrappers) when every use of \
-                           the parameter inside the function body is satisfied by a broader \
-                           abstract interface:\n\
-                           - Suggests `Iterable` when the parameter is only iterated once at \
-                             top-level depth (`for x in param`, a single comprehension, or a \
-                             single iterable builtin such as `sum`, `min`, `max`, `any`, `all`, \
-                             `sorted`, `list`, `tuple`, `set`, `frozenset`, `dict`, `enumerate`, \
-                             `zip`, `iter`, `map`, or `filter`).\n\
-                           - Suggests `Collection` (for `Sequence` parameters) when the parameter \
-                             is checked for length (`len(param)`), membership (`v in param`), \
-                             truthiness (`if param:`, `if not param:`, `bool(param)`), or \
-                             iterated multiple times (because a single-pass `Iterable` generator \
-                             is always truthy and exhausts on the first pass).\n\
-                           Parameters that are indexed or sliced (`param[0]`), reversed \
-                           (`reversed(param)`), queried via `.index()` or `.count()`, matched \
-                           in a `match` statement, unused, or passed to another function or \
-                           method are not flagged. Stub bodies, methods on `Protocol` or `ABC` \
-                           classes, dunder methods other than `__init__`, `__new__`, and \
-                           `__call__`, and functions decorated with `@override`, `@overload`, \
-                           `@abstractmethod`, `@fixture`, `@<function>.register`, or \
-                           `@<property>.setter` are exempt.",
-            why_is_this_bad: "Annotating a parameter as `Sequence[T]` when the function only \
-                              iterates over it once prevents callers from passing a `set[T]`, \
-                              `dict.keys()`, `dict.values()`, or a generator expression without \
-                              materializing an intermediate `list` or `tuple`.\n\n\
-                              `Iterable[T]` states single-pass iteration and `Collection[T]` \
-                              states `len()`, `in`, truthiness, or multi-pass iteration. Keep \
-                              `Sequence[T]` only as a deliberate contract, for example to \
-                              reserve indexing for a later version. The suggested interface \
-                              comes from a syntactic analysis of the function body.",
+            what_it_does: indoc::indoc! {r"
+                Flags non-variadic parameters of functions and methods in Python source files (test
+                files are not checked) whose type annotation uses `Sequence` or `Collection` (at the
+                top level or inside transparent `|`, `Optional`, `Union`, or `Annotated` wrappers)
+                when every use of the parameter inside the function body is satisfied by a broader
+                abstract interface:
+                - Suggests `Iterable` when the parameter is only iterated once at top-level depth
+                  (`for x in param`, a single comprehension, or a single iterable builtin such as
+                  `sum`, `min`, `max`, `any`, `all`, `sorted`, `list`, `tuple`, `set`, `frozenset`,
+                  `dict`, `enumerate`, `zip`, `iter`, `map`, or `filter`).
+                - Suggests `Collection` (for `Sequence` parameters) when the parameter is checked
+                  for length (`len(param)`), membership (`v in param`), truthiness (`if param:`,
+                  `if not param:`, `bool(param)`), or iterated multiple times (because a single-pass
+                  `Iterable` generator is always truthy and exhausts on the first pass).
+                Parameters that are indexed or sliced (`param[0]`), reversed (`reversed(param)`),
+                queried via `.index()` or `.count()`, matched in a `match` statement, unused, or
+                passed to another function or method are not flagged. Stub bodies, methods on
+                `Protocol` or `ABC` classes, dunder methods other than `__init__`, `__new__`, and
+                `__call__`, and functions decorated with `@override`, `@overload`,
+                `@abstractmethod`, `@fixture`, `@<function>.register`, or `@<property>.setter` are
+                exempt."},
+            why_is_this_bad: indoc::indoc! {r"
+                Annotating a parameter as `Sequence[T]` when the function only iterates over it once
+                prevents callers from passing a `set[T]`, `dict.keys()`, `dict.values()`, or a
+                generator expression without materializing an intermediate `list` or `tuple`.
+
+                `Iterable[T]` states single-pass iteration and `Collection[T]` states `len()`, `in`,
+                truthiness, or multi-pass iteration. Keep `Sequence[T]` only as a deliberate
+                contract, for example to reserve indexing for a later version. The suggested
+                interface comes from a syntactic analysis of the function body."},
             references: &[Reference {
                 title: "Python collections.abc — Collections Abstract Base Classes",
                 url: "https://docs.python.org/3/library/collections.abc.html",
