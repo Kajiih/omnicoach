@@ -2,10 +2,12 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    collect_locally_mutated_return_functions, collect_mutable_collection_types,
-    extract_function_signatures, read_only_collection_replacements,
+    AnnotationTraversalDepth, CollectionKind, PythonCollectionType, collect_collection_types,
+    collect_locally_mutated_return_functions, extract_function_signatures,
+    has_unaliased_collections_abc_set_import,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
+use crate::code_lint::policy::read_only_collection_replacements;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, EnforcementMode, Example, ImpactedQuality,
@@ -89,6 +91,7 @@ pub const RULE: CodeRule = CodeRule {
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     let locally_mutated = collect_locally_mutated_return_functions(file);
+    let abc_set_imported = has_unaliased_collections_abc_set_import(file);
     let mut diagnostics = Vec::new();
 
     for signature in extract_function_signatures(file) {
@@ -100,11 +103,18 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         let Some(ref return_type_node) = signature.return_type_node else {
             continue;
         };
-        let matched = collect_mutable_collection_types(return_type_node);
+        let matched: Vec<_> = collect_collection_types(
+            return_type_node,
+            AnnotationTraversalDepth::TransparentWrappersOnly,
+            abc_set_imported,
+        )
+        .into_iter()
+        .filter(|collection_type| collection_type.kind == CollectionKind::AbstractMutable)
+        .collect();
         if matched.is_empty() {
             continue;
         }
-        let token = matched.join(", ");
+        let token = PythonCollectionType::joined_paths(&matched);
         let replacement = read_only_collection_replacements(&matched);
         let expression = return_type_node.text();
         diagnostics.push(rule.diagnostic_at_node(

@@ -1,7 +1,7 @@
 # AST policy extraction: 01 Understand
 
 > [!NOTE]
-> **Status: VALIDATED (2026-10-05). Executing §6; step 1 landed. Q2 open (blocks step 4).**
+> **Status: VALIDATED (2026-10-05). Executing §6; steps 1–4 landed.**
 > Scope: the ROADMAP item "Rule-shaped items left in `ast/python`", plus the same leak found in `ast/rust.rs` and `ast.rs`.
 > Line numbers are from the inventory at change `tvvyzump` and will drift.
 
@@ -74,7 +74,7 @@ Each step is one atomic commit, smallest and least coupled first:
 
 - **D1.** No behavior change in this work. Bugs found are recorded, not fixed.
 - **D2.** The ROADMAP item is corrected once this doc is validated.
-- **D3 (was Q1).** Policy shared by several rules goes in a non-rule helper module under `rules/`, with an architecture entry. The main goal is still to keep that module minimal: prefer general construct-level logic in `ast/` that rules share, and keep only true shared policy in the helper module.
+- **D3 (was Q1).** Policy shared by several rules goes in a non-rule helper module, with an architecture entry. The main goal is still to keep that module minimal: prefer general construct-level logic in `ast/` that rules share, and keep only true shared policy in the helper module. The module is the `code_lint::policy` component, not a module under `rules/`: the architecture conformance test isolates direct children of a component from each other, so rule modules cannot import a sibling helper.
 - **D4 (was Q3).** Treat `call-before-definition` as enabled: extract the `ForwardCall` policy into the rule like any other (step 3).
 - **D5 (was Q4).** The typed-CST work happens later; this work does not wait for it.
-- **Q2.** Where does the knowledge "`list` is a mutable concrete collection, `Sequence` is a read-only abstract one, `frozenset` is immutable" live? It is a fact about Python's standard library, not a rule's choice, so the inventory proposes keeping it in `ast/` as a classification (for example `CollectionKind::{ConcreteMutable, AbstractReadOnly, Immutable}` for a type name). Rules would then decide what to flag and which replacement to suggest. The alternative is to move these lists into the rules (or the D3 helper module) as policy.
+- **D6 (was Q2).** The collection taxonomy is a fact about Python's standard library and lives in `ast/`: `collect_collection_types` returns every standard collection type in an annotation with its `CollectionKind` (concrete mutable, abstract mutable, abstract read-only, immutable) and `CollectionShape` (mapping, set, sequence, iterable). Rules choose which kinds and names to flag; suggestion text is policy.

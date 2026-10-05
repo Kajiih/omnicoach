@@ -2,8 +2,9 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    ParameterCollectionCapability, PythonParameterKind, analyze_parameter_collection_capability,
-    collect_specific_collection_types, extract_function_signatures,
+    AnnotationTraversalDepth, CollectionKind, ParameterCollectionCapability, PythonCollectionType,
+    PythonParameterKind, analyze_parameter_collection_capability, collect_collection_types,
+    extract_function_signatures, has_unaliased_collections_abc_set_import,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
@@ -13,6 +14,9 @@ use crate::rule_declaration::{
 };
 use ast_grep_language::SupportLang;
 use std::path::Path;
+
+/// The ABC the rule narrows to `Collection` when the parameter needs no positional access.
+const SEQUENCE: &str = "Sequence";
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Parameter `{name}` of `{function}` has annotation `{expression}`, but `{function}` appears to need only `{replacement}` operations on `{name}`.",
@@ -98,6 +102,7 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
+    let abc_set_imported = has_unaliased_collections_abc_set_import(file);
     let mut diagnostics = Vec::new();
     for signature in extract_function_signatures(file) {
         if signature.is_exempt_from_body_usage_rules() {
@@ -110,7 +115,17 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             let Some(ref type_node) = parameter.type_node else {
                 continue;
             };
-            let matched = collect_specific_collection_types(type_node);
+            let matched: Vec<_> = collect_collection_types(
+                type_node,
+                AnnotationTraversalDepth::TransparentWrappersOnly,
+                abc_set_imported,
+            )
+            .into_iter()
+            .filter(|collection_type| {
+                collection_type.kind == CollectionKind::AbstractReadOnly
+                    && matches!(collection_type.name.as_str(), SEQUENCE | "Collection")
+            })
+            .collect();
             if matched.is_empty() {
                 continue;
             }
@@ -123,7 +138,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                 ParameterCollectionCapability::Collection => {
                     let annotates_sequence = matched
                         .iter()
-                        .any(|type_path| type_path.rsplit('.').next() == Some("Sequence"));
+                        .any(|collection_type| collection_type.name == SEQUENCE);
                     if !annotates_sequence {
                         continue;
                     }
@@ -131,7 +146,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                 }
                 ParameterCollectionCapability::Iterable => "collections.abc.Iterable",
             };
-            let token = matched.join(", ");
+            let token = PythonCollectionType::joined_paths(&matched);
             let expression = type_node.text();
             diagnostics.push(rule.diagnostic_at_node(
                 path,

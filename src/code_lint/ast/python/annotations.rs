@@ -4,9 +4,9 @@
 
 use super::{AstNode, ParsedFile, RawNode, resolve_path_and_terminal_raw};
 
-/// Controls how deeply [`collect_type_constructors`] traverses a Python type annotation.
+/// Controls how deeply [`collect_collection_types`] traverses a Python type annotation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum AnnotationTraversalDepth {
+pub enum AnnotationTraversalDepth {
     /// Unwraps only transparent wrappers (`|`, `Optional`, `Union`, `Annotated[T, ...]`,
     /// `ClassVar[T]`, `Final[T]`, `Required[T]`, `NotRequired[T]`, `ReadOnly[T]`).
     TransparentWrappersOnly,
@@ -210,9 +210,8 @@ const SINGLE_ARG_COVARIANT_CONTAINERS: &[&str] = &[
 pub(super) const MUTABLE_COLLECTION_ABCS: &[&str] =
     &["MutableSequence", "MutableMapping", "MutableSet"];
 
-/// Read-only abstract and immutable collection constructors in `collections.abc`, `typing`, and
-/// `builtins` that have a natural empty value (`()`, `{}`, `frozenset()`, `iter(())`).
-const READONLY_AND_IMMUTABLE_COLLECTION_CONSTRUCTORS: &[&str] = &[
+/// Abstract read-only collection constructors in `collections.abc` and `typing`.
+const READ_ONLY_COLLECTION_ABCS: &[&str] = &[
     "Sequence",
     "Mapping",
     "Set",
@@ -221,16 +220,104 @@ const READONLY_AND_IMMUTABLE_COLLECTION_CONSTRUCTORS: &[&str] = &[
     "Iterable",
     "Iterator",
     "Reversible",
-    "frozenset",
-    "FrozenSet",
 ];
 
-/// Recursively collects matching type constructor paths from `node` according to `depth`.
+/// Immutable collection constructors in `builtins` and `typing`.
+const IMMUTABLE_COLLECTIONS: &[&str] = &["tuple", "Tuple", "frozenset", "FrozenSet"];
+
+/// What a standard-library collection type lets its holder do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectionKind {
+    /// A concrete mutable container: `list`, `dict`, `set`, their `typing` aliases, and the
+    /// `collections` containers (`defaultdict`, `deque`, `Counter`, `OrderedDict`).
+    ConcreteMutable,
+    /// An abstract mutable interface: `MutableSequence`, `MutableMapping`, `MutableSet`.
+    AbstractMutable,
+    /// An abstract read-only interface: `Sequence`, `Mapping`, `collections.abc.Set`,
+    /// `AbstractSet`, `Collection`, `Iterable`, `Iterator`, `Reversible`.
+    AbstractReadOnly,
+    /// An immutable container: `tuple`, `frozenset` and their `typing` aliases.
+    Immutable,
+}
+
+/// How a standard-library collection type gives access to its elements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectionShape {
+    /// By key: `dict`, `Mapping`, `MutableMapping`, `defaultdict`, `Counter`, `OrderedDict`.
+    Mapping,
+    /// By membership: `set`, `frozenset`, `AbstractSet`, `MutableSet`.
+    Set,
+    /// By position: `list`, `tuple`, `deque`, `Sequence`, `MutableSequence`.
+    Sequence,
+    /// By iteration only: `Collection`, `Iterable`, `Iterator`, `Reversible`.
+    Iterable,
+}
+
+/// A standard-library collection type constructor in a type annotation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonCollectionType {
+    /// The constructor as written (`list`, `typing.Dict`, `collections.abc.Sequence`).
+    pub path: String,
+    /// The constructor's unqualified name (`list`, `Dict`, `Sequence`).
+    pub name: String,
+    /// What the type lets its holder do.
+    pub kind: CollectionKind,
+    /// How the type gives access to its elements.
+    pub shape: CollectionShape,
+}
+
+impl PythonCollectionType {
+    /// The paths of `collection_types`, joined with `", "`.
+    #[must_use]
+    pub fn joined_paths(collection_types: &[Self]) -> String {
+        collection_types
+            .iter()
+            .map(|collection_type| collection_type.path.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// Classifies `(path, terminal)` as a standard-library collection type constructor.
+///
+/// With `abc_set_imported`, unqualified `Set` is `collections.abc.Set` rather than `typing.Set`.
+fn classify_collection(
+    path: &str,
+    terminal: &str,
+    abc_set_imported: bool,
+) -> Option<(CollectionKind, CollectionShape)> {
+    let kind = if is_concrete_collection_constructor(path, terminal)
+        && !(abc_set_imported && path == "Set")
+    {
+        CollectionKind::ConcreteMutable
+    } else if is_std_type_constructor(path, terminal, MUTABLE_COLLECTION_ABCS) {
+        CollectionKind::AbstractMutable
+    } else if is_std_type_constructor(path, terminal, READ_ONLY_COLLECTION_ABCS) {
+        CollectionKind::AbstractReadOnly
+    } else if is_std_type_constructor(path, terminal, IMMUTABLE_COLLECTIONS) {
+        CollectionKind::Immutable
+    } else {
+        return None;
+    };
+    let shape = match terminal {
+        "dict" | "Dict" | "defaultdict" | "DefaultDict" | "Counter" | "OrderedDict"
+        | "MutableMapping" | "Mapping" => CollectionShape::Mapping,
+        "set" | "Set" | "MutableSet" | "AbstractSet" | "frozenset" | "FrozenSet" => {
+            CollectionShape::Set
+        }
+        "Collection" | "Iterable" | "Iterator" | "Reversible" => CollectionShape::Iterable,
+        _ => CollectionShape::Sequence,
+    };
+    Some((kind, shape))
+}
+
+/// Recursively collects matching type constructor `(path, terminal)` pairs from `node`
+/// according to `depth`, deduplicated by path.
 pub(super) fn collect_type_constructors_raw<F>(
     node: &RawNode<'_>,
     depth: AnnotationTraversalDepth,
     predicate: &F,
-    out: &mut Vec<String>,
+    out: &mut Vec<(String, String)>,
 ) where
     F: Fn(&str, &str) -> bool,
 {
@@ -254,9 +341,7 @@ pub(super) fn collect_type_constructors_raw<F>(
         }
         "identifier" | "attribute" => {
             let (path, terminal) = resolve_path_and_terminal_raw(node);
-            if predicate(&path, &terminal) && !out.contains(&path) {
-                out.push(path);
-            }
+            push_type_constructor(path, terminal, predicate, out);
         }
         "generic_type" | "subscript" => {
             let Some((base_node, type_args)) = extract_generic_base_and_args(node) else {
@@ -278,14 +363,12 @@ pub(super) fn collect_type_constructors_raw<F>(
                 return;
             }
 
-            if predicate(&base_path, &base_terminal) && !out.contains(&base_path) {
-                out.push(base_path.clone());
-            }
+            let is_std_constructor = is_std_type_constructor_prefix(&base_path, &base_terminal);
+            let terminal = base_terminal.clone();
+            push_type_constructor(base_path, base_terminal, predicate, out);
 
-            if depth == AnnotationTraversalDepth::CovariantPositions
-                && is_std_type_constructor_prefix(&base_path, &base_terminal)
-            {
-                match base_terminal.as_str() {
+            if depth == AnnotationTraversalDepth::CovariantPositions && is_std_constructor {
+                match terminal.as_str() {
                     terminal_name if SINGLE_ARG_COVARIANT_CONTAINERS.contains(&terminal_name) => {
                         if let Some(first_arg) = type_args.first() {
                             collect_type_constructors_raw(first_arg, depth, predicate, out);
@@ -322,64 +405,51 @@ pub(super) fn collect_type_constructors_raw<F>(
     }
 }
 
-/// Collects matching type constructor strings (in source order, deduplicated) from a Python
-/// type annotation node according to `depth` and `predicate(full_path, terminal_name)`.
-fn collect_type_constructors<F>(
-    type_node: &AstNode<'_>,
-    depth: AnnotationTraversalDepth,
-    predicate: F,
-) -> Vec<String>
-where
+/// Appends `(path, terminal)` to `out` if it satisfies `predicate` and `path` is not there yet.
+fn push_type_constructor<F>(
+    path: String,
+    terminal: String,
+    predicate: &F,
+    out: &mut Vec<(String, String)>,
+) where
     F: Fn(&str, &str) -> bool,
 {
-    let mut out = Vec::new();
-    collect_type_constructors_raw(&type_node.raw, depth, &predicate, &mut out);
-    out
+    if predicate(&path, &terminal) && !out.iter().any(|(seen, _)| *seen == path) {
+        out.push((path, terminal));
+    }
 }
 
-/// Collects concrete mutable collection constructors (`list`, `dict`, `set`, `Set`, etc.) from `type_node`.
+/// Collects the standard-library collection types in `type_node` according to `depth`, in
+/// source order and deduplicated by path.
 ///
-/// If `abc_set_imported` is true (`from collections.abc import Set` is present in the file),
-/// unqualified `Set` is treated as the abstract `collections.abc.Set` rather than concrete `typing.Set`.
+/// With `abc_set_imported` (the file has an unaliased `from collections.abc import Set`, see
+/// [`has_unaliased_collections_abc_set_import`]), unqualified `Set` is the abstract
+/// `collections.abc.Set` rather than the concrete `typing.Set`.
 #[must_use]
-pub fn collect_concrete_collection_types(
+pub fn collect_collection_types(
     type_node: &AstNode<'_>,
+    depth: AnnotationTraversalDepth,
     abc_set_imported: bool,
-) -> Vec<String> {
-    collect_type_constructors(
-        type_node,
-        AnnotationTraversalDepth::CovariantPositions,
-        |full_path, terminal| {
-            if abc_set_imported && full_path == "Set" {
-                return false;
-            }
-            is_concrete_collection_constructor(full_path, terminal)
-        },
-    )
-}
-
-/// Collects abstract mutable collection constructors (`MutableSequence`, `MutableMapping`,
-/// `MutableSet`) from `type_node`, unwrapping only transparent wrappers.
-#[must_use]
-pub fn collect_mutable_collection_types(type_node: &AstNode<'_>) -> Vec<String> {
-    collect_type_constructors(
-        type_node,
-        AnnotationTraversalDepth::TransparentWrappersOnly,
-        |full_path, terminal| is_std_type_constructor(full_path, terminal, MUTABLE_COLLECTION_ABCS),
-    )
-}
-
-/// Collects specific read-only abstract collection constructors (`Sequence`, `Collection`)
-/// from `type_node`, unwrapping only transparent wrappers.
-#[must_use]
-pub fn collect_specific_collection_types(type_node: &AstNode<'_>) -> Vec<String> {
-    collect_type_constructors(
-        type_node,
-        AnnotationTraversalDepth::TransparentWrappersOnly,
-        |full_path, terminal| {
-            is_std_type_constructor(full_path, terminal, &["Sequence", "Collection"])
-        },
-    )
+) -> Vec<PythonCollectionType> {
+    let mut constructors = Vec::new();
+    collect_type_constructors_raw(
+        &type_node.raw,
+        depth,
+        &|path, terminal| classify_collection(path, terminal, abc_set_imported).is_some(),
+        &mut constructors,
+    );
+    constructors
+        .into_iter()
+        .filter_map(|(path, name)| {
+            let (kind, shape) = classify_collection(&path, &name, abc_set_imported)?;
+            Some(PythonCollectionType {
+                path,
+                name,
+                kind,
+                shape,
+            })
+        })
+        .collect()
 }
 
 /// Formats deduplicated collection replacements for `type_paths`, mapping dictionary-like types
@@ -406,17 +476,6 @@ fn format_collection_replacements(
     replacements.join(", ")
 }
 
-/// Returns the read-only `collections.abc` replacements of collection `type_paths`, joined with `", "`.
-#[must_use]
-pub fn read_only_collection_replacements(type_paths: &[String]) -> String {
-    format_collection_replacements(
-        type_paths,
-        "collections.abc.Mapping",
-        "collections.abc.Set",
-        "collections.abc.Sequence",
-    )
-}
-
 /// Returns the immutable constant collection replacements for `type_paths`, joined with `", "`.
 #[must_use]
 pub fn immutable_constant_collection_replacements(type_paths: &[String]) -> String {
@@ -426,13 +485,7 @@ pub fn immutable_constant_collection_replacements(type_paths: &[String]) -> Stri
 /// Returns true if `(path, terminal)` is a concrete or abstract collection type constructor
 /// (excluding `tuple` / `Tuple`, which requires variadic-vs-fixed arity inspection when subscripted).
 fn is_non_tuple_collection_constructor(path: &str, terminal: &str) -> bool {
-    is_concrete_collection_constructor(path, terminal)
-        || is_std_type_constructor(path, terminal, MUTABLE_COLLECTION_ABCS)
-        || is_std_type_constructor(
-            path,
-            terminal,
-            READONLY_AND_IMMUTABLE_COLLECTION_CONSTRUCTORS,
-        )
+    !matches!(terminal, "tuple" | "Tuple") && classify_collection(path, terminal, false).is_some()
 }
 
 /// Returns true if `node` (unwrapping `type` and `parenthesized_expression`) is an `ellipsis` (`...`).
