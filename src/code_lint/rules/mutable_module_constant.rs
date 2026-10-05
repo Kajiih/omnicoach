@@ -1,10 +1,13 @@
 //! Flags Python module-level constants whose type annotation or value is a mutable collection.
 
-use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    collect_mutable_module_constants, immutable_constant_collection_replacements,
+    AnnotationTraversalDepth, CollectionKind, CollectionShape, PythonCollectionType,
+    PythonModuleAssignment, call_callee, collect_collection_types, collect_module_assignments,
+    collection_display, collection_type, has_unaliased_collections_abc_set_import,
 };
+use crate::code_lint::ast::{AstNode, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
+use crate::code_lint::policy::replacements_by_shape;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
@@ -12,6 +15,9 @@ use crate::rule_declaration::{
 };
 use ast_grep_language::SupportLang;
 use std::path::Path;
+
+/// The builtin mapping, which a `Mapping` annotation already makes read-only to type checkers.
+const DICT: &str = "dict";
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Module constant `{name}` has mutable collection type `{token}`.",
@@ -104,21 +110,92 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
+    let abc_set_imported = has_unaliased_collections_abc_set_import(file);
     let mut diagnostics = Vec::new();
-    for constant in collect_mutable_module_constants(file) {
-        let token = constant.matched_types.join(", ");
-        let replacement = immutable_constant_collection_replacements(&constant.matched_types);
+    for assignment in collect_module_assignments(file) {
+        let is_dunder = assignment.name.starts_with("__") && assignment.name.ends_with("__");
+        if is_dunder || !assignment.is_constant() {
+            continue;
+        }
+        let Some((target_node, matched)) = mutable_collections(&assignment, abc_set_imported)
+        else {
+            continue;
+        };
+        let token = PythonCollectionType::joined_paths(&matched);
+        let replacement = replacements_by_shape(&matched, |shape| match shape {
+            CollectionShape::Mapping => "frozendict",
+            CollectionShape::Set => "frozenset",
+            CollectionShape::Sequence | CollectionShape::Iterable => "tuple",
+        });
         diagnostics.push(rule.diagnostic_at_node(
             path,
-            &constant.target_node,
+            target_node,
             &[
-                ("name", &constant.name),
+                ("name", &assignment.name),
                 ("token", &token),
                 ("replacement", &replacement),
             ],
         ));
     }
     diagnostics
+}
+
+/// The node to report and the mutable collection types of `assignment`: those of its annotation,
+/// or else the collection its value builds.
+fn mutable_collections<'tree, 'assignment>(
+    assignment: &'assignment PythonModuleAssignment<'tree>,
+    abc_set_imported: bool,
+) -> Option<(&'assignment AstNode<'tree>, Vec<PythonCollectionType>)> {
+    if let Some(annotation) = &assignment.annotation {
+        let matched: Vec<_> = collect_collection_types(
+            annotation,
+            AnnotationTraversalDepth::CovariantPositions,
+            abc_set_imported,
+        )
+        .into_iter()
+        .filter(|collection_type| {
+            matches!(
+                collection_type.kind,
+                CollectionKind::ConcreteMutable | CollectionKind::AbstractMutable
+            )
+        })
+        .collect();
+        if !matched.is_empty() {
+            return Some((annotation, matched));
+        }
+    }
+    let value = assignment.value.as_ref()?;
+    let built = collection_display(value).or_else(|| {
+        call_callee(value)
+            .and_then(|callee| collection_type(&callee, abc_set_imported))
+            .filter(is_runtime_mutable_collection_constructor)
+    })?;
+    let is_read_only_mapping = assignment.annotation.as_ref().is_some_and(|annotation| {
+        collect_collection_types(
+            annotation,
+            AnnotationTraversalDepth::TransparentWrappersOnly,
+            abc_set_imported,
+        )
+        .iter()
+        .any(|collection_type| collection_type.name == "Mapping")
+    });
+    if is_read_only_mapping && built.name == DICT {
+        return None;
+    }
+    Some((value, vec![built]))
+}
+
+/// Returns true if `constructed` is called at runtime to build a mutable collection: `list`,
+/// `dict`, `set` (optionally `builtins.`-qualified) or the `collections` containers `defaultdict`,
+/// `deque`, `Counter`, `OrderedDict` (optionally `collections.`-qualified).
+fn is_runtime_mutable_collection_constructor(constructed: &PythonCollectionType) -> bool {
+    let (path, name) = (constructed.path.as_str(), constructed.name.as_str());
+    let qualifier = match name {
+        "list" | DICT | "set" => "builtins.",
+        "defaultdict" | "deque" | "Counter" | "OrderedDict" => "collections.",
+        _ => return false,
+    };
+    path == name || path.strip_suffix(name) == Some(qualifier)
 }
 
 #[cfg(test)]

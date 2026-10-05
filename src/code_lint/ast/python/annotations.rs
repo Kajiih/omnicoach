@@ -253,10 +253,10 @@ pub enum CollectionShape {
     Iterable,
 }
 
-/// A standard-library collection type constructor in a type annotation.
+/// A standard-library collection type, as named in source or built by a display.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PythonCollectionType {
-    /// The constructor as written (`list`, `typing.Dict`, `collections.abc.Sequence`).
+    /// The type as written (`list`, `typing.Dict`, `collections.abc.Sequence`).
     pub path: String,
     /// The constructor's unqualified name (`list`, `Dict`, `Sequence`).
     pub name: String,
@@ -452,34 +452,44 @@ pub fn collect_collection_types(
         .collect()
 }
 
-/// Formats deduplicated collection replacements for `type_paths`, mapping dictionary-like types
-/// to `mapping`, set-like types to `set`, and sequence-like types to `sequence`.
-fn format_collection_replacements(
-    type_paths: &[String],
-    mapping: &'static str,
-    set: &'static str,
-    sequence: &'static str,
-) -> String {
-    let mut replacements: Vec<&str> = Vec::new();
-    for type_path in type_paths {
-        let terminal = type_path.rsplit('.').next().unwrap_or(type_path);
-        let replacement = match terminal {
-            "dict" | "Dict" | "defaultdict" | "DefaultDict" | "Counter" | "OrderedDict"
-            | "MutableMapping" => mapping,
-            "set" | "Set" | "MutableSet" => set,
-            _ => sequence,
-        };
-        if !replacements.contains(&replacement) {
-            replacements.push(replacement);
-        }
+/// The standard-library collection type that `expression` (an identifier or a dotted attribute,
+/// such as the callee of `deque()` or `collections.Counter()`) names.
+///
+/// With `abc_set_imported`, unqualified `Set` is `collections.abc.Set` rather than `typing.Set`.
+#[must_use]
+pub fn collection_type(
+    expression: &AstNode<'_>,
+    abc_set_imported: bool,
+) -> Option<PythonCollectionType> {
+    if !matches!(expression.raw.kind().as_ref(), "identifier" | "attribute") {
+        return None;
     }
-    replacements.join(", ")
+    let (path, name) = resolve_path_and_terminal_raw(&expression.raw);
+    let (kind, shape) = classify_collection(&path, &name, abc_set_imported)?;
+    Some(PythonCollectionType {
+        path,
+        name,
+        kind,
+        shape,
+    })
 }
 
-/// Returns the immutable constant collection replacements for `type_paths`, joined with `", "`.
+/// The builtin collection that `expression` builds if it is a list, set or dictionary display
+/// (`[...]`, `{a, b}`, `{k: v}`) or comprehension.
 #[must_use]
-pub fn immutable_constant_collection_replacements(type_paths: &[String]) -> String {
-    format_collection_replacements(type_paths, "frozendict", "frozenset", "tuple")
+pub fn collection_display(expression: &AstNode<'_>) -> Option<PythonCollectionType> {
+    let (name, shape) = match expression.raw.kind().as_ref() {
+        "list" | "list_comprehension" => ("list", CollectionShape::Sequence),
+        "set" | "set_comprehension" => ("set", CollectionShape::Set),
+        "dictionary" | "dictionary_comprehension" => ("dict", CollectionShape::Mapping),
+        _ => return None,
+    };
+    Some(PythonCollectionType {
+        path: name.to_owned(),
+        name: name.to_owned(),
+        kind: CollectionKind::ConcreteMutable,
+        shape,
+    })
 }
 
 /// Returns true if `(path, terminal)` is a concrete or abstract collection type constructor
