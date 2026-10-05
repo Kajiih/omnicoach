@@ -492,20 +492,35 @@ pub fn collection_display(expression: &AstNode<'_>) -> Option<PythonCollectionTy
     })
 }
 
-/// Returns true if `(path, terminal)` is a concrete or abstract collection type constructor
-/// (excluding `tuple` / `Tuple`, which requires variadic-vs-fixed arity inspection when subscripted).
-fn is_non_tuple_collection_constructor(path: &str, terminal: &str) -> bool {
-    !matches!(terminal, "tuple" | "Tuple") && classify_collection(path, terminal, false).is_some()
+/// Decomposes a generic type annotation or subscript into `(base_type_node, type_arguments)`.
+#[must_use]
+pub fn extract_generic_type<'a>(node: &AstNode<'a>) -> Option<(AstNode<'a>, Vec<AstNode<'a>>)> {
+    let unwrapped = unwrap_type_and_parens(&node.raw)?;
+    let (base, args) = extract_generic_base_and_args(&unwrapped)?;
+    Some((
+        AstNode::from_raw(base),
+        args.into_iter().map(AstNode::from_raw).collect(),
+    ))
 }
 
-/// Returns true if `node` (unwrapping `type` and `parenthesized_expression`) is an `ellipsis` (`...`).
-fn is_ellipsis_type_arg(node: &RawNode<'_>) -> bool {
-    unwrap_type_and_parens(node).is_some_and(|inner| inner.kind() == "ellipsis")
+/// A Python return type flattened across union constructs (`|`, `Union[...]`, `Optional[...]`),
+/// with async envelopes (`Awaitable`, `Coroutine`) and metadata wrappers (`Annotated`) unwrapped.
+#[derive(Clone)]
+pub struct PythonReturnTypeUnion<'a> {
+    /// True if `None` (`none`) or an `Optional[...]` wrapper is part of the union.
+    pub has_none: bool,
+    /// The non-`None` alternative branches in source order.
+    pub branches: Vec<AstNode<'a>>,
 }
 
 /// Unwraps outer return-annotation envelopes (`type`, `parenthesized_expression`,
 /// `Annotated[T, ...]`, `Awaitable[T]`, and `Coroutine[YieldT, SendT, ReturnT]`).
-fn unwrap_return_envelope<'a>(node: &RawNode<'a>) -> RawNode<'a> {
+#[must_use]
+pub fn unwrap_return_envelope<'a>(type_node: &AstNode<'a>) -> AstNode<'a> {
+    AstNode::from_raw(unwrap_return_envelope_raw(&type_node.raw))
+}
+
+fn unwrap_return_envelope_raw<'a>(node: &RawNode<'a>) -> RawNode<'a> {
     let mut current = node.clone();
     loop {
         let Some(unwrapped) = unwrap_type_and_parens(&current) else {
@@ -596,84 +611,16 @@ fn collect_union_branches<'a>(
     }
 }
 
-/// Returns the collection type constructor path (e.g. `"Sequence"`, `"list"`, `"tuple"`) if
-/// `branch` is a collection type, or `None` otherwise.
-fn collection_branch_type_path(branch: &RawNode<'_>) -> Option<String> {
-    match branch.kind().as_ref() {
-        "identifier" | "attribute" => {
-            let (path, terminal) = resolve_path_and_terminal_raw(branch);
-            if is_non_tuple_collection_constructor(&path, &terminal)
-                || is_std_type_constructor(&path, &terminal, &["tuple", "Tuple"])
-            {
-                Some(path)
-            } else {
-                None
-            }
-        }
-        "generic_type" | "subscript" => {
-            let (base_node, type_args) = extract_generic_base_and_args(branch)?;
-            let (base_path, base_terminal) = resolve_path_and_terminal_raw(&base_node);
-            let is_variadic_tuple =
-                is_std_type_constructor(&base_path, &base_terminal, &["tuple", "Tuple"])
-                    && type_args.len() == 2
-                    && is_ellipsis_type_arg(&type_args[1]);
-            if is_non_tuple_collection_constructor(&base_path, &base_terminal) || is_variadic_tuple
-            {
-                Some(base_path)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
-/// Collects collection type constructors from a nullable collection return annotation.
+/// Flattens `return_type_node` across union constructs (`|`, `Union[...]`, `Optional[...]`)
+/// after unwrapping outer async and metadata envelopes (`Awaitable`, `Coroutine`, `Annotated`).
 #[must_use]
-pub fn collect_nullable_collection_return_types(type_node: &AstNode<'_>) -> Vec<String> {
-    let root = unwrap_return_envelope(&type_node.raw);
+pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnTypeUnion<'a> {
+    let unwrapped = unwrap_return_envelope_raw(&return_type_node.raw);
     let mut has_none = false;
     let mut branches = Vec::new();
-    collect_union_branches(&root, &mut has_none, &mut branches);
-
-    if !has_none || branches.is_empty() {
-        return Vec::new();
+    collect_union_branches(&unwrapped, &mut has_none, &mut branches);
+    PythonReturnTypeUnion {
+        has_none,
+        branches: branches.into_iter().map(AstNode::from_raw).collect(),
     }
-
-    let mut matched = Vec::new();
-    for branch in &branches {
-        let Some(type_path) = collection_branch_type_path(branch) else {
-            return Vec::new();
-        };
-        if !matched.contains(&type_path) {
-            matched.push(type_path);
-        }
-    }
-    matched
-}
-
-/// Collects all non-exempt Python function/method return annotations in `file` that wrap a
-/// collection type in `| None` or `Optional`.
-#[must_use]
-pub fn collect_nullable_collection_returns(
-    file: &ParsedFile,
-) -> Vec<super::NullableCollectionReturn<'_>> {
-    let mut out = Vec::new();
-    for signature in super::extract_function_signatures(file) {
-        if signature.is_exempt_from_signature_rules() {
-            continue;
-        }
-        let Some(return_type_node) = signature.return_type_node else {
-            continue;
-        };
-        let collection_types = collect_nullable_collection_return_types(&return_type_node);
-        if !collection_types.is_empty() {
-            out.push(super::NullableCollectionReturn {
-                return_type_node,
-                function_name: signature.name,
-                collection_types,
-            });
-        }
-    }
-    out
 }

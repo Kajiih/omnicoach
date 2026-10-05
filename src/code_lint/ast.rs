@@ -521,27 +521,6 @@ pub fn enclosing_non_exempt_function_name(
     nearest_function_name
 }
 
-/// A function or method return type annotation that wraps a collection type in `None` or `Option`.
-pub struct NullableCollectionReturn<'a> {
-    /// The return type annotation node (`Sequence[str] | None`, `Option<Vec<String>>`).
-    pub return_type_node: AstNode<'a>,
-    /// Name of the function or method owning the return annotation.
-    pub function_name: String,
-    /// Matched collection type constructors (such as `["Sequence"]`, `["Vec"]`, `["[u8]"]`).
-    pub collection_types: Vec<String>,
-}
-
-/// Collects all non-exempt function/method return annotations in `file` that wrap a collection
-/// type in `| None` / `Optional` (Python) or `Option<...>` (Rust).
-#[must_use]
-pub fn collect_nullable_collection_returns(file: &ParsedFile) -> Vec<NullableCollectionReturn<'_>> {
-    dispatch_lang!(
-        file.lang(),
-        collect_nullable_collection_returns(file),
-        Vec::new()
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

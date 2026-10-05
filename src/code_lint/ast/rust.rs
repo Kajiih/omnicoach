@@ -3,9 +3,8 @@
 // omni:disable-file [repeated-literal] -- Tree-sitter node kinds and field names (see ROADMAP)
 
 use crate::code_lint::ast::{
-    AstNode, LiteralOccurrence, LiteralRole, LiteralValue, NullableCollectionReturn, ParsedFile,
-    PositionalRead, RawNode, ScopePositionalReads, delimited_string_parts, parse_float_literal,
-    parse_integer_literal,
+    AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, PositionalRead, RawNode,
+    ScopePositionalReads, delimited_string_parts, parse_float_literal, parse_integer_literal,
 };
 
 /// Returns true for Rust node kinds that hold statements as direct children.
@@ -1490,41 +1489,52 @@ fn unwrap_rust_pointer_wrappers<'a>(node: &RawNode<'a>) -> RawNode<'a> {
     current
 }
 
-/// Returns true if `(path, terminal)` is a standard Rust collection type constructor (`Vec`,
-/// `VecDeque`, `LinkedList`, `HashMap`, `BTreeMap`, `HashSet`, `BTreeSet`, `BinaryHeap`).
-fn is_rust_collection_constructor(path: &str, terminal: &str) -> bool {
-    if !matches!(
-        terminal,
-        "Vec"
-            | "VecDeque"
-            | "LinkedList"
-            | "HashMap"
-            | "BTreeMap"
-            | "HashSet"
-            | "BTreeSet"
-            | "BinaryHeap"
-    ) {
-        return false;
-    }
-    path == terminal
-        || path.strip_suffix(terminal).is_some_and(|prefix| {
-            matches!(
-                prefix,
-                "vec::"
-                    | "std::vec::"
-                    | "alloc::vec::"
-                    | "collections::"
-                    | "std::collections::"
-                    | "alloc::collections::"
-            )
-        })
+/// A Rust function or method item.
+#[derive(Clone)]
+pub struct RustFunction<'a> {
+    /// Function identifier name.
+    pub name: String,
+    /// Function item AST node.
+    pub node: AstNode<'a>,
+    /// Declared return type annotation node, if present (`-> T`).
+    pub return_type: Option<AstNode<'a>>,
+    /// True if the function is inside a `trait` declaration or an `impl Trait for Type` block.
+    pub is_trait_or_trait_impl: bool,
 }
 
-/// If `return_type_node` (or the `Ok` / `Ready` payload inside `Result` / `Poll`) is
-/// `Option<Collection>`, returns the matched collection type constructor or slice type text.
-fn extract_rust_nullable_collection_type(return_type_node: &RawNode<'_>) -> Option<String> {
-    let unwrapped_envelope = unwrap_rust_return_envelope(return_type_node);
-    let (option_base, option_args) = extract_rust_generic_base_and_args(&unwrapped_envelope)?;
+/// Collects all function and method definitions in `file`, in source order.
+#[must_use]
+pub fn collect_functions(file: &ParsedFile) -> Vec<RustFunction<'_>> {
+    let mut out = Vec::new();
+    for node in file.grep.root().dfs() {
+        if node.kind() != "function_item" {
+            continue;
+        }
+        let Some(name_node) = node.field("name") else {
+            continue;
+        };
+        let is_trait_or_trait_impl = is_trait_or_trait_impl_function(&node);
+        out.push(RustFunction {
+            name: name_node.text().trim().to_owned(),
+            return_type: node.field("return_type").map(AstNode::from_raw),
+            is_trait_or_trait_impl,
+            node: AstNode::from_raw(node),
+        });
+    }
+    out
+}
+
+/// Unwraps outer `Result<T, ...>` and `Poll<T>` return type envelopes from `node`.
+#[must_use]
+pub fn unwrap_return_envelope<'a>(node: &AstNode<'a>) -> AstNode<'a> {
+    AstNode::from_raw(unwrap_rust_return_envelope(&node.raw))
+}
+
+/// If `node` is `Option<T>` (unqualified, `std::option::Option`, or `core::option::Option`),
+/// returns the inner type node `T`.
+#[must_use]
+pub fn extract_option_payload<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
+    let (option_base, option_args) = extract_rust_generic_base_and_args(&node.raw)?;
     let (option_path, option_terminal) = resolve_rust_type_path(&option_base)?;
     if option_terminal != "Option"
         || !matches!(
@@ -1535,17 +1545,38 @@ fn extract_rust_nullable_collection_type(return_type_node: &RawNode<'_>) -> Opti
     {
         return None;
     }
+    Some(AstNode::from_raw(option_args.into_iter().next()?))
+}
 
-    let inner = unwrap_rust_pointer_wrappers(&option_args[0]);
-    match inner.kind().as_ref() {
-        "slice_type" => Some(inner.text().trim().to_owned()),
-        "array_type" if inner.field("length").is_none() => Some(inner.text().trim().to_owned()),
-        "generic_type" => {
-            let (base_node, _) = extract_rust_generic_base_and_args(&inner)?;
-            let (base_path, base_terminal) = resolve_rust_type_path(&base_node)?;
-            is_rust_collection_constructor(&base_path, &base_terminal)
-                .then(|| compact_path_text(base_node.text().as_ref()))
-        }
+/// Unwraps transparent borrow and smart-pointer wrappers (`&T`, `&mut T`, `Box<T>`, `Rc<T>`,
+/// `Arc<T>`, `Cow<'_, T>`) around a Rust type node.
+#[must_use]
+pub fn unwrap_pointer_wrappers<'a>(node: &AstNode<'a>) -> AstNode<'a> {
+    AstNode::from_raw(unwrap_rust_pointer_wrappers(&node.raw))
+}
+
+/// Extracts `(base_node, type_argument_nodes)` from a Rust `generic_type` node.
+#[must_use]
+pub fn extract_generic_type<'a>(node: &AstNode<'a>) -> Option<(AstNode<'a>, Vec<AstNode<'a>>)> {
+    let (base, args) = extract_rust_generic_base_and_args(&node.raw)?;
+    Some((
+        AstNode::from_raw(base),
+        args.into_iter().map(AstNode::from_raw).collect(),
+    ))
+}
+
+/// Resolves a Rust type path node to its `(full_path, terminal_identifier)`.
+#[must_use]
+pub fn resolve_type_path(node: &AstNode<'_>) -> Option<(String, String)> {
+    resolve_rust_type_path(&node.raw)
+}
+
+/// Extracts the slice type representation if `node` represents a Rust slice or unsized array (e.g. `[T]`).
+#[must_use]
+pub fn extract_slice_type(node: &AstNode<'_>) -> Option<String> {
+    match node.raw.kind().as_ref() {
+        "slice_type" => Some(node.text().trim().to_owned()),
+        "array_type" if node.raw.field("length").is_none() => Some(node.text().trim().to_owned()),
         _ => None,
     }
 }
@@ -1563,40 +1594,6 @@ fn is_trait_or_trait_impl_function(func_node: &RawNode<'_>) -> bool {
     };
     enclosing_item.kind() == "trait_item"
         || (enclosing_item.kind() == "impl_item" && enclosing_item.field("trait").is_some())
-}
-
-/// Collects all non-exempt Rust function/method return types in `file` that wrap a collection
-/// type in `Option<...>`.
-#[must_use]
-pub fn collect_nullable_collection_returns(file: &ParsedFile) -> Vec<NullableCollectionReturn<'_>> {
-    let test_ranges = collect_inline_test_ranges(file);
-    let mut out = Vec::new();
-    for node in file.grep.root().dfs() {
-        if node.kind() != "function_item" {
-            continue;
-        }
-        let start_offset = node.range().start;
-        if test_ranges
-            .iter()
-            .any(|range| range.contains(&start_offset))
-            || is_trait_or_trait_impl_function(&node)
-        {
-            continue;
-        }
-        let (Some(name_node), Some(return_type_node)) =
-            (node.field("name"), node.field("return_type"))
-        else {
-            continue;
-        };
-        if let Some(collection_type) = extract_rust_nullable_collection_type(&return_type_node) {
-            out.push(NullableCollectionReturn {
-                return_type_node: AstNode::from_raw(return_type_node),
-                function_name: name_node.text().trim().to_owned(),
-                collection_types: vec![collection_type],
-            });
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -1864,28 +1861,66 @@ mod tests {
         assert!(collect_literal_occurrences(&file).is_empty());
     }
 
+    #[test]
+    fn test_collect_functions_rust() {
+        let source = indoc::indoc! {r"
+            fn free_fn() -> Option<u32> { None }
+            trait T {
+                fn trait_fn(&self) {}
+            }
+            impl T for S {
+                fn trait_fn(&self) {}
+            }
+            impl S {
+                fn inherent_method(&self) -> Vec<u8> { Vec::new() }
+            }
+        "};
+        let file = ParsedFile::rust(source);
+        let functions = collect_functions(&file);
+        let actual: Vec<_> = functions
+            .iter()
+            .map(|func| {
+                (
+                    func.name.as_str(),
+                    func.return_type
+                        .as_ref()
+                        .map(|ret_type| ret_type.text().to_string()),
+                    func.is_trait_or_trait_impl,
+                )
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            &[
+                ("free_fn", Some("Option<u32>".to_owned()), false),
+                ("trait_fn", None, true),
+                ("trait_fn", None, true),
+                ("inherent_method", Some("Vec<u8>".to_owned()), false),
+            ]
+        );
+    }
+
     #[rstest::rstest]
-    #[case::option_vec("fn f() -> Option<Vec<String>> { None }", &[("f", "Vec")])]
-    #[case::option_slice("fn f(s: &[u8]) -> Option<&[u8]> { None }", &[("f", "[u8]")])]
-    #[case::option_fixed_array_ignored("fn f() -> Option<[u8; 4]> { None }", &[])]
-    #[case::result_option_hashmap(
-        "fn f() -> anyhow::Result<Option<std::collections::HashMap<String, i32>>> { Ok(None) }",
-        &[("f", "std::collections::HashMap")]
+    #[case::bare_option("fn f() -> Option<Vec<u8>> { None }", "Vec<u8>", "Vec<u8>")]
+    #[case::result_option(
+        "fn f() -> Result<Option<String>, ()> { Ok(None) }",
+        "String",
+        "String"
     )]
-    #[case::trait_impl_ignored("impl Iterator for S { type Item = Vec<u8>; fn next(&mut self) -> Option<Vec<u8>> { None } }", &[])]
-    fn test_collect_nullable_collection_returns_rust(
+    #[case::borrowed_slice("fn f() -> Option<&'a [u8]> { None }", "&'a [u8]", "[u8]")]
+    #[case::boxed_slice("fn f() -> Option<Box<[u8]>> { None }", "Box<[u8]>", "[u8]")]
+    fn test_return_type_unwrapping_rust(
         #[case] source: &str,
-        #[case] expected: &[(&str, &str)],
+        #[case] expected_payload: &str,
+        #[case] expected_unwrapped: &str,
     ) {
         let file = ParsedFile::rust(source);
-        let actual: Vec<(String, Vec<String>)> = collect_nullable_collection_returns(&file)
-            .into_iter()
-            .map(|item| (item.function_name, item.collection_types))
-            .collect();
-        let expected: Vec<(String, Vec<String>)> = expected
-            .iter()
-            .map(|(name, col)| ((*name).to_string(), vec![(*col).to_string()]))
-            .collect();
-        assert_eq!(actual, expected);
+        let functions = collect_functions(&file);
+        let return_type = functions[0].return_type.as_ref().unwrap();
+        let unwrapped_envelope = unwrap_return_envelope(return_type);
+        let payload = extract_option_payload(&unwrapped_envelope).expect("option payload");
+        assert_eq!(payload.text(), expected_payload);
+        let inner = unwrap_pointer_wrappers(&payload);
+        assert_eq!(inner.text(), expected_unwrapped);
     }
 }

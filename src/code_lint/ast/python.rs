@@ -12,9 +12,9 @@ mod strings;
 
 pub use self::annotations::{
     AnnotationTraversalDepth, CollectionKind, CollectionShape, PythonCollectionType,
-    collect_collection_types, collect_nullable_collection_return_types,
-    collect_nullable_collection_returns, collection_display, collection_type,
-    has_unaliased_collections_abc_set_import,
+    PythonReturnTypeUnion, collect_collection_types, collection_display, collection_type,
+    extract_generic_type, has_unaliased_collections_abc_set_import, return_type_union,
+    unwrap_return_envelope,
 };
 pub use self::classes::{
     PythonAnnotatedAttribute, PythonBaseClass, PythonClassInfo, PythonInstanceAttributeAnnotation,
@@ -45,9 +45,8 @@ use self::strings::{
     string_prefix_flags,
 };
 use crate::code_lint::ast::{
-    AstNode, LiteralOccurrence, LiteralRole, LiteralValue, NullableCollectionReturn, ParsedFile,
-    PositionalRead, RawNode, ScopePositionalReads, delimited_string_parts, parse_float_literal,
-    parse_integer_literal,
+    AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, PositionalRead, RawNode,
+    ScopePositionalReads, delimited_string_parts, parse_float_literal, parse_integer_literal,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -2645,25 +2644,21 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::pep604_sequence("def f() -> Sequence[int] | None: pass", &["Sequence"])]
-    #[case::optional_list("def f() -> Optional[list[int]]: pass", &["list"])]
-    #[case::union_mapping("def f() -> typing.Union[typing.Mapping[str, int], None]: pass", &["typing.Mapping"])]
-    #[case::deduplicated_branches("def f() -> list[int] | list[str] | None: pass", &["list"])]
-    #[case::multiple_collection_branches("def f() -> list[int] | set[str] | None: pass", &["list", "set"])]
-    #[case::variadic_tuple("def f() -> tuple[int, ...] | None: pass", &["tuple"])]
-    #[case::bare_tuple("def f() -> tuple | None: pass", &["tuple"])]
-    #[case::fixed_pair_tuple_ignored("def f() -> tuple[int, str] | None: pass", &[])]
-    #[case::single_element_tuple_ignored("def f() -> tuple[int] | None: pass", &[])]
-    #[case::mixed_scalar_and_collection_ignored("def f() -> str | Sequence[str] | None: pass", &[])]
-    #[case::inner_nullable_element_ignored("def f() -> Sequence[int | None]: pass", &[])]
-    #[case::annotated_branch_unwrapped("def f() -> Annotated[Sequence[int], 'meta'] | None: pass", &["Sequence"])]
-    #[case::awaitable_coroutine_envelopes_unwrapped(
-        "def f() -> Awaitable[Coroutine[Any, Any, MutableMapping[str, int] | None]]: pass",
-        &["MutableMapping"]
+    #[case::simple_union("def f() -> str | int: pass", false, &["str", "int"])]
+    #[case::optional_shorthand("def f() -> Optional[list[int]]: pass", true, &["list[int]"])]
+    #[case::pep604_none("def f() -> Sequence[str] | None: pass", true, &["Sequence[str]"])]
+    #[case::none_first("def f() -> None | set[int]: pass", true, &["set[int]"])]
+    #[case::multiple_branches_with_none("def f() -> list[int] | set[str] | None: pass", true, &["list[int]", "set[str]"])]
+    #[case::awaitable_coroutine_envelopes(
+        "def f() -> Awaitable[Coroutine[Any, Any, Mapping[str, int] | None]]: pass",
+        true,
+        &["Mapping[str, int]"]
     )]
-    fn test_collect_nullable_collection_return_types(
+    #[case::annotated_wrapper("def f() -> Annotated[tuple[int, ...] | None, 'meta']: pass", true, &["tuple[int, ...]"])]
+    fn test_return_type_union(
         #[case] source: &str,
-        #[case] expected: &[&str],
+        #[case] expected_has_none: bool,
+        #[case] expected_branches: &[&str],
     ) {
         let file = ParsedFile::new(source, SupportLang::Python);
         let signatures = extract_function_signatures(&file);
@@ -2671,10 +2666,22 @@ mod tests {
             .return_type_node
             .as_ref()
             .expect("function should have return annotation");
-        assert_eq!(
-            collect_nullable_collection_return_types(return_type_node),
-            expected
-        );
+        let union = return_type_union(return_type_node);
+        assert_eq!(union.has_none, expected_has_none);
+        let branches: Vec<_> = union.branches.iter().map(AstNode::text).collect();
+        assert_eq!(branches, expected_branches);
+    }
+
+    #[test]
+    fn test_extract_generic_type() {
+        let file = ParsedFile::new("def f() -> tuple[int, ...]: pass", SupportLang::Python);
+        let signatures = extract_function_signatures(&file);
+        let return_type_node = signatures[0].return_type_node.as_ref().unwrap();
+        let (base, args) = extract_generic_type(return_type_node).expect("generic type");
+        assert_eq!(base.text(), "tuple");
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0].text(), "int");
+        assert_eq!(args[1].text(), "...");
     }
 
     #[rstest::rstest]
