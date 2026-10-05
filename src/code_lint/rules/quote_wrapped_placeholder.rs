@@ -14,12 +14,6 @@ use crate::rule_declaration::{
 use ast_grep_language::SupportLang;
 use std::path::Path;
 
-/// Uppercase SQL statement keywords that mark a string as a SQL query rather than prose.
-const SQL_STATEMENT_KEYWORDS: &[&str] = &[
-    "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "WITH", "REPLACE", "MERGE",
-    "PRAGMA", "EXPLAIN", "TRUNCATE", "GRANT", "REVOKE", "WHERE",
-];
-
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Format placeholder `{expression}` is wrapped in literal quotes.",
     rationale: "Manual quotes around a string-formatted value do not escape embedded quotes or control characters and make non-string values such as `None` or numbers indistinguishable from strings.",
@@ -54,9 +48,9 @@ pub const RULE: CodeRule = CodeRule {
                            carry a conversion flag (`!r`, `!s`, `!a`), format specifier (`:...`), \
                            or debug `=`, non-`%s` printf specifiers (`%r`, `%d`, `%.2f`), \
                            isolated quoted placeholders without surrounding prose \
-                           (`f\"'{value}'\"`), and structured syntax (HTML attributes, SQL \
-                           queries, JSON or TOML fragments, `key=\"value\"` flags, and backtick \
-                           code spans) are not flagged.",
+                           (`f\"'{value}'\"`), and structured syntax (HTML attributes, JSON or \
+                           TOML fragments, `key=\"value\"` flags, and backtick code spans) are \
+                           not flagged.",
             why_is_this_bad: "Wrapping a default string placeholder in manual quotes fails when \
                               the runtime value contains the same quote character (`Invalid \
                               value 'can't'`) or control characters such as newlines and tabs, \
@@ -243,21 +237,11 @@ fn strip_escape_sequences(text: &str) -> String {
 }
 
 /// Returns true if `literal_text` contains at least one prose word ($\ge 2$ consecutive ASCII
-/// letters) and does not start with an uppercase SQL statement keyword.
+/// letters).
 fn is_prose_message_text(literal_text: &str) -> bool {
-    let cleaned = strip_escape_sequences(literal_text);
-    let has_word = cleaned
+    strip_escape_sequences(literal_text)
         .split(|character: char| !character.is_ascii_alphabetic())
-        .any(|word| word.len() >= 2);
-    if !has_word {
-        return false;
-    }
-    let first_word = cleaned
-        .trim_start_matches(|character: char| character.is_ascii_whitespace() || character == '(')
-        .split(|character: char| !character.is_ascii_alphabetic())
-        .next()
-        .unwrap_or_default();
-    !SQL_STATEMENT_KEYWORDS.contains(&first_word)
+        .any(|word| word.len() >= 2)
 }
 
 /// Extracted quote pair surrounding a placeholder, together with the text before the opening
@@ -502,11 +486,6 @@ crate::test_utils::rule_test!(
                 html_and_xml_attributes => r#"
                     link = f'<a href="{url}" title=\'{title}\'>Click here</a>'
                 "#,
-                sql_queries => r#"
-                    select_query = f"SELECT * FROM accounts WHERE username = '{username}'"
-                    insert_query = f"INSERT INTO accounts VALUES ('{username}')"
-                    like_query = f"SELECT * FROM accounts WHERE username LIKE '{pattern}'"
-                "#,
                 json_toml_and_key_value_syntax => r#"
                     json_text = f'{{"username": "{username}"}}'
                     toml_text = f'mode = "{mode}"'
@@ -620,6 +599,9 @@ crate::test_utils::rule_test!(
                         f"'{service_name}'"
                     )
                 "# => r#"f"'{service_name}'""#,
+                sql_query_not_special_cased => r#"
+                    query = f"SELECT * FROM accounts WHERE username LIKE '{pattern}'"
+                "# => r#"f"SELECT * FROM accounts WHERE username LIKE '{pattern}'""#,
             ],
         },
     }
