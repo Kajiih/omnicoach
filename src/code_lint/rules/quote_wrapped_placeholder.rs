@@ -37,7 +37,7 @@ pub const RULE: CodeRule = CodeRule {
             summary: "Flags Python format placeholders wrapped in literal single or double quotes.",
             what_it_does: "Flags bare string-formatted placeholders wrapped in matching single or \
                            double quotes (`'{x}'`, `\"{x}\"`, `'{}'`, `'{0}'`, `'%s'`, `'%(name)s'`) \
-                           inside human-readable Python format strings across all files, tests \
+                           inside Python format strings across all files, tests \
                            included. Three formatting contexts are inspected: f-strings \
                            (`f\"...\"`), strings formatted via `.format(...)` or \
                            `.format_map(...)` (or `str.format(...)`), and strings formatted via \
@@ -47,10 +47,8 @@ pub const RULE: CodeRule = CodeRule {
                            (`r\"...\"`), byte strings (`b\"...\"`), placeholders that already \
                            carry a conversion flag (`!r`, `!s`, `!a`), format specifier (`:...`), \
                            or debug `=`, non-`%s` printf specifiers (`%r`, `%d`, `%.2f`), \
-                           isolated quoted placeholders without surrounding prose \
-                           (`f\"'{value}'\"`), and structured syntax (HTML attributes, JSON or \
-                           TOML fragments, `key=\"value\"` flags, and backtick code spans) are \
-                           not flagged.",
+                           and structured syntax (HTML attributes, JSON or TOML fragments, \
+                           `key=\"value\"` flags, and backtick code spans) are not flagged.",
             why_is_this_bad: "Wrapping a default string placeholder in manual quotes fails when \
                               the runtime value contains the same quote character (`Invalid \
                               value 'can't'`) or control characters such as newlines and tabs, \
@@ -97,9 +95,6 @@ pub const RULE: CodeRule = CodeRule {
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for format_string in collect_format_strings(file) {
-        if !is_prose_message_text(&format_string.literal_text) {
-            continue;
-        }
         for (index, placeholder) in format_string.placeholders.iter().enumerate() {
             let Some((body, replacement)) = repr_replacement(format_string.style, placeholder)
             else {
@@ -234,14 +229,6 @@ fn strip_escape_sequences(text: &str) -> String {
         }
     }
     cleaned
-}
-
-/// Returns true if `literal_text` contains at least one prose word ($\ge 2$ consecutive ASCII
-/// letters).
-fn is_prose_message_text(literal_text: &str) -> bool {
-    strip_escape_sequences(literal_text)
-        .split(|character: char| !character.is_ascii_alphabetic())
-        .any(|word| word.len() >= 2)
 }
 
 /// Extracted quote pair surrounding a placeholder, together with the text before the opening
@@ -491,10 +478,6 @@ crate::test_utils::rule_test!(
                     toml_text = f'mode = "{mode}"'
                     cli_flag = f'--output="{output_path}"'
                 "#,
-                isolated_quote_wrapping => r#"
-                    double_quoted = f'"{value}"'
-                    single_quoted = f"'{value}'"
-                "#,
                 placeholder_inside_markdown_backticks => r#"
                     hint = f"Set `mode = '{mode}'` in the configuration file"
                     token_hint = f"Expected `'{token}'` in the input stream"
@@ -517,16 +500,24 @@ crate::test_utils::rule_test!(
                 spaced_non_identifier_braces_in_str_format => r#"
                     spaced = "Invalid '{ name }' in input".format()
                 "#,
-                isolated_str_format_and_printf => r#"
-                    format_only = "'{value}'".format(value=x)
-                    printf_only = "'%(name)s'" % {"name": x}
-                "#,
                 concatenated_flag_and_backtick_prefix_in_fstring => r#"
                     flag = "Pass --output=" f"'{output_path}'"
                     code = "Run `mode = " f"'{mode}'` in config"
                 "#,
             ],
             fail: [
+                isolated_fstring_single_quotes => r#"
+                    labels = ", ".join(f"'{name}'" for name in names)
+                "# => r#"f"'{name}'""#,
+                isolated_fstring_double_quotes => r#"
+                    label = f'"{value}"'
+                "# => r#"f'"{value}"'"#,
+                isolated_str_format => r#"
+                    label = "'{value}'".format(value=x)
+                "# => r#""'{value}'""#,
+                isolated_printf => r#"
+                    label = "'%(name)s'" % {"name": x}
+                "# => r#""'%(name)s'""#,
                 fstring_single_quotes => r#"
                     message = f"Invalid value '{value}' in input"
                 "# => r#"f"Invalid value '{value}' in input""#,

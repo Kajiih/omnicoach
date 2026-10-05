@@ -4,9 +4,9 @@
 // omni:disable-file [repeated-literal] -- Tree-sitter node kinds and field names (see ROADMAP)
 
 use super::{
-    AstNode, ParsedFile, RawNode, append_string_literal_segments, delimited_string_parts,
-    extract_logger_call, fstring_segments_and_interpolations, outermost_string_expression,
-    positional_call_arguments, preceding_concatenated_literal_text, string_prefix_flags,
+    AstNode, ParsedFile, RawNode, delimited_string_parts, extract_logger_call,
+    fstring_segments_and_interpolations, outermost_string_expression, positional_call_arguments,
+    preceding_concatenated_literal_text, string_prefix_flags,
 };
 
 /// `%` conversion types accepted by printf-style formatting.
@@ -50,8 +50,6 @@ pub struct PythonFormatString<'a> {
     /// Literal text of the strings before `node` in an implicit concatenation
     /// (`"Failed for " f"'{name}'"`), without f-string fields.
     pub preceding_text: String,
-    /// Literal text of the whole implicit concatenation, without its replacement fields.
-    pub literal_text: String,
     /// Literal text around the fields of `node`: `literals[i]` precedes `placeholders[i]` and
     /// the last entry follows the last field, so there is one more literal than placeholders.
     pub literals: Vec<String>,
@@ -88,7 +86,6 @@ fn format_string<'a>(string_node: &RawNode<'a>) -> Option<PythonFormatString<'a>
         node: AstNode::from_raw(string_node.clone()),
         style,
         preceding_text: preceding_concatenated_literal_text(string_node),
-        literal_text: concatenation_literal_text(string_node, style),
         literals,
         placeholders,
     })
@@ -182,27 +179,6 @@ fn is_printf_format_target(context_root: &RawNode<'_>) -> bool {
     call.uses_printf
         && call.has_trailing_positional_args
         && call.message_node.range() == context_root.range()
-}
-
-/// Returns the literal text of the implicit concatenation enclosing `string_node` (or of
-/// `string_node` alone), without the replacement fields of `style`.
-fn concatenation_literal_text(string_node: &RawNode<'_>, style: PythonFormatStyle) -> String {
-    let mut combined = String::new();
-    if let Some(parent) = string_node
-        .parent()
-        .filter(|node| node.kind() == "concatenated_string")
-    {
-        for child in parent.children().filter(|child| child.kind() == "string") {
-            append_string_literal_segments(&child, &mut combined);
-        }
-    } else {
-        append_string_literal_segments(string_node, &mut combined);
-    }
-    match style {
-        PythonFormatStyle::FString => combined,
-        PythonFormatStyle::StrFormat => split_brace_fields(&combined).0.concat(),
-        PythonFormatStyle::Printf => split_printf_fields(&combined).0.concat(),
-    }
 }
 
 /// Describes an f-string `interpolation` node.
