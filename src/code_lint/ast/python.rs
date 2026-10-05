@@ -29,7 +29,10 @@ pub use self::functions::{
     extract_parameters, find_nested_functions, has_override_decorator, is_trait_impl_member,
 };
 pub use self::logging::{PythonLoggerCall, collect_logger_calls};
-pub use self::scopes::{ForwardCall, collect_bindings, collect_forward_calls};
+pub use self::scopes::{
+    PythonFunctionScope, PythonScopeFunction, PythonSiblingCall, collect_bindings,
+    collect_function_scopes,
+};
 
 use self::annotations::{
     AnnotationTraversalDepth, MUTABLE_COLLECTION_ABCS, collect_type_constructors_raw,
@@ -2712,7 +2715,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_forward_calls_multiple_callees_and_cycles() {
+    fn test_collect_function_scopes_sibling_calls() {
         let source = indoc::indoc! {r"
             def orchestrate(x: int) -> int:
                 first = step_one(x)
@@ -2730,25 +2733,55 @@ mod tests {
 
             def is_odd(n: int) -> bool:
                 return False if n == 0 else is_even(n - 1)
+
+            class Greeter:
+                def greet(self) -> str:
+                    return self.name() + format_name(self)
+
+                def name(self) -> str:
+                    return 'x'
         "};
         let file = ParsedFile::new(source, SupportLang::Python);
-        let forward = collect_forward_calls(&file);
-        let summary: Vec<(&str, &str, String)> = forward
+        let scopes = collect_function_scopes(&file);
+        let summary: Vec<(bool, &str, usize, Vec<String>)> = scopes
             .iter()
-            .map(|call| {
-                (
-                    call.caller_name.as_str(),
-                    call.callee_name.as_str(),
-                    call.node.text().into_owned(),
-                )
+            .flat_map(|scope| {
+                scope.functions.iter().map(|function| {
+                    (
+                        scope.is_class,
+                        function.name.as_str(),
+                        function.definition_order,
+                        function
+                            .sibling_calls
+                            .iter()
+                            .map(|call| format!("{} at {}", call.callee_name, call.node.text()))
+                            .collect(),
+                    )
+                })
             })
             .collect();
+        let calls = |texts: &[&str]| -> Vec<String> {
+            texts.iter().map(|text| (*text).to_string()).collect()
+        };
         assert_eq!(
             summary,
             vec![
-                ("orchestrate", "step_one", "step_one(x)".to_string()),
-                ("orchestrate", "step_two", "step_two(first)".to_string()),
-                ("orchestrate", "is_even", "is_even(second)".to_string()),
+                (
+                    false,
+                    "orchestrate",
+                    0,
+                    calls(&[
+                        "step_one at step_one(x)",
+                        "step_two at step_two(first)",
+                        "is_even at is_even(second)",
+                    ])
+                ),
+                (false, "step_one", 1, calls(&[])),
+                (false, "step_two", 2, calls(&[])),
+                (false, "is_even", 3, calls(&["is_odd at is_odd(n - 1)"])),
+                (false, "is_odd", 4, calls(&["is_even at is_even(n - 1)"])),
+                (true, "greet", 0, calls(&["name at self.name()"])),
+                (true, "name", 1, calls(&[])),
             ]
         );
     }
