@@ -76,7 +76,8 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &repeated_literal::RULE,
     &mutable_module_constant::RULE,
     &inline_public_attribute_annotation::RULE,
-    &call_before_definition::RULE,
+    // Disabled pending SOTA declaration-order research (functions, methods, objects) in ROADMAP.md:
+    // &call_before_definition::RULE,
     &unmatched_logger_placeholder::RULE,
     &quote_wrapped_placeholder::RULE,
 ];
