@@ -1,8 +1,37 @@
-//! Lint policy shared by several code rules: the suggestions they make from AST facts.
+//! Lint policy shared by several consumers: the suggestions code rules make from AST facts, and
+//! the literals `repeated-literal` and the `rule_test!` harness treat as not worth naming.
 
 architecture_component!(CodeLintPolicy);
 
+use crate::code_lint::ast::LiteralValue;
 use crate::code_lint::ast::python::{CollectionShape, PythonCollectionType};
+
+/// True for literal values not worth naming.
+///
+/// These are strings shorter than 2 characters or without an alphanumeric character (a `\` and
+/// the character after it count as one non-alphanumeric character); integers -1, 0, 1, 2; floats
+/// -1.0, 0.0, 1.0, 2.0.
+#[must_use]
+pub fn is_trivial_literal(value: &LiteralValue) -> bool {
+    match value {
+        LiteralValue::Str(content) | LiteralValue::Bytes(content) => {
+            let mut units = 0_usize;
+            let mut has_alphanumeric = false;
+            let mut characters = content.chars();
+            while let Some(character) = characters.next() {
+                units += 1;
+                if character == '\\' {
+                    characters.next();
+                } else if character.is_alphanumeric() {
+                    has_alphanumeric = true;
+                }
+            }
+            units < 2 || !has_alphanumeric
+        }
+        LiteralValue::Int(value) => (-1..=2).contains(value),
+        LiteralValue::Float(bits) => [-1.0, 0.0, 1.0, 2.0].contains(&f64::from_bits(*bits)),
+    }
+}
 
 /// The read-only `collections.abc` counterparts of `collection_types`, deduplicated in order and
 /// joined with `", "`.
@@ -99,5 +128,24 @@ mod tests {
                 "{collection_types:?}"
             );
         }
+    }
+
+    #[rstest::rstest]
+    #[case::single_char(LiteralValue::Str("a".to_string()), true)]
+    #[case::delimiter(LiteralValue::Str(", ".to_string()), true)]
+    #[case::escaped_newline(LiteralValue::Str("\\n".to_string()), true)]
+    #[case::escaped_crlf(LiteralValue::Bytes("\\r\\n".to_string()), true)]
+    #[case::short_word(LiteralValue::Str("jj".to_string()), false)]
+    #[case::word_with_escape(LiteralValue::Str("a\\n".to_string()), false)]
+    #[case::small_integer(LiteralValue::Int(-1), true)]
+    #[case::integer_two(LiteralValue::Int(2), true)]
+    #[case::integer_minus_two(LiteralValue::Int(-2), false)]
+    #[case::integer_three(LiteralValue::Int(3), false)]
+    #[case::unit_float(LiteralValue::Float((-1.0_f64).to_bits()), true)]
+    #[case::float_two(LiteralValue::Float(2.0_f64.to_bits()), true)]
+    #[case::half_float(LiteralValue::Float(0.5_f64.to_bits()), false)]
+    #[case::raw_regex_class(LiteralValue::Str("\\\\s+".to_string()), false)]
+    fn test_is_trivial_literal(#[case] value: LiteralValue, #[case] expected: bool) {
+        assert_eq!(is_trivial_literal(&value), expected);
     }
 }

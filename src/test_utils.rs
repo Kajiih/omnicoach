@@ -6,6 +6,7 @@ use crate::code_lint::ast::{
     LiteralValue, ParsedFile, collect_literal_occurrences, detect_language,
 };
 use crate::code_lint::contract::CodeRule;
+use crate::code_lint::policy::is_trivial_literal;
 use crate::command_lint::contract::CommandRule;
 use crate::command_lint::vcs::JjClient;
 use crate::diagnostic::Diagnostic;
@@ -223,7 +224,7 @@ fn with_distinct_literals(code: &str, lang: SupportLang) -> Result<String, Strin
     let mut rewritten = code.to_owned();
     for occurrence in original_occurrences
         .iter()
-        .filter(|occurrence| !occurrence.value.is_trivial())
+        .filter(|occurrence| !is_trivial_literal(&occurrence.value))
     {
         let text = occurrence.node.text();
         let offset = character_to_change(&text, &occurrence.value)
@@ -255,7 +256,7 @@ fn with_distinct_literals(code: &str, lang: SupportLang) -> Result<String, Strin
         return Err("a rewritten literal no longer parses as a literal".to_owned());
     }
     for (index, (old, new)) in old_values.iter().zip(&new_values).enumerate() {
-        if !old.is_trivial() && old_values.contains(&new) {
+        if !is_trivial_literal(old) && old_values.contains(&new) {
             return Err(format!("the new value {new:?} already appears in the case"));
         }
         for (other_old, other_new) in old_values.iter().zip(&new_values).skip(index + 1) {
