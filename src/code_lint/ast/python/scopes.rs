@@ -213,6 +213,9 @@ fn traverse_python<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
             if let Some(ref name) = name_node {
                 bindings.push(AstNode::from_raw(name.clone()));
             }
+            if kind == "class_definition" {
+                extract_instance_attribute_declarations(node, bindings);
+            }
             traverse_children_skipping(node, name_node.as_ref(), bindings);
         }
         "import_statement" | "import_from_statement" => {
@@ -226,7 +229,102 @@ fn traverse_python<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
     }
 }
 
-/// Collects all binding definitions (variables, functions, classes, etc.) within a Python file.
+/// Extracts the attribute names that `__init__` declares on its receiver: the first
+/// `self.name = …` per name, in source order. Names the class body already declares
+/// (`name: int`) are skipped, so a dataclass-style `self.name = name` is not a second
+/// declaration; later reassignments, other methods, and `self.name[key] = …` declare nothing.
+fn extract_instance_attribute_declarations<'a>(
+    class_node: &RawNode<'a>,
+    bindings: &mut Vec<AstNode<'a>>,
+) {
+    let Some(class_body) = class_node.field("body") else {
+        return;
+    };
+    let Some(init) = direct_function_definitions(&class_body)
+        .into_iter()
+        .map(|(_, function_node)| function_node)
+        .find(|function_node| {
+            function_node
+                .field("name")
+                .is_some_and(|name| name.text() == "__init__")
+        })
+    else {
+        return;
+    };
+    let (Some(receiver), Some(init_body)) =
+        (method_receiver_name(&init, false), init.field("body"))
+    else {
+        return;
+    };
+
+    let mut declared = HashSet::new();
+    for statement in class_body.children() {
+        if statement.kind() == "expression_statement" {
+            for assignment in statement.children() {
+                if assignment.kind() == "assignment"
+                    && let Some(left) = assignment.field("left")
+                {
+                    extend_binding_names(&left, &mut declared);
+                }
+            }
+        }
+    }
+    collect_receiver_attribute_targets(&init_body, &receiver, &mut declared, bindings);
+}
+
+/// Walks `node` (without entering nested functions, classes, or lambdas) and appends the
+/// attribute identifier of every `receiver.name` assignment target whose name is not yet in
+/// `declared`.
+fn collect_receiver_attribute_targets<'a>(
+    node: &RawNode<'a>,
+    receiver: &str,
+    declared: &mut HashSet<String>,
+    bindings: &mut Vec<AstNode<'a>>,
+) {
+    match node.kind().as_ref() {
+        "function_definition" | "class_definition" | "lambda" => return,
+        "assignment" => {
+            if let Some(left) = node.field("left") {
+                push_receiver_attributes(&left, receiver, declared, bindings);
+            }
+        }
+        _ => {}
+    }
+    for child in node.children() {
+        collect_receiver_attribute_targets(&child, receiver, declared, bindings);
+    }
+}
+
+/// Appends the `receiver.name` attribute identifiers bound by the assignment target `target`
+/// (recursing through tuple and list targets) whose name is not yet in `declared`.
+fn push_receiver_attributes<'a>(
+    target: &RawNode<'a>,
+    receiver: &str,
+    declared: &mut HashSet<String>,
+    bindings: &mut Vec<AstNode<'a>>,
+) {
+    match target.kind().as_ref() {
+        "attribute" => {
+            if target
+                .field("object")
+                .is_some_and(|object| object.kind() == "identifier" && object.text() == receiver)
+                && let Some(attribute) = target.field("attribute")
+                && declared.insert(attribute.text().into_owned())
+            {
+                bindings.push(AstNode::from_raw(attribute));
+            }
+        }
+        "subscript" => {}
+        _ => {
+            for child in target.children() {
+                push_receiver_attributes(&child, receiver, declared, bindings);
+            }
+        }
+    }
+}
+
+/// Collects all binding definitions (variables, functions, classes, instance attributes declared
+/// in `__init__`, etc.) within a Python file.
 #[must_use]
 pub fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
     let mut bindings = Vec::new();

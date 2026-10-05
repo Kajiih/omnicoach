@@ -44,12 +44,15 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             summary: "Flags names made of a single letter.",
             what_it_does: "Flags single-letter names the code defines: variables, \
                            parameters (including lambda and closure parameters), loop, \
-                           comprehension, `except ... as`, walrus and pattern bindings, and \
-                           function, class and constant names, except the allowed ones; `_` \
-                           is never flagged. Imports (including aliased imports), members of a \
-                           Rust `impl Trait for Type` block, Python methods marked \
-                           `@override`, type parameters such as `T`, and references to \
-                           existing names are not checked.",
+                           comprehension, `except ... as`, walrus and pattern bindings, \
+                           function, class and constant names, and attributes where they are \
+                           declared (Python class-body declarations, the first `self.name = ...` \
+                           in `__init__`, Rust named struct fields), except the allowed ones; \
+                           `_` is never flagged. Imports (including aliased imports), members \
+                           of a Rust `impl Trait for Type` block, Python methods marked \
+                           `@override`, type parameters such as `T`, later attribute writes \
+                           (`self.b = ...` outside `__init__`), and references to existing \
+                           names are not checked.",
             why_is_this_bad: "A single letter says nothing about what the value is, so the \
                               reader has to trace where it comes from, and the meaning gets \
                               lost as the scope grows. Single letters are also impossible to \
@@ -145,7 +148,7 @@ crate::test_utils::rule_test!(
                 aliased_import_exempt => r#"
                     import os as a
                 "#,
-                attribute_and_subscript_targets_exempt => r#"
+                attribute_writes_outside_declarations_not_checked => r#"
                     class Worker:
                         def update(self, items, index) -> None:
                             self.b = 1
@@ -182,6 +185,24 @@ crate::test_utils::rule_test!(
                 walrus_expression => r#"
                     (v := 1)
                 "# => "v",
+                init_attribute_declaration => r#"
+                    class Worker:
+                        def __init__(self, count) -> None:
+                            self.b = count
+                            self.b = 2
+                "# => "b",
+                init_tuple_target_declaration => r#"
+                    class Worker:
+                        def __init__(self) -> None:
+                            self.total, self.d = 1, 2
+                "# => "d",
+                class_body_attribute_declaration => r#"
+                    class Worker:
+                        b: int
+
+                        def __init__(self, count: int) -> None:
+                            self.b = count
+                "# => "b",
             ],
         },
         Rust => {
@@ -278,6 +299,12 @@ crate::test_utils::rule_test!(
                         }
                     }
                 "# => "z",
+                struct_field => r#"
+                    struct Sample {
+                        q: i32,
+                        label: String,
+                    }
+                "# => "q",
             ],
         },
     }
