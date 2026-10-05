@@ -2,7 +2,7 @@
 //! placeholder.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::ast::python::collect_unmatched_logger_placeholders;
+use crate::code_lint::ast::python::{collect_logger_calls, named_format_field_roots};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -84,14 +84,18 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    collect_unmatched_logger_placeholders(file)
+    collect_logger_calls(file)
         .into_iter()
-        .map(|finding| {
-            rule.diagnostic_at_node(
+        .filter(|call| call.has_trailing_positional_args && !call.has_keyword_splat)
+        .filter_map(|call| {
+            let placeholder = named_format_field_roots(call.message.as_deref()?)?
+                .into_iter()
+                .find(|root| !call.keyword_names.contains(root))?;
+            Some(rule.diagnostic_at_node(
                 path,
-                &finding.call_node,
-                &[("callee", &finding.callee), ("name", &finding.placeholder)],
-            )
+                &call.node,
+                &[("callee", &call.callee), ("name", &placeholder)],
+            ))
         })
         .collect()
 }

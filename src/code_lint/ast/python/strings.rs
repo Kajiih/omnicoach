@@ -1,9 +1,8 @@
-//! Python string literal prefix, concatenation, segment extraction, and PEP 3101 field parsing.
+//! Python string literals: prefixes, implicit concatenation and literal segments.
 
 // omni:disable-file [repeated-literal] -- Tree-sitter node kinds and field names (see ROADMAP)
 
 use crate::code_lint::ast::{RawNode, delimited_string_parts};
-use std::collections::HashSet;
 
 /// Splits the prefix flags (`f`, `r`, `b`, `u`, `t`) from a `string_start` delimiter token.
 pub(super) fn string_prefix_flags(opening_delimiter: &str) -> &str {
@@ -171,7 +170,7 @@ pub(super) fn extract_plain_string_node(node: &RawNode<'_>) -> Option<String> {
 
 /// Extracts the static text of a plain string literal or an implicit `concatenated_string` of
 /// plain string literals.
-pub(super) fn extract_logger_message_literal(node: &RawNode<'_>) -> Option<String> {
+pub(super) fn static_string_text(node: &RawNode<'_>) -> Option<String> {
     match node.kind().as_ref() {
         "string" => extract_plain_string_node(node),
         "concatenated_string" => {
@@ -186,160 +185,4 @@ pub(super) fn extract_logger_message_literal(node: &RawNode<'_>) -> Option<Strin
         }
         _ => None,
     }
-}
-
-/// Returns true if `name` is a valid Python identifier (`order_id`, `_item2`, `café`).
-pub(super) fn is_python_identifier(name: &str) -> bool {
-    let mut characters = name.chars();
-    let Some(first) = characters.next() else {
-        return false;
-    };
-    let valid_start = first == '_' || first.is_alphabetic();
-    valid_start
-        && characters.all(|character| character == '_' || character.is_alphanumeric())
-        && !first.is_ascii_digit()
-}
-
-/// Validates a PEP 3101 `field_name` (`arg_name("." attribute | "[" index "]")*`) and returns
-/// its root `arg_name` slice.
-pub(super) fn extract_valid_field_root(field_name: &str) -> Option<&str> {
-    let split_at = field_name.find(['.', '[']).unwrap_or(field_name.len());
-    let root = &field_name[..split_at];
-    let valid_root = root.is_empty()
-        || root.chars().all(|character| character.is_ascii_digit())
-        || is_python_identifier(root);
-    if !valid_root {
-        return None;
-    }
-
-    let mut tail = &field_name[split_at..];
-    while !tail.is_empty() {
-        if let Some(after_dot) = tail.strip_prefix('.') {
-            let end = after_dot.find(['.', '[']).unwrap_or(after_dot.len());
-            if !is_python_identifier(&after_dot[..end]) {
-                return None;
-            }
-            tail = &after_dot[end..];
-        } else if let Some(after_bracket) = tail.strip_prefix('[') {
-            let close = after_bracket.find(']')?;
-            if close == 0 {
-                return None;
-            }
-            tail = &after_bracket[close + 1..];
-        } else {
-            return None;
-        }
-    }
-    Some(root)
-}
-
-/// Parses the `:format_spec` portion of a PEP 3101 replacement field starting at `start`,
-/// appending any nested `{nested_field}` root names to `roots` and returning the byte index
-/// immediately after the outer closing `}`.
-fn parse_format_spec_section<'a>(
-    message: &'a str,
-    start: usize,
-    roots: &mut Vec<&'a str>,
-) -> Option<usize> {
-    let mut cursor = start;
-    while cursor < message.len() {
-        let rest = &message[cursor..];
-        if rest.starts_with('}') {
-            return Some(cursor + 1);
-        }
-        if rest.starts_with('{') {
-            let after_open = &message[cursor + 1..];
-            let close_offset = after_open.find('}')?;
-            let nested_body = &after_open[..close_offset];
-            if nested_body.contains('{') {
-                return None;
-            }
-            let nested_field = nested_body
-                .split_once('!')
-                .map_or(nested_body, |(before, _)| before);
-            if let Some(nested_root) = extract_valid_field_root(nested_field) {
-                roots.push(nested_root);
-            }
-            cursor += 1 + close_offset + 1;
-        } else {
-            cursor += rest.chars().next()?.len_utf8();
-        }
-    }
-    None
-}
-
-/// Parses one `{...}` replacement field whose body starts at `start` (immediately after `{`),
-/// returning the byte index after the matching `}` and the root `arg_name`s found inside it.
-pub(super) fn parse_replacement_field(message: &str, start: usize) -> Option<(usize, Vec<&str>)> {
-    let mut cursor = start;
-    let mut in_brackets = false;
-    let mut delimiter = None;
-
-    while cursor < message.len() {
-        let character = message[cursor..].chars().next()?;
-        match character {
-            '[' if !in_brackets => in_brackets = true,
-            ']' if in_brackets => in_brackets = false,
-            '{' if !in_brackets => return None,
-            ':' | '}' if !in_brackets => {
-                delimiter = Some((cursor, character));
-                break;
-            }
-            _ => {}
-        }
-        cursor += character.len_utf8();
-    }
-
-    let (delimiter_index, delimiter_char) = delimiter?;
-    let header = &message[start..delimiter_index];
-    let field_name = match header.split_once('!') {
-        Some((before, "r" | "s" | "a")) => Some(before),
-        Some(_) => None,
-        None => Some(header),
-    };
-
-    let mut roots = Vec::new();
-    if let Some(root) = field_name.and_then(extract_valid_field_root) {
-        roots.push(root);
-    }
-
-    if delimiter_char == '}' {
-        return Some((delimiter_index + 1, roots));
-    }
-    let next_cursor = parse_format_spec_section(message, delimiter_index + 1, &mut roots)?;
-    Some((next_cursor, roots))
-}
-
-/// Returns the first named PEP 3101 placeholder root identifier in `message` that is not
-/// present in `keyword_names`, or `None` if `message` has unbalanced braces or all named
-/// placeholders are satisfied.
-pub(super) fn first_unmatched_named_placeholder(
-    message: &str,
-    keyword_names: &HashSet<String>,
-) -> Option<String> {
-    let mut cursor = 0;
-    let mut first_unmatched: Option<String> = None;
-
-    while cursor < message.len() {
-        let rest = &message[cursor..];
-        if rest.starts_with("{{") || rest.starts_with("}}") {
-            cursor += 2;
-        } else if rest.starts_with('}') {
-            return None;
-        } else if rest.starts_with('{') {
-            let (next_cursor, roots) = parse_replacement_field(message, cursor + 1)?;
-            for root in roots {
-                if first_unmatched.is_none()
-                    && is_python_identifier(root)
-                    && !keyword_names.contains(root)
-                {
-                    first_unmatched = Some(root.to_owned());
-                }
-            }
-            cursor = next_cursor;
-        } else {
-            cursor += rest.chars().next()?.len_utf8();
-        }
-    }
-    first_unmatched
 }
