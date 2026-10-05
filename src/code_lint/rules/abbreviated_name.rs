@@ -91,11 +91,13 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                            Only whole words match: `strategy` and \
                            `category` are not flagged, `handle_msg` and `TaskRes` are. \
                            Checked names: variables, parameters, loop and pattern bindings, \
-                           functions, classes, structs, enums, traits, type aliases and \
-                           constants. Not checked: imports (including aliased imports such as \
-                           `import os as os_cfg`), attributes (`self.ctx = ...`), struct \
-                           fields, and names imposed by a contract (Python methods marked \
-                           `@override`, members of a Rust `impl Trait for Type` block), \
+                           functions, classes, structs, enums, traits, type aliases, \
+                           constants, and attributes where they are declared (Python class-body \
+                           declarations, the first `self.name = ...` in `__init__`, Rust named \
+                           struct fields). Not checked: imports (including aliased imports such \
+                           as `import os as os_cfg`), later attribute writes (`self.ctx = ...` \
+                           outside `__init__`), and names imposed by a contract (Python methods \
+                           marked `@override`, members of a Rust `impl Trait for Type` block), \
                            although the parameters of those methods are still checked.",
             why_is_this_bad: "An abbreviation makes the reader guess: `res` can be a result, a \
                               response or a resource, `ch` a channel or a character. Different \
@@ -198,7 +200,7 @@ crate::test_utils::rule_test!(
                         def from_ctx(self, data: bytes) -> None:
                             pass
                 "#,
-                attribute_and_subscript_targets_exempt => r#"
+                attribute_writes_outside_declarations_not_checked => r#"
                     class Worker:
                         def update(self, items, index) -> None:
                             self.ctx = 1
@@ -238,6 +240,19 @@ crate::test_utils::rule_test!(
                         def from_ctx(self, data: bytes) -> None:
                             pass
                 "# => "from_ctx",
+                init_attribute_declaration => r#"
+                    class Worker:
+                        def __init__(self, context) -> None:
+                            self.ctx = context
+                            self.ctx = None
+                "# => "ctx",
+                class_body_attribute_declaration => r#"
+                    class Worker:
+                        ctx: str
+
+                        def __init__(self, context: str) -> None:
+                            self.ctx = context
+                "# => "ctx",
             ],
         },
         Rust => {
@@ -305,6 +320,12 @@ crate::test_utils::rule_test!(
                         fn from_ctx(&self) {}
                     }
                 "# => "from_ctx",
+                struct_field => r#"
+                    struct Request {
+                        ctx: Context,
+                        body: String,
+                    }
+                "# => "ctx",
             ],
         },
     }

@@ -318,6 +318,11 @@ fn traverse_rust<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
         "use_declaration" => {
             extract_from_use(node, bindings, None);
         }
+        "field_declaration" => {
+            if let Some(name) = node.field("name") {
+                bindings.push(AstNode::from_raw(name));
+            }
+        }
         _ => {
             for child in node.children() {
                 traverse_rust(&child, bindings);
@@ -326,7 +331,8 @@ fn traverse_rust<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
     }
 }
 
-/// Collects all binding definitions (variables, functions, structs, etc.) within `file`.
+/// Collects all binding definitions (variables, functions, structs, named struct fields, etc.)
+/// within `file`.
 #[must_use]
 pub fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
     let mut bindings = Vec::new();
