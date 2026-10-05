@@ -3,6 +3,8 @@
 This document records **Phase 2 (Gather Resources and References)** for `quote-wrapped-placeholder`. It builds on [01_understand.md](01_understand.md) (decisions `D1`–`D9`, open questions `Q1`–`Q4`).
 
 > Status: **VALIDATED** (2026-10-03). Refinements `R-D5`, `R-D6`, and `R-D9` accepted.
+>
+> **Superseded in part (2026-10-05):** SQL strings and isolated quoted placeholders (`f"'{value}'"`) are no longer exempt; SQL injection is left to Ruff `S608`. The prose and quote heuristics moved from `ast/python/quote_wrapped.rs` into the rule file, on top of the construct-level `ast/python/format_strings.rs`. The rule's `what_it_does` is authoritative.
 
 Confidence markers: ✅ verified against official docs/source this session · ⚠️ synthesized from tool behavior/ecosystem discussions.
 

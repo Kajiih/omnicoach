@@ -4,6 +4,8 @@
 > **Status: REVIEW COMPLETE. Waiting for decisions D1–D9 (§8) before landing.**
 > Scope: the helpers the legacy batch (commit "New Pol urles") added to [python.rs](../../../src/code_lint/ast/python.rs), and the six rules that use them. New code: lines 3066–5073, edits at 127–130 and 494–611, unit tests at 5845–6133. The file went from about 3,770 to 6,134 lines.
 > Ordering constraint: this lands before the typed-CST work in [ast_robustness](../ast_robustness/01_understand.md).
+>
+> **Superseded in part (2026-10-05):** the layout proposed in §8 changed after landing. `quote_wrapped.rs` is gone: format-string parsing is in `ast/python/format_strings.rs` and the prose and quote heuristics are in the `quote-wrapped-placeholder` rule. `logging.rs` only recognises logger calls; the unmatched-placeholder check is in its rule. `call-before-definition` is disabled. Remaining rule-shaped items are listed in ROADMAP.md ("Rule-shaped items left in `ast/python`").
 
 ## 1. Method
 

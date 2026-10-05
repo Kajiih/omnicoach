@@ -3,6 +3,8 @@
 Builds on the validated [01_understand.md](01_understand.md) (`D1`–`D9`, `C1`–`C4`) and [02_references.md](02_references.md) (`R1`–`R6`, `R-D5`, `R-D6`, `R-D9`).
 
 > Status: **VALIDATED** (2026-10-03). Approved for Phase 4 implementation.
+>
+> **Superseded in part (2026-10-05):** SQL strings and isolated quoted placeholders (`f"'{value}'"`) are no longer exempt; SQL injection is left to Ruff `S608`. The prose and quote heuristics moved from `ast/python/quote_wrapped.rs` into the rule file, on top of the construct-level `ast/python/format_strings.rs`. The rule's `what_it_does` is authoritative.
 
 ---
 
