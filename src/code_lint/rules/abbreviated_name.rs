@@ -198,6 +198,12 @@ crate::test_utils::rule_test!(
                         def from_ctx(self, data: bytes) -> None:
                             pass
                 "#,
+                attribute_and_subscript_targets_exempt => r#"
+                    class Worker:
+                        def update(self, items, index) -> None:
+                            self.ctx = 1
+                            items[index] = 2
+                "#,
             ],
             fail: [
                 camel_case_class_name => r#"
@@ -210,6 +216,10 @@ crate::test_utils::rule_test!(
                 "# => "handle_msg",
                 parameter_name => r#"
                     def process(req_ctx):
+                        pass
+                "# => "req_ctx",
+                typed_varargs_parameter_name => r#"
+                    def process(*req_ctx: int):
                         pass
                 "# => "req_ctx",
                 digit_to_uppercase_split => r#"

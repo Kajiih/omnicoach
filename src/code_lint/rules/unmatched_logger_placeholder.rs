@@ -34,15 +34,17 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags logger calls that pass positional arguments to a message with an unmatched named placeholder.",
             what_it_does: "Flags calls to `logger.<level>(...)`, `log.<level>(...)`, \
-                           `logging.<level>(...)`, `<expr>.logger.<level>(...)` and \
-                           `<expr>.log.<level>(...)` (across `trace`, `debug`, `info`, \
-                           `success`, `warning`, `warn`, `error`, `critical`, `fatal`, \
-                           `exception` and `log`) when the message string literal contains a \
-                           named replacement field such as `{order_id}`, at least one \
-                           positional format argument is passed after the message, no \
-                           `**kwargs` unpacking is present, and no matching `order_id=...` \
-                           keyword argument is provided. For `.log(level, message, ...)`, \
-                           the second positional argument is inspected as the message.",
+                           `_logger.<level>(...)`, `_log.<level>(...)`, `logging.<level>(...)`, \
+                           `<expr>.logger.<level>(...)`, `<expr>.log.<level>(...)`, \
+                           `<expr>._logger.<level>(...)` and `<expr>._log.<level>(...)` (across \
+                           `trace`, `debug`, `info`, `success`, `warning`, `warn`, `error`, \
+                           `critical`, `fatal`, `exception` and `log`) when the message string \
+                           literal contains a named replacement field such as `{order_id}`, at \
+                           least one positional format argument (or `*args` unpacking) is passed \
+                           after the message, no `**kwargs` unpacking is present, and no \
+                           matching `order_id=...` keyword argument is provided. For \
+                           `.log(level, message, ...)`, the second positional argument is \
+                           inspected as the message.",
             why_is_this_bad: "When refactoring an f-string log call such as \
                               `logger.info(f\"Order {order_id} filled\")` to use lazy logger \
                               formatting, stripping the `f` prefix and appending `order_id` \
@@ -153,6 +155,10 @@ crate::test_utils::rule_test!(
                     formatter.info("Order {order_id} filled", order_id)
                     template.format("Order {order_id}", order_id)
                 "#,
+                unicode_named_character_escape_not_flagged => r#"
+                    logger.info("Item \N{BULLET} %s", item)
+                    logger.info("Arrow \N{RIGHTWARDS ARROW} {}", target)
+                "#,
             ],
             fail: [
                 named_placeholder_with_positional_arg_on_logger => r#"
@@ -161,6 +167,15 @@ crate::test_utils::rule_test!(
                 named_placeholder_with_positional_arg_on_log => r#"
                     log.warning("Retry {attempt} failed", attempt)
                 "# => r#"log.warning("Retry {attempt} failed", attempt)"#,
+                named_placeholder_with_positional_arg_on_private_logger => r#"
+                    _logger.info("Order {order_id} filled", order_id)
+                "# => r#"_logger.info("Order {order_id} filled", order_id)"#,
+                named_placeholder_with_star_args_unpacking => r#"
+                    logger.info("Order {order_id} filled", *args)
+                "# => r#"logger.info("Order {order_id} filled", *args)"#,
+                raw_string_backslash_n_is_not_unicode_escape => r#"
+                    logger.info(r"Path \N{order_id}", order_id)
+                "# => r#"logger.info(r"Path \N{order_id}", order_id)"#,
                 named_placeholder_with_positional_arg_on_logging_module => r#"
                     logging.error("Request {request_id} failed", request_id)
                 "# => r#"logging.error("Request {request_id} failed", request_id)"#,

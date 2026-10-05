@@ -210,6 +210,9 @@ crate::test_utils::rule_test!(
 
                     def parse_value(raw: str) -> Optional[int | list[int]]:
                         return None
+
+                    def resolve_pair(raw: str) -> tuple[int, str] | list[int] | None:
+                        return None
                 "#,
                 nullable_parameters_and_attributes_not_flagged => r#"
                     from collections.abc import Mapping, Sequence

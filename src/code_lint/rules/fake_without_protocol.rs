@@ -38,11 +38,11 @@ pub const RULE: CodeRule = CodeRule {
                            list a collaborator base class, in all Python files. Names where \
                            `Fake` is only part of a longer word, such as `Faker` or `Fakeable`, \
                            are not flagged. Base classes that do not supply a collaborator \
-                           contract — `object`, `Generic` and `Protocol` (bare or qualified \
-                           through `builtins`, `typing` or `typing_extensions`) — do not count \
-                           on their own, so `class FakeClient(object):`, \
-                           `class FakeRepo(Generic[T]):` and `class FakeClient(Protocol):` are \
-                           still flagged.",
+                           contract — `object`, `Generic`, `Protocol` and `ABC` (bare or \
+                           qualified through `builtins`, `typing`, `typing_extensions` or `abc`) \
+                           — do not count on their own, so `class FakeClient(object):`, \
+                           `class FakeRepo(Generic[T]):`, `class FakeClient(Protocol):` and \
+                           `class FakeBaseStorage(ABC):` are still flagged.",
             why_is_this_bad: "Under PEP 544, a class that does not subclass a `Protocol` is only \
                               checked against that `Protocol` at typed call sites. When a test \
                               function or fixture is unannotated, or exercises only part of the \
@@ -124,10 +124,6 @@ crate::test_utils::rule_test!(
                     class FakeRepository(Repository[T], Generic[T]):
                         pass
                 "#,
-                inherits_abc => r#"
-                    class FakeBaseStorage(ABC):
-                        pass
-                "#,
                 non_fake_class_without_base => r#"
                     class UserRepository:
                         pass
@@ -203,6 +199,14 @@ crate::test_utils::rule_test!(
                     class FakeTypingProtocolClient(typing.Protocol):
                         pass
                 "# => "FakeTypingProtocolClient",
+                inherits_only_abc => r#"
+                    class FakeBaseStorage(ABC):
+                        pass
+                "# => "FakeBaseStorage",
+                inherits_only_abc_abc => r#"
+                    class FakeQualifiedAbcStorage(abc.ABC):
+                        pass
+                "# => "FakeQualifiedAbcStorage",
                 pep695_generic_without_base => r#"
                     class FakePep695Repo[T]:
                         pass

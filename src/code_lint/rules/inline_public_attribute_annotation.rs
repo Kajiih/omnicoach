@@ -38,8 +38,11 @@ pub const RULE: CodeRule = CodeRule {
                            direct instance methods whose first parameter is `self` and that are \
                            not decorated with `@staticmethod` or `@classmethod` are inspected. \
                            Private attributes starting with `_`, unannotated assignments \
-                           (`self.attr = value`), and unparameterized `Final` annotations \
-                           (`self.attr: Final = value`) are not flagged.",
+                           (`self.attr = value`), unparameterized `Final` annotations \
+                           (`self.attr: Final = value`), and field-synthesizing classes \
+                           (`@dataclass`, `attrs` `@define`/`@frozen`/`@mutable`/`@s`, and \
+                           Pydantic `BaseModel`, where a class-body annotation alters `__init__` \
+                           or field validation) are not flagged.",
             why_is_this_bad: "A public attribute is part of a class's external interface. When \
                               its type annotation is written inline on `self.attr: Type` inside \
                               `__init__` or another method, Python's compiler discards the \
@@ -220,6 +223,31 @@ crate::test_utils::rule_test!(
                                 self._attempts: int = 1
                             else:
                                 self._attempts: int = 0
+                "#,
+                dataclass_attrs_and_pydantic_base_model_exempt => r#"
+                    from dataclasses import dataclass
+                    from attrs import define
+                    from pydantic import BaseModel
+
+                    @dataclass
+                    class OrderSummary:
+                        items: list[int]
+
+                        def __post_init__(self) -> None:
+                            self.total: int = sum(self.items)
+
+                    @define
+                    class AttrsSummary:
+                        items: list[int]
+
+                        def __attrs_post_init__(self) -> None:
+                            self.total: int = sum(self.items)
+
+                    class PydanticSummary(BaseModel):
+                        items: list[int]
+
+                        def model_post_init(self, __context: object) -> None:
+                            self.total: int = sum(self.items)
                 "#,
             ],
             fail: [
