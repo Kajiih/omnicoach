@@ -4,9 +4,9 @@
 
 mod annotations;
 mod classes;
+mod format_strings;
 mod functions;
 mod logging;
-mod quote_wrapped;
 mod scopes;
 mod strings;
 
@@ -21,12 +21,15 @@ pub use self::classes::{
     PythonInlinePublicAttributeAnnotation, collect_inline_public_attribute_annotations,
     collect_public_class_attributes, extract_classes,
 };
+pub use self::format_strings::{
+    PythonFormatPlaceholder, PythonFormatString, PythonFormatStyle, collect_format_strings,
+    extract_valid_field_root, named_format_field_roots,
+};
 pub use self::functions::{
     PythonFunctionSignature, PythonParameterInfo, PythonParameterKind, extract_function_signatures,
     extract_parameters, find_nested_functions, has_override_decorator, is_trait_impl_member,
 };
-pub use self::logging::{UnmatchedLoggerPlaceholder, collect_unmatched_logger_placeholders};
-pub use self::quote_wrapped::{PythonQuoteWrappedPlaceholder, collect_quote_wrapped_placeholders};
+pub use self::logging::{PythonLoggerCall, collect_logger_calls};
 pub use self::scopes::{ForwardCall, collect_bindings, collect_forward_calls};
 
 use self::annotations::{
@@ -39,10 +42,9 @@ use self::functions::{direct_function_definitions, method_receiver_name, parse_p
 use self::logging::extract_logger_call;
 use self::scopes::scope_shadows_parameter;
 use self::strings::{
-    append_string_literal_segments, extract_logger_message_literal, extract_valid_field_root,
-    first_unmatched_named_placeholder, fstring_segments_and_interpolations, is_triple_quoted,
+    append_string_literal_segments, fstring_segments_and_interpolations, is_triple_quoted,
     outermost_string_expression, positional_call_arguments, preceding_concatenated_literal_text,
-    string_prefix_flags,
+    static_string_text, string_prefix_flags,
 };
 use crate::code_lint::ast::{
     AstNode, LiteralOccurrence, LiteralRole, LiteralValue, NullableCollectionReturn, ParsedFile,
@@ -2624,50 +2626,69 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::simple_unmatched("Order {order_id} filled", &[], Some("order_id"))]
-    #[case::simple_matched("Order {order_id} filled", &["order_id"], None)]
-    #[case::compound_attribute("Order {order.id} filled", &[], Some("order"))]
-    #[case::compound_subscript("Order {order[id]} filled", &[], Some("order"))]
-    #[case::conversion_and_spec("Order {order_id!r} {amount:.2f}", &["order_id"], Some("amount"))]
-    #[case::positional_empty_and_numbered("Order {} and {0} and {0.id} and {1[key]}", &[], None)]
-    #[case::escaped_double_braces("Literal {{order_id}} value {}", &[], None)]
-    #[case::triple_braces_captures_inner("Literal {{{order_id}}}", &[], Some("order_id"))]
-    #[case::nested_format_spec("Value {:>{width}}", &[], Some("width"))]
-    #[case::non_identifier_braces("Payload {\"order_id\": 1} and {a, b}", &[], None)]
-    #[case::unclosed_opening_brace("Malformed {order_id in input", &[], None)]
-    #[case::unmatched_closing_brace("Malformed {order_id} stray }", &[], None)]
-    fn test_first_unmatched_named_placeholder_parsing(
-        #[case] message: &str,
-        #[case] provided_kwargs: &[&str],
-        #[case] expected: Option<&str>,
-    ) {
-        let keyword_names: HashSet<String> = provided_kwargs
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect();
-        let actual = first_unmatched_named_placeholder(message, &keyword_names);
-        assert_eq!(actual.as_deref(), expected);
+    #[case::simple("Order {order_id} filled", Some(&["order_id"][..]))]
+    #[case::compound_attribute("Order {order.id} filled", Some(&["order"][..]))]
+    #[case::compound_subscript("Order {order[id]} filled", Some(&["order"][..]))]
+    #[case::conversion_and_spec("Order {order_id!r} {amount:.2f}", Some(&["order_id", "amount"][..]))]
+    #[case::positional_empty_and_numbered("Order {} and {0} and {0.id} and {1[key]}", Some(&[][..]))]
+    #[case::escaped_double_braces("Literal {{order_id}} value {}", Some(&[][..]))]
+    #[case::triple_braces_captures_inner("Literal {{{order_id}}}", Some(&["order_id"][..]))]
+    #[case::nested_format_spec("Value {:>{width}}", Some(&["width"][..]))]
+    #[case::non_identifier_braces("Payload {\"order_id\": 1} and {a, b}", Some(&[][..]))]
+    #[case::unclosed_opening_brace("Malformed {order_id in input", None)]
+    #[case::unmatched_closing_brace("Malformed {order_id} stray }", None)]
+    fn test_named_format_field_roots(#[case] message: &str, #[case] expected: Option<&[&str]>) {
+        let expected = expected.map(|roots| roots.iter().map(|root| (*root).to_owned()).collect());
+        assert_eq!(named_format_field_roots(message), expected);
     }
 
     #[test]
-    fn test_collect_unmatched_logger_placeholders_extracts_callee_and_placeholder() {
+    fn test_collect_logger_calls_reads_callee_message_and_arguments() {
         let source = indoc::indoc! {r#"
             logger.info("Order {order_id} filled", order_id)
-            self.log.error("Peer {peer.id} failed", peer)
-            logging.log(20, "User {user_id} action {action}", action, user_id=1)
-            logger.info("Order {order_id} filled", order_id=1)
+            self.log.error("Peer " "{peer.id} failed", **extra)
+            logging.log(20, f"User {user_id}", user_id=1)
+            print("not a logger", value)
         "#};
         let file = ParsedFile::new(source, SupportLang::Python);
-        let findings: Vec<(String, String)> = collect_unmatched_logger_placeholders(&file)
+        let calls: Vec<_> = collect_logger_calls(&file)
             .into_iter()
-            .map(|item| (item.callee, item.placeholder))
+            .map(|call| {
+                let mut keyword_names: Vec<String> = call.keyword_names.into_iter().collect();
+                keyword_names.sort();
+                (
+                    call.callee,
+                    call.message,
+                    call.has_trailing_positional_args,
+                    call.has_keyword_splat,
+                    keyword_names,
+                )
+            })
             .collect();
         assert_eq!(
-            findings,
+            calls,
             vec![
-                ("logger.info".to_owned(), "order_id".to_owned()),
-                ("self.log.error".to_owned(), "peer".to_owned()),
-                ("logging.log".to_owned(), "action".to_owned()),
+                (
+                    "logger.info".to_owned(),
+                    Some("Order {order_id} filled".to_owned()),
+                    true,
+                    false,
+                    vec![],
+                ),
+                (
+                    "self.log.error".to_owned(),
+                    Some("Peer {peer.id} failed".to_owned()),
+                    false,
+                    true,
+                    vec![],
+                ),
+                (
+                    "logging.log".to_owned(),
+                    None,
+                    false,
+                    false,
+                    vec!["user_id".to_owned()]
+                ),
             ]
         );
     }
@@ -2714,46 +2735,133 @@ mod tests {
         );
     }
 
-    #[rstest::rstest]
-    #[case::fstring_multiple_placeholders(
-        "msg = f\"Copied '{source}' to '{target}'\"",
-        &[("'{source}'", "{source!r}"), ("'{target}'", "{target!r}")]
-    )]
-    #[case::str_format_empty_and_named(
-        "msg = \"Copied '{}' to '{target}'\".format(source, target=dest)",
-        &[("'{}'", "{!r}"), ("'{target}'", "{target!r}")]
-    )]
-    #[case::printf_positional_and_named(
-        "msg = \"Invalid '%s' and '%(key)s'\" % (a, b)",
-        &[("'%s'", "%r"), ("'%(key)s'", "%(key)r")]
-    )]
-    #[case::concatenated_fstring_shares_prose_context(
-        "msg = (\n    \"Failed to load configuration for \"\n    f\"'{service_name}'\"\n)",
-        &[("'{service_name}'", "{service_name!r}")]
-    )]
-    #[case::isolated_str_format_and_printf_ignored(
-        "a = \"'{value}'\".format(value=x)\nb = \"'%(name)s'\" % {\"name\": x}",
-        &[]
-    )]
-    #[case::concatenated_flag_and_backtick_ignored(
-        "a = \"Pass --output=\" f\"'{output_path}'\"\nb = \"Run `mode = \" f\"'{mode}'` in config\"",
-        &[]
-    )]
-    fn test_collect_quote_wrapped_placeholders_python(
-        #[case] python_code: &str,
-        #[case] expected: &[(&str, &str)],
-    ) {
+    /// `(style, preceding_text, literal_text, literals, [(field, conversion, format_spec)])`.
+    type FormatStringSummary = (
+        PythonFormatStyle,
+        String,
+        String,
+        Vec<String>,
+        Vec<(String, Option<String>, Option<String>)>,
+    );
+
+    fn summarize_format_strings(python_code: &str) -> Vec<FormatStringSummary> {
         let file = ParsedFile::new(python_code, SupportLang::Python);
-        let actual: Vec<(String, String)> = collect_quote_wrapped_placeholders(&file)
+        collect_format_strings(&file)
             .into_iter()
-            .map(|item| (item.expression, item.replacement))
-            .collect();
-        let expected: Vec<(String, String)> = expected
-            .iter()
-            .map(|(expression, replacement)| {
-                ((*expression).to_string(), (*replacement).to_string())
+            .map(|format_string| {
+                let placeholders = format_string
+                    .placeholders
+                    .into_iter()
+                    .map(|placeholder| {
+                        (
+                            placeholder.field,
+                            placeholder.conversion,
+                            placeholder.format_spec,
+                        )
+                    })
+                    .collect();
+                (
+                    format_string.style,
+                    format_string.preceding_text,
+                    format_string.literal_text,
+                    format_string.literals,
+                    placeholders,
+                )
             })
-            .collect();
-        assert_eq!(actual, expected);
+            .collect()
+    }
+
+    fn owned(texts: &[&str]) -> Vec<String> {
+        texts.iter().map(|text| (*text).to_owned()).collect()
+    }
+
+    fn field(
+        name: &str,
+        conversion: Option<&str>,
+        format_spec: Option<&str>,
+    ) -> (String, Option<String>, Option<String>) {
+        (
+            name.to_owned(),
+            conversion.map(str::to_owned),
+            format_spec.map(str::to_owned),
+        )
+    }
+
+    #[test]
+    fn test_collect_format_strings_splits_fstrings() {
+        assert_eq!(
+            summarize_format_strings(r#"message = f"Copied '{ source !r:>8}' {count=}""#),
+            vec![(
+                PythonFormatStyle::FString,
+                String::new(),
+                "Copied '' ".to_owned(),
+                owned(&["Copied '", "' ", ""]),
+                vec![
+                    field("source", Some("r"), Some(">8")),
+                    field("count", None, None)
+                ],
+            )]
+        );
+    }
+
+    #[test]
+    fn test_collect_format_strings_splits_str_format_templates() {
+        assert_eq!(
+            summarize_format_strings(
+                r#"message = "Copied '{}' to '{target.name!s}' {{raw}}".format(a, target=b)"#
+            ),
+            vec![(
+                PythonFormatStyle::StrFormat,
+                String::new(),
+                "Copied '' to '' {{raw}}".to_owned(),
+                owned(&["Copied '", "' to '", "' {{raw}}"]),
+                vec![field("", None, None), field("target.name", Some("s"), None)],
+            )]
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::percent_operator(r#"message = "Got %s, %(key)5.2f and 100%%" % values"#)]
+    #[case::logger_with_arguments(r#"logger.info("Got %s, %(key)5.2f and 100%%", values)"#)]
+    fn test_collect_format_strings_splits_printf_templates(#[case] python_code: &str) {
+        assert_eq!(
+            summarize_format_strings(python_code),
+            vec![(
+                PythonFormatStyle::Printf,
+                String::new(),
+                "Got ,  and 100%%".to_owned(),
+                owned(&["Got ", ", ", " and 100%%"]),
+                vec![
+                    field("", Some("s"), None),
+                    field("key", Some("f"), Some("5.2"))
+                ],
+            )]
+        );
+    }
+
+    #[test]
+    fn test_collect_format_strings_reads_concatenated_prefix() {
+        let summaries = summarize_format_strings("message = (\"Load \" f\"'{name}'\")");
+        let (style, preceding_text, literal_text, ..) = &summaries[0];
+        assert_eq!(
+            (
+                summaries.len(),
+                *style,
+                preceding_text.as_str(),
+                literal_text.as_str()
+            ),
+            (1, PythonFormatStyle::FString, "Load ", "Load ''")
+        );
+    }
+
+    #[test]
+    fn test_collect_format_strings_skips_unformatted_raw_and_byte_strings() {
+        let source = indoc::indoc! {r#"
+            plain = "Invalid '{name}' or '%s'"
+            raw = r"Invalid '{name}'".format(name=value)
+            byte = b"Invalid '%s'" % value
+            no_arguments = logger.info("Literal '%s'")
+        "#};
+        assert_eq!(summarize_format_strings(source), vec![]);
     }
 }

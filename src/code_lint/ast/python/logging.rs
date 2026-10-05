@@ -1,22 +1,10 @@
-//! Shared Python logger call recognition (`logging` and `loguru`) and `unmatched-logger-placeholder` collector.
+//! Python logger calls (`logging` and `loguru`): receiver and method recognition, message and
+//! arguments.
 
 // omni:disable-file [repeated-literal] -- Tree-sitter node kinds and field names (see ROADMAP)
 
-use super::{
-    AstNode, ParsedFile, RawNode, extract_logger_message_literal, first_unmatched_named_placeholder,
-};
+use super::{AstNode, ParsedFile, RawNode, static_string_text};
 use std::collections::HashSet;
-
-/// A Python logger call with an unmatched named PEP 3101 placeholder and positional arguments.
-#[derive(Clone)]
-pub struct UnmatchedLoggerPlaceholder<'a> {
-    /// The full `call` AST node (`logger.info("Order {order_id}", order_id)`).
-    pub call_node: AstNode<'a>,
-    /// Source text of the invoked logger method (`logger.info`, `self.logger.error`).
-    pub callee: String,
-    /// The first unmatched named placeholder root identifier (`order_id`).
-    pub placeholder: String,
-}
 
 /// Bare variable/module names recognized as logger receivers (`logger.info`, `logging.error`, `_logger.info`).
 const LOGGER_RECEIVERS: &[&str] = &["logging", "logger", "log", "_logger", "_log"];
@@ -40,20 +28,25 @@ const PRINTF_LOGGER_METHODS: &[&str] = &[
 /// Additional `loguru`-only methods that format with `{}` rather than `%`.
 const LOGURU_ONLY_METHODS: &[&str] = &["trace", "success"];
 
-/// Parsed metadata for a recognized logger method call.
-pub(super) struct LoggerCallInfo<'a> {
-    /// Full callee text (`logger.info`, `app.logger.error`).
+/// A call to a recognized logger method (`logger.info(...)`, `self.log.error(...)`).
+pub struct PythonLoggerCall<'a> {
+    /// The `call` node.
+    pub node: AstNode<'a>,
+    /// Source text of the invoked method (`logger.info`, `app.logger.error`).
     pub callee: String,
-    /// Whether this method supports stdlib `logging` `%`-formatting (`false` for `trace`/`success`).
-    pub uses_printf: bool,
-    /// The message expression node (`arg 0`, or `arg 1` for `.log(level, msg, ...)`).
-    pub message_node: RawNode<'a>,
-    /// True if at least one positional or `*args` argument follows `message_node`.
+    /// Static text of the message when it is a plain string literal or an implicit
+    /// concatenation of them.
+    pub message: Option<String>,
+    /// True if at least one positional or `*args` argument follows the message.
     pub has_trailing_positional_args: bool,
     /// True if the call contains a `**kwargs` dictionary splat.
     pub has_keyword_splat: bool,
     /// Explicit keyword argument names passed to the call.
     pub keyword_names: HashSet<String>,
+    /// Whether this method supports stdlib `logging` `%`-formatting (`false` for `trace`/`success`).
+    pub(super) uses_printf: bool,
+    /// The message expression node (`arg 0`, or `arg 1` for `.log(level, msg, ...)`).
+    pub(super) message_node: RawNode<'a>,
 }
 
 /// Returns true if `receiver` is a recognized logger variable, module, or attribute (`logger`,
@@ -69,7 +62,7 @@ fn is_logger_receiver(receiver: &RawNode<'_>) -> bool {
 }
 
 /// Parses `call_node` as a logger call if its callee is a recognized logger receiver and method.
-pub(super) fn extract_logger_call<'a>(call_node: &RawNode<'a>) -> Option<LoggerCallInfo<'a>> {
+pub(super) fn extract_logger_call<'a>(call_node: &RawNode<'a>) -> Option<PythonLoggerCall<'a>> {
     if call_node.kind() != "call" {
         return None;
     }
@@ -117,44 +110,24 @@ pub(super) fn extract_logger_call<'a>(call_node: &RawNode<'a>) -> Option<LoggerC
         return None;
     }
 
-    Some(LoggerCallInfo {
+    Some(PythonLoggerCall {
+        node: AstNode::from_raw(call_node.clone()),
         callee: function.text().into_owned(),
-        uses_printf,
-        message_node,
+        message: static_string_text(&message_node),
         has_trailing_positional_args: positional_or_splat.len() > message_index + 1,
         has_keyword_splat,
         keyword_names,
+        uses_printf,
+        message_node,
     })
 }
 
-/// Inspects a single `call` node and returns an [`UnmatchedLoggerPlaceholder`] if it is a
-/// logger call passing positional format arguments to a message with an unmatched named
-/// placeholder.
-fn check_logger_call_node<'a>(call_node: &RawNode<'a>) -> Option<UnmatchedLoggerPlaceholder<'a>> {
-    let info = extract_logger_call(call_node)?;
-    if info.has_keyword_splat || !info.has_trailing_positional_args {
-        return None;
-    }
-    let message = extract_logger_message_literal(&info.message_node)?;
-    let placeholder = first_unmatched_named_placeholder(&message, &info.keyword_names)?;
-
-    Some(UnmatchedLoggerPlaceholder {
-        call_node: AstNode::from_raw(call_node.clone()),
-        callee: info.callee,
-        placeholder,
-    })
-}
-
-/// Collects logger calls in `file` that pass positional format arguments to a message literal
-/// containing an unmatched named PEP 3101 placeholder.
+/// Collects the logger calls in `file`, in source order.
 #[must_use]
-pub fn collect_unmatched_logger_placeholders(
-    file: &ParsedFile,
-) -> Vec<UnmatchedLoggerPlaceholder<'_>> {
+pub fn collect_logger_calls(file: &ParsedFile) -> Vec<PythonLoggerCall<'_>> {
     file.grep
         .root()
         .dfs()
-        .filter(|node| node.kind() == "call")
-        .filter_map(|node| check_logger_call_node(&node))
+        .filter_map(|node| extract_logger_call(&node))
         .collect()
 }
