@@ -556,7 +556,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "omni"
+name = "omni-lint"
 version = "0.1.0"
 dependencies = [
  "anyhow",
