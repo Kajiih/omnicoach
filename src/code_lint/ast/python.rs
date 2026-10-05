@@ -42,9 +42,9 @@ use self::functions::{direct_function_definitions, method_receiver_name, parse_p
 use self::logging::extract_logger_call;
 use self::scopes::scope_shadows_parameter;
 use self::strings::{
-    append_string_literal_segments, fstring_segments_and_interpolations, is_triple_quoted,
-    outermost_string_expression, positional_call_arguments, preceding_concatenated_literal_text,
-    static_string_text, string_prefix_flags,
+    fstring_segments_and_interpolations, is_triple_quoted, outermost_string_expression,
+    positional_call_arguments, preceding_concatenated_literal_text, static_string_text,
+    string_prefix_flags,
 };
 use crate::code_lint::ast::{
     AstNode, LiteralOccurrence, LiteralRole, LiteralValue, NullableCollectionReturn, ParsedFile,
@@ -2735,10 +2735,9 @@ mod tests {
         );
     }
 
-    /// `(style, preceding_text, literal_text, literals, [(field, conversion, format_spec)])`.
+    /// `(style, preceding_text, literals, [(field, conversion, format_spec)])`.
     type FormatStringSummary = (
         PythonFormatStyle,
-        String,
         String,
         Vec<String>,
         Vec<(String, Option<String>, Option<String>)>,
@@ -2763,7 +2762,6 @@ mod tests {
                 (
                     format_string.style,
                     format_string.preceding_text,
-                    format_string.literal_text,
                     format_string.literals,
                     placeholders,
                 )
@@ -2794,7 +2792,6 @@ mod tests {
             vec![(
                 PythonFormatStyle::FString,
                 String::new(),
-                "Copied '' ".to_owned(),
                 owned(&["Copied '", "' ", ""]),
                 vec![
                     field("source", Some("r"), Some(">8")),
@@ -2813,7 +2810,6 @@ mod tests {
             vec![(
                 PythonFormatStyle::StrFormat,
                 String::new(),
-                "Copied '' to '' {{raw}}".to_owned(),
                 owned(&["Copied '", "' to '", "' {{raw}}"]),
                 vec![field("", None, None), field("target.name", Some("s"), None)],
             )]
@@ -2829,7 +2825,6 @@ mod tests {
             vec![(
                 PythonFormatStyle::Printf,
                 String::new(),
-                "Got ,  and 100%%".to_owned(),
                 owned(&["Got ", ", ", " and 100%%"]),
                 vec![
                     field("", Some("s"), None),
@@ -2842,15 +2837,10 @@ mod tests {
     #[test]
     fn test_collect_format_strings_reads_concatenated_prefix() {
         let summaries = summarize_format_strings("message = (\"Load \" f\"'{name}'\")");
-        let (style, preceding_text, literal_text, ..) = &summaries[0];
+        let (style, preceding_text, ..) = &summaries[0];
         assert_eq!(
-            (
-                summaries.len(),
-                *style,
-                preceding_text.as_str(),
-                literal_text.as_str()
-            ),
-            (1, PythonFormatStyle::FString, "Load ", "Load ''")
+            (summaries.len(), *style, preceding_text.as_str()),
+            (1, PythonFormatStyle::FString, "Load ")
         );
     }
 

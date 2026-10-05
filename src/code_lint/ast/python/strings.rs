@@ -53,7 +53,7 @@ pub(super) fn positional_call_arguments<'a>(arguments: &RawNode<'a>) -> Vec<RawN
 
 /// Appends the literal text segments (excluding `{...}` interpolations) of a single `string` node
 /// to `buffer`, using node-relative byte offsets into `string_node.text()`.
-pub(super) fn append_string_literal_segments(string_node: &RawNode<'_>, buffer: &mut String) {
+fn append_string_literal_segments(string_node: &RawNode<'_>, buffer: &mut String) {
     let Some((segments, _)) = fstring_segments_and_interpolations(string_node) else {
         return;
     };
