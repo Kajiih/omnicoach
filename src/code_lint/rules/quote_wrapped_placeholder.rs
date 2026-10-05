@@ -13,7 +13,7 @@ use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Format placeholder `{expression}` is wrapped in literal quotes.",
-    rationale: "Manual quotes around a formatted value do not escape embedded quotes or control characters and make non-string values such as `None` or numbers indistinguishable from strings.",
+    rationale: "Manual quotes around a string-formatted value do not escape embedded quotes or control characters and make non-string values such as `None` or numbers indistinguishable from strings.",
     suggestion: "Replace the quoted placeholder with `{replacement}`, or wrap it in backticks when formatting a code identifier.",
 };
 
@@ -33,30 +33,30 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags Python format placeholders wrapped in literal single or double quotes.",
             what_it_does: "Flags bare string-formatted placeholders wrapped in matching single or \
-                           double quotes (`'{x}'`, `\"{x}\"`, `'%s'`, `'%(name)s'`) inside \
-                           human-readable Python format strings across all files, tests included. \
-                           Three formatting contexts are inspected: f-strings (`f\"...\"`), \
-                           strings formatted via `.format(...)` or `.format_map(...)` (or \
-                           `str.format(...)`), and strings formatted via the `%` operator or \
-                           passed with format arguments to a logger call (`debug`, `info`, \
-                           `warning`, `warn`, `error`, `exception`, `critical`, `fatal`, `log`). \
-                           Plain unformatted strings, docstrings, raw strings (`r\"...\"`), byte \
-                           strings (`b\"...\"`), placeholders that already carry a conversion \
-                           flag (`!r`, `!s`, `!a`), format specifier (`:...`), or debug `=`, \
-                           non-`%s` printf specifiers (`%r`, `%d`, `%.2f`), isolated quoted \
-                           placeholders without surrounding prose (`f\"'{value}'\"`), and \
-                           structured syntax (HTML attributes, SQL queries, JSON or TOML \
-                           fragments, `key=\"value\"` flags, and backtick code spans) are not \
-                           flagged.",
+                           double quotes (`'{x}'`, `\"{x}\"`, `'{}'`, `'{0}'`, `'%s'`, `'%(name)s'`) \
+                           inside human-readable Python format strings across all files, tests \
+                           included. Three formatting contexts are inspected: f-strings \
+                           (`f\"...\"`), strings formatted via `.format(...)` or \
+                           `.format_map(...)` (or `str.format(...)`), and strings formatted via \
+                           the `%` operator or passed with format arguments to a logger call \
+                           (`debug`, `info`, `warning`, `warn`, `error`, `exception`, `critical`, \
+                           `fatal`, `log`). Plain unformatted strings, docstrings, raw strings \
+                           (`r\"...\"`), byte strings (`b\"...\"`), placeholders that already \
+                           carry a conversion flag (`!r`, `!s`, `!a`), format specifier (`:...`), \
+                           or debug `=`, non-`%s` printf specifiers (`%r`, `%d`, `%.2f`), \
+                           isolated quoted placeholders without surrounding prose \
+                           (`f\"'{value}'\"`), and structured syntax (HTML attributes, SQL \
+                           queries, JSON or TOML fragments, `key=\"value\"` flags, and backtick \
+                           code spans) are not flagged.",
             why_is_this_bad: "Wrapping a default string placeholder in manual quotes fails when \
                               the runtime value contains the same quote character (`Invalid \
                               value 'can't'`) or control characters such as newlines and tabs, \
                               and it turns `None`, booleans, and numbers into quoted strings \
                               (`'None'`, `'42'`) that look identical to actual strings in logs \
                               and error messages.\n\n\
-                              Use representation formatting (`{x!r}` in f-strings and `.format()`, \
-                              `%r` or `%(name)r` in printf and logger format strings) so Python \
-                              quotes and escapes strings automatically while preserving the \
+                              Use `repr` formatting (`{x!r}` in f-strings and `.format()`, `%r` \
+                              or `%(name)r` in printf and logger format strings) so strings are \
+                              quoted and escaped automatically via `repr()` while preserving the \
                               representation of non-string types, or wrap the placeholder in \
                               backticks (`` `{x}` ``) when formatting a code identifier.",
             references: &[
@@ -65,8 +65,8 @@ pub const RULE: CodeRule = CodeRule {
                     url: "https://peps.python.org/pep-3101/",
                 },
                 Reference {
-                    title: "PEP 498: Literal String Interpolation",
-                    url: "https://peps.python.org/pep-0498/",
+                    title: "Python Documentation: Built-in Functions — repr()",
+                    url: "https://docs.python.org/3/library/functions.html#repr",
                 },
             ],
             examples: &[Example {
@@ -187,6 +187,17 @@ crate::test_utils::rule_test!(
                 mismatched_quotes => r#"
                     mismatched = f"Invalid value '{value}\" in input"
                 "#,
+                escaped_braces_json_in_fstring_and_str_format => r#"
+                    fstring_json = f'{{"key": "{value}", "mode": 1}}'
+                    format_json = '{{"key": "{}"}}'.format(value)
+                "#,
+                concatenated_structured_prefix_in_str_format_and_logger => r#"
+                    format_flag = ("Pass --output=" "'{path}'").format(path=output_path)
+                    logger.info("Set `mode = " "'%s'` in config", mode)
+                "#,
+                spaced_non_identifier_braces_in_str_format => r#"
+                    spaced = "Invalid '{ name }' in input".format()
+                "#,
             ],
             fail: [
                 fstring_single_quotes => r#"
@@ -207,6 +218,15 @@ crate::test_utils::rule_test!(
                 fstring_complex_expression => r#"
                     message = f"Failed to load '{path.name}' from disk"
                 "# => r#"f"Failed to load '{path.name}' from disk""#,
+                prose_starting_with_capitalized_english_verb => r#"
+                    message = "Update of '%s' failed" % item
+                "# => r#""Update of '%s' failed""#,
+                prose_with_preposition_before_quoted_placeholder => r#"
+                    message = f"Missing key in '{section}'"
+                "# => r#"f"Missing key in '{section}'""#,
+                prose_with_from_preposition_before_quoted_placeholder => r#"
+                    message = f"Cannot read config from '{path}'"
+                "# => r#"f"Cannot read config from '{path}'""#,
                 str_format_named_placeholder => r#"
                     message = "Invalid value '{name}' in input".format(name=value)
                 "# => r#""Invalid value '{name}' in input""#,
@@ -230,6 +250,12 @@ crate::test_utils::rule_test!(
                 "# => r#""Failed to connect to '%s' on port %d""#,
                 logger_log_level_percent_s => r#"
                     logging.log(logging.ERROR, "Failed to connect to '%s'", host)
+                "# => r#""Failed to connect to '%s'""#,
+                compound_logger_receiver_percent_s => r#"
+                    app.logger.info("Failed to connect to '%s'", host)
+                "# => r#""Failed to connect to '%s'""#,
+                logger_with_star_args_percent_s => r#"
+                    logger.info("Failed to connect to '%s'", *args)
                 "# => r#""Failed to connect to '%s'""#,
             ],
         },

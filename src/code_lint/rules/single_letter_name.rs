@@ -145,6 +145,12 @@ crate::test_utils::rule_test!(
                 aliased_import_exempt => r#"
                     import os as a
                 "#,
+                attribute_and_subscript_targets_exempt => r#"
+                    class Worker:
+                        def update(self, items, index) -> None:
+                            self.b = 1
+                            items[index] = 2
+                "#,
             ],
             fail: [
                 rust_only_allowed_char_flagged_in_python => r#"
@@ -157,6 +163,10 @@ crate::test_utils::rule_test!(
                     def foo(b: int = 1):
                         pass
                 "# => "b",
+                typed_varargs_parameter => r#"
+                    def total(*a: int) -> int:
+                        return sum(a)
+                "# => "a",
                 multi_assignment => r#"
                     x, d = 3, 4
                 "# => "d",

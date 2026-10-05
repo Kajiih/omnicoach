@@ -39,9 +39,6 @@ pub const RULE: CodeRule = CodeRule {
                            `cls.helper()`) whose definition appears later in the same scope. \
                            At most one finding is reported per caller and callee pair, at the \
                            first forward call site.\n\n\
-                           Multi-part definitions that share a name (`@overload` stubs and \
-                           their implementation, or a `@property` getter and its setter or \
-                           deleter) are grouped at the position of their first `def`. \
                            Several constructs are not flagged: direct and mutual recursion \
                            (where two or more functions call each other in a cycle, so one must \
                            appear first), calls inside class constructors (`__init__`, \
@@ -184,7 +181,7 @@ crate::test_utils::rule_test!(
                         def _finalize(self) -> None:
                             pass
                 "#,
-                overload_stubs_and_implementation_grouped => r#"
+                overload_stubs_and_implementation_before_caller => r#"
                     from typing import overload
 
                     @overload
@@ -193,11 +190,11 @@ crate::test_utils::rule_test!(
                     @overload
                     def parse(raw: bytes) -> int: ...
 
-                    def run(raw: str) -> int:
-                        return parse(raw)
-
                     def parse(raw: str | bytes) -> int:
                         return int(raw)
+
+                    def run(raw: str) -> int:
+                        return parse(raw)
                 "#,
                 property_getter_and_setter_pair => r#"
                     class Box:
@@ -206,7 +203,7 @@ crate::test_utils::rule_test!(
                             return self._value
 
                         def reset(self) -> None:
-                            self.value(0)
+                            self.value = 0
 
                         @value.setter
                         def value(self, new_val: int) -> None:
@@ -245,6 +242,10 @@ crate::test_utils::rule_test!(
                             return helper()
                         return 0
 
+                    def via_walrus_in_comprehension(items, factory) -> int:
+                        _ = [helper for _ in items if (helper := factory)]
+                        return helper()
+
                     def helper(x: int = 0) -> int:
                         return x
                 "#,
@@ -263,8 +264,8 @@ crate::test_utils::rule_test!(
 
                     def via_match(action) -> int:
                         match action:
-                            case helper:
-                                return helper()
+                            case [first] as helper:
+                                return helper(first)
 
                     def via_import_and_nested_def() -> int:
                         from math import cos as helper
@@ -402,6 +403,33 @@ crate::test_utils::rule_test!(
                     def is_odd(n: int) -> bool:
                         return False if n == 0 else is_even(n - 1)
                 "# => r#"is_even(n)"#,
+                forward_call_across_singledispatch_underscore_handlers => r#"
+                    from functools import singledispatch
+
+                    @singledispatch
+                    def handle(x: object) -> int:
+                        return helper()
+
+                    @handle.register
+                    def _(x: int) -> int:
+                        return x
+
+                    @handle.register
+                    def _(x: str) -> int:
+                        return len(x)
+
+                    def helper() -> int:
+                        return 0
+                "# => r#"helper()"#,
+                forward_call_in_nested_function_default_argument => r#"
+                    def outer() -> int:
+                        def inner(val: int = helper()) -> int:
+                            return val
+                        return inner()
+
+                    def helper() -> int:
+                        return 42
+                "# => r#"helper()"#,
             ],
         }
     }
