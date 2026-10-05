@@ -2,10 +2,12 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    PythonParameterKind, collect_mutable_collection_types, extract_function_signatures,
-    is_parameter_mutated_or_escaping, read_only_collection_replacements,
+    AnnotationTraversalDepth, CollectionKind, PythonCollectionType, PythonParameterKind,
+    collect_collection_types, extract_function_signatures,
+    has_unaliased_collections_abc_set_import, is_parameter_mutated_or_escaping,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
+use crate::code_lint::policy::read_only_collection_replacements;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
@@ -86,6 +88,7 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
+    let abc_set_imported = has_unaliased_collections_abc_set_import(file);
     let mut diagnostics = Vec::new();
     for signature in extract_function_signatures(file) {
         if signature.is_exempt_from_body_usage_rules() {
@@ -98,14 +101,21 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             let Some(ref type_node) = parameter.type_node else {
                 continue;
             };
-            let matched = collect_mutable_collection_types(type_node);
+            let matched: Vec<_> = collect_collection_types(
+                type_node,
+                AnnotationTraversalDepth::TransparentWrappersOnly,
+                abc_set_imported,
+            )
+            .into_iter()
+            .filter(|collection_type| collection_type.kind == CollectionKind::AbstractMutable)
+            .collect();
             if matched.is_empty() {
                 continue;
             }
             if is_parameter_mutated_or_escaping(&signature.node, &parameter.name) {
                 continue;
             }
-            let token = matched.join(", ");
+            let token = PythonCollectionType::joined_paths(&matched);
             let replacement = read_only_collection_replacements(&matched);
             let expression = type_node.text();
             diagnostics.push(rule.diagnostic_at_node(

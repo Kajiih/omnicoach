@@ -2,10 +2,11 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    collect_concrete_collection_types, collect_public_class_attributes,
-    has_unaliased_collections_abc_set_import, read_only_collection_replacements,
+    AnnotationTraversalDepth, CollectionKind, PythonCollectionType, collect_collection_types,
+    collect_public_class_attributes, has_unaliased_collections_abc_set_import,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
+use crate::code_lint::policy::read_only_collection_replacements;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, EnforcementMode, Example, ImpactedQuality,
@@ -97,11 +98,18 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
     let abc_set_imported = has_unaliased_collections_abc_set_import(file);
     let mut diagnostics = Vec::new();
     for attribute in collect_public_class_attributes(file) {
-        let matched = collect_concrete_collection_types(&attribute.type_node, abc_set_imported);
+        let matched: Vec<_> = collect_collection_types(
+            &attribute.type_node,
+            AnnotationTraversalDepth::CovariantPositions,
+            abc_set_imported,
+        )
+        .into_iter()
+        .filter(|collection_type| collection_type.kind == CollectionKind::ConcreteMutable)
+        .collect();
         if matched.is_empty() {
             continue;
         }
-        let token = matched.join(", ");
+        let token = PythonCollectionType::joined_paths(&matched);
         let replacement = read_only_collection_replacements(&matched);
         let expression = attribute.type_node.text();
         diagnostics.push(rule.diagnostic_at_node(
