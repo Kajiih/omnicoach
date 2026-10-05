@@ -2,6 +2,7 @@
 
 use crate::code_lint::ast::{self, AstNode, LiteralRole, LiteralValue, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
+use crate::code_lint::policy::is_trivial_literal;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality,
@@ -174,7 +175,9 @@ fn group_literals(file: &ParsedFile) -> Vec<LiteralGroup<'_>> {
     let mut groups: Vec<LiteralGroup<'_>> = Vec::new();
     for occurrence in ast::collect_literal_occurrences(file) {
         let start = occurrence.node.span().start;
-        if occurrence.value.is_trivial() || test_ranges.iter().any(|range| range.contains(&start)) {
+        if is_trivial_literal(&occurrence.value)
+            || test_ranges.iter().any(|range| range.contains(&start))
+        {
             continue;
         }
         let index = *index_by_value.entry(occurrence.value).or_insert_with(|| {

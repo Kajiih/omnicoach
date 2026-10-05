@@ -114,7 +114,7 @@ define_architecture! {
     CodeLintContract    => [CodeLintSemantic, CodeLintAst, RuleDeclaration],
     /// Inline comment suppression tracker and directive policies (`code_lint::suppression`).
     CodeLintSuppression => [CodeLintContract, CodeLintSemantic, RuleDeclaration, Config],
-    /// Suggestion policy shared by several code rules, built from AST facts (`code_lint::policy`).
+    /// Policy shared by several code rules or by a rule and the test harness, built from AST facts (`code_lint::policy`).
     CodeLintPolicy      => [CodeLintAst],
     /// Concrete static analysis linter rules (`code_lint::rules`).
     CodeLintRules       => [CodeLintContract, CodeLintPolicy, RuleDeclaration],
@@ -141,7 +141,7 @@ define_architecture! {
 
     // --- Test Harness & Entrypoints ---
     /// The `rule_test!` harness and snapshot fixtures (`test_utils`).
-    TestUtils           => [CodeLintContract, CommandLintContract],
+    TestUtils           => [CodeLintContract, CodeLintPolicy, CommandLintContract],
     /// CLI entrypoints (`bin::*`).
     Bin                 => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog],
 }

@@ -306,31 +306,6 @@ impl LiteralValue {
             Self::Str(_) | Self::Bytes(_) => None,
         }
     }
-
-    /// True for values not worth naming: strings shorter than 2 characters or without an
-    /// alphanumeric character (a `\` and the character after it count as one
-    /// non-alphanumeric character); integers -1, 0, 1, 2; floats -1.0, 0.0, 1.0, 2.0.
-    #[must_use]
-    pub fn is_trivial(&self) -> bool {
-        match self {
-            Self::Str(content) | Self::Bytes(content) => {
-                let mut units = 0_usize;
-                let mut has_alphanumeric = false;
-                let mut characters = content.chars();
-                while let Some(character) = characters.next() {
-                    units += 1;
-                    if character == '\\' {
-                        characters.next();
-                    } else if character.is_alphanumeric() {
-                        has_alphanumeric = true;
-                    }
-                }
-                units < 2 || !has_alphanumeric
-            }
-            Self::Int(value) => (-1..=2).contains(value),
-            Self::Float(bits) => [-1.0, 0.0, 1.0, 2.0].contains(&f64::from_bits(*bits)),
-        }
-    }
 }
 
 /// Whether a literal defines a named constant or is used inline.
@@ -585,24 +560,5 @@ mod tests {
             })
             .collect();
         assert_eq!(argument_texts, vec![vec![expected_argument.to_owned()]]);
-    }
-
-    #[rstest::rstest]
-    #[case::single_char(LiteralValue::Str("a".to_string()), true)]
-    #[case::delimiter(LiteralValue::Str(", ".to_string()), true)]
-    #[case::escaped_newline(LiteralValue::Str("\\n".to_string()), true)]
-    #[case::escaped_crlf(LiteralValue::Bytes("\\r\\n".to_string()), true)]
-    #[case::short_word(LiteralValue::Str("jj".to_string()), false)]
-    #[case::word_with_escape(LiteralValue::Str("a\\n".to_string()), false)]
-    #[case::small_integer(LiteralValue::Int(-1), true)]
-    #[case::integer_two(LiteralValue::Int(2), true)]
-    #[case::integer_minus_two(LiteralValue::Int(-2), false)]
-    #[case::integer_three(LiteralValue::Int(3), false)]
-    #[case::unit_float(LiteralValue::float(-1.0), true)]
-    #[case::float_two(LiteralValue::float(2.0), true)]
-    #[case::half_float(LiteralValue::float(0.5), false)]
-    #[case::raw_regex_class(LiteralValue::Str("\\\\s+".to_string()), false)]
-    fn test_literal_value_is_trivial(#[case] value: LiteralValue, #[case] expected: bool) {
-        assert_eq!(value.is_trivial(), expected);
     }
 }
