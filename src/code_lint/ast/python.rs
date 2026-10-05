@@ -2482,63 +2482,44 @@ mod tests {
         let classes = extract_classes(&file);
         assert_eq!(classes.len(), 1);
         assert!(classes[0].bases.is_empty());
-        assert!(!classes[0].has_contract_base());
     }
 
     #[test]
-    fn test_python_class_info_fake_name_and_contract_base() {
+    fn test_python_base_class_is_structural_marker() {
         let source = indoc::indoc! {r"
-            class FakeClient(HttpClient):
-                pass
-
-            class _FakeGateway(object):
-                pass
-
-            class Fake_Repo(Generic[T]):
-                pass
-
-            class Fake2FA(Protocol):
-                pass
-
-            class FakeExtGeneric(typing_extensions.Generic[T]):
-                pass
-
-            class FakeExtProtocol(typing_extensions.Protocol, **kwargs):
-                pass
-
-            class Fake(ABC):
-                pass
-
-            class Faker:
-                pass
-
-            class Fakeable:
+            class C(
+                HttpClient,
+                object,
+                Generic[T],
+                Protocol,
+                typing_extensions.Generic[T],
+                typing_extensions.Protocol,
+                ABC,
+                abc.ABC,
+                Repository[T],
+                **kwargs,
+            ):
                 pass
         "};
         let file = ParsedFile::new(source, SupportLang::Python);
         let classes = extract_classes(&file);
-        let summary: Vec<(&str, bool, bool)> = classes
+        let summary: Vec<(&str, bool)> = classes[0]
+            .bases
             .iter()
-            .map(|class_info| {
-                (
-                    class_info.name.as_str(),
-                    class_info.is_fake_class_name(),
-                    class_info.has_contract_base(),
-                )
-            })
+            .map(|base| (base.name.as_str(), base.is_structural_marker()))
             .collect();
         assert_eq!(
             summary,
             vec![
-                ("FakeClient", true, true),
-                ("_FakeGateway", true, false),
-                ("Fake_Repo", true, false),
-                ("Fake2FA", true, false),
-                ("FakeExtGeneric", true, false),
-                ("FakeExtProtocol", true, false),
-                ("Fake", true, false),
-                ("Faker", false, false),
-                ("Fakeable", false, false),
+                ("HttpClient", false),
+                ("object", true),
+                ("Generic[T]", true),
+                ("Protocol", true),
+                ("typing_extensions.Generic[T]", true),
+                ("typing_extensions.Protocol", true),
+                ("ABC", true),
+                ("abc.ABC", true),
+                ("Repository[T]", false),
             ]
         );
     }

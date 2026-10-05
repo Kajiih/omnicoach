@@ -27,12 +27,11 @@ impl PythonBaseClass<'_> {
             .map_or(self.name.as_str(), |(base, _)| base.trim())
     }
 
-    /// Returns true if this base class names a collaborator contract (an interface, domain
-    /// `Protocol`, domain `ABC`, or concrete base class) rather than a structural marker
-    /// (`object`, `Generic`, `Protocol`, or `ABC` itself).
+    /// Returns true if this base class is a structural marker rather than a supertype:
+    /// `object`, `Generic`, `Protocol`, or `ABC` itself (optionally subscripted or qualified).
     #[must_use]
-    pub fn is_contract_base(&self) -> bool {
-        !matches!(
+    pub fn is_structural_marker(&self) -> bool {
+        matches!(
             self.unsubscripted_name(),
             "object"
                 | "builtins.object"
@@ -76,27 +75,6 @@ impl<'a> PythonClassInfo<'a> {
                     .strip_suffix(target)
                     .is_some_and(|prefix| prefix.ends_with('.'))
         })
-    }
-
-    /// Returns true if the class name starts with the word `Fake` (after any leading `_`),
-    /// such as `FakeClient`, `_FakeClient`, `Fake_Client`, `Fake2FA`, or `Fake`, but not
-    /// words where `Fake` is followed by a lowercase letter (`Faker`, `Fakeable`).
-    #[must_use]
-    pub fn is_fake_class_name(&self) -> bool {
-        self.name
-            .trim_start_matches('_')
-            .strip_prefix("Fake")
-            .is_some_and(|rest| {
-                rest.is_empty()
-                    || !rest.starts_with(|character: char| character.is_ascii_lowercase())
-            })
-    }
-
-    /// Returns true if the class declares at least one collaborator contract base class
-    /// (excluding `object`, `Generic[...]`, `Protocol[...]`, and `ABC`).
-    #[must_use]
-    pub fn has_contract_base(&self) -> bool {
-        self.bases.iter().any(PythonBaseClass::is_contract_base)
     }
 
     /// The `@dataclass` or `@dataclasses.dataclass` decorator, matched by name rather than by
