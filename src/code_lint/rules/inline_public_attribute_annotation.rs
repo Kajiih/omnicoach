@@ -1,7 +1,7 @@
 //! Flags public Python instance attributes annotated inline inside methods.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::ast::python::collect_inline_public_attribute_annotations;
+use crate::code_lint::ast::python::collect_instance_attribute_annotations;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -89,8 +89,15 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    collect_inline_public_attribute_annotations(file)
+    collect_instance_attribute_annotations(file)
         .into_iter()
+        .filter(|attribute| {
+            // Moving the annotation to the body of a field-synthesizing class turns it into a
+            // constructor field, and a bare `Final` is invalid in a class body without a value.
+            !attribute.name.starts_with('_')
+                && !attribute.is_in_field_synthesizing_class
+                && !attribute.is_bare_final()
+        })
         .map(|attribute| {
             rule.diagnostic_at_node(
                 path,
@@ -99,7 +106,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                     ("name", &attribute.name),
                     ("class", &attribute.class_name),
                     ("function", &attribute.method_name),
-                    ("expression", &attribute.annotation_text),
+                    ("expression", &attribute.annotation.text()),
                 ],
             )
         })
