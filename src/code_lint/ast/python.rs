@@ -18,7 +18,7 @@ pub use self::annotations::{
 };
 pub use self::classes::{
     PythonAnnotatedAttribute, PythonBaseClass, PythonClassInfo, PythonInstanceAttributeAnnotation,
-    collect_instance_attribute_annotations, collect_public_class_attributes, extract_classes,
+    collect_class_attributes, collect_instance_attribute_annotations, extract_classes,
 };
 pub use self::format_strings::{
     PythonFormatPlaceholder, PythonFormatString, PythonFormatStyle, collect_format_strings,
@@ -2407,26 +2407,32 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::class_level("class C:\n    items: list[int]", &[("items", false)])]
-    #[case::private_skipped("class C:\n    _items: list[int]", &[])]
-    #[case::init_attribute("class C:\n    def __init__(self):\n        self.items: list[int] = []", &[("items", false)])]
-    #[case::self_mutation("class C:\n    items: list[int]\n    def add(self):\n        self.items.append(1)", &[("items", true)])]
-    #[case::cls_mutation("class C:\n    items: list[int]\n    @classmethod\n    def add(cls):\n        cls.items.append(1)", &[("items", true)])]
-    #[case::class_name_mutation("class C:\n    items: list[int]\n    def add(self):\n        C.items.append(1)", &[("items", true)])]
-    #[case::subscript_delete("class C:\n    items: list[int]\n    def pop(self):\n        del self.items[0]", &[("items", true)])]
-    #[case::protocol_skipped("class P(Protocol):\n    items: list[int]", &[])]
-    fn test_collect_public_class_attributes(
+    #[case::class_level("class C:\n    items: list[int]", &[("items", false, false)])]
+    #[case::private_included("class C:\n    _items: list[int]", &[("_items", false, false)])]
+    #[case::init_attribute("class C:\n    def __init__(self):\n        self.items: list[int] = []", &[("items", false, false)])]
+    #[case::self_mutation("class C:\n    items: list[int]\n    def add(self):\n        self.items.append(1)", &[("items", true, false)])]
+    #[case::cls_mutation("class C:\n    items: list[int]\n    @classmethod\n    def add(cls):\n        cls.items.append(1)", &[("items", true, false)])]
+    #[case::class_name_mutation("class C:\n    items: list[int]\n    def add(self):\n        C.items.append(1)", &[("items", true, false)])]
+    #[case::subscript_delete("class C:\n    items: list[int]\n    def pop(self):\n        del self.items[0]", &[("items", true, false)])]
+    #[case::protocol_member("class P(Protocol):\n    items: list[int]", &[("items", false, true)])]
+    fn test_collect_class_attributes(
         #[case] source: &str,
-        #[case] expected: &[(&str, bool)],
+        #[case] expected: &[(&str, bool, bool)],
     ) {
         let file = ParsedFile::new(source, SupportLang::Python);
-        let actual: Vec<(String, bool)> = collect_public_class_attributes(&file)
+        let actual: Vec<(String, bool, bool)> = collect_class_attributes(&file)
             .into_iter()
-            .map(|attribute| (attribute.name, attribute.is_mutated_in_class))
+            .map(|attribute| {
+                (
+                    attribute.name,
+                    attribute.is_mutated_in_class,
+                    attribute.is_in_protocol_or_abc,
+                )
+            })
             .collect();
-        let expected: Vec<(String, bool)> = expected
+        let expected: Vec<(String, bool, bool)> = expected
             .iter()
-            .map(|(name, mutated)| ((*name).to_string(), *mutated))
+            .map(|(name, mutated, in_protocol)| ((*name).to_string(), *mutated, *in_protocol))
             .collect();
         assert_eq!(actual, expected);
     }
