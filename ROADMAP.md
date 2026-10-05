@@ -29,7 +29,6 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
     - `annotations.rs`: the collection vocabularies behind `collect_concrete_collection_types`, `collect_mutable_collection_types` and `collect_specific_collection_types`; `read_only_collection_replacements` and `immutable_constant_collection_replacements` (suggestion text); `collect_nullable_collection_return_types` and `collect_nullable_collection_returns`.
     - `scopes.rs`: `ForwardCall` and `collect_forward_calls` (only used by the disabled `call-before-definition`).
     - `python.rs`: `PythonMutableModuleConstant` and `collect_mutable_module_constants`.
-    - `classes.rs`: `PythonInlinePublicAttributeAnnotation` and `collect_inline_public_attribute_annotations`.
   - *Target*: split each into a construct-level fact in `ast/python` (for example "type annotation subscripts", "module-level assignments", "class attribute declarations") and policy in the rule. Do it with the typed CST decision above, so the construct API is designed once.
 
 ## Rule Engine & Declarative Rules

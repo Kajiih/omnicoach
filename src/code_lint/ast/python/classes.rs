@@ -310,7 +310,7 @@ fn collect_mutated_class_attr_names_rec(
 }
 
 /// Walks statements inside a method body (without entering nested functions, classes, or lambdas)
-/// and collects `(assignment_node, attr_name, type_node)` for public `self.<attr>: <type>` annotations.
+/// and collects `(assignment_node, attr_name, type_node)` for `self.<attr>: <type>` annotations.
 fn collect_self_annotated_assignments_rec<'a>(
     node: &RawNode<'a>,
     out: &mut Vec<(RawNode<'a>, String, RawNode<'a>)>,
@@ -329,10 +329,7 @@ fn collect_self_annotated_assignments_rec<'a>(
         })
         && let Some(attribute_node) = left.field("attribute")
     {
-        let attribute_name = attribute_node.text().into_owned();
-        if !attribute_name.starts_with('_') {
-            out.push((node.clone(), attribute_name, type_node));
-        }
+        out.push((node.clone(), attribute_node.text().into_owned(), type_node));
     }
     for child in node.children() {
         collect_self_annotated_assignments_rec(&child, out);
@@ -398,6 +395,9 @@ pub fn collect_public_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotated
                     collect_self_annotated_assignments_rec(&statement, &mut annotated);
                 }
                 for (_, attr_name, type_node) in annotated {
+                    if attr_name.starts_with('_') {
+                        continue;
+                    }
                     let is_mutated_in_class = mutated_attrs.contains(&attr_name);
                     out.push(PythonAnnotatedAttribute {
                         class_name: class_name.clone(),
@@ -413,35 +413,46 @@ pub fn collect_public_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotated
     out
 }
 
-/// A public Python instance attribute annotated inline (`self.<name>: <type>`) inside an instance method.
+/// A Python instance attribute annotated inline (`self.<name>: <type>`) inside an instance method.
 #[derive(Clone)]
-pub struct PythonInlinePublicAttributeAnnotation<'a> {
-    /// Name of the enclosing class (`{class}`).
+pub struct PythonInstanceAttributeAnnotation<'a> {
+    /// Name of the enclosing class.
     pub class_name: String,
-    /// Name of the enclosing instance method (`{function}`).
+    /// True if the enclosing class synthesizes constructor fields from class-body annotations
+    /// (`@dataclass`, `attrs` decorators, or Pydantic `BaseModel` subclasses).
+    pub is_in_field_synthesizing_class: bool,
+    /// Name of the enclosing instance method.
     pub method_name: String,
-    /// Public attribute identifier (`{name}`, without `"self."`).
+    /// Attribute identifier, without `"self."`.
     pub name: String,
-    /// Source text of the type annotation (`{expression}`, e.g. `"int"` or `"Final[int]"`).
-    pub annotation_text: String,
+    /// Type annotation AST node (`int` or `Final[int]`).
+    pub annotation: AstNode<'a>,
     /// Full `assignment` AST node (`self.foo: int = 1` or `self.foo: int`).
     pub assignment_node: AstNode<'a>,
 }
 
-/// Collects inline type annotations on public instance attributes (`self.<attr>: <type>`) inside
+impl PythonInstanceAttributeAnnotation<'_> {
+    /// Returns true if the annotation is an unparameterized `Final` qualifier (`Final`,
+    /// `typing.Final`, `Annotated[Final, ...]`), which PEP 591 forbids in a class body without
+    /// an initializer.
+    #[must_use]
+    pub fn is_bare_final(&self) -> bool {
+        is_bare_final_annotation(&self.annotation.raw)
+    }
+}
+
+/// Collects inline type annotations on instance attributes (`self.<attr>: <type>`) inside
 /// instance methods across `file`.
 ///
-/// Only direct instance methods (not decorated with `@staticmethod` or `@classmethod`, and whose
-/// first parameter is the receiver `self`) of a non-field-synthesizing `class_definition` are
-/// inspected. `@dataclass`, `attrs`, and Pydantic `BaseModel` classes are skipped because moving
-/// an attribute annotation to their class body turns it into a constructor field.
+/// Only direct instance methods of a `class_definition` are inspected: not decorated with
+/// `@staticmethod` or `@classmethod`, and whose first parameter is the receiver `self`.
 #[must_use]
-pub fn collect_inline_public_attribute_annotations(
+pub fn collect_instance_attribute_annotations(
     file: &ParsedFile,
-) -> Vec<PythonInlinePublicAttributeAnnotation<'_>> {
+) -> Vec<PythonInstanceAttributeAnnotation<'_>> {
     let mut out = Vec::new();
     for class_node in file.grep.root().dfs() {
-        if class_node.kind() != "class_definition" || is_field_synthesizing_class_raw(&class_node) {
+        if class_node.kind() != "class_definition" {
             continue;
         }
         let Some(name_node) = class_node.field("name") else {
@@ -451,6 +462,7 @@ pub fn collect_inline_public_attribute_annotations(
             continue;
         };
         let class_name = name_node.text().into_owned();
+        let is_in_field_synthesizing_class = is_field_synthesizing_class_raw(&class_node);
 
         for (_, function_node) in direct_function_definitions(&body) {
             if method_receiver_name(&function_node, false).is_some()
@@ -463,15 +475,14 @@ pub fn collect_inline_public_attribute_annotations(
                     collect_self_annotated_assignments_rec(&statement, &mut annotated);
                 }
                 for (assignment_node, attribute_name, type_node) in annotated {
-                    if !is_bare_final_annotation(&type_node) {
-                        out.push(PythonInlinePublicAttributeAnnotation {
-                            class_name: class_name.clone(),
-                            method_name: method_name.clone(),
-                            name: attribute_name,
-                            annotation_text: type_node.text().into_owned(),
-                            assignment_node: AstNode::from_raw(assignment_node),
-                        });
-                    }
+                    out.push(PythonInstanceAttributeAnnotation {
+                        class_name: class_name.clone(),
+                        is_in_field_synthesizing_class,
+                        method_name: method_name.clone(),
+                        name: attribute_name,
+                        annotation: AstNode::from_raw(type_node),
+                        assignment_node: AstNode::from_raw(assignment_node),
+                    });
                 }
             }
         }

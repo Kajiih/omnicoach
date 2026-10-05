@@ -17,9 +17,8 @@ pub use self::annotations::{
     immutable_constant_collection_replacements, read_only_collection_replacements,
 };
 pub use self::classes::{
-    PythonAnnotatedAttribute, PythonBaseClass, PythonClassInfo,
-    PythonInlinePublicAttributeAnnotation, collect_inline_public_attribute_annotations,
-    collect_public_class_attributes, extract_classes,
+    PythonAnnotatedAttribute, PythonBaseClass, PythonClassInfo, PythonInstanceAttributeAnnotation,
+    collect_instance_attribute_annotations, collect_public_class_attributes, extract_classes,
 };
 pub use self::format_strings::{
     PythonFormatPlaceholder, PythonFormatString, PythonFormatStyle, collect_format_strings,
@@ -2549,32 +2548,28 @@ mod tests {
         "class C:\n    def __init__(self):\n        self.x: int = 1\n    async def reset(self):\n        if True:\n            self.y: str",
         &[("C", "__init__", "x", "int"), ("C", "reset", "y", "str")]
     )]
-    #[case::parameterized_final_collected_bare_final_skipped(
-        "class C:\n    def __init__(self):\n        self.a: Final = 1\n        self.b: typing.Final = 2\n        self.c: Annotated[Final, 'm'] = 3\n        self.d: Final[int] = 4",
-        &[("C", "__init__", "d", "Final[int]")]
-    )]
-    #[case::private_and_unannotated_skipped(
+    #[case::private_collected_unannotated_skipped(
         "class C:\n    def __init__(self):\n        self._p: int = 1\n        self.pub = 2",
-        &[]
+        &[("C", "__init__", "_p", "int")]
     )]
     #[case::staticmethod_classmethod_and_nested_func_skipped(
         "class C:\n    @staticmethod\n    def sm(self):\n        self.a: int = 1\n    @classmethod\n    def cm(cls):\n        cls.b: int = 2\n    def run(self):\n        def inner(self):\n            self.c: int = 3",
         &[]
     )]
-    fn test_collect_inline_public_attribute_annotations(
+    fn test_collect_instance_attribute_annotations(
         #[case] source: &str,
         #[case] expected: &[(&str, &str, &str, &str)],
     ) {
         let file = ParsedFile::new(source, SupportLang::Python);
         let actual: Vec<(String, String, String, String)> =
-            collect_inline_public_attribute_annotations(&file)
+            collect_instance_attribute_annotations(&file)
                 .into_iter()
                 .map(|attribute| {
                     (
                         attribute.class_name,
                         attribute.method_name,
                         attribute.name,
-                        attribute.annotation_text,
+                        attribute.annotation.text().into_owned(),
                     )
                 })
                 .collect();
@@ -2590,6 +2585,48 @@ mod tests {
             })
             .collect();
         assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::bare_final(
+        "class C:\n    def __init__(self):\n        self.a: Final = 1",
+        (true, false)
+    )]
+    #[case::qualified_bare_final(
+        "class C:\n    def __init__(self):\n        self.a: typing.Final = 1",
+        (true, false)
+    )]
+    #[case::annotated_bare_final(
+        "class C:\n    def __init__(self):\n        self.a: Annotated[Final, 'm'] = 1",
+        (true, false)
+    )]
+    #[case::parameterized_final(
+        "class C:\n    def __init__(self):\n        self.a: Final[int] = 1",
+        (false, false)
+    )]
+    #[case::dataclass(
+        "@dataclass\nclass C:\n    def __post_init__(self):\n        self.a: int = 1",
+        (false, true)
+    )]
+    #[case::pydantic_model(
+        "class C(BaseModel):\n    def model_post_init(self, context):\n        self.a: int = 1",
+        (false, true)
+    )]
+    fn test_instance_attribute_annotation_facts(
+        #[case] source: &str,
+        #[case] expected: (bool, bool),
+    ) {
+        let file = ParsedFile::new(source, SupportLang::Python);
+        let actual: Vec<(bool, bool)> = collect_instance_attribute_annotations(&file)
+            .iter()
+            .map(|attribute| {
+                (
+                    attribute.is_bare_final(),
+                    attribute.is_in_field_synthesizing_class,
+                )
+            })
+            .collect();
+        assert_eq!(actual, [expected]);
     }
 
     #[rstest::rstest]
