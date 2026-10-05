@@ -528,33 +528,45 @@ pub(super) fn function_name_and_is_top_level<'a>(
     Some((name_node.text(), is_top_level))
 }
 
-/// Returns the formatted subscript label (`"os.environ[...]"` or `"environ[...]"`) if `node`
-/// indexes into Python's `os.environ` or `environ` mapping.
-fn python_environ_subscript_label(node: &RawNode<'_>) -> Option<&'static str> {
+/// A Python subscript reading the `os.environ` (or bare `environ`) mapping.
+pub struct PythonEnvironSubscript<'a> {
+    /// The whole subscript (`os.environ["HOST"]`).
+    pub node: AstNode<'a>,
+    /// The mapping expression being indexed (`os.environ` or `environ`).
+    pub mapping: AstNode<'a>,
+}
+
+/// Returns the mapping expression if `node` is a subscript indexing Python's `os.environ` or
+/// `environ`.
+fn environ_subscript_mapping<'a>(node: &RawNode<'a>) -> Option<RawNode<'a>> {
     if node.kind() != "subscript" {
         return None;
     }
     let value = node.field("value")?;
-    match value.kind().as_ref() {
-        "identifier" if value.text() == "environ" => Some("environ[...]"),
+    let is_environ = match value.kind().as_ref() {
+        "identifier" => value.text() == "environ",
         "attribute" => {
             let obj = value.field("object")?;
             let attr = value.field("attribute")?;
-            (obj.text() == "os" && attr.text() == "environ").then_some("os.environ[...]")
+            obj.text() == "os" && attr.text() == "environ"
         }
-        _ => None,
-    }
+        _ => false,
+    };
+    is_environ.then_some(value)
 }
 
 /// Collects all Python subscript expressions indexing into `os.environ` or `environ`.
 #[must_use]
-pub fn collect_environ_subscripts(file: &ParsedFile) -> Vec<(AstNode<'_>, &'static str)> {
+pub fn collect_environ_subscripts(file: &ParsedFile) -> Vec<PythonEnvironSubscript<'_>> {
     file.grep
         .root()
         .dfs()
         .filter_map(|node| {
-            let label = python_environ_subscript_label(&node)?;
-            Some((AstNode::from_raw(node), label))
+            let mapping = environ_subscript_mapping(&node)?;
+            Some(PythonEnvironSubscript {
+                node: AstNode::from_raw(node),
+                mapping: AstNode::from_raw(mapping),
+            })
         })
         .collect()
 }
