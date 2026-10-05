@@ -8,13 +8,23 @@ use crate::code_lint::ast::python::{CollectionShape, PythonCollectionType};
 /// joined with `", "`.
 #[must_use]
 pub fn read_only_collection_replacements(collection_types: &[PythonCollectionType]) -> String {
+    replacements_by_shape(collection_types, |shape| match shape {
+        CollectionShape::Mapping => "collections.abc.Mapping",
+        CollectionShape::Set => "collections.abc.Set",
+        CollectionShape::Sequence | CollectionShape::Iterable => "collections.abc.Sequence",
+    })
+}
+
+/// The `replacement` of each shape in `collection_types`, deduplicated in order and joined with
+/// `", "`.
+#[must_use]
+pub fn replacements_by_shape(
+    collection_types: &[PythonCollectionType],
+    replacement: impl Fn(CollectionShape) -> &'static str,
+) -> String {
     let mut replacements: Vec<&str> = Vec::new();
     for collection_type in collection_types {
-        let replacement = match collection_type.shape {
-            CollectionShape::Mapping => "collections.abc.Mapping",
-            CollectionShape::Set => "collections.abc.Set",
-            CollectionShape::Sequence | CollectionShape::Iterable => "collections.abc.Sequence",
-        };
+        let replacement = replacement(collection_type.shape);
         if !replacements.contains(&replacement) {
             replacements.push(replacement);
         }
