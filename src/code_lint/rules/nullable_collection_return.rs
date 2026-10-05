@@ -1,6 +1,6 @@
 //! Flags function return annotations that wrap a collection type in `| None`, `Optional`, or `Option`.
 
-use crate::code_lint::ast::{ParsedFile, collect_nullable_collection_returns};
+use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -131,23 +131,150 @@ pub const RULE: CodeRule = CodeRule {
     check: check_file,
 };
 
+const RUST_COLLECTION_TYPES: &[&str] = &[
+    "Vec",
+    "VecDeque",
+    "LinkedList",
+    "HashMap",
+    "BTreeMap",
+    "HashSet",
+    "BTreeSet",
+    "BinaryHeap",
+];
+
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    collect_nullable_collection_returns(file)
-        .into_iter()
-        .map(|finding| {
-            let token = finding.collection_types.join(", ");
-            let expression = finding.return_type_node.text();
-            rule.diagnostic_at_node(
+    match file.lang() {
+        SupportLang::Python => check_python(rule, path, file),
+        SupportLang::Rust => check_rust(rule, path, file),
+        _ => Vec::new(),
+    }
+}
+
+const FUNCTION: &str = "function";
+const EXPRESSION: &str = "expression";
+const TOKEN: &str = "token";
+
+fn check_python(rule: &CodeRule, path: &Path, file: &ParsedFile) -> Vec<Diagnostic> {
+    let abc_set_imported = ast::python::has_unaliased_collections_abc_set_import(file);
+    let mut diagnostics = Vec::new();
+    for signature in ast::python::extract_function_signatures(file) {
+        if signature.is_exempt_from_signature_rules() {
+            continue;
+        }
+        let Some(ref return_type_node) = signature.return_type_node else {
+            continue;
+        };
+        let union = ast::python::return_type_union(return_type_node);
+        if !union.has_none || union.branches.is_empty() {
+            continue;
+        }
+        let mut collection_types = Vec::new();
+        let mut all_branches_are_collections = true;
+        for branch in &union.branches {
+            if let Some(type_name) = python_collection_branch_type(branch, abc_set_imported) {
+                if !collection_types.contains(&type_name) {
+                    collection_types.push(type_name);
+                }
+            } else {
+                all_branches_are_collections = false;
+                break;
+            }
+        }
+        if all_branches_are_collections && !collection_types.is_empty() {
+            let token = collection_types.join(", ");
+            let expression = return_type_node.text();
+            diagnostics.push(rule.diagnostic_at_node(
                 path,
-                &finding.return_type_node,
+                return_type_node,
                 &[
-                    ("function", &finding.function_name),
-                    ("expression", expression.as_ref()),
-                    ("token", &token),
+                    (FUNCTION, &signature.name),
+                    (EXPRESSION, expression.as_ref()),
+                    (TOKEN, &token),
                 ],
+            ));
+        }
+    }
+    diagnostics
+}
+
+fn python_collection_branch_type(branch: &AstNode<'_>, abc_set_imported: bool) -> Option<String> {
+    if let Some((base, args)) = ast::python::extract_generic_type(branch) {
+        let collection = ast::python::collection_type(&base, abc_set_imported)?;
+        if matches!(collection.name.as_str(), "tuple" | "Tuple") {
+            let is_variadic = args.len() == 2 && args[1].text() == "...";
+            if !is_variadic {
+                return None;
+            }
+        }
+        Some(collection.path)
+    } else {
+        let collection = ast::python::collection_type(branch, abc_set_imported)?;
+        Some(collection.path)
+    }
+}
+
+fn check_rust(rule: &CodeRule, path: &Path, file: &ParsedFile) -> Vec<Diagnostic> {
+    let test_ranges = ast::rust::collect_inline_test_ranges(file);
+    let mut diagnostics = Vec::new();
+    for func in ast::rust::collect_functions(file) {
+        if test_ranges
+            .iter()
+            .any(|range| range.contains(&func.node.span().start))
+            || func.is_trait_or_trait_impl
+        {
+            continue;
+        }
+        let Some(ref return_type_node) = func.return_type else {
+            continue;
+        };
+        if let Some(collection_type) = extract_rust_nullable_collection_type(return_type_node) {
+            let expression = return_type_node.text();
+            diagnostics.push(rule.diagnostic_at_node(
+                path,
+                return_type_node,
+                &[
+                    (FUNCTION, &func.name),
+                    (EXPRESSION, expression.as_ref()),
+                    (TOKEN, &collection_type),
+                ],
+            ));
+        }
+    }
+    diagnostics
+}
+
+fn extract_rust_nullable_collection_type(return_type_node: &AstNode<'_>) -> Option<String> {
+    let unwrapped = ast::rust::unwrap_return_envelope(return_type_node);
+    let option_payload = ast::rust::extract_option_payload(&unwrapped)?;
+    let inner = ast::rust::unwrap_pointer_wrappers(&option_payload);
+    if let Some(slice_type) = ast::rust::extract_slice_type(&inner) {
+        return Some(slice_type);
+    }
+    if let Some((base, _)) = ast::rust::extract_generic_type(&inner)
+        && let Some((path, terminal)) = ast::rust::resolve_type_path(&base)
+        && is_rust_collection_constructor(&path, &terminal)
+    {
+        return Some(base.text().trim().to_owned());
+    }
+    None
+}
+
+fn is_rust_collection_constructor(path: &str, terminal: &str) -> bool {
+    if !RUST_COLLECTION_TYPES.contains(&terminal) {
+        return false;
+    }
+    path == terminal
+        || path.strip_suffix(terminal).is_some_and(|prefix| {
+            matches!(
+                prefix,
+                "vec::"
+                    | "std::vec::"
+                    | "alloc::vec::"
+                    | "collections::"
+                    | "std::collections::"
+                    | "alloc::collections::"
             )
         })
-        .collect()
 }
 
 #[cfg(test)]

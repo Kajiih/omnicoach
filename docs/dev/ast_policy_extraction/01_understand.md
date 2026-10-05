@@ -1,7 +1,7 @@
 # AST policy extraction: 01 Understand
 
 > [!NOTE]
-> **Status: VALIDATED (2026-10-05). Executing §6; steps 1–5 landed.**
+> **Status: VALIDATED (2026-10-05). Executing §6; steps 1–6 landed.**
 > Scope: the ROADMAP item "Rule-shaped items left in `ast/python`", plus the same leak found in `ast/rust.rs` and `ast.rs`.
 > Line numbers are from the inventory at change `tvvyzump` and will drift.
 
