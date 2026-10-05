@@ -2,7 +2,9 @@
 //! scope.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::ast::python::collect_forward_calls;
+use crate::code_lint::ast::python::{
+    PythonFunctionScope, PythonScopeFunction, PythonSiblingCall, collect_function_scopes,
+};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -10,6 +12,7 @@ use crate::rule_declaration::{
     RuleDoc, RuleOptions, Topic,
 };
 use ast_grep_language::SupportLang;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -92,19 +95,89 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    collect_forward_calls(file)
-        .into_iter()
-        .map(|call| {
+    collect_function_scopes(file)
+        .iter()
+        .flat_map(forward_calls)
+        .map(|(caller, call)| {
             rule.diagnostic_at_node(
                 path,
                 &call.node,
-                &[
-                    ("function", &call.caller_name),
-                    ("callee", &call.callee_name),
-                ],
+                &[("function", &caller.name), ("callee", &call.callee_name)],
             )
         })
         .collect()
+}
+
+/// Class methods that run before the instance is fully built, so they may call later methods.
+const CONSTRUCTORS: &[&str] = &["__init__", "__new__", "__post_init__"];
+
+/// The first call from each function to each sibling defined later in `scope`, except calls
+/// from class constructors and recursion (the callee can reach the caller in the scope's call
+/// graph).
+fn forward_calls<'scope, 'a>(
+    scope: &'scope PythonFunctionScope<'a>,
+) -> Vec<(
+    &'scope PythonScopeFunction<'a>,
+    &'scope PythonSiblingCall<'a>,
+)> {
+    let latest_order_by_name: HashMap<&str, usize> = scope
+        .functions
+        .iter()
+        .map(|function| (function.name.as_str(), function.definition_order))
+        .collect();
+    let mut call_graph: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for function in &scope.functions {
+        call_graph
+            .entry(function.name.as_str())
+            .or_default()
+            .extend(
+                function
+                    .sibling_calls
+                    .iter()
+                    .map(|call| call.callee_name.as_str()),
+            );
+    }
+
+    let mut forward = Vec::new();
+    for function in &scope.functions {
+        if scope.is_class && CONSTRUCTORS.contains(&function.name.as_str()) {
+            continue;
+        }
+        let mut reported_callees = HashSet::new();
+        for call in &function.sibling_calls {
+            let is_defined_later = latest_order_by_name
+                .get(call.callee_name.as_str())
+                .is_some_and(|&callee_order| callee_order > function.definition_order);
+            if is_defined_later
+                && !can_reach(&call.callee_name, &function.name, &call_graph)
+                && reported_callees.insert(call.callee_name.as_str())
+            {
+                forward.push((function, call));
+            }
+        }
+    }
+    forward
+}
+
+/// Returns true if `start` can reach `target` in the directed `call_graph`.
+fn can_reach<'a>(
+    start: &'a str,
+    target: &'a str,
+    call_graph: &HashMap<&'a str, HashSet<&'a str>>,
+) -> bool {
+    let mut visited = HashSet::new();
+    let mut stack = vec![start];
+    while let Some(current) = stack.pop() {
+        if current == target {
+            return true;
+        }
+        if visited.insert(current)
+            && let Some(neighbors) = call_graph.get(current)
+        {
+            stack.extend(neighbors.iter().copied());
+        }
+    }
+    false
 }
 
 #[cfg(test)]

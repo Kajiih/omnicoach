@@ -1,4 +1,4 @@
-//! Python binding extraction, lexical scope boundaries, and `call-before-definition` analysis.
+//! Python binding extraction, lexical scope boundaries, and calls between sibling functions.
 
 // omni:disable-file [repeated-literal] -- Tree-sitter node kinds and field names (see ROADMAP)
 
@@ -343,16 +343,34 @@ pub(super) fn scope_shadows_parameter(scope_node: &RawNode<'_>, parameter_name: 
         .any(|parts| parts.name == parameter_name)
 }
 
-/// A call inside a Python function or method to a sibling function or method defined later in
-/// the same module or class scope.
+/// A call from a function or method to a sibling in the same module or class scope: `callee(...)`
+/// in a module, `self.callee(...)` (through the method's receiver) in a class.
 #[derive(Clone)]
-pub struct ForwardCall<'a> {
-    /// The `call` expression AST node (`callee(...)` or `self.callee(...)`).
+pub struct PythonSiblingCall<'a> {
+    /// The `call` expression AST node.
     pub node: AstNode<'a>,
-    /// Name of the enclosing function or method making the call.
-    pub caller_name: String,
-    /// Name of the called sibling function or method defined later in the scope.
+    /// Name of the called sibling.
     pub callee_name: String,
+}
+
+/// A function or method of a module or class scope. `@overload` stubs are grouped with their
+/// implementation, and `@property` getters with their `@<name>.setter` / `@<name>.deleter`.
+pub struct PythonScopeFunction<'a> {
+    /// Function or method name.
+    pub name: String,
+    /// Position of the group's first definition among the scope's direct function definitions.
+    pub definition_order: usize,
+    /// Calls to siblings in the bodies of the group's definitions, in walk order. Names shadowed
+    /// by a local binding are not sibling calls.
+    pub sibling_calls: Vec<PythonSiblingCall<'a>>,
+}
+
+/// The functions of one module or class scope, in definition order.
+pub struct PythonFunctionScope<'a> {
+    /// True for a class body, false for the module.
+    pub is_class: bool,
+    /// The scope's functions or methods.
+    pub functions: Vec<PythonScopeFunction<'a>>,
 }
 
 /// A logical function or method in a module or class scope (grouping `@overload` stubs with
@@ -662,48 +680,16 @@ fn match_sibling_call(
     }
 }
 
-/// Returns true if `start` can reach `target` in the directed `call_graph`.
-fn can_reach<'a>(
-    start: &'a str,
-    target: &'a str,
-    call_graph: &HashMap<&'a str, HashSet<&'a str>>,
-) -> bool {
-    let mut visited = HashSet::new();
-    let mut stack = vec![start];
-    while let Some(current) = stack.pop() {
-        if current == target {
-            return true;
-        }
-        if visited.insert(current)
-            && let Some(neighbors) = call_graph.get(current)
-        {
-            stack.extend(neighbors.iter().copied());
-        }
-    }
-    false
-}
-
-/// Evaluates sibling functions or methods in a single scope and appends any forward calls to `out`.
-fn evaluate_scope<'a>(
-    functions: &[LogicalFunction<'a>],
-    is_class: bool,
-    out: &mut Vec<ForwardCall<'a>>,
-) {
+/// Collects the sibling calls of each function in a single scope.
+fn function_scope(functions: Vec<LogicalFunction<'_>>, is_class: bool) -> PythonFunctionScope<'_> {
     let sibling_names: HashSet<&str> = functions
         .iter()
         .map(|function| function.name.as_str())
         .collect();
-    let latest_order_by_name: HashMap<&str, usize> = functions
-        .iter()
-        .map(|function| (function.name.as_str(), function.definition_order))
-        .collect();
 
-    let mut calls_by_function: Vec<Vec<(String, AstNode<'a>)>> =
-        Vec::with_capacity(functions.len());
-    let mut call_graph: HashMap<&str, HashSet<&str>> = HashMap::new();
-
-    for function in functions {
-        let mut function_calls = Vec::new();
+    let mut sibling_calls_by_function = Vec::with_capacity(functions.len());
+    for function in &functions {
+        let mut sibling_calls = Vec::new();
         for function_node in &function.parts {
             let Some(body) = function_node.field("body") else {
                 continue;
@@ -719,72 +705,41 @@ fn evaluate_scope<'a>(
                 receiver_name: receiver.as_deref(),
                 is_class,
             };
-            collect_calls_in_body(&body, &context, &initial_bindings, &mut function_calls);
+            collect_calls_in_body(&body, &context, &initial_bindings, &mut sibling_calls);
         }
-        let edges = call_graph.entry(function.name.as_str()).or_default();
-        for (callee_name, _) in &function_calls {
-            if let Some(&callee_ref) = sibling_names.get(callee_name.as_str()) {
-                edges.insert(callee_ref);
-            }
-        }
-        calls_by_function.push(function_calls);
+        sibling_calls_by_function.push(sibling_calls);
     }
 
-    for (function, function_calls) in functions.iter().zip(calls_by_function) {
-        if is_class
-            && matches!(
-                function.name.as_str(),
-                "__init__" | "__new__" | "__post_init__"
-            )
-        {
-            continue;
-        }
-        let mut reported_callees: HashSet<String> = HashSet::new();
-        for (callee_name, call_node) in function_calls {
-            let Some(&callee_order) = latest_order_by_name.get(callee_name.as_str()) else {
-                continue;
-            };
-            if callee_order <= function.definition_order {
-                continue;
-            }
-            if can_reach(callee_name.as_str(), function.name.as_str(), &call_graph) {
-                continue;
-            }
-            if reported_callees.insert(callee_name.clone()) {
-                out.push(ForwardCall {
-                    node: call_node,
-                    caller_name: function.name.clone(),
-                    callee_name,
-                });
-            }
-        }
+    let functions = functions
+        .into_iter()
+        .zip(sibling_calls_by_function)
+        .map(|(function, sibling_calls)| PythonScopeFunction {
+            name: function.name,
+            definition_order: function.definition_order,
+            sibling_calls: sibling_calls
+                .into_iter()
+                .map(|(callee_name, node)| PythonSiblingCall { node, callee_name })
+                .collect(),
+        })
+        .collect();
+    PythonFunctionScope {
+        is_class,
+        functions,
     }
 }
 
-/// Collects forward sibling calls in module and class scopes across `file`, in source order.
-///
-/// Exempts direct and mutual recursion (strongly connected components in the intra-scope call
-/// graph), class constructor callers (`__init__`, `__new__`, `__post_init__`), locally shadowed
-/// names, `@overload` / `@property` accessor groups, and non-call references. Reports at most
-/// one [`ForwardCall`] per `(caller, callee)` pair per definition, anchored at the first
-/// offending `call` node.
+/// Collects the module scope, then every class scope in source order, with each function's
+/// calls to its siblings.
 #[must_use]
-pub fn collect_forward_calls(file: &ParsedFile) -> Vec<ForwardCall<'_>> {
-    let mut results = Vec::new();
+pub fn collect_function_scopes(file: &ParsedFile) -> Vec<PythonFunctionScope<'_>> {
     let root = file.grep.root();
-
-    let module_functions = collect_scope_functions(&root);
-    evaluate_scope(&module_functions, false, &mut results);
-
+    let mut scopes = vec![function_scope(collect_scope_functions(&root), false)];
     for node in root.dfs() {
         if node.kind() == "class_definition"
             && let Some(body) = node.field("body")
         {
-            let class_methods = collect_scope_functions(&body);
-            evaluate_scope(&class_methods, true, &mut results);
+            scopes.push(function_scope(collect_scope_functions(&body), true));
         }
     }
-
-    results.sort_unstable_by_key(|call| call.node.span().start);
-    results
+    scopes
 }
