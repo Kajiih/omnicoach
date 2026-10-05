@@ -8,7 +8,6 @@ expression: "output.replace(binary, \"<binary>\")"
 - `abbreviated-name` (python, rust): Flags names that contain an abbreviation such as `ctx` or `msg`.
 - `bare-multiline-string` (python, rust): Flags multiline string literals that are not wrapped in a dedent helper.
 - `blanket-suppression` (python, rust): Flags suppression directives that name no rule.
-- `call-before-definition` (python): Flags functions and methods that call a sibling function or method defined later in the same module or class.
 - `concrete-collection-attribute` (python): Flags public Python class and instance attributes annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
 - `concrete-collection-parameter` (python): Flags Python function parameters annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
 - `concrete-collection-return` (python): Flags Python function return annotations using concrete mutable collection types such as `list`, `dict`, or `set`.
