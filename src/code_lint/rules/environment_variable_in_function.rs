@@ -200,16 +200,17 @@ fn check_file(
     }
 
     if lang == SupportLang::Python {
-        for (subscript_node, label) in ast::python::collect_environ_subscripts(file) {
+        for subscript in ast::python::collect_environ_subscripts(file) {
             if let Some(func_name) = ast::enclosing_non_exempt_function_name(
-                &subscript_node,
+                &subscript.node,
                 lang,
                 is_exempt_boundary_function,
             ) {
+                let expression = format!("{}[...]", subscript.mapping.text());
                 diagnostics.push(rule.diagnostic_at_node(
                     path,
-                    &subscript_node,
-                    &[(EXPRESSION, label), (FUNCTION, &func_name)],
+                    &subscript.node,
+                    &[(EXPRESSION, &expression), (FUNCTION, &func_name)],
                 ));
             }
         }
