@@ -28,7 +28,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `mutable-dataclass` (python): Requires Python dataclasses to declare `frozen=True`.
 - `mutable-module-constant` (python): Flags Python module-level constants whose type annotation or value is a mutable collection.
 - `nested-function` (python): Flags Python functions defined inside other functions.
-- `nullable-collection-return` (python): Flags Python function return annotations that wrap a collection type in `| None` or `Optional`.
+- `nullable-collection-return` (python, rust): Flags function return annotations that wrap a collection type in `| None`, `Optional`, or `Option`.
 - `packed-assertion` (python, rust): Flags assertions that pack several checks into one condition.
 - `primitive-duration` (python, rust): Flags durations held as plain numbers, detected by a time-unit suffix such as `timeout_secs` or `delay_ms`.
 - `quote-wrapped-placeholder` (python): Flags Python format placeholders wrapped in literal single or double quotes.

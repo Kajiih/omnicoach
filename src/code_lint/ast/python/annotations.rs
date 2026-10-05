@@ -588,3 +588,29 @@ pub fn collect_nullable_collection_return_types(type_node: &AstNode<'_>) -> Vec<
     }
     matched
 }
+
+/// Collects all non-exempt Python function/method return annotations in `file` that wrap a
+/// collection type in `| None` or `Optional`.
+#[must_use]
+pub fn collect_nullable_collection_returns(
+    file: &ParsedFile,
+) -> Vec<super::NullableCollectionReturn<'_>> {
+    let mut out = Vec::new();
+    for signature in super::extract_function_signatures(file) {
+        if signature.is_exempt_from_signature_rules() {
+            continue;
+        }
+        let Some(return_type_node) = signature.return_type_node else {
+            continue;
+        };
+        let collection_types = collect_nullable_collection_return_types(&return_type_node);
+        if !collection_types.is_empty() {
+            out.push(super::NullableCollectionReturn {
+                return_type_node,
+                function_name: signature.name,
+                collection_types,
+            });
+        }
+    }
+    out
+}

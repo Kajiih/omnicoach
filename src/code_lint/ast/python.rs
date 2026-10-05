@@ -12,9 +12,9 @@ mod strings;
 
 pub use self::annotations::{
     collect_concrete_collection_types, collect_mutable_collection_types,
-    collect_nullable_collection_return_types, collect_specific_collection_types,
-    has_unaliased_collections_abc_set_import, immutable_constant_collection_replacements,
-    read_only_collection_replacements,
+    collect_nullable_collection_return_types, collect_nullable_collection_returns,
+    collect_specific_collection_types, has_unaliased_collections_abc_set_import,
+    immutable_constant_collection_replacements, read_only_collection_replacements,
 };
 pub use self::classes::{
     PythonAnnotatedAttribute, PythonBaseClass, PythonClassInfo,
@@ -45,8 +45,9 @@ use self::strings::{
     string_prefix_flags,
 };
 use crate::code_lint::ast::{
-    AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, PositionalRead, RawNode,
-    ScopePositionalReads, delimited_string_parts, parse_float_literal, parse_integer_literal,
+    AstNode, LiteralOccurrence, LiteralRole, LiteralValue, NullableCollectionReturn, ParsedFile,
+    PositionalRead, RawNode, ScopePositionalReads, delimited_string_parts, parse_float_literal,
+    parse_integer_literal,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -67,6 +68,14 @@ pub(super) fn decorated_definition<'a>(statement: &RawNode<'a>) -> Option<RawNod
     } else {
         None
     }
+}
+
+/// Returns the 1-indexed starting line of the earliest outer attribute sibling attached to
+/// `statement`. Python has none: `@decorator` syntax wraps the definition in a
+/// `decorated_definition` node handled by [`decorated_definition`].
+#[must_use]
+pub(super) const fn earliest_attribute_start_line(_statement: &RawNode<'_>) -> Option<usize> {
+    None
 }
 
 /// Returns true for Python comment node kinds.

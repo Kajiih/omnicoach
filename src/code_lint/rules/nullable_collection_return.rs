@@ -1,9 +1,6 @@
-//! Flags Python function return annotations that wrap a collection type in `| None` or `Optional`.
+//! Flags function return annotations that wrap a collection type in `| None`, `Optional`, or `Option`.
 
-use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::ast::python::{
-    collect_nullable_collection_return_types, extract_function_signatures,
-};
+use crate::code_lint::ast::{ParsedFile, collect_nullable_collection_returns};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -15,8 +12,16 @@ use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Return annotation `{expression}` of `{function}` makes collection type `{token}` nullable.",
-    rationale: "Wrapping a collection return type in `| None` or `Optional` creates two representations for an empty result and forces callers to check for `None` before iterating or querying length.",
-    suggestion: "Remove `None` from the return annotation of `{function}` and return an empty collection such as `()`, `[]`, `{}`, or `frozenset()` when no elements are present.",
+    rationale: {
+        base: "Wrapping a collection return type in an optional type creates two representations for an empty result and forces callers to unwrap before iterating or querying length.",
+        Python => "Wrapping a collection return type in `| None` or `Optional` creates two representations for an empty result and forces callers to check for `None` before iterating or querying length.",
+        Rust => "Wrapping a collection return type in `Option` creates two representations for an empty result and forces callers to unwrap or match before iterating or querying length.",
+    },
+    suggestion: {
+        base: "Remove the optional wrapper from the return annotation of `{function}` and return an empty collection when no elements are present.",
+        Python => "Remove `None` from the return annotation of `{function}` and return an empty collection such as `()`, `[]`, `{}`, or `frozenset()` when no elements are present.",
+        Rust => "Remove `Option` from the return type of `{function}` and return an empty collection such as `Vec::new()`, `&[]`, `BTreeMap::new()`, or `HashSet::new()` when no elements are present.",
+    },
 };
 
 /// The rule's declaration.
@@ -24,7 +29,7 @@ pub const RULE: CodeRule = CodeRule {
     declaration: Declaration {
         name: RuleName("nullable-collection-return"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python],
+        languages: &[SupportLang::Python, SupportLang::Rust],
         options: RuleOptions {
             enforcement_mode: Some(LanguageDefaults::new(
                 EnforcementMode::RequireExplanation,
@@ -39,32 +44,40 @@ pub const RULE: CodeRule = CodeRule {
             impacted_quality: ImpactedQuality::Maintainability,
         },
         doc: RuleDoc {
-            summary: "Flags Python function return annotations that wrap a collection type in `| None` or `Optional`.",
-            what_it_does: "Flags functions and methods in Python source files (test files are \
-                           not checked) whose return annotation (or awaited return type inside \
-                           `Awaitable[...]` or `Coroutine[Any, Any, ...]`, or underlying type \
-                           inside `Annotated[..., ...]`) is a union containing `None` (`| None`, \
-                           `Optional[...]`, or `Union[..., None]`) in which every non-`None` \
-                           branch is a collection type (`Sequence`, `MutableSequence`, `Mapping`, \
-                           `MutableMapping`, `Set`, `AbstractSet`, `MutableSet`, `Collection`, \
-                           `Iterable`, `Reversible`, `list`, `List`, `dict`, `Dict`, `set`, \
-                           `frozenset`, `FrozenSet`, `deque`, `Deque`, `defaultdict`, \
-                           `DefaultDict`, `Counter`, `OrderedDict`, bare `tuple` / `Tuple`, or \
-                           variadic `tuple[T, ...]` / `Tuple[T, ...]`). Fixed-length record \
-                           tuples (`tuple[int, str] | None`), unions that mix a collection with \
-                           a non-collection type (`str | Sequence[str] | None`), and \
-                           non-nullable collections of nullable elements (`Sequence[int | None]`) \
-                           are not flagged. Dunder methods other than `__init__`, `__new__`, and \
-                           `__call__`, methods on `Protocol` or `ABC` classes, and functions \
-                           decorated with `@override`, `@overload`, `@abstractmethod`, \
-                           `@fixture`, or `@<function>.register` are exempt.",
-            why_is_this_bad: "A collection type (`Sequence`, `Mapping`, `Set`, `Iterable`, \
-                              `list`, `dict`, `set`, `tuple[T, ...]`) already has an empty value \
-                              (`()`, `[]`, `{}`, `frozenset()`) that represents zero elements. \
-                              Returning `Sequence[T] | None` or `Optional[list[T]]` splits the \
-                              empty case across `None` and `()`, forcing every caller to branch \
-                              on `None` (`for item in get_items() or ():`) before iterating, \
-                              indexing, or calling `len()`.\n\n\
+            summary: "Flags function return annotations that wrap a collection type in `| None`, `Optional`, or `Option`.",
+            what_it_does: "Flags functions and methods in source files (test files are not \
+                           checked) whose return annotation makes a collection type nullable. In \
+                           Python, this matches return annotations (or awaited return types inside \
+                           `Awaitable[...]` or `Coroutine[Any, Any, ...]`, or underlying types \
+                           inside `Annotated[..., ...]`) that form a union containing `None` \
+                           (`| None`, `Optional[...]`, or `Union[..., None]`) in which every \
+                           non-`None` branch is a collection type (`Sequence`, `MutableSequence`, \
+                           `Mapping`, `MutableMapping`, `Set`, `AbstractSet`, `MutableSet`, \
+                           `Collection`, `Iterable`, `Iterator`, `Reversible`, `list`, `List`, \
+                           `dict`, `Dict`, `set`, `frozenset`, `FrozenSet`, `deque`, `Deque`, \
+                           `defaultdict`, `DefaultDict`, `Counter`, `OrderedDict`, bare `tuple` / \
+                           `Tuple`, or variadic `tuple[T, ...]` / `Tuple[T, ...]`); fixed-length \
+                           record tuples (`tuple[int, str] | None`), unions mixing a collection \
+                           with a non-collection type, dunder methods other than `__init__`, \
+                           `__new__`, and `__call__`, methods on `Protocol` or `ABC` classes, and \
+                           functions decorated with `@override`, `@overload`, `@abstractmethod`, \
+                           `@fixture`, or `@<function>.register` are exempt. In Rust, this \
+                           matches functions and inherent methods whose return type (or payload \
+                           inside `Result<..., E>` or `Poll<...>`) is `Option<...>` wrapping a \
+                           standard collection (`Vec`, `VecDeque`, `LinkedList`, `HashMap`, \
+                           `BTreeMap`, `HashSet`, `BTreeSet`, `BinaryHeap`) or slice (`&[T]`, \
+                           `&mut [T]`, `Box<[T]>`, `Rc<[T]>`, `Arc<[T]>`, `Cow<'_, [T]>`); \
+                           fixed-size arrays (`Option<[T; N]>`), tuples (`Option<(A, B)>`), \
+                           strings (`Option<String>`, `Option<&str>`), and methods inside `trait` \
+                           or `impl Trait for Type` blocks are exempt.",
+            why_is_this_bad: "A collection type (`Sequence`, `Mapping`, `Set`, `list`, `dict`, \
+                              `Vec<T>`, `&[T]`, `BTreeMap<K, V>`, `HashSet<T>`) already has an \
+                              empty value (`()`, `[]`, `{}`, `Vec::new()`, `&[]`) that represents \
+                              zero elements. Returning `Sequence[T] | None` in Python or \
+                              `Option<Vec<T>>` in Rust splits the empty case across two states, \
+                              forcing every caller to branch on `None` (`for item in get_items() \
+                              or ():` or `if let Some(items) = get_items()`) before iterating, \
+                              indexing, or querying length.\n\n\
                               Return an empty collection when no items are found so callers can \
                               iterate and query length unconditionally. A nullable collection \
                               return is only needed for a three-state contract where `None` \
@@ -80,56 +93,64 @@ pub const RULE: CodeRule = CodeRule {
                     url: "https://pmd.github.io/pmd/pmd_rules_java_design.html#returnemptycollectionratherthannull",
                 },
             ],
-            examples: &[Example {
-                language: SupportLang::Python,
-                flagged: indoc::indoc! {r"
-                    from collections.abc import Sequence
+            examples: &[
+                Example {
+                    language: SupportLang::Python,
+                    flagged: indoc::indoc! {r"
+                        from collections.abc import Sequence
 
-                    def active_tags(self) -> Sequence[str] | None:
-                        return self._tags
-                "},
-                flagged_span: "Sequence[str] | None",
-                fixed: indoc::indoc! {r"
-                    from collections.abc import Sequence
+                        def active_tags(self) -> Sequence[str] | None:
+                            return self._tags
+                    "},
+                    flagged_span: "Sequence[str] | None",
+                    fixed: indoc::indoc! {r"
+                        from collections.abc import Sequence
 
-                    def active_tags(self) -> Sequence[str]:
-                        return self._tags or ()
-                "},
-            }],
+                        def active_tags(self) -> Sequence[str]:
+                            return self._tags or ()
+                    "},
+                },
+                Example {
+                    language: SupportLang::Rust,
+                    flagged: indoc::indoc! {r"
+                        fn active_tags(&self) -> Option<&[String]> {
+                            self.tags.as_deref()
+                        }
+                    "},
+                    flagged_span: "Option<&[String]>",
+                    fixed: indoc::indoc! {r"
+                        fn active_tags(&self) -> &[String] {
+                            self.tags.as_deref().unwrap_or(&[])
+                        }
+                    "},
+                },
+            ],
         },
     },
+    // Test helpers often shape a return value to match what an assertion compares: an
+    // `Option` mirrors another `Option`, and `None` means "nothing to compare" rather than
+    // an empty result.
     target: RuleTarget::SourceOnly,
     check: check_file,
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-
-    for signature in extract_function_signatures(file) {
-        if signature.is_exempt_from_signature_rules() {
-            continue;
-        }
-        let Some(ref return_type_node) = signature.return_type_node else {
-            continue;
-        };
-        let matched = collect_nullable_collection_return_types(return_type_node);
-        if matched.is_empty() {
-            continue;
-        }
-        let token = matched.join(", ");
-        let expression = return_type_node.text();
-        diagnostics.push(rule.diagnostic_at_node(
-            path,
-            return_type_node,
-            &[
-                ("function", &signature.name),
-                ("expression", expression.as_ref()),
-                ("token", &token),
-            ],
-        ));
-    }
-
-    diagnostics
+    collect_nullable_collection_returns(file)
+        .into_iter()
+        .map(|finding| {
+            let token = finding.collection_types.join(", ");
+            let expression = finding.return_type_node.text();
+            rule.diagnostic_at_node(
+                path,
+                &finding.return_type_node,
+                &[
+                    ("function", &finding.function_name),
+                    ("expression", expression.as_ref()),
+                    ("token", &token),
+                ],
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -209,9 +230,6 @@ crate::test_utils::rule_test!(
                         return None
 
                     def parse_value(raw: str) -> Optional[int | list[int]]:
-                        return None
-
-                    def resolve_pair(raw: str) -> tuple[int, str] | list[int] | None:
                         return None
                 "#,
                 nullable_parameters_and_attributes_not_flagged => r#"
@@ -362,6 +380,12 @@ crate::test_utils::rule_test!(
                     def stream_ids() -> Iterable[int] | None:
                         return None
                 "# => "Iterable[int] | None",
+                iterator_or_none => r#"
+                    from collections.abc import Iterator
+
+                    def iter_ids() -> Iterator[int] | None:
+                        return None
+                "# => "Iterator[int] | None",
                 collections_deque_or_none => r#"
                     from collections import deque
 
@@ -401,6 +425,176 @@ crate::test_utils::rule_test!(
                         # Internal implementation comment inside the body block.
                         return None
                 "# => "Sequence[str] | None",
+            ],
+        },
+        Rust => {
+            pass: [
+                non_nullable_rust_collection_returns => r#"
+                    use std::collections::{BTreeMap, HashSet};
+
+                    fn get_users() -> Vec<String> {
+                        Vec::new()
+                    }
+
+                    fn get_tags(&self) -> &[String] {
+                        &[]
+                    }
+
+                    fn get_counts() -> BTreeMap<String, usize> {
+                        BTreeMap::new()
+                    }
+
+                    fn get_flags() -> HashSet<String> {
+                        HashSet::new()
+                    }
+                "#,
+                non_collection_rust_option_returns => r#"
+                    struct User;
+
+                    fn find_name(user_id: u64) -> Option<String> {
+                        None
+                    }
+
+                    fn find_slice(raw: &str) -> Option<&str> {
+                        None
+                    }
+
+                    fn find_user(user_id: u64) -> Option<User> {
+                        None
+                    }
+
+                    fn parse_pair(raw: &str) -> Option<(String, u32)> {
+                        None
+                    }
+
+                    fn parse_header(raw: &[u8]) -> Option<[u8; 4]> {
+                        None
+                    }
+                "#,
+                collection_of_option_elements_not_flagged => r#"
+                    fn get_scores() -> Vec<Option<i32>> {
+                        vec![Some(1), None]
+                    }
+
+                    fn get_slices<'a>() -> &'a [Option<&'a str>] {
+                        &[]
+                    }
+                "#,
+                nullable_parameters_and_struct_fields_not_flagged => r#"
+                    struct Config {
+                        tags: Option<Vec<String>>,
+                    }
+
+                    fn configure(items: Option<&[String]>, tags: Option<Vec<String>>) {
+                        let _ = (items, tags);
+                    }
+                "#,
+                trait_declaration_and_trait_impl_exempt => r#"
+                    trait TagStore {
+                        fn required_tags(&self, user_id: &str) -> Option<Vec<String>>;
+
+                        fn default_tags(&self, user_id: &str) -> Option<Vec<String>> {
+                            let _ = user_id;
+                            None
+                        }
+                    }
+
+                    struct MemoryStore;
+
+                    impl TagStore for MemoryStore {
+                        fn required_tags(&self, user_id: &str) -> Option<Vec<String>> {
+                            let _ = user_id;
+                            None
+                        }
+                    }
+                "#,
+                explained_rust_function_and_attributed_function => r#"
+                    // Returns None on cache miss; an empty slice means the user has no tags.
+                    #[must_use]
+                    fn cached_tags(&self, user_id: &str) -> Option<&[String]> {
+                        let _ = user_id;
+                        None
+                    }
+                "#,
+            ],
+            fail: [
+                option_vec_return => r#"
+                    fn get_users() -> Option<Vec<String>> {
+                        None
+                    }
+                "# => "Option<Vec<String>>",
+                qualified_std_option_hashmap_return => r#"
+                    fn get_counts() -> std::option::Option<std::collections::HashMap<String, usize>> {
+                        None
+                    }
+                "# => "std::option::Option<std::collections::HashMap<String, usize>>",
+                option_btreeset_return => r#"
+                    use std::collections::BTreeSet;
+
+                    fn get_tags() -> Option<BTreeSet<String>> {
+                        None
+                    }
+                "# => "Option<BTreeSet<String>>",
+                option_vecdeque_return => r#"
+                    use std::collections::VecDeque;
+
+                    fn get_queue() -> Option<VecDeque<u32>> {
+                        None
+                    }
+                "# => "Option<VecDeque<u32>>",
+                option_shared_slice_return => r#"
+                    fn get_bytes<'a>(input: &'a [u8]) -> Option<&'a [u8]> {
+                        let _ = input;
+                        None
+                    }
+                "# => "Option<&'a [u8]>",
+                option_boxed_slice_return => r#"
+                    fn get_items() -> Option<Box<[String]>> {
+                        None
+                    }
+                "# => "Option<Box<[String]>>",
+                option_arc_slice_return => r#"
+                    use std::sync::Arc;
+
+                    fn get_shared() -> Option<Arc<[String]>> {
+                        None
+                    }
+                "# => "Option<Arc<[String]>>",
+                option_cow_slice_return => r#"
+                    use std::borrow::Cow;
+
+                    fn get_borrowed<'a>() -> Option<Cow<'a, [String]>> {
+                        None
+                    }
+                "# => "Option<Cow<'a, [String]>>",
+                result_wrapping_option_vec_return => r#"
+                    fn load_users() -> Result<Option<Vec<String>>, std::io::Error> {
+                        Ok(None)
+                    }
+                "# => "Result<Option<Vec<String>>, std::io::Error>",
+                poll_wrapping_option_vec_return => r#"
+                    use std::task::Poll;
+
+                    fn poll_batch() -> Poll<Option<Vec<u8>>> {
+                        Poll::Ready(None)
+                    }
+                "# => "Poll<Option<Vec<u8>>>",
+                inherent_impl_method_option_vec_return => r#"
+                    struct Store;
+
+                    impl Store {
+                        fn load_tags(&self) -> Option<Vec<String>> {
+                            None
+                        }
+                    }
+                "# => "Option<Vec<String>>",
+                rust_body_comment_does_not_count_as_header_explanation => r#"
+                    #[must_use]
+                    fn get_items() -> Option<Vec<String>> {
+                        // Internal implementation comment inside the body block.
+                        None
+                    }
+                "# => "Option<Vec<String>>",
             ],
         },
     }
