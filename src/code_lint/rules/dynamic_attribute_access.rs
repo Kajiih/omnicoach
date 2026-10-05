@@ -2,12 +2,11 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -41,7 +40,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
         name: RuleName("dynamic-attribute-access"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python],
+        languages: &[Language::Python],
         options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::TYPE_CHECKER_BYPASS],
@@ -71,7 +70,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 url: "https://docs.python.org/3/library/functions.html#getattr",
             }],
             examples: &[Example {
-                language: SupportLang::Python,
+                language: Language::Python,
                 flagged: indoc::indoc! {r"
                     def is_feature_enabled(flags: FeatureFlags, feature: str) -> bool:
                         return getattr(flags, feature, False)

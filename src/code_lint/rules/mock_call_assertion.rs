@@ -2,12 +2,11 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -47,7 +46,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
         name: RuleName("mock-call-assertion"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python],
+        languages: &[Language::Python],
         options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::TEST_ASSERTIONS, Topic::TEST_DOUBLES],
@@ -78,7 +77,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 url: "https://abseil.io/resources/swe-book/html/ch13.html",
             }],
             examples: &[Example {
-                language: SupportLang::Python,
+                language: Language::Python,
                 flagged: indoc::indoc! {r"
                     def test_checkout_charges_order_total(gateway):
                         checkout(gateway, order_total=100)

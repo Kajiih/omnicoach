@@ -110,7 +110,7 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ast_grep_language::SupportLang;
+    use crate::diagnostic::Language;
 
     #[test]
     fn test_python_call_matching_excludes_receiver_methods() {
@@ -121,7 +121,7 @@ mod tests {
             self.sleep(1)
             asyncio.get_event_loop().create_task(work())
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let banned: HashSet<String> = ["sleep", "time.sleep", "$LOOP($$$LOOP_ARGS).create_task"]
             .into_iter()
             .map(str::to_string)
@@ -153,7 +153,7 @@ mod tests {
                 clock.sleep(dur).await;
             }
         "};
-        let file = ParsedFile::new(source, SupportLang::Rust);
+        let file = ParsedFile::new(source, Language::Rust);
         let banned: HashSet<String> = ["sleep", "std::thread::sleep", "tokio::time::sleep"]
             .into_iter()
             .map(str::to_string)
@@ -178,7 +178,7 @@ mod tests {
             assert_called_once()
             self.assertEqual(1, 1)
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let banned: HashSet<String> = ["$OBJ.assert_called_once", "$OBJ.assert_called_once_with"]
             .into_iter()
             .map(str::to_string)

@@ -2,12 +2,11 @@
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality,
     LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const MAX_ASSERTIONS: CountOption = CountOption {
@@ -32,7 +31,7 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
     declaration: Declaration {
         name: RuleName("too-many-assertions"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python, SupportLang::Rust],
+        languages: &[Language::Python, Language::Rust],
         options: RuleOptions::code_rule(MAX_ASSERTIONS),
         classification: Classification {
             topics: &[Topic::TEST_ASSERTIONS],
@@ -61,7 +60,7 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
             }],
             examples: &[
                 Example {
-                    language: SupportLang::Python,
+                    language: Language::Python,
                     flagged: indoc::indoc! {r#"
                         def test_parse_version():
                             version = parse_version("2.7.1-rc1+20261002")
@@ -85,7 +84,7 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                     "#},
                 },
                 Example {
-                    language: SupportLang::Rust,
+                    language: Language::Rust,
                     flagged: indoc::indoc! {r#"
                         #[test]
                         fn test_parse_version() {

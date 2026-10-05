@@ -3,12 +3,11 @@
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::bindings;
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -36,7 +35,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
         name: RuleName("type-suffixed-name"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python, SupportLang::Rust],
+        languages: &[Language::Python, Language::Rust],
         options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::TYPE_ENCODED_NAMES],
@@ -70,7 +69,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             }],
             examples: &[
                 Example {
-                    language: SupportLang::Python,
+                    language: Language::Python,
                     flagged: indoc::indoc! {r"
                         def rank_players(matches):
                             scores_dict = tally_scores(matches)
@@ -84,7 +83,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                     "},
                 },
                 Example {
-                    language: SupportLang::Rust,
+                    language: Language::Rust,
                     flagged: indoc::indoc! {r"
                         fn rank_players(matches: &[Match]) -> Vec<PlayerId> {
                             let scores_map = tally_scores(matches);

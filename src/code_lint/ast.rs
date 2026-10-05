@@ -9,33 +9,30 @@
 
 architecture_component!(CodeLintAst);
 
-/// Dispatches `$func(args...)` to `ast::python` or `ast::rust` by `$lang`, evaluating
-/// `$fallback` for any other language.
+/// Dispatches `$func(args...)` to `ast::python` or `ast::rust` by `$lang`.
 macro_rules! dispatch_lang {
-    ($lang:expr, $func:ident ( $($arg:expr),* $(,)? ), $fallback:expr) => {
+    ($lang:expr, $func:ident ( $($arg:expr),* $(,)? )) => {
         match $lang {
-            ast_grep_language::SupportLang::Python => {
+            $crate::diagnostic::Language::Python => {
                 $crate::code_lint::ast::python::$func($($arg),*)
             }
-            ast_grep_language::SupportLang::Rust => {
+            $crate::diagnostic::Language::Rust => {
                 $crate::code_lint::ast::rust::$func($($arg),*)
             }
-            _ => $fallback,
         }
     };
 }
-pub(crate) use dispatch_lang;
 
 pub mod python;
 pub mod rust;
 pub mod statements;
 
-use crate::diagnostic::{LineColumn, SourceLocation, SourceSpan};
+use crate::diagnostic::{Language, LineColumn, SourceLocation, SourceSpan};
 use ast_grep_core::AstGrep;
 use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_language::SupportLang;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Type alias for an in-memory source document parsed by `ast-grep`.
 pub(in crate::code_lint::ast) type SourceDoc = StrDoc<SupportLang>;
@@ -43,16 +40,20 @@ pub(in crate::code_lint::ast) type SourceDoc = StrDoc<SupportLang>;
 /// Internal type alias for a raw `ast-grep` syntax tree node.
 pub(in crate::code_lint::ast) type RawNode<'a> = ast_grep_core::Node<'a, SourceDoc>;
 
-/// Returns the language of `path` from its extension, or `None` if Omni does not analyze it.
-#[must_use]
-pub fn detect_language(path: &Path) -> Option<SupportLang> {
-    path.extension()
-        .and_then(std::ffi::OsStr::to_str)
-        .and_then(|extension| match extension {
-            "py" => Some(SupportLang::Python),
-            "rs" => Some(SupportLang::Rust),
-            _ => None,
-        })
+/// The `ast-grep` grammar that parses `lang`.
+const fn to_support_lang(lang: Language) -> SupportLang {
+    match lang {
+        Language::Python => SupportLang::Python,
+        Language::Rust => SupportLang::Rust,
+    }
+}
+
+/// The [`Language`] of a tree built by [`ParsedFile::new`], which only parses Python and Rust.
+pub(in crate::code_lint::ast) const fn from_support_lang(lang: SupportLang) -> Language {
+    match lang {
+        SupportLang::Python => Language::Python,
+        _ => Language::Rust,
+    }
 }
 
 /// A parsed source file encapsulating the language and syntax tree.
@@ -61,27 +62,29 @@ pub fn detect_language(path: &Path) -> Option<SupportLang> {
 /// (semantic engines, rule traits, and lint rules) interact strictly through typed AST helpers.
 pub struct ParsedFile {
     pub(in crate::code_lint::ast) grep: AstGrep<SourceDoc>,
+    lang: Language,
 }
 
 impl ParsedFile {
     /// Parses `source` into a syntax tree for `lang`.
     #[must_use]
-    pub fn new(source: &str, lang: SupportLang) -> Self {
+    pub fn new(source: &str, lang: Language) -> Self {
         Self {
-            grep: AstGrep::new(source, lang),
+            grep: AstGrep::new(source, to_support_lang(lang)),
+            lang,
         }
     }
 
     /// Parses `source` into a Rust syntax tree.
     #[must_use]
     pub fn rust(source: &str) -> Self {
-        Self::new(source, SupportLang::Rust)
+        Self::new(source, Language::Rust)
     }
 
     /// Returns the programming language of this parsed file.
     #[must_use]
-    pub fn lang(&self) -> SupportLang {
-        *self.grep.lang()
+    pub const fn lang(&self) -> Language {
+        self.lang
     }
 
     /// Returns the full source text of the file.
@@ -121,8 +124,8 @@ impl<'a> AstNode<'a> {
 
     /// Returns the programming language of the file containing this node.
     #[must_use]
-    pub fn lang(&self) -> SupportLang {
-        *self.raw.lang()
+    pub fn lang(&self) -> Language {
+        from_support_lang(*self.raw.lang())
     }
 
     /// Returns the [`SourceSpan`] (byte range) of this node.
@@ -161,8 +164,8 @@ impl<'a> AstNode<'a> {
 }
 
 /// Returns true for node kinds that represent comments in `lang`.
-fn is_comment_kind(kind: &str, lang: SupportLang) -> bool {
-    dispatch_lang!(lang, is_comment_kind(kind), false)
+fn is_comment_kind(kind: &str, lang: Language) -> bool {
+    dispatch_lang!(lang, is_comment_kind(kind))
 }
 
 /// Collects all Tree-sitter comment nodes in `file` in source order.
@@ -193,17 +196,14 @@ fn call_argument_nodes<'a>(call_node: &RawNode<'a>) -> Vec<AstNode<'a>> {
 }
 
 /// Returns true for node kinds that represent call expressions in `lang`.
-fn is_call_kind(kind: &str, lang: SupportLang) -> bool {
-    dispatch_lang!(lang, is_call_kind(kind), false)
+fn is_call_kind(kind: &str, lang: Language) -> bool {
+    dispatch_lang!(lang, is_call_kind(kind))
 }
 
 /// Returns the invoked method name node of a call's callee expression in `lang`, if the callee
 /// is a method access rather than a plain function reference.
-fn extract_method_call_target<'a>(
-    function: &RawNode<'a>,
-    lang: SupportLang,
-) -> Option<RawNode<'a>> {
-    dispatch_lang!(lang, extract_method_call_target(function), None)
+fn extract_method_call_target<'a>(function: &RawNode<'a>, lang: Language) -> Option<RawNode<'a>> {
+    dispatch_lang!(lang, extract_method_call_target(function))
 }
 
 /// Candidate call expression extracted from the syntax tree.
@@ -276,7 +276,7 @@ pub struct ScopePositionalReads<'a> {
 /// their enclosing function.
 #[must_use]
 pub fn collect_positional_reads(file: &ParsedFile) -> Vec<ScopePositionalReads<'_>> {
-    dispatch_lang!(file.lang(), collect_positional_reads(file), Vec::new())
+    dispatch_lang!(file.lang(), collect_positional_reads(file))
 }
 
 /// A literal's normalized value: equal values are the same literal whatever their spelling.
@@ -333,7 +333,7 @@ pub struct LiteralOccurrence<'a> {
 /// the parts of composite constant initializers are not collected.
 #[must_use]
 pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'_>> {
-    dispatch_lang!(file.lang(), collect_literal_occurrences(file), Vec::new())
+    dispatch_lang!(file.lang(), collect_literal_occurrences(file))
 }
 
 /// Parses an integer literal with digit separators and an optional `0x` / `0o` / `0b` prefix
@@ -402,42 +402,38 @@ pub fn find_pattern_calls<'a>(
 /// Collects all binding definition nodes from a parsed file.
 #[must_use]
 pub fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
-    dispatch_lang!(file.lang(), collect_bindings(file), Vec::new())
+    dispatch_lang!(file.lang(), collect_bindings(file))
 }
 
 /// Returns true if the node represents an import binding.
 #[must_use]
-pub fn is_import_binding(node: &AstNode<'_>, lang: SupportLang) -> bool {
+pub fn is_import_binding(node: &AstNode<'_>, lang: Language) -> bool {
     let Some(parent) = node.raw.parent() else {
         return false;
     };
     let parent_kind = parent.kind();
-    dispatch_lang!(lang, is_import_binding_parent(parent_kind.as_ref()), false)
+    dispatch_lang!(lang, is_import_binding_parent(parent_kind.as_ref()))
 }
 
 /// Returns true if the node represents a structural type, class, or function definition name.
 #[must_use]
-pub fn is_structural_definition(node: &AstNode<'_>, lang: SupportLang) -> bool {
+pub fn is_structural_definition(node: &AstNode<'_>, lang: Language) -> bool {
     let Some(parent) = node.raw.parent() else {
         return false;
     };
     let parent_kind = parent.kind();
-    dispatch_lang!(
-        lang,
-        is_structural_definition_parent(parent_kind.as_ref()),
-        false
-    )
+    dispatch_lang!(lang, is_structural_definition_parent(parent_kind.as_ref()))
 }
 
 /// Returns true if the node is the name of a member defined inside a trait implementation
 /// (`impl Trait for Type` in Rust or `@override` method in Python), i.e. a name mandated by a contract.
 #[must_use]
-pub fn is_trait_impl_member(node: &AstNode<'_>, lang: SupportLang) -> bool {
+pub fn is_trait_impl_member(node: &AstNode<'_>, lang: Language) -> bool {
     let Some(raw_item) = node.raw.parent() else {
         return false;
     };
     let item = AstNode::from_raw(raw_item);
-    dispatch_lang!(lang, is_trait_impl_member(&item), false)
+    dispatch_lang!(lang, is_trait_impl_member(&item))
 }
 
 /// Collects all outermost test functions in `file` along with their identifier node, name, and assertion count.
@@ -445,11 +441,7 @@ pub fn is_trait_impl_member(node: &AstNode<'_>, lang: SupportLang) -> bool {
 pub fn collect_test_function_assertion_counts(
     file: &ParsedFile,
 ) -> Vec<(AstNode<'_>, String, usize)> {
-    dispatch_lang!(
-        file.lang(),
-        collect_test_function_assertion_counts(file),
-        Vec::new()
-    )
+    dispatch_lang!(file.lang(), collect_test_function_assertion_counts(file))
 }
 
 /// Finds all multiline string literals in `file` that are not docstrings/doc-attributes/snapshots
@@ -461,8 +453,7 @@ pub fn find_unwrapped_multiline_strings(
 ) -> Vec<AstNode<'_>> {
     dispatch_lang!(
         file.lang(),
-        find_unwrapped_multiline_strings(file, is_allowed_wrapper),
-        Vec::new()
+        find_unwrapped_multiline_strings(file, is_allowed_wrapper)
     )
 }
 
@@ -476,13 +467,13 @@ pub fn find_unwrapped_multiline_strings(
 #[must_use]
 pub fn enclosing_non_exempt_function_name(
     node: &AstNode<'_>,
-    lang: SupportLang,
+    lang: Language,
     is_exempt: impl Fn(&str, bool) -> bool,
 ) -> Option<String> {
     let mut nearest_function_name: Option<String> = None;
 
     for ancestor in node.raw.ancestors() {
-        let func_info = dispatch_lang!(lang, function_name_and_is_top_level(&ancestor), None);
+        let func_info = dispatch_lang!(lang, function_name_and_is_top_level(&ancestor));
         if let Some((func_name, is_top_level)) = func_info {
             if is_exempt(&func_name, is_top_level) {
                 return None;
@@ -503,7 +494,7 @@ mod tests {
     #[test]
     fn test_source_location_from_node() {
         let source = "fn main() {\n    let value = 42;\n}\n";
-        let file = ParsedFile::new(source, SupportLang::Rust);
+        let file = ParsedFile::new(source, Language::Rust);
         let matched = file
             .grep
             .root()
@@ -529,7 +520,7 @@ mod tests {
                 0,  # inline comment
             )
         "},
-        SupportLang::Python,
+        Language::Python,
         "0"
     )]
     #[case::rust(
@@ -541,12 +532,12 @@ mod tests {
                 );
             }
         "},
-        SupportLang::Rust,
+        Language::Rust,
         "Duration::ZERO"
     )]
     fn test_call_argument_nodes_excludes_comments_and_trivia(
         #[case] source: &str,
-        #[case] lang: SupportLang,
+        #[case] lang: Language,
         #[case] expected_argument: &str,
     ) {
         let file = ParsedFile::new(source, lang);

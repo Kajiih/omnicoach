@@ -1636,8 +1636,8 @@ pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'
 mod tests {
     use super::functions::is_stub_function_body;
     use super::*;
+    use crate::diagnostic::Language;
     use LiteralRole::{ConstantDefinition, Inline};
-    use ast_grep_language::SupportLang;
 
     #[test]
     fn test_collect_bindings_python() {
@@ -1664,7 +1664,7 @@ mod tests {
                 def my_method(self):
                     pass
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let bindings = collect_bindings(&file);
         let names: Vec<String> = bindings
             .iter()
@@ -1705,7 +1705,7 @@ mod tests {
                 case [a, b]:
                     pass
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let bindings = collect_bindings(&file);
         let names: Vec<String> = bindings
             .iter()
@@ -1721,7 +1721,7 @@ mod tests {
                 pass
             x = suppress(KeyError)
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let calls: Vec<_> = file
             .grep
             .root()
@@ -1748,7 +1748,7 @@ mod tests {
             def foo():
                 pass
         "#};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let func = AstNode::from_raw(
             file.grep
                 .root()
@@ -1768,7 +1768,7 @@ mod tests {
             def foo():
                 pass
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let func = AstNode::from_raw(
             file.grep
                 .root()
@@ -1800,7 +1800,7 @@ mod tests {
             def foo():
                 pass
         "#};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let func = AstNode::from_raw(
             file.grep
                 .root()
@@ -1827,7 +1827,7 @@ mod tests {
             def foo():
                 pass
         "#};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let func = AstNode::from_raw(
             file.grep
                 .root()
@@ -1848,7 +1848,7 @@ mod tests {
             class FakeService(abc.ABC, Protocol):
                 pass
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let classes = extract_classes(&file);
         assert_eq!(classes.len(), 1);
 
@@ -1864,7 +1864,7 @@ mod tests {
             class FakeService(abc.ABC, Protocol):
                 pass
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let classes = extract_classes(&file);
         let cls = &classes[0];
         assert_eq!(cls.bases.len(), 2);
@@ -1879,7 +1879,7 @@ mod tests {
             class Config:
                 pass
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let classes = extract_classes(&file);
         assert_eq!(classes.len(), 1);
 
@@ -1895,7 +1895,7 @@ mod tests {
             def handler(self, a: int, b: str = 'hello', *, c: bool, **kwargs):
                 pass
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let root = AstNode::from_raw(file.grep.root());
         let params = extract_parameters(&root);
 
@@ -1911,7 +1911,7 @@ mod tests {
             def handler(self, a: int, b: str = 'hello', *, c: bool, **kwargs):
                 pass
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let root = AstNode::from_raw(file.grep.root());
         let params = extract_parameters(&root);
 
@@ -1931,7 +1931,7 @@ mod tests {
             def main(argv):
                 return argv[1]
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let reads_by_scope: Vec<Vec<(String, i64)>> = collect_positional_reads(&file)
             .into_iter()
             .map(|scope| {
@@ -1979,7 +1979,7 @@ mod tests {
         #[case] source: &str,
         #[case] expected_per_param: &[&[&str]],
     ) {
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let abc_set_imported = has_unaliased_collections_abc_set_import(&file);
         let sigs = extract_function_signatures(&file);
         assert_eq!(sigs.len(), 1);
@@ -2032,7 +2032,7 @@ mod tests {
         false
     )]
     fn test_is_stub_function_body(#[case] source: &str, #[case] expected: bool) {
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
         assert_eq!(is_stub_function_body(&sigs[0].node), expected);
     }
@@ -2053,7 +2053,7 @@ mod tests {
     )]
     #[case::regular_class("class C:\n    def f(self, x: list[int]) -> None: pass", false)]
     fn test_is_in_protocol_or_abc_class(#[case] source: &str, #[case] expected: bool) {
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
         assert_eq!(is_in_protocol_or_abc_class(&sigs[0].node), expected);
     }
@@ -2061,7 +2061,7 @@ mod tests {
     /// Collects the top-level collection types of the annotation of the first parameter of the
     /// first function in `source`, as `(path, kind, shape)`.
     fn top_level_collection_types(source: &str) -> Vec<(String, CollectionKind, CollectionShape)> {
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
         let type_node = sigs[0].parameters[0]
             .type_node
@@ -2228,7 +2228,7 @@ mod tests {
         #[case] source: &str,
         #[case] expected: &[(&str, Option<&str>, Option<&str>, bool)],
     ) {
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let assignments = collect_module_assignments(&file);
         let collected: Vec<_> = assignments
             .iter()
@@ -2270,7 +2270,7 @@ mod tests {
         #[case] value: &str,
         #[case] expected: Option<(&str, CollectionShape)>,
     ) {
-        let file = ParsedFile::new(&format!("VALUE = {value}"), SupportLang::Python);
+        let file = ParsedFile::new(&format!("VALUE = {value}"), Language::Python);
         let assignments = collect_module_assignments(&file);
         let value = assignments[0].value.as_ref().expect("value");
         let built = collection_display(value)
@@ -2346,7 +2346,7 @@ mod tests {
         #[case] source: &str,
         #[case] expected: ParameterCollectionCapability,
     ) {
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
         assert_eq!(
             analyze_parameter_collection_capability(&sigs[0].node, "x"),
@@ -2381,7 +2381,7 @@ mod tests {
         false
     )]
     fn test_is_parameter_mutated_or_escaping(#[case] source: &str, #[case] expected: bool) {
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
         assert_eq!(
             is_parameter_mutated_or_escaping(&sigs[0].node, "x"),
@@ -2401,7 +2401,7 @@ mod tests {
         #[case] expected: &[&str],
     ) {
         let source = format!("def make():\n    return []\n{usage}");
-        let file = ParsedFile::new(&source, SupportLang::Python);
+        let file = ParsedFile::new(&source, Language::Python);
         let expected: HashSet<String> = expected.iter().map(|name| (*name).to_string()).collect();
         assert_eq!(collect_locally_mutated_return_functions(&file), expected);
     }
@@ -2419,7 +2419,7 @@ mod tests {
         #[case] source: &str,
         #[case] expected: &[(&str, bool, bool)],
     ) {
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let actual: Vec<(String, bool, bool)> = collect_class_attributes(&file)
             .into_iter()
             .map(|attribute| {
@@ -2460,7 +2460,7 @@ mod tests {
         #[case] source: &str,
         #[case] expected: &[(&str, LiteralRole)],
     ) {
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let actual: Vec<(String, LiteralRole)> = collect_literal_occurrences(&file)
             .into_iter()
             .map(|occurrence| (occurrence.node.text().into_owned(), occurrence.role))
@@ -2485,7 +2485,7 @@ mod tests {
         )]
         callee: &str,
     ) {
-        let file = ParsedFile::new(&format!("t = {callee}('Nm', 'vv')"), SupportLang::Python);
+        let file = ParsedFile::new(&format!("t = {callee}('Nm', 'vv')"), Language::Python);
         let texts: Vec<String> = collect_literal_occurrences(&file)
             .into_iter()
             .map(|occurrence| occurrence.node.text().into_owned())
@@ -2512,7 +2512,7 @@ mod tests {
         #[case] literal: &str,
         #[case] expected: LiteralValue,
     ) {
-        let file = ParsedFile::new(&format!("value = {literal}"), SupportLang::Python);
+        let file = ParsedFile::new(&format!("value = {literal}"), Language::Python);
         let values: Vec<LiteralValue> = collect_literal_occurrences(&file)
             .into_iter()
             .map(|occurrence| occurrence.value)
@@ -2529,7 +2529,7 @@ mod tests {
             ):
                 pass
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let classes = extract_classes(&file);
         assert_eq!(classes.len(), 1);
         assert!(classes[0].bases.is_empty());
@@ -2552,7 +2552,7 @@ mod tests {
             ):
                 pass
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let classes = extract_classes(&file);
         let summary: Vec<(&str, bool)> = classes[0]
             .bases
@@ -2592,7 +2592,7 @@ mod tests {
         #[case] source: &str,
         #[case] expected: &[(&str, &str, &str, &str)],
     ) {
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let actual: Vec<(String, String, String, String)> =
             collect_instance_attribute_annotations(&file)
                 .into_iter()
@@ -2648,7 +2648,7 @@ mod tests {
         #[case] source: &str,
         #[case] expected: (bool, bool),
     ) {
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let actual: Vec<(bool, bool)> = collect_instance_attribute_annotations(&file)
             .iter()
             .map(|attribute| {
@@ -2678,7 +2678,7 @@ mod tests {
         #[case] expected_has_none: bool,
         #[case] expected_branches: &[&str],
     ) {
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let signatures = extract_function_signatures(&file);
         let return_type_node = signatures[0]
             .return_type_node
@@ -2692,7 +2692,7 @@ mod tests {
 
     #[test]
     fn test_extract_generic_type() {
-        let file = ParsedFile::new("def f() -> tuple[int, ...]: pass", SupportLang::Python);
+        let file = ParsedFile::new("def f() -> tuple[int, ...]: pass", Language::Python);
         let signatures = extract_function_signatures(&file);
         let return_type_node = signatures[0].return_type_node.as_ref().unwrap();
         let (base, args) = extract_generic_type(return_type_node).expect("generic type");
@@ -2727,7 +2727,7 @@ mod tests {
             logging.log(20, f"User {user_id}", user_id=1)
             print("not a logger", value)
         "#};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let calls: Vec<_> = collect_logger_calls(&file)
             .into_iter()
             .map(|call| {
@@ -2797,7 +2797,7 @@ mod tests {
                 def name(self) -> str:
                     return 'x'
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let scopes = collect_function_scopes(&file);
         let summary: Vec<(bool, &str, usize, Vec<String>)> = scopes
             .iter()
@@ -2851,7 +2851,7 @@ mod tests {
     );
 
     fn summarize_format_strings(python_code: &str) -> Vec<FormatStringSummary> {
-        let file = ParsedFile::new(python_code, SupportLang::Python);
+        let file = ParsedFile::new(python_code, Language::Python);
         collect_format_strings(&file)
             .into_iter()
             .map(|format_string| {

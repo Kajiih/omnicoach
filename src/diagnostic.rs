@@ -2,9 +2,51 @@
 
 architecture_component!(Diagnostic);
 
-use ast_grep_language::SupportLang;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use strum::VariantArray;
+
+/// A programming language analyzed by the code linter; [`Language::VARIANTS`] lists them all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, VariantArray)]
+pub enum Language {
+    /// Python (`.py` files).
+    Python,
+    /// Rust (`.rs` files).
+    Rust,
+}
+
+impl Language {
+    /// The lowercase identifier naming the language in configuration keys
+    /// (`[rules.<name>.python]`) and Markdown code fences.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Python => "python",
+            Self::Rust => "rust",
+        }
+    }
+
+    /// The language of `path`, from its extension, or `None` if the code linter does not
+    /// analyze it.
+    #[must_use]
+    pub fn from_path(path: &Path) -> Option<Self> {
+        match path.extension()?.to_str()? {
+            "py" => Some(Self::Python),
+            "rs" => Some(Self::Rust),
+            _ => None,
+        }
+    }
+}
+
+/// The human-readable name: `Python`, `Rust`.
+impl std::fmt::Display for Language {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Python => "Python",
+            Self::Rust => "Rust",
+        })
+    }
+}
 
 /// Strongly-typed static rule identifier name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
@@ -55,16 +97,13 @@ pub struct LanguageText {
     /// Default text used when no language-specific override matches.
     pub base: &'static str,
     /// Language-specific overrides.
-    pub overrides: &'static [(SupportLang, &'static str)],
+    pub overrides: &'static [(Language, &'static str)],
 }
 
 impl LanguageText {
     /// Creates a new `LanguageText` with a base string and language-specific overrides.
     #[must_use]
-    pub const fn new(
-        base: &'static str,
-        overrides: &'static [(SupportLang, &'static str)],
-    ) -> Self {
+    pub const fn new(base: &'static str, overrides: &'static [(Language, &'static str)]) -> Self {
         Self { base, overrides }
     }
 
@@ -79,7 +118,7 @@ impl LanguageText {
 
     /// Resolves the raw static text for the given language.
     #[must_use]
-    pub fn resolve_for_lang(&self, lang: SupportLang) -> &'static str {
+    pub fn resolve_for_lang(&self, lang: Language) -> &'static str {
         for &(override_lang, text) in self.overrides {
             if override_lang == lang {
                 return text;
@@ -96,7 +135,7 @@ impl LanguageText {
 
     /// Resolves and interpolates named `{key}` placeholders for the given language.
     #[must_use]
-    pub fn render_for_lang(&self, lang: SupportLang, params: &[(&str, &str)]) -> String {
+    pub fn render_for_lang(&self, lang: Language, params: &[(&str, &str)]) -> String {
         Self::interpolate(self.resolve_for_lang(lang), params)
     }
 
@@ -193,7 +232,7 @@ impl ViolationTemplate {
 
     /// Renders the template into a concrete `ViolationMessage` for a specific programming language.
     #[must_use]
-    pub fn render_for_lang(&self, lang: SupportLang, params: &[(&str, &str)]) -> ViolationMessage {
+    pub fn render_for_lang(&self, lang: Language, params: &[(&str, &str)]) -> ViolationMessage {
         ViolationMessage {
             summary: self.summary.render_for_lang(lang, params),
             rationale: self.rationale.render_for_lang(lang, params),
@@ -222,7 +261,7 @@ macro_rules! violation_template {
     (@text { base: $base:expr, $($lang:ident => $text:expr),+ $(,)? }) => {
         $crate::diagnostic::LanguageText::new(
             $base,
-            &[$((::ast_grep_language::SupportLang::$lang, $text)),+],
+            &[$(($crate::diagnostic::Language::$lang, $text)),+],
         )
     };
     // Internal arm: static string field
@@ -482,24 +521,21 @@ mod tests {
         const ADVICE: LanguageText = LanguageText::new(
             "Parameterize variations for {func}",
             &[
-                (
-                    SupportLang::Python,
-                    "Use @pytest.mark.parametrize for {func}",
-                ),
-                (SupportLang::Rust, "Use #[rstest] for {func}"),
+                (Language::Python, "Use @pytest.mark.parametrize for {func}"),
+                (Language::Rust, "Use #[rstest] for {func}"),
             ],
         );
 
         assert_eq!(
-            ADVICE.resolve_for_lang(SupportLang::Python),
+            ADVICE.resolve_for_lang(Language::Python),
             "Use @pytest.mark.parametrize for {func}"
         );
         assert_eq!(
-            ADVICE.render_for_lang(SupportLang::Python, &[("func", "test_math")]),
+            ADVICE.render_for_lang(Language::Python, &[("func", "test_math")]),
             "Use @pytest.mark.parametrize for test_math"
         );
         assert_eq!(
-            ADVICE.render_for_lang(SupportLang::Rust, &[("func", "test_math")]),
+            ADVICE.render_for_lang(Language::Rust, &[("func", "test_math")]),
             "Use #[rstest] for test_math"
         );
         assert_eq!(
@@ -533,7 +569,7 @@ mod tests {
         };
 
         assert_eq!(
-            TEMPLATE.render_for_lang(SupportLang::Python, &[("func", "process_data")]),
+            TEMPLATE.render_for_lang(Language::Python, &[("func", "process_data")]),
             ViolationMessage::new(
                 "Function `process_data` too long",
                 "Long functions are hard to read",
@@ -542,7 +578,7 @@ mod tests {
         );
 
         assert_eq!(
-            TEMPLATE.render_for_lang(SupportLang::Rust, &[("func", "process_data")]),
+            TEMPLATE.render_for_lang(Language::Rust, &[("func", "process_data")]),
             ViolationMessage::new(
                 "Function `process_data` too long",
                 "Long functions are hard to read",

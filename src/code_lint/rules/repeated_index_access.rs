@@ -2,12 +2,11 @@
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile, ScopePositionalReads};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality,
     LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -39,7 +38,7 @@ pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
     declaration: Declaration {
         name: RuleName("repeated-index-access"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python, SupportLang::Rust],
+        languages: &[Language::Python, Language::Rust],
         options: RuleOptions::code_rule((MIN_POSITIONS, MAX_PLACEHOLDERS)),
         classification: Classification {
             topics: &[Topic::POSITIONAL_INDEXING],
@@ -84,7 +83,7 @@ pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
             ],
             examples: &[
                 Example {
-                    language: SupportLang::Python,
+                    language: Language::Python,
                     flagged: indoc::indoc! {r"
                         def render_marker(location):
                             return map_marker(latitude=location[0], longitude=location[1])
@@ -97,7 +96,7 @@ pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
                     "},
                 },
                 Example {
-                    language: SupportLang::Rust,
+                    language: Language::Rust,
                     flagged: indoc::indoc! {r"
                         fn elapsed(interval: (Instant, Instant)) -> Duration {
                             interval.1 - interval.0

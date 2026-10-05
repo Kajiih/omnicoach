@@ -152,12 +152,12 @@ mod tests {
         // Allow empty/anonymous commit edit
         let output_allowed =
             crate::test_utils::assert_command_rule_snapshot(&RULE, "jj edit a456", &jj_client);
-        assert!(output_allowed.is_empty());
+        assert_eq!(output_allowed, "");
 
         // Allow unrelated commands
         let output_log =
             crate::test_utils::assert_command_rule_snapshot(&RULE, "jj log -r d123", &jj_client);
-        assert!(output_log.is_empty());
+        assert_eq!(output_log, "");
     }
 
     #[rstest::rstest]

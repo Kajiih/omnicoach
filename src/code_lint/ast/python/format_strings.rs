@@ -391,14 +391,13 @@ pub fn extract_valid_field_root(field_name: &str) -> Option<&str> {
                 return None;
             }
             tail = &after_dot[end..];
-        } else if let Some(after_bracket) = tail.strip_prefix('[') {
+        } else {
+            let after_bracket = tail.strip_prefix('[')?;
             let close = after_bracket.find(']')?;
             if close == 0 {
                 return None;
             }
             tail = &after_bracket[close + 1..];
-        } else {
-            return None;
         }
     }
     Some(root)

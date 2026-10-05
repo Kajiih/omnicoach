@@ -7,12 +7,11 @@ use crate::code_lint::ast::python::{
     extract_function_signatures, has_unaliased_collections_abc_set_import,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, EnforcementMode, Example, ImpactedQuality,
     LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::path::Path;
 
 /// The ABC the rule narrows to `Collection` when the parameter needs no positional access.
@@ -29,7 +28,7 @@ pub const RULE: CodeRule = CodeRule {
     declaration: Declaration {
         name: RuleName("specific-collection-parameter"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python],
+        languages: &[Language::Python],
         options: RuleOptions {
             enforcement_mode: Some(LanguageDefaults::new(
                 EnforcementMode::RequireExplanation,
@@ -80,7 +79,7 @@ pub const RULE: CodeRule = CodeRule {
                 url: "https://docs.python.org/3/library/collections.abc.html",
             }],
             examples: &[Example {
-                language: SupportLang::Python,
+                language: Language::Python,
                 flagged: indoc::indoc! {r"
                     from collections.abc import Sequence
 

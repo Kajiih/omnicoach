@@ -299,8 +299,7 @@ impl<'a> CommentIndex<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagnostic::SourceSpan;
-    use ast_grep_language::SupportLang;
+    use crate::diagnostic::{Language, SourceSpan};
     use indoc::indoc;
     use rstest::rstest;
 
@@ -394,7 +393,7 @@ mod tests {
                 pass
         "};
 
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let index = CommentIndex::from_file(&file);
         assert_eq!(index.has_adjacent_explanation(line), expected);
     }
@@ -408,7 +407,7 @@ mod tests {
                 pass
         "};
 
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let index = CommentIndex::from_file(&file);
 
         assert!(index.has_adjacent_explanation(3));
@@ -421,7 +420,7 @@ mod tests {
             with suppress(FileNotFoundError):
                 pass
         "};
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let index = CommentIndex::from_file(&file);
 
         // Line 2 has no standalone comment preceding it; line 1 is code with inline comment
@@ -523,7 +522,7 @@ mod tests {
         #[case] target_call: &str,
         #[case] expected: bool,
     ) {
-        let file = ParsedFile::new(source, SupportLang::Python);
+        let file = ParsedFile::new(source, Language::Python);
         let index = CommentIndex::from_file(&file);
         let (span, line) = span_of(source, target_call);
 
@@ -540,7 +539,7 @@ mod tests {
                 };
             }
         "};
-        let file = ParsedFile::new(source, SupportLang::Rust);
+        let file = ParsedFile::new(source, Language::Rust);
         let index = CommentIndex::from_file(&file);
         let (span, line) = span_of(source, "compute()");
 

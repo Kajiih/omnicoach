@@ -2,12 +2,11 @@
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -17,9 +16,9 @@ const ALLOWED: ListOption = ListOption {
     default: FilterListDefaults {
         base: &[],
         extend: &[
-            (SupportLang::Python, &["cleandoc", "inspect.cleandoc"]),
+            (Language::Python, &["cleandoc", "inspect.cleandoc"]),
             (
-                SupportLang::Rust,
+                Language::Rust,
                 &[
                     "indoc",
                     "indoc::indoc",
@@ -53,7 +52,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
         name: RuleName("bare-multiline-string"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python, SupportLang::Rust],
+        languages: &[Language::Python, Language::Rust],
         options: RuleOptions::code_rule(ALLOWED),
         classification: Classification {
             topics: &[Topic::LITERALS],
@@ -96,7 +95,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             ],
             examples: &[
                 Example {
-                    language: SupportLang::Python,
+                    language: Language::Python,
                     flagged: indoc::indoc! {r#"
                         ACTIVE_USERS_QUERY = """
                             SELECT id, email
@@ -119,7 +118,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                     "#},
                 },
                 Example {
-                    language: SupportLang::Rust,
+                    language: Language::Rust,
                     flagged: indoc::indoc! {r#"
                         const ACTIVE_USERS_QUERY: &str = r"
                             SELECT id, email

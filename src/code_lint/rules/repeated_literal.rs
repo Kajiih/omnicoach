@@ -3,12 +3,11 @@
 use crate::code_lint::ast::{self, AstNode, LiteralRole, LiteralValue, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::is_trivial_literal;
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality,
     LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -30,7 +29,7 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
     declaration: Declaration {
         name: RuleName("repeated-literal"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python, SupportLang::Rust],
+        languages: &[Language::Python, Language::Rust],
         options: RuleOptions::code_rule(MIN_OCCURRENCES),
         classification: Classification {
             topics: &[Topic::LITERALS],
@@ -92,7 +91,7 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
             ],
             examples: &[
                 Example {
-                    language: SupportLang::Python,
+                    language: Language::Python,
                     flagged: indoc::indoc! {r#"
                         def fetch_orders(session):
                             return session.get("https://api.example.com/orders")
@@ -112,7 +111,7 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                     "#},
                 },
                 Example {
-                    language: SupportLang::Rust,
+                    language: Language::Rust,
                     flagged: indoc::indoc! {r#"
                         fn read_config() -> io::Result<String> {
                             fs::read_to_string("omni.toml")
@@ -166,7 +165,7 @@ impl<'a> LiteralGroup<'a> {
 /// Groups the file's non-trivial literals by value, in first-seen order. Rust test code is
 /// left out so a test literal cannot pair with a production one.
 fn group_literals(file: &ParsedFile) -> Vec<LiteralGroup<'_>> {
-    let test_ranges = if file.lang() == SupportLang::Rust {
+    let test_ranges = if file.lang() == Language::Rust {
         ast::rust::collect_inline_test_ranges(file)
     } else {
         Vec::new()

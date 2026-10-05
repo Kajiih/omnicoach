@@ -2,12 +2,11 @@
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
     RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -29,7 +28,7 @@ pub const RULE: CodeRule = CodeRule {
     declaration: Declaration {
         name: RuleName("packed-assertion"),
         template: &TEMPLATE,
-        languages: &[SupportLang::Python, SupportLang::Rust],
+        languages: &[Language::Python, Language::Rust],
         options: RuleOptions::code_rule(()),
         classification: Classification {
             topics: &[Topic::TEST_ASSERTIONS],
@@ -62,7 +61,7 @@ pub const RULE: CodeRule = CodeRule {
             }],
             examples: &[
                 Example {
-                    language: SupportLang::Python,
+                    language: Language::Python,
                     flagged: indoc::indoc! {r"
                         def test_login():
                             assert user.is_active and user.is_verified
@@ -75,7 +74,7 @@ pub const RULE: CodeRule = CodeRule {
                     "},
                 },
                 Example {
-                    language: SupportLang::Rust,
+                    language: Language::Rust,
                     flagged: indoc::indoc! {r"
                         #[test]
                         fn test_login() {
@@ -175,11 +174,11 @@ fn check_python_assert_statement(
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     match file.lang() {
-        SupportLang::Rust => ast::rust::collect_macro_invocations(file)
+        Language::Rust => ast::rust::collect_macro_invocations(file)
             .iter()
             .filter_map(|node| check_rust_assertion_macro(rule, node, path))
             .collect(),
-        _ => ast::python::collect_assert_statements(file)
+        Language::Python => ast::python::collect_assert_statements(file)
             .iter()
             .filter_map(|node| check_python_assert_statement(rule, node, path))
             .collect(),

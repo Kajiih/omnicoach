@@ -3,12 +3,11 @@
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls::{self, CallMatch};
-use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
     ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
-use ast_grep_language::SupportLang;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -19,11 +18,11 @@ const BANNED: ListOption = ListOption {
         base: &["sleep"],
         extend: &[
             (
-                SupportLang::Python,
+                Language::Python,
                 &["time.sleep", "asyncio.sleep", "anyio.sleep", "trio.sleep"],
             ),
             (
-                SupportLang::Rust,
+                Language::Rust,
                 &[
                     "thread::sleep",
                     "std::thread::sleep",
@@ -61,7 +60,7 @@ pub const SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
         name: RuleName("sleep-in-tests"),
         template: &SLEEP_TEMPLATE,
-        languages: &[SupportLang::Python, SupportLang::Rust],
+        languages: &[Language::Python, Language::Rust],
         options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::TEST_TIMING],
@@ -96,7 +95,7 @@ pub const SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
             ],
             examples: &[
                 Example {
-                    language: SupportLang::Python,
+                    language: Language::Python,
                     flagged: indoc::indoc! {r#"
                         def test_session_expires(sessions):
                             sessions.open("alice", ttl=30)
@@ -112,7 +111,7 @@ pub const SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
                     "#},
                 },
                 Example {
-                    language: SupportLang::Rust,
+                    language: Language::Rust,
                     flagged: indoc::indoc! {r#"
                         #[tokio::test]
                         async fn test_session_expires() {
@@ -145,7 +144,7 @@ pub const ZERO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
         name: RuleName("zero-sleep-in-tests"),
         template: &ZERO_SLEEP_TEMPLATE,
-        languages: &[SupportLang::Python, SupportLang::Rust],
+        languages: &[Language::Python, Language::Rust],
         options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::TEST_TIMING],
@@ -183,7 +182,7 @@ pub const ZERO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
             ],
             examples: &[
                 Example {
-                    language: SupportLang::Python,
+                    language: Language::Python,
                     flagged: indoc::indoc! {r#"
                         async def test_publish_notifies_subscriber(bus, subscriber):
                             bus.publish("order.created")
@@ -199,7 +198,7 @@ pub const ZERO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
                     "#},
                 },
                 Example {
-                    language: SupportLang::Rust,
+                    language: Language::Rust,
                     flagged: indoc::indoc! {r#"
                         #[tokio::test]
                         async fn test_publish_notifies_subscriber() {
