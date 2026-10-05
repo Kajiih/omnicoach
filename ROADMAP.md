@@ -24,9 +24,6 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
 - **Standalone crate extraction**: once the DAG design items above settle (or when a second project needs it), evaluate extracting the declarative architecture and conformance engine into a standalone publishable crate (zero-dependency `define_architecture!` / `architecture_component!` macros in `[dependencies]`, CST conformance runner behind a `check` feature in `[dev-dependencies]`), moving `summarize_rust_file` out of `src/code_lint/ast/rust.rs`.
 - **Pre-existing Python collector defects** (found in the signature collection review, `docs/dev/signature_collection_types/06_review_and_audit.md`):
   - `parse_param_parts`: four near-copies and an unreachable `dfs()` fallback.
-- **Rule-shaped items left in `ast/`** (in progress; inventory, order and decisions in `docs/dev/ast_policy_extraction/01_understand.md`):
-  - *Current*: `ast/` should expose language constructs, not rule verdicts. The quote-wrapped, logger-placeholder, inline-attribute-annotation, fake-without-protocol, call-before-definition, mutable-module-constant and nullable-collection-return policy now lives in its rules. `ast/python` classifies standard collection types (`CollectionKind`, `CollectionShape`); the collection rules choose what to flag, and their shared replacement formatting lives in the `code_lint::policy` component. Rule policy remains in `ast/rust.rs` (logging-macro literal exemptions) and in `ast.rs` (`LiteralValue::is_trivial`).
-  - *Target*: construct-level facts in `ast/`, policy in the rule. Policy shared by several rules goes in the minimal `code_lint::policy` component (rule modules cannot import a sibling). Does not wait for the typed CST.
 
 ## Rule Engine & Declarative Rules
 

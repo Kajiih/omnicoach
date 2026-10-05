@@ -247,10 +247,13 @@ pub fn extract_classes(file: &ParsedFile) -> Vec<PythonClassInfo<'_>> {
     classes
 }
 
-/// A public Python class or instance attribute carrying a type annotation.
+/// A Python class or `__init__` instance attribute carrying a type annotation.
 pub struct PythonAnnotatedAttribute<'a> {
     /// Name of the enclosing class.
     pub class_name: String,
+    /// True if the enclosing class is a `Protocol` or `ABC`, so the annotation declares an
+    /// interface member.
+    pub is_in_protocol_or_abc: bool,
     /// Attribute identifier name (e.g. `"items"`).
     pub name: String,
     /// Type annotation AST node (`type`).
@@ -314,15 +317,13 @@ fn collect_self_annotated_assignments_rec<'a>(
     }
 }
 
-/// Collects public (`!name.starts_with('_')`) annotated class and `__init__` attributes,
-/// recording whether each attribute is mutated in place within its class.
-///
-/// Skips `Protocol` and `ABC` classes.
+/// Collects annotated class and `__init__` attributes, recording whether each attribute is
+/// mutated in place within its class.
 #[must_use]
-pub fn collect_public_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotatedAttribute<'_>> {
+pub fn collect_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotatedAttribute<'_>> {
     let mut out = Vec::new();
     for class_node in file.grep.root().dfs() {
-        if class_node.kind() != "class_definition" || is_protocol_or_abc_class_raw(&class_node) {
+        if class_node.kind() != "class_definition" {
             continue;
         }
         let Some(name_node) = class_node.field("name") else {
@@ -333,6 +334,7 @@ pub fn collect_public_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotated
         };
         let class_name = name_node.text().into_owned();
         let is_typed_dict = is_typed_dict_class_raw(&class_node);
+        let is_in_protocol_or_abc = is_protocol_or_abc_class_raw(&class_node);
 
         let mut mutated_attrs = HashSet::new();
         for child in body.children() {
@@ -349,16 +351,15 @@ pub fn collect_public_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotated
                 && left.kind() == "identifier"
             {
                 let attr_name = left.text().into_owned();
-                if !attr_name.starts_with('_') {
-                    let is_mutated_in_class = mutated_attrs.contains(&attr_name);
-                    out.push(PythonAnnotatedAttribute {
-                        class_name: class_name.clone(),
-                        name: attr_name,
-                        type_node: AstNode::from_raw(type_node),
-                        is_mutated_in_class,
-                        is_typed_dict_key: is_typed_dict,
-                    });
-                }
+                let is_mutated_in_class = mutated_attrs.contains(&attr_name);
+                out.push(PythonAnnotatedAttribute {
+                    class_name: class_name.clone(),
+                    is_in_protocol_or_abc,
+                    name: attr_name,
+                    type_node: AstNode::from_raw(type_node),
+                    is_mutated_in_class,
+                    is_typed_dict_key: is_typed_dict,
+                });
             }
         }
 
@@ -373,12 +374,10 @@ pub fn collect_public_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotated
                     collect_self_annotated_assignments_rec(&statement, &mut annotated);
                 }
                 for (_, attr_name, type_node) in annotated {
-                    if attr_name.starts_with('_') {
-                        continue;
-                    }
                     let is_mutated_in_class = mutated_attrs.contains(&attr_name);
                     out.push(PythonAnnotatedAttribute {
                         class_name: class_name.clone(),
+                        is_in_protocol_or_abc,
                         name: attr_name,
                         type_node: AstNode::from_raw(type_node),
                         is_mutated_in_class,

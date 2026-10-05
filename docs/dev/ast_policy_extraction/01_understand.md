@@ -1,7 +1,7 @@
 # AST policy extraction: 01 Understand
 
 > [!NOTE]
-> **Status: VALIDATED (2026-10-05). Executing §6; steps 1–6 landed.**
+> **Status: DONE (2026-10-05). All §6 steps landed; step 7 triage in D7.**
 > Scope: the ROADMAP item "Rule-shaped items left in `ast/python`", plus the same leak found in `ast/rust.rs` and `ast.rs`.
 > Line numbers are from the inventory at change `tvvyzump` and will drift.
 
@@ -78,3 +78,6 @@ Each step is one atomic commit, smallest and least coupled first:
 - **D4 (was Q3).** Treat `call-before-definition` as enabled: extract the `ForwardCall` policy into the rule like any other (step 3).
 - **D5 (was Q4).** The typed-CST work happens later; this work does not wait for it.
 - **D6 (was Q2).** The collection taxonomy is a fact about Python's standard library and lives in `ast/`: `collect_collection_types` returns every standard collection type in an annotation with its `CollectionKind` (concrete mutable, abstract mutable, abstract read-only, immutable) and `CollectionShape` (mapping, set, sequence, iterable). Rules choose which kinds and names to flag; suggestion text is policy.
+- **D7 (step 7 triage).**
+  - Moved: `LiteralValue::is_trivial` → `code_lint::policy::is_trivial_literal` (shared by `repeated-literal` and the `rule_test!` harness); `collect_environ_subscripts` returns `PythonEnvironSubscript { node, mapping }` and the rule renders the label; `collect_public_class_attributes` → `collect_class_attributes`, which keeps private names and reports `is_in_protocol_or_abc`, and the two collection-attribute rules filter.
+  - Kept as facts: Rust `LITERAL_EXEMPT_MACROS` and Python `TYPE_NAME_FIRST_ARGUMENT_CALLS` name positions where the language or API requires a literal (format strings, compile-time inputs, type names), so no named constant can replace it; the over-exemption of non-format arguments (`assert_eq!(x, "v")`) is already a documented `repeated-literal` known gap. `find_unwrapped_multiline_strings` already takes the allowed wrappers from the rule; docstrings, `#[doc]` attributes and `insta` inline snapshots are not runtime text values. `analyze_parameter_collection_capability` is usage analysis.
