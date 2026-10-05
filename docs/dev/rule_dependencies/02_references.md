@@ -57,7 +57,7 @@ Takeaways:
 
 Takeaways for Omni:
 
-- **Directed and external relations** (`Chain`, `ReliesOn`, `Delegates`, `Duplicates`) fit Biome's node-local static slice on `RuleDoc` (`related: &'static [Related]`). For Omni → Omni directed edges ($a \to b$), declaring the edge once on $a$ and letting `rule_catalog.rs` also display incoming edges on $b$ avoids duplicate maintenance. For incoming external chains (T5: Ruff `SIM105` → `suppressed-exception`), a direction field or `ChainedFrom` variant lets the Omni rule record the incoming edge locally.
+- **Directed and external relations** (`Chain`, `ReliesOn`, `Delegates`, `Duplicates`) fit Biome's node-local static slice on `Declaration` (`03_design.md` §1.1). For Omni → Omni directed edges ($a \to b$), declaring the edge once on $a$ and letting `rule_catalog.rs` also display incoming edges on $b$ avoids duplicate maintenance. For incoming external chains (T5: Ruff `SIM105` → `suppressed-exception`), a direction field or subject-first constructor lets the Omni rule record the incoming edge locally.
 - **Symmetric Omni ↔ Omni relations** in `01_understand.md` §3.3 are all `Partitions` once D9 resolves T3 (`DivergentAdvice`). Modeling them as named `Partition` equivalence-class constants in `src/rule_declaration/` (the exact pattern `Topic` already uses in `src/rule_declaration/taxonomy.rs`) eliminates 30 pairwise back-and-forth declarations across 13 rule files, keeps shared conditions (`when banned lists agree`) in one place, separates orthogonal partition axes on collection rules, and guarantees symmetry by construction.
 
 ## 4. Sources

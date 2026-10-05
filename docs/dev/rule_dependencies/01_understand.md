@@ -1,7 +1,7 @@
 # Rule dependencies and soundness: 01 Understand
 
 > [!NOTE]
-> **Status: UNDERSTAND COMPLETE. Vocabulary derived from first principles (§2.1, prior art in `02_references.md`). Ready to design option A.**
+> **Status: UNDERSTAND COMPLETE. Vocabulary derived from first principles (§2.1, prior art in `02_references.md`). Exploratory design spike recorded in `03_design.md`; both design commitment and implementation are deferred until the rule corpus grows (D13).**
 > Scope: the ROADMAP item "Rule dependencies and soundness". How Omni rules relate to each other and to external linters, and whether a set of enabled rules can give contradictory or harmful advice.
 > Line numbers are from the investigation at change `tvvyzump` and will drift. [U] marks claims not checked against code or tool output.
 
@@ -202,7 +202,7 @@ Takeaways: nobody runs fixes across rules as a test. Enforced checks are narrow 
 
 ## 6. Options
 
-- **A. Typed relationship field.** `RuleDoc.related: &'static [Related]` for directed and external links (`Chain`, `DivergentAdvice`, `ReliesOn`, `Delegates`, `Duplicates`), plus named equivalence classes (`RuleDoc.partitions: &'static [Partition]`, mirroring `Topic` in `src/rule_declaration/taxonomy.rs`) for symmetric Omni ↔ Omni `Partitions` (`02_references.md` §3). Contradictions and cycles are not declared: they break hard targets and must be fixed. Rendered by `--explain`. A registry test checks that names exist, there are no self-references, every `Partition` has at least two member rules, and `Chain` and `ReliesOn` have no cycles. Also covers ROADMAP "Typed overlap / sources field".
+- **A. Typed relationship field.** A `relations` field on `Declaration` (D13): directed and external links (`Chain`, `DivergentAdvice`, `ReliesOn`, `Delegates`, `Duplicates`), plus named equivalence classes (`Partition` constants, mirroring `Topic` in `src/rule_declaration/taxonomy.rs`) for symmetric `Partitions` (`02_references.md` §3). Contradictions and cycles are not declared: they break hard targets and must be fixed. Rendered by `--explain`. A registry test checks that names exist, there are no self-references, every `Partition` has at least two member rules, and `Chain` and `ReliesOn` have no cycles. Also covers ROADMAP "Typed overlap / sources field".
 - **B. Config-load warnings.** Warn when an enabled rule relies on a disabled Omni rule, including on a subset of paths. Needs warning plumbing. External companions would need Ruff's resolved settings (brittle).
 - **C. Auto-enable / auto-disable** (Ruff, Biome style). Breaks ADR 007's precedence, and Omni cannot enable Ruff rules. Not recommended.
 - **D. Fix-conflict harness.** A test in `tests/` that runs every code rule's `Example.fixed` through all rules via `runner::lint_file` (not `rule_test!`, which ignores `RuleTarget`), under a source path and a test path. It asserts no diagnostics from other rules, except relationships declared in A. No production change. Fails today on F1–F3. Can be extended to `flagged` snippets to detect undeclared overlaps.
@@ -223,6 +223,12 @@ Recommended order: A first, registering the known relations of §3 on their rule
 - **D10 (was Q1).** Start with A, after defining every relation of §3 properly. Conditional relations are declared by hand with their condition, even though tests only see the default configuration.
 - **D11 (was Q4).** T2 is a revealed chain (§2.1), so nothing is declared or changed, and `t` is not added to `single-letter-name`'s allow list. T1 is a doc-example fix on `repeated-index-access`: replace `x, y = point` and `let Point(x, y) = point;` with the same full-word example in both languages (`start, end = span` in Python and `let (start, end) = span;` in Rust).
 - **D12 (was Q7).** Relations record their direction (`a → b` or `a ↔ b`), with *dependency* defined for `ReliesOn`, `Delegates` and `Partitions`, and whether they are unconditional or conditional (with the condition).
+- **D13 (from the `03_design.md` exploratory spike — tentative, to be challenged when resumed).**
+  1. In the spike, relations sit on `Declaration` next to `classification`, not in the prose `RuleDoc`.
+  2. N-ary partitions were modeled as shared `Partition` constants, and directed relations were declared once on the source rule in the active voice (`triggers`, `delegates_to`, `relies_on`, `subsumes`) with `--explain` deriving the incoming view.
+  3. If compile-time rule identifiers are used instead of `RuleName` strings, they belong next to `RuleName` in `src/diagnostic.rs` to preserve sibling rule isolation (`03_design.md` §1.2, Q2).
+  4. Existential relations (`Chain`, `Overlaps`) can carry executable witnesses, whereas universal ones (`Partitions`, `Subsumes`) must hold by construction from a shared classifier (`03_design.md` §3).
+  5. **Both committing to a design and implementing it are deferred** until a larger rule corpus lands (`03_design.md` §4). When resumed, do not blindly follow `03_design.md`: re-inventory the expanded rule corpus, challenge every tentative choice above, and look for simpler or stronger alternatives.
 
 ## 8. Side notes
 
