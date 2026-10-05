@@ -3,6 +3,8 @@
 This document records **Phase 1 (Understand)** for porting the legacy linter's `QuoteWrappedPlaceholderRule` ([legacy_lints.py:2151-2221](../../../scratch/legacy_reference/legacy_lints.py#L2151-L2221)) to Omni as `quote-wrapped-placeholder`.
 
 > Status: **VALIDATED** (2026-10-03). All decisions `D1`–`D9` and open questions `Q1`–`Q4` validated.
+>
+> **Superseded in part (2026-10-05):** SQL strings and isolated quoted placeholders (`f"'{value}'"`) are no longer exempt; SQL injection is left to Ruff `S608`. The prose and quote heuristics moved from `ast/python/quote_wrapped.rs` into the rule file, on top of the construct-level `ast/python/format_strings.rs`. The rule's `what_it_does` is authoritative.
 
 ---
 

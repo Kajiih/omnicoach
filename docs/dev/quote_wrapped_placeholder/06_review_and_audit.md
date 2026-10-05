@@ -3,6 +3,8 @@
 This document records the independent pedantic code/test and user-facing text reviews conducted for `quote-wrapped-placeholder` (`QuoteWrappedPlaceholderRule`), along with the verification of all findings.
 
 > Status: **COMPLETE and validated.**
+>
+> **Superseded in part (2026-10-05):** SQL strings and isolated quoted placeholders (`f"'{value}'"`) are no longer exempt; SQL injection is left to Ruff `S608`. The prose and quote heuristics moved from `ast/python/quote_wrapped.rs` into the rule file, on top of the construct-level `ast/python/format_strings.rs`. The rule's `what_it_does` is authoritative.
 
 ---
 
