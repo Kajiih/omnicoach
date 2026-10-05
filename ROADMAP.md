@@ -24,12 +24,9 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
 - **Standalone crate extraction**: once the DAG design items above settle (or when a second project needs it), evaluate extracting the declarative architecture and conformance engine into a standalone publishable crate (zero-dependency `define_architecture!` / `architecture_component!` macros in `[dependencies]`, CST conformance runner behind a `check` feature in `[dev-dependencies]`), moving `summarize_rust_file` out of `src/code_lint/ast/rust.rs`.
 - **Pre-existing Python collector defects** (found in the signature collection review, `docs/dev/signature_collection_types/06_review_and_audit.md`):
   - `parse_param_parts`: four near-copies and an unreachable `dfs()` fallback.
-- **Rule-shaped items left in `ast/python`**:
-  - *Current*: `ast/python` should expose language constructs, not rule verdicts. The quote-wrapped and logger-placeholder policy now lives in its rules (`ast/python/format_strings.rs` and `ast/python/logging.rs` only recognise the constructs). These items still encode one rule's policy:
-    - `annotations.rs`: the collection vocabularies behind `collect_concrete_collection_types`, `collect_mutable_collection_types` and `collect_specific_collection_types`; `read_only_collection_replacements` and `immutable_constant_collection_replacements` (suggestion text); `collect_nullable_collection_return_types` and `collect_nullable_collection_returns`.
-    - `scopes.rs`: `ForwardCall` and `collect_forward_calls` (only used by the disabled `call-before-definition`).
-    - `python.rs`: `PythonMutableModuleConstant` and `collect_mutable_module_constants`.
-  - *Target*: split each into a construct-level fact in `ast/python` (for example "type annotation subscripts", "module-level assignments", "class attribute declarations") and policy in the rule. Do it with the typed CST decision above, so the construct API is designed once.
+- **Rule-shaped items left in `ast/`** (in progress; inventory, order and decisions in `docs/dev/ast_policy_extraction/01_understand.md`):
+  - *Current*: `ast/` should expose language constructs, not rule verdicts. The quote-wrapped, logger-placeholder, inline-attribute-annotation and fake-without-protocol policy now lives in its rules. Rule policy remains in `ast/python` (`annotations.rs` collection vocabularies and replacements, `scopes.rs` `ForwardCall`, `python.rs` `PythonMutableModuleConstant`), in `ast/rust.rs` (nullable collection returns, logging-macro literal exemptions) and in `ast.rs` (`LiteralValue::is_trivial`, the `NullableCollectionReturn` dispatcher). Several items are shared by 3–7 rules.
+  - *Target*: construct-level facts in `ast/`, policy in the rule. Policy shared by several rules goes in a minimal non-rule helper module under `rules/`. Does not wait for the typed CST.
 
 ## Rule Engine & Declarative Rules
 

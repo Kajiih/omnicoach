@@ -1,7 +1,7 @@
 # AST policy extraction: 01 Understand
 
 > [!NOTE]
-> **Status: UNDERSTAND. Waiting for answers to Q1–Q4 (§7) before design.**
+> **Status: VALIDATED (2026-10-05). Executing §6; step 1 landed. Q2 open (blocks step 4).**
 > Scope: the ROADMAP item "Rule-shaped items left in `ast/python`", plus the same leak found in `ast/rust.rs` and `ast.rs`.
 > Line numbers are from the inventory at change `tvvyzump` and will drift.
 
@@ -74,8 +74,7 @@ Each step is one atomic commit, smallest and least coupled first:
 
 - **D1.** No behavior change in this work. Bugs found are recorded, not fixed.
 - **D2.** The ROADMAP item is corrected once this doc is validated.
-- **Q1.** Rules do not import each other today, and `rules/` holds only rules. Policy shared by several rules (collection replacements, signature exemptions) needs a home. Options: (a) a non-rule helper module under `rules/` (no precedent; needs an architecture entry), (b) leave shared policy in `ast/` and extract only single-rule policy, (c) duplicate it per rule. Recommendation: (a).
--> Yes, a), but the main goal is still to really minimize those and to make general logic that can be shared
-- **Q2.** Is the typing taxonomy (which constructors are concrete, mutable, read-only) a language fact that belongs in `ast/`? It describes the standard library, not a rule's taste, so the inventory treats it as a fact; the suggestion text built from it is policy. -> Not sure I understand
-- **Q3.** `ForwardCall`: defer until `call-before-definition` is re-decided, move its policy now, or delete it with the rule? -> Consider the rule is not disabled.
-- **Q4.** Do steps 1–5 need to wait for the typed-CST decision? The inventory says no: they reshape the public API at the level of constructs, which a typed CST would sit under. Only step 6 might change if typed wrappers enter the public API. -> typed-CST will happen later
+- **D3 (was Q1).** Policy shared by several rules goes in a non-rule helper module under `rules/`, with an architecture entry. The main goal is still to keep that module minimal: prefer general construct-level logic in `ast/` that rules share, and keep only true shared policy in the helper module.
+- **D4 (was Q3).** Treat `call-before-definition` as enabled: extract the `ForwardCall` policy into the rule like any other (step 3).
+- **D5 (was Q4).** The typed-CST work happens later; this work does not wait for it.
+- **Q2.** Where does the knowledge "`list` is a mutable concrete collection, `Sequence` is a read-only abstract one, `frozenset` is immutable" live? It is a fact about Python's standard library, not a rule's choice, so the inventory proposes keeping it in `ast/` as a classification (for example `CollectionKind::{ConcreteMutable, AbstractReadOnly, Immutable}` for a type name). Rules would then decide what to flag and which replacement to suggest. The alternative is to move these lists into the rules (or the D3 helper module) as policy.

@@ -1,7 +1,7 @@
 //! Flags Python `Fake*` classes that do not inherit from a `Protocol` or base class.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::ast::python::extract_classes;
+use crate::code_lint::ast::python::{PythonBaseClass, extract_classes};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -92,9 +92,23 @@ pub const RULE: CodeRule = CodeRule {
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     extract_classes(file)
         .into_iter()
-        .filter(|class| class.is_fake_class_name() && !class.has_contract_base())
+        .filter(|class| {
+            is_fake_class_name(&class.name)
+                && class
+                    .bases
+                    .iter()
+                    .all(PythonBaseClass::is_structural_marker)
+        })
         .map(|class| rule.diagnostic_at_node(path, &class.name_node, &[("class", &class.name)]))
         .collect()
+}
+
+/// Returns true if `name` starts with the word `Fake` after any leading `_`: `Fake` alone or
+/// followed by anything but a lowercase letter, so `Faker` and `Fakeable` do not match.
+fn is_fake_class_name(name: &str) -> bool {
+    name.trim_start_matches('_')
+        .strip_prefix("Fake")
+        .is_some_and(|rest| !rest.starts_with(|character: char| character.is_ascii_lowercase()))
 }
 
 #[cfg(test)]
