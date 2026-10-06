@@ -271,7 +271,9 @@ pub(super) fn extract_parameters_raw<'a>(
 /// Extracts all parameters in order from a Python `parameters` or `function_definition` node.
 #[must_use]
 pub fn extract_parameters<'a>(func_or_params_node: &AstNode<'a>) -> Vec<PythonParameterInfo<'a>> {
-    extract_parameters_raw(&func_or_params_node.raw)
+    func_or_params_node
+        .raw_opt()
+        .map_or_else(Vec::new, extract_parameters_raw)
 }
 
 /// Discovers and extracts all function signatures from a Python file.
@@ -404,7 +406,7 @@ fn is_stub_statement_raw(statement: &RawNode<'_>) -> bool {
 /// Returns true if `func_node` has a stub body consisting only of an optional docstring and
 /// `...`, `pass`, or `raise NotImplementedError`.
 pub(super) fn is_stub_function_body(func_node: &AstNode<'_>) -> bool {
-    let Some(body) = func_node.raw.field("body") else {
+    let Some(body) = func_node.raw_opt().and_then(|raw| raw.field("body")) else {
         return false;
     };
     let statements: Vec<_> = body
@@ -431,7 +433,9 @@ pub fn has_override_decorator(func_node: &AstNode<'_>) -> bool {
 /// `@override` decorator on a method.
 #[must_use]
 pub fn is_trait_impl_member(item: &AstNode<'_>) -> bool {
-    item.raw.kind().as_ref() == "function_definition" && has_override_decorator(item)
+    item.raw_opt()
+        .is_some_and(|raw| raw.kind().as_ref() == "function_definition")
+        && has_override_decorator(item)
 }
 
 /// Returns true if the nearest enclosing `function_definition` or `class_definition` of a Python

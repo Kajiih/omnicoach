@@ -1,9 +1,8 @@
 //! Shared helpers for matching banned call expressions declaratively.
 //!
-//! Rules that flag banned function or method invocations
-//! specify their targets via a `ListOption`.
-//! Each callee entry (e.g. `"time.sleep"`, `"tokio::time::sleep"`, `"$LOOP($$$LOOP_ARGS).create_task"`)
-//! is either matched by callee text or normalized into a `<callee>($$$ARGS)` structural pattern.
+//! Rules that flag banned function or method invocations specify their targets via a `ListOption`.
+//! Each callee entry (e.g. `"time.sleep"`, `"tokio::time::sleep"`, `"*.assert_called_once"`,
+//! `"*().create_task"`) is matched in a single pass over [`ast::collect_call_candidates`].
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use std::collections::HashSet;
@@ -18,33 +17,19 @@ pub struct CallMatch<'a> {
     pub arguments: Vec<AstNode<'a>>,
 }
 
-/// Normalizes a callee entry into an `ast-grep` call pattern ending with `($$$ARGS)`.
-///
-/// If the entry already ends with `)` (a full call pattern), it is returned unchanged.
-#[must_use]
-fn to_call_pattern(entry: &str) -> String {
-    let trimmed = entry.trim();
-    if trimmed.ends_with(')') {
-        trimmed.to_string()
-    } else {
-        format!("{trimmed}($$$ARGS)")
-    }
-}
-
-/// Returns true if `entry` is a plain callee name that can be matched by text equality,
-/// rather than an `ast-grep` structural pattern (`$LOOP($$$ARGS).create_task`, `foo()`).
-fn is_literal_callee(entry: &str) -> bool {
-    let trimmed = entry.trim();
-    !trimmed.contains('$') && !trimmed.ends_with(')')
-}
-
 /// Finds all call expressions in `file` matching any of the `banned_callees` entries.
 ///
-/// Literal callee names (e.g. `"time.sleep"`) and any-receiver method patterns starting with `$OBJ.`
-/// (e.g. `"$OBJ.assert_called_once"`) are evaluated in a single-pass AST traversal with O(1) set lookups.
-/// Entries containing general metavariables (e.g. `"$LOOP($$$ARGS).create_task"`) or custom call
-/// signatures fall back to structural `ast-grep` pattern matching.
+/// Supported entry forms:
+/// - Literal callee names (e.g. `"time.sleep"`, `"tokio::time::sleep"`): matched by exact callee text.
+/// - Any-receiver method patterns `"*.<method>"` (e.g. `"*.assert_called_once"`): matches any method call
+///   whose terminal method name is `<method>`.
+/// - Chained-call method patterns `"*().<method>"` (e.g. `"*().create_task"`): matches any method call
+///   whose receiver is itself a call expression and whose terminal method name is `<method>`.
+/// - Specific chained-call method patterns `"<receiver_callee>().<method>"`
+///   (e.g. `"asyncio.get_running_loop().create_task"`): matches a method call whose receiver call has
+///   callee `<receiver_callee>` and whose terminal method name is `<method>`.
 ///
+/// All patterns are evaluated in a single pass over [`ast::collect_call_candidates`].
 /// Matches are sorted by byte span `(start, end)` and deduplicated so that overlapping
 /// patterns or `HashSet` iteration order never produce non-deterministic or duplicate matches.
 #[must_use]
@@ -52,52 +37,58 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
     file: &'a ParsedFile,
     banned_callees: &HashSet<String, S>,
 ) -> Vec<CallMatch<'a>> {
-    let mut matches: Vec<CallMatch<'a>> = Vec::new();
-
     let mut literal_callees: HashSet<&str> = HashSet::new();
     let mut method_callees: HashSet<&str> = HashSet::new();
-    let mut structural_entries: Vec<&str> = Vec::new();
+    let mut any_chained_methods: HashSet<&str> = HashSet::new();
+    let mut specific_chained_methods: HashSet<(&str, &str)> = HashSet::new();
 
     for entry in banned_callees {
         let trimmed = entry.trim();
-        if let Some(method_name) = trimmed.strip_prefix("$OBJ.")
-            && !method_name.is_empty()
-            && is_literal_callee(method_name)
-        {
-            method_callees.insert(method_name);
-            continue;
-        }
-        if is_literal_callee(trimmed) {
-            literal_callees.insert(trimmed);
-        } else {
-            structural_entries.push(trimmed);
-        }
-    }
-
-    if !literal_callees.is_empty() || !method_callees.is_empty() {
-        for candidate in ast::collect_call_candidates(file) {
-            let is_banned = literal_callees.contains(candidate.callee.as_str())
-                || candidate
-                    .method_name
-                    .as_deref()
-                    .is_some_and(|method| method_callees.contains(method));
-            if is_banned {
-                matches.push(CallMatch {
-                    node: candidate.node,
-                    callee: candidate.callee,
-                    arguments: candidate.arguments,
-                });
+        let trimmed = trimmed.strip_suffix("()").unwrap_or(trimmed);
+        if let Some(method_name) = trimmed.strip_prefix("*().") {
+            if !method_name.is_empty() {
+                any_chained_methods.insert(method_name);
             }
+        } else if let Some(method_name) = trimmed.strip_prefix("*.") {
+            if !method_name.is_empty() {
+                method_callees.insert(method_name);
+            }
+        } else if let Some((receiver_callee, method_name)) = trimmed.split_once("().") {
+            if !receiver_callee.is_empty() && !method_name.is_empty() {
+                specific_chained_methods.insert((receiver_callee, method_name));
+            }
+        } else if !trimmed.is_empty() {
+            literal_callees.insert(trimmed);
         }
     }
 
-    for entry in structural_entries {
-        let pattern = to_call_pattern(entry);
-        for (node, callee, arguments) in ast::find_pattern_calls(file, &pattern, entry) {
+    if literal_callees.is_empty()
+        && method_callees.is_empty()
+        && any_chained_methods.is_empty()
+        && specific_chained_methods.is_empty()
+    {
+        return Vec::new();
+    }
+
+    let mut matches: Vec<CallMatch<'a>> = Vec::new();
+    for candidate in ast::collect_call_candidates(file) {
+        let is_banned = literal_callees.contains(candidate.callee.as_str())
+            || candidate.method_name.as_deref().is_some_and(|method| {
+                method_callees.contains(method)
+                    || (candidate.receiver_call_callee.is_some()
+                        && any_chained_methods.contains(method))
+                    || candidate
+                        .receiver_call_callee
+                        .as_deref()
+                        .is_some_and(|receiver_callee| {
+                            specific_chained_methods.contains(&(receiver_callee, method))
+                        })
+            });
+        if is_banned {
             matches.push(CallMatch {
-                node,
-                callee,
-                arguments,
+                node: candidate.node,
+                callee: candidate.callee,
+                arguments: candidate.arguments,
             });
         }
     }
@@ -122,7 +113,7 @@ mod tests {
             asyncio.get_event_loop().create_task(work())
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let banned: HashSet<String> = ["sleep", "time.sleep", "$LOOP($$$LOOP_ARGS).create_task"]
+        let banned: HashSet<String> = ["sleep", "time.sleep", "*().create_task"]
             .into_iter()
             .map(str::to_string)
             .collect();
@@ -171,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_banned_calls_with_obj_method_syntax() {
+    fn test_find_banned_calls_with_wildcard_method_syntax() {
         let source = indoc::indoc! {r"
             mock_service.assert_called_once()
             gateway.charge.assert_called_once_with(100)
@@ -179,7 +170,7 @@ mod tests {
             self.assertEqual(1, 1)
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let banned: HashSet<String> = ["$OBJ.assert_called_once", "$OBJ.assert_called_once_with"]
+        let banned: HashSet<String> = ["*.assert_called_once", "*.assert_called_once_with"]
             .into_iter()
             .map(str::to_string)
             .collect();

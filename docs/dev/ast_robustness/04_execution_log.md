@@ -39,3 +39,31 @@
   - `architecture_conformance` 11, `cli` 23 (includes self-dogfooding), `registry` 17;
   - doctests 8 passed, 1 ignored;
   - no rustdoc warnings.
+
+---
+
+## Slice 2 — AST Core (`src/code_lint/ast.rs`, `src/code_lint/ast/statements.rs`) + Native `CallPattern` (`src/code_lint/semantic/calls.rs`) — DONE
+
+- **Goal**: Add `ruff_python_parser = "=0.0.16"`, `ruff_python_ast = "=0.0.16"`, `ruff_text_size = "=0.0.16"`, and `ra_ap_syntax = "=0.0.357"` to `Cargo.toml`; migrate `ParsedFile` core methods, `collect_comment_nodes`, `collect_call_candidates`, `enclosing_non_exempt_function_name`, and `statements::enclosing_statement_header_range` (both Python and Rust) to dedicated ASTs; replace `ast-grep` `$OBJ` / `$LOOP` call patterns in `semantic/calls.rs` with native single-pass call matching (Decision D4) and delete `ast::find_pattern_calls`.
+- **Changes**:
+  - `Cargo.toml`: Added `ruff_python_parser = "=0.0.16"`, `ruff_python_ast = "=0.0.16"`, `ruff_text_size = "=0.0.16"`, `ra_ap_syntax = "=0.0.357"`, and `multiple_crate_versions = "allow"`.
+  - `src/code_lint/ast.rs`:
+    - Added `LineIndex`, `CodeLintAst { Python(...), Rust(...) }`, `AstNodeRepr<'a> { Raw(RawNode<'a>), Span { file: &'a ParsedFile, span: SourceSpan } }` (transitional dual-repr deleted in Slice 5), `span_from_ruff_range`, `span_from_rowan_range`, and `is_rust_comment_kind` (`COMMENT | OUTER_DOC_COMMENT | INNER_DOC_COMMENT`).
+    - Migrated `ParsedFile::source_text`, `ParsedFile::has_syntax_error`, `collect_comment_nodes`, `collect_call_candidates` (enriched with `receiver_call_callee: Option<String>`), and `enclosing_non_exempt_function_name` to `ruff_python_ast` and `ra_ap_syntax`.
+    - Deleted `ast::find_pattern_calls` and `ast::from_support_lang`.
+    - Removed `// omni:disable-file [repeated-literal]` from `src/code_lint/ast.rs` (zero repeated string literals remain in `ast.rs`).
+  - `src/code_lint/ast/statements.rs`:
+    - Migrated `enclosing_statement_header_range` (both Python and Rust) and all unit tests to `ruff_python_ast` and `ra_ap_syntax`.
+    - Deleted `is_statement_container` and `earliest_attribute_start_line` from `python.rs` and `rust.rs`, plus `rust::decorated_definition`.
+    - Fixed a real F1/F2 interaction uncovered by migrating `collect_comment_nodes`: previously, `tree-sitter-rust` choked on `&& let` (Rust 2024 `let`-chains) in `src/code_lint/ast/python/format_strings.rs`, placing `named_format_field_roots` inside an `ERROR` node so `statements::enclosing_statement_header_range` returned `None` (which had been masked only because `tree-sitter-rust`'s `line_comment` token included the trailing `\n` and smeared line 486's comment onto line 487's `#[must_use]`). With `ra_ap_syntax` in `statements.rs`, `format_strings.rs` parses with zero syntax errors and `enclosing_statement_header_range` resolves `487..=488` cleanly.
+  - `src/code_lint/semantic/calls.rs`, `src/code_lint/rules/mock_call_assertion.rs`, `src/code_lint/rules/unstructured_task.rs`:
+    - Replaced `$OBJ.assert_*` with `*.assert_*` and `$LOOP($$$LOOP_ARGS).create_task` with `*().create_task`.
+    - Rewrote `find_banned_calls` to evaluate literal callees, `*.<method>`, `*().<method>`, and `<receiver_callee>().<method>` in a single pass over `ast::collect_call_candidates(file)`.
+  - `src/code_lint/ast/python.rs`:
+    - Updated `find_enclosing_with_item`, `find_enclosing_with_statement`, `is_with_context_manager`, and `is_inside_except_clause` to support `AstNodeRepr::Span` via `ruff_python_ast` visitors.
+    - Deleted unused `is_comment_kind`, `is_call_kind`, and `extract_method_call_target` from `python.rs` and `rust.rs`.
+- **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo doc --no-deps --document-private-items` is green:
+  - lib 1397 passed;
+  - `architecture_conformance` 11, `cli` 23 (includes self-dogfooding), `registry` 17;
+  - doctests 8 passed, 1 ignored;
+  - no rustdoc warnings.

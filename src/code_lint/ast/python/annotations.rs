@@ -431,9 +431,12 @@ pub fn collect_collection_types(
     depth: AnnotationTraversalDepth,
     abc_set_imported: bool,
 ) -> Vec<PythonCollectionType> {
+    let Some(raw) = type_node.raw_opt() else {
+        return Vec::new();
+    };
     let mut constructors = Vec::new();
     collect_type_constructors_raw(
-        &type_node.raw,
+        raw,
         depth,
         &|path, terminal| classify_collection(path, terminal, abc_set_imported).is_some(),
         &mut constructors,
@@ -461,10 +464,11 @@ pub fn collection_type(
     expression: &AstNode<'_>,
     abc_set_imported: bool,
 ) -> Option<PythonCollectionType> {
-    if !matches!(expression.raw.kind().as_ref(), "identifier" | "attribute") {
+    let raw = expression.raw_opt()?;
+    if !matches!(raw.kind().as_ref(), "identifier" | "attribute") {
         return None;
     }
-    let (path, name) = resolve_path_and_terminal_raw(&expression.raw);
+    let (path, name) = resolve_path_and_terminal_raw(raw);
     let (kind, shape) = classify_collection(&path, &name, abc_set_imported)?;
     Some(PythonCollectionType {
         path,
@@ -478,7 +482,8 @@ pub fn collection_type(
 /// (`[...]`, `{a, b}`, `{k: v}`) or comprehension.
 #[must_use]
 pub fn collection_display(expression: &AstNode<'_>) -> Option<PythonCollectionType> {
-    let (name, shape) = match expression.raw.kind().as_ref() {
+    let raw = expression.raw_opt()?;
+    let (name, shape) = match raw.kind().as_ref() {
         "list" | "list_comprehension" => ("list", CollectionShape::Sequence),
         "set" | "set_comprehension" => ("set", CollectionShape::Set),
         "dictionary" | "dictionary_comprehension" => ("dict", CollectionShape::Mapping),
@@ -495,7 +500,8 @@ pub fn collection_display(expression: &AstNode<'_>) -> Option<PythonCollectionTy
 /// Decomposes a generic type annotation or subscript into `(base_type_node, type_arguments)`.
 #[must_use]
 pub fn extract_generic_type<'a>(node: &AstNode<'a>) -> Option<(AstNode<'a>, Vec<AstNode<'a>>)> {
-    let unwrapped = unwrap_type_and_parens(&node.raw)?;
+    let raw = node.raw_opt()?;
+    let unwrapped = unwrap_type_and_parens(raw)?;
     let (base, args) = extract_generic_base_and_args(&unwrapped)?;
     Some((
         AstNode::from_raw(base),
@@ -517,7 +523,10 @@ pub struct PythonReturnTypeUnion<'a> {
 /// `Annotated[T, ...]`, `Awaitable[T]`, and `Coroutine[YieldT, SendT, ReturnT]`).
 #[must_use]
 pub fn unwrap_return_envelope<'a>(type_node: &AstNode<'a>) -> AstNode<'a> {
-    AstNode::from_raw(unwrap_return_envelope_raw(&type_node.raw))
+    type_node.raw_opt().map_or_else(
+        || type_node.clone(),
+        |raw| AstNode::from_raw(unwrap_return_envelope_raw(raw)),
+    )
 }
 
 fn unwrap_return_envelope_raw<'a>(node: &RawNode<'a>) -> RawNode<'a> {
@@ -615,7 +624,13 @@ fn collect_union_branches<'a>(
 /// after unwrapping outer async and metadata envelopes (`Awaitable`, `Coroutine`, `Annotated`).
 #[must_use]
 pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnTypeUnion<'a> {
-    let unwrapped = unwrap_return_envelope_raw(&return_type_node.raw);
+    let Some(raw) = return_type_node.raw_opt() else {
+        return PythonReturnTypeUnion {
+            has_none: false,
+            branches: Vec::new(),
+        };
+    };
+    let unwrapped = unwrap_return_envelope_raw(raw);
     let mut has_none = false;
     let mut branches = Vec::new();
     collect_union_branches(&unwrapped, &mut has_none, &mut branches);
