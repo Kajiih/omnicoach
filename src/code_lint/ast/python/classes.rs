@@ -190,7 +190,10 @@ fn is_field_synthesizing_class_raw(class_node: &RawNode<'_>) -> bool {
 /// Returns true if `node` (a method `function_definition` or class attribute node) is directly
 /// enclosed in a `Protocol` or `ABC` class definition.
 pub(super) fn is_in_protocol_or_abc_class(node: &AstNode<'_>) -> bool {
-    for ancestor in node.raw.ancestors() {
+    let Some(raw) = node.raw_opt() else {
+        return false;
+    };
+    for ancestor in raw.ancestors() {
         match ancestor.kind().as_ref() {
             "function_definition" | "lambda" => return false,
             "class_definition" => return is_protocol_or_abc_class_raw(&ancestor),
@@ -414,7 +417,9 @@ impl PythonInstanceAttributeAnnotation<'_> {
     /// an initializer.
     #[must_use]
     pub fn is_bare_final(&self) -> bool {
-        is_bare_final_annotation(&self.annotation.raw)
+        self.annotation
+            .raw_opt()
+            .is_some_and(is_bare_final_annotation)
     }
 }
 

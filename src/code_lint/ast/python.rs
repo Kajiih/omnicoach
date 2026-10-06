@@ -50,14 +50,6 @@ use crate::code_lint::ast::{
 };
 use std::collections::{HashMap, HashSet};
 
-/// Returns true for Python node kinds that hold statements as direct children.
-///
-/// `module` is the file root and `block` is an indented suite.
-#[must_use]
-pub(super) fn is_statement_container(kind: &str) -> bool {
-    matches!(kind, "module" | "block")
-}
-
 /// Returns the `def` or `class` wrapped by a `decorated_definition` statement, so its header
 /// spans from the first decorator to the end of the definition's own header.
 #[must_use]
@@ -67,22 +59,6 @@ pub(super) fn decorated_definition<'a>(statement: &RawNode<'a>) -> Option<RawNod
     } else {
         None
     }
-}
-
-/// Returns the 1-indexed starting line of the earliest outer attribute sibling attached to
-/// `statement`. Python has none: `@decorator` syntax wraps the definition in a
-/// `decorated_definition` node handled by [`decorated_definition`].
-#[must_use]
-pub(super) const fn earliest_attribute_start_line(_statement: &RawNode<'_>) -> Option<usize> {
-    None
-}
-
-/// Returns true for Python comment node kinds.
-///
-/// Python spells every comment `comment`, whether or not it is used as documentation.
-#[must_use]
-pub(super) fn is_comment_kind(kind: &str) -> bool {
-    kind == "comment"
 }
 
 /// Returns true if a Python node of `parent_kind` makes a child identifier an import binding.
@@ -98,22 +74,6 @@ pub(super) fn is_import_binding_parent(parent_kind: &str) -> bool {
 #[must_use]
 pub(super) fn is_structural_definition_parent(parent_kind: &str) -> bool {
     matches!(parent_kind, "class_definition" | "function_definition")
-}
-
-/// Returns true if `kind` is a call expression in Python.
-#[must_use]
-pub(super) fn is_call_kind(kind: &str) -> bool {
-    kind == "call"
-}
-
-/// If `function` is a method access (e.g. `obj.method`), returns the method identifier node.
-#[must_use]
-pub(super) fn extract_method_call_target<'a>(function: &RawNode<'a>) -> Option<RawNode<'a>> {
-    if function.kind().as_ref() == "attribute" {
-        function.field("attribute")
-    } else {
-        None
-    }
 }
 
 /// Returns true if a Python `function_definition` node is a test function (`test` or `test_*`).
@@ -166,7 +126,7 @@ impl KeywordArg<'_> {
     /// Evaluates literal boolean arguments (`True` / `False`).
     #[must_use]
     pub fn as_bool(&self) -> Option<bool> {
-        match self.value_node.raw.kind().as_ref() {
+        match self.value_node.raw_opt()?.kind().as_ref() {
             "true" => Some(true),
             "false" => Some(false),
             _ => None,
@@ -290,7 +250,7 @@ fn extract_decorators_raw<'a>(node: &RawNode<'a>) -> Vec<DecoratorInfo<'a>> {
 /// Extracts all decorators from a `decorated_definition` or a definition node inside one.
 #[must_use]
 pub fn extract_decorators<'a>(node: &AstNode<'a>) -> Vec<DecoratorInfo<'a>> {
-    extract_decorators_raw(&node.raw)
+    node.raw_opt().map_or_else(Vec::new, extract_decorators_raw)
 }
 
 /// Returns true if a Python `function_definition` or `class_definition` has a decorator whose
@@ -322,7 +282,8 @@ impl PythonModuleAssignment<'_> {
             || self
                 .annotation
                 .as_ref()
-                .is_some_and(|annotation| has_final_annotation(&annotation.raw))
+                .and_then(AstNode::raw_opt)
+                .is_some_and(has_final_annotation)
     }
 }
 
@@ -359,10 +320,11 @@ pub fn collect_module_assignments(file: &ParsedFile) -> Vec<PythonModuleAssignme
 /// instantiation (`list[str]()` has callee `list`).
 #[must_use]
 pub fn call_callee<'a>(call: &AstNode<'a>) -> Option<AstNode<'a>> {
-    if call.raw.kind() != "call" {
+    let raw = call.raw_opt()?;
+    if raw.kind() != "call" {
         return None;
     }
-    let callee = call.raw.field("function")?;
+    let callee = raw.field("function")?;
     let callee = if callee.kind() == "subscript" {
         callee.field("value")?
     } else {
@@ -375,7 +337,10 @@ pub fn call_callee<'a>(call: &AstNode<'a>) -> Option<AstNode<'a>> {
 /// Transparently handles expressions wrapped in `parenthesized_expression`.
 #[must_use]
 pub fn find_enclosing_with_item<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
-    for ancestor in node.raw.ancestors() {
+    if let Some(file) = node.file_opt() {
+        return find_python_enclosing_with_item(file, node.span());
+    }
+    for ancestor in node.raw_opt()?.ancestors() {
         match ancestor.kind().as_ref() {
             "with_item" => return Some(AstNode::from_raw(ancestor)),
             "parenthesized_expression" => {}
@@ -388,7 +353,10 @@ pub fn find_enclosing_with_item<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
 /// Traverses upward from a node to find its nearest enclosing `with_statement`.
 #[must_use]
 pub fn find_enclosing_with_statement<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
-    node.raw
+    if let Some(file) = node.file_opt() {
+        return find_python_enclosing_with_statement(file, node.span());
+    }
+    node.raw_opt()?
         .ancestors()
         .find(|parent| parent.kind() == "with_statement")
         .map(AstNode::from_raw)
@@ -403,7 +371,13 @@ pub fn is_with_context_manager(node: &AstNode<'_>) -> bool {
 /// Returns true if `node` is enclosed inside an `except_clause` block within the same scope.
 #[must_use]
 pub fn is_inside_except_clause(node: &AstNode<'_>) -> bool {
-    for ancestor in node.raw.ancestors() {
+    if let Some(file) = node.file_opt() {
+        return is_python_span_inside_except_clause(file, node.span());
+    }
+    let Some(raw) = node.raw_opt() else {
+        return false;
+    };
+    for ancestor in raw.ancestors() {
         match ancestor.kind().as_ref() {
             "except_clause" => return true,
             "function_definition" | "lambda" | "class_definition" => return false,
@@ -411,6 +385,172 @@ pub fn is_inside_except_clause(node: &AstNode<'_>) -> bool {
         }
     }
     false
+}
+
+/// Finds the enclosing `WithItem` in `file` whose `context_expr` has byte span `target_span`.
+fn find_python_enclosing_with_item(
+    file: &ParsedFile,
+    target_span: crate::diagnostic::SourceSpan,
+) -> Option<AstNode<'_>> {
+    use crate::code_lint::ast::span_from_ruff_range;
+    use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
+    use ruff_python_ast::{Stmt, WithItem};
+    use ruff_text_size::Ranged as _;
+
+    struct WithItemFinder {
+        target_span: crate::diagnostic::SourceSpan,
+        found: Option<crate::diagnostic::SourceSpan>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for WithItemFinder {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if self.found.is_some() {
+                return;
+            }
+            let span = span_from_ruff_range(statement.range());
+            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
+                return;
+            }
+            if let Stmt::With(with_statement) = statement {
+                for item in &with_statement.items {
+                    if span_from_ruff_range(item.context_expr.range()) == self.target_span {
+                        self.found = Some(span_from_ruff_range(item.range()));
+                        return;
+                    }
+                }
+            }
+            walk_stmt(self, statement);
+        }
+
+        fn visit_with_item(&mut self, _with_item: &'a WithItem) {}
+    }
+
+    let parsed = file.py_module()?;
+    let mut finder = WithItemFinder {
+        target_span,
+        found: None,
+    };
+    finder.visit_body(&parsed.syntax().body);
+    finder.found.map(|span| AstNode::from_span(file, span))
+}
+
+/// Finds the nearest enclosing `Stmt::With` in `file` containing `target_span`.
+fn find_python_enclosing_with_statement(
+    file: &ParsedFile,
+    target_span: crate::diagnostic::SourceSpan,
+) -> Option<AstNode<'_>> {
+    use crate::code_lint::ast::span_from_ruff_range;
+    use ruff_python_ast::Stmt;
+    use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
+    use ruff_text_size::Ranged as _;
+
+    struct WithStatementFinder {
+        target_span: crate::diagnostic::SourceSpan,
+        found: Option<crate::diagnostic::SourceSpan>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for WithStatementFinder {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            let span = span_from_ruff_range(statement.range());
+            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
+                return;
+            }
+            if matches!(statement, Stmt::With(_)) {
+                self.found = Some(span);
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let parsed = file.py_module()?;
+    let mut finder = WithStatementFinder {
+        target_span,
+        found: None,
+    };
+    finder.visit_body(&parsed.syntax().body);
+    finder.found.map(|span| AstNode::from_span(file, span))
+}
+
+/// Returns true if `target_span` in `file` is enclosed inside an `ExceptHandler` within the same scope.
+fn is_python_span_inside_except_clause(
+    file: &ParsedFile,
+    target_span: crate::diagnostic::SourceSpan,
+) -> bool {
+    use crate::code_lint::ast::span_from_ruff_range;
+    use ruff_python_ast::visitor::source_order::{
+        SourceOrderVisitor, walk_except_handler, walk_expr, walk_stmt,
+    };
+    use ruff_python_ast::{ExceptHandler, Expr, Stmt};
+    use ruff_text_size::Ranged as _;
+
+    struct ExceptScopeFinder {
+        target_span: crate::diagnostic::SourceSpan,
+        in_except: bool,
+        matched: Option<bool>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for ExceptScopeFinder {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if self.matched.is_some() {
+                return;
+            }
+            let span = span_from_ruff_range(statement.range());
+            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
+                return;
+            }
+            let prev = self.in_except;
+            if matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
+                self.in_except = false;
+            }
+            walk_stmt(self, statement);
+            self.in_except = prev;
+        }
+
+        fn visit_except_handler(&mut self, except_handler: &'a ExceptHandler) {
+            if self.matched.is_some() {
+                return;
+            }
+            let span = span_from_ruff_range(except_handler.range());
+            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
+                return;
+            }
+            let prev = self.in_except;
+            self.in_except = true;
+            walk_except_handler(self, except_handler);
+            self.in_except = prev;
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if self.matched.is_some() {
+                return;
+            }
+            let span = span_from_ruff_range(expr.range());
+            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
+                return;
+            }
+            if span == self.target_span {
+                self.matched = Some(self.in_except);
+                return;
+            }
+            let prev = self.in_except;
+            if matches!(expr, Expr::Lambda(_)) {
+                self.in_except = false;
+            }
+            walk_expr(self, expr);
+            self.in_except = prev;
+        }
+    }
+
+    let Some(parsed) = file.py_module() else {
+        return false;
+    };
+    let mut finder = ExceptScopeFinder {
+        target_span,
+        in_except: false,
+        matched: None,
+    };
+    finder.visit_body(&parsed.syntax().body);
+    finder.matched.unwrap_or(false)
 }
 
 /// Returns true if `node` is a Python `tuple` or `list` consisting solely of `>= 2` boolean literals (`True` / `False`).
@@ -443,19 +583,18 @@ pub fn collect_assert_statements(file: &ParsedFile) -> Vec<AstNode<'_>> {
 /// Returns true if a Python `assert_statement` node has a top-level `and` boolean operator.
 #[must_use]
 pub fn has_top_level_logical_and(assert_node: &AstNode<'_>) -> bool {
-    assert_node
-        .raw
-        .children()
-        .any(|c| c.kind() == "boolean_operator" && c.children().any(|op| op.kind() == "and"))
+    assert_node.raw_opt().is_some_and(|raw| {
+        raw.children()
+            .any(|c| c.kind() == "boolean_operator" && c.children().any(|op| op.kind() == "and"))
+    })
 }
 
 /// Returns true if a Python `assert_statement` node compares against a boolean literal tuple/list.
 #[must_use]
 pub fn has_boolean_literal_comparison(assert_node: &AstNode<'_>) -> bool {
     assert_node
-        .raw
-        .children()
-        .find(|c| c.kind() == "comparison_operator")
+        .raw_opt()
+        .and_then(|raw| raw.children().find(|c| c.kind() == "comparison_operator"))
         .is_some_and(|comp| {
             comp.children()
                 .any(|c| is_boolean_literal_collection_raw(&c))
@@ -504,8 +643,9 @@ pub fn collect_test_function_assertion_counts(
     collect_outer_test_functions(file)
         .into_iter()
         .filter_map(|func_node| {
-            let name_node = func_node.raw.field("name")?;
-            let body_node = func_node.raw.field("body")?;
+            let raw = func_node.raw_opt()?;
+            let name_node = raw.field("name")?;
+            let body_node = raw.field("body")?;
             let func_name = name_node.text().to_string();
             let count = count_python_assertions(&body_node);
             Some((AstNode::from_raw(name_node), func_name, count))
@@ -1029,7 +1169,7 @@ fn check_parameter_mutated_or_escaping_rec(node: &RawNode<'_>, parameter_name: &
 /// or passed to an unknown function/method) anywhere in `func_node`'s body.
 #[must_use]
 pub fn is_parameter_mutated_or_escaping(func_node: &AstNode<'_>, parameter_name: &str) -> bool {
-    let Some(body) = func_node.raw.field("body") else {
+    let Some(body) = func_node.raw_opt().and_then(|raw| raw.field("body")) else {
         return false;
     };
     check_parameter_mutated_or_escaping_rec(&body, parameter_name)
@@ -1256,7 +1396,7 @@ pub fn analyze_parameter_collection_capability(
     func_node: &AstNode<'_>,
     parameter_name: &str,
 ) -> ParameterCollectionCapability {
-    let Some(body) = func_node.raw.field("body") else {
+    let Some(body) = func_node.raw_opt().and_then(|raw| raw.field("body")) else {
         return ParameterCollectionCapability::Unused;
     };
     let mut tracker = CapabilityTracker::default();

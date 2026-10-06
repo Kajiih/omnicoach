@@ -7,31 +7,6 @@ use crate::code_lint::ast::{
     ScopePositionalReads, delimited_string_parts, parse_float_literal, parse_integer_literal,
 };
 
-/// Returns true for Rust node kinds that hold statements as direct children.
-///
-/// `source_file` is the file root, `block` is a braced body, and `declaration_list` is the
-/// body of an `impl`, `trait`, or inline `mod`.
-#[must_use]
-pub fn is_statement_container(kind: &str) -> bool {
-    matches!(kind, "source_file" | "block" | "declaration_list")
-}
-
-/// Returns the definition wrapped by a decorator statement. Rust has none: attributes
-/// (`#[...]`) are sibling nodes of the item they annotate, not wrappers around it.
-#[must_use]
-pub const fn decorated_definition<'a>(_statement: &RawNode<'a>) -> Option<RawNode<'a>> {
-    None
-}
-
-/// Returns the 1-indexed starting line of the earliest outer `#[...]` attribute sibling attached
-/// to `statement`, or `None` if `statement` has no preceding outer attributes.
-#[must_use]
-pub(super) fn earliest_attribute_start_line(statement: &RawNode<'_>) -> Option<usize> {
-    preceding_attributes(statement)
-        .last()
-        .map(|attr| attr.start_pos().line() + 1)
-}
-
 /// Returns true for Rust comment node kinds.
 ///
 /// Rust distinguishes `//` from `/* */`. Doc comments are not separate kinds: `/// text`
@@ -65,29 +40,15 @@ pub fn is_structural_definition_parent(parent_kind: &str) -> bool {
     )
 }
 
-/// Returns true if `kind` is a call expression in Rust.
-#[must_use]
-pub fn is_call_kind(kind: &str) -> bool {
-    kind == "call_expression"
-}
-
-/// If `function` is a method access (e.g. `obj.method`), returns the method identifier node.
-#[must_use]
-pub(super) fn extract_method_call_target<'a>(function: &RawNode<'a>) -> Option<RawNode<'a>> {
-    if function.kind().as_ref() == "field_expression" {
-        function.field("field")
-    } else {
-        None
-    }
-}
-
 /// Returns true if `item`, the definition owning a name, has that name mandated by a contract.
 ///
 /// The contract is an `impl Trait for Type` block: the member sits in the `declaration_list`
 /// of an `impl_item` that names a trait.
 #[must_use]
 pub fn is_trait_impl_member(item: &AstNode<'_>) -> bool {
-    let raw = &item.raw;
+    let Some(raw) = item.raw_opt() else {
+        return false;
+    };
     if !matches!(
         raw.kind().as_ref(),
         "function_item" | "type_item" | "associated_type" | "const_item"
@@ -474,7 +435,9 @@ fn collect_outer_test_functions_rec<'a>(node: &RawNode<'a>, out: &mut Vec<RawNod
 /// Extracts the terminal macro identifier from a Rust `macro_invocation` node (e.g. `assert` from `std::assert!`).
 #[must_use]
 pub fn macro_terminal_name<'tree>(macro_node: &AstNode<'tree>) -> std::borrow::Cow<'tree, str> {
-    macro_terminal_name_raw(&macro_node.raw)
+    macro_node
+        .raw_opt()
+        .map_or(std::borrow::Cow::Borrowed(""), macro_terminal_name_raw)
 }
 
 fn macro_terminal_name_raw<'tree>(macro_node: &RawNode<'tree>) -> std::borrow::Cow<'tree, str> {
@@ -558,9 +521,8 @@ fn non_delimiter_children<'a>(node: &RawNode<'a>) -> Vec<RawNode<'a>> {
 #[must_use]
 pub fn has_top_level_logical_and(macro_node: &AstNode<'_>) -> bool {
     let Some(token_tree) = macro_node
-        .raw
-        .children()
-        .find(|child| child.kind() == "token_tree")
+        .raw_opt()
+        .and_then(|raw| raw.children().find(|child| child.kind() == "token_tree"))
     else {
         return false;
     };
@@ -584,9 +546,8 @@ pub fn has_top_level_logical_and(macro_node: &AstNode<'_>) -> bool {
 #[must_use]
 pub fn extract_macro_arguments<'a>(macro_node: &AstNode<'a>) -> Vec<AstNode<'a>> {
     macro_node
-        .raw
-        .children()
-        .find(|child| child.kind() == "token_tree")
+        .raw_opt()
+        .and_then(|raw| raw.children().find(|child| child.kind() == "token_tree"))
         .map_or_else(Vec::new, |token_tree| {
             non_delimiter_children(&token_tree)
                 .into_iter()
@@ -599,14 +560,17 @@ pub fn extract_macro_arguments<'a>(macro_node: &AstNode<'a>) -> Vec<AstNode<'a>>
 /// solely of `>= 2` boolean literals (`true` / `false`).
 #[must_use]
 pub fn is_boolean_literal_collection(node: &AstNode<'_>) -> bool {
-    let kind = node.raw.kind();
+    let Some(raw) = node.raw_opt() else {
+        return false;
+    };
+    let kind = raw.kind();
     if !matches!(
         kind.as_ref(),
         "token_tree" | "array_expression" | "tuple_expression"
     ) {
         return false;
     }
-    let items = non_delimiter_children(&node.raw);
+    let items = non_delimiter_children(raw);
     items.len() >= 2
         && items
             .iter()
@@ -1525,14 +1489,18 @@ pub fn collect_functions(file: &ParsedFile) -> Vec<RustFunction<'_>> {
 /// Unwraps outer `Result<T, ...>` and `Poll<T>` return type envelopes from `node`.
 #[must_use]
 pub fn unwrap_return_envelope<'a>(node: &AstNode<'a>) -> AstNode<'a> {
-    AstNode::from_raw(unwrap_rust_return_envelope(&node.raw))
+    node.raw_opt().map_or_else(
+        || node.clone(),
+        |raw| AstNode::from_raw(unwrap_rust_return_envelope(raw)),
+    )
 }
 
 /// If `node` is `Option<T>` (unqualified, `std::option::Option`, or `core::option::Option`),
 /// returns the inner type node `T`.
 #[must_use]
 pub fn extract_option_payload<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
-    let (option_base, option_args) = extract_rust_generic_base_and_args(&node.raw)?;
+    let raw = node.raw_opt()?;
+    let (option_base, option_args) = extract_rust_generic_base_and_args(raw)?;
     let (option_path, option_terminal) = resolve_rust_type_path(&option_base)?;
     if option_terminal != "Option"
         || !matches!(
@@ -1550,13 +1518,17 @@ pub fn extract_option_payload<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
 /// `Arc<T>`, `Cow<'_, T>`) around a Rust type node.
 #[must_use]
 pub fn unwrap_pointer_wrappers<'a>(node: &AstNode<'a>) -> AstNode<'a> {
-    AstNode::from_raw(unwrap_rust_pointer_wrappers(&node.raw))
+    node.raw_opt().map_or_else(
+        || node.clone(),
+        |raw| AstNode::from_raw(unwrap_rust_pointer_wrappers(raw)),
+    )
 }
 
 /// Extracts `(base_node, type_argument_nodes)` from a Rust `generic_type` node.
 #[must_use]
 pub fn extract_generic_type<'a>(node: &AstNode<'a>) -> Option<(AstNode<'a>, Vec<AstNode<'a>>)> {
-    let (base, args) = extract_rust_generic_base_and_args(&node.raw)?;
+    let raw = node.raw_opt()?;
+    let (base, args) = extract_rust_generic_base_and_args(raw)?;
     Some((
         AstNode::from_raw(base),
         args.into_iter().map(AstNode::from_raw).collect(),
@@ -1566,15 +1538,16 @@ pub fn extract_generic_type<'a>(node: &AstNode<'a>) -> Option<(AstNode<'a>, Vec<
 /// Resolves a Rust type path node to its `(full_path, terminal_identifier)`.
 #[must_use]
 pub fn resolve_type_path(node: &AstNode<'_>) -> Option<(String, String)> {
-    resolve_rust_type_path(&node.raw)
+    resolve_rust_type_path(node.raw_opt()?)
 }
 
 /// Extracts the slice type representation if `node` represents a Rust slice or unsized array (e.g. `[T]`).
 #[must_use]
 pub fn extract_slice_type(node: &AstNode<'_>) -> Option<String> {
-    match node.raw.kind().as_ref() {
+    let raw = node.raw_opt()?;
+    match raw.kind().as_ref() {
         "slice_type" => Some(node.text().trim().to_owned()),
-        "array_type" if node.raw.field("length").is_none() => Some(node.text().trim().to_owned()),
+        "array_type" if raw.field("length").is_none() => Some(node.text().trim().to_owned()),
         _ => None,
     }
 }

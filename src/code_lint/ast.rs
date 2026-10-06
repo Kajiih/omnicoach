@@ -5,8 +5,6 @@
 //! No module outside `crate::code_lint::ast` imports `ast_grep_core` or accesses raw Tree-sitter
 //! node kinds, field names, or traversal iterators.
 
-// omni:disable-file [repeated-literal] -- Tree-sitter node kinds and field names (see ROADMAP)
-
 architecture_component!(CodeLintAst);
 
 /// Dispatches `$func(args...)` to `ast::python` or `ast::rust` by `$lang`.
@@ -31,6 +29,8 @@ use crate::diagnostic::{Language, LineColumn, SourceLocation, SourceSpan};
 use ast_grep_core::AstGrep;
 use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_language::SupportLang;
+use ra_ap_syntax::AstNode as _;
+use ruff_text_size::Ranged;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -48,20 +48,72 @@ const fn to_support_lang(lang: Language) -> SupportLang {
     }
 }
 
-/// The [`Language`] of a tree built by [`ParsedFile::new`], which only parses Python and Rust.
-pub(in crate::code_lint::ast) const fn from_support_lang(lang: SupportLang) -> Language {
-    match lang {
-        SupportLang::Python => Language::Python,
-        _ => Language::Rust,
+/// Precomputed byte offsets of line starts in a source file for O(log L) line/column lookup.
+pub(in crate::code_lint::ast) struct LineIndex {
+    /// Byte offset of the start of each 0-indexed line. Always starts with `0`.
+    line_starts: Vec<u32>,
+}
+
+impl LineIndex {
+    #[must_use]
+    pub(in crate::code_lint::ast) fn new(source: &str) -> Self {
+        let mut line_starts = vec![0_u32];
+        for (idx, byte) in source.bytes().enumerate() {
+            if byte == b'\n'
+                && let Ok(next) = u32::try_from(idx + 1)
+            {
+                line_starts.push(next);
+            }
+        }
+        Self { line_starts }
     }
+
+    /// Returns the 1-indexed line number containing `byte_offset`.
+    #[must_use]
+    pub(in crate::code_lint::ast) fn line(&self, byte_offset: usize) -> usize {
+        let offset_u32 = u32::try_from(byte_offset).unwrap_or(u32::MAX);
+        self.line_starts
+            .partition_point(|&start| start <= offset_u32)
+    }
+
+    /// Returns the 1-indexed `(line, column)` (where `column` counts Unicode scalar values)
+    /// for `byte_offset` in `source`.
+    #[must_use]
+    pub(in crate::code_lint::ast) fn line_column(
+        &self,
+        source: &str,
+        byte_offset: usize,
+    ) -> LineColumn {
+        let line = self.line(byte_offset);
+        let line_start = self.line_starts[line - 1] as usize;
+        let clamped_end = byte_offset.min(source.len()).max(line_start);
+        let column = source[line_start..clamped_end].chars().count() + 1;
+        LineColumn { line, column }
+    }
+}
+
+/// Dedicated language-specific parsed syntax tree.
+pub(in crate::code_lint::ast) enum CodeLintAst {
+    /// Parsed Python module (`ruff_python_parser`).
+    Python(
+        Result<
+            ruff_python_parser::Parsed<ruff_python_ast::ModModule>,
+            ruff_python_parser::ParseError,
+        >,
+    ),
+    /// Parsed Rust source file (`ra_ap_syntax`).
+    Rust(ra_ap_syntax::Parse<ra_ap_syntax::ast::SourceFile>),
 }
 
 /// A parsed source file encapsulating the language and syntax tree.
 ///
-/// The inner `AstGrep` tree is restricted to `crate::code_lint::ast` so that higher layers
+/// The inner syntax tree is restricted to `crate::code_lint::ast` so that higher layers
 /// (semantic engines, rule traits, and lint rules) interact strictly through typed AST helpers.
 pub struct ParsedFile {
     pub(in crate::code_lint::ast) grep: AstGrep<SourceDoc>,
+    pub(in crate::code_lint::ast) source: String,
+    pub(in crate::code_lint::ast) line_index: LineIndex,
+    pub(in crate::code_lint::ast) ast: CodeLintAst,
     lang: Language,
 }
 
@@ -69,8 +121,18 @@ impl ParsedFile {
     /// Parses `source` into a syntax tree for `lang`.
     #[must_use]
     pub fn new(source: &str, lang: Language) -> Self {
+        let ast = match lang {
+            Language::Python => CodeLintAst::Python(ruff_python_parser::parse_module(source)),
+            Language::Rust => CodeLintAst::Rust(ra_ap_syntax::SourceFile::parse(
+                source,
+                ra_ap_syntax::Edition::Edition2024,
+            )),
+        };
         Self {
             grep: AstGrep::new(source, to_support_lang(lang)),
+            source: source.to_string(),
+            line_index: LineIndex::new(source),
+            ast,
             lang,
         }
     }
@@ -90,69 +152,161 @@ impl ParsedFile {
     /// Returns the full source text of the file.
     #[must_use]
     pub fn source_text(&self) -> std::borrow::Cow<'_, str> {
-        self.grep.root().text()
+        std::borrow::Cow::Borrowed(&self.source)
     }
 
     /// Returns whether the parser had to recover from invalid or missing syntax.
     #[must_use]
     pub fn has_syntax_error(&self) -> bool {
-        self.grep
-            .root()
-            .dfs()
-            .any(|node| node.is_error() || node.is_missing())
+        match &self.ast {
+            CodeLintAst::Python(Ok(parsed)) => !parsed.errors().is_empty(),
+            CodeLintAst::Python(Err(_)) => true,
+            CodeLintAst::Rust(parsed) => !parsed.errors().is_empty(),
+        }
+    }
+
+    /// Returns the parsed Python module if this is a Python file without fatal parse failure.
+    #[must_use]
+    pub(in crate::code_lint::ast) const fn py_module(
+        &self,
+    ) -> Option<&ruff_python_parser::Parsed<ruff_python_ast::ModModule>> {
+        match &self.ast {
+            CodeLintAst::Python(Ok(parsed)) => Some(parsed),
+            CodeLintAst::Python(Err(_)) | CodeLintAst::Rust(_) => None,
+        }
+    }
+
+    /// Returns the parsed Rust syntax tree if this is a Rust file.
+    #[must_use]
+    pub(in crate::code_lint::ast) const fn rs_parsed(
+        &self,
+    ) -> Option<&ra_ap_syntax::Parse<ra_ap_syntax::ast::SourceFile>> {
+        match &self.ast {
+            CodeLintAst::Rust(parsed) => Some(parsed),
+            CodeLintAst::Python(_) => None,
+        }
     }
 }
 
+/// Internal backing representation of an [`AstNode`] during the P3 migration.
+#[derive(Clone)]
+pub(in crate::code_lint::ast) enum AstNodeRepr<'a> {
+    /// Transitional `ast-grep` node (removed in Slice 5).
+    Raw(RawNode<'a>),
+    /// Dedicated byte span within `file`.
+    Span {
+        file: &'a ParsedFile,
+        span: SourceSpan,
+    },
+}
+
 /// An opaque syntax tree node exposing source text and span coordinates without leaking
-/// low-level Tree-sitter grammar vocabulary (`.kind()`, `.field()`, `.dfs()`, etc.).
+/// low-level grammar vocabulary.
 #[derive(Clone)]
 pub struct AstNode<'a> {
-    pub(in crate::code_lint::ast) raw: RawNode<'a>,
+    pub(in crate::code_lint::ast) repr: AstNodeRepr<'a>,
 }
 
 impl<'a> AstNode<'a> {
     #[must_use]
     pub(in crate::code_lint::ast) const fn from_raw(raw: RawNode<'a>) -> Self {
-        Self { raw }
+        Self {
+            repr: AstNodeRepr::Raw(raw),
+        }
+    }
+
+    #[must_use]
+    pub(in crate::code_lint::ast) const fn from_span(
+        file: &'a ParsedFile,
+        span: SourceSpan,
+    ) -> Self {
+        Self {
+            repr: AstNodeRepr::Span { file, span },
+        }
+    }
+
+    /// Returns the transitional `RawNode` if backed by `ast-grep`.
+    #[must_use]
+    pub(in crate::code_lint::ast) const fn raw_opt(&self) -> Option<&RawNode<'a>> {
+        match &self.repr {
+            AstNodeRepr::Raw(raw) => Some(raw),
+            AstNodeRepr::Span { .. } => None,
+        }
+    }
+
+    /// Returns the owning [`ParsedFile`] if backed by a dedicated span.
+    #[must_use]
+    pub(in crate::code_lint::ast) const fn file_opt(&self) -> Option<&'a ParsedFile> {
+        match &self.repr {
+            AstNodeRepr::Span { file, .. } => Some(file),
+            AstNodeRepr::Raw(_) => None,
+        }
     }
 
     /// Returns the source text slice spanned by this node.
     #[must_use]
     pub fn text(&self) -> std::borrow::Cow<'_, str> {
-        self.raw.text()
+        match &self.repr {
+            AstNodeRepr::Raw(raw) => raw.text(),
+            AstNodeRepr::Span { file, span } => {
+                std::borrow::Cow::Borrowed(&file.source[span.start..span.end])
+            }
+        }
     }
 
     /// Returns the programming language of the file containing this node.
     #[must_use]
     pub fn lang(&self) -> Language {
-        from_support_lang(*self.raw.lang())
+        match &self.repr {
+            AstNodeRepr::Raw(raw) => match *raw.lang() {
+                SupportLang::Python => Language::Python,
+                _ => Language::Rust,
+            },
+            AstNodeRepr::Span { file, .. } => file.lang(),
+        }
     }
 
     /// Returns the [`SourceSpan`] (byte range) of this node.
     #[must_use]
     pub fn span(&self) -> SourceSpan {
-        SourceSpan::from_range(self.raw.range())
+        match &self.repr {
+            AstNodeRepr::Raw(raw) => SourceSpan::from_range(raw.range()),
+            AstNodeRepr::Span { span, .. } => *span,
+        }
     }
 
     /// Returns the 1-indexed starting line number of this node.
     #[must_use]
     pub fn start_line(&self) -> usize {
-        self.raw.start_pos().line() + 1
+        match &self.repr {
+            AstNodeRepr::Raw(raw) => raw.start_pos().line() + 1,
+            AstNodeRepr::Span { file, span } => file.line_index.line(span.start),
+        }
     }
 
     /// Returns the 1-indexed ending line number of this node.
     #[must_use]
     pub fn end_line(&self) -> usize {
-        self.raw.end_pos().line() + 1
+        match &self.repr {
+            AstNodeRepr::Raw(raw) => raw.end_pos().line() + 1,
+            AstNodeRepr::Span { file, span } => file.line_index.line(span.end),
+        }
     }
 
     /// Resolves the 1-indexed start `(line, column)` coordinate of this node.
     #[must_use]
     pub fn start_coordinate(&self) -> LineColumn {
-        let start_pos = self.raw.start_pos();
-        LineColumn {
-            line: start_pos.line() + 1,
-            column: start_pos.column(&self.raw) + 1,
+        match &self.repr {
+            AstNodeRepr::Raw(raw) => {
+                let start_pos = raw.start_pos();
+                LineColumn {
+                    line: start_pos.line() + 1,
+                    column: start_pos.column(raw) + 1,
+                }
+            }
+            AstNodeRepr::Span { file, span } => {
+                file.line_index.line_column(&file.source, span.start)
+            }
         }
     }
 
@@ -163,47 +317,59 @@ impl<'a> AstNode<'a> {
     }
 }
 
-/// Returns true for node kinds that represent comments in `lang`.
-fn is_comment_kind(kind: &str, lang: Language) -> bool {
-    dispatch_lang!(lang, is_comment_kind(kind))
+/// Converts a `ruff_text_size::TextRange` into a [`SourceSpan`].
+#[must_use]
+pub(in crate::code_lint::ast) const fn span_from_ruff_range(
+    range: ruff_text_size::TextRange,
+) -> SourceSpan {
+    SourceSpan::new(range.start().to_usize(), range.end().to_usize())
 }
 
-/// Collects all Tree-sitter comment nodes in `file` in source order.
+/// Converts a `ra_ap_syntax::TextRange` into a [`SourceSpan`].
+#[must_use]
+pub(in crate::code_lint::ast) fn span_from_rowan_range(
+    range: ra_ap_syntax::TextRange,
+) -> SourceSpan {
+    SourceSpan::new(range.start().into(), range.end().into())
+}
+
+/// Returns true if `kind` is a Rust comment token (`//`, `/* */`, `///`, `//!`, `/** */`, `/*! */`).
+#[must_use]
+pub(in crate::code_lint::ast) const fn is_rust_comment_kind(
+    kind: ra_ap_syntax::SyntaxKind,
+) -> bool {
+    use ra_ap_syntax::SyntaxKind;
+    matches!(
+        kind,
+        SyntaxKind::COMMENT | SyntaxKind::OUTER_DOC_COMMENT | SyntaxKind::INNER_DOC_COMMENT
+    )
+}
+
+/// Collects all comment nodes in `file` in source order.
 ///
-/// Matches on language-specific comment kinds rather than `Node::is_extra`, which would also
-/// admit non-comment trivia such as Python's `line_continuation`.
+/// Uses `ruff_python_ast::token::TokenKind::Comment` for Python and `is_rust_comment_kind`
+/// for Rust so non-comment trivia (such as Python line continuations) is never included.
 #[must_use]
 pub fn collect_comment_nodes(file: &ParsedFile) -> Vec<AstNode<'_>> {
-    let lang = file.lang();
-    file.grep
-        .root()
-        .dfs()
-        .filter(|curr| is_comment_kind(curr.kind().as_ref(), lang))
-        .map(AstNode::from_raw)
-        .collect()
-}
-
-/// Returns the semantic argument nodes of a call expression, excluding unnamed punctuation
-/// tokens (`(`, `)`, `,`, `::`, etc.) and extra trivia nodes (`comment`, `line_comment`,
-/// `block_comment`, `line_continuation`).
-fn call_argument_nodes<'a>(call_node: &RawNode<'a>) -> Vec<AstNode<'a>> {
-    call_node.field("arguments").map_or_else(Vec::new, |args| {
-        args.children()
-            .filter(|child| child.is_named() && !child.is_extra())
-            .map(AstNode::from_raw)
-            .collect()
-    })
-}
-
-/// Returns true for node kinds that represent call expressions in `lang`.
-fn is_call_kind(kind: &str, lang: Language) -> bool {
-    dispatch_lang!(lang, is_call_kind(kind))
-}
-
-/// Returns the invoked method name node of a call's callee expression in `lang`, if the callee
-/// is a method access rather than a plain function reference.
-fn extract_method_call_target<'a>(function: &RawNode<'a>, lang: Language) -> Option<RawNode<'a>> {
-    dispatch_lang!(lang, extract_method_call_target(function))
+    match &file.ast {
+        CodeLintAst::Python(Ok(parsed)) => parsed
+            .tokens()
+            .iter()
+            .filter(|token| token.kind() == ruff_python_ast::token::TokenKind::Comment)
+            .map(|token| AstNode::from_span(file, span_from_ruff_range(token.range())))
+            .collect(),
+        CodeLintAst::Python(Err(_)) => Vec::new(),
+        CodeLintAst::Rust(parsed) => parsed
+            .tree()
+            .syntax()
+            .descendants_with_tokens()
+            .filter_map(|element| {
+                let token = element.into_token()?;
+                is_rust_comment_kind(token.kind())
+                    .then(|| AstNode::from_span(file, span_from_rowan_range(token.text_range())))
+            })
+            .collect(),
+    }
 }
 
 /// Candidate call expression extracted from the syntax tree.
@@ -214,36 +380,177 @@ pub struct AstCallCandidate<'a> {
     pub callee: String,
     /// Terminal method identifier text if the callee is a method access (e.g. `obj.method`).
     pub method_name: Option<String>,
+    /// If the receiver of a method call is itself a call expression (e.g. `get_loop().create_task(coro)`),
+    /// the callee text of that receiver call (e.g. `"get_loop"` or `"asyncio.get_running_loop"`).
+    pub receiver_call_callee: Option<String>,
     /// Semantic argument nodes passed to the call.
     pub arguments: Vec<AstNode<'a>>,
+}
+
+/// Collects all direct call expressions in a Python file using `ruff_python_ast`.
+fn collect_python_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> {
+    use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
+    use ruff_python_ast::{Expr, ExprCall};
+
+    struct CallVisitor<'a> {
+        file: &'a ParsedFile,
+        out: Vec<AstCallCandidate<'a>>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for CallVisitor<'a> {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Call(call) = expr {
+                self.record_call(call);
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    impl CallVisitor<'_> {
+        fn record_call(&mut self, call: &ExprCall) {
+            let func_span = span_from_ruff_range(call.func.range());
+            let callee = self.file.source[func_span.start..func_span.end].to_string();
+            let (method_name, receiver_call_callee) =
+                if let Expr::Attribute(attr) = call.func.as_ref() {
+                    let receiver_callee = if let Expr::Call(inner_call) = attr.value.as_ref() {
+                        let inner_span = span_from_ruff_range(inner_call.func.range());
+                        Some(self.file.source[inner_span.start..inner_span.end].to_string())
+                    } else {
+                        None
+                    };
+                    (Some(attr.attr.to_string()), receiver_callee)
+                } else {
+                    (None, None)
+                };
+            let mut arguments =
+                Vec::with_capacity(call.arguments.args.len() + call.arguments.keywords.len());
+            let mut arg_spans: Vec<SourceSpan> = call
+                .arguments
+                .args
+                .iter()
+                .map(|arg| span_from_ruff_range(arg.range()))
+                .chain(
+                    call.arguments
+                        .keywords
+                        .iter()
+                        .map(|kw| span_from_ruff_range(kw.range())),
+                )
+                .collect();
+            arg_spans.sort_by_key(|span| (span.start, span.end));
+            for span in arg_spans {
+                arguments.push(AstNode::from_span(self.file, span));
+            }
+            self.out.push(AstCallCandidate {
+                node: AstNode::from_span(self.file, span_from_ruff_range(call.range())),
+                callee,
+                method_name,
+                receiver_call_callee,
+                arguments,
+            });
+        }
+    }
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut visitor = CallVisitor {
+        file,
+        out: Vec::new(),
+    };
+    visitor.visit_body(&parsed.syntax().body);
+    visitor.out
+}
+
+/// Extracts the callee string of a Rust call or method-call expression.
+fn rust_call_callee_text(expr: &ra_ap_syntax::ast::Expr, source: &str) -> Option<String> {
+    match expr {
+        ra_ap_syntax::ast::Expr::CallExpr(call) => {
+            let func = call.expr()?;
+            let span = span_from_rowan_range(func.syntax().text_range());
+            Some(source[span.start..span.end].to_string())
+        }
+        ra_ap_syntax::ast::Expr::MethodCallExpr(method_call) => {
+            let receiver = method_call.receiver()?;
+            let name_ref = method_call.name_ref()?;
+            let start: usize = receiver.syntax().text_range().start().into();
+            let end: usize = name_ref.syntax().text_range().end().into();
+            Some(source[start..end].to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Collects all direct call and method-call expressions in a Rust file using `ra_ap_syntax`.
+fn collect_rust_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> {
+    use ra_ap_syntax::ast::{self, HasArgList as _};
+
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for syntax_node in parsed.tree().syntax().descendants() {
+        if let Some(call) = ast::CallExpr::cast(syntax_node.clone()) {
+            let Some(func) = call.expr() else {
+                continue;
+            };
+            let func_span = span_from_rowan_range(func.syntax().text_range());
+            let callee = file.source[func_span.start..func_span.end].to_string();
+            let arguments = call.arg_list().map_or_else(Vec::new, |arguments| {
+                arguments
+                    .args()
+                    .map(|arg| {
+                        AstNode::from_span(file, span_from_rowan_range(arg.syntax().text_range()))
+                    })
+                    .collect()
+            });
+            out.push(AstCallCandidate {
+                node: AstNode::from_span(file, span_from_rowan_range(call.syntax().text_range())),
+                callee,
+                method_name: None,
+                receiver_call_callee: None,
+                arguments,
+            });
+        } else if let Some(method_call) = ast::MethodCallExpr::cast(syntax_node) {
+            let (Some(receiver), Some(name_ref)) = (method_call.receiver(), method_call.name_ref())
+            else {
+                continue;
+            };
+            let start: usize = receiver.syntax().text_range().start().into();
+            let end: usize = name_ref.syntax().text_range().end().into();
+            let callee = file.source[start..end].to_string();
+            let method_name = Some(name_ref.text().to_string());
+            let receiver_call_callee = rust_call_callee_text(&receiver, &file.source);
+            let arguments = method_call.arg_list().map_or_else(Vec::new, |arguments| {
+                arguments
+                    .args()
+                    .map(|arg| {
+                        AstNode::from_span(file, span_from_rowan_range(arg.syntax().text_range()))
+                    })
+                    .collect()
+            });
+            out.push(AstCallCandidate {
+                node: AstNode::from_span(
+                    file,
+                    span_from_rowan_range(method_call.syntax().text_range()),
+                ),
+                callee,
+                method_name,
+                receiver_call_callee,
+                arguments,
+            });
+        }
+    }
+    out
 }
 
 /// Collects all direct call expressions in `file` along with their callee text, optional method
 /// target name, and semantic argument nodes.
 #[must_use]
 pub fn collect_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> {
-    let lang = file.lang();
-    let mut out = Vec::new();
-    for node in file
-        .grep
-        .root()
-        .dfs()
-        .filter(|call_node| is_call_kind(call_node.kind().as_ref(), lang))
-    {
-        if let Some(function) = node.field("function") {
-            let callee = function.text().into_owned();
-            let method_name = extract_method_call_target(&function, lang)
-                .map(|target| target.text().into_owned());
-            let arguments = call_argument_nodes(&node);
-            out.push(AstCallCandidate {
-                node: AstNode::from_raw(node),
-                callee,
-                method_name,
-                arguments,
-            });
-        }
+    match file.lang() {
+        Language::Python => collect_python_call_candidates(file),
+        Language::Rust => collect_rust_call_candidates(file),
     }
-    out
 }
 
 /// A read of one positional element through an integer literal: `receiver[1]` or
@@ -372,33 +679,6 @@ pub(in crate::code_lint::ast) fn delimited_string_parts(node: &RawNode<'_>) -> (
     (opening, content)
 }
 
-/// Matches an `ast-grep` call pattern containing `$ARGS` (e.g. `$LOOP($$$LOOP_ARGS).create_task($$$ARGS)`)
-/// and returns `(call_node, callee_text, argument_nodes)` tuples.
-#[must_use]
-pub fn find_pattern_calls<'a>(
-    file: &'a ParsedFile,
-    pattern: &str,
-    fallback_callee: &str,
-) -> Vec<(AstNode<'a>, String, Vec<AstNode<'a>>)> {
-    let mut out = Vec::new();
-    for matched in file.grep.root().find_all(pattern) {
-        let raw_node = matched.get_node().clone();
-        let callee = raw_node.field("function").map_or_else(
-            || fallback_callee.to_string(),
-            |func| func.text().to_string(),
-        );
-        let arguments = matched
-            .get_env()
-            .get_multiple_matches("ARGS")
-            .into_iter()
-            .filter(|child| child.is_named() && !child.is_extra())
-            .map(AstNode::from_raw)
-            .collect();
-        out.push((AstNode::from_raw(raw_node), callee, arguments));
-    }
-    out
-}
-
 /// Collects all binding definition nodes from a parsed file.
 #[must_use]
 pub fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
@@ -408,7 +688,10 @@ pub fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
 /// Returns true if the node represents an import binding.
 #[must_use]
 pub fn is_import_binding(node: &AstNode<'_>, lang: Language) -> bool {
-    let Some(parent) = node.raw.parent() else {
+    let Some(raw) = node.raw_opt() else {
+        return false;
+    };
+    let Some(parent) = raw.parent() else {
         return false;
     };
     let parent_kind = parent.kind();
@@ -418,7 +701,10 @@ pub fn is_import_binding(node: &AstNode<'_>, lang: Language) -> bool {
 /// Returns true if the node represents a structural type, class, or function definition name.
 #[must_use]
 pub fn is_structural_definition(node: &AstNode<'_>, lang: Language) -> bool {
-    let Some(parent) = node.raw.parent() else {
+    let Some(raw) = node.raw_opt() else {
+        return false;
+    };
+    let Some(parent) = raw.parent() else {
         return false;
     };
     let parent_kind = parent.kind();
@@ -429,7 +715,10 @@ pub fn is_structural_definition(node: &AstNode<'_>, lang: Language) -> bool {
 /// (`impl Trait for Type` in Rust or `@override` method in Python), i.e. a name mandated by a contract.
 #[must_use]
 pub fn is_trait_impl_member(node: &AstNode<'_>, lang: Language) -> bool {
-    let Some(raw_item) = node.raw.parent() else {
+    let Some(raw) = node.raw_opt() else {
+        return false;
+    };
+    let Some(raw_item) = raw.parent() else {
         return false;
     };
     let item = AstNode::from_raw(raw_item);
@@ -457,6 +746,96 @@ pub fn find_unwrapped_multiline_strings(
     )
 }
 
+/// Resolves the enclosing non-exempt function name for a span in a Python file.
+fn python_enclosing_non_exempt_function_name(
+    file: &ParsedFile,
+    target_span: SourceSpan,
+    is_exempt: impl Fn(&str, bool) -> bool,
+) -> Option<String> {
+    use ruff_python_ast::Stmt;
+    use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
+
+    struct EnclosingFunctionFinder {
+        target_span: SourceSpan,
+        depth: usize,
+        enclosing: Vec<(String, bool)>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for EnclosingFunctionFinder {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            let span = span_from_ruff_range(statement.range());
+            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
+                return;
+            }
+            if let Stmt::FunctionDef(func) = statement {
+                let is_top_level = self.depth == 0;
+                self.enclosing.push((func.name.to_string(), is_top_level));
+            }
+            self.depth += 1;
+            walk_stmt(self, statement);
+            self.depth -= 1;
+        }
+    }
+
+    let parsed = file.py_module()?;
+    let mut finder = EnclosingFunctionFinder {
+        target_span,
+        depth: 0,
+        enclosing: Vec::new(),
+    };
+    finder.visit_body(&parsed.syntax().body);
+
+    let mut nearest_function_name: Option<String> = None;
+    for (func_name, is_top_level) in finder.enclosing.into_iter().rev() {
+        if is_exempt(&func_name, is_top_level) {
+            return None;
+        }
+        if nearest_function_name.is_none() {
+            nearest_function_name = Some(func_name);
+        }
+    }
+    nearest_function_name
+}
+
+/// Resolves the enclosing non-exempt function name for a span in a Rust file.
+fn rust_enclosing_non_exempt_function_name(
+    file: &ParsedFile,
+    target_span: SourceSpan,
+    is_exempt: impl Fn(&str, bool) -> bool,
+) -> Option<String> {
+    use ra_ap_syntax::ast::{self, HasName as _};
+
+    let parsed = file.rs_parsed()?;
+    let start_offset = u32::try_from(target_span.start).ok()?;
+    let end_offset = u32::try_from(target_span.end).ok()?;
+    let target_range = ra_ap_syntax::TextRange::new(start_offset.into(), end_offset.into());
+    let covering = parsed.tree().syntax().covering_element(target_range);
+    let start_node = match covering {
+        ra_ap_syntax::SyntaxElement::Node(node) => node,
+        ra_ap_syntax::SyntaxElement::Token(token) => token.parent()?,
+    };
+
+    let mut nearest_function_name: Option<String> = None;
+    for ancestor in start_node.ancestors() {
+        if let Some(func) = ast::Fn::cast(ancestor)
+            && let Some(name) = func.name()
+        {
+            let func_name = name.text();
+            let is_top_level = func
+                .syntax()
+                .parent()
+                .is_some_and(|parent| ast::SourceFile::can_cast(parent.kind()));
+            if is_exempt(func_name, is_top_level) {
+                return None;
+            }
+            if nearest_function_name.is_none() {
+                nearest_function_name = Some(func_name.to_string());
+            }
+        }
+    }
+    nearest_function_name
+}
+
 /// Returns the nearest enclosing function name if `node` is inside a function and no enclosing
 /// function satisfies `is_exempt(func_name, is_top_level)`.
 ///
@@ -470,9 +849,17 @@ pub fn enclosing_non_exempt_function_name(
     lang: Language,
     is_exempt: impl Fn(&str, bool) -> bool,
 ) -> Option<String> {
-    let mut nearest_function_name: Option<String> = None;
+    if let Some(file) = node.file_opt() {
+        let span = node.span();
+        return match lang {
+            Language::Python => python_enclosing_non_exempt_function_name(file, span, is_exempt),
+            Language::Rust => rust_enclosing_non_exempt_function_name(file, span, is_exempt),
+        };
+    }
 
-    for ancestor in node.raw.ancestors() {
+    let raw = node.raw_opt()?;
+    let mut nearest_function_name: Option<String> = None;
+    for ancestor in raw.ancestors() {
         let func_info = dispatch_lang!(lang, function_name_and_is_top_level(&ancestor));
         if let Some((func_name, is_top_level)) = func_info {
             if is_exempt(&func_name, is_top_level) {
@@ -483,7 +870,6 @@ pub fn enclosing_non_exempt_function_name(
             }
         }
     }
-
     nearest_function_name
 }
 

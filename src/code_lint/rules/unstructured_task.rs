@@ -21,7 +21,7 @@ const BANNED: ListOption = ListOption {
             "asyncio.ensure_future",
             "loop.create_task",
             "event_loop.create_task",
-            "$LOOP($$$LOOP_ARGS).create_task",
+            "*().create_task",
         ],
         extend: &[],
         remove: &[],
