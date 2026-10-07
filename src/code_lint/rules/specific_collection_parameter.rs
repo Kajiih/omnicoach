@@ -4,7 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     AnnotationTraversalDepth, CollectionKind, ParameterCollectionCapability, PythonCollectionType,
     PythonParameterKind, collect_collection_types, extract_function_signatures,
-    has_unaliased_collections_abc_set_import, summarize_parameter_usages,
+    summarize_parameter_usages,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
@@ -102,7 +102,6 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    let abc_set_imported = has_unaliased_collections_abc_set_import(file);
     let mut diagnostics = Vec::new();
     for signature in extract_function_signatures(file) {
         if signature.is_exempt_from_body_usage_rules() {
@@ -119,7 +118,6 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             let matched: Vec<_> = collect_collection_types(
                 type_node,
                 AnnotationTraversalDepth::TransparentWrappersOnly,
-                abc_set_imported,
             )
             .into_iter()
             .filter(|collection_type| {

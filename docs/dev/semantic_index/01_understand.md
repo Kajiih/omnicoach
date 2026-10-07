@@ -62,6 +62,12 @@ walk that extracts the fact**, and memoize shared projections on `ParsedFile`.
    span finders that become unused.
 3. **Per-file import map.** Resolve Python `import` / `from … import` and Rust `use` aliases, with
    local definitions shadowing imports; replace `abc_set_imported`; promote the alias `known_gap`.
+   *Done:* `ast::resolve_name` (cached `ImportMap` on `ParsedFile`) returns
+   `Imported(path)` / `Local` / `Unbound` from module-level Python imports and `def`/`class`
+   (assignments excluded) and root-level Rust `use` trees and items. Wired into banned-call
+   literal matching (D1) and Python collection/`Annotated`/`Final` classification;
+   `abc_set_imported` is gone. Protocol/ABC bases, `@override` and `@dataclass` still match by
+   terminal name.
 4. **Cross-language symmetry.** Move rule-held AST logic into `ast/` and remove duplicated
    per-language algorithms in the 5 branching rules.
 5. **Split `ast/python.rs`.** Move parameter analysis and literal/positional-read collection (with

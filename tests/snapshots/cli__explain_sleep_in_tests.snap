@@ -79,7 +79,7 @@ async fn test_session_expires() {
 Keys under `[rules.sleep-in-tests]`, or `[rules.sleep-in-tests.<language>]` for one language:
 
 - `enforcement-mode` (`ban` or `require-explanation`, default `ban`): `ban` flags every occurrence; `require-explanation` accepts an occurrence explained by a comment at the end of its line or in the comment lines directly above it. A comment at the end of any header line of the enclosing statement, or directly above that header (above the first decorator, if any), also counts and excuses every finding on that header, from any rule in this mode; the body of a block statement is not part of its header. The comment needs at least three words; a bare tool directive such as `noqa` or `type: ignore` does not count, but a reason written after it does.
-- `banned` (list of strings, default `sleep`; python adds `time.sleep`, `asyncio.sleep`, `anyio.sleep`, `trio.sleep`; rust adds `thread::sleep`, `std::thread::sleep`, `time::sleep`, `tokio::time::sleep`): Sleep calls flagged in tests.
+- `banned` (list of strings, default `sleep`; python adds `time.sleep`, `asyncio.sleep`, `anyio.sleep`, `trio.sleep`, `gevent.sleep`, `eventlet.sleep`; rust adds `thread::sleep`, `std::thread::sleep`, `time::sleep`, `tokio::time::sleep`, `async_std::task::sleep`): Sleep calls flagged in tests.
 - `extend-banned` (list of strings): items added to the default.
 - `remove-banned` (list of strings): items removed from the default.
 
@@ -89,10 +89,10 @@ enforcement-mode = "ban"
 banned = ["sleep"]
 
 [rules.sleep-in-tests.python]
-extend-banned = ["time.sleep", "asyncio.sleep", "anyio.sleep", "trio.sleep"]
+extend-banned = ["time.sleep", "asyncio.sleep", "anyio.sleep", "trio.sleep", "gevent.sleep", "eventlet.sleep"]
 
 [rules.sleep-in-tests.rust]
-extend-banned = ["thread::sleep", "std::thread::sleep", "time::sleep", "tokio::time::sleep"]
+extend-banned = ["thread::sleep", "std::thread::sleep", "time::sleep", "tokio::time::sleep", "async_std::task::sleep"]
 ```
 
 ## References

@@ -4,7 +4,7 @@
 //! Each callee entry (e.g. `"time.sleep"`, `"tokio::time::sleep"`, `"*.assert_called_once"`,
 //! `"*().create_task"`) is matched in a single pass over [`ast::collect_call_candidates`].
 
-use crate::code_lint::ast::{self, AstNode, EnclosingFunction, ParsedFile};
+use crate::code_lint::ast::{self, AstNode, EnclosingFunction, ParsedFile, ResolvedName};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -27,7 +27,11 @@ pub struct CallMatch<'a> {
 /// Finds all call expressions in `file` matching any of the `banned_callees` entries.
 ///
 /// Supported entry forms:
-/// - Literal callee names (e.g. `"time.sleep"`, `"tokio::time::sleep"`): matched by exact callee text.
+/// - Literal callee names (e.g. `"time.sleep"`, `"tokio::time::sleep"`): matched against the callee
+///   resolved by [`ast::resolve_name`]. A callee whose first segment is imported matches only by
+///   its canonical path (`t.cast` after `import typing as t` matches `"typing.cast"`; `cast` after
+///   `from sqlalchemy import cast` does not match `"cast"`), one whose first segment is defined in
+///   the file never matches, and any other callee matches by its exact text.
 /// - Any-receiver method patterns `"*.<method>"` (e.g. `"*.assert_called_once"`): matches any method call
 ///   whose terminal method name is `<method>`.
 /// - Chained-call method patterns `"*().<method>"` (e.g. `"*().create_task"`): matches any method call
@@ -79,7 +83,13 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
 
     let mut matches: Vec<CallMatch<'a>> = Vec::new();
     for candidate in ast::collect_call_candidates(file) {
-        let is_banned = literal_callees.contains(candidate.callee.as_str())
+        let is_banned_literal = !literal_callees.is_empty()
+            && match ast::resolve_name(file, &candidate.callee) {
+                ResolvedName::Imported(path) => literal_callees.contains(path.as_str()),
+                ResolvedName::Local => false,
+                ResolvedName::Unbound => literal_callees.contains(candidate.callee.as_str()),
+            };
+        let is_banned = is_banned_literal
             || candidate.method_name.as_deref().is_some_and(|method| {
                 method_callees.contains(method)
                     || (candidate.receiver_call_callee.is_some()
@@ -169,6 +179,31 @@ mod tests {
         );
         assert_eq!(matched[1].arguments.len(), 1);
         assert_eq!(matched[1].arguments[0].text(), "Duration::ZERO");
+    }
+
+    #[test]
+    fn test_rust_literal_callees_match_resolved_use_paths() {
+        let source = indoc::indoc! {r"
+            use std::thread;
+            use crate::clock::sleep;
+            use tokio::time::sleep as pause;
+
+            fn test_case() {
+                thread::sleep(dur);
+                sleep(dur);
+                pause(dur).await;
+            }
+        "};
+        let file = ParsedFile::new(source, Language::Rust);
+        let banned: HashSet<String> = ["sleep", "std::thread::sleep", "tokio::time::sleep"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+
+        let matched = find_banned_calls(&file, &banned);
+        let callees: Vec<&str> = matched.iter().map(|item| item.callee.as_str()).collect();
+
+        assert_eq!(callees, vec!["thread::sleep", "pause"]);
     }
 
     #[test]

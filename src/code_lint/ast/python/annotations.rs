@@ -1,9 +1,8 @@
 //! Python type annotation unwrapping, constructor resolution, union flattening, and collection type vocabularies.
 
 use super::{AstNode, ParsedFile, find_expr_at_span, resolve_path_and_terminal_expr};
-use crate::code_lint::ast::span_from_ruff_range;
-use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
-use ruff_python_ast::{Expr, Operator, Stmt};
+use crate::code_lint::ast::{ResolvedName, resolve_name, span_from_ruff_range};
+use ruff_python_ast::{Expr, Operator};
 use ruff_text_size::Ranged as _;
 
 /// Controls how deeply [`collect_collection_types`] traverses a Python type annotation.
@@ -91,42 +90,6 @@ pub(super) fn is_concrete_collection_constructor(path: &str, terminal: &str) -> 
     }
 }
 
-/// Returns true if `file` contains an unaliased `from collections.abc import Set` statement.
-#[must_use]
-pub fn has_unaliased_collections_abc_set_import(file: &ParsedFile) -> bool {
-    *file.abc_set_imported.get_or_init(|| {
-        struct ImportFinder {
-            found: bool,
-        }
-
-        impl<'a> SourceOrderVisitor<'a> for ImportFinder {
-            fn visit_stmt(&mut self, statement: &'a Stmt) {
-                if self.found {
-                    return;
-                }
-                if let Stmt::ImportFrom(import_from) = statement
-                    && import_from.level == 0
-                    && import_from.module.as_deref() == Some("collections.abc")
-                    && import_from.names.iter().any(|alias| {
-                        alias.name.as_str() == TYPING_SET_CONSTRUCTOR && alias.asname.is_none()
-                    })
-                {
-                    self.found = true;
-                    return;
-                }
-                walk_stmt(self, statement);
-            }
-        }
-
-        let Some(parsed) = file.py_module() else {
-            return false;
-        };
-        let mut finder = ImportFinder { found: false };
-        finder.visit_body(&parsed.syntax().body);
-        finder.found
-    })
-}
-
 /// Extracts `(base_expr, type_argument_exprs)` from a Python `Expr::Subscript` node inside a
 /// type annotation.
 pub(super) fn extract_generic_base_and_args(expr: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
@@ -141,39 +104,55 @@ pub(super) fn extract_generic_base_and_args(expr: &Expr) -> Option<(&Expr, Vec<&
     Some((subscript.value.as_ref(), type_args))
 }
 
-/// Unwraps outer `Annotated[T, ...]` wrappers from `type_expr`.
-fn unwrap_annotated_expr<'a>(mut current: &'a Expr, source: &str) -> &'a Expr {
-    while let Some((base_node, type_args)) = extract_generic_base_and_args(current) {
-        let (base_path, base_terminal) = resolve_path_and_terminal_expr(base_node, source);
-        if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_ANNOTATED])
-            && let Some(&first_arg) = type_args.first()
-        {
-            current = first_arg;
-        } else {
-            break;
+/// The `(path, terminal)` that the type constructor expression `expr` names, resolved through the
+/// imports of `file` (`t.List` after `import typing as t` is `("typing.List", "List")`), or `None`
+/// if it names a definition of `file` (see [`resolve_name`]).
+fn resolved_path_and_terminal_expr(expr: &Expr, file: &ParsedFile) -> Option<(String, String)> {
+    let (path, terminal) = resolve_path_and_terminal_expr(expr, &file.source);
+    match resolve_name(file, &path) {
+        ResolvedName::Imported(resolved) => {
+            let terminal = resolved
+                .rsplit_once('.')
+                .map_or(resolved.as_str(), |(_, terminal)| terminal)
+                .to_owned();
+            Some((resolved, terminal))
         }
+        ResolvedName::Local => None,
+        ResolvedName::Unbound => Some((path, terminal)),
+    }
+}
+
+/// Unwraps outer `Annotated[T, ...]` wrappers from `type_expr`.
+fn unwrap_annotated_expr<'a>(mut current: &'a Expr, file: &ParsedFile) -> &'a Expr {
+    while let Some((base_node, type_args)) = extract_generic_base_and_args(current)
+        && let Some((base_path, base_terminal)) = resolved_path_and_terminal_expr(base_node, file)
+        && is_std_type_constructor(&base_path, &base_terminal, &[TYPE_ANNOTATED])
+        && let Some(&first_arg) = type_args.first()
+    {
+        current = first_arg;
     }
     current
 }
 
 /// True if `type_expr` is `Final` or `Final[T]` (qualified or not, optionally wrapped in `Annotated`).
-pub(super) fn has_final_annotation_expr(type_expr: &Expr, source: &str) -> bool {
-    let unwrapped = unwrap_annotated_expr(type_expr, source);
+pub(super) fn has_final_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> bool {
+    let unwrapped = unwrap_annotated_expr(type_expr, file);
     let candidate =
         extract_generic_base_and_args(unwrapped).map_or(unwrapped, |(base_node, _)| base_node);
-    resolve_path_and_terminal_expr(candidate, source).1 == TYPE_FINAL
+    resolved_path_and_terminal_expr(candidate, file)
+        .is_some_and(|(_, terminal)| terminal == TYPE_FINAL)
 }
 
 /// Returns true if `type_expr` is an unparameterized `Final` qualifier (`Final`, `typing.Final`,
 /// or `typing_extensions.Final`, optionally wrapped in `Annotated[Final, ...]`), which PEP 591
 /// forbids in a class body without an initializer (`x: Final` is invalid; `x: Final[T]` is valid).
-pub(super) fn is_bare_final_annotation_expr(type_expr: &Expr, source: &str) -> bool {
-    let unwrapped = unwrap_annotated_expr(type_expr, source);
+pub(super) fn is_bare_final_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> bool {
+    let unwrapped = unwrap_annotated_expr(type_expr, file);
     if matches!(unwrapped, Expr::Subscript(_)) {
         return false;
     }
-    let (path, terminal) = resolve_path_and_terminal_expr(unwrapped, source);
-    is_std_type_constructor(&path, &terminal, &[TYPE_FINAL])
+    resolved_path_and_terminal_expr(unwrapped, file)
+        .is_some_and(|(path, terminal)| is_std_type_constructor(&path, &terminal, &[TYPE_FINAL]))
 }
 
 /// Transparent type wrappers whose all type arguments preserve the enclosing variance.
@@ -258,7 +237,8 @@ pub enum CollectionShape {
 pub struct PythonCollectionType {
     /// The type as written (`list`, `typing.Dict`, `collections.abc.Sequence`).
     pub path: String,
-    /// The constructor's unqualified name (`list`, `Dict`, `Sequence`).
+    /// The constructor's unqualified name, resolved through the file's imports (`list`, `Dict`,
+    /// `Sequence`; `Set` for `ReadOnlySet` after `from collections.abc import Set as ReadOnlySet`).
     pub name: String,
     /// What the type lets its holder do.
     pub kind: CollectionKind,
@@ -278,17 +258,10 @@ impl PythonCollectionType {
     }
 }
 
-/// Classifies `(path, terminal)` as a standard-library collection type constructor.
-///
-/// With `abc_set_imported`, unqualified `Set` is `collections.abc.Set` rather than `typing.Set`.
-fn classify_collection(
-    path: &str,
-    terminal: &str,
-    abc_set_imported: bool,
-) -> Option<(CollectionKind, CollectionShape)> {
-    let kind = if is_concrete_collection_constructor(path, terminal)
-        && !(abc_set_imported && path == TYPING_SET_CONSTRUCTOR)
-    {
+/// Classifies the import-resolved `(path, terminal)` as a standard-library collection type
+/// constructor.
+fn classify_collection(path: &str, terminal: &str) -> Option<(CollectionKind, CollectionShape)> {
+    let kind = if is_concrete_collection_constructor(path, terminal) {
         CollectionKind::ConcreteMutable
     } else if is_std_type_constructor(path, terminal, MUTABLE_COLLECTION_ABCS) {
         CollectionKind::AbstractMutable
@@ -320,88 +293,75 @@ fn classify_collection(
     Some((kind, shape))
 }
 
-/// Recursively collects matching type constructor `(path, terminal)` pairs from `expr`
-/// according to `depth`, deduplicated by path.
-pub(super) fn collect_type_constructors_expr<F>(
+/// Recursively collects the collection types named in `expr` according to `depth`, deduplicated
+/// by path.
+fn collect_collection_types_expr(
     expr: &Expr,
-    source: &str,
+    file: &ParsedFile,
     depth: AnnotationTraversalDepth,
-    predicate: &F,
-    out: &mut Vec<(String, String)>,
-) where
-    F: Fn(&str, &str) -> bool,
-{
+    out: &mut Vec<PythonCollectionType>,
+) {
     match expr {
         Expr::BinOp(bin_op) if bin_op.op == Operator::BitOr => {
-            collect_type_constructors_expr(&bin_op.left, source, depth, predicate, out);
-            collect_type_constructors_expr(&bin_op.right, source, depth, predicate, out);
+            collect_collection_types_expr(&bin_op.left, file, depth, out);
+            collect_collection_types_expr(&bin_op.right, file, depth, out);
         }
-        Expr::Name(_) | Expr::Attribute(_) => {
-            let (path, terminal) = resolve_path_and_terminal_expr(expr, source);
-            push_type_constructor(path, terminal, predicate, out);
-        }
+        Expr::Name(_) | Expr::Attribute(_) => push_collection_type(expr, file, out),
         Expr::Subscript(_) => {
             let Some((base_node, type_args)) = extract_generic_base_and_args(expr) else {
                 return;
             };
-            let (base_path, base_terminal) = resolve_path_and_terminal_expr(base_node, source);
+            let Some((base_path, base_terminal)) = resolved_path_and_terminal_expr(base_node, file)
+            else {
+                return;
+            };
 
             if is_std_type_constructor(&base_path, &base_terminal, TRANSPARENT_UNION_WRAPPERS) {
                 for arg in &type_args {
-                    collect_type_constructors_expr(arg, source, depth, predicate, out);
+                    collect_collection_types_expr(arg, file, depth, out);
                 }
                 return;
             }
 
             if is_std_type_constructor(&base_path, &base_terminal, TRANSPARENT_FIRST_ARG_WRAPPERS) {
                 if let Some(first_arg) = type_args.first() {
-                    collect_type_constructors_expr(first_arg, source, depth, predicate, out);
+                    collect_collection_types_expr(first_arg, file, depth, out);
                 }
                 return;
             }
 
-            let is_std_constructor = is_std_type_constructor_prefix(&base_path, &base_terminal);
-            let terminal = base_terminal.clone();
-            push_type_constructor(base_path, base_terminal, predicate, out);
+            push_collection_type(base_node, file, out);
 
-            if depth == AnnotationTraversalDepth::CovariantPositions && is_std_constructor {
-                match terminal.as_str() {
+            if depth == AnnotationTraversalDepth::CovariantPositions
+                && is_std_type_constructor_prefix(&base_path, &base_terminal)
+            {
+                match base_terminal.as_str() {
                     terminal_name if SINGLE_ARG_COVARIANT_CONTAINERS.contains(&terminal_name) => {
                         if let Some(first_arg) = type_args.first() {
-                            collect_type_constructors_expr(
-                                first_arg, source, depth, predicate, out,
-                            );
+                            collect_collection_types_expr(first_arg, file, depth, out);
                         }
                     }
                     "tuple" | "Tuple" => {
                         for arg in &type_args {
-                            collect_type_constructors_expr(arg, source, depth, predicate, out);
+                            collect_collection_types_expr(arg, file, depth, out);
                         }
                     }
                     TYPE_MAPPING | "Callable" => {
                         if let Some(second_arg) = type_args.get(1) {
-                            collect_type_constructors_expr(
-                                second_arg, source, depth, predicate, out,
-                            );
+                            collect_collection_types_expr(second_arg, file, depth, out);
                         }
                     }
                     "Generator" | TYPE_COROUTINE => {
                         if let Some(yield_arg) = type_args.first() {
-                            collect_type_constructors_expr(
-                                yield_arg, source, depth, predicate, out,
-                            );
+                            collect_collection_types_expr(yield_arg, file, depth, out);
                         }
                         if let Some(return_arg) = type_args.get(2) {
-                            collect_type_constructors_expr(
-                                return_arg, source, depth, predicate, out,
-                            );
+                            collect_collection_types_expr(return_arg, file, depth, out);
                         }
                     }
                     "AsyncGenerator" => {
                         if let Some(yield_arg) = type_args.first() {
-                            collect_type_constructors_expr(
-                                yield_arg, source, depth, predicate, out,
-                            );
+                            collect_collection_types_expr(yield_arg, file, depth, out);
                         }
                     }
                     _ => {}
@@ -412,31 +372,25 @@ pub(super) fn collect_type_constructors_expr<F>(
     }
 }
 
-/// Appends `(path, terminal)` to `out` if it satisfies `predicate` and `path` is not there yet.
-fn push_type_constructor<F>(
-    path: String,
-    terminal: String,
-    predicate: &F,
-    out: &mut Vec<(String, String)>,
-) where
-    F: Fn(&str, &str) -> bool,
-{
-    if predicate(&path, &terminal) && !out.iter().any(|(seen, _)| *seen == path) {
-        out.push((path, terminal));
+/// Appends the collection type that `expr` names to `out` if its path is not there yet.
+fn push_collection_type(expr: &Expr, file: &ParsedFile, out: &mut Vec<PythonCollectionType>) {
+    if let Some(collection) = collection_type_expr(expr, file)
+        && !out.iter().any(|seen| seen.path == collection.path)
+    {
+        out.push(collection);
     }
 }
 
 /// Collects the standard-library collection types in `type_node` according to `depth`, in
 /// source order and deduplicated by path.
 ///
-/// With `abc_set_imported` (the file has an unaliased `from collections.abc import Set`, see
-/// [`has_unaliased_collections_abc_set_import`]), unqualified `Set` is the abstract
-/// `collections.abc.Set` rather than the concrete `typing.Set`.
+/// Names are resolved through the file's imports (see [`resolve_name`]), so
+/// `from collections.abc import Set` makes `Set` the abstract `collections.abc.Set` rather than
+/// the concrete `typing.Set`, and a locally defined `class Set` is not a collection type.
 #[must_use]
 pub fn collect_collection_types(
     type_node: &AstNode<'_>,
     depth: AnnotationTraversalDepth,
-    abc_set_imported: bool,
 ) -> Vec<PythonCollectionType> {
     let Some(parsed) = type_node.file.py_module() else {
         return Vec::new();
@@ -444,54 +398,31 @@ pub fn collect_collection_types(
     let Some(expr) = find_expr_at_span(parsed.syntax(), type_node.span()) else {
         return Vec::new();
     };
-    let mut constructors = Vec::new();
-    collect_type_constructors_expr(
-        expr,
-        &type_node.file.source,
-        depth,
-        &|path, terminal| classify_collection(path, terminal, abc_set_imported).is_some(),
-        &mut constructors,
-    );
-    constructors
-        .into_iter()
-        .filter_map(|(path, name)| {
-            let (kind, shape) = classify_collection(&path, &name, abc_set_imported)?;
-            Some(PythonCollectionType {
-                path,
-                name,
-                kind,
-                shape,
-            })
-        })
-        .collect()
+    let mut collection_types = Vec::new();
+    collect_collection_types_expr(expr, type_node.file, depth, &mut collection_types);
+    collection_types
 }
 
 /// The standard-library collection type that `expression` (an identifier or a dotted attribute,
 /// such as the callee of `deque()` or `collections.Counter()`) names.
 ///
-/// With `abc_set_imported`, unqualified `Set` is `collections.abc.Set` rather than `typing.Set`.
+/// Names are resolved through the file's imports as in [`collect_collection_types`].
 #[must_use]
-pub fn collection_type(
-    expression: &AstNode<'_>,
-    abc_set_imported: bool,
-) -> Option<PythonCollectionType> {
+pub fn collection_type(expression: &AstNode<'_>) -> Option<PythonCollectionType> {
     let expr = find_expr_at_span(expression.file.py_module()?.syntax(), expression.span())?;
-    collection_type_expr(expr, &expression.file.source, abc_set_imported)
+    collection_type_expr(expr, expression.file)
 }
 
 /// See [`collection_type`].
-fn collection_type_expr(
-    expr: &Expr,
-    source: &str,
-    abc_set_imported: bool,
-) -> Option<PythonCollectionType> {
+fn collection_type_expr(expr: &Expr, file: &ParsedFile) -> Option<PythonCollectionType> {
     if !matches!(expr, Expr::Name(_) | Expr::Attribute(_)) {
         return None;
     }
-    let (path, name) = resolve_path_and_terminal_expr(expr, source);
-    let (kind, shape) = classify_collection(&path, &name, abc_set_imported)?;
+    let (resolved_path, name) = resolved_path_and_terminal_expr(expr, file)?;
+    let (kind, shape) = classify_collection(&resolved_path, &name)?;
+    let span = span_from_ruff_range(expr.range());
     Some(PythonCollectionType {
-        path,
+        path: file.source[span.start..span.end].to_owned(),
         name,
         kind,
         shape,
@@ -541,9 +472,10 @@ pub struct PythonReturnTypeBranch<'a> {
 
 /// Unwraps outer return-annotation envelopes (`Annotated[T, ...]`, `Awaitable[T]`, and
 /// `Coroutine[YieldT, SendT, ReturnT]`).
-fn unwrap_return_envelope_expr<'a>(mut current: &'a Expr, source: &str) -> &'a Expr {
-    while let Some((base_node, type_args)) = extract_generic_base_and_args(current) {
-        let (base_path, base_terminal) = resolve_path_and_terminal_expr(base_node, source);
+fn unwrap_return_envelope_expr<'a>(mut current: &'a Expr, file: &ParsedFile) -> &'a Expr {
+    while let Some((base_node, type_args)) = extract_generic_base_and_args(current)
+        && let Some((base_path, base_terminal)) = resolved_path_and_terminal_expr(base_node, file)
+    {
         if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_ANNOTATED, "Awaitable"])
             && let Some(&first_arg) = type_args.first()
         {
@@ -565,14 +497,14 @@ fn unwrap_return_envelope_expr<'a>(mut current: &'a Expr, source: &str) -> &'a E
 /// into `branches` and sets `*has_none = true` if `None` (`none`) or `Optional[...]` is part of the union.
 fn collect_union_branches_expr<'a>(
     expr: &'a Expr,
-    source: &str,
+    file: &ParsedFile,
     has_none: &mut bool,
     branches: &mut Vec<&'a Expr>,
 ) {
     match expr {
         Expr::BinOp(bin_op) if bin_op.op == Operator::BitOr => {
-            collect_union_branches_expr(&bin_op.left, source, has_none, branches);
-            collect_union_branches_expr(&bin_op.right, source, has_none, branches);
+            collect_union_branches_expr(&bin_op.left, file, has_none, branches);
+            collect_union_branches_expr(&bin_op.right, file, has_none, branches);
         }
         Expr::NoneLiteral(_) => {
             *has_none = true;
@@ -582,23 +514,27 @@ fn collect_union_branches_expr<'a>(
                 branches.push(expr);
                 return;
             };
-            let (base_path, base_terminal) = resolve_path_and_terminal_expr(base_node, source);
+            let Some((base_path, base_terminal)) = resolved_path_and_terminal_expr(base_node, file)
+            else {
+                branches.push(expr);
+                return;
+            };
             if is_std_type_constructor(&base_path, &base_terminal, &["Optional"]) {
                 *has_none = true;
                 for argument in type_args {
-                    collect_union_branches_expr(argument, source, has_none, branches);
+                    collect_union_branches_expr(argument, file, has_none, branches);
                 }
                 return;
             }
             if is_std_type_constructor(&base_path, &base_terminal, &["Union"]) {
                 for argument in type_args {
-                    collect_union_branches_expr(argument, source, has_none, branches);
+                    collect_union_branches_expr(argument, file, has_none, branches);
                 }
                 return;
             }
             if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_ANNOTATED]) {
                 if let Some(&first_arg) = type_args.first() {
-                    collect_union_branches_expr(first_arg, source, has_none, branches);
+                    collect_union_branches_expr(first_arg, file, has_none, branches);
                 }
                 return;
             }
@@ -612,13 +548,8 @@ fn collect_union_branches_expr<'a>(
 
 /// Flattens `return_type_node` across union constructs (`|`, `Union[...]`, `Optional[...]`)
 /// after unwrapping outer async and metadata envelopes (`Awaitable`, `Coroutine`, `Annotated`).
-///
-/// With `abc_set_imported`, unqualified `Set` is `collections.abc.Set` rather than `typing.Set`.
 #[must_use]
-pub fn return_type_union<'a>(
-    return_type_node: &AstNode<'a>,
-    abc_set_imported: bool,
-) -> PythonReturnTypeUnion<'a> {
+pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnTypeUnion<'a> {
     let Some(parsed) = return_type_node.file.py_module() else {
         return PythonReturnTypeUnion {
             has_none: false,
@@ -632,10 +563,10 @@ pub fn return_type_union<'a>(
         };
     };
     let file = return_type_node.file;
-    let unwrapped = unwrap_return_envelope_expr(expr, &file.source);
+    let unwrapped = unwrap_return_envelope_expr(expr, file);
     let mut has_none = false;
     let mut branches = Vec::new();
-    collect_union_branches_expr(unwrapped, &file.source, &mut has_none, &mut branches);
+    collect_union_branches_expr(unwrapped, file, &mut has_none, &mut branches);
     let node_of = |expr: &Expr| AstNode::from_span(file, span_from_ruff_range(expr.range()));
     PythonReturnTypeUnion {
         has_none,
@@ -646,7 +577,7 @@ pub fn return_type_union<'a>(
                 let constructor = generic.as_ref().map_or(branch, |&(base, _)| base);
                 PythonReturnTypeBranch {
                     node: node_of(branch),
-                    collection: collection_type_expr(constructor, &file.source, abc_set_imported),
+                    collection: collection_type_expr(constructor, file),
                     type_arguments: generic
                         .map(|(_, arguments)| arguments.into_iter().map(node_of).collect()),
                 }

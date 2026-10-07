@@ -485,10 +485,7 @@ pub fn collect_instance_attribute_annotations(
                                     self.file,
                                     span_from_ruff_range(ann_assign.range),
                                 ),
-                                is_bare_final: is_bare_final_annotation_expr(
-                                    type_expr,
-                                    &self.file.source,
-                                ),
+                                is_bare_final: is_bare_final_annotation_expr(type_expr, self.file),
                             });
                         }
                     }

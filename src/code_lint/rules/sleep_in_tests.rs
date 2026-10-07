@@ -19,7 +19,14 @@ const BANNED: ListOption = ListOption {
         extend: &[
             (
                 Language::Python,
-                &["time.sleep", "asyncio.sleep", "anyio.sleep", "trio.sleep"],
+                &[
+                    "time.sleep",
+                    "asyncio.sleep",
+                    "anyio.sleep",
+                    "trio.sleep",
+                    "gevent.sleep",
+                    "eventlet.sleep",
+                ],
             ),
             (
                 Language::Rust,
@@ -28,6 +35,7 @@ const BANNED: ListOption = ListOption {
                     "std::thread::sleep",
                     "time::sleep",
                     "tokio::time::sleep",
+                    "async_std::task::sleep",
                 ],
             ),
         ],

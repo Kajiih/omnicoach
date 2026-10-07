@@ -4,7 +4,6 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     AnnotationTraversalDepth, CollectionKind, PythonCollectionType, collect_collection_types,
     collect_locally_mutated_return_functions, extract_function_signatures,
-    has_unaliased_collections_abc_set_import,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::read_only_collection_replacements;
@@ -90,7 +89,6 @@ pub const RULE: CodeRule = CodeRule {
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     let locally_mutated = collect_locally_mutated_return_functions(file);
-    let abc_set_imported = has_unaliased_collections_abc_set_import(file);
     let mut diagnostics = Vec::new();
 
     for signature in extract_function_signatures(file) {
@@ -105,7 +103,6 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         let matched: Vec<_> = collect_collection_types(
             return_type_node,
             AnnotationTraversalDepth::TransparentWrappersOnly,
-            abc_set_imported,
         )
         .into_iter()
         .filter(|collection_type| collection_type.kind == CollectionKind::AbstractMutable)

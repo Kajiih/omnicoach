@@ -20,9 +20,12 @@ macro_rules! dispatch_lang {
     };
 }
 
+mod imports;
 pub mod python;
 pub mod rust;
 pub mod statements;
+
+pub use imports::{ResolvedName, resolve_name};
 
 use crate::diagnostic::{Language, LineColumn, LineIndex, SourceLocation, SourceSpan};
 use ra_ap_syntax::AstNode as _;
@@ -90,7 +93,7 @@ pub struct ParsedFile {
     pub(in crate::code_lint::ast) bindings: OnceLock<Vec<(SourceSpan, BindingKind)>>,
     pub(in crate::code_lint::ast) call_candidates: OnceLock<Vec<CachedCallCandidate>>,
     pub(in crate::code_lint::ast) rust_inline_test_ranges: OnceLock<Vec<std::ops::Range<usize>>>,
-    pub(in crate::code_lint::ast) abc_set_imported: OnceLock<bool>,
+    pub(in crate::code_lint::ast) imports: OnceLock<imports::ImportMap>,
     pub(in crate::code_lint::ast) locally_mutated_return_functions: OnceLock<HashSet<String>>,
 }
 
@@ -114,7 +117,7 @@ impl ParsedFile {
             bindings: OnceLock::new(),
             call_candidates: OnceLock::new(),
             rust_inline_test_ranges: OnceLock::new(),
-            abc_set_imported: OnceLock::new(),
+            imports: OnceLock::new(),
             locally_mutated_return_functions: OnceLock::new(),
         }
     }

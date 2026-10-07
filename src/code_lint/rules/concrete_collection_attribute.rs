@@ -3,7 +3,7 @@
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     AnnotationTraversalDepth, CollectionKind, PythonCollectionType, collect_class_attributes,
-    collect_collection_types, has_unaliased_collections_abc_set_import,
+    collect_collection_types,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::read_only_collection_replacements;
@@ -94,7 +94,6 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    let abc_set_imported = has_unaliased_collections_abc_set_import(file);
     let mut diagnostics = Vec::new();
     for attribute in collect_class_attributes(file) {
         if attribute.name.starts_with('_') || attribute.is_in_protocol_or_abc {
@@ -103,7 +102,6 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         let matched: Vec<_> = collect_collection_types(
             &attribute.type_node,
             AnnotationTraversalDepth::CovariantPositions,
-            abc_set_imported,
         )
         .into_iter()
         .filter(|collection_type| collection_type.kind == CollectionKind::ConcreteMutable)
