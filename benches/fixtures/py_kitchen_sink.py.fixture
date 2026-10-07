@@ -1,0 +1,522 @@
+"""Representative Python module dense with classes, protocols, dataclasses, and collection types."""
+
+from __future__ import annotations
+
+import abc
+import collections
+import collections.abc
+import typing
+from collections.abc import (
+    AsyncIterable,
+    Callable,
+    Collection,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    MutableSequence,
+    MutableSet,
+    Sequence,
+    Set as AbstractSet,
+)
+from dataclasses import dataclass, field
+from typing import (
+    Annotated,
+    Any,
+    ClassVar,
+    Final,
+    Generic,
+    Optional,
+    Protocol,
+    TypeVar,
+    Union,
+    override,
+)
+
+ItemT = TypeVar("ItemT")
+KeyT = TypeVar("KeyT")
+ValueT = TypeVar("ValueT")
+
+
+class StorageBackend(Protocol[KeyT, ValueT]):
+    """Protocol for key-value storage engines."""
+
+    def fetch_many(self, keys: Sequence[KeyT]) -> Mapping[KeyT, ValueT]:
+        """Fetches values for the requested keys."""
+        ...
+
+    def store_batch(
+        self,
+        entries: Mapping[KeyT, ValueT],
+        tags: Iterable[str],
+    ) -> list[KeyT]:
+        """Stores a batch of entries and returns updated keys."""
+        ...
+
+
+class AbstractMetricsSink(abc.ABC):
+    """Abstract base class for metric aggregation sinks."""
+
+    @abc.abstractmethod
+    def record_histogram(
+        self,
+        metric_name: str,
+        samples: Sequence[float],
+        labels: Mapping[str, str],
+    ) -> None:
+        """Records histogram samples with labels."""
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def flush_pending(self, buffer: list[float]) -> Optional[list[str]]:
+        """Flushes pending samples and returns any failed series names."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True, slots=True)
+class ImmutableRouteConfig:
+    """Immutable routing configuration."""
+
+    service_name: str
+    upstream_hosts: tuple[str, ...]
+    timeout_milliseconds: int
+    retry_codes: frozenset[int] = field(default_factory=frozenset)
+
+
+@dataclass
+class MutablePipelineState:
+    """Mutable pipeline state used to exercise dataclass and attribute rules."""
+
+    pipeline_id: str
+    active_workers: list[str]
+    pending_counts: dict[str, int]
+    visited_nodes: set[str]
+    default_tags: ClassVar[list[str]] = ["prod", "v2"]
+
+    def __init__(
+        self,
+        pipeline_id: str,
+        active_workers: list[str],
+        pending_counts: dict[str, int],
+    ) -> None:
+        self.pipeline_id = pipeline_id
+        self.active_workers: list[str] = active_workers
+        self.pending_counts: dict[str, int] = pending_counts
+        self.visited_nodes: set[str] = set()
+        self.transient_errors: list[str] = []
+
+    def register_worker(self, worker_name: str) -> None:
+        """Appends a worker to the active list."""
+        self.active_workers.append(worker_name)
+        self.visited_nodes.add(worker_name)
+
+    def record_error(self, message: str) -> None:
+        """Records a transient error message."""
+        self.transient_errors.append(message)
+
+
+class InMemoryMetricsSink(AbstractMetricsSink):
+    """Concrete metrics sink backed by in-memory collections."""
+
+    series_names: list[str]
+    bucket_counts: dict[str, int]
+    seen_labels: set[str]
+
+    def __init__(self) -> None:
+        self.series_names = []
+        self.bucket_counts = {}
+        self.seen_labels = set()
+
+    @override
+    def record_histogram(
+        self,
+        metric_name: str,
+        samples: Sequence[float],
+        labels: Mapping[str, str],
+    ) -> None:
+        self.series_names.append(metric_name)
+        for label_key in labels:
+            self.seen_labels.add(label_key)
+        self.bucket_counts[metric_name] = len(samples)
+
+    @override
+    def flush_pending(self, buffer: list[float]) -> Optional[list[str]]:
+        if not buffer:
+            return None
+        buffer.clear()
+        return list(self.series_names)
+
+
+def merge_batches_mutable(
+    primary_items: list[str],
+    secondary_items: list[str],
+    ignored_prefixes: set[str],
+    weights_by_key: dict[str, float],
+) -> list[str]:
+    """Function taking concrete mutable collections with mixed read/mutate usages."""
+    # omni:ignore[mutable-collection-parameter, specific-collection-parameter] -- benchmark fixture
+    primary_items.extend(secondary_items)
+    filtered_output: list[str] = []
+    for candidate in primary_items:
+        if any(candidate.startswith(prefix) for prefix in ignored_prefixes):
+            continue
+        if candidate in weights_by_key:
+            filtered_output.append(candidate)
+    return filtered_output
+
+
+def compute_weighted_scores(
+    items: Sequence[str],
+    weights: Mapping[str, float],
+    active_filters: AbstractSet[str],
+    fallback_values: Collection[float],
+) -> dict[str, float]:
+    """Uses abstract read-only collections with varying capability needs."""
+    results: dict[str, float] = {}
+    if not fallback_values:
+        return results
+    for item_name in items:
+        if item_name in active_filters:
+            results[item_name] = weights.get(item_name, 0.0)
+    return results
+
+
+def partition_records_by_status(
+    raw_records: list[dict[str, Any]],
+    required_fields: Sequence[str],
+    excluded_ids: frozenset[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Partitions records into valid and rejected buckets."""
+    valid_records: list[dict[str, Any]] = []
+    rejected_records: list[dict[str, Any]] = []
+    for record in raw_records:
+        record_id = str(record.get("id", ""))
+        if record_id in excluded_ids:
+            rejected_records.append(record)
+            continue
+        if all(field_name in record for field_name in required_fields):
+            valid_records.append(record)
+        else:
+            rejected_records.append(record)
+    return valid_records, rejected_records
+
+
+def resolve_nullable_collections(
+    include_defaults: bool,
+    seed_items: Sequence[str],
+) -> list[str] | None:
+    """Returns an optional list to exercise nullable collection return analysis."""
+    if not include_defaults and not seed_items:
+        return None
+    return [item.strip() for item in seed_items if item]
+
+
+def resolve_union_mapping(
+    mode: str,
+    entries: Mapping[str, int],
+) -> Union[dict[str, int], None]:
+    """Returns a PEP 484 Union with None and a dict."""
+    if mode == "empty":
+        return None
+    return {key: value * 2 for key, value in entries.items()}
+
+
+def transform_annotated_sequence(
+    payload: Annotated[list[int], "validated-input"],
+    lookup: typing.Dict[int, str],
+    allowed: typing.Set[int],
+) -> typing.Optional[typing.List[str]]:
+    """Exercises typing-qualified generics and Annotated wrappers."""
+    if not payload:
+        return None
+    output: list[str] = []
+    for number in payload:
+        if number in allowed and number in lookup:
+            output.append(lookup[number])
+    return output
+
+
+def coordinate_distance(
+    source_latitude: float,
+    source_longitude: float,
+    target_latitude: float,
+    target_longitude: float,
+) -> float:
+    """Exercises identical positional parameter type checking."""
+    delta_lat = target_latitude - source_latitude
+    delta_lon = target_longitude - source_longitude
+    return (delta_lat * delta_lat + delta_lon * delta_lon) ** 0.5
+
+
+def build_Mutable_buffer(initial_values: Iterable[int]) -> list[int]:
+    """Returns a list whose callers mutate it in place."""
+    return list(initial_values)
+
+
+def consume_and_mutate_buffer(seed: Iterable[int]) -> list[int]:
+    """Mutates the return value of build_Mutable_buffer locally."""
+    buffer = build_Mutable_buffer(seed)
+    buffer.append(999)
+    buffer.sort()
+    return buffer
+
+
+class LayeredCacheRepository(Generic[KeyT, ValueT]):
+    """Generic repository with multiple methods and annotated attributes."""
+
+    l1_cache: dict[KeyT, ValueT]
+    eviction_order: collections.deque[KeyT]
+    hit_counter: collections.Counter[KeyT]
+    pinned_keys: set[KeyT]
+
+    def __init__(self, capacity: int) -> None:
+        self.capacity: Final[int] = capacity
+        self.l1_cache = {}
+        self.eviction_order = collections.deque()
+        self.hit_counter = collections.Counter()
+        self.pinned_keys = set()
+
+    def get_or_default(self, key: KeyT, default_value: ValueT) -> ValueT:
+        """Looks up a key and updates hit counter."""
+        if key in self.l1_cache:
+            self.hit_counter[key] += 1
+            return self.l1_cache[key]
+        return default_value
+
+    def put_batch(
+        self,
+        items: Mapping[KeyT, ValueT],
+        pin_all: bool,
+    ) -> Sequence[KeyT]:
+        """Inserts a batch of items and tracks eviction order."""
+        inserted_keys: list[KeyT] = []
+        for key, value in items.items():
+            self.l1_cache[key] = value
+            self.eviction_order.append(key)
+            if pin_all:
+                self.pinned_keys.add(key)
+            inserted_keys.append(key)
+        return inserted_keys
+
+    def snapshot_keys(self) -> list[KeyT] | None:
+        """Returns current keys or None if empty."""
+        if not self.l1_cache:
+            return None
+        return list(self.l1_cache.keys())
+# --- Calls, literals, format strings, indexing, and scopes ---
+
+import asyncio
+import contextlib
+import logging
+import os
+from os import environ
+from typing import cast as typing_cast
+
+logger = logging.getLogger(__name__)
+
+MAX_CONNECTIONS: Final[int] = 64
+DEFAULT_PORT: Final[int] = 8080
+PROTOCOL_HEADER: Final[str] = "X-Omni-Protocol-Version"
+
+GLOBAL_SESSION_CACHE: dict[str, Any] = {}
+ACTIVE_ENDPOINTS = ["https://primary.internal:8080", "https://replica.internal:8080"]
+
+
+def parse_connection_tuple(
+    raw_row: tuple[str, str, int, str, str],
+    fallback_row: tuple[str, str, int, str, str],
+) -> dict[str, Any]:
+    """Exercises positional indexing, repeated literals, and bindings."""
+    host_name = raw_row[0]
+    service_region = raw_row[1]
+    port_number = raw_row[2]
+    tls_mode = raw_row[3]
+
+    if not host_name:
+        host_name = fallback_row[0]
+        service_region = fallback_row[1]
+        port_number = fallback_row[2]
+
+    timeout_seconds = 30
+    retry_delay_milliseconds = 250
+
+    return {
+        "host": host_name,
+        "region": service_region,
+        "port": port_number or DEFAULT_PORT,
+        "tls": tls_mode,
+        "timeout": timeout_seconds,
+        "retry_delay": retry_delay_milliseconds,
+        "status": "initialized",
+    }
+
+
+def dispatch_with_logging(
+    order_id: str,
+    customer_id: str,
+    attempt_number: int,
+    payload_map: dict[str, Any],
+) -> str:
+    """Exercises logger calls, format strings, exception handling, and casts."""
+    # omni:ignore[type-cast] -- benchmark suppression directive path
+    normalized_id = typing_cast(str, payload_map.get("order_id", order_id))
+    dynamic_flag = getattr(payload_map, "custom_attribute", None)
+
+    logger.info(
+        "Dispatching order {order_id} for customer {customer_id} on attempt {attempt}",
+        order_id=normalized_id,
+        customer_id=customer_id,
+        attempt=attempt_number,
+    )
+
+    formatted_summary = (
+        f"Order '{normalized_id}' for '{customer_id}' "
+        f"(attempt={attempt_number}, flag={dynamic_flag!r})"
+    )
+    template_message = "Processed {order_id} in region {region}".format(
+        order_id=normalized_id,
+        region="eu-west-1",
+    )
+    printf_message = "Legacy status %s for %s (%d)" % (
+        "completed",
+        normalized_id,
+        attempt_number,
+    )
+
+    try:
+        if attempt_number > 5:
+            raise RuntimeError("Exceeded maximum dispatch attempts")
+    except RuntimeError:
+        logger.error("Failed to dispatch order %s", normalized_id)
+
+    with contextlib.suppress(KeyError):
+        del payload_map["ephemeral_token"]
+
+    return f"{formatted_summary} | {template_message} | {printf_message}"
+
+
+def read_runtime_environment(override_prefix: str) -> tuple[str, str, str]:
+    """Exercises environment variable lookups and nested helper functions."""
+    cluster_name = os.getenv("OMNI_CLUSTER_NAME", "default-cluster")
+    deployment_stage = os.environ.get("OMNI_DEPLOYMENT_STAGE", "staging")
+    region_code = environ["OMNI_REGION_CODE"]
+
+    def format_Scoped_key(suffix: str) -> str:
+        return f"{override_prefix}:{cluster_name}:{suffix}"
+
+    return (
+        format_Scoped_key(cluster_name),
+        format_Scoped_key(deployment_stage),
+        format_Scoped_key(region_code),
+    )
+
+
+async def schedule_background_jobs(
+    job_names: list[str],
+) -> list[asyncio.Task[None]]:
+    """Exercises async task creation call matching."""
+    loop = asyncio.get_running_loop()
+    scheduled_tasks: list[asyncio.Task[None]] = []
+
+    async def run_single_job(name: str) -> None:
+        await asyncio.sleep(0.1)
+        logger.debug("Finished job {job_name}", job_name=name)
+
+    for job_name in job_names:
+        task = asyncio.create_task(run_single_job(job_name))
+        loop_task = loop.create_task(run_single_job(job_name))
+        scheduled_tasks.append(task)
+        scheduled_tasks.append(loop_task)
+    return scheduled_tasks
+
+
+def orchestrate_workflow_steps(input_value: int) -> int:
+    """Exercises sibling function call graphs and literal occurrences."""
+    first_result = compute_first_step(input_value)
+    second_result = compute_second_step(first_result)
+    return finalize_workflow(second_result)
+
+
+def compute_first_step(value: int) -> int:
+    """First step helper."""
+    return value + 1024
+
+
+def compute_second_step(value: int) -> int:
+    """Second step helper."""
+    return value * 1024
+
+
+def finalize_workflow(value: int) -> int:
+    """Final step helper."""
+    return value - 1024
+
+
+# --- Test-targeted stress section ---
+
+import time
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+
+class PaymentGatewayProtocol(Protocol):
+    """Protocol for payment gateway test doubles."""
+
+    def charge(self, account_id: str, amount_cents: int) -> bool:
+        """Charges the account."""
+        ...
+
+
+class FakePaymentGateway(PaymentGatewayProtocol):
+    """Compliant fake implementing PaymentGatewayProtocol."""
+
+    def __init__(self) -> None:
+        self.charged_accounts: list[tuple[str, int]] = []
+
+    def charge(self, account_id: str, amount_cents: int) -> bool:
+        self.charged_accounts.append((account_id, amount_cents))
+        return amount_cents > 0
+
+
+class FakeUnboundNotificationService:
+    """Fake without protocol to exercise fake-without-protocol detection."""
+
+    def send_alert(self, recipient: str, body: str) -> bool:
+        return bool(recipient and body)
+
+
+def test_payment_gateway_charges_positive_amounts() -> None:
+    """Standard unit test with focused assertions."""
+    gateway = FakePaymentGateway()
+    succeeded = gateway.charge("acct_1001", 2500)
+    assert succeeded is True
+    assert len(gateway.charged_accounts) == 1
+    assert gateway.charged_accounts[0] == ("acct_1001", 2500)
+
+
+def test_packed_and_excessive_assertions_detection() -> None:
+    """Exercises too-many-assertions and packed-assertion extractors."""
+    gateway = FakePaymentGateway()
+    first_ok = gateway.charge("acct_1", 100)
+    second_ok = gateway.charge("acct_2", 200)
+    assert first_ok and second_ok
+    assert (first_ok, second_ok) == (True, True)
+    assert gateway.charged_accounts[0][0] == "acct_1"
+    assert gateway.charged_accounts[1][0] == "acct_2"
+    assert gateway.charged_accounts[0][1] == 100
+    assert gateway.charged_accounts[1][1] == 200
+
+
+@pytest.mark.asyncio
+async def test_sleep_and_mock_assertions() -> None:
+    """Exercises sleep-in-tests, zero-sleep-in-tests, and mock rules."""
+    time.sleep(0)
+    await asyncio.sleep(0.0)
+    await asyncio.sleep(0.25)
+
+    mock_client = MagicMock()
+    with patch("builtins.print") as patched_print:
+        patched_print("benchmark test")
+        mock_client.execute("SELECT 1")
+        mock_client.execute.assert_called()
+        patched_print.assert_called_once()

@@ -15,8 +15,8 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
   - *Target*: If production `macro_rules!` macros calling cross-component helpers (`$crate::...`) are introduced outside `src/lib.rs`, or if root-anchored `::` paths appear, extend `summarize_rust_file` to scan `macro_rule` body token trees and normalize leading `::` prefixes.
 - **Non-transitive DAG edges**: every edge is transitive today, so a component reaches everything its dependencies reach. A "private" edge (a dependency that dependents do not inherit) would let the graph express isolation rules that currently need bespoke conformance checks.
 - **Compiler-enforced subtree visibility (`pub(in crate::...)` / `pub(super)`)**: tighten item visibility to `pub(in crate::code_lint)`, `pub(in crate::command_lint)`, or `pub(super)` wherever component boundaries align with a directory subtree, so cross-domain access fails in `rustc` (`E0603`) before conformance tests run.
-- **Dedicated AST Migration for `code_lint` (replacing `ast-grep` / Tree-sitter)**:
-  - *Status*: In progress (`docs/dev/ast_robustness/`). Migrating Python to `ruff_python_parser` + `ruff_python_ast` and Rust to `ra_ap_syntax`, replacing `ast_grep_language::SupportLang` with an Omni `Language` enum, deleting CST normalization workarounds (`parse_param_parts`, `unwrap_type_and_parens`, raw string escape hacks), and lifting all 10 `omni:disable-file [repeated-literal]` directives in `src/code_lint/ast*`.
+- **Dedicated AST Migration & Semantic Index for `code_lint` (replacing `ast-grep` / Tree-sitter)**:
+  - *Status*: **Completed** ([docs/dev/ast_robustness/04_execution_log.md](docs/dev/ast_robustness/04_execution_log.md), [docs/dev/semantic_index/04_execution_log.md](docs/dev/semantic_index/04_execution_log.md)). Migrated Python to `ruff_python_parser` + `ruff_python_ast` and Rust to `ra_ap_syntax`, replaced `ast_grep_language::SupportLang` in `code_lint` with `crate::diagnostic::Language`, added `OnceLock<ImportMap>` for canonical import-alias resolution, shrank the release binary by 87.4% (44.47 MiB → 5.62 MiB), and lifted all 10 `omni:disable-file [repeated-literal]` directives in `src/code_lint/ast*`.
 - **`command_lint` Shell AST & Test Harness Migration (dropping `ast-grep` completely)**:
   - *Current*: `src/command_lint/command.rs` (`InterceptedCommand::parse_all`) walks `SupportLang::Bash` for `kind() == "command"` and splits child arguments via `shell_words::split`. This flattens connectors (`&&`, `||`, `;`, `&`) and pipelines (`|`), loses subshell `(...)` and command substitution `$(...)` context, drops leading `FOO=bar` environment assignments and I/O redirects (`2>&1`, `<<EOF`), loses per-argument spans and quote kinds, and keeps `ast-grep-core` + `ast-grep-language` (`tree-sitter-bash`) in `Cargo.toml`. Command rules also lack a declarative `command_rule_test!` macro and executed examples.
   - *Disqualified crates*: `yash-syntax` (`0.25.0`), `mystsh` (`0.0.3`), and `bash-ast` are `GPL-3.0-or-later` (incompatible with `omni-lint`'s `MIT` license); `conch-parser` (`0.1.1`) is unmaintained (2018) and POSIX-only.
@@ -143,14 +143,23 @@ Source: Python Tip of the Week #069 "Prefer constants over wild values" (go/pyth
 
 ## 2. Performance & Concurrency Architecture
 
+- **Eliminate Quadratic $O(N^2)$ `find_expr_at_span` in Python Type Annotations & Memoize Python Signature/Class Extractors**:
+  - *Context & Empirical Measurement* ([docs/dev/performance_benchmarking/04_execution_log.md](docs/dev/performance_benchmarking/04_execution_log.md)): In `benches/omni_bench.rs`, `linter::family_python` shows that `C_py_signatures_unmemoized` (`8.30 ms` median across the 88.4 KB Python corpus) + `nullable-collection-return` (`1.19 ms`) + `D_py_classes_unmemoized` (`1.96 ms`) account for **>53% of total warm Python rule evaluation time**, even though `extract_function_signatures` itself takes only `~216 µs` across all 4 fixtures.
+  - *Root Cause*: `PythonParameter::type_node`, `PythonFunctionSignature::return_type_node`, and `PythonClassAttribute::type_node` store an untyped `AstNode<'a>` (just a `SourceSpan`). When `collect_collection_types(type_node, ...)` ([src/code_lint/ast/python/annotations.rs](src/code_lint/ast/python/annotations.rs)) inspects an annotation, it calls `find_expr_at_span(parsed.syntax(), type_node.span())` ([src/code_lint/ast/python.rs](src/code_lint/ast/python.rs)), whose `ExprFinder` implements `visit_expr` range pruning but omits `visit_stmt` range pruning — re-walking every statement in the Python module AST from the root (`O(functions × params × statements)`), repeated across 8 unmemoized rules. (Similarly, `find_parameters_at_span` and `find_body_at_span` in `python.rs` omit `visit_stmt` range pruning.)
+  - *Target*: Resolve or attach the annotation `Expr` / `CollectionType` summary directly during the single-pass `extract_function_signatures` and `collect_class_attributes` visitors (eliminating `find_expr_at_span` and adding `visit_stmt` range pruning to `ExprFinder` / `ParametersFinder` / `BodyFinder`), and memoize `extract_function_signatures`, `extract_classes`, and `collect_class_attributes` on `ParsedFile` via `OnceLock`.
+- **Single-Pass Rust CST Extraction to Eliminate Rowan Red-Tree Cursor Allocation Multiplication**:
+  - *Context & Empirical Measurement* ([docs/dev/performance_benchmarking/04_execution_log.md](docs/dev/performance_benchmarking/04_execution_log.md)): On `rs_real_ast_module` (`annotations.rs`, 23.6 KiB), `linter::end_to_end_all_rules` takes `4.84 ms` and performs **46,843 heap allocations (2.22 MB)**; across the 4 Rust fixtures, `E_dedicated_extractors` accounts for **78.0% of warm Rust rule time (`6.28 ms`) and 68,726 heap allocations (2.76 MB)**.
+  - *Root Cause*: `ra_ap_syntax` uses Rowan's green/red tree. Unlike `ruff_python_ast` (where AST nodes live in contiguous `Vec`/`Box` slices and traversing them allocates 0 bytes), each call to `syntax.descendants()` or `syntax.descendants_with_tokens()` on a Rowan `SyntaxNode` dynamically allocates heap-backed red-node cursors (`4,400–8,800` heap allocations per full-file walk on `annotations.rs`). Today, 4 `OnceLock` extractors and 6 Group E rules each perform their own independent `syntax.descendants()` walk.
+  - *Target*: Fuse the Rust CST extractors (`call_candidates`, `bindings`, `comment_nodes`, `rust_inline_test_ranges`, `literal_occurrences`, `positional_reads`, `find_unwrapped_multiline_strings`, `collect_functions`, `collect_test_function_assertion_counts`) into a single top-down `syntax.descendants_with_tokens()` visitor pass per file so the Rowan red-tree is materialized only once.
+- **Suppression Fast-Path False Trigger on `"omni:"` Inside String Literals**:
+  - *Context & Empirical Measurement* ([docs/dev/performance_benchmarking/04_execution_log.md](docs/dev/performance_benchmarking/04_execution_log.md)): `SuppressionTracker::from_file` runs at `7.8–15.9 GB/s` with `0` allocations when `"omni:"` is absent, but on `rs_real_test_suite` (`tests/cli.rs`) the substring appears inside test string literals, so the fast path falls through to `collect_comment_nodes` (`521 µs`, `2,213` allocations).
+  - *Investigation*: Measure how often the fallthrough happens on real repositories before changing anything; the fallthrough is correct, only slower, and a narrower pre-check (e.g. `"omni:disable"`) must not miss any valid directive.
+- *Evaluation protocol for the items above*: each change ships only with a before/after `omni_bench` run on the pinned fixtures (median time + allocation counts) plus an end-to-end `hyperfine` run; any change that adds complexity (new caches, fused visitors, new data on extracted structs) needs a measured win that justifies it, prototyped on its own branch first.
 - **Directory Discovery Parallelism & Micro-Run Overhead**:
   - *Current*: File-level analysis runs in parallel via `rayon` (`targets.into_par_iter()`) with deterministic sorting across both plain-text and JSON output, while directory traversal in `collect_directory_candidates` runs single-threaded via `ignore::WalkBuilder::build()`.
   - *Investigation*:
     - Evaluate whether `ignore::WalkParallel` improves directory discovery on large repositories compared to single-threaded collection + `rayon`.
     - Measure `rayon` thread-pool initialization overhead on small repositories to ensure micro-runs and pre-commit hooks are not penalized.
-- **Parse & Pipeline Floor Profiling**:
-  - *Context*: Disabling all rules via tag exclusion shows that the shared per-file pipeline (walking files, reading from disk, tree-sitter parsing via `ast-grep`, and comment suppression scanning) accounts for ~228ms (56% of total runtime on ~8k lines). Pre-I/O `Language::from_path` filtering is in place, and `SuppressionTracker::from_file` skips the comment walk on files without `omni:`.
-  - *Investigation*: Break down the remaining cost between Tree-sitter parser initialization and tree building, and whether either can be reduced.
 - **Subprocess Batching & Caching (`EnvContext`)**:
   - *Current*: Command rules spawn individual `jj` or `git` CLI calls per evaluation.
   - *Target*: Introduce a shared `EnvContext` struct that pre-fetches and caches repository state (e.g., batching queries into a single `jj log --json` or `git status` invocation) to ensure sub-10ms execution across multiple rules.
@@ -162,20 +171,18 @@ Source: Python Tip of the Week #069 "Prefer constants over wild values" (go/pyth
 
 ## 3. Performance Measurement, Tracing & Tooling
 
+- **SOTA In-Process Benchmark Suite (`benches/omni_bench.rs`) & Profiling Profile (`[profile.profiling]`)**:
+  - *Status*: **Completed** ([docs/dev/performance_benchmarking/04_execution_log.md](docs/dev/performance_benchmarking/04_execution_log.md)).
+  - *Design*: Uses `divan = "0.1.21"` with `divan::AllocProfiler` (`#[global_allocator]`) and `BytesCount` throughput counters across 8 pinned real-world and kitchen-sink fixtures (`benches/fixtures/*.fixture`, zero `repeat(N)`). Structured into 4 SOTA groups (`parser`, `semantic`, `linter`, `command_lint`) with warm-preparsed `ParsedFile` isolation (`D7`) for rule-family (`family_python`, `family_rust`) and per-rule (`rule_python`, `rule_rust`) attribution. `[profile.profiling]` (`inherits = "release"`, `debug = "line-tables-only"`, `strip = "none"`) enables symbolicated `perf` / `samply` flamegraphs without bloating release binaries.
 - **Execution Timing & Observability (`--timings`)**:
   - *Context*: Understanding which rules or pipeline stages dominate execution on a user's machine is essential for performance triage.
   - *Investigation & Design Questions*:
     - Compare a lightweight, zero-dependency `--timings` flag (using `std::time::Instant` around rule executions to produce a sorted table, following oxlint's `--debug timings` or ESLint's `TIMING=1`) against heavyweight runtime tracing.
     - SOTA review shows that full `tracing-subscriber` pipelines pull in substantial dependencies (`sharded-slab`, `regex-automata`, etc.) and are best suited for server/LSP contexts rather than fast batch CLI invocations.
     - Explore what level of timing granularity is useful (per-rule vs. pipeline phase) without penalizing normal runs.
-- **Benchmarking & Regression Guard Strategy**:
-  - *Context*: Simple shell-level timing (`date +%s%N`) exhibits $\pm 17\%$ noise on sub-second runs, causing false regressions. At the same time, threshold-based wall-clock assertions on shared CI runners (e.g. GitHub Actions) suffer from high variance (15–30%) and lead to flaky CI.
-  - *Investigation & Design Questions*:
-    - Evaluate local developer micro-benchmarking harnesses: `divan` (lightweight, zero additional heavy dependencies) vs. `criterion` (industry standard, but heavier dependency footprint).
-    - Explore CI regression gating models: evaluate simulated instruction-count tracking (e.g., CodSpeed or Valgrind cachegrind) vs. keeping performance gates advisory/local to prevent CI alert fatigue.
-    - Define a standardized macro-benchmark corpus (e.g., fixed snapshot of source files) executed via `hyperfine` for reproducible end-to-end timing.
-- **Profiling Workflow & Cargo Configuration**:
-  - *Target*: Document standard profiling recipes for Linux (`samply`, `perf`) and macOS (`cargo-instruments`). Establish a dedicated `[profile.profiling]` Cargo profile (`inherits = "release"`, `debug = "line-tables-only"`, `strip = "none"`) that provides symbolicated stack traces without bloating production binaries.
+- **CI Instruction-Count Regression Gating (CodSpeed / Valgrind Cachegrind)**:
+  - *Context*: Wall-clock assertions on shared CI runners suffer from 15–30% variance.
+  - *Target*: Evaluate integrating simulated CPU instruction-count tracking (`codspeed-divan-compat` or Valgrind Cachegrind) once CI performance gating is needed.
 
 ---
 

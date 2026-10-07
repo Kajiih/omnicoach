@@ -1,0 +1,256 @@
+//! Representative Rust module dense with structs, traits, impl blocks, and return type envelopes.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::sync::Arc;
+
+/// Configuration envelope for an upstream storage partition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartitionConfig {
+    /// Human-readable partition identifier.
+    pub partition_name: String,
+    /// Ordered replica endpoints.
+    pub replica_endpoints: Vec<String>,
+    /// Allowed routing tags.
+    pub routing_tags: BTreeSet<String>,
+    /// Maximum concurrent requests.
+    pub max_concurrency: usize,
+}
+
+/// Abstract storage repository trait.
+pub trait PartitionRepository {
+    /// Returns all active endpoints for a partition.
+    fn active_endpoints(&self, partition_name: &str) -> Vec<String>;
+
+    /// Looks up optional tags for a partition.
+    fn lookup_tags(&self, partition_name: &str) -> Option<Vec<String>>;
+}
+
+/// In-memory implementation of [`PartitionRepository`].
+#[derive(Debug, Default)]
+pub struct InMemoryPartitionRepository {
+    configs_by_name: HashMap<String, PartitionConfig>,
+    recent_queries: VecDeque<String>,
+    pinned_partitions: HashSet<String>,
+}
+
+impl InMemoryPartitionRepository {
+    /// Creates an empty repository with reserved capacity.
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            configs_by_name: HashMap::with_capacity(capacity),
+            recent_queries: VecDeque::with_capacity(capacity),
+            pinned_partitions: HashSet::new(),
+        }
+    }
+
+    /// Registers a partition configuration.
+    pub fn register_partition(&mut self, config: PartitionConfig, pinned: bool) {
+        if pinned {
+            self.pinned_partitions.insert(config.partition_name.clone());
+        }
+        self.configs_by_name
+            .insert(config.partition_name.clone(), config);
+    }
+
+    /// Collects optional replica endpoints wrapped in `Option<Vec<String>>`.
+    #[must_use]
+    pub fn optional_replicas(&self, partition_name: &str) -> Option<Vec<String>> {
+        let config = self.configs_by_name.get(partition_name)?;
+        if config.replica_endpoints.is_empty() {
+            return None;
+        }
+        Some(config.replica_endpoints.clone())
+    }
+
+    /// Collects optional routing tags inside a `Result<Option<BTreeSet<String>>, String>`.
+    pub fn try_optional_tags(
+        &self,
+        partition_name: &str,
+    ) -> Result<Option<BTreeSet<String>>, String> {
+        let Some(config) = self.configs_by_name.get(partition_name) else {
+            return Err(format!("unknown partition: {partition_name}"));
+        };
+        if config.routing_tags.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(config.routing_tags.clone()))
+    }
+
+    /// Returns a shared slice of partition names or `None` when empty.
+    #[must_use]
+    pub fn optional_pinned_snapshot(&self) -> Option<Arc<[String]>> {
+        if self.pinned_partitions.is_empty() {
+            return None;
+        }
+        let mut names: Vec<String> = self.pinned_partitions.iter().cloned().collect();
+        names.sort();
+        Some(Arc::from(names))
+    }
+
+    /// Merges partition endpoint counts into a sorted map.
+    #[must_use]
+    pub fn endpoint_counts_by_partition(&self) -> BTreeMap<String, usize> {
+        self.configs_by_name
+            .iter()
+            .map(|(name, config)| (name.clone(), config.replica_endpoints.len()))
+            .collect()
+    }
+}
+
+impl PartitionRepository for InMemoryPartitionRepository {
+    fn active_endpoints(&self, partition_name: &str) -> Vec<String> {
+        self.configs_by_name
+            .get(partition_name)
+            .map(|config| config.replica_endpoints.clone())
+            .unwrap_or_default()
+    }
+
+    fn lookup_tags(&self, partition_name: &str) -> Option<Vec<String>> {
+        let config = self.configs_by_name.get(partition_name)?;
+        Some(config.routing_tags.iter().cloned().collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_register_and_lookup_partition() {
+        let mut repository = InMemoryPartitionRepository::with_capacity(4);
+        repository.register_partition(
+            PartitionConfig {
+                partition_name: "eu-west".to_owned(),
+                replica_endpoints: vec!["https://n1.internal".to_owned()],
+                routing_tags: BTreeSet::from(["primary".to_owned()]),
+                max_concurrency: 16,
+            },
+            true,
+        );
+        assert_eq!(repository.active_endpoints("eu-west").len(), 1);
+    }
+}
+// --- Calls, literals, tuple indexing, globals, and macros ---
+
+use std::env;
+use std::sync::{LazyLock, Mutex};
+use std::thread;
+
+/// Default connection timeout in milliseconds.
+pub const DEFAULT_TIMEOUT_MS: u64 = 5_000;
+
+/// Maximum payload size in bytes.
+pub const MAX_PAYLOAD_BYTES: usize = 65_536;
+
+/// Protocol version header constant.
+pub const PROTOCOL_HEADER: &str = "x-omni-protocol-v2";
+
+static GLOBAL_REQUEST_COUNTER: LazyLock<Mutex<HashMap<String, usize>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Parses a 4-tuple connection record `(host, region, port, protocol)` into a summary string.
+#[must_use]
+pub fn format_connection_tuple(
+    primary_record: &(String, String, u16, String),
+    fallback_record: &(String, String, u16, String),
+) -> String {
+    let host_name = if primary_record.0.is_empty() {
+        &fallback_record.0
+    } else {
+        &primary_record.0
+    };
+    let region_name = if primary_record.1.is_empty() {
+        &fallback_record.1
+    } else {
+        &primary_record.1
+    };
+    let port_number = if primary_record.2 == 0 {
+        fallback_record.2
+    } else {
+        primary_record.2
+    };
+    let protocol_scheme = &primary_record.3;
+
+    // omni:ignore[repeated-literal] -- benchmark suppression directive path
+    let status_label = "ready-for-dispatch";
+    let fallback_label = "ready-for-dispatch";
+
+    format!(
+        "{protocol_scheme}://{host_name}:{port_number}/{region_name} ({status_label}/{fallback_label})"
+    )
+}
+
+/// Reads runtime environment configuration and spawns a worker thread.
+#[must_use]
+pub fn read_environment_and_dispatch(request_key: &str) -> (String, String, usize) {
+    let cluster_name = env::var("OMNI_CLUSTER_NAME").unwrap_or_else(|_| "local-cluster".to_owned());
+    let stage_name = env::var("OMNI_STAGE_NAME").unwrap_or_else(|_| "development".to_owned());
+
+    let key_owned = request_key.to_owned();
+    let worker_handle = thread::spawn(move || {
+        if let Ok(mut guard) = GLOBAL_REQUEST_COUNTER.lock() {
+            let count = guard.entry(key_owned).or_insert(0);
+            *count += 1;
+            *count
+        } else {
+            0
+        }
+    });
+
+    let updated_count = worker_handle.join().unwrap_or(0);
+    (cluster_name, stage_name, updated_count)
+}
+
+/// Evaluates status code buckets with negative and positive literals.
+#[must_use]
+pub fn classify_response_code(response_code: i64, retry_budget: i64) -> &'static str {
+    match (response_code, retry_budget) {
+        (200, _) => "ok",
+        (404, 0) => "not_found_terminal",
+        (404, _) => "not_found_retryable",
+        (-404, _) => "synthetic_missing",
+        (-1, _) => "transport_reset",
+        (500..=599, _) => "server_error",
+        _ => "unclassified",
+    }
+}
+
+// --- Test-targeted stress section ---
+
+use std::time::Duration;
+
+fn compute_checksum(payload: &[u8]) -> u32 {
+    payload
+        .iter()
+        .fold(0_u32, |accumulator, &byte| accumulator.wrapping_add(u32::from(byte)))
+}
+
+#[test]
+fn test_compute_checksum_basic() {
+    let input = b"omni-benchmark";
+    let checksum = compute_checksum(input);
+    assert_eq!(checksum, 1456);
+    assert!(checksum > 1000);
+}
+
+#[test]
+fn test_packed_and_excessive_assertions_detection() {
+    let first_sum = compute_checksum(b"alpha");
+    let second_sum = compute_checksum(b"beta");
+    assert!(first_sum > 0 && second_sum > 0);
+    assert_eq!([first_sum > 0, second_sum > 0], [true, true]);
+    assert_eq!(first_sum, 514);
+    assert_eq!(second_sum, 412);
+    assert_ne!(first_sum, second_sum);
+    assert!(first_sum > second_sum);
+}
+
+#[test]
+fn test_sleep_detection_in_rust_tests() {
+    thread::sleep(Duration::from_millis(0));
+    thread::sleep(Duration::ZERO);
+    thread::sleep(Duration::from_millis(50));
+    let value = compute_checksum(b"sleep");
+    assert_eq!(value, 537);
+}
