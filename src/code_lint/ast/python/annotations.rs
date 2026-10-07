@@ -476,10 +476,19 @@ pub fn collection_type(
     abc_set_imported: bool,
 ) -> Option<PythonCollectionType> {
     let expr = find_expr_at_span(expression.file.py_module()?.syntax(), expression.span())?;
+    collection_type_expr(expr, &expression.file.source, abc_set_imported)
+}
+
+/// See [`collection_type`].
+fn collection_type_expr(
+    expr: &Expr,
+    source: &str,
+    abc_set_imported: bool,
+) -> Option<PythonCollectionType> {
     if !matches!(expr, Expr::Name(_) | Expr::Attribute(_)) {
         return None;
     }
-    let (path, name) = resolve_path_and_terminal_expr(expr, &expression.file.source);
+    let (path, name) = resolve_path_and_terminal_expr(expr, source);
     let (kind, shape) = classify_collection(&path, &name, abc_set_imported)?;
     Some(PythonCollectionType {
         path,
@@ -508,19 +517,6 @@ pub fn collection_display(expression: &AstNode<'_>) -> Option<PythonCollectionTy
     })
 }
 
-/// Decomposes a generic type annotation or subscript into `(base_type_node, type_arguments)`.
-#[must_use]
-pub fn extract_generic_type<'a>(node: &AstNode<'a>) -> Option<(AstNode<'a>, Vec<AstNode<'a>>)> {
-    let expr = find_expr_at_span(node.file.py_module()?.syntax(), node.span())?;
-    let (base, args) = extract_generic_base_and_args(expr)?;
-    Some((
-        AstNode::from_span(node.file, span_from_ruff_range(base.range())),
-        args.into_iter()
-            .map(|arg| AstNode::from_span(node.file, span_from_ruff_range(arg.range())))
-            .collect(),
-    ))
-}
-
 /// A Python return type flattened across union constructs (`|`, `Union[...]`, `Optional[...]`),
 /// with async envelopes (`Awaitable`, `Coroutine`) and metadata wrappers (`Annotated`) unwrapped.
 #[derive(Clone)]
@@ -528,7 +524,19 @@ pub struct PythonReturnTypeUnion<'a> {
     /// True if `None` (`none`) or an `Optional[...]` wrapper is part of the union.
     pub has_none: bool,
     /// The non-`None` alternative branches in source order.
-    pub branches: Vec<AstNode<'a>>,
+    pub branches: Vec<PythonReturnTypeBranch<'a>>,
+}
+
+/// A non-`None` alternative of a [`PythonReturnTypeUnion`].
+#[derive(Clone)]
+pub struct PythonReturnTypeBranch<'a> {
+    /// The branch type expression.
+    pub node: AstNode<'a>,
+    /// The collection type the branch names, directly (`list`) or as the base of a subscript
+    /// (`list[int]`); see [`collection_type`].
+    pub collection: Option<PythonCollectionType>,
+    /// The type arguments if the branch is a subscript (`int` and `...` in `tuple[int, ...]`).
+    pub type_arguments: Option<Vec<AstNode<'a>>>,
 }
 
 /// Unwraps outer return-annotation envelopes (`Annotated[T, ...]`, `Awaitable[T]`, and
@@ -604,8 +612,13 @@ fn collect_union_branches_expr<'a>(
 
 /// Flattens `return_type_node` across union constructs (`|`, `Union[...]`, `Optional[...]`)
 /// after unwrapping outer async and metadata envelopes (`Awaitable`, `Coroutine`, `Annotated`).
+///
+/// With `abc_set_imported`, unqualified `Set` is `collections.abc.Set` rather than `typing.Set`.
 #[must_use]
-pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnTypeUnion<'a> {
+pub fn return_type_union<'a>(
+    return_type_node: &AstNode<'a>,
+    abc_set_imported: bool,
+) -> PythonReturnTypeUnion<'a> {
     let Some(parsed) = return_type_node.file.py_module() else {
         return PythonReturnTypeUnion {
             has_none: false,
@@ -618,21 +631,25 @@ pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnType
             branches: Vec::new(),
         };
     };
-    let unwrapped = unwrap_return_envelope_expr(expr, &return_type_node.file.source);
+    let file = return_type_node.file;
+    let unwrapped = unwrap_return_envelope_expr(expr, &file.source);
     let mut has_none = false;
     let mut branches = Vec::new();
-    collect_union_branches_expr(
-        unwrapped,
-        &return_type_node.file.source,
-        &mut has_none,
-        &mut branches,
-    );
+    collect_union_branches_expr(unwrapped, &file.source, &mut has_none, &mut branches);
+    let node_of = |expr: &Expr| AstNode::from_span(file, span_from_ruff_range(expr.range()));
     PythonReturnTypeUnion {
         has_none,
         branches: branches
             .into_iter()
             .map(|branch| {
-                AstNode::from_span(return_type_node.file, span_from_ruff_range(branch.range()))
+                let generic = extract_generic_base_and_args(branch);
+                let constructor = generic.as_ref().map_or(branch, |&(base, _)| base);
+                PythonReturnTypeBranch {
+                    node: node_of(branch),
+                    collection: collection_type_expr(constructor, &file.source, abc_set_imported),
+                    type_arguments: generic
+                        .map(|(_, arguments)| arguments.into_iter().map(node_of).collect()),
+                }
             })
             .collect(),
     }

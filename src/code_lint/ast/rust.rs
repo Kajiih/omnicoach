@@ -1,8 +1,8 @@
 //! AST helper predicates and structural extractors for Rust (`ra_ap_syntax`).
 
 use crate::code_lint::ast::{
-    AstNode, Binding, BindingKind, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile,
-    PositionalRead, ScopePositionalReads, is_rust_comment_kind, parse_float_literal,
+    AstNode, Binding, BindingKind, EnclosingFunction, LiteralOccurrence, LiteralRole, LiteralValue,
+    ParsedFile, PositionalRead, ScopePositionalReads, is_rust_comment_kind, parse_float_literal,
     parse_integer_literal, push_bindings, span_from_rowan_range,
 };
 use crate::diagnostic::SourceSpan;
@@ -55,6 +55,18 @@ fn cast_at_span<T: ra_ap_syntax::AstNode>(node: &AstNode<'_>) -> Option<T> {
         .ancestors()
         .take_while(|ancestor| ancestor.text_range() == target_range)
         .find_map(T::cast)
+}
+
+/// Returns `node` as an [`EnclosingFunction`] if it is a named function or method item; top level
+/// if it is an item of the source file.
+pub(super) fn named_function(node: &SyntaxNode) -> Option<EnclosingFunction> {
+    let name = ast::Fn::cast(node.clone())?.name()?;
+    Some(EnclosingFunction {
+        name: name.text().to_string(),
+        is_top_level: node
+            .parent()
+            .is_some_and(|parent| ast::SourceFile::can_cast(parent.kind())),
+    })
 }
 
 /// Returns the kind of the binding declared by the named item `item`: a contract member if it is
@@ -1697,26 +1709,14 @@ pub fn collect_functions(file: &ParsedFile) -> Vec<RustFunction<'_>> {
     out
 }
 
-/// Unwraps outer `Result<T, ...>` and `Poll<T>` return type envelopes from `node`.
-#[must_use]
-pub fn unwrap_return_envelope<'a>(node: &AstNode<'a>) -> AstNode<'a> {
-    let Some(type_node) = cast_at_span::<ast::Type>(node) else {
-        return *node;
+/// Returns `T` if `type_node` is `Option<T>` (unqualified, `std::option::Option`, or
+/// `core::option::Option`).
+fn option_payload(type_node: &ast::Type, source: &str) -> Option<ast::Type> {
+    let ast::Type::PathType(path_type) = type_node else {
+        return None;
     };
-    let unwrapped = unwrap_rust_return_envelope(type_node, &node.file.source);
-    AstNode::from_span(
-        node.file,
-        span_from_rowan_range(unwrapped.syntax().text_range()),
-    )
-}
-
-/// If `node` is `Option<T>` (unqualified, `std::option::Option`, or `core::option::Option`),
-/// returns the inner type node `T`.
-#[must_use]
-pub fn extract_option_payload<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
-    let path_type = cast_at_span::<ast::PathType>(node)?;
     let (_, (option_path, option_terminal), option_args) =
-        extract_path_type_generics(&path_type, &node.file.source)?;
+        extract_path_type_generics(path_type, source)?;
     if option_terminal != OPTION_TYPE_NAME
         || !matches!(
             option_path.as_str(),
@@ -1726,70 +1726,58 @@ pub fn extract_option_payload<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
     {
         return None;
     }
-    let payload = option_args.into_iter().next()?;
-    Some(AstNode::from_span(
-        node.file,
-        span_from_rowan_range(payload.syntax().text_range()),
-    ))
+    option_args.into_iter().next()
 }
 
-/// Unwraps transparent borrow and smart-pointer wrappers (`&T`, `&mut T`, `Box<T>`, `Rc<T>`,
-/// `Arc<T>`, `Cow<'_, T>`) around a Rust type node.
-#[must_use]
-pub fn unwrap_pointer_wrappers<'a>(node: &AstNode<'a>) -> AstNode<'a> {
-    let Some(type_node) = cast_at_span::<ast::Type>(node) else {
-        return *node;
-    };
-    let unwrapped = unwrap_rust_pointer_wrappers(type_node, &node.file.source);
-    AstNode::from_span(
-        node.file,
-        span_from_rowan_range(unwrapped.syntax().text_range()),
-    )
+/// The payload `T` of an optional return type, as classified by [`nullable_return_payload`].
+pub enum NullableReturnPayload {
+    /// A slice or unsized array type (`[T]`), with its source text.
+    Slice(String),
+    /// A generic path type (`std::vec::Vec<T>`).
+    Generic {
+        /// Source text of the base path (`std::vec::Vec`).
+        base: String,
+        /// The base path with whitespace and any leading `::` removed.
+        path: String,
+        /// The last segment of the base path (`Vec`).
+        terminal: String,
+    },
 }
 
-/// Extracts `(base_node, type_argument_nodes)` from a Rust `generic_type` node.
+/// Classifies the payload `T` of `return_type` if it is `Option<T>`.
+///
+/// Outer `Result<T, ...>` and `Poll<T>` envelopes are unwrapped first, then transparent borrow
+/// and smart-pointer wrappers (`&T`, `&mut T`, `Box<T>`, `Rc<T>`, `Arc<T>`, `Cow<'_, T>`) around
+/// `T`. Returns `None` if there is no `Option` or `T` is neither a slice nor a generic path type.
 #[must_use]
-pub fn extract_generic_type<'a>(node: &AstNode<'a>) -> Option<(AstNode<'a>, Vec<AstNode<'a>>)> {
-    let path_type = cast_at_span::<ast::PathType>(node)?;
-    let (base_span, _, type_args) = extract_path_type_generics(&path_type, &node.file.source)?;
-    Some((
-        AstNode::from_span(node.file, base_span),
-        type_args
-            .into_iter()
-            .map(|type_arg| {
-                AstNode::from_span(
-                    node.file,
-                    span_from_rowan_range(type_arg.syntax().text_range()),
-                )
+pub fn nullable_return_payload(return_type: &AstNode<'_>) -> Option<NullableReturnPayload> {
+    let source = &return_type.file.source;
+    let return_type = cast_at_span::<ast::Type>(return_type)?;
+    let payload = option_payload(&unwrap_rust_return_envelope(return_type, source), source)?;
+    let inner = unwrap_rust_pointer_wrappers(payload, source);
+    match &inner {
+        ast::Type::SliceType(_) => {
+            let span = span_from_rowan_range(inner.syntax().text_range());
+            Some(NullableReturnPayload::Slice(
+                source[span.start..span.end].trim().to_owned(),
+            ))
+        }
+        ast::Type::ArrayType(array_type) if array_type.const_arg().is_none() => {
+            let span = span_from_rowan_range(inner.syntax().text_range());
+            Some(NullableReturnPayload::Slice(
+                source[span.start..span.end].trim().to_owned(),
+            ))
+        }
+        ast::Type::PathType(path_type) => {
+            let (base_span, (path, terminal), _) = extract_path_type_generics(path_type, source)?;
+            Some(NullableReturnPayload::Generic {
+                base: source[base_span.start..base_span.end].trim().to_owned(),
+                path,
+                terminal,
             })
-            .collect(),
-    ))
-}
-
-/// Resolves a Rust type path node to its `(full_path, terminal_identifier)`.
-#[must_use]
-pub fn resolve_type_path(node: &AstNode<'_>) -> Option<(String, String)> {
-    if cast_at_span::<ast::Path>(node).is_none()
-        && cast_at_span::<ast::NameRef>(node).is_none()
-        && cast_at_span::<ast::PathType>(node).is_none()
-    {
-        return None;
+        }
+        _ => None,
     }
-    normalize_type_path_text(&node.text())
-}
-
-/// Extracts the slice type representation if `node` represents a Rust slice or unsized array (e.g. `[T]`).
-#[must_use]
-pub fn extract_slice_type(node: &AstNode<'_>) -> Option<String> {
-    if cast_at_span::<ast::SliceType>(node).is_some() {
-        return Some(node.text().trim().to_owned());
-    }
-    if let Some(array_type) = cast_at_span::<ast::ArrayType>(node)
-        && array_type.const_arg().is_none()
-    {
-        return Some(node.text().trim().to_owned());
-    }
-    None
 }
 
 #[cfg(test)]
@@ -2112,11 +2100,12 @@ mod tests {
     ) {
         let file = ParsedFile::rust(source);
         let functions = collect_functions(&file);
-        let return_type = functions[0].return_type.as_ref().unwrap();
-        let unwrapped_envelope = unwrap_return_envelope(return_type);
-        let payload = extract_option_payload(&unwrapped_envelope).expect("option payload");
-        assert_eq!(payload.text(), expected_payload);
-        let inner = unwrap_pointer_wrappers(&payload);
-        assert_eq!(inner.text(), expected_unwrapped);
+        let return_type = cast_at_span::<ast::Type>(functions[0].return_type.as_ref().unwrap())
+            .expect("return type");
+        let unwrapped_envelope = unwrap_rust_return_envelope(return_type, &file.source);
+        let payload = option_payload(&unwrapped_envelope, &file.source).expect("option payload");
+        assert_eq!(payload.syntax().text().to_string(), expected_payload);
+        let inner = unwrap_rust_pointer_wrappers(payload, &file.source);
+        assert_eq!(inner.syntax().text().to_string(), expected_unwrapped);
     }
 }

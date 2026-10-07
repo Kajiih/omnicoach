@@ -4,8 +4,9 @@
 //! Each callee entry (e.g. `"time.sleep"`, `"tokio::time::sleep"`, `"*.assert_called_once"`,
 //! `"*().create_task"`) is matched in a single pass over [`ast::collect_call_candidates`].
 
-use crate::code_lint::ast::{self, AstNode, ParsedFile};
+use crate::code_lint::ast::{self, AstNode, EnclosingFunction, ParsedFile};
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// A matched call expression together with its resolved callee string and argument nodes.
 pub struct CallMatch<'a> {
@@ -19,6 +20,8 @@ pub struct CallMatch<'a> {
     pub is_with_context_manager: bool,
     /// See [`ast::AstCallCandidate::is_in_except_clause`].
     pub is_in_except_clause: bool,
+    /// See [`ast::AstCallCandidate::enclosing_functions`].
+    pub enclosing_functions: Arc<[EnclosingFunction]>,
 }
 
 /// Finds all call expressions in `file` matching any of the `banned_callees` entries.
@@ -95,6 +98,7 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
                 arguments: candidate.arguments,
                 is_with_context_manager: candidate.is_with_context_manager,
                 is_in_except_clause: candidate.is_in_except_clause,
+                enclosing_functions: candidate.enclosing_functions,
             });
         }
     }

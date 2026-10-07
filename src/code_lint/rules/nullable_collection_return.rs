@@ -1,5 +1,7 @@
 //! Flags function return annotations that wrap a collection type in `| None`, `Optional`, or `Option`.
 
+use crate::code_lint::ast::python::PythonReturnTypeBranch;
+use crate::code_lint::ast::rust::NullableReturnPayload;
 use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
@@ -162,14 +164,14 @@ fn check_python(rule: &CodeRule, path: &Path, file: &ParsedFile) -> Vec<Diagnost
         let Some(ref return_type_node) = signature.return_type_node else {
             continue;
         };
-        let union = ast::python::return_type_union(return_type_node);
+        let union = ast::python::return_type_union(return_type_node, abc_set_imported);
         if !union.has_none || union.branches.is_empty() {
             continue;
         }
         let mut collection_types = Vec::new();
         let mut all_branches_are_collections = true;
         for branch in &union.branches {
-            if let Some(type_name) = python_collection_branch_type(branch, abc_set_imported) {
+            if let Some(type_name) = python_collection_branch_type(branch) {
                 if !collection_types.contains(&type_name) {
                     collection_types.push(type_name);
                 }
@@ -195,20 +197,17 @@ fn check_python(rule: &CodeRule, path: &Path, file: &ParsedFile) -> Vec<Diagnost
     diagnostics
 }
 
-fn python_collection_branch_type(branch: &AstNode<'_>, abc_set_imported: bool) -> Option<String> {
-    if let Some((base, args)) = ast::python::extract_generic_type(branch) {
-        let collection = ast::python::collection_type(&base, abc_set_imported)?;
-        if matches!(collection.name.as_str(), "tuple" | "Tuple") {
-            let is_variadic = args.len() == 2 && args[1].text() == "...";
-            if !is_variadic {
-                return None;
-            }
+fn python_collection_branch_type(branch: &PythonReturnTypeBranch<'_>) -> Option<String> {
+    let collection = branch.collection.as_ref()?;
+    if let Some(args) = &branch.type_arguments
+        && matches!(collection.name.as_str(), "tuple" | "Tuple")
+    {
+        let is_variadic = args.len() == 2 && args[1].text() == "...";
+        if !is_variadic {
+            return None;
         }
-        Some(collection.path)
-    } else {
-        let collection = ast::python::collection_type(branch, abc_set_imported)?;
-        Some(collection.path)
     }
+    Some(collection.path.clone())
 }
 
 fn check_rust(rule: &CodeRule, path: &Path, file: &ParsedFile) -> Vec<Diagnostic> {
@@ -237,19 +236,14 @@ fn check_rust(rule: &CodeRule, path: &Path, file: &ParsedFile) -> Vec<Diagnostic
 }
 
 fn extract_rust_nullable_collection_type(return_type_node: &AstNode<'_>) -> Option<String> {
-    let unwrapped = ast::rust::unwrap_return_envelope(return_type_node);
-    let option_payload = ast::rust::extract_option_payload(&unwrapped)?;
-    let inner = ast::rust::unwrap_pointer_wrappers(&option_payload);
-    if let Some(slice_type) = ast::rust::extract_slice_type(&inner) {
-        return Some(slice_type);
+    match ast::rust::nullable_return_payload(return_type_node)? {
+        NullableReturnPayload::Slice(slice_type) => Some(slice_type),
+        NullableReturnPayload::Generic {
+            base,
+            path,
+            terminal,
+        } => is_rust_collection_constructor(&path, &terminal).then_some(base),
     }
-    if let Some((base, _)) = ast::rust::extract_generic_type(&inner)
-        && let Some((path, terminal)) = ast::rust::resolve_type_path(&base)
-        && is_rust_collection_constructor(&path, &terminal)
-    {
-        return Some(base.text().trim().to_owned());
-    }
-    None
 }
 
 fn is_rust_collection_constructor(path: &str, terminal: &str) -> bool {

@@ -10,8 +10,8 @@ mod strings;
 
 pub use self::annotations::{
     AnnotationTraversalDepth, CollectionKind, CollectionShape, PythonCollectionType,
-    PythonReturnTypeUnion, collect_collection_types, collection_display, collection_type,
-    extract_generic_type, has_unaliased_collections_abc_set_import, return_type_union,
+    PythonReturnTypeBranch, PythonReturnTypeUnion, collect_collection_types, collection_display,
+    collection_type, has_unaliased_collections_abc_set_import, return_type_union,
 };
 pub use self::classes::{
     PythonAnnotatedAttribute, PythonBaseClass, PythonClassInfo, PythonInstanceAttributeAnnotation,
@@ -42,8 +42,9 @@ use self::logging::extract_logger_call;
 use self::scopes::parameters_shadow_name;
 use self::strings::{fstring_segments_and_interpolations, static_string_text};
 use crate::code_lint::ast::{
-    AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, PositionalRead,
-    ScopePositionalReads, parse_float_literal, parse_integer_literal, span_from_ruff_range,
+    AstNode, EnclosingFunction, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile,
+    PositionalRead, ScopePositionalReads, parse_float_literal, parse_integer_literal,
+    span_from_ruff_range, with_innermost_function,
 };
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
@@ -52,6 +53,7 @@ use ruff_python_ast::{
 };
 use ruff_text_size::Ranged as _;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 const PYTEST_RAISES: &str = "raises";
 const ENVIRON_NAME: &str = "environ";
@@ -81,44 +83,6 @@ pub(super) fn find_expr_at_span(module: &ModModule, target_span: SourceSpan) -> 
     }
 
     let mut finder = ExprFinder {
-        target_span,
-        found: None,
-    };
-    finder.visit_body(&module.body);
-    finder.found
-}
-
-/// Finds the `StmtFunctionDef` node in `module` whose definition or name span equals `target_span`.
-pub(super) fn find_function_def_at_span(
-    module: &ModModule,
-    target_span: SourceSpan,
-) -> Option<&StmtFunctionDef> {
-    struct FunctionFinder<'a> {
-        target_span: SourceSpan,
-        found: Option<&'a StmtFunctionDef>,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for FunctionFinder<'a> {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if self.found.is_some() {
-                return;
-            }
-            let span = span_from_ruff_range(statement.range());
-            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
-                return;
-            }
-            if let Stmt::FunctionDef(func_def) = statement
-                && (span == self.target_span
-                    || span_from_ruff_range(func_def.name.range) == self.target_span)
-            {
-                self.found = Some(func_def);
-                return;
-            }
-            walk_stmt(self, statement);
-        }
-    }
-
-    let mut finder = FunctionFinder {
         target_span,
         found: None,
     };
@@ -565,12 +529,50 @@ pub(super) fn collect_test_function_assertion_counts(
     collector.out
 }
 
+/// Tracks the functions enclosing the statement visited by a source-order walk.
+#[derive(Default)]
+pub(in crate::code_lint::ast) struct EnclosingFunctionTracker {
+    /// Number of statements enclosing the visited statement.
+    depth: usize,
+    /// The enclosing functions, innermost first.
+    pub(in crate::code_lint::ast) functions: Arc<[EnclosingFunction]>,
+}
+
+impl EnclosingFunctionTracker {
+    /// Enters `statement`, which encloses everything visited until the matching [`Self::exit`].
+    /// Returns the outer functions to pass to it.
+    pub(in crate::code_lint::ast) fn enter(
+        &mut self,
+        statement: &Stmt,
+    ) -> Arc<[EnclosingFunction]> {
+        let outer = Arc::clone(&self.functions);
+        if let Stmt::FunctionDef(func_def) = statement {
+            let function = EnclosingFunction {
+                name: func_def.name.to_string(),
+                is_top_level: self.depth == 0,
+            };
+            self.functions = with_innermost_function(function, &outer);
+        }
+        self.depth += 1;
+        outer
+    }
+
+    /// Leaves the statement entered by the [`Self::enter`] call that returned `outer`.
+    pub(in crate::code_lint::ast) fn exit(&mut self, outer: Arc<[EnclosingFunction]>) {
+        self.depth -= 1;
+        self.functions = outer;
+    }
+}
+
 /// A Python subscript reading the `os.environ` (or bare `environ`) mapping.
 pub struct PythonEnvironSubscript<'a> {
     /// The whole subscript (`os.environ["HOST"]`).
     pub node: AstNode<'a>,
     /// The mapping expression being indexed (`os.environ` or `environ`).
     pub mapping: AstNode<'a>,
+    /// The functions enclosing the subscript, innermost first (see
+    /// [`AstCallCandidate::enclosing_functions`](crate::code_lint::ast::AstCallCandidate::enclosing_functions)).
+    pub enclosing_functions: Arc<[EnclosingFunction]>,
 }
 
 /// Returns true if `value` is Python's `os.environ` or bare `environ`.
@@ -590,10 +592,17 @@ fn is_environ_mapping_expr(value: &Expr) -> bool {
 pub fn collect_environ_subscripts(file: &ParsedFile) -> Vec<PythonEnvironSubscript<'_>> {
     struct EnvironSubscriptCollector<'a> {
         file: &'a ParsedFile,
+        enclosing_functions: EnclosingFunctionTracker,
         out: Vec<PythonEnvironSubscript<'a>>,
     }
 
     impl<'a> SourceOrderVisitor<'a> for EnvironSubscriptCollector<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            let outer_functions = self.enclosing_functions.enter(statement);
+            walk_stmt(self, statement);
+            self.enclosing_functions.exit(outer_functions);
+        }
+
         fn visit_expr(&mut self, expr: &'a Expr) {
             if let Expr::Subscript(sub) = expr
                 && is_environ_mapping_expr(&sub.value)
@@ -601,6 +610,7 @@ pub fn collect_environ_subscripts(file: &ParsedFile) -> Vec<PythonEnvironSubscri
                 self.out.push(PythonEnvironSubscript {
                     node: AstNode::from_span(self.file, span_from_ruff_range(sub.range())),
                     mapping: AstNode::from_span(self.file, span_from_ruff_range(sub.value.range())),
+                    enclosing_functions: Arc::clone(&self.enclosing_functions.functions),
                 });
             }
             walk_expr(self, expr);
@@ -612,6 +622,7 @@ pub fn collect_environ_subscripts(file: &ParsedFile) -> Vec<PythonEnvironSubscri
     };
     let mut collector = EnvironSubscriptCollector {
         file,
+        enclosing_functions: EnclosingFunctionTracker::default(),
         out: Vec::new(),
     };
     collector.visit_body(&parsed.syntax().body);
@@ -1395,15 +1406,12 @@ impl<'a> SourceOrderVisitor<'a> for ParameterUseVisitor<'a> {
     }
 }
 
-/// Classifies how `func_node`'s body uses each of its parameters, keyed by parameter name.
+/// Classifies how `signature`'s body uses each of its parameters, keyed by parameter name.
 #[must_use]
-pub fn summarize_parameter_usages<'a>(func_node: &AstNode<'a>) -> HashMap<&'a str, ParameterUsage> {
-    let Some(parsed) = func_node.file.py_module() else {
-        return HashMap::new();
-    };
-    let Some(func) = find_function_def_at_span(parsed.syntax(), func_node.span()) else {
-        return HashMap::new();
-    };
+pub fn summarize_parameter_usages<'a>(
+    signature: &PythonFunctionSignature<'a>,
+) -> HashMap<&'a str, ParameterUsage> {
+    let func = signature.definition;
     let mut visitor = ParameterUseVisitor {
         usages: func
             .parameters
@@ -2577,7 +2585,7 @@ mod tests {
         let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
         assert_eq!(
-            summarize_parameter_usages(&sigs[0].node)["x"].collection_capability(),
+            summarize_parameter_usages(&sigs[0])["x"].collection_capability(),
             expected
         );
     }
@@ -2616,7 +2624,7 @@ mod tests {
         let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
         assert_eq!(
-            summarize_parameter_usages(&sigs[0].node)["x"].is_mutated_or_escaping(),
+            summarize_parameter_usages(&sigs[0])["x"].is_mutated_or_escaping(),
             expected
         );
     }
@@ -2916,19 +2924,26 @@ mod tests {
             .return_type_node
             .as_ref()
             .expect("function should have return annotation");
-        let union = return_type_union(return_type_node);
+        let union = return_type_union(return_type_node, false);
         assert_eq!(union.has_none, expected_has_none);
-        let branches: Vec<_> = union.branches.iter().map(AstNode::text).collect();
+        let branches: Vec<_> = union
+            .branches
+            .iter()
+            .map(|branch| branch.node.text())
+            .collect();
         assert_eq!(branches, expected_branches);
     }
 
     #[test]
-    fn test_extract_generic_type() {
+    fn test_return_type_branch_generic_type() {
         let file = ParsedFile::new("def f() -> tuple[int, ...]: pass", Language::Python);
         let signatures = extract_function_signatures(&file);
         let return_type_node = signatures[0].return_type_node.as_ref().unwrap();
-        let (base, args) = extract_generic_type(return_type_node).expect("generic type");
-        assert_eq!(base.text(), "tuple");
+        let union = return_type_union(return_type_node, false);
+        let branch = &union.branches[0];
+        let collection = branch.collection.as_ref().expect("collection type");
+        assert_eq!(collection.name, "tuple");
+        let args = branch.type_arguments.as_ref().expect("generic type");
         assert_eq!(args.len(), 2);
         assert_eq!(args[0].text(), "int");
         assert_eq!(args[1].text(), "...");

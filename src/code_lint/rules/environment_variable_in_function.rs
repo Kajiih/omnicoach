@@ -1,6 +1,6 @@
 //! Enforces that environment variables are only accessed at module/static scope or explicit configuration boundaries.
 
-use crate::code_lint::ast::{self, ParsedFile};
+use crate::code_lint::ast::{self, EnclosingFunction, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::semantic::calls;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
@@ -154,7 +154,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
 /// class, `impl`, or `mod` is ordinary business logic and stays subject to the rule.
 ///
 /// The exemption is *inherited* by nested functions, closures, and lambdas (see
-/// [`ast::enclosing_non_exempt_function_name`]): they are part of the boundary's implementation
+/// [`non_exempt_function_name`]): they are part of the boundary's implementation
 /// and cannot be called or substituted from the outside, so the testability rationale behind this
 /// rule does not apply to them.
 ///
@@ -169,6 +169,23 @@ fn is_exempt_boundary_function(name: &str, is_top_level: bool) -> bool {
     }
 }
 
+/// Returns the innermost of `enclosing_functions` (innermost first) if none of them is an exempt
+/// boundary function.
+///
+/// Every enclosing function is checked, so nested functions inherit a boundary's exemption, but
+/// the innermost one is reported so that diagnostics point at the innermost context.
+fn non_exempt_function_name(enclosing_functions: &[EnclosingFunction]) -> Option<&str> {
+    if enclosing_functions
+        .iter()
+        .any(|function| is_exempt_boundary_function(&function.name, function.is_top_level))
+    {
+        return None;
+    }
+    enclosing_functions
+        .first()
+        .map(|function| function.name.as_str())
+}
+
 /// Template placeholder for the environment read.
 const EXPRESSION: &str = "expression";
 /// Template placeholder for the enclosing function.
@@ -180,36 +197,27 @@ fn check_file(
     file: &ParsedFile,
     banned_calls: &HashSet<String>,
 ) -> Vec<Diagnostic> {
-    let lang = file.lang();
     let mut diagnostics = Vec::new();
 
     for call_match in calls::find_banned_calls(file, banned_calls) {
-        if let Some(func_name) = ast::enclosing_non_exempt_function_name(
-            &call_match.node,
-            lang,
-            is_exempt_boundary_function,
-        ) {
+        if let Some(func_name) = non_exempt_function_name(&call_match.enclosing_functions) {
             let expression = format!("{}()", call_match.callee);
             diagnostics.push(rule.diagnostic_at_node(
                 path,
                 &call_match.node,
-                &[(EXPRESSION, &expression), (FUNCTION, &func_name)],
+                &[(EXPRESSION, &expression), (FUNCTION, func_name)],
             ));
         }
     }
 
-    if lang == Language::Python {
+    if file.lang() == Language::Python {
         for subscript in ast::python::collect_environ_subscripts(file) {
-            if let Some(func_name) = ast::enclosing_non_exempt_function_name(
-                &subscript.node,
-                lang,
-                is_exempt_boundary_function,
-            ) {
+            if let Some(func_name) = non_exempt_function_name(&subscript.enclosing_functions) {
                 let expression = format!("{}[...]", subscript.mapping.text());
                 diagnostics.push(rule.diagnostic_at_node(
                     path,
                     &subscript.node,
-                    &[(EXPRESSION, &expression), (FUNCTION, &func_name)],
+                    &[(EXPRESSION, &expression), (FUNCTION, func_name)],
                 ));
             }
         }

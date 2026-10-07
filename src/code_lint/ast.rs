@@ -29,7 +29,27 @@ use ra_ap_syntax::AstNode as _;
 use ruff_text_size::Ranged;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+
+/// A function enclosing a collected node, recorded by the walk that collected the node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnclosingFunction {
+    /// The function's name.
+    pub name: String,
+    /// True if the function is defined at file scope: a statement of the Python module body or
+    /// an item of the Rust source file (not nested in a class, `impl`, `mod`, or block).
+    pub is_top_level: bool,
+}
+
+/// Returns `outer` (innermost first) with `function` prepended as the new innermost function.
+fn with_innermost_function(
+    function: EnclosingFunction,
+    outer: &[EnclosingFunction],
+) -> Arc<[EnclosingFunction]> {
+    std::iter::once(function)
+        .chain(outer.iter().cloned())
+        .collect()
+}
 
 /// Cached call expression metadata without lifetime ties to `ParsedFile`.
 pub(in crate::code_lint::ast) struct CachedCallCandidate {
@@ -40,6 +60,7 @@ pub(in crate::code_lint::ast) struct CachedCallCandidate {
     argument_spans: Vec<SourceSpan>,
     is_with_context_manager: bool,
     is_in_except_clause: bool,
+    enclosing_functions: Arc<[EnclosingFunction]>,
 }
 
 /// Dedicated language-specific parsed syntax tree.
@@ -302,6 +323,9 @@ pub struct AstCallCandidate<'a> {
     /// True if the call is inside a Python `except` handler without an intervening `def`,
     /// `class`, or `lambda` boundary. Always false in Rust.
     pub is_in_except_clause: bool,
+    /// The functions enclosing the call, innermost first. A Python function encloses its
+    /// decorators, parameters, and body; lambdas and Rust closures are not functions.
+    pub enclosing_functions: Arc<[EnclosingFunction]>,
 }
 
 /// Collects all direct call expressions in a Python file using `ruff_python_ast`.
@@ -317,6 +341,7 @@ fn collect_python_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate>
         with_item_context_span: Option<SourceSpan>,
         /// True while inside an `except` handler of the current function scope.
         in_except_clause: bool,
+        enclosing_functions: python::EnclosingFunctionTracker,
         out: Vec<CachedCallCandidate>,
     }
 
@@ -326,7 +351,9 @@ fn collect_python_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate>
             if matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
                 self.in_except_clause = false;
             }
+            let outer_functions = self.enclosing_functions.enter(statement);
             walk_stmt(self, statement);
+            self.enclosing_functions.exit(outer_functions);
             self.in_except_clause = enclosing;
         }
 
@@ -395,6 +422,7 @@ fn collect_python_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate>
                 argument_spans,
                 is_with_context_manager: self.with_item_context_span == Some(span),
                 is_in_except_clause: self.in_except_clause,
+                enclosing_functions: Arc::clone(&self.enclosing_functions.functions),
             });
         }
     }
@@ -406,6 +434,7 @@ fn collect_python_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate>
         file,
         with_item_context_span: None,
         in_except_clause: false,
+        enclosing_functions: python::EnclosingFunctionTracker::default(),
         out: Vec::new(),
     };
     visitor.visit_body(&parsed.syntax().body);
@@ -439,7 +468,24 @@ fn collect_rust_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for syntax_node in parsed.tree().syntax().descendants() {
+    let mut enclosing_functions: Arc<[EnclosingFunction]> = Arc::default();
+    let mut outer_functions = Vec::new();
+    for event in parsed.tree().syntax().preorder() {
+        let syntax_node = match event {
+            ra_ap_syntax::WalkEvent::Enter(syntax_node) => syntax_node,
+            ra_ap_syntax::WalkEvent::Leave(syntax_node) => {
+                if rust::named_function(&syntax_node).is_some()
+                    && let Some(outer) = outer_functions.pop()
+                {
+                    enclosing_functions = outer;
+                }
+                continue;
+            }
+        };
+        if let Some(function) = rust::named_function(&syntax_node) {
+            let inner = with_innermost_function(function, &enclosing_functions);
+            outer_functions.push(std::mem::replace(&mut enclosing_functions, inner));
+        }
         if let Some(call) = ast::CallExpr::cast(syntax_node.clone()) {
             let Some(func) = call.expr() else {
                 continue;
@@ -460,6 +506,7 @@ fn collect_rust_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate> {
                 argument_spans,
                 is_with_context_manager: false,
                 is_in_except_clause: false,
+                enclosing_functions: Arc::clone(&enclosing_functions),
             });
         } else if let Some(method_call) = ast::MethodCallExpr::cast(syntax_node) {
             let (Some(receiver), Some(name_ref)) = (method_call.receiver(), method_call.name_ref())
@@ -485,6 +532,7 @@ fn collect_rust_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate> {
                 argument_spans,
                 is_with_context_manager: false,
                 is_in_except_clause: false,
+                enclosing_functions: Arc::clone(&enclosing_functions),
             });
         }
     }
@@ -513,6 +561,7 @@ pub fn collect_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> {
                 .collect(),
             is_with_context_manager: entry.is_with_context_manager,
             is_in_except_clause: entry.is_in_except_clause,
+            enclosing_functions: Arc::clone(&entry.enclosing_functions),
         })
         .collect()
 }
@@ -699,117 +748,6 @@ pub fn find_unwrapped_multiline_strings(
         file.lang(),
         find_unwrapped_multiline_strings(file, is_allowed_wrapper)
     )
-}
-
-/// Resolves the enclosing non-exempt function name for a span in a Python file.
-fn python_enclosing_non_exempt_function_name(
-    file: &ParsedFile,
-    target_span: SourceSpan,
-    is_exempt: impl Fn(&str, bool) -> bool,
-) -> Option<String> {
-    use ruff_python_ast::Stmt;
-    use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
-
-    struct EnclosingFunctionFinder {
-        target_span: SourceSpan,
-        depth: usize,
-        enclosing: Vec<(String, bool)>,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for EnclosingFunctionFinder {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            let span = span_from_ruff_range(statement.range());
-            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
-                return;
-            }
-            if let Stmt::FunctionDef(func) = statement {
-                let is_top_level = self.depth == 0;
-                self.enclosing.push((func.name.to_string(), is_top_level));
-            }
-            self.depth += 1;
-            walk_stmt(self, statement);
-            self.depth -= 1;
-        }
-    }
-
-    let parsed = file.py_module()?;
-    let mut finder = EnclosingFunctionFinder {
-        target_span,
-        depth: 0,
-        enclosing: Vec::new(),
-    };
-    finder.visit_body(&parsed.syntax().body);
-
-    let mut nearest_function_name: Option<String> = None;
-    for (func_name, is_top_level) in finder.enclosing.into_iter().rev() {
-        if is_exempt(&func_name, is_top_level) {
-            return None;
-        }
-        if nearest_function_name.is_none() {
-            nearest_function_name = Some(func_name);
-        }
-    }
-    nearest_function_name
-}
-
-/// Resolves the enclosing non-exempt function name for a span in a Rust file.
-fn rust_enclosing_non_exempt_function_name(
-    file: &ParsedFile,
-    target_span: SourceSpan,
-    is_exempt: impl Fn(&str, bool) -> bool,
-) -> Option<String> {
-    use ra_ap_syntax::ast::{self, HasName as _};
-
-    let parsed = file.rs_parsed()?;
-    let start_offset = u32::try_from(target_span.start).ok()?;
-    let end_offset = u32::try_from(target_span.end).ok()?;
-    let target_range = ra_ap_syntax::TextRange::new(start_offset.into(), end_offset.into());
-    let covering = parsed.tree().syntax().covering_element(target_range);
-    let start_node = match covering {
-        ra_ap_syntax::SyntaxElement::Node(node) => node,
-        ra_ap_syntax::SyntaxElement::Token(token) => token.parent()?,
-    };
-
-    let mut nearest_function_name: Option<String> = None;
-    for ancestor in start_node.ancestors() {
-        if let Some(func) = ast::Fn::cast(ancestor)
-            && let Some(name) = func.name()
-        {
-            let func_name = name.text();
-            let is_top_level = func
-                .syntax()
-                .parent()
-                .is_some_and(|parent| ast::SourceFile::can_cast(parent.kind()));
-            if is_exempt(func_name, is_top_level) {
-                return None;
-            }
-            if nearest_function_name.is_none() {
-                nearest_function_name = Some(func_name.to_string());
-            }
-        }
-    }
-    nearest_function_name
-}
-
-/// Returns the nearest enclosing function name if `node` is inside a function and no enclosing
-/// function satisfies `is_exempt(func_name, is_top_level)`.
-///
-/// The exemption is *inherited*: a nested function, closure, or lambda declared inside an exempt
-/// boundary function is part of that boundary's implementation. The reported name is the *nearest*
-/// enclosing function, so diagnostics point at the innermost context even though exemptions
-/// consider every ancestor.
-#[must_use]
-pub fn enclosing_non_exempt_function_name(
-    node: &AstNode<'_>,
-    lang: Language,
-    is_exempt: impl Fn(&str, bool) -> bool,
-) -> Option<String> {
-    match lang {
-        Language::Python => {
-            python_enclosing_non_exempt_function_name(node.file, node.span, is_exempt)
-        }
-        Language::Rust => rust_enclosing_non_exempt_function_name(node.file, node.span, is_exempt),
-    }
 }
 
 #[cfg(test)]
