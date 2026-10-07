@@ -18,9 +18,9 @@ during the walk, and callers re-derive it by span.
 | P1 | 21 Python helpers re-walk the module from the root per call; 13 Rust helpers re-run `covering_element`. | `find_expr_at_span`, `find_function_def_at_span`, `find_assert_at_span`, `is_import_binding`, `is_structural_definition`, `is_trait_impl_member` (2 walks), `extract_decorators`, `is_in_protocol_or_abc_class`, `is_stub_function_body`, `is_with_context_manager` (2 walks), `is_inside_except_clause`, … |
 | P2 | Hot loops: every binding (4 naming rules), every function (7 signature rules), every assert, every `suppress` call. | `semantic/bindings.rs`, `PythonFunctionSignature::is_exempt_from_*` |
 | P3 | Multi-consumer collectors are recomputed per rule. | `extract_function_signatures` (7 rules), `CommentIndex::from_file` (per `RequireExplanation` rule), `extract_classes` (3), `collect_class_attributes` (2), `rust::collect_functions` (2) |
-| P4 | Two ~300-line parameter-use visitors walk each body once per parameter and disagree. | `MutationOrEscapeFinder` vs `CapabilityVisitor` in `ast/python.rs` |
+| P4 | Two ~300-line parameter-use visitors duplicate their traversal and walk each body once per parameter. | `MutationOrEscapeFinder` vs `CapabilityVisitor` in `ast/python.rs` |
 | P5 | Names are matched syntactically: aliases are missed, unrelated imports and local definitions match. | `known_gap_typing_module_alias_not_resolved`; `abc_set_imported: bool` threaded through 9 rules |
-| P6 | 5 multi-language rules branch on `file.lang()` and duplicate logic; rule files hold AST logic. | `nullable_collection_return.rs`, `identical_positional_types.rs`, `packed_assertion.rs`, `call_before_definition.rs`, `environment_variable_in_function.rs` |
+| P6 | Suspected: 5 multi-language rules duplicate per-language logic. Confirmed only for `nullable-collection-return`; `identical-positional-types` and `call-before-definition` are Python-only, and the other two share their algorithm already. | `nullable_collection_return.rs` |
 | P7 | `ast/python.rs` is 3,791 lines across 7 domains. | |
 
 ### Suspected divergence bugs between the parameter visitors (P4): not confirmed
@@ -70,6 +70,12 @@ walk that extracts the fact**, and memoize shared projections on `ParsedFile`.
    terminal name.
 4. **Cross-language symmetry.** Move rule-held AST logic into `ast/` and remove duplicated
    per-language algorithms in the 5 branching rules.
+   *Done:* only `nullable-collection-return` still duplicated logic; it now has per-language
+   collectors feeding one diagnostic builder. `identical-positional-types` and
+   `call-before-definition` are Python-only and never branched; `packed-assertion` keeps one
+   checker per language (Python flags come from `ast::python`, Rust keeps only macro-name policy);
+   `environment-variable-in-function` was already shared after slice 2b (only the Python-only
+   `environ[...]` subscripts remain behind a language check).
 5. **Split `ast/python.rs`.** Move parameter analysis and literal/positional-read collection (with
    their tests) into submodules.
 
