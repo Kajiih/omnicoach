@@ -3,7 +3,7 @@
 use crate::code_lint::ast::python::{
     AnnotationTraversalDepth, CollectionKind, CollectionShape, PythonCollectionType,
     PythonModuleAssignment, call_callee, collect_collection_types, collect_module_assignments,
-    collection_display, collection_type, has_unaliased_collections_abc_set_import,
+    collection_display, collection_type,
 };
 use crate::code_lint::ast::{AstNode, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
@@ -109,15 +109,13 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    let abc_set_imported = has_unaliased_collections_abc_set_import(file);
     let mut diagnostics = Vec::new();
     for assignment in collect_module_assignments(file) {
         let is_dunder = assignment.name.starts_with("__") && assignment.name.ends_with("__");
         if is_dunder || !assignment.is_constant() {
             continue;
         }
-        let Some((target_node, matched)) = mutable_collections(&assignment, abc_set_imported)
-        else {
+        let Some((target_node, matched)) = mutable_collections(&assignment) else {
             continue;
         };
         let token = PythonCollectionType::joined_paths(&matched);
@@ -143,22 +141,18 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
 /// or else the collection its value builds.
 fn mutable_collections<'tree, 'assignment>(
     assignment: &'assignment PythonModuleAssignment<'tree>,
-    abc_set_imported: bool,
 ) -> Option<(&'assignment AstNode<'tree>, Vec<PythonCollectionType>)> {
     if let Some(annotation) = &assignment.annotation {
-        let matched: Vec<_> = collect_collection_types(
-            annotation,
-            AnnotationTraversalDepth::CovariantPositions,
-            abc_set_imported,
-        )
-        .into_iter()
-        .filter(|collection_type| {
-            matches!(
-                collection_type.kind,
-                CollectionKind::ConcreteMutable | CollectionKind::AbstractMutable
-            )
-        })
-        .collect();
+        let matched: Vec<_> =
+            collect_collection_types(annotation, AnnotationTraversalDepth::CovariantPositions)
+                .into_iter()
+                .filter(|collection_type| {
+                    matches!(
+                        collection_type.kind,
+                        CollectionKind::ConcreteMutable | CollectionKind::AbstractMutable
+                    )
+                })
+                .collect();
         if !matched.is_empty() {
             return Some((annotation, matched));
         }
@@ -166,14 +160,13 @@ fn mutable_collections<'tree, 'assignment>(
     let value = assignment.value.as_ref()?;
     let built = collection_display(value).or_else(|| {
         call_callee(value)
-            .and_then(|callee| collection_type(&callee, abc_set_imported))
+            .and_then(|callee| collection_type(&callee))
             .filter(is_runtime_mutable_collection_constructor)
     })?;
     let is_read_only_mapping = assignment.annotation.as_ref().is_some_and(|annotation| {
         collect_collection_types(
             annotation,
             AnnotationTraversalDepth::TransparentWrappersOnly,
-            abc_set_imported,
         )
         .iter()
         .any(|collection_type| collection_type.name == "Mapping")

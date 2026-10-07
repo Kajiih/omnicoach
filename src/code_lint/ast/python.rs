@@ -11,7 +11,7 @@ mod strings;
 pub use self::annotations::{
     AnnotationTraversalDepth, CollectionKind, CollectionShape, PythonCollectionType,
     PythonReturnTypeBranch, PythonReturnTypeUnion, collect_collection_types, collection_display,
-    collection_type, has_unaliased_collections_abc_set_import, return_type_union,
+    collection_type, return_type_union,
 };
 pub use self::classes::{
     PythonAnnotatedAttribute, PythonBaseClass, PythonClassInfo, PythonInstanceAttributeAnnotation,
@@ -330,10 +330,7 @@ fn collect_module_assignments_in_stmts<'a>(
                             .value
                             .as_ref()
                             .map(|val| AstNode::from_span(file, span_from_ruff_range(val.range()))),
-                        has_final_annotation: has_final_annotation_expr(
-                            &ann.annotation,
-                            &file.source,
-                        ),
+                        has_final_annotation: has_final_annotation_expr(&ann.annotation, file),
                     });
                 }
             }
@@ -1741,7 +1738,7 @@ impl<'a> SourceOrderVisitor<'a> for LiteralOccurrenceCollector<'a> {
                     && (matches!(
                         ann.target.as_ref(),
                         Expr::Name(name) if is_constant_name(name.id.as_str())
-                    ) || has_final_annotation_expr(&ann.annotation, &self.file.source)) =>
+                    ) || has_final_annotation_expr(&ann.annotation, self.file)) =>
             {
                 if let Some(value) = &ann.value {
                     self.record_constant_rhs(value);
@@ -2212,7 +2209,6 @@ mod tests {
         #[case] expected_per_param: &[&[&str]],
     ) {
         let file = ParsedFile::new(source, Language::Python);
-        let abc_set_imported = has_unaliased_collections_abc_set_import(&file);
         let sigs = extract_function_signatures(&file);
         assert_eq!(sigs.len(), 1);
         let actual: Vec<Vec<String>> = sigs[0]
@@ -2220,15 +2216,13 @@ mod tests {
             .iter()
             .map(|parameter| {
                 let type_node = parameter.type_node.as_ref().expect("param should be typed");
-                collect_collection_types(
-                    type_node,
-                    AnnotationTraversalDepth::CovariantPositions,
-                    abc_set_imported,
-                )
-                .into_iter()
-                .filter(|collection_type| collection_type.kind == CollectionKind::ConcreteMutable)
-                .map(|collection_type| collection_type.path)
-                .collect()
+                collect_collection_types(type_node, AnnotationTraversalDepth::CovariantPositions)
+                    .into_iter()
+                    .filter(|collection_type| {
+                        collection_type.kind == CollectionKind::ConcreteMutable
+                    })
+                    .map(|collection_type| collection_type.path)
+                    .collect()
             })
             .collect();
         let expected: Vec<Vec<String>> = expected_per_param
@@ -2299,20 +2293,16 @@ mod tests {
             .type_node
             .as_ref()
             .expect("param should be typed");
-        collect_collection_types(
-            type_node,
-            AnnotationTraversalDepth::TransparentWrappersOnly,
-            has_unaliased_collections_abc_set_import(&file),
-        )
-        .into_iter()
-        .map(|collection_type| {
-            (
-                collection_type.path,
-                collection_type.kind,
-                collection_type.shape,
-            )
-        })
-        .collect()
+        collect_collection_types(type_node, AnnotationTraversalDepth::TransparentWrappersOnly)
+            .into_iter()
+            .map(|collection_type| {
+                (
+                    collection_type.path,
+                    collection_type.kind,
+                    collection_type.shape,
+                )
+            })
+            .collect()
     }
 
     #[rstest::rstest]
@@ -2506,7 +2496,7 @@ mod tests {
         let assignments = collect_module_assignments(&file);
         let value = assignments[0].value.as_ref().expect("value");
         let built = collection_display(value)
-            .or_else(|| call_callee(value).and_then(|callee| collection_type(&callee, false)));
+            .or_else(|| call_callee(value).and_then(|callee| collection_type(&callee)));
         assert_eq!(
             built
                 .as_ref()
@@ -2924,7 +2914,7 @@ mod tests {
             .return_type_node
             .as_ref()
             .expect("function should have return annotation");
-        let union = return_type_union(return_type_node, false);
+        let union = return_type_union(return_type_node);
         assert_eq!(union.has_none, expected_has_none);
         let branches: Vec<_> = union
             .branches
@@ -2939,7 +2929,7 @@ mod tests {
         let file = ParsedFile::new("def f() -> tuple[int, ...]: pass", Language::Python);
         let signatures = extract_function_signatures(&file);
         let return_type_node = signatures[0].return_type_node.as_ref().unwrap();
-        let union = return_type_union(return_type_node, false);
+        let union = return_type_union(return_type_node);
         let branch = &union.branches[0];
         let collection = branch.collection.as_ref().expect("collection type");
         assert_eq!(collection.name, "tuple");

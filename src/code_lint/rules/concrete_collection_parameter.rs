@@ -4,7 +4,6 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     AnnotationTraversalDepth, CollectionKind, PythonCollectionType, PythonParameterKind,
     collect_collection_types, extract_function_signatures,
-    has_unaliased_collections_abc_set_import,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::read_only_collection_replacements;
@@ -91,7 +90,6 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    let abc_set_imported = has_unaliased_collections_abc_set_import(file);
     let mut diagnostics = Vec::new();
     for signature in extract_function_signatures(file) {
         if signature.is_exempt_from_signature_rules() {
@@ -104,14 +102,13 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             let Some(ref type_node) = param.type_node else {
                 continue;
             };
-            let matched: Vec<_> = collect_collection_types(
-                type_node,
-                AnnotationTraversalDepth::CovariantPositions,
-                abc_set_imported,
-            )
-            .into_iter()
-            .filter(|collection_type| collection_type.kind == CollectionKind::ConcreteMutable)
-            .collect();
+            let matched: Vec<_> =
+                collect_collection_types(type_node, AnnotationTraversalDepth::CovariantPositions)
+                    .into_iter()
+                    .filter(|collection_type| {
+                        collection_type.kind == CollectionKind::ConcreteMutable
+                    })
+                    .collect();
             if matched.is_empty() {
                 continue;
             }
@@ -270,10 +267,11 @@ crate::test_utils::rule_test!(
                     def process(items: "list[int]") -> None:
                         pass
                 "#,
-                known_gap_typing_module_alias_not_resolved => r#"
-                    import typing as t
+                local_class_shadows_typing_name => r#"
+                    class List:
+                        pass
 
-                    def process(items: t.List[int]) -> None:
+                    def process(items: List[int]) -> None:
                         pass
                 "#,
             ],
@@ -282,6 +280,18 @@ crate::test_utils::rule_test!(
                     def process(items: list) -> None:
                         pass
                 "# => "list",
+                typing_module_alias_resolved => r#"
+                    import typing as t
+
+                    def process(items: t.List[int]) -> None:
+                        pass
+                "# => "t.List[int]",
+                typing_from_import_alias_resolved => r#"
+                    from typing import List as L
+
+                    def process(items: L[int]) -> None:
+                        pass
+                "# => "L[int]",
                 collections_defaultdict => r#"
                     from collections import defaultdict
 

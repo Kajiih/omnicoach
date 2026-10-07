@@ -105,6 +105,16 @@ crate::test_utils::rule_test!(
                     if isinstance(val, int):
                         x = val
                 "#,
+                unrelated_imported_cast => r#"
+                    from sqlalchemy import cast
+                    x = cast(column, Integer)
+                "#,
+                locally_defined_cast => r#"
+                    def cast(value, kind):
+                        return kind(value)
+
+                    x = cast(y, int)
+                "#,
             ],
             fail: [
                 bare_cast => r#"
@@ -118,6 +128,14 @@ crate::test_utils::rule_test!(
                     import typing_extensions
                     x = typing_extensions.cast(int, data)
                 "# => r#"typing_extensions.cast(int, data)"#,
+                typing_module_alias_cast => r#"
+                    import typing as t
+                    x = t.cast(int, data)
+                "# => r#"t.cast(int, data)"#,
+                typing_from_import_alias_cast => r#"
+                    from typing import cast as typed
+                    x = typed(int, data)
+                "# => r#"typed(int, data)"#,
             ],
         },
     }

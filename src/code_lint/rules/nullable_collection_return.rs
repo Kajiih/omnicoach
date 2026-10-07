@@ -155,7 +155,6 @@ const EXPRESSION: &str = "expression";
 const TOKEN: &str = "token";
 
 fn check_python(rule: &CodeRule, path: &Path, file: &ParsedFile) -> Vec<Diagnostic> {
-    let abc_set_imported = ast::python::has_unaliased_collections_abc_set_import(file);
     let mut diagnostics = Vec::new();
     for signature in ast::python::extract_function_signatures(file) {
         if signature.is_exempt_from_signature_rules() {
@@ -164,7 +163,7 @@ fn check_python(rule: &CodeRule, path: &Path, file: &ParsedFile) -> Vec<Diagnost
         let Some(ref return_type_node) = signature.return_type_node else {
             continue;
         };
-        let union = ast::python::return_type_union(return_type_node, abc_set_imported);
+        let union = ast::python::return_type_union(return_type_node);
         if !union.has_none || union.branches.is_empty() {
             continue;
         }
