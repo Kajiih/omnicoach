@@ -88,9 +88,7 @@ fn check_file(
     file: &ParsedFile,
     banned: &HashSet<String>,
 ) -> Vec<Diagnostic> {
-    rule.check_banned_calls_where(path, file, banned, |matched| {
-        crate::code_lint::ast::python::is_inside_except_clause(&matched.node)
-    })
+    rule.check_banned_calls_where(path, file, banned, |matched| matched.is_in_except_clause)
 }
 
 #[cfg(test)]

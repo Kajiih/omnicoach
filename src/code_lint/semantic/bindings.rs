@@ -2,19 +2,22 @@
 //!
 //! Used to inspect locally authored bindings across supported languages while exempting external imports and trait/override contracts.
 
-use crate::code_lint::ast::{
-    self, AstNode, ParsedFile, is_import_binding, is_structural_definition, is_trait_impl_member,
-};
+use crate::code_lint::ast::{self, AstNode, BindingKind, ParsedFile};
 use std::collections::HashSet;
 
 /// Collects all binding nodes in `file` whose identifier names are locally authored and
 /// eligible for renaming (excluding imports and trait/override contract members).
 #[must_use]
 pub fn collect_renameable_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
-    let lang = file.lang();
     ast::collect_bindings(file)
         .into_iter()
-        .filter(|node| !is_import_binding(node, lang) && !is_trait_impl_member(node, lang))
+        .filter(|binding| {
+            !matches!(
+                binding.kind,
+                BindingKind::Import | BindingKind::ContractMember
+            )
+        })
+        .map(|binding| binding.node)
         .collect()
 }
 
@@ -33,9 +36,8 @@ pub struct SuffixedBindingMatch<'a> {
 /// Finds all variable, constant, and parameter bindings in `file` whose name ends
 /// (case-insensitively) with any suffix in `banned_suffixes`.
 ///
-/// Automatically skips imports ([`is_import_binding`]), structural definitions
-/// ([`is_structural_definition`]: functions, classes, structs, enums, traits), and
-/// trait/override contract names ([`is_trait_impl_member`]).
+/// Only [`BindingKind::Value`] bindings are considered: imports, structural definitions
+/// (functions, classes, structs, enums, traits), and trait/override contract names are skipped.
 /// Suffixes are evaluated longest-first for deterministic matching.
 #[must_use]
 pub fn find_suffixed_bindings<'a, S: std::hash::BuildHasher>(
@@ -55,17 +57,13 @@ pub fn find_suffixed_bindings<'a, S: std::hash::BuildHasher>(
         .sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
 
     let bindings = ast::collect_bindings(file);
-    let lang = file.lang();
     let mut matches = Vec::new();
 
-    for node in bindings {
-        if is_import_binding(&node, lang)
-            || is_structural_definition(&node, lang)
-            || is_trait_impl_member(&node, lang)
-        {
+    for binding in bindings {
+        if binding.kind != BindingKind::Value {
             continue;
         }
-
+        let node = binding.node;
         let name = node.text().into_owned();
         let name_lower = name.to_lowercase();
 

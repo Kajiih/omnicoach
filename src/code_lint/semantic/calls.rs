@@ -15,6 +15,10 @@ pub struct CallMatch<'a> {
     pub callee: String,
     /// The semantic argument nodes (excluding punctuation and comments).
     pub arguments: Vec<AstNode<'a>>,
+    /// See [`ast::AstCallCandidate::is_with_context_manager`].
+    pub is_with_context_manager: bool,
+    /// See [`ast::AstCallCandidate::is_in_except_clause`].
+    pub is_in_except_clause: bool,
 }
 
 /// Finds all call expressions in `file` matching any of the `banned_callees` entries.
@@ -89,6 +93,8 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
                 node: candidate.node,
                 callee: candidate.callee,
                 arguments: candidate.arguments,
+                is_with_context_manager: candidate.is_with_context_manager,
+                is_in_except_clause: candidate.is_in_except_clause,
             });
         }
     }

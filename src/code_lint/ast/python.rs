@@ -21,7 +21,6 @@ pub use self::format_strings::{
     PythonFormatPlaceholder, PythonFormatString, PythonFormatStyle, collect_format_strings,
     extract_valid_field_root, named_format_field_roots,
 };
-pub(super) use self::functions::is_trait_impl_member;
 pub use self::functions::{
     PythonFunctionSignature, PythonParameterInfo, PythonParameterKind, extract_function_signatures,
     find_nested_functions,
@@ -33,10 +32,12 @@ pub use self::scopes::{
 };
 
 use self::annotations::{has_final_annotation_expr, is_bare_final_annotation_expr};
-use self::classes::is_in_protocol_or_abc_class;
+use self::classes::is_protocol_or_abc_class;
 #[cfg(test)]
 use self::functions::extract_parameters;
-use self::functions::{direct_function_definitions, method_receiver_name_ast};
+use self::functions::{
+    direct_function_definitions, has_override_decorator, method_receiver_name_ast,
+};
 use self::logging::extract_logger_call;
 use self::scopes::parameters_shadow_name;
 use self::strings::{fstring_segments_and_interpolations, static_string_text};
@@ -45,12 +46,9 @@ use crate::code_lint::ast::{
     ScopePositionalReads, parse_float_literal, parse_integer_literal, span_from_ruff_range,
 };
 use crate::diagnostic::SourceSpan;
-use ruff_python_ast::visitor::source_order::{
-    SourceOrderVisitor, walk_except_handler, walk_expr, walk_stmt,
-};
+use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{
-    Decorator, ExceptHandler, Expr, ModModule, Parameters, Stmt, StmtAssert, StmtFunctionDef,
-    StringFlags as _, WithItem,
+    Decorator, ExceptHandler, Expr, ModModule, Parameters, Stmt, StmtFunctionDef, StringFlags as _,
 };
 use ruff_text_size::Ranged as _;
 use std::collections::{HashMap, HashSet};
@@ -172,123 +170,6 @@ pub(super) fn find_parameters_at_span(
     };
     finder.visit_body(&module.body);
     finder.found
-}
-
-/// Finds the `StmtAssert` node in `module` whose byte span equals `target_span`.
-fn find_assert_at_span(module: &ModModule, target_span: SourceSpan) -> Option<&StmtAssert> {
-    struct AssertFinder<'a> {
-        target_span: SourceSpan,
-        found: Option<&'a StmtAssert>,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for AssertFinder<'a> {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if self.found.is_some() {
-                return;
-            }
-            let span = span_from_ruff_range(statement.range());
-            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
-                return;
-            }
-            if let Stmt::Assert(assert_statement) = statement
-                && span == self.target_span
-            {
-                self.found = Some(assert_statement);
-                return;
-            }
-            walk_stmt(self, statement);
-        }
-    }
-
-    let mut finder = AssertFinder {
-        target_span,
-        found: None,
-    };
-    finder.visit_body(&module.body);
-    finder.found
-}
-
-/// Returns true if `node` is a Python import binding (`import x` or `from m import y`).
-#[must_use]
-pub(super) fn is_import_binding(node: &AstNode<'_>) -> bool {
-    struct ImportSpanChecker {
-        target_span: SourceSpan,
-        found: bool,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for ImportSpanChecker {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if self.found {
-                return;
-            }
-            let span = span_from_ruff_range(statement.range());
-            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
-                return;
-            }
-            if matches!(statement, Stmt::Import(_) | Stmt::ImportFrom(_)) {
-                self.found = true;
-                return;
-            }
-            walk_stmt(self, statement);
-        }
-    }
-
-    let Some(parsed) = node.file.py_module() else {
-        return false;
-    };
-    let mut checker = ImportSpanChecker {
-        target_span: node.span(),
-        found: false,
-    };
-    checker.visit_body(&parsed.syntax().body);
-    checker.found
-}
-
-/// Returns true if `node` is the declared name of a Python `def` or `class`.
-#[must_use]
-pub(super) fn is_structural_definition(node: &AstNode<'_>) -> bool {
-    struct StructuralDefChecker {
-        target_span: SourceSpan,
-        found: bool,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for StructuralDefChecker {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if self.found {
-                return;
-            }
-            let span = span_from_ruff_range(statement.range());
-            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
-                return;
-            }
-            match statement {
-                Stmt::FunctionDef(func_def)
-                    if span_from_ruff_range(func_def.name.range) == self.target_span =>
-                {
-                    self.found = true;
-                    return;
-                }
-                Stmt::ClassDef(class_def)
-                    if span_from_ruff_range(class_def.name.range) == self.target_span =>
-                {
-                    self.found = true;
-                    return;
-                }
-                _ => {}
-            }
-            walk_stmt(self, statement);
-        }
-    }
-
-    let Some(parsed) = node.file.py_module() else {
-        return false;
-    };
-    let mut checker = StructuralDefChecker {
-        target_span: node.span(),
-        found: false,
-    };
-    checker.visit_body(&parsed.syntax().body);
-    checker.found
 }
 
 /// Returns true if a Python `StmtFunctionDef` is a test function (`test` or `test_*`).
@@ -428,66 +309,6 @@ pub(super) fn extract_decorators_from_slice<'a>(
     out
 }
 
-/// Extracts all decorators from a `function_definition` or `class_definition` node.
-#[must_use]
-fn extract_decorators<'a>(node: &AstNode<'a>) -> Vec<DecoratorInfo<'a>> {
-    struct DecoratorOwnerFinder<'a> {
-        target_span: SourceSpan,
-        found: Option<&'a [Decorator]>,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for DecoratorOwnerFinder<'a> {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if self.found.is_some() {
-                return;
-            }
-            let span = span_from_ruff_range(statement.range());
-            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
-                return;
-            }
-            match statement {
-                Stmt::FunctionDef(func_def)
-                    if span == self.target_span
-                        || span_from_ruff_range(func_def.name.range) == self.target_span =>
-                {
-                    self.found = Some(&func_def.decorator_list);
-                    return;
-                }
-                Stmt::ClassDef(class_def)
-                    if span == self.target_span
-                        || span_from_ruff_range(class_def.name.range) == self.target_span =>
-                {
-                    self.found = Some(&class_def.decorator_list);
-                    return;
-                }
-                _ => {}
-            }
-            walk_stmt(self, statement);
-        }
-    }
-
-    let Some(parsed) = node.file.py_module() else {
-        return Vec::new();
-    };
-    let mut finder = DecoratorOwnerFinder {
-        target_span: node.span(),
-        found: None,
-    };
-    finder.visit_body(&parsed.syntax().body);
-    finder.found.map_or_else(Vec::new, |list| {
-        extract_decorators_from_slice(list, node.file)
-    })
-}
-
-/// Returns true if a Python `function_definition` or `class_definition` has a decorator whose
-/// terminal identifier or full path satisfies `predicate`.
-#[must_use]
-pub(super) fn has_decorator(node: &AstNode<'_>, predicate: impl Fn(&str) -> bool) -> bool {
-    extract_decorators(node)
-        .into_iter()
-        .any(|dec| predicate(&dec.terminal_name) || predicate(&dec.path))
-}
-
 /// A single-name assignment at module level, including inside the bodies of top-level `if`,
 /// `try` and `with` statements (`ALLOWED = [...]`, `PORTS: Final = {...}`, `NAME: str`).
 pub struct PythonModuleAssignment<'a> {
@@ -497,6 +318,9 @@ pub struct PythonModuleAssignment<'a> {
     pub annotation: Option<AstNode<'a>>,
     /// The assigned value without enclosing parentheses, absent for a bare annotation.
     pub value: Option<AstNode<'a>>,
+    /// True if the annotation is `Final` or `Final[T]` (qualified or not, optionally wrapped in
+    /// `Annotated`).
+    has_final_annotation: bool,
 }
 
 impl PythonModuleAssignment<'_> {
@@ -504,19 +328,7 @@ impl PythonModuleAssignment<'_> {
     /// annotation.
     #[must_use]
     pub fn is_constant(&self) -> bool {
-        if is_constant_name(&self.name) {
-            return true;
-        }
-        let Some(annotation) = &self.annotation else {
-            return false;
-        };
-        let Some(parsed) = annotation.file.py_module() else {
-            return false;
-        };
-        let Some(expr) = find_expr_at_span(parsed.syntax(), annotation.span()) else {
-            return false;
-        };
-        has_final_annotation_expr(expr, &annotation.file.source)
+        is_constant_name(&self.name) || self.has_final_annotation
     }
 }
 
@@ -538,6 +350,7 @@ fn collect_module_assignments_in_stmts<'a>(
                             file,
                             span_from_ruff_range(assign.value.range()),
                         )),
+                        has_final_annotation: false,
                     });
                 }
             }
@@ -553,6 +366,10 @@ fn collect_module_assignments_in_stmts<'a>(
                             .value
                             .as_ref()
                             .map(|val| AstNode::from_span(file, span_from_ruff_range(val.range()))),
+                        has_final_annotation: has_final_annotation_expr(
+                            &ann.annotation,
+                            &file.source,
+                        ),
                     });
                 }
             }
@@ -610,155 +427,6 @@ pub fn call_callee<'a>(call: &AstNode<'a>) -> Option<AstNode<'a>> {
     ))
 }
 
-/// Traverses upward from an expression to find if it is enclosed in a `WithItem`.
-#[must_use]
-fn find_enclosing_with_item<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
-    struct WithItemFinder {
-        target_span: SourceSpan,
-        found: Option<SourceSpan>,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for WithItemFinder {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if self.found.is_some() {
-                return;
-            }
-            let span = span_from_ruff_range(statement.range());
-            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
-                return;
-            }
-            if let Stmt::With(with_statement) = statement {
-                for item in &with_statement.items {
-                    if span_from_ruff_range(item.context_expr.range()) == self.target_span {
-                        self.found = Some(span_from_ruff_range(item.range()));
-                        return;
-                    }
-                }
-            }
-            walk_stmt(self, statement);
-        }
-
-        fn visit_with_item(&mut self, _with_item: &'a WithItem) {}
-    }
-
-    let parsed = node.file.py_module()?;
-    let mut finder = WithItemFinder {
-        target_span: node.span(),
-        found: None,
-    };
-    finder.visit_body(&parsed.syntax().body);
-    finder.found.map(|span| AstNode::from_span(node.file, span))
-}
-
-/// Traverses upward from a node to find its nearest enclosing `Stmt::With`.
-#[must_use]
-fn find_enclosing_with_statement<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
-    struct WithStatementFinder {
-        target_span: SourceSpan,
-        found: Option<SourceSpan>,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for WithStatementFinder {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            let span = span_from_ruff_range(statement.range());
-            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
-                return;
-            }
-            if matches!(statement, Stmt::With(_)) {
-                self.found = Some(span);
-            }
-            walk_stmt(self, statement);
-        }
-    }
-
-    let parsed = node.file.py_module()?;
-    let mut finder = WithStatementFinder {
-        target_span: node.span(),
-        found: None,
-    };
-    finder.visit_body(&parsed.syntax().body);
-    finder.found.map(|span| AstNode::from_span(node.file, span))
-}
-
-/// Returns true if `node` is invoked as a context manager inside a Python `with` statement header.
-#[must_use]
-pub fn is_with_context_manager(node: &AstNode<'_>) -> bool {
-    find_enclosing_with_item(node).is_some() && find_enclosing_with_statement(node).is_some()
-}
-
-/// Returns true if `node` is enclosed inside an `ExceptHandler` block within the same scope.
-#[must_use]
-pub fn is_inside_except_clause(node: &AstNode<'_>) -> bool {
-    struct ExceptScopeFinder {
-        target_span: SourceSpan,
-        in_except: bool,
-        matched: Option<bool>,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for ExceptScopeFinder {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if self.matched.is_some() {
-                return;
-            }
-            let span = span_from_ruff_range(statement.range());
-            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
-                return;
-            }
-            let prev = self.in_except;
-            if matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
-                self.in_except = false;
-            }
-            walk_stmt(self, statement);
-            self.in_except = prev;
-        }
-
-        fn visit_except_handler(&mut self, except_handler: &'a ExceptHandler) {
-            if self.matched.is_some() {
-                return;
-            }
-            let span = span_from_ruff_range(except_handler.range());
-            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
-                return;
-            }
-            let prev = self.in_except;
-            self.in_except = true;
-            walk_except_handler(self, except_handler);
-            self.in_except = prev;
-        }
-
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if self.matched.is_some() {
-                return;
-            }
-            let span = span_from_ruff_range(expr.range());
-            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
-                return;
-            }
-            if span == self.target_span {
-                self.matched = Some(self.in_except);
-                return;
-            }
-            let prev = self.in_except;
-            if matches!(expr, Expr::Lambda(_)) {
-                self.in_except = false;
-            }
-            walk_expr(self, expr);
-            self.in_except = prev;
-        }
-    }
-
-    let Some(parsed) = node.file.py_module() else {
-        return false;
-    };
-    let mut finder = ExceptScopeFinder {
-        target_span: node.span(),
-        in_except: false,
-        matched: None,
-    };
-    finder.visit_body(&parsed.syntax().body);
-    finder.matched.unwrap_or(false)
-}
-
 /// Returns true if `expr` is a Python `tuple` or `list` consisting solely of `>= 2` boolean literals (`True` / `False`).
 fn is_boolean_literal_collection_expr(expr: &Expr) -> bool {
     let elements = match expr {
@@ -772,21 +440,44 @@ fn is_boolean_literal_collection_expr(expr: &Expr) -> bool {
             .all(|element| matches!(element, Expr::BooleanLiteral(_)))
 }
 
+/// A Python `assert` statement with the facts about its condition that packing checks need.
+pub struct PythonAssert<'a> {
+    /// The `assert` statement node.
+    pub node: AstNode<'a>,
+    /// True if the condition has a top-level `and` boolean operator.
+    pub has_top_level_logical_and: bool,
+    /// True if the condition is a comparison with an operand that is a tuple or list of two or
+    /// more boolean literals.
+    pub has_boolean_literal_comparison: bool,
+}
+
 /// Collects all Python `Stmt::Assert` nodes in `file`.
 #[must_use]
-pub fn collect_assert_statements(file: &ParsedFile) -> Vec<AstNode<'_>> {
+pub fn collect_assert_statements(file: &ParsedFile) -> Vec<PythonAssert<'_>> {
     struct AssertCollector<'a> {
         file: &'a ParsedFile,
-        out: Vec<AstNode<'a>>,
+        out: Vec<PythonAssert<'a>>,
     }
 
     impl<'a> SourceOrderVisitor<'a> for AssertCollector<'a> {
         fn visit_stmt(&mut self, statement: &'a Stmt) {
             if let Stmt::Assert(assert_statement) = statement {
-                self.out.push(AstNode::from_span(
-                    self.file,
-                    span_from_ruff_range(assert_statement.range()),
-                ));
+                let test = assert_statement.test.as_ref();
+                self.out.push(PythonAssert {
+                    node: AstNode::from_span(
+                        self.file,
+                        span_from_ruff_range(assert_statement.range()),
+                    ),
+                    has_top_level_logical_and: matches!(
+                        test,
+                        Expr::BoolOp(bool_op) if bool_op.op == ruff_python_ast::BoolOp::And
+                    ),
+                    has_boolean_literal_comparison: matches!(
+                        test,
+                        Expr::Compare(comparison)
+                            if comparison.operands.iter().any(is_boolean_literal_collection_expr)
+                    ),
+                });
             }
             walk_stmt(self, statement);
         }
@@ -801,36 +492,6 @@ pub fn collect_assert_statements(file: &ParsedFile) -> Vec<AstNode<'_>> {
     };
     collector.visit_body(&parsed.syntax().body);
     collector.out
-}
-
-/// Returns true if a Python `assert` statement node has a top-level `and` boolean operator.
-#[must_use]
-pub fn has_top_level_logical_and(assert_node: &AstNode<'_>) -> bool {
-    let Some(parsed) = assert_node.file.py_module() else {
-        return false;
-    };
-    let Some(assert_statement) = find_assert_at_span(parsed.syntax(), assert_node.span()) else {
-        return false;
-    };
-    matches!(
-        assert_statement.test.as_ref(),
-        Expr::BoolOp(bool_op) if bool_op.op == ruff_python_ast::BoolOp::And
-    )
-}
-
-/// Returns true if a Python `assert` statement node compares against a boolean literal tuple/list.
-#[must_use]
-pub fn has_boolean_literal_comparison(assert_node: &AstNode<'_>) -> bool {
-    let Some(parsed) = assert_node.file.py_module() else {
-        return false;
-    };
-    let Some(assert_statement) = find_assert_at_span(parsed.syntax(), assert_node.span()) else {
-        return false;
-    };
-    let Expr::Compare(comp) = assert_statement.test.as_ref() else {
-        return false;
-    };
-    comp.operands.iter().any(is_boolean_literal_collection_expr)
 }
 
 /// Counts top-level assertion constructs in a Python test function body.
@@ -2229,8 +1890,6 @@ pub(super) fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccur
 
 #[cfg(test)]
 mod tests {
-    use super::classes::is_in_protocol_or_abc_class;
-    use super::functions::is_stub_function_body;
     use super::*;
     use crate::code_lint::ast::collect_call_candidates;
     use crate::diagnostic::Language;
@@ -2265,7 +1924,7 @@ mod tests {
         let bindings = collect_bindings(&file);
         let names: Vec<String> = bindings
             .iter()
-            .map(|node| node.text().to_string())
+            .map(|binding| binding.node.text().to_string())
             .collect();
         assert_eq!(
             names,
@@ -2306,32 +1965,37 @@ mod tests {
         let bindings = collect_bindings(&file);
         let names: Vec<String> = bindings
             .iter()
-            .map(|node| node.text().to_string())
+            .map(|binding| binding.node.text().to_string())
             .collect();
         assert_eq!(names, vec!["x", "z", "a", "b"]);
     }
 
     #[test]
-    fn test_find_enclosing_with_helpers() {
+    fn test_call_candidate_is_with_context_manager() {
         let source = indoc::indoc! {r"
             with suppress(FileNotFoundError):
                 pass
             x = suppress(KeyError)
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let calls: Vec<_> = collect_call_candidates(&file)
-            .into_iter()
-            .map(|candidate| candidate.node)
-            .collect();
+        let calls = collect_call_candidates(&file);
         assert_eq!(calls.len(), 2);
+        assert!(calls[0].is_with_context_manager);
+        assert!(!calls[1].is_with_context_manager);
+    }
 
-        // First call is inside a with_statement
-        let with_item = find_enclosing_with_item(&calls[0]);
-        assert!(with_item.is_some());
-        assert!(find_enclosing_with_statement(&calls[0]).is_some());
+    /// Returns the first top-level function definition of `file`.
+    fn first_function_def(file: &ParsedFile) -> &StmtFunctionDef {
+        let parsed = file.py_module().expect("source should parse");
+        let Some(Stmt::FunctionDef(func_def)) = parsed.syntax().body.first() else {
+            unreachable!("source should start with a function definition");
+        };
+        func_def
+    }
 
-        // Second call is outside a with_statement
-        assert!(find_enclosing_with_item(&calls[1]).is_none());
+    /// Extracts the decorators of the first top-level function definition in `file`.
+    fn first_function_decorators(file: &ParsedFile) -> Vec<DecoratorInfo<'_>> {
+        extract_decorators_from_slice(&first_function_def(file).decorator_list, file)
     }
 
     #[test]
@@ -2344,8 +2008,7 @@ mod tests {
                 pass
         "#};
         let file = ParsedFile::new(source, Language::Python);
-        let func = &extract_function_signatures(&file)[0].node;
-        let decorators = extract_decorators(func);
+        let decorators = first_function_decorators(&file);
         assert_eq!(decorators.len(), 3);
     }
 
@@ -2357,8 +2020,7 @@ mod tests {
                 pass
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let func = &extract_function_signatures(&file)[0].node;
-        let decorators = extract_decorators(func);
+        let decorators = first_function_decorators(&file);
 
         let dec0 = &decorators[0];
         assert_eq!(dec0.terminal_name, "dataclass");
@@ -2382,8 +2044,7 @@ mod tests {
                 pass
         "#};
         let file = ParsedFile::new(source, Language::Python);
-        let func = &extract_function_signatures(&file)[0].node;
-        let decorators = extract_decorators(func);
+        let decorators = first_function_decorators(&file);
 
         let dec0 = &decorators[0];
         assert_eq!(dec0.terminal_name, "parametrize");
@@ -2394,19 +2055,15 @@ mod tests {
         assert!(dec1.call_node.is_none());
     }
 
-    #[test]
-    fn test_has_decorator_predicate_matching() {
-        let source = indoc::indoc! {r#"
-            @pytest.mark.parametrize("x", [1, 2])
-            def foo():
-                pass
-        "#};
-        let file = ParsedFile::new(source, Language::Python);
-        let func = &extract_function_signatures(&file)[0].node;
-
-        assert!(has_decorator(func, |name| name == "parametrize"));
-        assert!(has_decorator(func, |path| path == "pytest.mark.parametrize"));
-        assert!(!has_decorator(func, |name| name == "override"));
+    #[rstest::rstest]
+    #[case::other_decorator("@pytest.mark.parametrize(\"x\", [1, 2])", false)]
+    #[case::bare_override("@override", true)]
+    #[case::qualified_override("@typing_extensions.override", true)]
+    fn test_has_override_decorator(#[case] decorator: &str, #[case] expected: bool) {
+        let source = format!("{decorator}\ndef foo():\n    pass\n");
+        let file = ParsedFile::new(&source, Language::Python);
+        let decorators = &first_function_def(&file).decorator_list;
+        assert_eq!(has_override_decorator(decorators, &file), expected);
     }
 
     #[test]
@@ -2598,10 +2255,10 @@ mod tests {
         "def f(x: list[int]) -> None:\n    raise ValueError() from NotImplementedError",
         false
     )]
-    fn test_is_stub_function_body(#[case] source: &str, #[case] expected: bool) {
+    fn test_has_stub_body(#[case] source: &str, #[case] expected: bool) {
         let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
-        assert_eq!(is_stub_function_body(&sigs[0].node), expected);
+        assert_eq!(sigs[0].has_stub_body, expected);
     }
 
     #[rstest::rstest]
@@ -2622,7 +2279,7 @@ mod tests {
     fn test_is_in_protocol_or_abc_class(#[case] source: &str, #[case] expected: bool) {
         let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
-        assert_eq!(is_in_protocol_or_abc_class(&sigs[0].node), expected);
+        assert_eq!(sigs[0].is_in_protocol_or_abc_class, expected);
     }
 
     /// Collects the top-level collection types of the annotation of the first parameter of the

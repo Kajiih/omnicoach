@@ -3,12 +3,14 @@
 #[cfg(test)]
 use super::find_parameters_at_span;
 use super::{
-    AstNode, ParsedFile, extract_decorators_from_slice, find_function_def_at_span, has_decorator,
-    is_in_protocol_or_abc_class, resolve_path_and_terminal_expr,
+    AstNode, DecoratorInfo, ParsedFile, extract_decorators_from_slice, is_protocol_or_abc_class,
+    resolve_path_and_terminal_expr,
 };
 use crate::code_lint::ast::span_from_ruff_range;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
-use ruff_python_ast::{Expr, Parameter, ParameterWithDefault, Parameters, Stmt, StmtFunctionDef};
+use ruff_python_ast::{
+    Decorator, Expr, Parameter, ParameterWithDefault, Parameters, Stmt, StmtFunctionDef,
+};
 use ruff_text_size::Ranged as _;
 
 /// Parameter classification in a Python function signature.
@@ -75,6 +77,13 @@ pub struct PythonFunctionSignature<'a> {
     pub parameters: Vec<PythonParameterInfo<'a>>,
     /// Return type annotation AST node (`-> <type>`), if present.
     pub return_type_node: Option<AstNode<'a>>,
+    /// True if the function is decorated with an exempt signature decorator
+    /// ([`has_exempt_signature_decorator`]).
+    pub(super) has_exempt_signature_decorator: bool,
+    /// True if the function is directly enclosed in a `Protocol` or `ABC` class definition.
+    pub(super) is_in_protocol_or_abc_class: bool,
+    /// True if the body is a stub ([`is_stub_body`]).
+    pub(super) has_stub_body: bool,
 }
 
 impl PythonFunctionSignature<'_> {
@@ -84,7 +93,7 @@ impl PythonFunctionSignature<'_> {
     /// `@<property>.setter`.
     #[must_use]
     pub fn has_imposed_signature(&self) -> bool {
-        is_exempt_dunder_method(&self.name) || has_exempt_signature_decorator(&self.node)
+        is_exempt_dunder_method(&self.name) || self.has_exempt_signature_decorator
     }
 
     /// Returns true if the function is exempt from signature annotation rules: its signature
@@ -92,14 +101,14 @@ impl PythonFunctionSignature<'_> {
     /// class.
     #[must_use]
     pub fn is_exempt_from_signature_rules(&self) -> bool {
-        self.has_imposed_signature() || is_in_protocol_or_abc_class(&self.node)
+        self.has_imposed_signature() || self.is_in_protocol_or_abc_class
     }
 
     /// Returns true if the function is exempt from body-usage parameter rules (signature-exempt
     /// functions or stub bodies consisting only of `...`, `pass`, or `raise NotImplementedError`).
     #[must_use]
     pub fn is_exempt_from_body_usage_rules(&self) -> bool {
-        self.is_exempt_from_signature_rules() || is_stub_function_body(&self.node)
+        self.is_exempt_from_signature_rules() || self.has_stub_body
     }
 }
 
@@ -226,29 +235,45 @@ pub(super) fn extract_parameters<'a>(
 pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSignature<'_>> {
     struct SignatureVisitor<'a> {
         file: &'a ParsedFile,
+        /// True while directly inside a `Protocol` or `ABC` class body (not a nested `def`).
+        in_protocol_or_abc_class: bool,
         signatures: Vec<PythonFunctionSignature<'a>>,
     }
 
     impl<'a> SourceOrderVisitor<'a> for SignatureVisitor<'a> {
         fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if let Stmt::FunctionDef(func_def) = statement {
-                let parameters = extract_parameters_from_ast(&func_def.parameters, self.file);
-                let return_type_node = func_def
-                    .returns
-                    .as_ref()
-                    .map(|ret| AstNode::from_span(self.file, span_from_ruff_range(ret.range())));
-                self.signatures.push(PythonFunctionSignature {
-                    node: AstNode::from_span(self.file, span_from_ruff_range(func_def.range)),
-                    name_node: AstNode::from_span(
-                        self.file,
-                        span_from_ruff_range(func_def.name.range),
-                    ),
-                    name: func_def.name.id.to_string(),
-                    parameters,
-                    return_type_node,
-                });
+            let enclosing = self.in_protocol_or_abc_class;
+            match statement {
+                Stmt::FunctionDef(func_def) => {
+                    let parameters = extract_parameters_from_ast(&func_def.parameters, self.file);
+                    let return_type_node = func_def.returns.as_ref().map(|ret| {
+                        AstNode::from_span(self.file, span_from_ruff_range(ret.range()))
+                    });
+                    let decorators =
+                        extract_decorators_from_slice(&func_def.decorator_list, self.file);
+                    self.signatures.push(PythonFunctionSignature {
+                        node: AstNode::from_span(self.file, span_from_ruff_range(func_def.range)),
+                        name_node: AstNode::from_span(
+                            self.file,
+                            span_from_ruff_range(func_def.name.range),
+                        ),
+                        name: func_def.name.id.to_string(),
+                        parameters,
+                        return_type_node,
+                        has_exempt_signature_decorator: has_exempt_signature_decorator(&decorators),
+                        is_in_protocol_or_abc_class: enclosing,
+                        has_stub_body: is_stub_body(&func_def.body, &self.file.source),
+                    });
+                    self.in_protocol_or_abc_class = false;
+                }
+                Stmt::ClassDef(class_def) => {
+                    self.in_protocol_or_abc_class =
+                        is_protocol_or_abc_class(class_def, &self.file.source);
+                }
+                _ => {}
             }
             walk_stmt(self, statement);
+            self.in_protocol_or_abc_class = enclosing;
         }
     }
 
@@ -257,6 +282,7 @@ pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSigna
     };
     let mut visitor = SignatureVisitor {
         file,
+        in_protocol_or_abc_class: false,
         signatures: Vec::new(),
     };
     visitor.visit_body(&parsed.syntax().body);
@@ -312,17 +338,20 @@ fn is_exempt_dunder_method(func_name: &str) -> bool {
         && !matches!(func_name, "__init__" | "__new__" | "__call__")
 }
 
-/// Returns true if `func_node` is decorated with `@override`, `@overload`, `@abstractmethod`,
+/// Returns true if `decorators` include `@override`, `@overload`, `@abstractmethod`,
 /// `@fixture` (`@pytest.fixture`), `@<function>.register` (`functools.singledispatch`
 /// implementations, which dispatch on their annotations), or `@<property>.setter` (whose value
 /// type mirrors the getter's return type).
-fn has_exempt_signature_decorator(func_node: &AstNode<'_>) -> bool {
-    has_decorator(func_node, |terminal| {
+fn has_exempt_signature_decorator(decorators: &[DecoratorInfo<'_>]) -> bool {
+    let is_exempt = |name: &str| {
         matches!(
-            terminal,
+            name,
             OVERRIDE_DECORATOR | "overload" | "abstractmethod" | "fixture" | "register" | "setter"
         )
-    })
+    };
+    decorators
+        .iter()
+        .any(|decorator| is_exempt(&decorator.terminal_name) || is_exempt(&decorator.path))
 }
 
 /// Returns true if `statement` is an expression statement wrapping a string literal (docstring).
@@ -359,42 +388,28 @@ fn is_stub_statement(statement: &Stmt, source: &str) -> bool {
     }
 }
 
-/// Returns true if `func_node` has a stub body consisting only of an optional docstring and
-/// `...`, `pass`, or `raise NotImplementedError`.
-pub(super) fn is_stub_function_body(func_node: &AstNode<'_>) -> bool {
-    let Some(parsed) = func_node.file.py_module() else {
-        return false;
-    };
-    let Some(func_def) = find_function_def_at_span(parsed.syntax(), func_node.span()) else {
-        return false;
-    };
-    let statements = &func_def.body;
+/// Returns true if the function body `statements` is a stub consisting only of an optional
+/// docstring and `...`, `pass`, or `raise NotImplementedError`.
+fn is_stub_body(statements: &[Stmt], source: &str) -> bool {
     let remaining = if statements.first().is_some_and(is_docstring_statement) {
         &statements[1..]
     } else {
-        &statements[..]
+        statements
     };
-    remaining.is_empty()
-        || (remaining.len() == 1 && is_stub_statement(&remaining[0], &func_node.file.source))
+    remaining.is_empty() || (remaining.len() == 1 && is_stub_statement(&remaining[0], source))
 }
 
-/// Returns true if a Python `function_definition` is decorated with `@override`.
-#[must_use]
-fn has_override_decorator(func_node: &AstNode<'_>) -> bool {
-    has_decorator(func_node, |terminal| terminal == OVERRIDE_DECORATOR)
-}
-
-/// Returns true if `item`, the definition owning a name, has that name mandated by a contract.
+/// Returns true if `decorators` include `@override`, which makes the decorated method's name
+/// mandated by a contract.
 ///
 /// Python has no structural trait implementations, so the contract is an explicit
 /// `@override` decorator on a method.
-#[must_use]
-pub(in crate::code_lint::ast) fn is_trait_impl_member(item: &AstNode<'_>) -> bool {
-    let Some(parsed) = item.file.py_module() else {
-        return false;
-    };
-    find_function_def_at_span(parsed.syntax(), item.span()).is_some()
-        && has_override_decorator(item)
+pub(super) fn has_override_decorator(decorators: &[Decorator], file: &ParsedFile) -> bool {
+    extract_decorators_from_slice(decorators, file)
+        .iter()
+        .any(|decorator| {
+            decorator.terminal_name == OVERRIDE_DECORATOR || decorator.path == OVERRIDE_DECORATOR
+        })
 }
 
 /// Finds all nested Python function definitions (`def ...` inside another `def ...`) and returns

@@ -2,8 +2,8 @@
 
 use super::{
     AstNode, DecoratorInfo, ParsedFile, direct_function_definitions, extract_decorators_from_slice,
-    find_expr_at_span, in_place_mutated_receiver_expr, is_bare_final_annotation_expr,
-    method_receiver_name_ast, resolve_path_and_terminal_expr,
+    in_place_mutated_receiver_expr, is_bare_final_annotation_expr, method_receiver_name_ast,
+    resolve_path_and_terminal_expr,
 };
 use crate::code_lint::ast::span_from_ruff_range;
 use crate::diagnostic::SourceSpan;
@@ -172,73 +172,6 @@ fn is_field_synthesizing_class(class_def: &StmtClassDef, file: &ParsedFile) -> b
         || base_class_terminals(class_def, &file.source)
             .iter()
             .any(|terminal| terminal == "BaseModel")
-}
-
-/// Returns true if `node` (a method `function_definition` or class attribute node) is directly
-/// enclosed in a `Protocol` or `ABC` class definition.
-pub(super) fn is_in_protocol_or_abc_class(node: &AstNode<'_>) -> bool {
-    struct EnclosingScopeFinder<'a> {
-        target_span: SourceSpan,
-        source: &'a str,
-        in_protocol_or_abc: bool,
-        matched: Option<bool>,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for EnclosingScopeFinder<'a> {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if self.matched.is_some() {
-                return;
-            }
-            let span = span_from_ruff_range(statement.range());
-            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
-                return;
-            }
-            if span == self.target_span {
-                self.matched = Some(self.in_protocol_or_abc);
-                return;
-            }
-            let prev = self.in_protocol_or_abc;
-            match statement {
-                Stmt::ClassDef(class_def) => {
-                    self.in_protocol_or_abc = is_protocol_or_abc_class(class_def, self.source);
-                }
-                Stmt::FunctionDef(_) => {
-                    self.in_protocol_or_abc = false;
-                }
-                _ => {}
-            }
-            walk_stmt(self, statement);
-            self.in_protocol_or_abc = prev;
-        }
-
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if self.matched.is_some() {
-                return;
-            }
-            let span = span_from_ruff_range(expr.range());
-            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
-                return;
-            }
-            let prev = self.in_protocol_or_abc;
-            if matches!(expr, Expr::Lambda(_)) {
-                self.in_protocol_or_abc = false;
-            }
-            walk_expr(self, expr);
-            self.in_protocol_or_abc = prev;
-        }
-    }
-
-    let Some(parsed) = node.file.py_module() else {
-        return false;
-    };
-    let mut finder = EnclosingScopeFinder {
-        target_span: node.span(),
-        source: &node.file.source,
-        in_protocol_or_abc: false,
-        matched: None,
-    };
-    finder.visit_body(&parsed.syntax().body);
-    finder.matched.unwrap_or(false)
 }
 
 /// Discovers and extracts all class definitions from a Python file.
@@ -498,6 +431,8 @@ pub struct PythonInstanceAttributeAnnotation<'a> {
     pub annotation: AstNode<'a>,
     /// Full `assignment` AST node (`self.foo: int = 1` or `self.foo: int`).
     pub assignment_node: AstNode<'a>,
+    /// True if `annotation` is an unparameterized `Final` qualifier.
+    is_bare_final: bool,
 }
 
 impl PythonInstanceAttributeAnnotation<'_> {
@@ -505,14 +440,8 @@ impl PythonInstanceAttributeAnnotation<'_> {
     /// `typing.Final`, `Annotated[Final, ...]`), which PEP 591 forbids in a class body without
     /// an initializer.
     #[must_use]
-    pub fn is_bare_final(&self) -> bool {
-        let Some(parsed) = self.annotation.file.py_module() else {
-            return false;
-        };
-        let Some(expr) = find_expr_at_span(parsed.syntax(), self.annotation.span()) else {
-            return false;
-        };
-        is_bare_final_annotation_expr(expr, &self.annotation.file.source)
+    pub const fn is_bare_final(&self) -> bool {
+        self.is_bare_final
     }
 }
 
@@ -555,6 +484,10 @@ pub fn collect_instance_attribute_annotations(
                                 assignment_node: AstNode::from_span(
                                     self.file,
                                     span_from_ruff_range(ann_assign.range),
+                                ),
+                                is_bare_final: is_bare_final_annotation_expr(
+                                    type_expr,
+                                    &self.file.source,
                                 ),
                             });
                         }
