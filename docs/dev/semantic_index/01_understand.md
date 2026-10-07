@@ -1,7 +1,7 @@
 # Semantic index: 01 Understand
 
 > [!NOTE]
-> **Status: IN PROGRESS (2026-10-07).** Follow-up to the dedicated AST migration
+> **Status: DONE (2026-10-07).** Follow-up to the dedicated AST migration
 > ([ast_robustness](../ast_robustness/07_learn.md)). Inputs: a call-graph audit of `src/code_lint/`
 > and a review of how Ruff (`ruff_python_semantic`), Oxlint (`oxc_semantic`), Biome
 > (`biome_analyze`) and Clippy / rust-analyzer structure their AST, semantic model and rule queries.
@@ -10,7 +10,7 @@
 
 `AstNode<'a>` is `{ file, span }`. That keeps rules parser-agnostic, but `ruff_python_ast` has no
 parent links, so any helper taking an `AstNode` must walk the module from the root to find the
-node again. Helpers that extract a fact (a function, a binding, a call) drop context they had
+node again. Helpers that extract a fact (a binding, a function, a call) drop context they had
 during the walk, and callers re-derive it by span.
 
 | ID | Finding | Evidence |
@@ -58,11 +58,14 @@ walk that extracts the fact**, and memoize shared projections on `ParsedFile`.
    enclosing loop depth.
 2. **No root re-walks; memoized projections.** Record context flags at extraction time (bindings,
    function signatures, call candidates, asserts, module assignments); keep chained type queries on
-   parser types inside `ast/`; memoize the multi-consumer collectors and `CommentIndex`; delete the
-   span finders that become unused.
+   parser types inside `ast/`; delete the span finders that become unused.
+   **Done:** `BindingKind`, `PythonFunctionSignature` exemption flags + `definition: &'a StmtFunctionDef`,
+   `PythonAssert`, `AstCallCandidate` context flags (`is_with_context_manager`, `is_in_except_clause`,
+   `enclosing_functions`), `rust::nullable_return_payload`, and `PythonReturnTypeBranch` removed the
+   root re-walks (~16% user CPU reduction on the 150-file Python corpus).
 3. **Per-file import map.** Resolve Python `import` / `from … import` and Rust `use` aliases, with
    local definitions shadowing imports; replace `abc_set_imported`; promote the alias `known_gap`.
-   *Done:* `ast::resolve_name` (cached `ImportMap` on `ParsedFile`) returns
+   **Done:** `ast::resolve_name` (cached `ImportMap` on `ParsedFile`) returns
    `Imported(path)` / `Local` / `Unbound` from module-level Python imports and `def`/`class`
    (assignments excluded) and root-level Rust `use` trees and items. Wired into banned-call
    literal matching (D1) and Python collection/`Annotated`/`Final` classification;
@@ -70,7 +73,7 @@ walk that extracts the fact**, and memoize shared projections on `ParsedFile`.
    terminal name.
 4. **Cross-language symmetry.** Move rule-held AST logic into `ast/` and remove duplicated
    per-language algorithms in the 5 branching rules.
-   *Done:* only `nullable-collection-return` still duplicated logic; it now has per-language
+   **Done:** only `nullable-collection-return` still duplicated logic; it now has per-language
    collectors feeding one diagnostic builder. `identical-positional-types` and
    `call-before-definition` are Python-only and never branched; `packed-assertion` keeps one
    checker per language (Python flags come from `ast::python`, Rust keeps only macro-name policy);
@@ -78,6 +81,9 @@ walk that extracts the fact**, and memoize shared projections on `ParsedFile`.
    `environ[...]` subscripts remain behind a language check).
 5. **Split `ast/python.rs`.** Move parameter analysis and literal/positional-read collection (with
    their tests) into submodules.
+   **Done:** extracted `ast/python/parameter_usage.rs` (560 lines), `ast/python/positional_reads.rs`
+   (234 lines), and `ast/python/literals.rs` (449 lines), and moved `find_unwrapped_multiline_strings`
+   into `ast/python/strings.rs` (204 lines), shrinking `ast/python.rs` from 3,202 to 1,878 lines.
 
 Gate per slice: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test &&
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items`. Existing `rule_test!`
