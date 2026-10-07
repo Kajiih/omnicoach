@@ -208,16 +208,13 @@ pub(super) fn extract_parameters_from_ast<'a>(
 /// Extracts all parameters in order from a Python `parameters` or `function_definition` node.
 #[must_use]
 pub fn extract_parameters<'a>(func_or_params_node: &AstNode<'a>) -> Vec<PythonParameterInfo<'a>> {
-    let Some(file) = func_or_params_node.file_opt() else {
-        return Vec::new();
-    };
-    let Some(parsed) = file.py_module() else {
+    let Some(parsed) = func_or_params_node.file.py_module() else {
         return Vec::new();
     };
     let Some(params) = find_parameters_at_span(parsed.syntax(), func_or_params_node.span()) else {
         return Vec::new();
     };
-    extract_parameters_from_ast(params, file)
+    extract_parameters_from_ast(params, func_or_params_node.file)
 }
 
 /// Discovers and extracts all function signatures from a Python file.
@@ -361,10 +358,7 @@ fn is_stub_statement(statement: &Stmt, source: &str) -> bool {
 /// Returns true if `func_node` has a stub body consisting only of an optional docstring and
 /// `...`, `pass`, or `raise NotImplementedError`.
 pub(super) fn is_stub_function_body(func_node: &AstNode<'_>) -> bool {
-    let Some(file) = func_node.file_opt() else {
-        return false;
-    };
-    let Some(parsed) = file.py_module() else {
+    let Some(parsed) = func_node.file.py_module() else {
         return false;
     };
     let Some(func_def) = find_function_def_at_span(parsed.syntax(), func_node.span()) else {
@@ -376,7 +370,8 @@ pub(super) fn is_stub_function_body(func_node: &AstNode<'_>) -> bool {
     } else {
         &statements[..]
     };
-    remaining.is_empty() || (remaining.len() == 1 && is_stub_statement(&remaining[0], &file.source))
+    remaining.is_empty()
+        || (remaining.len() == 1 && is_stub_statement(&remaining[0], &func_node.file.source))
 }
 
 /// Returns true if a Python `function_definition` is decorated with `@override`.
@@ -391,10 +386,7 @@ pub fn has_override_decorator(func_node: &AstNode<'_>) -> bool {
 /// `@override` decorator on a method.
 #[must_use]
 pub fn is_trait_impl_member(item: &AstNode<'_>) -> bool {
-    let Some(file) = item.file_opt() else {
-        return false;
-    };
-    let Some(parsed) = file.py_module() else {
+    let Some(parsed) = item.file.py_module() else {
         return false;
     };
     find_function_def_at_span(parsed.syntax(), item.span()).is_some()

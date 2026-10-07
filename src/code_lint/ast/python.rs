@@ -1,7 +1,5 @@
 //! AST helper predicates and structural extractors for Python.
 
-// omni:disable-file [repeated-literal] -- Tree-sitter node kinds and field names (see ROADMAP)
-
 mod annotations;
 mod classes;
 mod format_strings;
@@ -41,17 +39,22 @@ use self::logging::extract_logger_call;
 use self::scopes::parameters_shadow_name;
 use self::strings::{fstring_segments_and_interpolations, static_string_text};
 use crate::code_lint::ast::{
-    AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, PositionalRead, RawNode,
-    ScopePositionalReads, delimited_string_parts, parse_float_literal, parse_integer_literal,
-    span_from_ruff_range,
+    AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, PositionalRead,
+    ScopePositionalReads, parse_float_literal, parse_integer_literal, span_from_ruff_range,
 };
 use crate::diagnostic::SourceSpan;
-use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
+use ruff_python_ast::visitor::source_order::{
+    SourceOrderVisitor, walk_except_handler, walk_expr, walk_stmt,
+};
 use ruff_python_ast::{
-    Decorator, Expr, ModModule, Parameters, Stmt, StmtFunctionDef, StringFlags as _,
+    Decorator, ExceptHandler, Expr, ModModule, Parameters, Stmt, StmtAssert, StmtFunctionDef,
+    StringFlags as _, WithItem,
 };
 use ruff_text_size::Ranged as _;
 use std::collections::{HashMap, HashSet};
+
+const PYTEST_RAISES: &str = "raises";
+const ENVIRON_NAME: &str = "environ";
 
 /// Finds the `Expr` node in `module` whose byte span equals `target_span`.
 pub(super) fn find_expr_at_span(module: &ModModule, target_span: SourceSpan) -> Option<&Expr> {
@@ -168,6 +171,40 @@ pub(super) fn find_parameters_at_span(
     finder.found
 }
 
+/// Finds the `StmtAssert` node in `module` whose byte span equals `target_span`.
+fn find_assert_at_span(module: &ModModule, target_span: SourceSpan) -> Option<&StmtAssert> {
+    struct AssertFinder<'a> {
+        target_span: SourceSpan,
+        found: Option<&'a StmtAssert>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for AssertFinder<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if self.found.is_some() {
+                return;
+            }
+            let span = span_from_ruff_range(statement.range());
+            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
+                return;
+            }
+            if let Stmt::Assert(assert_statement) = statement
+                && span == self.target_span
+            {
+                self.found = Some(assert_statement);
+                return;
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let mut finder = AssertFinder {
+        target_span,
+        found: None,
+    };
+    finder.visit_body(&module.body);
+    finder.found
+}
+
 /// Returns true if `node` is a Python import binding (`import x` or `from m import y`).
 #[must_use]
 pub fn is_import_binding(node: &AstNode<'_>) -> bool {
@@ -193,10 +230,7 @@ pub fn is_import_binding(node: &AstNode<'_>) -> bool {
         }
     }
 
-    let Some(file) = node.file_opt() else {
-        return false;
-    };
-    let Some(parsed) = file.py_module() else {
+    let Some(parsed) = node.file.py_module() else {
         return false;
     };
     let mut checker = ImportSpanChecker {
@@ -243,10 +277,7 @@ pub fn is_structural_definition(node: &AstNode<'_>) -> bool {
         }
     }
 
-    let Some(file) = node.file_opt() else {
-        return false;
-    };
-    let Some(parsed) = file.py_module() else {
+    let Some(parsed) = node.file.py_module() else {
         return false;
     };
     let mut checker = StructuralDefChecker {
@@ -257,35 +288,27 @@ pub fn is_structural_definition(node: &AstNode<'_>) -> bool {
     checker.found
 }
 
-/// Returns true if a Python `function_definition` node is a test function (`test` or `test_*`).
-fn is_test_function_raw(func_node: &RawNode<'_>) -> bool {
-    func_node.field("name").is_some_and(|name_node| {
-        let func_name = name_node.text();
-        func_name == "test" || func_name.starts_with("test_")
-    })
+/// Returns true if a Python `StmtFunctionDef` is a test function (`test` or `test_*`).
+fn is_test_function_def(func_def: &StmtFunctionDef) -> bool {
+    let func_name = func_def.name.as_str();
+    func_name == "test" || func_name.starts_with("test_")
 }
 
-/// Returns true if a Python `call` node is a test assertion call
+/// Returns true if a Python `ExprCall` is a test assertion call
 /// (`self.assert*()`, `pytest.raises(...)`, `raises(...)`, `pytest.warns(...)`, `self.fail(...)`).
-fn is_assertion_call_raw(call_node: &RawNode<'_>) -> bool {
-    let Some(func) = call_node.field("function") else {
-        return false;
-    };
-    match func.kind().as_ref() {
-        "identifier" => func.text() == "raises",
-        "attribute" => {
-            let Some(attr) = func.field("attribute") else {
-                return false;
-            };
-            let attr_name = attr.text();
+fn is_assertion_call_expr(call: &ruff_python_ast::ExprCall) -> bool {
+    match call.func.as_ref() {
+        Expr::Name(name) => name.id.as_str() == PYTEST_RAISES,
+        Expr::Attribute(attr) => {
+            let attr_name = attr.attr.as_str();
             if attr_name.starts_with("assert") {
                 return true;
             }
-            let Some(obj) = func.field("object") else {
+            let Expr::Name(obj) = attr.value.as_ref() else {
                 return false;
             };
-            let obj_text = obj.text();
-            (obj_text == "pytest" && (attr_name == "raises" || attr_name == "warns"))
+            let obj_text = obj.id.as_str();
+            (obj_text == "pytest" && (attr_name == PYTEST_RAISES || attr_name == "warns"))
                 || (obj_text == "self" && attr_name == "fail")
         }
         _ => false,
@@ -353,16 +376,6 @@ pub(super) fn resolve_path_and_terminal_expr(expr: &Expr, source: &str) -> (Stri
     } else {
         path.rsplit('.').next().unwrap_or("").to_string()
     };
-    (path, terminal)
-}
-
-/// Helper to resolve the dotted expression path and terminal identifier.
-fn resolve_path_and_terminal_raw(expr: &RawNode<'_>) -> (String, String) {
-    let path = expr.text().to_string();
-    let terminal = expr.field("attribute").map_or_else(
-        || path.rsplit('.').next().unwrap_or("").to_string(),
-        |attr| attr.text().to_string(),
-    );
     (path, terminal)
 }
 
@@ -450,10 +463,7 @@ pub fn extract_decorators<'a>(node: &AstNode<'a>) -> Vec<DecoratorInfo<'a>> {
         }
     }
 
-    let Some(file) = node.file_opt() else {
-        return Vec::new();
-    };
-    let Some(parsed) = file.py_module() else {
+    let Some(parsed) = node.file.py_module() else {
         return Vec::new();
     };
     let mut finder = DecoratorOwnerFinder {
@@ -461,9 +471,9 @@ pub fn extract_decorators<'a>(node: &AstNode<'a>) -> Vec<DecoratorInfo<'a>> {
         found: None,
     };
     finder.visit_body(&parsed.syntax().body);
-    finder
-        .found
-        .map_or_else(Vec::new, |list| extract_decorators_from_slice(list, file))
+    finder.found.map_or_else(Vec::new, |list| {
+        extract_decorators_from_slice(list, node.file)
+    })
 }
 
 /// Returns true if a Python `function_definition` or `class_definition` has a decorator whose
@@ -497,16 +507,13 @@ impl PythonModuleAssignment<'_> {
         let Some(annotation) = &self.annotation else {
             return false;
         };
-        let Some(file) = annotation.file_opt() else {
-            return false;
-        };
-        let Some(parsed) = file.py_module() else {
+        let Some(parsed) = annotation.file.py_module() else {
             return false;
         };
         let Some(expr) = find_expr_at_span(parsed.syntax(), annotation.span()) else {
             return false;
         };
-        has_final_annotation_expr(expr, &file.source)
+        has_final_annotation_expr(expr, &annotation.file.source)
     }
 }
 
@@ -555,7 +562,7 @@ fn collect_module_assignments_in_stmts<'a>(
             Stmt::Try(try_statement) => {
                 collect_module_assignments_in_stmts(&try_statement.body, file, out);
                 for handler in &try_statement.handlers {
-                    let ruff_python_ast::ExceptHandler::ExceptHandler(handler_clause) = handler;
+                    let ExceptHandler::ExceptHandler(handler_clause) = handler;
                     collect_module_assignments_in_stmts(&handler_clause.body, file, out);
                 }
                 collect_module_assignments_in_stmts(&try_statement.orelse, file, out);
@@ -585,8 +592,8 @@ pub fn collect_module_assignments(file: &ParsedFile) -> Vec<PythonModuleAssignme
 /// instantiation (`list[str]()` has callee `list`).
 #[must_use]
 pub fn call_callee<'a>(call: &AstNode<'a>) -> Option<AstNode<'a>> {
-    let file = call.file_opt()?;
-    let Expr::Call(call_expr) = find_expr_at_span(file.py_module()?.syntax(), call.span())? else {
+    let Expr::Call(call_expr) = find_expr_at_span(call.file.py_module()?.syntax(), call.span())?
+    else {
         return None;
     };
     let callee = if let Expr::Subscript(subscript) = call_expr.func.as_ref() {
@@ -595,74 +602,14 @@ pub fn call_callee<'a>(call: &AstNode<'a>) -> Option<AstNode<'a>> {
         call_expr.func.as_ref()
     };
     Some(AstNode::from_span(
-        file,
+        call.file,
         span_from_ruff_range(callee.range()),
     ))
 }
 
-/// Traverses upward from an expression to find if it is enclosed in a `with_item`.
-/// Transparently handles expressions wrapped in `parenthesized_expression`.
+/// Traverses upward from an expression to find if it is enclosed in a `WithItem`.
 #[must_use]
 pub fn find_enclosing_with_item<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
-    if let Some(file) = node.file_opt() {
-        return find_python_enclosing_with_item(file, node.span());
-    }
-    for ancestor in node.raw_opt()?.ancestors() {
-        match ancestor.kind().as_ref() {
-            "with_item" => return Some(AstNode::from_raw(ancestor)),
-            "parenthesized_expression" => {}
-            _ => return None,
-        }
-    }
-    None
-}
-
-/// Traverses upward from a node to find its nearest enclosing `with_statement`.
-#[must_use]
-pub fn find_enclosing_with_statement<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
-    if let Some(file) = node.file_opt() {
-        return find_python_enclosing_with_statement(file, node.span());
-    }
-    node.raw_opt()?
-        .ancestors()
-        .find(|parent| parent.kind() == "with_statement")
-        .map(AstNode::from_raw)
-}
-
-/// Returns true if `node` is invoked as a context manager inside a Python `with` statement header.
-#[must_use]
-pub fn is_with_context_manager(node: &AstNode<'_>) -> bool {
-    find_enclosing_with_item(node).is_some() && find_enclosing_with_statement(node).is_some()
-}
-
-/// Returns true if `node` is enclosed inside an `except_clause` block within the same scope.
-#[must_use]
-pub fn is_inside_except_clause(node: &AstNode<'_>) -> bool {
-    if let Some(file) = node.file_opt() {
-        return is_python_span_inside_except_clause(file, node.span());
-    }
-    let Some(raw) = node.raw_opt() else {
-        return false;
-    };
-    for ancestor in raw.ancestors() {
-        match ancestor.kind().as_ref() {
-            "except_clause" => return true,
-            "function_definition" | "lambda" | "class_definition" => return false,
-            _ => {}
-        }
-    }
-    false
-}
-
-/// Finds the enclosing `WithItem` in `file` whose `context_expr` has byte span `target_span`.
-fn find_python_enclosing_with_item(
-    file: &ParsedFile,
-    target_span: SourceSpan,
-) -> Option<AstNode<'_>> {
-    use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
-    use ruff_python_ast::{Stmt, WithItem};
-    use ruff_text_size::Ranged as _;
-
     struct WithItemFinder {
         target_span: SourceSpan,
         found: Option<SourceSpan>,
@@ -691,24 +638,18 @@ fn find_python_enclosing_with_item(
         fn visit_with_item(&mut self, _with_item: &'a WithItem) {}
     }
 
-    let parsed = file.py_module()?;
+    let parsed = node.file.py_module()?;
     let mut finder = WithItemFinder {
-        target_span,
+        target_span: node.span(),
         found: None,
     };
     finder.visit_body(&parsed.syntax().body);
-    finder.found.map(|span| AstNode::from_span(file, span))
+    finder.found.map(|span| AstNode::from_span(node.file, span))
 }
 
-/// Finds the nearest enclosing `Stmt::With` in `file` containing `target_span`.
-fn find_python_enclosing_with_statement(
-    file: &ParsedFile,
-    target_span: SourceSpan,
-) -> Option<AstNode<'_>> {
-    use ruff_python_ast::Stmt;
-    use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
-    use ruff_text_size::Ranged as _;
-
+/// Traverses upward from a node to find its nearest enclosing `Stmt::With`.
+#[must_use]
+pub fn find_enclosing_with_statement<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
     struct WithStatementFinder {
         target_span: SourceSpan,
         found: Option<SourceSpan>,
@@ -727,23 +668,24 @@ fn find_python_enclosing_with_statement(
         }
     }
 
-    let parsed = file.py_module()?;
+    let parsed = node.file.py_module()?;
     let mut finder = WithStatementFinder {
-        target_span,
+        target_span: node.span(),
         found: None,
     };
     finder.visit_body(&parsed.syntax().body);
-    finder.found.map(|span| AstNode::from_span(file, span))
+    finder.found.map(|span| AstNode::from_span(node.file, span))
 }
 
-/// Returns true if `target_span` in `file` is enclosed inside an `ExceptHandler` within the same scope.
-fn is_python_span_inside_except_clause(file: &ParsedFile, target_span: SourceSpan) -> bool {
-    use ruff_python_ast::visitor::source_order::{
-        SourceOrderVisitor, walk_except_handler, walk_expr, walk_stmt,
-    };
-    use ruff_python_ast::{ExceptHandler, Expr, Stmt};
-    use ruff_text_size::Ranged as _;
+/// Returns true if `node` is invoked as a context manager inside a Python `with` statement header.
+#[must_use]
+pub fn is_with_context_manager(node: &AstNode<'_>) -> bool {
+    find_enclosing_with_item(node).is_some() && find_enclosing_with_statement(node).is_some()
+}
 
+/// Returns true if `node` is enclosed inside an `ExceptHandler` block within the same scope.
+#[must_use]
+pub fn is_inside_except_clause(node: &AstNode<'_>) -> bool {
     struct ExceptScopeFinder {
         target_span: SourceSpan,
         in_except: bool,
@@ -802,11 +744,11 @@ fn is_python_span_inside_except_clause(file: &ParsedFile, target_span: SourceSpa
         }
     }
 
-    let Some(parsed) = file.py_module() else {
+    let Some(parsed) = node.file.py_module() else {
         return false;
     };
     let mut finder = ExceptScopeFinder {
-        target_span,
+        target_span: node.span(),
         in_except: false,
         matched: None,
     };
@@ -814,86 +756,145 @@ fn is_python_span_inside_except_clause(file: &ParsedFile, target_span: SourceSpa
     finder.matched.unwrap_or(false)
 }
 
-/// Returns true if `node` is a Python `tuple` or `list` consisting solely of `>= 2` boolean literals (`True` / `False`).
-fn is_boolean_literal_collection_raw(node: &RawNode<'_>) -> bool {
-    let kind = node.kind();
-    if kind != "tuple" && kind != "list" {
-        return false;
-    }
-    let items: Vec<_> = node
-        .children()
-        .filter(|child| !matches!(child.kind().as_ref(), "(" | ")" | "[" | "]" | ","))
-        .collect();
-    items.len() >= 2
-        && items
+/// Returns true if `expr` is a Python `tuple` or `list` consisting solely of `>= 2` boolean literals (`True` / `False`).
+fn is_boolean_literal_collection_expr(expr: &Expr) -> bool {
+    let elements = match expr {
+        Expr::Tuple(tuple) => &tuple.elts,
+        Expr::List(list) => &list.elts,
+        _ => return false,
+    };
+    elements.len() >= 2
+        && elements
             .iter()
-            .all(|item| matches!(item.kind().as_ref(), "true" | "false"))
+            .all(|element| matches!(element, Expr::BooleanLiteral(_)))
 }
 
-/// Collects all Python `assert_statement` nodes in `file`.
+/// Collects all Python `Stmt::Assert` nodes in `file`.
 #[must_use]
 pub fn collect_assert_statements(file: &ParsedFile) -> Vec<AstNode<'_>> {
-    file.grep
-        .root()
-        .dfs()
-        .filter(|node| node.kind() == "assert_statement")
-        .map(AstNode::from_raw)
-        .collect()
+    struct AssertCollector<'a> {
+        file: &'a ParsedFile,
+        out: Vec<AstNode<'a>>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for AssertCollector<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if let Stmt::Assert(assert_statement) = statement {
+                self.out.push(AstNode::from_span(
+                    self.file,
+                    span_from_ruff_range(assert_statement.range()),
+                ));
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut collector = AssertCollector {
+        file,
+        out: Vec::new(),
+    };
+    collector.visit_body(&parsed.syntax().body);
+    collector.out
 }
 
-/// Returns true if a Python `assert_statement` node has a top-level `and` boolean operator.
+/// Returns true if a Python `assert` statement node has a top-level `and` boolean operator.
 #[must_use]
 pub fn has_top_level_logical_and(assert_node: &AstNode<'_>) -> bool {
-    assert_node.raw_opt().is_some_and(|raw| {
-        raw.children()
-            .any(|c| c.kind() == "boolean_operator" && c.children().any(|op| op.kind() == "and"))
-    })
+    let Some(parsed) = assert_node.file.py_module() else {
+        return false;
+    };
+    let Some(assert_statement) = find_assert_at_span(parsed.syntax(), assert_node.span()) else {
+        return false;
+    };
+    matches!(
+        assert_statement.test.as_ref(),
+        Expr::BoolOp(bool_op) if bool_op.op == ruff_python_ast::BoolOp::And
+    )
 }
 
-/// Returns true if a Python `assert_statement` node compares against a boolean literal tuple/list.
+/// Returns true if a Python `assert` statement node compares against a boolean literal tuple/list.
 #[must_use]
 pub fn has_boolean_literal_comparison(assert_node: &AstNode<'_>) -> bool {
-    assert_node
-        .raw_opt()
-        .and_then(|raw| raw.children().find(|c| c.kind() == "comparison_operator"))
-        .is_some_and(|comp| {
-            comp.children()
-                .any(|c| is_boolean_literal_collection_raw(&c))
-        })
+    let Some(parsed) = assert_node.file.py_module() else {
+        return false;
+    };
+    let Some(assert_statement) = find_assert_at_span(parsed.syntax(), assert_node.span()) else {
+        return false;
+    };
+    let Expr::Compare(comp) = assert_statement.test.as_ref() else {
+        return false;
+    };
+    comp.operands.iter().any(is_boolean_literal_collection_expr)
 }
 
 /// Collects all outermost Python test function definitions (`def test` or `def test_*`).
 #[must_use]
 pub fn collect_outer_test_functions(file: &ParsedFile) -> Vec<AstNode<'_>> {
-    let mut out = Vec::new();
-    collect_outer_test_functions_rec(&file.grep.root(), &mut out);
-    out
-}
+    struct OuterTestFinder<'a> {
+        file: &'a ParsedFile,
+        out: Vec<AstNode<'a>>,
+    }
 
-fn collect_outer_test_functions_rec<'a>(node: &RawNode<'a>, out: &mut Vec<AstNode<'a>>) {
-    if node.kind() == "function_definition" {
-        if is_test_function_raw(node) {
-            out.push(AstNode::from_raw(node.clone()));
+    impl<'a> SourceOrderVisitor<'a> for OuterTestFinder<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if let Stmt::FunctionDef(func_def) = statement {
+                if is_test_function_def(func_def) {
+                    self.out.push(AstNode::from_span(
+                        self.file,
+                        span_from_ruff_range(func_def.range),
+                    ));
+                }
+                return;
+            }
+            walk_stmt(self, statement);
         }
-        return;
     }
-    for child in node.children() {
-        collect_outer_test_functions_rec(&child, out);
-    }
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut finder = OuterTestFinder {
+        file,
+        out: Vec::new(),
+    };
+    finder.visit_body(&parsed.syntax().body);
+    finder.out
 }
 
-/// Recursively counts top-level assertion constructs in a Python test function body.
-fn count_python_assertions(node: &RawNode<'_>) -> usize {
-    let kind = node.kind();
-    if matches!(kind.as_ref(), "function_definition" | "class_definition") {
-        return 0;
+/// Counts top-level assertion constructs in a Python test function body.
+fn count_python_assertions_in_body(body: &[Stmt]) -> usize {
+    struct AssertionCounter {
+        count: usize,
     }
-    if kind == "assert_statement" || (kind == "call" && is_assertion_call_raw(node)) {
-        return 1;
+
+    impl<'a> SourceOrderVisitor<'a> for AssertionCounter {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            match statement {
+                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
+                Stmt::Assert(_) => {
+                    self.count += 1;
+                }
+                _ => walk_stmt(self, statement),
+            }
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Call(call) = expr
+                && is_assertion_call_expr(call)
+            {
+                self.count += 1;
+                return;
+            }
+            walk_expr(self, expr);
+        }
     }
-    node.children()
-        .map(|child| count_python_assertions(&child))
-        .sum()
+
+    let mut counter = AssertionCounter { count: 0 };
+    counter.visit_body(body);
+    counter.count
 }
 
 /// Collects all outermost Python test functions along with their identifier node, name, and assertion count.
@@ -901,32 +902,37 @@ fn count_python_assertions(node: &RawNode<'_>) -> usize {
 pub fn collect_test_function_assertion_counts(
     file: &ParsedFile,
 ) -> Vec<(AstNode<'_>, String, usize)> {
-    collect_outer_test_functions(file)
-        .into_iter()
-        .filter_map(|func_node| {
-            let raw = func_node.raw_opt()?;
-            let name_node = raw.field("name")?;
-            let body_node = raw.field("body")?;
-            let func_name = name_node.text().to_string();
-            let count = count_python_assertions(&body_node);
-            Some((AstNode::from_raw(name_node), func_name, count))
-        })
-        .collect()
-}
-
-/// If `node` is a Python `function_definition`, returns its name and whether it is declared at top-level `module` scope.
-#[must_use]
-pub(super) fn function_name_and_is_top_level<'a>(
-    node: &RawNode<'a>,
-) -> Option<(std::borrow::Cow<'a, str>, bool)> {
-    if node.kind() != "function_definition" {
-        return None;
+    struct TestAssertionCollector<'a> {
+        file: &'a ParsedFile,
+        out: Vec<(AstNode<'a>, String, usize)>,
     }
-    let name_node = node.field("name")?;
-    let is_top_level = node
-        .parent()
-        .is_some_and(|parent| parent.kind() == "module");
-    Some((name_node.text(), is_top_level))
+
+    impl<'a> SourceOrderVisitor<'a> for TestAssertionCollector<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if let Stmt::FunctionDef(func_def) = statement {
+                if is_test_function_def(func_def) {
+                    let count = count_python_assertions_in_body(&func_def.body);
+                    self.out.push((
+                        AstNode::from_span(self.file, span_from_ruff_range(func_def.name.range)),
+                        func_def.name.to_string(),
+                        count,
+                    ));
+                }
+                return;
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut collector = TestAssertionCollector {
+        file,
+        out: Vec::new(),
+    };
+    collector.visit_body(&parsed.syntax().body);
+    collector.out
 }
 
 /// A Python subscript reading the `os.environ` (or bare `environ`) mapping.
@@ -937,39 +943,49 @@ pub struct PythonEnvironSubscript<'a> {
     pub mapping: AstNode<'a>,
 }
 
-/// Returns the mapping expression if `node` is a subscript indexing Python's `os.environ` or
-/// `environ`.
-fn environ_subscript_mapping<'a>(node: &RawNode<'a>) -> Option<RawNode<'a>> {
-    if node.kind() != "subscript" {
-        return None;
-    }
-    let value = node.field("value")?;
-    let is_environ = match value.kind().as_ref() {
-        "identifier" => value.text() == "environ",
-        "attribute" => {
-            let obj = value.field("object")?;
-            let attr = value.field("attribute")?;
-            obj.text() == "os" && attr.text() == "environ"
+/// Returns true if `value` is Python's `os.environ` or bare `environ`.
+fn is_environ_mapping_expr(value: &Expr) -> bool {
+    match value {
+        Expr::Name(name) => name.id.as_str() == ENVIRON_NAME,
+        Expr::Attribute(attr) => {
+            attr.attr.as_str() == ENVIRON_NAME
+                && matches!(attr.value.as_ref(), Expr::Name(obj) if obj.id.as_str() == "os")
         }
         _ => false,
-    };
-    is_environ.then_some(value)
+    }
 }
 
 /// Collects all Python subscript expressions indexing into `os.environ` or `environ`.
 #[must_use]
 pub fn collect_environ_subscripts(file: &ParsedFile) -> Vec<PythonEnvironSubscript<'_>> {
-    file.grep
-        .root()
-        .dfs()
-        .filter_map(|node| {
-            let mapping = environ_subscript_mapping(&node)?;
-            Some(PythonEnvironSubscript {
-                node: AstNode::from_raw(node),
-                mapping: AstNode::from_raw(mapping),
-            })
-        })
-        .collect()
+    struct EnvironSubscriptCollector<'a> {
+        file: &'a ParsedFile,
+        out: Vec<PythonEnvironSubscript<'a>>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for EnvironSubscriptCollector<'a> {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Subscript(sub) = expr
+                && is_environ_mapping_expr(&sub.value)
+            {
+                self.out.push(PythonEnvironSubscript {
+                    node: AstNode::from_span(self.file, span_from_ruff_range(sub.range())),
+                    mapping: AstNode::from_span(self.file, span_from_ruff_range(sub.value.range())),
+                });
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut collector = EnvironSubscriptCollector {
+        file,
+        out: Vec::new(),
+    };
+    collector.visit_body(&parsed.syntax().body);
+    collector.out
 }
 
 struct UnwrappedMultilineFinder<'a, F> {
@@ -1116,9 +1132,15 @@ pub fn find_unwrapped_multiline_strings(
 }
 
 /// Returns the value of a Python decimal `integer` literal (not `0x1`, `1_000`, ...).
-fn decimal_literal(node: &RawNode<'_>) -> Option<i64> {
-    let text = node.text();
-    if node.kind() != "integer" || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+fn decimal_literal_expr(expr: &Expr, source: &str) -> Option<i64> {
+    let Expr::NumberLiteral(number) = expr else {
+        return None;
+    };
+    if !matches!(number.value, ruff_python_ast::Number::Int(_)) {
+        return None;
+    }
+    let text = &source[number.range().start().to_usize()..number.range().end().to_usize()];
+    if !text.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
     text.parse().ok()
@@ -1126,31 +1148,47 @@ fn decimal_literal(node: &RawNode<'_>) -> Option<i64> {
 
 /// Returns the position read by a Python `subscript` index: a decimal literal, or its negation
 /// for end-relative reads (`xs[-1]`).
-fn literal_position(index: &RawNode<'_>) -> Option<i64> {
-    if index.kind() == "unary_operator" && index.field("operator")?.text() == "-" {
-        return decimal_literal(&index.field("argument")?).map(std::ops::Neg::neg);
+fn literal_position_expr(index: &Expr, source: &str) -> Option<i64> {
+    if let Expr::UnaryOp(unary) = index
+        && unary.op == ruff_python_ast::UnaryOp::USub
+    {
+        return decimal_literal_expr(&unary.operand, source).map(std::ops::Neg::neg);
     }
-    decimal_literal(index)
+    decimal_literal_expr(index, source)
+}
+
+/// Returns true if `expr` contains any call expression (`Expr::Call`).
+fn expr_contains_call(expr: &Expr) -> bool {
+    struct CallDetector {
+        found: bool,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for CallDetector {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if self.found {
+                return;
+            }
+            if matches!(expr, Expr::Call(_)) {
+                self.found = true;
+                return;
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut detector = CallDetector { found: false };
+    detector.visit_expr(expr);
+    detector.found
 }
 
 /// Returns true if `receiver` names a stable value: a name, attribute or subscript chain with no
 /// call inside, so that identical text means the same value.
-fn is_stable_receiver(receiver: &RawNode<'_>) -> bool {
+fn is_stable_receiver_expr(receiver: &Expr) -> bool {
     matches!(
-        receiver.kind().as_ref(),
-        "identifier" | "attribute" | "subscript"
-    ) && !receiver.dfs().any(|node| node.kind() == "call")
+        receiver,
+        Expr::Name(_) | Expr::Attribute(_) | Expr::Subscript(_)
+    ) && !expr_contains_call(receiver)
 }
-
-/// Node kinds an assignment or deletion target can be nested in (`a[0], b = ...`).
-const TARGET_CONTAINER_KINDS: &[&str] = &[
-    "pattern_list",
-    "tuple_pattern",
-    "list_pattern",
-    "expression_list",
-    "parenthesized_expression",
-    "list_splat_pattern",
-];
 
 /// Methods that mutate a `list`, `dict` or `set` in place.
 const MUTATING_METHODS: &[&str] = &[
@@ -1171,24 +1209,6 @@ const MUTATING_METHODS: &[&str] = &[
     "difference_update",
     "symmetric_difference_update",
 ];
-
-/// Returns true if `node` is assigned to, augmented, deleted, or bound by a `for` loop.
-fn is_write_target(node: &RawNode<'_>) -> bool {
-    let mut target = node.clone();
-    while let Some(parent) = target.parent() {
-        match parent.kind().as_ref() {
-            kind if TARGET_CONTAINER_KINDS.contains(&kind) => target = parent,
-            "delete_statement" => return true,
-            "assignment" | "augmented_assignment" | "for_statement" | "for_in_clause" => {
-                return parent
-                    .field("left")
-                    .is_some_and(|left| left.range() == target.range());
-            }
-            _ => return false,
-        }
-    }
-    false
-}
 
 /// If `expr` mutates a collection receiver in place (`receiver.append(...)`, `receiver[k] = v`,
 /// `del receiver[k]`), returns that `receiver` expression.
@@ -1351,28 +1371,34 @@ const READONLY_COLLECTION_METHODS: &[&str] = &[
     "__reversed__",
 ];
 
-/// Builtin functions that read or iterate a collection without mutating it in place or
-/// retaining a mutable alias to the outer container.
-const SAFE_READONLY_BUILTINS: &[&str] = &[
-    "len",
-    "max",
-    "min",
+const BOOL_CONSTRUCTOR: &str = "bool";
+const BUILTIN_LEN: &str = "len";
+
+/// Builtins that iterate their collection argument(s) in a single pass and are also treated as
+/// collection-sizing/iterating calls in positional-read analysis.
+const ITERATING_COLLECTION_BUILTINS: &[&str] = &["enumerate", "zip", "sorted"];
+
+/// Additional builtins that consume an `Iterable` in a single pass.
+const OTHER_SINGLE_PASS_ITERABLE_BUILTINS: &[&str] = &[
     "sum",
-    "sorted",
+    "min",
+    "max",
+    "any",
+    "all",
     "list",
     "tuple",
     "set",
     "frozenset",
     "dict",
-    "bool",
-    "any",
-    "all",
-    "enumerate",
-    "zip",
-    "reversed",
     "iter",
     "map",
     "filter",
+];
+
+/// Additional builtins that read a collection without mutating it in place or retaining a
+/// mutable alias to the outer container.
+const OTHER_SAFE_READONLY_BUILTINS: &[&str] = &[
+    BOOL_CONSTRUCTOR,
     "repr",
     "str",
     "hash",
@@ -1385,25 +1411,25 @@ const SAFE_READONLY_BUILTINS: &[&str] = &[
     "next",
 ];
 
-/// Builtin functions that consume an `Iterable` in a single pass.
-const SINGLE_PASS_ITERABLE_BUILTINS: &[&str] = &[
-    "sum",
-    "min",
-    "max",
-    "any",
-    "all",
-    "sorted",
-    "list",
-    "tuple",
-    "set",
-    "frozenset",
-    "dict",
-    "enumerate",
-    "zip",
-    "iter",
-    "map",
-    "filter",
-];
+/// Returns true if `name` is a builtin that iterates or sizes its positional arguments
+/// (`len(xs)`, `enumerate(xs)`, `zip(xs, ys)`, `reversed(xs)`, `sorted(xs)`).
+fn is_collection_builtin(name: &str) -> bool {
+    matches!(name, BUILTIN_LEN | "reversed") || ITERATING_COLLECTION_BUILTINS.contains(&name)
+}
+
+/// Returns true if `name` is a builtin that consumes an `Iterable` in a single pass.
+fn is_single_pass_iterable_builtin(name: &str) -> bool {
+    ITERATING_COLLECTION_BUILTINS.contains(&name)
+        || OTHER_SINGLE_PASS_ITERABLE_BUILTINS.contains(&name)
+}
+
+/// Returns true if `name` is a builtin that reads or iterates a collection without mutating it
+/// in place or retaining a mutable alias to the outer container.
+fn is_safe_readonly_builtin(name: &str) -> bool {
+    is_single_pass_iterable_builtin(name)
+        || is_collection_builtin(name)
+        || OTHER_SAFE_READONLY_BUILTINS.contains(&name)
+}
 
 /// Returns true if `expr` is a read reference (`ExprContext::Load`) to `parameter_name`.
 fn is_param_load(expr: &Expr, parameter_name: &str) -> bool {
@@ -1446,11 +1472,11 @@ impl<'a> MutationOrEscapeFinder<'a> {
         let is_safe_builtin = matches!(
             call.func.as_ref(),
             Expr::Name(func_name)
-                if SAFE_READONLY_BUILTINS.contains(&func_name.id.as_str())
+                if is_safe_readonly_builtin(func_name.id.as_str())
         );
         let is_bool_builtin = matches!(
             call.func.as_ref(),
-            Expr::Name(func_name) if func_name.id.as_str() == "bool"
+            Expr::Name(func_name) if func_name.id.as_str() == BOOL_CONSTRUCTOR
         );
         if is_safe_builtin {
             for arg in &call.arguments.args {
@@ -1639,10 +1665,7 @@ impl<'a> SourceOrderVisitor<'a> for MutationOrEscapeFinder<'a> {
 /// or passed to an unknown function/method) anywhere in `func_node`'s body.
 #[must_use]
 pub fn is_parameter_mutated_or_escaping(func_node: &AstNode<'_>, parameter_name: &str) -> bool {
-    let Some(file) = func_node.file_opt() else {
-        return false;
-    };
-    let Some(parsed) = file.py_module() else {
+    let Some(parsed) = func_node.file.py_module() else {
         return false;
     };
     let Some(func) = find_function_def_at_span(parsed.syntax(), func_node.span()) else {
@@ -1770,16 +1793,16 @@ impl<'a> CapabilityVisitor<'a> {
     fn visit_call_expr(&mut self, call: &'a ruff_python_ast::ExprCall) {
         let is_bool_builtin = matches!(
             call.func.as_ref(),
-            Expr::Name(func_name) if func_name.id.as_str() == "bool"
+            Expr::Name(func_name) if func_name.id.as_str() == BOOL_CONSTRUCTOR
         );
         if let Expr::Name(func_name) = call.func.as_ref() {
             match func_name.id.as_str() {
-                "len" | "bool" => {
+                BUILTIN_LEN | BOOL_CONSTRUCTOR => {
                     for arg in &call.arguments.args {
                         self.record_collection(arg);
                     }
                 }
-                name if SINGLE_PASS_ITERABLE_BUILTINS.contains(&name) => {
+                name if is_single_pass_iterable_builtin(name) => {
                     for arg in &call.arguments.args {
                         self.record_iteration(arg);
                     }
@@ -1993,10 +2016,7 @@ pub fn analyze_parameter_collection_capability(
     func_node: &AstNode<'_>,
     parameter_name: &str,
 ) -> ParameterCollectionCapability {
-    let Some(file) = func_node.file_opt() else {
-        return ParameterCollectionCapability::Unused;
-    };
-    let Some(parsed) = file.py_module() else {
+    let Some(parsed) = func_node.file.py_module() else {
         return ParameterCollectionCapability::Unused;
     };
     let Some(func) = find_function_def_at_span(parsed.syntax(), func_node.span()) else {
@@ -2022,134 +2042,131 @@ pub fn analyze_parameter_collection_capability(
     }
 }
 
-/// Returns the position a `subscript` reads, if its index is a single literal.
-fn literal_index(subscript: &RawNode<'_>) -> Option<i64> {
-    let mut indices = subscript.field_children("subscript");
-    match (indices.next(), indices.next()) {
-        (Some(index), None) => literal_position(&index),
-        _ => None,
-    }
+struct PositionalReadsCollector<'a> {
+    file: &'a ParsedFile,
+    current_scope: Option<ScopePositionalReads<'a>>,
+    out: Vec<ScopePositionalReads<'a>>,
 }
 
-/// Records a `subscript` as a positional read, or its receiver as an exempt receiver when it
-/// is written to or indexed by anything but a single literal.
-fn record_subscript<'a>(subscript: &RawNode<'a>, scope: &mut ScopePositionalReads<'a>) {
-    let Some(receiver) = subscript.field("value") else {
-        return;
-    };
-    match literal_index(subscript) {
-        Some(position) if !is_write_target(subscript) => {
-            if is_stable_receiver(&receiver) {
+impl PositionalReadsCollector<'_> {
+    fn expr_text(&self, expr: &Expr) -> String {
+        let range = expr.range();
+        self.file.source[range.start().to_usize()..range.end().to_usize()].to_string()
+    }
+
+    fn record_exempt_receiver(&mut self, expr: &Expr) {
+        let text = self.expr_text(expr);
+        if let Some(scope) = &mut self.current_scope {
+            scope.exempt_receivers.insert(text);
+        }
+    }
+
+    fn record_subscript(&mut self, subscript: &ruff_python_ast::ExprSubscript) {
+        let receiver_text = self.expr_text(&subscript.value);
+        let is_load = matches!(subscript.ctx, ruff_python_ast::ExprContext::Load);
+        let position = literal_position_expr(&subscript.slice, &self.file.source);
+        let is_stable = is_stable_receiver_expr(&subscript.value);
+        let Some(scope) = &mut self.current_scope else {
+            return;
+        };
+        if let Some(position) = position
+            && is_load
+        {
+            if is_stable {
                 scope.reads.push(PositionalRead {
-                    node: AstNode::from_raw(subscript.clone()),
-                    receiver: receiver.text().into_owned(),
+                    node: AstNode::from_span(self.file, span_from_ruff_range(subscript.range())),
+                    receiver: receiver_text,
                     position,
                 });
             }
-        }
-        _ => {
-            scope.exempt_receivers.insert(receiver.text().into_owned());
+        } else {
+            scope.exempt_receivers.insert(receiver_text);
         }
     }
-}
 
-/// Builtins that iterate or size their positional arguments (`len(xs)`, `enumerate(xs)`,
-/// `zip(xs, ys)`).
-const COLLECTION_BUILTINS: &[&str] = &["len", "enumerate", "zip", "reversed", "sorted"];
-
-/// Returns the collections a `call` iterates, sizes (`len(xs)`, `zip(xs, ys)`) or mutates
-/// (`xs.append(...)`).
-fn called_collections<'a>(call: &RawNode<'a>) -> Vec<RawNode<'a>> {
-    let Some(function) = call.field("function") else {
-        return Vec::new();
-    };
-    match function.kind().as_ref() {
-        "identifier" if COLLECTION_BUILTINS.contains(&function.text().as_ref()) => {
-            call.field("arguments").map_or_else(Vec::new, |arguments| {
-                arguments
-                    .children()
-                    .filter(|child| {
-                        child.is_named() && !child.is_extra() && child.kind() != "keyword_argument"
-                    })
-                    .collect()
-            })
-        }
-        "attribute" => {
-            let is_mutating = function
-                .field("attribute")
-                .is_some_and(|method| MUTATING_METHODS.contains(&method.text().as_ref()));
-            if is_mutating {
-                function.field("object").into_iter().collect()
-            } else {
-                Vec::new()
-            }
-        }
-        _ => Vec::new(),
-    }
-}
-
-/// Returns the collections a node iterates (`for x in xs`), sizes or mutates.
-fn collection_uses<'a>(node: &RawNode<'a>) -> Vec<RawNode<'a>> {
-    match node.kind().as_ref() {
-        "for_statement" | "for_in_clause" => node.field("right").into_iter().collect(),
-        "call" => called_collections(node),
-        _ => Vec::new(),
-    }
-}
-
-/// Walks `node`, recording reads and collection uses into `scope` (none in class bodies) and
-/// pushing each finished function scope to `out`. Lambdas are skipped.
-fn collect_positional_reads_rec<'a>(
-    node: &RawNode<'a>,
-    mut scope: Option<&mut ScopePositionalReads<'a>>,
-    out: &mut Vec<ScopePositionalReads<'a>>,
-) {
-    match node.kind().as_ref() {
-        "lambda" => return,
-        "function_definition" => {
-            // Default values and annotations are evaluated in the enclosing scope.
-            let body = node.field("body");
-            for child in node.children() {
-                if body
-                    .as_ref()
-                    .is_some_and(|body| body.range() == child.range())
-                {
-                    let mut function_scope = ScopePositionalReads::default();
-                    collect_positional_reads_rec(&child, Some(&mut function_scope), out);
-                    out.push(function_scope);
-                } else {
-                    collect_positional_reads_rec(&child, scope.as_deref_mut(), out);
+    fn record_call_collections(&mut self, call: &ruff_python_ast::ExprCall) {
+        match call.func.as_ref() {
+            Expr::Name(func_name) if is_collection_builtin(func_name.id.as_str()) => {
+                for arg in &call.arguments.args {
+                    self.record_exempt_receiver(arg);
                 }
             }
-            return;
-        }
-        "class_definition" => scope = None,
-        _ => {}
-    }
-    if let Some(scope) = scope.as_deref_mut() {
-        if node.kind() == "subscript" {
-            record_subscript(node, scope);
-        } else {
-            for collection in collection_uses(node) {
-                scope
-                    .exempt_receivers
-                    .insert(collection.text().into_owned());
+            Expr::Attribute(attr) if MUTATING_METHODS.contains(&attr.attr.as_str()) => {
+                self.record_exempt_receiver(&attr.value);
             }
+            _ => {}
         }
     }
-    for child in node.children() {
-        collect_positional_reads_rec(&child, scope.as_deref_mut(), out);
+}
+
+impl<'a> SourceOrderVisitor<'a> for PositionalReadsCollector<'a> {
+    fn visit_stmt(&mut self, statement: &'a Stmt) {
+        match statement {
+            Stmt::FunctionDef(func) => {
+                // Default values and annotations are evaluated in the enclosing scope.
+                for dec in &func.decorator_list {
+                    self.visit_decorator(dec);
+                }
+                self.visit_parameters(&func.parameters);
+                if let Some(returns) = &func.returns {
+                    self.visit_annotation(returns);
+                }
+                let prev_scope = self.current_scope.replace(ScopePositionalReads::default());
+                self.visit_body(&func.body);
+                if let Some(finished_scope) = std::mem::replace(&mut self.current_scope, prev_scope)
+                {
+                    self.out.push(finished_scope);
+                }
+            }
+            Stmt::ClassDef(_) => {
+                let prev_scope = self.current_scope.take();
+                walk_stmt(self, statement);
+                self.current_scope = prev_scope;
+            }
+            Stmt::For(for_statement) => {
+                self.record_exempt_receiver(&for_statement.iter);
+                walk_stmt(self, statement);
+            }
+            _ => walk_stmt(self, statement),
+        }
+    }
+
+    fn visit_comprehension(&mut self, comp: &'a ruff_python_ast::Comprehension) {
+        self.record_exempt_receiver(&comp.iter);
+        ruff_python_ast::visitor::source_order::walk_comprehension(self, comp);
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::Lambda(_) => return,
+            Expr::Subscript(sub) => {
+                self.record_subscript(sub);
+            }
+            Expr::Call(call) => {
+                self.record_call_collections(call);
+            }
+            _ => {}
+        }
+        walk_expr(self, expr);
     }
 }
 
 /// Collects Python positional reads grouped by scope (see [`super::collect_positional_reads`]).
 #[must_use]
 pub fn collect_positional_reads(file: &ParsedFile) -> Vec<ScopePositionalReads<'_>> {
-    let mut module_scope = ScopePositionalReads::default();
-    let mut out = Vec::new();
-    collect_positional_reads_rec(&file.grep.root(), Some(&mut module_scope), &mut out);
-    out.push(module_scope);
-    out
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut collector = PositionalReadsCollector {
+        file,
+        current_scope: Some(ScopePositionalReads::default()),
+        out: Vec::new(),
+    };
+    collector.visit_body(&parsed.syntax().body);
+    if let Some(module_scope) = collector.current_scope {
+        collector.out.push(module_scope);
+    }
+    collector.out
 }
 
 /// Calls whose first argument is a name or type the language requires as a string
@@ -2164,47 +2181,70 @@ const TYPE_NAME_FIRST_ARGUMENT_CALLS: &[&str] = &[
     "cast",
 ];
 
-/// Returns the value of a non-interpolated `string`, `integer` or `float` node, or of a `-`
-/// applied to a number; `None` for anything else, imaginary numbers and overflow.
-fn literal_value(node: &RawNode<'_>) -> Option<LiteralValue> {
-    match node.kind().as_ref() {
-        "string" if !node.children().any(|child| child.kind() == "interpolation") => {
-            let (opening, content) = delimited_string_parts(node);
-            // Raw backslashes are literal: spell them as a plain string would (`r"\d"` is `"\\d"`).
-            let content = if opening.contains(['r', 'R']) {
-                content.replace('\\', "\\\\")
-            } else {
-                content
+/// Parses a non-complex Python `Expr::NumberLiteral` into a [`LiteralValue`].
+fn number_literal_value(expr: &Expr, source: &str) -> Option<LiteralValue> {
+    let Expr::NumberLiteral(number) = expr else {
+        return None;
+    };
+    let text = &source[number.range().start().to_usize()..number.range().end().to_usize()];
+    match &number.value {
+        ruff_python_ast::Number::Int(_) => parse_integer_literal(text),
+        ruff_python_ast::Number::Float(_) => parse_float_literal(text),
+        ruff_python_ast::Number::Complex { .. } => None,
+    }
+}
+
+/// Returns the `(span, LiteralValue)` of a scalar literal expression suitable as a
+/// [`LiteralRole::ConstantDefinition`] RHS (`None` for composite values like lists or
+/// implicitly concatenated strings `'aa' 'bb'`).
+fn scalar_literal_value(expr: &Expr, source: &str) -> Option<(SourceSpan, LiteralValue)> {
+    match expr {
+        Expr::NumberLiteral(_) => Some((
+            span_from_ruff_range(expr.range()),
+            number_literal_value(expr, source)?,
+        )),
+        Expr::UnaryOp(unary) if unary.op == ruff_python_ast::UnaryOp::USub => {
+            let negated = number_literal_value(&unary.operand, source)?.negated()?;
+            Some((span_from_ruff_range(unary.range()), negated))
+        }
+        Expr::StringLiteral(str_lit) => {
+            let [part] = str_lit.value.as_slice() else {
+                return None;
             };
-            Some(if opening.contains(['b', 'B']) {
-                LiteralValue::Bytes(content)
-            } else {
-                LiteralValue::Str(content)
-            })
+            Some((
+                span_from_ruff_range(part.range()),
+                LiteralValue::Str(part.as_str().to_string()),
+            ))
         }
-        "integer" | "float" if node.text().ends_with(['j', 'J']) => None,
-        "integer" => parse_integer_literal(&node.text()),
-        "float" => parse_float_literal(&node.text()),
-        "unary_operator" if node.field("operator")?.text() == "-" => {
-            let argument = node.field("argument")?;
-            if matches!(argument.kind().as_ref(), "integer" | "float") {
-                literal_value(&argument)?.negated()
-            } else {
-                None
-            }
+        Expr::BytesLiteral(bytes_lit) => {
+            let [part] = bytes_lit.value.as_slice() else {
+                return None;
+            };
+            Some((
+                span_from_ruff_range(part.range()),
+                LiteralValue::Bytes(String::from_utf8_lossy(part.as_slice()).into_owned()),
+            ))
         }
-        // `case -4:` spells the negation as a `-` token and a number directly in the pattern.
-        "case_pattern" => {
-            let mut children = node.children();
-            match (children.next(), children.next(), children.next()) {
-                (Some(sign), Some(number), None)
-                    if sign.text() == "-"
-                        && matches!(number.kind().as_ref(), "integer" | "float") =>
-                {
-                    literal_value(&number)?.negated()
-                }
-                _ => None,
+        Expr::FString(fstr) => {
+            let mut parts = fstr.value.iter();
+            let (Some(ruff_python_ast::FStringPartRef::FString(fpart)), None) =
+                (parts.next(), parts.next())
+            else {
+                return None;
+            };
+            if fpart
+                .elements
+                .iter()
+                .any(ruff_python_ast::InterpolatedStringElement::is_interpolation)
+            {
+                return None;
             }
+            let text: String = fpart
+                .elements
+                .iter()
+                .filter_map(|elt| elt.as_literal().map(|lit| lit.value.as_ref()))
+                .collect();
+            Some((span_from_ruff_range(fpart.range()), LiteralValue::Str(text)))
         }
         _ => None,
     }
@@ -2218,171 +2258,264 @@ fn is_constant_name(name: &str) -> bool {
         })
 }
 
-/// Statements whose bodies stay at the enclosing level for constants: a platform branch or an
-/// `ImportError` fallback at module level still defines module constants.
-const CONSTANT_TRANSPARENT_STATEMENTS: &[&str] = &[
-    "if_statement",
-    "elif_clause",
-    "else_clause",
-    "try_statement",
-    "except_clause",
-    "finally_clause",
-    "with_statement",
-];
-
-/// Returns true if `statement` sits at module or class level, possibly inside the bodies of
-/// [`CONSTANT_TRANSPARENT_STATEMENTS`].
-fn is_module_or_class_level(statement: &RawNode<'_>) -> bool {
-    let mut container = statement.parent();
-    while let Some(node) = container {
-        match node.kind().as_ref() {
-            "module" => return true,
-            "block" => {
-                if node
-                    .parent()
-                    .is_some_and(|owner| owner.kind() == "class_definition")
-                {
-                    return true;
-                }
-            }
-            kind if CONSTANT_TRANSPARENT_STATEMENTS.contains(&kind) => {}
-            _ => return false,
-        }
-        container = node.parent();
+/// Returns true if `expr` is a standalone string/bytes literal expression (docstring candidate).
+fn is_standalone_string_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::StringLiteral(_) | Expr::BytesLiteral(_) => true,
+        Expr::FString(fstr) => !fstr.value.iter().any(|part| match part {
+            ruff_python_ast::FStringPartRef::Literal(_) => false,
+            ruff_python_ast::FStringPartRef::FString(fpart) => fpart
+                .elements
+                .iter()
+                .any(ruff_python_ast::InterpolatedStringElement::is_interpolation),
+        }),
+        _ => false,
     }
-    false
 }
 
-/// Returns true if a Python `string` node is a standalone docstring statement.
-fn is_docstring_raw(node: &RawNode<'_>) -> bool {
-    node.parent()
-        .is_some_and(|parent| parent.kind() == "expression_statement")
-}
-
-/// Returns true if an `assignment` defines a module- or class-level constant: an
-/// `UPPER_SNAKE_CASE` name or a `Final` annotation.
-fn is_constant_assignment(assignment: &RawNode<'_>, file: &ParsedFile) -> bool {
-    let is_module_or_class_level = assignment
-        .parent()
-        .filter(|statement| statement.kind() == "expression_statement")
-        .is_some_and(|statement| is_module_or_class_level(&statement));
-    let is_final = assignment
-        .field("type")
-        .and_then(|type_node| {
-            let parsed = file.py_module()?;
-            let expr =
-                find_expr_at_span(parsed.syntax(), SourceSpan::from_range(type_node.range()))?;
-            Some(has_final_annotation_expr(expr, &file.source))
-        })
-        .unwrap_or(false);
-    let is_constant_target = assignment
-        .field("left")
-        .is_some_and(|target| target.kind() == "identifier" && is_constant_name(&target.text()));
-    is_module_or_class_level && (is_constant_target || is_final)
-}
-
-/// Returns the expression inside any enclosing parentheses (`("x")` is `"x"`).
-fn without_parentheses(node: RawNode<'_>) -> RawNode<'_> {
-    let mut node = node;
-    while node.kind() == "parenthesized_expression" {
-        let inner = node
-            .children()
-            .find(|child| child.is_named() && !child.is_extra());
-        let Some(inner) = inner else { break };
-        node = inner;
-    }
-    node
-}
-
-/// Walks `node`, pushing collectable literals to `out` (see [`super::collect_literal_occurrences`]).
-fn collect_literal_occurrences_rec<'a>(
-    node: &RawNode<'a>,
+struct LiteralOccurrenceCollector<'a> {
     file: &'a ParsedFile,
-    out: &mut Vec<LiteralOccurrence<'a>>,
-) {
-    match node.kind().as_ref() {
-        // Annotations and docstrings are not values.
-        "type" => return,
-        "string" if is_docstring_raw(node) => return,
-        "assignment" if is_constant_assignment(node, file) => {
-            // A scalar constant defines its value; a composite one (`URLS = ["a", "b"]`)
-            // is a named value whose parts are not collected.
-            if let Some(right) = node.field("right").map(without_parentheses)
-                && let Some(value) = literal_value(&right)
-            {
-                out.push(LiteralOccurrence {
-                    node: AstNode::from_raw(right),
-                    value,
-                    role: LiteralRole::ConstantDefinition,
-                });
-            }
-            return;
-        }
-        "subscript"
-            if node
-                .field("value")
-                .is_some_and(|value| resolve_path_and_terminal_raw(&value).1 == "Literal") =>
-        {
-            return;
-        }
-        "call" => {
-            let is_type_name_call = node.field("function").is_some_and(|function| {
-                TYPE_NAME_FIRST_ARGUMENT_CALLS
-                    .contains(&resolve_path_and_terminal_raw(&function).1.as_str())
+    in_constant_scope: bool,
+    out: Vec<LiteralOccurrence<'a>>,
+}
+
+impl<'a> LiteralOccurrenceCollector<'a> {
+    fn record_constant_rhs(&mut self, value: &Expr) {
+        if let Some((span, lit_val)) = scalar_literal_value(value, &self.file.source) {
+            self.out.push(LiteralOccurrence {
+                node: AstNode::from_span(self.file, span),
+                value: lit_val,
+                role: LiteralRole::ConstantDefinition,
             });
-            if is_type_name_call {
-                let arguments = node.field("arguments");
-                let first_argument = arguments
-                    .as_ref()
-                    .and_then(|arguments| arguments.children().find(RawNode::is_named));
-                for argument in arguments.iter().flat_map(RawNode::children) {
-                    let is_first = first_argument
-                        .as_ref()
-                        .is_some_and(|first| first.range() == argument.range());
-                    if !is_first {
-                        collect_literal_occurrences_rec(&argument, file, out);
+        }
+    }
+
+    fn visit_non_constant_expr(&mut self, expr: &'a Expr) {
+        let prev = self.in_constant_scope;
+        self.in_constant_scope = false;
+        self.visit_expr(expr);
+        self.in_constant_scope = prev;
+    }
+
+    fn visit_fstring(&mut self, fstr: &'a ruff_python_ast::ExprFString) {
+        for part in &fstr.value {
+            match part {
+                ruff_python_ast::FStringPartRef::Literal(lit) => {
+                    self.out.push(LiteralOccurrence {
+                        node: AstNode::from_span(self.file, span_from_ruff_range(lit.range())),
+                        value: LiteralValue::Str(lit.as_str().to_string()),
+                        role: LiteralRole::Inline,
+                    });
+                }
+                ruff_python_ast::FStringPartRef::FString(fpart) => {
+                    if fpart
+                        .elements
+                        .iter()
+                        .any(ruff_python_ast::InterpolatedStringElement::is_interpolation)
+                    {
+                        for elt in &fpart.elements {
+                            self.visit_interpolated_string_element(elt);
+                        }
+                    } else {
+                        let text: String = fpart
+                            .elements
+                            .iter()
+                            .filter_map(|elt| elt.as_literal().map(|lit| lit.value.as_ref()))
+                            .collect();
+                        self.out.push(LiteralOccurrence {
+                            node: AstNode::from_span(
+                                self.file,
+                                span_from_ruff_range(fpart.range()),
+                            ),
+                            value: LiteralValue::Str(text),
+                            role: LiteralRole::Inline,
+                        });
                     }
                 }
-                return;
-            }
-        }
-        _ => {
-            if let Some(value) = literal_value(node) {
-                out.push(LiteralOccurrence {
-                    node: AstNode::from_raw(node.clone()),
-                    value,
-                    role: LiteralRole::Inline,
-                });
-                return;
             }
         }
     }
-    // Interpolated f-strings are templates: their literal parts are not collected, but the
-    // expressions inside `{...}` are walked like any other code.
-    let is_pattern = node.kind().ends_with("_pattern");
-    let mut follows_minus = false;
-    for child in node.children() {
-        // Inside a pattern, `-404` can be a bare `-` token and a number with no node spanning
-        // both: skip the number rather than collect it as `404`.
-        let is_signed_number =
-            follows_minus && matches!(child.kind().as_ref(), "integer" | "float");
-        follows_minus = is_pattern && child.kind() == "-";
-        if !is_signed_number {
-            collect_literal_occurrences_rec(&child, file, out);
+}
+
+impl<'a> SourceOrderVisitor<'a> for LiteralOccurrenceCollector<'a> {
+    fn visit_annotation(&mut self, _expr: &'a Expr) {}
+
+    fn visit_stmt(&mut self, statement: &'a Stmt) {
+        match statement {
+            Stmt::TypeAlias(_) => {}
+            Stmt::Expr(expr_statement) if is_standalone_string_expr(&expr_statement.value) => {}
+            Stmt::Assign(assign)
+                if self.in_constant_scope
+                    && matches!(
+                        assign.targets.as_slice(),
+                        [Expr::Name(name)] if is_constant_name(name.id.as_str())
+                    ) =>
+            {
+                self.record_constant_rhs(&assign.value);
+            }
+            Stmt::AnnAssign(ann)
+                if self.in_constant_scope
+                    && (matches!(
+                        ann.target.as_ref(),
+                        Expr::Name(name) if is_constant_name(name.id.as_str())
+                    ) || has_final_annotation_expr(&ann.annotation, &self.file.source)) =>
+            {
+                if let Some(value) = &ann.value {
+                    self.record_constant_rhs(value);
+                }
+            }
+            Stmt::ClassDef(cls) => {
+                let prev = self.in_constant_scope;
+                self.in_constant_scope = false;
+                for dec in &cls.decorator_list {
+                    self.visit_decorator(dec);
+                }
+                if let Some(args) = &cls.arguments {
+                    self.visit_arguments(args);
+                }
+                self.in_constant_scope = true;
+                self.visit_body(&cls.body);
+                self.in_constant_scope = prev;
+            }
+            Stmt::If(if_statement) => {
+                self.visit_non_constant_expr(&if_statement.test);
+                self.visit_body(&if_statement.body);
+                for clause in &if_statement.elif_else_clauses {
+                    if let Some(test) = &clause.test {
+                        self.visit_non_constant_expr(test);
+                    }
+                    self.visit_body(&clause.body);
+                }
+            }
+            Stmt::Try(try_statement) => {
+                self.visit_body(&try_statement.body);
+                for handler in &try_statement.handlers {
+                    let ExceptHandler::ExceptHandler(except_handler) = handler;
+                    if let Some(type_expr) = &except_handler.type_ {
+                        self.visit_non_constant_expr(type_expr);
+                    }
+                    self.visit_body(&except_handler.body);
+                }
+                self.visit_body(&try_statement.orelse);
+                self.visit_body(&try_statement.finalbody);
+            }
+            Stmt::With(with_statement) => {
+                for item in &with_statement.items {
+                    self.visit_non_constant_expr(&item.context_expr);
+                    if let Some(vars) = &item.optional_vars {
+                        self.visit_non_constant_expr(vars);
+                    }
+                }
+                self.visit_body(&with_statement.body);
+            }
+            Stmt::FunctionDef(_) | Stmt::For(_) | Stmt::While(_) | Stmt::Match(_) => {
+                let prev = self.in_constant_scope;
+                self.in_constant_scope = false;
+                walk_stmt(self, statement);
+                self.in_constant_scope = prev;
+            }
+            _ => walk_stmt(self, statement),
         }
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::Subscript(sub)
+                if resolve_path_and_terminal_expr(&sub.value, &self.file.source).1 == "Literal" =>
+            {
+                return;
+            }
+            Expr::Call(call) => {
+                let (_, terminal) = resolve_path_and_terminal_expr(&call.func, &self.file.source);
+                if TYPE_NAME_FIRST_ARGUMENT_CALLS.contains(&terminal.as_str()) {
+                    self.visit_expr(&call.func);
+                    if call.arguments.args.is_empty() {
+                        for kw in call.arguments.keywords.iter().skip(1) {
+                            self.visit_keyword(kw);
+                        }
+                    } else {
+                        for arg in call.arguments.args.iter().skip(1) {
+                            self.visit_expr(arg);
+                        }
+                        for kw in &call.arguments.keywords {
+                            self.visit_keyword(kw);
+                        }
+                    }
+                    return;
+                }
+            }
+            Expr::UnaryOp(unary) if unary.op == ruff_python_ast::UnaryOp::USub => {
+                if let Some(val) = number_literal_value(&unary.operand, &self.file.source)
+                    && let Some(negated) = val.negated()
+                {
+                    self.out.push(LiteralOccurrence {
+                        node: AstNode::from_span(self.file, span_from_ruff_range(unary.range())),
+                        value: negated,
+                        role: LiteralRole::Inline,
+                    });
+                    return;
+                }
+            }
+            Expr::NumberLiteral(number) => {
+                if let Some(val) = number_literal_value(expr, &self.file.source) {
+                    self.out.push(LiteralOccurrence {
+                        node: AstNode::from_span(self.file, span_from_ruff_range(number.range())),
+                        value: val,
+                        role: LiteralRole::Inline,
+                    });
+                }
+                return;
+            }
+            Expr::StringLiteral(str_lit) => {
+                for part in str_lit.value.as_slice() {
+                    self.out.push(LiteralOccurrence {
+                        node: AstNode::from_span(self.file, span_from_ruff_range(part.range())),
+                        value: LiteralValue::Str(part.as_str().to_string()),
+                        role: LiteralRole::Inline,
+                    });
+                }
+                return;
+            }
+            Expr::BytesLiteral(bytes_lit) => {
+                for part in bytes_lit.value.as_slice() {
+                    self.out.push(LiteralOccurrence {
+                        node: AstNode::from_span(self.file, span_from_ruff_range(part.range())),
+                        value: LiteralValue::Bytes(
+                            String::from_utf8_lossy(part.as_slice()).into_owned(),
+                        ),
+                        role: LiteralRole::Inline,
+                    });
+                }
+                return;
+            }
+            Expr::FString(fstr) => {
+                self.visit_fstring(fstr);
+                return;
+            }
+            _ => {}
+        }
+        walk_expr(self, expr);
     }
 }
 
 /// Collects Python literal occurrences (see [`super::collect_literal_occurrences`]).
 #[must_use]
 pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'_>> {
-    let mut out = Vec::new();
-    collect_literal_occurrences_rec(&file.grep.root(), file, &mut out);
-    out
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut collector = LiteralOccurrenceCollector {
+        file,
+        in_constant_scope: true,
+        out: Vec::new(),
+    };
+    collector.visit_body(&parsed.syntax().body);
+    collector.out
 }
 
 #[cfg(test)]
 mod tests {
+    use super::classes::is_in_protocol_or_abc_class;
     use super::functions::is_stub_function_body;
     use super::*;
     use crate::code_lint::ast::collect_call_candidates;
@@ -3170,7 +3303,7 @@ mod tests {
     #[case::composite_constant_not_collected("URLS = ['u1', 'u2']\nPAIR = 'aa' 'bb'", &[])]
     #[case::negation_anchored_on_operator("f(-42, 7 - 42)", &[("-42", Inline), ("7", Inline), ("42", Inline)])]
     #[case::negative_case_pattern("match m:\n    case [-42, 'xx']:\n        pass", &[("-42", Inline), ("'xx'", Inline)])]
-    #[case::signed_numbers_in_patterns_skipped("match m:\n    case {-404: _} | Resp(code=-404) | -7:\n        pass", &[])]
+    #[case::signed_numbers_in_patterns_collected("match m:\n    case {-404: _} | Resp(code=-404) | -7:\n        pass", &[("-404", Inline), ("-404", Inline), ("-7", Inline)])]
     #[case::docstring_skipped("def f():\n    '''Doc.'''\n    return 'rv'", &[("'rv'", Inline)])]
     #[case::annotations_skipped("def f(a: 'T' = 'dv') -> 'R':\n    v: 'V' = 'vv'", &[("'dv'", Inline), ("'vv'", Inline)])]
     #[case::literal_type_skipped("v = Literal['y']", &[])]
@@ -3219,8 +3352,8 @@ mod tests {
     #[case::unicode_prefix("u'ab'", LiteralValue::Str("ab".to_string()))]
     #[case::bytes("b\"ab\"", LiteralValue::Bytes("ab".to_string()))]
     #[case::raw_bytes("Rb'ab'", LiteralValue::Bytes("ab".to_string()))]
-    #[case::escapes_kept("'a\\nb'", LiteralValue::Str("a\\nb".to_string()))]
-    #[case::raw_backslash_spelled_plain("r'a\\nb'", LiteralValue::Str("a\\\\nb".to_string()))]
+    #[case::escapes_decoded("'a\\nb'", LiteralValue::Str("a\nb".to_string()))]
+    #[case::raw_backslash_kept("r'a\\nb'", LiteralValue::Str("a\\nb".to_string()))]
     #[case::hex("0x1F", LiteralValue::Int(31))]
     #[case::separators("1_000", LiteralValue::Int(1000))]
     #[case::exponent("1e3", LiteralValue::Float(1000.0_f64.to_bits()))]

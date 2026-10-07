@@ -440,14 +440,14 @@ pub struct LineColumn {
 }
 
 /// Optimized index for mapping flat byte offsets to 1-indexed (line, column) positions.
-struct LineIndex {
+pub(crate) struct LineIndex {
     inner: line_index::LineIndex,
 }
 
 impl LineIndex {
     /// Creates a new `LineIndex` for the given file content.
     #[must_use]
-    fn new(content: &str) -> Self {
+    pub(crate) fn new(content: &str) -> Self {
         Self {
             inner: line_index::LineIndex::new(content),
         }
@@ -455,7 +455,7 @@ impl LineIndex {
 
     /// Resolves a byte offset to a 1-indexed (line, column) coordinate.
     #[must_use]
-    fn lookup(&self, offset: usize) -> LineColumn {
+    pub(crate) fn lookup(&self, offset: usize) -> LineColumn {
         let line_col = self.inner.line_col(line_index::TextSize::from(
             u32::try_from(offset).unwrap_or(u32::MAX),
         ));
@@ -463,6 +463,12 @@ impl LineIndex {
             line: line_col.line as usize + 1,
             column: line_col.col as usize + 1,
         }
+    }
+
+    /// Resolves a byte offset to a 1-indexed line number.
+    #[must_use]
+    pub(crate) fn line(&self, offset: usize) -> usize {
+        self.lookup(offset).line
     }
 }
 

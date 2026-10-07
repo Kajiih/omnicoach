@@ -220,15 +220,12 @@ pub(super) fn is_in_protocol_or_abc_class(node: &AstNode<'_>) -> bool {
         }
     }
 
-    let Some(file) = node.file_opt() else {
-        return false;
-    };
-    let Some(parsed) = file.py_module() else {
+    let Some(parsed) = node.file.py_module() else {
         return false;
     };
     let mut finder = EnclosingScopeFinder {
         target_span: node.span(),
-        source: &file.source,
+        source: &node.file.source,
         in_protocol_or_abc: false,
         matched: None,
     };
@@ -501,16 +498,13 @@ impl PythonInstanceAttributeAnnotation<'_> {
     /// an initializer.
     #[must_use]
     pub fn is_bare_final(&self) -> bool {
-        let Some(file) = self.annotation.file_opt() else {
-            return false;
-        };
-        let Some(parsed) = file.py_module() else {
+        let Some(parsed) = self.annotation.file.py_module() else {
             return false;
         };
         let Some(expr) = find_expr_at_span(parsed.syntax(), self.annotation.span()) else {
             return false;
         };
-        is_bare_final_annotation_expr(expr, &file.source)
+        is_bare_final_annotation_expr(expr, &self.annotation.file.source)
     }
 }
 

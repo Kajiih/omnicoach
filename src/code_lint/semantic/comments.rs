@@ -194,7 +194,7 @@ impl<'a> CommentIndex<'a> {
                 comments_by_line.insert(
                     line,
                     IndexedComment {
-                        node: node.clone(),
+                        node,
                         is_standalone,
                     },
                 );

@@ -62,9 +62,9 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                 `assert_eq!`, `panic!`, `bail!`, `warn!`, `include_str!` and similar). Interpolated
                 Python f-strings are templates and skipped, but literals inside their `{...}` count,
                 as do `case` and `match` patterns and `matches!`. A negative number written as a
-                bare `-` token, inside a Rust macro or a Python mapping, keyword or `|` pattern, is
-                skipped. Test files and Rust `#[cfg(test)]` and `#[test]` code are not checked. The
-                reported count covers only the occurrences collected under these rules."#},
+                bare `-` token inside a Rust macro is skipped. Test files and Rust `#[cfg(test)]`
+                and `#[test]` code are not checked. The reported count covers only the occurrences
+                collected under these rules."#},
             why_is_this_bad: indoc::indoc! {r#"
                 A literal copied across a file is a value without a name: the reader must guess what
                 `"primary-db"` or `30` stands for, and changing it means finding every copy. Missing
@@ -282,15 +282,15 @@ crate::test_utils::rule_test!(
                     log(f"user {name} logged in")
                     log(f"user {name} logged in")
                 "#,
-                known_gap_negative_numbers_in_mapping_and_keyword_patterns => r#"
+            ],
+            fail: [
+                negative_numbers_in_mapping_and_keyword_patterns => r#"
                     match response:
                         case {-404: _}:
                             pass
                         case Response(status=-404):
                             pass
-                "#,
-            ],
-            fail: [
+                "# => "-404",
                 repeated_string_flags_second_use => r#"
                     connect("primary-db")
                     reconnect("primary-db")

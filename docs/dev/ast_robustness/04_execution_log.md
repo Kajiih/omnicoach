@@ -129,3 +129,31 @@
   - `architecture_conformance` 11, `cli` 23 (includes self-dogfooding), `registry` 17;
   - doctests 8 passed, 1 ignored;
   - no rustdoc warnings.
+
+---
+
+## Slice 5 — Migrate `src/code_lint/ast/python.rs`, Drop `AstGrep` from `code_lint`, and Trim `ast-grep-language` (Decisions D1, D2, D5, D6, D8) — DONE
+
+- **Goal**: Migrate the remaining extractors in `src/code_lint/ast/python.rs` (`collect_test_function_assertion_counts`, `collect_positional_reads`, `collect_literal_occurrences`), delete all transitional `AstGrep` / `RawNode` / `AstNodeRepr` scaffolding from `src/code_lint/ast.rs`, reuse `crate::diagnostic::LineIndex`, port `src/bin/ast_dumper.rs`, trim `ast-grep-language` to `tree-sitter-bash`, and enforce parser crate boundaries in `tests/architecture_conformance.rs`.
+- **Changes**:
+  - `src/code_lint/ast/python.rs` & `src/code_lint/ast/python/strings.rs` & `src/code_lint/ast/python/logging.rs`:
+    - Migrated `collect_test_function_assertion_counts` (`Stmt::Assert`, `with pytest.raises(...)`, and top-level boolean `and` detection), `collect_positional_reads` (scope-aware integer-indexed subscript reads with mutation and sizing/iteration tracking), and `collect_literal_occurrences` (using native `StringLiteral::as_str()` and `BytesLiteral::as_slice()` decoding per Decision D6, plus `PatternMatchValue` negative number extraction per Decision D5).
+    - Deleted `normalize_string_content`, `strip_named_unicode_escapes`, and `delimited_string_parts`; simplified `static_string_text` to `string_literal.value.to_str()`.
+    - Deduplicated builtin name constants (`is_collection_builtin`, `is_single_pass_iterable_builtin`, `is_safe_readonly_builtin`) and removed `// omni:disable-file [repeated-literal]` from `src/code_lint/ast/python.rs`.
+  - `src/code_lint/rules/repeated_literal.rs`:
+    - Promoted `negative_numbers_in_mapping_and_keyword_patterns` from `pass:` (`known_gap_...`) to `fail:` (Decision D5) and updated the rule's `what_it_does` documentation accordingly.
+  - `src/diagnostic.rs` & `src/code_lint/ast.rs`:
+    - Made `crate::diagnostic::LineIndex` `pub(crate)` and reused it in `src/code_lint/ast.rs`.
+    - Removed `AstGrep`, `SourceDoc`, `RawNode`, `to_support_lang`, `AstNodeRepr`, `from_raw`, `raw_opt`, and `file_opt` from `src/code_lint/ast.rs` (Decision D2).
+    - Made `AstNode<'a>` `#[derive(Clone, Copy)]` with `{ file: &'a ParsedFile, span: SourceSpan }`.
+  - `src/bin/ast_dumper.rs`:
+    - Ported from `ast-grep` to `ra_ap_syntax::SourceFile` and `ruff_python_parser::parse_module`.
+  - `Cargo.toml` & `tests/architecture_conformance.rs`:
+    - Trimmed `ast-grep-language` to `{ version = "0.45", default-features = false, features = ["tree-sitter-bash"] }` (Decision D8), removed `=` version pins on `ruff_*` / `ra_ap_syntax`, and documented why `multiple_crate_versions = "allow"` lives in `[lints.clippy]`.
+    - Restricted `AST_GREP_OWNERS` (`ast_grep_core`, `ast_grep_language`) to `&["command_lint::command"]` and added `DEDICATED_AST_OWNERS` (`ruff_python_parser`, `ruff_python_ast`, `ruff_text_size`, `ra_ap_syntax`) restricted to `&["code_lint::ast", "bin::ast_dumper"]`.
+- **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo doc --no-deps --document-private-items` is green:
+  - lib 1397 passed;
+  - `architecture_conformance` 11, `cli` 23 (includes self-dogfooding), `registry` 17;
+  - doctests 8 passed, 1 ignored;
+  - no rustdoc warnings.
+

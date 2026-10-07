@@ -45,48 +45,12 @@ pub(super) fn fstring_segments_and_interpolations<'a>(
     (segments, interpolations)
 }
 
-/// Replaces unescaped `\N{...}` named Unicode character escapes with a space in non-raw strings
-/// so `{...}` inside `\N{NAME}` is not mistaken for a PEP 3101 format field.
-fn strip_named_unicode_escapes(content: &str) -> String {
-    let mut cleaned = String::with_capacity(content.len());
-    let mut cursor = 0;
-    while cursor < content.len() {
-        let rest = &content[cursor..];
-        if rest.starts_with(r"\\") {
-            cleaned.push_str(r"\\");
-            cursor += 2;
-        } else if let Some(after_prefix) = rest.strip_prefix(r"\N{")
-            && let Some(close_offset) = after_prefix.find('}')
-            && !after_prefix[..close_offset].contains('{')
-        {
-            cleaned.push(' ');
-            cursor += 3 + close_offset + 1;
-        } else if let Some(character) = rest.chars().next() {
-            cleaned.push(character);
-            cursor += character.len_utf8();
-        } else {
-            break;
-        }
-    }
-    cleaned
-}
-
-/// Extracts the static text of a plain string literal or an implicit concatenation of plain
-/// string literals (with `\N{...}` escapes stripped in non-raw strings), excluding f-strings and
-/// byte strings.
-pub(super) fn static_string_text(expr: &Expr, source: &str) -> Option<String> {
+/// Extracts the decoded text of a plain string literal or an implicit concatenation of plain
+/// string literals, excluding f-strings and byte strings.
+pub(super) fn static_string_text(expr: &Expr) -> Option<String> {
     let Expr::StringLiteral(string_literal) = expr else {
         return None;
     };
-    let mut combined = String::new();
-    for part in string_literal.value.as_slice() {
-        let range = part.content_range();
-        let content = &source[usize::from(range.start())..usize::from(range.end())];
-        if part.flags.prefix().is_raw() {
-            combined.push_str(content);
-        } else {
-            combined.push_str(&strip_named_unicode_escapes(content));
-        }
-    }
-    (!combined.is_empty()).then_some(combined)
+    let text = string_literal.value.to_str();
+    (!text.is_empty()).then(|| text.to_owned())
 }
