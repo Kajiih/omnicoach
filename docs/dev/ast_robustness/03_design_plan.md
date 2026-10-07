@@ -249,7 +249,7 @@ Each slice is designed to compile cleanly and pass `cargo fmt --check && cargo c
 0. [Slice 0: Toolchain Update]           → verify: rustc 1.99.0 installed (DONE)
 1. [Slice 1: Omni Language Enum]         → verify: cargo clippy & test green; 0 SupportLang outside ast.rs / command.rs (DONE)
 2. [Slice 2: AST Core + CallPattern]     → verify: Cargo.toml updated; ast.rs + statements.rs + semantic/calls.rs migrated; find_pattern_calls deleted (DONE)
-3. [Slice 3: Rust AST (ra_ap_syntax)]    → verify: ast/rust.rs 100% migrated; 0 RawNode in rust.rs
+3. [Slice 3: Rust AST (ra_ap_syntax)]    → verify: ast/rust.rs 100% migrated; 0 RawNode in rust.rs (DONE)
 4. [Slice 4: Python AST Submodules]      → verify: ast/python/{strings,format_strings,logging,annotations,classes,functions,scopes}.rs migrated
 5. [Slice 5: Python Root + Drop AstGrep] → verify: ast/python.rs migrated; 0 AstGrep in code_lint; ast-grep-language trimmed to bash
 6. [Slice 6: Boundaries + Memoization + Zero-Legacy Audit] → verify: OnceLock caches + visibility tightening + Phase 5/6 audit 100% green

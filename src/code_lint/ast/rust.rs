@@ -1,293 +1,267 @@
-//! AST helper predicates for structural traversal in Rust.
-
-// omni:disable-file [repeated-literal] -- Tree-sitter node kinds and field names (see ROADMAP)
+//! AST helper predicates and structural extractors for Rust (`ra_ap_syntax`).
 
 use crate::code_lint::ast::{
-    AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, PositionalRead, RawNode,
-    ScopePositionalReads, delimited_string_parts, parse_float_literal, parse_integer_literal,
+    AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, PositionalRead,
+    ScopePositionalReads, is_rust_comment_kind, parse_float_literal, parse_integer_literal,
+    span_from_rowan_range,
+};
+use crate::diagnostic::SourceSpan;
+use ra_ap_syntax::ast::{
+    self, HasAttrs as _, HasGenericArgs as _, HasModuleItem as _, HasName as _, HasVisibility as _,
+};
+use ra_ap_syntax::{
+    AstNode as _, AstToken as _, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken,
 };
 
-/// Returns true for Rust comment node kinds.
-///
-/// Rust distinguishes `//` from `/* */`. Doc comments are not separate kinds: `/// text`
-/// parses as a `line_comment` wrapping `outer_doc_comment_marker` and `doc_comment`, so
-/// matching only the outer kinds covers documentation without counting it twice.
-#[must_use]
-pub fn is_comment_kind(kind: &str) -> bool {
-    matches!(kind, "line_comment" | "block_comment")
+/// Keyword identifier `"self"` in Rust `use` trees and expressions.
+const SELF_KEYWORD: &str = "self";
+/// Identifier `"test"` used in `#[test]`, `#[cfg(test)]`, and `test_*` functions.
+const TEST_IDENTIFIER: &str = "test";
+/// Rust 32-bit float literal suffix.
+const FLOAT_SUFFIX_32: &str = "f32";
+/// Rust 64-bit float literal suffix.
+const FLOAT_SUFFIX_64: &str = "f64";
+/// Unqualified name of `std::option::Option`.
+const OPTION_TYPE_NAME: &str = "Option";
+/// Unqualified name of `std::task::Poll`.
+const POLL_TYPE_NAME: &str = "Poll";
+/// Unqualified name of `std::boxed::Box`.
+const BOX_TYPE_NAME: &str = "Box";
+/// Unqualified name of `std::rc::Rc`.
+const RC_TYPE_NAME: &str = "Rc";
+/// Unqualified name of `std::sync::Arc`.
+const ARC_TYPE_NAME: &str = "Arc";
+/// Unqualified name of `std::borrow::Cow`.
+const COW_TYPE_NAME: &str = "Cow";
+
+/// Resolves the deepest [`SyntaxNode`] in `node`'s file covering `node.span()`.
+fn syntax_node(node: &AstNode<'_>) -> Option<SyntaxNode> {
+    let file = node.file_opt()?;
+    let parsed = file.rs_parsed()?;
+    let span = node.span();
+    let start_offset = u32::try_from(span.start).ok()?;
+    let end_offset = u32::try_from(span.end).ok()?;
+    let range = ra_ap_syntax::TextRange::new(start_offset.into(), end_offset.into());
+    match parsed.tree().syntax().covering_element(range) {
+        SyntaxElement::Node(found) => Some(found),
+        SyntaxElement::Token(token) => token.parent(),
+    }
 }
 
-/// Returns true if a Rust node of `parent_kind` makes a child identifier an import binding.
-#[must_use]
-pub fn is_import_binding_parent(parent_kind: &str) -> bool {
-    matches!(
-        parent_kind,
-        "use_declaration" | "use_list" | "use_as_clause" | "scoped_identifier"
-    )
+/// Casts the syntax node at `node.span()` (or an exact-range wrapper ancestor) to `T`.
+fn cast_at_span<T: ra_ap_syntax::AstNode>(node: &AstNode<'_>) -> Option<T> {
+    let inner = syntax_node(node)?;
+    let target_range = inner.text_range();
+    inner
+        .ancestors()
+        .take_while(|ancestor| ancestor.text_range() == target_range)
+        .find_map(T::cast)
 }
 
-/// Returns true if a Rust node of `parent_kind` declares a structural definition name.
+/// Returns true if `node` is an import binding introduced by a `use` declaration.
 #[must_use]
-pub fn is_structural_definition_parent(parent_kind: &str) -> bool {
-    matches!(
-        parent_kind,
-        "struct_item"
-            | "enum_item"
-            | "trait_item"
-            | "type_item"
-            | "associated_type"
-            | "function_item"
-    )
+pub(super) fn is_import_binding(node: &AstNode<'_>) -> bool {
+    syntax_node(node).is_some_and(|syntax| {
+        syntax
+            .ancestors()
+            .any(|ancestor| ast::Use::can_cast(ancestor.kind()))
+    })
 }
 
-/// Returns true if `item`, the definition owning a name, has that name mandated by a contract.
-///
-/// The contract is an `impl Trait for Type` block: the member sits in the `declaration_list`
-/// of an `impl_item` that names a trait.
+/// Returns true if `node` is the declared name of a struct, enum, trait, type alias, or function.
+#[must_use]
+pub(super) fn is_structural_definition(node: &AstNode<'_>) -> bool {
+    syntax_node(node)
+        .and_then(|syntax| syntax.parent())
+        .is_some_and(|parent| {
+            matches!(
+                parent.kind(),
+                SyntaxKind::STRUCT
+                    | SyntaxKind::ENUM
+                    | SyntaxKind::TRAIT
+                    | SyntaxKind::TYPE_ALIAS
+                    | SyntaxKind::FN
+            )
+        })
+}
+
+/// Returns true if `item`, the definition (or its identifier) owning a name, has that name
+/// mandated by a trait implementation contract (`impl Trait for Type`).
 #[must_use]
 pub fn is_trait_impl_member(item: &AstNode<'_>) -> bool {
-    let Some(raw) = item.raw_opt() else {
+    let Some(syntax) = syntax_node(item) else {
         return false;
     };
+    let member_node = if syntax.kind() == SyntaxKind::NAME {
+        let Some(parent) = syntax.parent() else {
+            return false;
+        };
+        parent
+    } else {
+        syntax
+    };
     if !matches!(
-        raw.kind().as_ref(),
-        "function_item" | "type_item" | "associated_type" | "const_item"
+        member_node.kind(),
+        SyntaxKind::FN | SyntaxKind::TYPE_ALIAS | SyntaxKind::CONST
     ) {
         return false;
     }
-    let Some(body) = raw.parent() else {
+    let Some(assoc_items) = member_node.parent() else {
         return false;
     };
-    if body.kind().as_ref() != "declaration_list" {
+    if !ast::AssocItemList::can_cast(assoc_items.kind()) {
         return false;
     }
-    let Some(impl_item) = body.parent() else {
-        return false;
-    };
-    impl_item.kind().as_ref() == "impl_item" && impl_item.field("trait").is_some()
+    assoc_items
+        .parent()
+        .and_then(ast::Impl::cast)
+        .is_some_and(|impl_item| impl_item.trait_().is_some())
 }
 
-/// Recursively extracts binding identifiers from a pattern node.
-fn extract_from_pattern<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
-    let kind = node.kind();
-    match kind.as_ref() {
-        "identifier" => {
-            // Exclude uppercase names (variants/constants like None, Ok, MAX)
-            // which are type constructor references rather than variable bindings.
-            if let Some(first_char) = node.text().chars().next()
-                && first_char.is_ascii_uppercase()
+/// Extracts binding identifiers in source order from a pattern subtree.
+fn extract_from_pattern<'a>(
+    pattern: &ast::Pat,
+    file: &'a ParsedFile,
+    bindings: &mut Vec<AstNode<'a>>,
+) {
+    for descendant in pattern.syntax().descendants() {
+        if let Some(ident_pattern) = ast::IdentPat::cast(descendant)
+            && let Some(name) = ident_pattern.name()
+        {
+            let text = name.text();
+            if text
+                .chars()
+                .next()
+                .is_some_and(|first_char| first_char.is_ascii_uppercase())
             {
-                return;
+                continue;
             }
-            if node.text() != "_" {
-                bindings.push(AstNode::from_raw(node.clone()));
-            }
-        }
-        "shorthand_field_identifier" => {
-            bindings.push(AstNode::from_raw(node.clone()));
-        }
-        "struct_pattern" | "tuple_struct_pattern" => {
-            let type_node = node.field("type");
-            for child in node.children() {
-                if let Some(ref struct_type) = type_node
-                    && struct_type.range() == child.range()
-                {
-                    continue;
-                }
-                if child.kind() == "type_identifier" {
-                    continue;
-                }
-                extract_from_pattern(&child, bindings);
-            }
-        }
-        "field_pattern" => {
-            for child in node.children() {
-                if child.kind() != "field_identifier" && child.kind() != ":" {
-                    extract_from_pattern(&child, bindings);
-                }
-            }
-        }
-        "match_pattern" => {
-            let cond = node.field("condition");
-            for child in node.children() {
-                if let Some(ref condition) = cond
-                    && condition.range() == child.range()
-                {
-                    continue;
-                }
-                if child.kind() == "if" {
-                    continue;
-                }
-                extract_from_pattern(&child, bindings);
-            }
-        }
-        _ => {
-            for child in node.children() {
-                extract_from_pattern(&child, bindings);
+            if text != "_" {
+                bindings.push(AstNode::from_span(
+                    file,
+                    span_from_rowan_range(name.syntax().text_range()),
+                ));
             }
         }
     }
 }
 
-/// Helper to extract the last segment identifier from a path node.
-fn extract_last_segment<'a>(node: &RawNode<'a>) -> Option<RawNode<'a>> {
-    match node.kind().as_ref() {
-        "identifier" => Some(node.clone()),
-        "scoped_identifier" => node.field("name"),
+/// Recursively extracts bindings from a `use` tree in source order.
+fn extract_from_use_tree<'a>(
+    use_tree: &ast::UseTree,
+    prefix_last_segment: Option<&ast::NameRef>,
+    file: &'a ParsedFile,
+    bindings: &mut Vec<AstNode<'a>>,
+) {
+    if let Some(rename) = use_tree.rename() {
+        if let Some(name) = rename.name()
+            && name.text() != "_"
+        {
+            bindings.push(AstNode::from_span(
+                file,
+                span_from_rowan_range(name.syntax().text_range()),
+            ));
+        }
+        return;
+    }
+    if let Some(sub_trees) = use_tree.use_tree_list() {
+        let last_segment = use_tree
+            .path()
+            .and_then(|path| path.segment())
+            .and_then(|segment| segment.name_ref());
+        for child_tree in sub_trees.use_trees() {
+            extract_from_use_tree(&child_tree, last_segment.as_ref(), file, bindings);
+        }
+        return;
+    }
+    if use_tree.star_token().is_some() {
+        return;
+    }
+    if let Some(path) = use_tree.path()
+        && let Some(segment) = path.segment()
+        && let Some(name_ref) = segment.name_ref()
+    {
+        if name_ref.text() == SELF_KEYWORD && path.qualifier().is_none() {
+            if let Some(parent_segment) = prefix_last_segment {
+                bindings.push(AstNode::from_span(
+                    file,
+                    span_from_rowan_range(parent_segment.syntax().text_range()),
+                ));
+            }
+        } else if name_ref.text() != "_" {
+            bindings.push(AstNode::from_span(
+                file,
+                span_from_rowan_range(name_ref.syntax().text_range()),
+            ));
+        }
+    }
+}
+
+/// Extracts the pattern child of a pattern-binding syntax node (`let`, `for`, parameter, match arm).
+fn node_pattern(node: &SyntaxNode) -> Option<ast::Pat> {
+    match node.kind() {
+        SyntaxKind::LET_STMT => ast::LetStmt::cast(node.clone())?.pat(),
+        SyntaxKind::LET_EXPR => ast::LetExpr::cast(node.clone())?.pat(),
+        SyntaxKind::FOR_EXPR => ast::ForExpr::cast(node.clone())?.pat(),
+        SyntaxKind::PARAM => ast::Param::cast(node.clone())?.pat(),
+        SyntaxKind::MATCH_ARM => ast::MatchArm::cast(node.clone())?.pat(),
         _ => None,
     }
 }
 
-/// Recursively extracts bindings from a use declaration.
-fn extract_from_use<'a>(
-    node: &RawNode<'a>,
-    bindings: &mut Vec<AstNode<'a>>,
-    prefix_last_segment: Option<&RawNode<'a>>,
-) {
-    match node.kind().as_ref() {
-        "use_declaration" => {
-            for child in node.children() {
-                if child.kind() != "use" && child.kind() != ";" {
-                    extract_from_use(&child, bindings, None);
-                }
-            }
-        }
-        "identifier" => {
-            if node.text() != "_" {
-                bindings.push(AstNode::from_raw(node.clone()));
-            }
-        }
-        "self" => {
-            if let Some(parent) = prefix_last_segment {
-                bindings.push(AstNode::from_raw(parent.clone()));
-            }
-        }
-        "scoped_identifier" => {
-            if let Some(last_seg) = extract_last_segment(node)
-                && last_seg.text() != "_"
-            {
-                bindings.push(AstNode::from_raw(last_seg));
-            }
-        }
-        "use_as_clause" => {
-            if let Some(alias) = node.field("alias")
-                && alias.text() != "_"
-            {
-                bindings.push(AstNode::from_raw(alias));
-            }
-        }
-        "scoped_use_list" => {
-            if let (Some(path), Some(list)) = (node.field("path"), node.field("list")) {
-                let last_seg = extract_last_segment(&path);
-                extract_from_use(&list, bindings, last_seg.as_ref());
-            }
-        }
-        "use_list" => {
-            for child in node.children() {
-                let kind = child.kind();
-                if kind != "{" && kind != "}" && kind != "," {
-                    extract_from_use(&child, bindings, prefix_last_segment);
-                }
-            }
-        }
-        _ => {}
+/// Extracts the declared [`ast::Name`] of a named Rust item or record field declaration.
+fn named_item_identifier(node: &SyntaxNode) -> Option<ast::Name> {
+    match node.kind() {
+        SyntaxKind::CONST => ast::Const::cast(node.clone())?.name(),
+        SyntaxKind::STATIC => ast::Static::cast(node.clone())?.name(),
+        SyntaxKind::FN => ast::Fn::cast(node.clone())?.name(),
+        SyntaxKind::STRUCT => ast::Struct::cast(node.clone())?.name(),
+        SyntaxKind::ENUM => ast::Enum::cast(node.clone())?.name(),
+        SyntaxKind::TRAIT => ast::Trait::cast(node.clone())?.name(),
+        SyntaxKind::TYPE_ALIAS => ast::TypeAlias::cast(node.clone())?.name(),
+        SyntaxKind::RECORD_FIELD => ast::RecordField::cast(node.clone())?.name(),
+        _ => None,
     }
 }
 
-fn traverse_rust<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
-    let kind = node.kind();
-    match kind.as_ref() {
-        "let_declaration" | "let_condition" => {
-            if let Some(pattern) = node.field("pattern") {
-                extract_from_pattern(&pattern, bindings);
-            } else {
-                let mut found_let = false;
-                for child in node.children() {
-                    if child.kind() == "let" {
-                        found_let = true;
-                        continue;
-                    }
-                    if found_let {
-                        extract_from_pattern(&child, bindings);
-                        break;
-                    }
-                }
-            }
-            for child in node.children() {
-                traverse_rust(&child, bindings);
+fn traverse_rust<'a>(node: &SyntaxNode, file: &'a ParsedFile, bindings: &mut Vec<AstNode<'a>>) {
+    if let Some(use_item) = ast::Use::cast(node.clone()) {
+        if let Some(use_tree) = use_item.use_tree() {
+            extract_from_use_tree(&use_tree, None, file, bindings);
+        }
+        return;
+    }
+    if node.kind() == SyntaxKind::RECORD_FIELD {
+        if let Some(name) = named_item_identifier(node) {
+            bindings.push(AstNode::from_span(
+                file,
+                span_from_rowan_range(name.syntax().text_range()),
+            ));
+        }
+        return;
+    }
+    if let Some(pattern) = node_pattern(node) {
+        let pattern_range = pattern.syntax().text_range();
+        extract_from_pattern(&pattern, file, bindings);
+        for child in node.children() {
+            if child.text_range() != pattern_range {
+                traverse_rust(&child, file, bindings);
             }
         }
-        "for_expression" => {
-            if let Some(pattern) = node.field("pattern") {
-                extract_from_pattern(&pattern, bindings);
-            } else {
-                let mut found_for = false;
-                for child in node.children() {
-                    if child.kind() == "for" {
-                        found_for = true;
-                        continue;
-                    }
-                    if found_for {
-                        extract_from_pattern(&child, bindings);
-                        break;
-                    }
-                }
-            }
-            for child in node.children() {
-                traverse_rust(&child, bindings);
+        return;
+    }
+    if let Some(name) = named_item_identifier(node) {
+        let name_range = name.syntax().text_range();
+        bindings.push(AstNode::from_span(file, span_from_rowan_range(name_range)));
+        for child in node.children() {
+            if child.text_range() != name_range {
+                traverse_rust(&child, file, bindings);
             }
         }
-        "parameter" => {
-            if let Some(pattern) = node.field("pattern") {
-                extract_from_pattern(&pattern, bindings);
-            }
-            for child in node.children() {
-                traverse_rust(&child, bindings);
-            }
-        }
-        "closure_parameters" => {
-            for child in node.children() {
-                if child.kind() != "|" {
-                    extract_from_pattern(&child, bindings);
-                }
-            }
-        }
-        "match_arm" => {
-            for child in node.children() {
-                if child.kind() == "match_pattern" {
-                    extract_from_pattern(&child, bindings);
-                } else if child.kind() != "=>" {
-                    traverse_rust(&child, bindings);
-                }
-            }
-        }
-        "const_item" | "static_item" | "function_item" | "struct_item" | "enum_item"
-        | "trait_item" | "type_item" | "associated_type" => {
-            let name_range = node.field("name").map(|name_node| {
-                let range = name_node.range();
-                bindings.push(AstNode::from_raw(name_node));
-                range
-            });
-            for child in node.children() {
-                if name_range.as_ref() == Some(&child.range()) {
-                    continue;
-                }
-                traverse_rust(&child, bindings);
-            }
-        }
-        "use_declaration" => {
-            extract_from_use(node, bindings, None);
-        }
-        "field_declaration" => {
-            if let Some(name) = node.field("name") {
-                bindings.push(AstNode::from_raw(name));
-            }
-        }
-        _ => {
-            for child in node.children() {
-                traverse_rust(&child, bindings);
-            }
-        }
+        return;
+    }
+    for child in node.children() {
+        traverse_rust(&child, file, bindings);
     }
 }
 
@@ -295,135 +269,133 @@ fn traverse_rust<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
 /// within `file`.
 #[must_use]
 pub fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
     let mut bindings = Vec::new();
-    traverse_rust(&file.grep.root(), &mut bindings);
+    traverse_rust(parsed.tree().syntax(), file, &mut bindings);
     bindings
 }
 
-/// Extracts the terminal identifier of the attribute path inside an `attribute_item` node
-/// (e.g. `Some("test")` for `#[test]` or `#[tokio::test]`, `Some("cfg")` for `#[cfg(test)]`).
-fn attribute_terminal_name<'a>(attr_item: &RawNode<'a>) -> Option<RawNode<'a>> {
-    let attr = attr_item
-        .children()
-        .find(|child| child.kind() == "attribute")?;
-    let path = attr
-        .children()
-        .find(|child| matches!(child.kind().as_ref(), "identifier" | "scoped_identifier"))?;
-    extract_last_segment(&path)
+/// Extracts the terminal identifier of an attribute's path (e.g. `"test"` for `#[tokio::test]`).
+fn attribute_terminal_name(attribute: &ast::Attr) -> Option<ast::NameRef> {
+    let path = attribute
+        .path()
+        .or_else(|| attribute.syntax().descendants().find_map(ast::Path::cast))?;
+    path.segment()?.name_ref()
 }
 
-/// Returns true if an `attribute_item` AST node represents a Rust test attribute
-/// (`#[test]`, `#[tokio::test]`, `#[rstest]`, `#[test_case(...)]`).
+/// Returns true if `attribute` is a Rust test attribute (`#[test]`, `#[tokio::test]`, `#[rstest]`, `#[test_case(...)]`).
 #[must_use]
-fn is_test_attribute(attr_item: &RawNode<'_>) -> bool {
-    attribute_terminal_name(attr_item)
-        .is_some_and(|terminal| matches!(terminal.text().as_ref(), "test" | "rstest" | "test_case"))
+fn is_test_attribute(attribute: &ast::Attr) -> bool {
+    attribute_terminal_name(attribute)
+        .is_some_and(|terminal| matches!(terminal.text(), TEST_IDENTIFIER | "rstest" | "test_case"))
 }
 
-/// Returns true if an `attribute_item` AST node represents a `#[cfg(test)]` attribute.
-#[must_use]
-fn is_conditional_test_attribute(attr_item: &RawNode<'_>) -> bool {
-    if attribute_terminal_name(attr_item).is_none_or(|terminal| terminal.text() != "cfg") {
-        return false;
+/// Returns true if `element` is a delimiter or comma token inside a `TokenTree`.
+fn is_token_tree_delimiter_or_trivia(element: &SyntaxElement) -> bool {
+    match element {
+        SyntaxElement::Node(_) => false,
+        SyntaxElement::Token(token) => {
+            token.kind().is_trivia()
+                || matches!(
+                    token.kind(),
+                    SyntaxKind::L_PAREN
+                        | SyntaxKind::R_PAREN
+                        | SyntaxKind::L_BRACK
+                        | SyntaxKind::R_BRACK
+                        | SyntaxKind::L_CURLY
+                        | SyntaxKind::R_CURLY
+                        | SyntaxKind::COMMA
+                )
+        }
     }
-    let Some(attr) = attr_item
-        .children()
-        .find(|child| child.kind() == "attribute")
-    else {
+}
+
+/// Extracts the non-delimiter, non-trivia direct child elements of `token_tree`.
+fn meaningful_token_tree_elements(token_tree: &ast::TokenTree) -> Vec<SyntaxElement> {
+    token_tree
+        .syntax()
+        .children_with_tokens()
+        .filter(|element| !is_token_tree_delimiter_or_trivia(element))
+        .collect()
+}
+
+/// Returns true if `attribute` represents a `#[cfg(test)]` attribute.
+#[must_use]
+fn is_conditional_test_attribute(attribute: &ast::Attr) -> bool {
+    let Some(ast::Meta::CfgMeta(conditional_meta)) = attribute.meta() else {
         return false;
     };
-    let Some(token_tree) = attr.children().find(|child| child.kind() == "token_tree") else {
+    let Some(ast::CfgPredicate::CfgAtom(atom)) = conditional_meta.cfg_predicate() else {
         return false;
     };
-    matches!(
-        non_delimiter_children(&token_tree).as_slice(),
-        [argument] if argument.kind() == "identifier" && argument.text() == "test"
-    )
+    atom.eq_token().is_none()
+        && atom
+            .ident_token()
+            .is_some_and(|ident| ident.text() == TEST_IDENTIFIER)
 }
 
-/// Returns true if an `attribute_item` AST node represents a `#[doc = "..."]` attribute.
+/// Returns true if `attribute` represents a `#[doc = "..."]` attribute.
 #[must_use]
-fn is_doc_attribute(attr_item: &RawNode<'_>) -> bool {
-    attribute_terminal_name(attr_item).is_some_and(|terminal| terminal.text() == "doc")
+fn is_doc_attribute(attribute: &ast::Attr) -> bool {
+    attribute_terminal_name(attribute).is_some_and(|terminal| terminal.text() == "doc")
 }
 
-/// Yields the contiguous preceding `attribute_item` siblings attached to a non-trivia `node`.
-fn preceding_attributes<'a>(node: &RawNode<'a>) -> impl Iterator<Item = RawNode<'a>> {
-    let first = (!matches!(
-        node.kind().as_ref(),
-        "attribute_item" | "line_comment" | "block_comment"
-    ))
-    .then(|| node.prev())
-    .flatten();
-    std::iter::successors(first, RawNode::prev)
-        .take_while(|sibling| {
-            matches!(
-                sibling.kind().as_ref(),
-                "attribute_item" | "line_comment" | "block_comment"
-            )
-        })
-        .filter(|sibling| sibling.kind() == "attribute_item")
-}
-
-/// Returns true if a Rust item is preceded by a test attribute (`#[test]`, `#[tokio::test]`, `#[rstest]`, etc.).
-#[must_use]
-fn has_test_attribute(node: &RawNode<'_>) -> bool {
-    preceding_attributes(node).any(|sibling| is_test_attribute(&sibling))
+fn collect_inline_test_ranges_rec(node: &SyntaxNode, ranges: &mut Vec<std::ops::Range<usize>>) {
+    let mut first_attribute_start: Option<usize> = None;
+    let mut has_test_attr = false;
+    for attribute in node.children().filter_map(ast::Attr::cast) {
+        if attribute.kind() != ast::AttrKind::Outer {
+            continue;
+        }
+        first_attribute_start.get_or_insert_with(|| attribute.syntax().text_range().start().into());
+        if is_conditional_test_attribute(&attribute) || is_test_attribute(&attribute) {
+            has_test_attr = true;
+        }
+    }
+    if has_test_attr {
+        let start = first_attribute_start.unwrap_or_else(|| node.text_range().start().into());
+        let end: usize = node.text_range().end().into();
+        ranges.push(start..end);
+        return;
+    }
+    for child in node.children() {
+        if child.kind() != SyntaxKind::TOKEN_TREE {
+            collect_inline_test_ranges_rec(&child, ranges);
+        }
+    }
 }
 
 /// Collects byte spans for all inline test items (`#[cfg(test)]` modules/items and `#[test]` functions)
 /// within a Rust source file.
 #[must_use]
 pub fn collect_inline_test_ranges(file: &ParsedFile) -> Vec<std::ops::Range<usize>> {
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
     let mut ranges = Vec::new();
-    collect_inline_test_ranges_rec(&file.grep.root(), &mut ranges);
+    collect_inline_test_ranges_rec(parsed.tree().syntax(), &mut ranges);
     ranges
 }
 
-fn collect_inline_test_ranges_rec(node: &RawNode<'_>, ranges: &mut Vec<std::ops::Range<usize>>) {
-    let mut first_attribute_start: Option<usize> = None;
-    let mut pending_test_attribute = false;
-
-    for child in node.children() {
-        let kind = child.kind();
-        if kind == "attribute_item" {
-            first_attribute_start.get_or_insert_with(|| child.range().start);
-            if is_conditional_test_attribute(&child) || is_test_attribute(&child) {
-                pending_test_attribute = true;
-            }
-            continue;
-        }
-        if is_comment_kind(kind.as_ref()) {
-            continue;
-        }
-        if pending_test_attribute {
-            let start = first_attribute_start.unwrap_or_else(|| child.range().start);
-            ranges.push(start..child.range().end);
-            first_attribute_start = None;
-            pending_test_attribute = false;
-            continue;
-        }
-        first_attribute_start = None;
-        if kind != "token_tree" {
-            collect_inline_test_ranges_rec(&child, ranges);
-        }
-    }
-}
-
-/// Returns true if a Rust `function_item` node is a test function (`#[test]` / `#[rstest]` or named `test` / `test_*`).
+/// Returns true if `function` is a test function (`#[test]` / `#[rstest]` or named `test` / `test_*`).
 #[must_use]
-fn is_test_function(func_node: &RawNode<'_>) -> bool {
-    let is_named_test = func_node.field("name").is_some_and(|name_node| {
-        let func_name = name_node.text();
-        func_name == "test" || func_name.starts_with("test_")
+fn is_test_function(function: &ast::Fn) -> bool {
+    let is_named_test = function.name().is_some_and(|name_node| {
+        let function_name = name_node.text();
+        function_name == TEST_IDENTIFIER || function_name.starts_with("test_")
     });
-    is_named_test || has_test_attribute(func_node)
+    let has_test_attr = function
+        .attrs()
+        .any(|attribute| attribute.kind() == ast::AttrKind::Outer && is_test_attribute(&attribute));
+    is_named_test || has_test_attr
 }
 
-fn collect_outer_test_functions_rec<'a>(node: &RawNode<'a>, out: &mut Vec<RawNode<'a>>) {
-    if node.kind() == "function_item" {
-        if is_test_function(node) {
-            out.push(node.clone());
+fn collect_outer_test_functions_rec(node: &SyntaxNode, out: &mut Vec<ast::Fn>) {
+    if let Some(function) = ast::Fn::cast(node.clone()) {
+        if is_test_function(&function) {
+            out.push(function);
         }
         return;
     }
@@ -432,34 +404,28 @@ fn collect_outer_test_functions_rec<'a>(node: &RawNode<'a>, out: &mut Vec<RawNod
     }
 }
 
+/// Extracts the terminal macro identifier from a [`ast::MacroCall`] node.
+fn macro_call_terminal_name(macro_call: &ast::MacroCall) -> String {
+    macro_call
+        .path()
+        .and_then(|path| path.segment())
+        .and_then(|segment| segment.name_ref())
+        .map_or_else(String::new, |name_ref| name_ref.text().trim().to_string())
+}
+
 /// Extracts the terminal macro identifier from a Rust `macro_invocation` node (e.g. `assert` from `std::assert!`).
 #[must_use]
 pub fn macro_terminal_name<'tree>(macro_node: &AstNode<'tree>) -> std::borrow::Cow<'tree, str> {
-    macro_node
-        .raw_opt()
-        .map_or(std::borrow::Cow::Borrowed(""), macro_terminal_name_raw)
+    cast_at_span::<ast::MacroCall>(macro_node)
+        .map_or(std::borrow::Cow::Borrowed(""), |macro_call| {
+            std::borrow::Cow::Owned(macro_call_terminal_name(&macro_call))
+        })
 }
 
-fn macro_terminal_name_raw<'tree>(macro_node: &RawNode<'tree>) -> std::borrow::Cow<'tree, str> {
-    let Some(macro_id) = macro_node.field("macro") else {
-        return std::borrow::Cow::Borrowed("");
-    };
-    let text = macro_id.text();
-    match text {
-        std::borrow::Cow::Borrowed(borrowed) => {
-            std::borrow::Cow::Borrowed(borrowed.rsplit("::").next().unwrap_or("").trim())
-        }
-        std::borrow::Cow::Owned(owned) => {
-            std::borrow::Cow::Owned(owned.rsplit("::").next().unwrap_or("").trim().to_string())
-        }
-    }
-}
-
-/// Returns true if a Rust `macro_invocation` node invokes an assertion macro
-/// (`assert!`, `assert_*!`, `debug_assert!`, `debug_assert_*!`, `insta::assert_snapshot!`, etc.).
+/// Returns true if `macro_call` invokes an assertion macro (`assert!`, `assert_*!`, `debug_assert!`, `debug_assert_*!`).
 #[must_use]
-fn is_assertion_macro_raw(macro_node: &RawNode<'_>) -> bool {
-    let terminal = macro_terminal_name_raw(macro_node);
+fn is_assertion_macro(macro_call: &ast::MacroCall) -> bool {
+    let terminal = macro_call_terminal_name(macro_call);
     terminal == "assert"
         || terminal.starts_with("assert_")
         || terminal == "debug_assert"
@@ -467,12 +433,13 @@ fn is_assertion_macro_raw(macro_node: &RawNode<'_>) -> bool {
 }
 
 /// Recursively counts top-level assertion macro invocations in a Rust test function body.
-fn count_rust_assertions(node: &RawNode<'_>) -> usize {
-    let kind = node.kind();
-    if kind == "function_item" {
+fn count_rust_assertions(node: &SyntaxNode) -> usize {
+    if ast::Fn::can_cast(node.kind()) {
         return 0;
     }
-    if kind == "macro_invocation" && is_assertion_macro_raw(node) {
+    if let Some(macro_call) = ast::MacroCall::cast(node.clone())
+        && is_assertion_macro(&macro_call)
+    {
         return 1;
     }
     node.children()
@@ -485,16 +452,23 @@ fn count_rust_assertions(node: &RawNode<'_>) -> usize {
 pub fn collect_test_function_assertion_counts(
     file: &ParsedFile,
 ) -> Vec<(AstNode<'_>, String, usize)> {
-    let mut test_funcs = Vec::new();
-    collect_outer_test_functions_rec(&file.grep.root(), &mut test_funcs);
-    test_funcs
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
+    let mut test_functions = Vec::new();
+    collect_outer_test_functions_rec(parsed.tree().syntax(), &mut test_functions);
+    test_functions
         .into_iter()
-        .filter_map(|func_node| {
-            let name_node = func_node.field("name")?;
-            let body_node = func_node.field("body")?;
-            let func_name = name_node.text().to_string();
-            let count = count_rust_assertions(&body_node);
-            Some((AstNode::from_raw(name_node), func_name, count))
+        .filter_map(|function| {
+            let name_node = function.name()?;
+            let body_node = function.body()?;
+            let function_name = name_node.text().to_string();
+            let count = count_rust_assertions(body_node.syntax());
+            Some((
+                AstNode::from_span(file, span_from_rowan_range(name_node.syntax().text_range())),
+                function_name,
+                count,
+            ))
         })
         .collect()
 }
@@ -502,98 +476,161 @@ pub fn collect_test_function_assertion_counts(
 /// Collects all `macro_invocation` nodes in `file`.
 #[must_use]
 pub fn collect_macro_invocations(file: &ParsedFile) -> Vec<AstNode<'_>> {
-    file.grep
-        .root()
-        .dfs()
-        .filter(|node| node.kind() == "macro_invocation")
-        .map(AstNode::from_raw)
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
+    parsed
+        .tree()
+        .syntax()
+        .descendants()
+        .filter_map(ast::MacroCall::cast)
+        .map(|macro_call| {
+            AstNode::from_span(
+                file,
+                span_from_rowan_range(macro_call.syntax().text_range()),
+            )
+        })
         .collect()
 }
 
-/// Extracts the non-delimiter child nodes (`(`, `)`, `[`, `]`, `,`) of a token tree or sequence node.
-fn non_delimiter_children<'a>(node: &RawNode<'a>) -> Vec<RawNode<'a>> {
-    node.children()
-        .filter(|child| !matches!(child.kind().as_ref(), "(" | ")" | "[" | "]" | ","))
-        .collect()
+/// Returns true if `token_tree` has a direct `&&` operator among its children.
+fn token_tree_has_direct_logical_and(token_tree: &ast::TokenTree) -> bool {
+    let elements: Vec<_> = token_tree.syntax().children_with_tokens().collect();
+    for (index, element) in elements.iter().enumerate() {
+        if let SyntaxElement::Token(token) = element {
+            if token.kind() == SyntaxKind::AMP2 {
+                return true;
+            }
+            if token.kind() == SyntaxKind::AMP
+                && let Some(SyntaxElement::Token(next)) = elements.get(index + 1)
+                && next.kind() == SyntaxKind::AMP
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Returns true if a Rust `macro_invocation`'s `token_tree` contains a top-level `&&` logical operator.
 #[must_use]
 pub fn has_top_level_logical_and(macro_node: &AstNode<'_>) -> bool {
-    let Some(token_tree) = macro_node
-        .raw_opt()
-        .and_then(|raw| raw.children().find(|child| child.kind() == "token_tree"))
-    else {
+    let Some(macro_call) = cast_at_span::<ast::MacroCall>(macro_node) else {
         return false;
     };
-    let meaningful: Vec<_> = token_tree
-        .children()
-        .filter(|child| child.kind() != "(" && child.kind() != ")")
-        .collect();
-
-    if meaningful.iter().any(|child| child.kind() == "&&") {
+    let Some(token_tree) = macro_call.token_tree() else {
+        return false;
+    };
+    if token_tree_has_direct_logical_and(&token_tree) {
         return true;
     }
-
+    let meaningful = meaningful_token_tree_elements(&token_tree);
     matches!(
         meaningful.as_slice(),
-        [only_child] if only_child.kind() == "token_tree"
-            && only_child.children().any(|child| child.kind() == "&&")
+        [SyntaxElement::Node(only_child)]
+            if ast::TokenTree::cast(only_child.clone())
+                .is_some_and(|inner| token_tree_has_direct_logical_and(&inner))
     )
 }
 
 /// Extracts the argument nodes inside a Rust `macro_invocation`'s `token_tree`.
 #[must_use]
 pub fn extract_macro_arguments<'a>(macro_node: &AstNode<'a>) -> Vec<AstNode<'a>> {
-    macro_node
-        .raw_opt()
-        .and_then(|raw| raw.children().find(|child| child.kind() == "token_tree"))
-        .map_or_else(Vec::new, |token_tree| {
-            non_delimiter_children(&token_tree)
-                .into_iter()
-                .map(AstNode::from_raw)
-                .collect()
-        })
+    let Some(file) = macro_node.file_opt() else {
+        return Vec::new();
+    };
+    let Some(macro_call) = cast_at_span::<ast::MacroCall>(macro_node) else {
+        return Vec::new();
+    };
+    let Some(token_tree) = macro_call.token_tree() else {
+        return Vec::new();
+    };
+    meaningful_token_tree_elements(&token_tree)
+        .into_iter()
+        .map(|element| AstNode::from_span(file, span_from_rowan_range(element.text_range())))
+        .collect()
+}
+
+/// Returns true if `expression` is a boolean literal (`true` or `false`).
+fn is_boolean_literal_expr(expression: &ast::Expr) -> bool {
+    matches!(
+        expression,
+        ast::Expr::Literal(literal)
+            if matches!(literal.kind(), ast::LiteralKind::Bool(_))
+    )
 }
 
 /// Returns true if `node` is a Rust tuple, array, or parenthesized macro `token_tree` consisting
 /// solely of `>= 2` boolean literals (`true` / `false`).
 #[must_use]
 pub fn is_boolean_literal_collection(node: &AstNode<'_>) -> bool {
-    let Some(raw) = node.raw_opt() else {
-        return false;
-    };
-    let kind = raw.kind();
-    if !matches!(
-        kind.as_ref(),
-        "token_tree" | "array_expression" | "tuple_expression"
-    ) {
-        return false;
+    if let Some(token_tree) = cast_at_span::<ast::TokenTree>(node) {
+        let items = meaningful_token_tree_elements(&token_tree);
+        return items.len() >= 2
+            && items.iter().all(|item| {
+                matches!(
+                    item,
+                    SyntaxElement::Token(token)
+                        if matches!(token.kind(), SyntaxKind::TRUE_KW | SyntaxKind::FALSE_KW)
+                )
+            });
     }
-    let items = non_delimiter_children(raw);
-    items.len() >= 2
-        && items
-            .iter()
-            .all(|item| matches!(item.kind().as_ref(), "boolean_literal" | "true" | "false"))
+    if let Some(array_expr) = cast_at_span::<ast::ArrayExpr>(node) {
+        let elements: Vec<_> = array_expr.exprs().collect();
+        return elements.len() >= 2 && elements.iter().all(is_boolean_literal_expr);
+    }
+    if let Some(tuple_expr) = cast_at_span::<ast::TupleExpr>(node) {
+        let elements: Vec<_> = tuple_expr.fields().collect();
+        return elements.len() >= 2 && elements.iter().all(is_boolean_literal_expr);
+    }
+    false
+}
+
+/// Returns the previous non-trivia token before `token`.
+fn previous_non_trivia_token(token: &SyntaxToken) -> Option<SyntaxToken> {
+    std::iter::successors(token.prev_token(), SyntaxToken::prev_token)
+        .find(|candidate| !candidate.kind().is_trivia())
+}
+
+/// Returns true if `kind` can be a segment of a Rust path (`ident`, `crate`, `self`, `super`).
+const fn is_path_segment_token_kind(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::IDENT | SyntaxKind::CRATE_KW | SyntaxKind::SELF_KW | SyntaxKind::SUPER_KW
+    )
 }
 
 /// Resolves `(full_path, terminal_name)` if `token_tree` is immediately preceded by `!` and a macro path
 /// (such as `indoc! { ... }` or `indoc::indoc! { ... }` inside an outer `token_tree`).
-fn resolve_preceding_macro_path(token_tree: &RawNode<'_>) -> Option<(String, String)> {
-    let bang = token_tree.prev()?;
-    if bang.text() != "!" {
+fn resolve_preceding_macro_path(token_tree: &SyntaxNode) -> Option<(String, String)> {
+    let first_token = token_tree.first_token()?;
+    let bang = previous_non_trivia_token(&first_token)?;
+    if bang.kind() != SyntaxKind::BANG {
         return None;
     }
-    let macro_ident = bang.prev()?;
+    let macro_ident = previous_non_trivia_token(&bang)?;
+    if !is_path_segment_token_kind(macro_ident.kind()) {
+        return None;
+    }
     let terminal = macro_ident.text().trim().to_string();
     let mut full_path = terminal.clone();
-    let mut curr = macro_ident;
-    while let Some(colon_colon) = curr.prev() {
-        if colon_colon.text() == "::"
-            && let Some(prev_ident) = colon_colon.prev()
+    let mut current = macro_ident;
+    while let Some(preceding) = previous_non_trivia_token(&current) {
+        let before_colons = if preceding.kind() == SyntaxKind::COLON2 {
+            previous_non_trivia_token(&preceding)
+        } else if preceding.kind() == SyntaxKind::COLON
+            && let Some(first_colon) = previous_non_trivia_token(&preceding)
+            && first_colon.kind() == SyntaxKind::COLON
         {
-            full_path = format!("{prev}::{full_path}", prev = prev_ident.text().trim());
-            curr = prev_ident;
+            previous_non_trivia_token(&first_colon)
+        } else {
+            break;
+        };
+        if let Some(prev_ident) = before_colons
+            && is_path_segment_token_kind(prev_ident.kind())
+        {
+            full_path = format!("{prefix}::{full_path}", prefix = prev_ident.text().trim());
+            current = prev_ident;
         } else {
             break;
         }
@@ -601,72 +638,65 @@ fn resolve_preceding_macro_path(token_tree: &RawNode<'_>) -> Option<(String, Str
     Some((full_path, terminal))
 }
 
-/// Returns true if `node` is preceded by `@` (an `insta` inline snapshot literal `@"..."`).
+/// Returns true if `token` is preceded by `@` (an `insta` inline snapshot literal `@"..."`).
 #[must_use]
-fn is_insta_inline_snapshot(node: &RawNode<'_>) -> bool {
-    node.prev().is_some_and(|prev| prev.text() == "@")
+fn is_insta_inline_snapshot(token: &SyntaxToken) -> bool {
+    previous_non_trivia_token(token).is_some_and(|previous| previous.kind() == SyntaxKind::AT)
 }
 
-/// Returns true if `node` is enclosed inside a `#[doc = "..."]` attribute.
+/// Returns true if `token` is enclosed inside a `#[doc = "..."]` attribute.
 #[must_use]
-fn is_enclosed_in_doc_attribute(node: &RawNode<'_>) -> bool {
-    node.ancestors()
-        .any(|ancestor| ancestor.kind() == "attribute_item" && is_doc_attribute(&ancestor))
+fn is_enclosed_in_doc_attribute(token: &SyntaxToken) -> bool {
+    token
+        .parent_ancestors()
+        .filter_map(ast::Attr::cast)
+        .any(|attribute| is_doc_attribute(&attribute))
 }
 
-/// Returns true if `node` is enclosed in a Rust `macro_invocation` (or nested macro `token_tree`)
+/// Returns true if `token` is enclosed in a Rust `macro_invocation` (or nested macro `token_tree`)
 /// within the current scope whose `(full_path, terminal_name)` satisfies `predicate`.
 #[must_use]
-fn is_enclosed_in_macro(node: &RawNode<'_>, predicate: &impl Fn(&str, &str) -> bool) -> bool {
-    for ancestor in node.ancestors() {
-        match ancestor.kind().as_ref() {
-            "function_item" | "closure_expression" => break,
-            "macro_invocation" => {
-                let terminal = macro_terminal_name_raw(&ancestor);
-                let full_text = ancestor.field("macro").map(|macro_id| macro_id.text());
-                let full_path = full_text.as_deref().map_or("", str::trim);
-                if predicate(full_path, terminal.as_ref()) {
-                    return true;
-                }
+fn is_enclosed_in_macro(token: &SyntaxToken, predicate: &impl Fn(&str, &str) -> bool) -> bool {
+    for ancestor in token.parent_ancestors() {
+        if matches!(ancestor.kind(), SyntaxKind::FN | SyntaxKind::CLOSURE_EXPR) {
+            break;
+        }
+        if let Some(macro_call) = ast::MacroCall::cast(ancestor.clone()) {
+            let terminal = macro_call_terminal_name(&macro_call);
+            let full_path = macro_call.path().map_or_else(String::new, |path| {
+                compact_path_text(&path.syntax().text().to_string())
+            });
+            if predicate(&full_path, &terminal) {
+                return true;
             }
-            "token_tree" => {
-                if let Some((full_path, terminal)) = resolve_preceding_macro_path(&ancestor)
-                    && predicate(&full_path, &terminal)
-                {
-                    return true;
-                }
-            }
-            _ => {}
+        } else if ancestor.kind() == SyntaxKind::TOKEN_TREE
+            && let Some((full_path, terminal)) = resolve_preceding_macro_path(&ancestor)
+            && predicate(&full_path, &terminal)
+        {
+            return true;
         }
     }
     false
 }
 
-/// Returns true if `node` is a Rust string literal node that spans multiple lines and contains
+/// Returns true if `token` is a Rust string literal token that spans multiple lines and contains
 /// runtime newlines (raw strings spanning lines, or standard strings with at least one intermediate
 /// line not ending in a `\` line continuation).
 #[must_use]
-fn is_multiline_string_literal(node: &RawNode<'_>) -> bool {
-    if node.end_pos().line() <= node.start_pos().line() {
+fn is_multiline_string_token(token: &SyntaxToken) -> bool {
+    if !matches!(
+        token.kind(),
+        SyntaxKind::STRING | SyntaxKind::BYTE_STRING | SyntaxKind::C_STRING
+    ) {
         return false;
     }
-    let kind = node.kind();
-    let is_string = matches!(
-        kind.as_ref(),
-        "string_literal"
-            | "raw_string_literal"
-            | "byte_string_literal"
-            | "raw_byte_string_literal"
-            | "c_string_literal"
-            | "raw_c_string_literal"
-    );
-    if !is_string {
+    let text = token.text();
+    if !text.contains('\n') {
         return false;
     }
-    if kind.starts_with("raw_") {
+    if text.starts_with('r') || text.starts_with("br") || text.starts_with("cr") {
         return true;
     }
-    let text = node.text();
     let mut lines = text.lines();
     lines.next_back();
     lines.any(|line| !line.trim_end().ends_with('\\'))
@@ -679,33 +709,22 @@ pub fn find_unwrapped_multiline_strings(
     file: &ParsedFile,
     is_allowed_wrapper: impl Fn(&str, &str) -> bool,
 ) -> Vec<AstNode<'_>> {
-    file.grep
-        .root()
-        .dfs()
-        .filter(|node| {
-            is_multiline_string_literal(node)
-                && !is_insta_inline_snapshot(node)
-                && !is_enclosed_in_doc_attribute(node)
-                && !is_enclosed_in_macro(node, &is_allowed_wrapper)
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
+    parsed
+        .tree()
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(SyntaxElement::into_token)
+        .filter(|token| {
+            is_multiline_string_token(token)
+                && !is_insta_inline_snapshot(token)
+                && !is_enclosed_in_doc_attribute(token)
+                && !is_enclosed_in_macro(token, &is_allowed_wrapper)
         })
-        .map(AstNode::from_raw)
+        .map(|token| AstNode::from_span(file, span_from_rowan_range(token.text_range())))
         .collect()
-}
-
-/// If `node` is a Rust `function_item`, returns its `(name, is_top_level)` where `is_top_level`
-/// is true when declared directly at `source_file` scope.
-#[must_use]
-pub(super) fn function_name_and_is_top_level<'a>(
-    node: &RawNode<'a>,
-) -> Option<(std::borrow::Cow<'a, str>, bool)> {
-    if node.kind() != "function_item" {
-        return None;
-    }
-    let name = node.field("name")?.text();
-    let is_top_level = node
-        .parent()
-        .is_some_and(|parent| parent.kind() == "source_file");
-    Some((name, is_top_level))
 }
 
 /// Visibility and name of a top-level external `mod <name>;` declaration in a Rust file.
@@ -774,7 +793,7 @@ fn join_use_prefix(prefix: &str, segment: &str) -> String {
     let clean = compact_path_text(segment);
     if prefix.is_empty() {
         clean
-    } else if clean == "self" {
+    } else if clean == SELF_KEYWORD {
         prefix.to_string()
     } else if let Some(rest) = clean.strip_prefix("self::") {
         format!("{prefix}::{rest}")
@@ -783,128 +802,260 @@ fn join_use_prefix(prefix: &str, segment: &str) -> String {
     }
 }
 
-fn expand_use_tree(node: &RawNode<'_>, prefix: &str, out: &mut Vec<String>) {
-    match node.kind().as_ref() {
-        "use_declaration" => {
-            if let Some(argument) = node.field("argument") {
-                expand_use_tree(&argument, prefix, out);
-            }
+fn expand_use_tree(use_tree: &ast::UseTree, prefix: &str, out: &mut Vec<String>) {
+    if let Some(sub_trees) = use_tree.use_tree_list() {
+        let next_prefix = use_tree.path().map_or_else(
+            || prefix.to_string(),
+            |path| join_use_prefix(prefix, &path.syntax().text().to_string()),
+        );
+        for child_tree in sub_trees.use_trees() {
+            expand_use_tree(&child_tree, &next_prefix, out);
         }
-        "identifier" | "type_identifier" | "crate" | "self" | "super" => {
-            let text = node.text();
-            if text != "_" {
-                out.push(join_use_prefix(prefix, text.as_ref()));
-            }
+        return;
+    }
+    if use_tree.star_token().is_some() {
+        if let Some(path) = use_tree.path() {
+            out.push(join_use_prefix(prefix, &path.syntax().text().to_string()));
+        } else if !prefix.is_empty() {
+            out.push(prefix.to_string());
         }
-        "scoped_identifier" => {
-            out.push(join_use_prefix(prefix, node.text().as_ref()));
+        return;
+    }
+    if let Some(path) = use_tree.path() {
+        let path_text = path.syntax().text().to_string();
+        if compact_path_text(&path_text) != "_" {
+            out.push(join_use_prefix(prefix, &path_text));
         }
-        "use_as_clause" => {
-            if let Some(path) = node.field("path") {
-                expand_use_tree(&path, prefix, out);
-            }
-        }
-        "use_wildcard" => {
-            if let Some(path_child) = node.children().find(|child| {
-                let kind = child.kind();
-                kind != "::" && kind != "*" && !is_comment_kind(kind.as_ref())
-            }) {
-                expand_use_tree(&path_child, prefix, out);
-            } else if !prefix.is_empty() {
-                out.push(prefix.to_string());
-            }
-        }
-        "scoped_use_list" => {
-            let next_prefix = node.field("path").map_or_else(
-                || prefix.to_string(),
-                |path| join_use_prefix(prefix, path.text().as_ref()),
-            );
-            if let Some(list) = node.field("list") {
-                expand_use_tree(&list, &next_prefix, out);
-            }
-        }
-        "use_list" => {
-            for child in node.children() {
-                let kind = child.kind();
-                if kind != "{" && kind != "}" && kind != "," && !is_comment_kind(kind.as_ref()) {
-                    expand_use_tree(&child, prefix, out);
-                }
-            }
-        }
-        _ => {}
     }
 }
 
-fn is_pure_path_segment(node: &RawNode<'_>) -> bool {
-    matches!(
-        node.kind().as_ref(),
-        "identifier" | "type_identifier" | "crate" | "self" | "super"
-    ) || is_pure_scoped_path(node)
+fn is_simple_path_segment(segment: &ast::PathSegment) -> bool {
+    segment.name_ref().is_some()
+        && segment.type_anchor().is_none()
+        && segment.generic_arg_list().is_none()
+        && segment.parenthesized_arg_list().is_none()
+        && segment.ret_type().is_none()
 }
 
-fn is_pure_scoped_path(node: &RawNode<'_>) -> bool {
-    matches!(
-        node.kind().as_ref(),
-        "scoped_identifier" | "scoped_type_identifier"
-    ) && node
-        .field("path")
-        .is_some_and(|path| is_pure_path_segment(&path))
+fn has_pure_qualifiers(path: &ast::Path) -> bool {
+    let Some(qualifier) = path.qualifier() else {
+        return false;
+    };
+    let mut current = Some(qualifier);
+    while let Some(qual_path) = current {
+        let Some(segment) = qual_path.segment() else {
+            return false;
+        };
+        if !is_simple_path_segment(&segment) {
+            return false;
+        }
+        current = qual_path.qualifier();
+    }
+    path.segment()
+        .is_some_and(|segment| segment.name_ref().is_some() && segment.type_anchor().is_none())
 }
 
-fn is_token_path_segment(kind: &str) -> bool {
-    matches!(
-        kind,
-        "identifier" | "type_identifier" | "crate" | "self" | "super"
-    )
+/// Checks if `elements[index..]` begins with `::` (either `COLON2` or two adjacent `COLON` tokens),
+/// returning the index immediately after `::`.
+fn consume_double_colon(elements: &[SyntaxElement], index: usize) -> Option<usize> {
+    match elements.get(index)? {
+        SyntaxElement::Token(token) if token.kind() == SyntaxKind::COLON2 => Some(index + 1),
+        SyntaxElement::Token(first) if first.kind() == SyntaxKind::COLON => {
+            if let Some(SyntaxElement::Token(second)) = elements.get(index + 1)
+                && second.kind() == SyntaxKind::COLON
+            {
+                Some(index + 2)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn token_segment_at(elements: &[SyntaxElement], index: usize) -> Option<&SyntaxToken> {
+    match elements.get(index)? {
+        SyntaxElement::Token(token) if is_path_segment_token_kind(token.kind()) => Some(token),
+        _ => None,
+    }
 }
 
 fn collect_token_tree_paths(
-    token_tree: &RawNode<'_>,
+    token_tree: &ast::TokenTree,
+    file: &ParsedFile,
     statement_text: &str,
     out: &mut Vec<RustPathReference>,
 ) {
-    let children: Vec<RawNode<'_>> = token_tree.children().collect();
+    let elements: Vec<SyntaxElement> = token_tree
+        .syntax()
+        .children_with_tokens()
+        .filter(
+            |element| !matches!(element, SyntaxElement::Token(token) if token.kind().is_trivia()),
+        )
+        .collect();
     let mut index = 0;
-    while index < children.len() {
-        let current = &children[index];
-        if current.kind() == "token_tree" {
-            collect_token_tree_paths(current, statement_text, out);
+    while index < elements.len() {
+        if let SyntaxElement::Node(child_node) = &elements[index]
+            && let Some(nested_tree) = ast::TokenTree::cast(child_node.clone())
+        {
+            collect_token_tree_paths(&nested_tree, file, statement_text, out);
             index += 1;
             continue;
         }
-        if is_token_path_segment(current.kind().as_ref())
-            && index + 2 < children.len()
-            && children[index + 1].kind() == "::"
-            && is_token_path_segment(children[index + 2].kind().as_ref())
+        if let Some(first_token) = token_segment_at(&elements, index)
+            && let Some(after_colons) = consume_double_colon(&elements, index + 1)
+            && token_segment_at(&elements, after_colons).is_some()
         {
-            let line = current.start_pos().line() + 1;
-            let mut segments = vec![current.text().trim().to_string()];
-            index += 1;
-            while index + 1 < children.len()
-                && children[index].kind() == "::"
-                && is_token_path_segment(children[index + 1].kind().as_ref())
+            let line = file
+                .line_index
+                .line(first_token.text_range().start().into());
+            let mut segments = vec![first_token.text().trim().to_string()];
+            let mut cursor = index + 1;
+            while let Some(next_segment_idx) = consume_double_colon(&elements, cursor)
+                && let Some(segment_token) = token_segment_at(&elements, next_segment_idx)
             {
-                segments.push(children[index + 1].text().trim().to_string());
-                index += 2;
+                segments.push(segment_token.text().trim().to_string());
+                cursor = next_segment_idx + 1;
             }
             out.push(RustPathReference {
                 line,
                 raw_path: segments.join("::"),
                 statement_text: statement_text.to_string(),
             });
+            index = cursor;
             continue;
         }
         index += 1;
     }
 }
 
-fn summarize_rust_node(
-    node: &RawNode<'_>,
+/// Returns `(start_line, trimmed_declaration_text)` of `node`, starting after any leading
+/// outer attributes, doc comments, and whitespace.
+fn item_line_and_text(file: &ParsedFile, node: &SyntaxNode) -> (usize, String) {
+    let start_offset: usize = node
+        .children_with_tokens()
+        .find(|element| {
+            let kind = element.kind();
+            kind != SyntaxKind::ATTR
+                && kind != SyntaxKind::WHITESPACE
+                && !is_rust_comment_kind(kind)
+        })
+        .map_or_else(
+            || node.text_range().start().into(),
+            |element| element.text_range().start().into(),
+        );
+    let end_offset: usize = node.text_range().end().into();
+    let line = file.line_index.line(start_offset);
+    let text = file.source[start_offset..end_offset].trim().to_string();
+    (line, text)
+}
+
+fn summarize_use_item(
+    use_item: &ast::Use,
+    file: &ParsedFile,
     test_ranges: &[std::ops::Range<usize>],
     defined_macros: &std::collections::HashSet<String>,
     summary: &mut RustFileSummary,
 ) {
-    let start_offset = node.range().start;
+    for attribute in use_item.attrs() {
+        summarize_rust_node(
+            attribute.syntax(),
+            file,
+            test_ranges,
+            defined_macros,
+            summary,
+        );
+    }
+    let (line, declaration_text) = item_line_and_text(file, use_item.syntax());
+    let mut target_paths = Vec::new();
+    if let Some(use_tree) = use_item.use_tree() {
+        expand_use_tree(&use_tree, "", &mut target_paths);
+    }
+    for raw_path in &target_paths {
+        summary.referenced_paths.push(RustPathReference {
+            line,
+            raw_path: raw_path.clone(),
+            statement_text: declaration_text.clone(),
+        });
+    }
+    if let Some(visibility) = use_item.visibility() {
+        let is_own_macro_path = visibility.syntax().text().to_string().trim() == "pub(crate)"
+            && matches!(
+                target_paths.as_slice(),
+                [target] if defined_macros.contains(target.as_str())
+            );
+        if !is_own_macro_path {
+            summary.visible_uses.push(VisibleUseDeclaration {
+                line,
+                declaration_text,
+                target_paths,
+            });
+        }
+    }
+}
+
+fn summarize_qualified_path(
+    path: &ast::Path,
+    file: &ParsedFile,
+    test_ranges: &[std::ops::Range<usize>],
+    defined_macros: &std::collections::HashSet<String>,
+    summary: &mut RustFileSummary,
+) {
+    let parent_is_pure = path
+        .syntax()
+        .parent()
+        .and_then(ast::Path::cast)
+        .is_some_and(|parent_path| has_pure_qualifiers(&parent_path));
+    if !parent_is_pure
+        && let Some(segment) = path.segment()
+        && let Some(name_ref) = segment.name_ref()
+    {
+        let start_offset: usize = path.syntax().text_range().start().into();
+        let end_offset: usize = name_ref.syntax().text_range().end().into();
+        let slice_text = file.source[start_offset..end_offset].trim();
+        summary.referenced_paths.push(RustPathReference {
+            line: file.line_index.line(start_offset),
+            raw_path: compact_path_text(slice_text),
+            statement_text: slice_text.to_string(),
+        });
+        if let Some(generic_args) = segment.generic_arg_list() {
+            summarize_rust_node(
+                generic_args.syntax(),
+                file,
+                test_ranges,
+                defined_macros,
+                summary,
+            );
+        }
+        if let Some(paren_args) = segment.parenthesized_arg_list() {
+            summarize_rust_node(
+                paren_args.syntax(),
+                file,
+                test_ranges,
+                defined_macros,
+                summary,
+            );
+        }
+        if let Some(ret_type) = segment.ret_type() {
+            summarize_rust_node(
+                ret_type.syntax(),
+                file,
+                test_ranges,
+                defined_macros,
+                summary,
+            );
+        }
+    }
+}
+
+fn summarize_rust_node(
+    node: &SyntaxNode,
+    file: &ParsedFile,
+    test_ranges: &[std::ops::Range<usize>],
+    defined_macros: &std::collections::HashSet<String>,
+    summary: &mut RustFileSummary,
+) {
+    let start_offset: usize = node.text_range().start().into();
     if test_ranges
         .iter()
         .any(|range| range.contains(&start_offset))
@@ -912,86 +1063,72 @@ fn summarize_rust_node(
         return;
     }
 
-    let kind = node.kind();
-    match kind.as_ref() {
-        "attribute_item" => {
-            if attribute_terminal_name(node)
+    if let Some(attribute) = ast::Attr::cast(node.clone()) {
+        if attribute.kind() == ast::AttrKind::Outer
+            && attribute_terminal_name(&attribute)
                 .is_some_and(|terminal| terminal.text() == "macro_export")
-            {
-                summary.macro_exports.push("#[macro_export]".to_string());
+        {
+            summary.macro_exports.push("#[macro_export]".to_string());
+        }
+        for child in node.children() {
+            if child.kind() != SyntaxKind::TOKEN_TREE {
+                summarize_rust_node(&child, file, test_ranges, defined_macros, summary);
             }
         }
-        "use_declaration" => {
-            let line = node.start_pos().line() + 1;
-            let declaration_text = node.text().trim().to_string();
-            let mut target_paths = Vec::new();
-            expand_use_tree(node, "", &mut target_paths);
-            for raw_path in &target_paths {
-                summary.referenced_paths.push(RustPathReference {
-                    line,
-                    raw_path: raw_path.clone(),
-                    statement_text: declaration_text.clone(),
-                });
-            }
-            if let Some(visibility) = node
-                .children()
-                .find(|child| child.kind() == "visibility_modifier")
-            {
-                let is_own_macro_path = visibility.text().trim() == "pub(crate)"
-                    && matches!(
-                        target_paths.as_slice(),
-                        [target] if defined_macros.contains(target.as_str())
-                    );
-                if !is_own_macro_path {
-                    summary.visible_uses.push(VisibleUseDeclaration {
-                        line,
-                        declaration_text,
-                        target_paths,
-                    });
-                }
-            }
-            return;
+        return;
+    }
+
+    if let Some(use_item) = ast::Use::cast(node.clone()) {
+        summarize_use_item(&use_item, file, test_ranges, defined_macros, summary);
+        return;
+    }
+
+    if let Some(macro_rules) = ast::MacroRules::cast(node.clone()) {
+        for attribute in macro_rules.attrs() {
+            summarize_rust_node(
+                attribute.syntax(),
+                file,
+                test_ranges,
+                defined_macros,
+                summary,
+            );
         }
-        "macro_definition" => {
-            return;
+        return;
+    }
+
+    if let Some(macro_call) = ast::MacroCall::cast(node.clone()) {
+        let macro_ast_node = AstNode::from_span(
+            file,
+            span_from_rowan_range(macro_call.syntax().text_range()),
+        );
+        if macro_call_terminal_name(&macro_call) == "architecture_component" {
+            let component_argument: String = extract_macro_arguments(&macro_ast_node)
+                .into_iter()
+                .map(|argument| argument.text().into_owned())
+                .collect();
+            summary.architecture_components.push(component_argument);
         }
-        "macro_invocation" => {
-            if macro_terminal_name_raw(node) == "architecture_component" {
-                let component_argument: String =
-                    extract_macro_arguments(&AstNode::from_raw(node.clone()))
-                        .into_iter()
-                        .map(|argument| argument.text().into_owned())
-                        .collect();
-                summary.architecture_components.push(component_argument);
-            }
-            if let Some(token_tree) = node.children().find(|child| child.kind() == "token_tree") {
-                let statement_text = node.text().trim().to_string();
-                collect_token_tree_paths(
-                    &token_tree,
-                    &statement_text,
-                    &mut summary.referenced_paths,
-                );
-            }
+        if let Some(token_tree) = macro_call.token_tree() {
+            let (_, statement_text) = item_line_and_text(file, node);
+            collect_token_tree_paths(
+                &token_tree,
+                file,
+                &statement_text,
+                &mut summary.referenced_paths,
+            );
         }
-        "scoped_identifier" | "scoped_type_identifier" if is_pure_scoped_path(node) => {
-            if node
-                .parent()
-                .is_none_or(|parent| !is_pure_scoped_path(&parent))
-            {
-                summary.referenced_paths.push(RustPathReference {
-                    line: node.start_pos().line() + 1,
-                    raw_path: compact_path_text(node.text().as_ref()),
-                    statement_text: node.text().trim().to_string(),
-                });
-            }
-            return;
-        }
-        _ => {}
+    }
+
+    if let Some(path) = ast::Path::cast(node.clone())
+        && has_pure_qualifiers(&path)
+    {
+        summarize_qualified_path(&path, file, test_ranges, defined_macros, summary);
+        return;
     }
 
     for child in node.children() {
-        if child.kind() != "token_tree" {
-            summarize_rust_node(&child, test_ranges, defined_macros, summary);
+        if child.kind() != SyntaxKind::TOKEN_TREE {
+            summarize_rust_node(&child, file, test_ranges, defined_macros, summary);
         }
     }
 }
@@ -1000,87 +1137,97 @@ fn summarize_rust_node(
 /// in a single CST pass, skipping `#[cfg(test)]` and `#[test]` items.
 #[must_use]
 pub fn summarize_rust_file(file: &ParsedFile) -> RustFileSummary {
-    let root = file.grep.root();
+    let Some(parsed) = file.rs_parsed() else {
+        return RustFileSummary::default();
+    };
+    let source_file = parsed.tree();
     let test_ranges = collect_inline_test_ranges(file);
     let mut summary = RustFileSummary::default();
     let mut defined_macros = std::collections::HashSet::new();
 
-    for child in root.children() {
-        let start_offset = child.range().start;
+    for item in source_file.items() {
+        let start_offset: usize = item.syntax().text_range().start().into();
         if test_ranges
             .iter()
             .any(|range| range.contains(&start_offset))
         {
             continue;
         }
-        let kind = child.kind();
-        if child.is_extra()
-            || is_comment_kind(kind.as_ref())
-            || matches!(kind.as_ref(), "attribute_item" | "inner_attribute_item")
-        {
-            continue;
-        }
-        if kind == "mod_item" && child.field("body").is_none() {
-            if let Some(name_node) = child.field("name") {
-                let is_private = !child
-                    .children()
-                    .any(|grandchild| grandchild.kind() == "visibility_modifier");
-                summary.external_mods.push(ExternalModDeclaration {
-                    name: name_node.text().trim().to_string(),
-                    declaration_text: child.text().trim().to_string(),
-                    is_private,
-                });
+        let (item_line, declaration_text) = item_line_and_text(file, item.syntax());
+        match &item {
+            ast::Item::Module(module) if module.item_list().is_none() => {
+                if let Some(name_node) = module.name() {
+                    let is_private = module.visibility().is_none();
+                    summary.external_mods.push(ExternalModDeclaration {
+                        name: name_node.text().trim().to_string(),
+                        declaration_text,
+                        is_private,
+                    });
+                }
             }
-            continue;
-        }
-        if kind == "macro_definition" {
-            if let Some(name_node) = child.field("name") {
-                defined_macros.insert(name_node.text().into_owned());
+            ast::Item::MacroRules(macro_rules) => {
+                if let Some(name_node) = macro_rules.name() {
+                    defined_macros.insert(name_node.text().to_string());
+                }
+                summary
+                    .macro_definitions
+                    .push((item_line, declaration_text));
             }
-            summary.macro_definitions.push((
-                child.start_pos().line() + 1,
-                child.text().trim().to_string(),
-            ));
-            continue;
+            _ => {
+                summary
+                    .non_namespace_items
+                    .push((item_line, declaration_text));
+            }
         }
-        summary.non_namespace_items.push((
-            child.start_pos().line() + 1,
-            child.text().trim().to_string(),
-        ));
     }
 
-    for child in root.children() {
-        summarize_rust_node(&child, &test_ranges, &defined_macros, &mut summary);
+    for child in source_file.syntax().children() {
+        summarize_rust_node(&child, file, &test_ranges, &defined_macros, &mut summary);
     }
 
     summary
 }
 
-/// Returns true if `receiver` names a stable value: a name, `self` or field chain with no call
-/// inside, so that identical text means the same value.
-fn is_stable_receiver(receiver: &RawNode<'_>) -> bool {
-    matches!(
-        receiver.kind().as_ref(),
-        "identifier" | "self" | "field_expression"
-    ) && !receiver.dfs().any(|node| node.kind() == "call_expression")
+/// Returns true if `receiver` names a stable value: a single-segment name/`self` or field chain
+/// with no call inside, so that identical text means the same value.
+fn is_stable_receiver(receiver: &ast::Expr) -> bool {
+    let is_name_or_field = match receiver {
+        ast::Expr::PathExpr(path_expr) => path_expr
+            .path()
+            .is_some_and(|path| path.qualifier().is_none()),
+        ast::Expr::FieldExpr(_) => true,
+        _ => false,
+    };
+    is_name_or_field
+        && !receiver.syntax().descendants().any(|descendant| {
+            matches!(
+                descendant.kind(),
+                SyntaxKind::CALL_EXPR | SyntaxKind::METHOD_CALL_EXPR
+            )
+        })
 }
 
 /// Returns true if `node` is assigned to (`t.0 = x`, `t.0 += x`, `(t.0, t.1) = (b, a)`) or
 /// mutably borrowed (`&mut t.0`).
-fn is_mutated(node: &RawNode<'_>) -> bool {
+fn is_mutated(node: &SyntaxNode) -> bool {
     let mut place = node.clone();
     while let Some(parent) = place.parent() {
-        match parent.kind().as_ref() {
-            "tuple_expression" | "parenthesized_expression" => place = parent,
-            "assignment_expression" | "compound_assignment_expr" => {
-                return parent
-                    .field("left")
-                    .is_some_and(|left| left.range() == place.range());
+        match parent.kind() {
+            SyntaxKind::TUPLE_EXPR | SyntaxKind::PAREN_EXPR => place = parent,
+            SyntaxKind::BIN_EXPR => {
+                let Some(bin_expr) = ast::BinExpr::cast(parent) else {
+                    return false;
+                };
+                if !matches!(bin_expr.op_kind(), Some(ast::BinaryOp::Assignment { .. })) {
+                    return false;
+                }
+                return bin_expr
+                    .lhs()
+                    .is_some_and(|left| left.syntax().text_range() == place.text_range());
             }
-            "reference_expression" => {
-                return parent
-                    .children()
-                    .any(|child| child.kind() == "mutable_specifier");
+            SyntaxKind::REF_EXPR => {
+                return ast::RefExpr::cast(parent)
+                    .is_some_and(|ref_expr| ref_expr.mut_token().is_some());
             }
             _ => return false,
         }
@@ -1090,21 +1237,34 @@ fn is_mutated(node: &RawNode<'_>) -> bool {
 
 /// Records a tuple-field access (`span.0`) as a positional read, or its receiver as an exempt
 /// receiver when the field is mutated.
-fn record_field_expression<'a>(node: &RawNode<'a>, scope: &mut ScopePositionalReads<'a>) {
-    let (Some(receiver), Some(field)) = (node.field("value"), node.field("field")) else {
+fn record_field_expression<'a>(
+    field_expr: &ast::FieldExpr,
+    file: &'a ParsedFile,
+    scope: &mut ScopePositionalReads<'a>,
+) {
+    let (Some(receiver), Some(field_name)) = (field_expr.expr(), field_expr.name_ref()) else {
         return;
     };
-    if field.kind() != "integer_literal" {
+    if field_name
+        .syntax()
+        .first_token()
+        .is_none_or(|token| token.kind() != SyntaxKind::INT_NUMBER)
+    {
         return;
     }
-    if is_mutated(node) {
-        scope.exempt_receivers.insert(receiver.text().into_owned());
+    let receiver_span = span_from_rowan_range(receiver.syntax().text_range());
+    let receiver_text = file.source[receiver_span.start..receiver_span.end].to_string();
+    if is_mutated(field_expr.syntax()) {
+        scope.exempt_receivers.insert(receiver_text);
     } else if is_stable_receiver(&receiver)
-        && let Ok(position) = field.text().parse()
+        && let Ok(position) = field_name.text().parse()
     {
         scope.reads.push(PositionalRead {
-            node: AstNode::from_raw(node.clone()),
-            receiver: receiver.text().into_owned(),
+            node: AstNode::from_span(
+                file,
+                span_from_rowan_range(field_expr.syntax().text_range()),
+            ),
+            receiver: receiver_text,
             position,
         });
     }
@@ -1113,36 +1273,37 @@ fn record_field_expression<'a>(node: &RawNode<'a>, scope: &mut ScopePositionalRe
 /// Walks `node`, recording reads and mutations into the enclosing function's `scope` (none
 /// outside functions; closures belong to it) and pushing each finished function scope to `out`.
 fn collect_positional_reads_rec<'a>(
-    node: &RawNode<'a>,
+    node: &SyntaxNode,
+    file: &'a ParsedFile,
     mut scope: Option<&mut ScopePositionalReads<'a>>,
     out: &mut Vec<ScopePositionalReads<'a>>,
 ) {
-    match node.kind().as_ref() {
-        "function_item" => {
-            let mut function_scope = ScopePositionalReads::default();
-            for child in node.children() {
-                collect_positional_reads_rec(&child, Some(&mut function_scope), out);
-            }
-            out.push(function_scope);
-            return;
+    if ast::Fn::can_cast(node.kind()) {
+        let mut function_scope = ScopePositionalReads::default();
+        for child in node.children() {
+            collect_positional_reads_rec(&child, file, Some(&mut function_scope), out);
         }
-        "field_expression" => {
-            if let Some(scope) = scope.as_deref_mut() {
-                record_field_expression(node, scope);
-            }
-        }
-        _ => {}
+        out.push(function_scope);
+        return;
+    }
+    if let Some(field_expr) = ast::FieldExpr::cast(node.clone())
+        && let Some(active_scope) = scope.as_deref_mut()
+    {
+        record_field_expression(&field_expr, file, active_scope);
     }
     for child in node.children() {
-        collect_positional_reads_rec(&child, scope.as_deref_mut(), out);
+        collect_positional_reads_rec(&child, file, scope.as_deref_mut(), out);
     }
 }
 
 /// Collects Rust tuple-field reads grouped by function (see [`super::collect_positional_reads`]).
 #[must_use]
 pub fn collect_positional_reads(file: &ParsedFile) -> Vec<ScopePositionalReads<'_>> {
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
-    collect_positional_reads_rec(&file.grep.root(), None, &mut out);
+    collect_positional_reads_rec(parsed.tree().syntax(), file, None, &mut out);
     out
 }
 
@@ -1185,8 +1346,13 @@ const LITERAL_EXEMPT_MACROS: &[&str] = &[
 /// Returns the value of a Rust integer literal, resolving its type suffix (`30u64`, `0xffu8`);
 /// a decimal literal with an `f32` / `f64` suffix (`1f32`) is a float.
 fn integer_literal_value(text: &str) -> Option<LiteralValue> {
-    let is_hex = text.starts_with("0x");
-    let digits_start = if is_hex || text.starts_with("0o") || text.starts_with("0b") {
+    let is_hex = text.starts_with("0x") || text.starts_with("0X");
+    let digits_start = if is_hex
+        || text.starts_with("0o")
+        || text.starts_with("0O")
+        || text.starts_with("0b")
+        || text.starts_with("0B")
+    {
         2
     } else {
         0
@@ -1201,64 +1367,92 @@ fn integer_literal_value(text: &str) -> Option<LiteralValue> {
         })
         .map_or(text.len(), |offset| digits_start + offset);
     let (number, suffix) = text.split_at(suffix_start);
-    if matches!(suffix, "f32" | "f64") {
+    if matches!(suffix, FLOAT_SUFFIX_32 | FLOAT_SUFFIX_64) {
         parse_float_literal(number)
     } else {
         parse_integer_literal(number)
     }
 }
 
-/// Returns the value of a string, byte-string, integer or float literal, or of a `-` applied
-/// to a number; `None` for anything else (C strings, characters) and overflow.
-fn literal_value(node: &RawNode<'_>) -> Option<LiteralValue> {
-    match node.kind().as_ref() {
-        "string_literal" => {
-            let (opening, content) = delimited_string_parts(node);
-            match opening.chars().next() {
-                Some('b') => Some(LiteralValue::Bytes(content)),
-                Some('c') => None,
-                _ => Some(LiteralValue::Str(content)),
-            }
-        }
-        "raw_string_literal" => {
-            // Raw backslashes and quotes are literal: spell them as a plain string would.
-            let content = node
-                .children()
-                .find(|child| child.kind() == "string_content")
-                .map(|child| child.text().replace('\\', "\\\\").replace('"', "\\\""))
-                .unwrap_or_default();
-            match node.text().chars().next() {
-                Some('b') => Some(LiteralValue::Bytes(content)),
-                Some('c') => None,
-                _ => Some(LiteralValue::Str(content)),
-            }
-        }
-        "integer_literal" => integer_literal_value(&node.text()),
-        "float_literal" => {
-            let text = node.text();
+/// Decodes a literal [`SyntaxToken`] (`STRING`, `BYTE_STRING`, `INT_NUMBER`, `FLOAT_NUMBER`)
+/// into its [`LiteralValue`], using `ra_ap_syntax`'s native escape decoder for strings and byte strings.
+fn token_literal_value(token: &SyntaxToken) -> Option<LiteralValue> {
+    if let Some(string_token) = ast::String::cast(token.clone()) {
+        let decoded = string_token.value().ok()?;
+        return Some(LiteralValue::Str(decoded.into_owned()));
+    }
+    if let Some(byte_string_token) = ast::ByteString::cast(token.clone()) {
+        let decoded = byte_string_token.value().ok()?;
+        return Some(LiteralValue::Bytes(
+            String::from_utf8_lossy(&decoded).into_owned(),
+        ));
+    }
+    match token.kind() {
+        SyntaxKind::INT_NUMBER => integer_literal_value(token.text()),
+        SyntaxKind::FLOAT_NUMBER => {
+            let text = token.text();
             let number = text
-                .strip_suffix("f32")
-                .or_else(|| text.strip_suffix("f64"))
-                .unwrap_or(&text);
+                .strip_suffix(FLOAT_SUFFIX_32)
+                .or_else(|| text.strip_suffix(FLOAT_SUFFIX_64))
+                .unwrap_or(text);
             parse_float_literal(number)
-        }
-        "unary_expression" | "negative_literal" => {
-            let mut children = node.children();
-            match (children.next(), children.next(), children.next()) {
-                (Some(sign), Some(number), None)
-                    if sign.text() == "-"
-                        && matches!(
-                            number.kind().as_ref(),
-                            "integer_literal" | "float_literal"
-                        ) =>
-                {
-                    literal_value(&number)?.negated()
-                }
-                _ => None,
-            }
         }
         _ => None,
     }
+}
+
+/// Evaluates an [`ast::Literal`], negative [`ast::PrefixExpr`], or [`ast::LiteralPat`] node
+/// to its [`LiteralValue`].
+fn node_literal_value(node: &SyntaxNode) -> Option<LiteralValue> {
+    if let Some(literal) = ast::Literal::cast(node.clone()) {
+        let token = literal.token();
+        if !matches!(
+            token.kind(),
+            SyntaxKind::STRING
+                | SyntaxKind::BYTE_STRING
+                | SyntaxKind::INT_NUMBER
+                | SyntaxKind::FLOAT_NUMBER
+        ) {
+            return None;
+        }
+        let value = token_literal_value(&token)?;
+        let has_leading_minus = node
+            .children_with_tokens()
+            .filter_map(SyntaxElement::into_token)
+            .any(|child_tok| child_tok.kind() == SyntaxKind::MINUS);
+        return if has_leading_minus {
+            value.negated()
+        } else {
+            Some(value)
+        };
+    }
+    if let Some(prefix_expr) = ast::PrefixExpr::cast(node.clone()) {
+        if prefix_expr.op_kind() != Some(ast::UnaryOp::Neg) {
+            return None;
+        }
+        let ast::Expr::Literal(inner_literal) = prefix_expr.expr()? else {
+            return None;
+        };
+        let token = inner_literal.token();
+        if !matches!(
+            token.kind(),
+            SyntaxKind::INT_NUMBER | SyntaxKind::FLOAT_NUMBER
+        ) {
+            return None;
+        }
+        return token_literal_value(&token)?.negated();
+    }
+    if let Some(literal_pat) = ast::LiteralPat::cast(node.clone()) {
+        let inner_literal = literal_pat.literal()?;
+        let token = inner_literal.token();
+        let value = token_literal_value(&token)?;
+        return if literal_pat.minus_token().is_some() {
+            value.negated()
+        } else {
+            Some(value)
+        };
+    }
+    None
 }
 
 /// Returns true if `name` (a macro's last path segment) is in [`LITERAL_EXEMPT_MACROS`].
@@ -1266,88 +1460,138 @@ fn is_literal_exempt_macro(name: &str) -> bool {
     LITERAL_EXEMPT_MACROS.contains(&name)
 }
 
-/// Walks `node`, pushing collectable literals to `out` (see [`super::collect_literal_occurrences`]).
-fn collect_literal_occurrences_rec<'a>(node: &RawNode<'a>, out: &mut Vec<LiteralOccurrence<'a>>) {
-    match node.kind().as_ref() {
-        "attribute_item" | "inner_attribute_item" | "extern_modifier" => return,
-        "macro_invocation" if is_literal_exempt_macro(&macro_terminal_name_raw(node)) => return,
-        "token_tree"
-            if resolve_preceding_macro_path(node)
-                .is_some_and(|(_, terminal)| is_literal_exempt_macro(&terminal)) =>
-        {
-            return;
-        }
-        // `pair.0`: the tuple position is a field name, not a value.
-        "field_expression" => {
-            if let Some(value) = node.field("value") {
-                collect_literal_occurrences_rec(&value, out);
-            }
-            return;
-        }
-        // A scalar constant defines its value; a composite one (`const NAMES: &[&str] = ...`)
-        // is a named value whose parts are not collected. A `static mut` is not a constant.
-        "const_item" | "static_item" | "enum_variant"
-            if !node
-                .children()
-                .any(|child| child.kind() == "mutable_specifier") =>
-        {
-            if let Some(value_node) = node.field("value")
-                && let Some(value) = literal_value(&value_node)
-            {
-                out.push(LiteralOccurrence {
-                    node: AstNode::from_raw(value_node),
-                    value,
-                    role: LiteralRole::ConstantDefinition,
-                });
-            }
-            return;
-        }
-        _ => {
-            if let Some(value) = literal_value(node) {
-                out.push(LiteralOccurrence {
-                    node: AstNode::from_raw(node.clone()),
-                    value,
-                    role: LiteralRole::Inline,
-                });
-                return;
-            }
-        }
+/// Returns the initializer expression node of a scalar constant (`const`, non-`mut` `static`, or `enum` variant).
+fn constant_initializer_expr(node: &SyntaxNode) -> Option<(bool, Option<ast::Expr>)> {
+    if let Some(const_item) = ast::Const::cast(node.clone()) {
+        return Some((true, const_item.body()));
     }
-    let is_token_tree = node.kind() == "token_tree";
-    let mut follows_minus = false;
-    for child in node.children() {
-        // A macro's `-42` is a bare `-` token and a number: skip the number rather than
-        // collect it as `42`.
-        let is_signed_number =
-            follows_minus && matches!(child.kind().as_ref(), "integer_literal" | "float_literal");
-        follows_minus = is_token_tree && child.kind() == "-";
-        if !is_signed_number {
-            collect_literal_occurrences_rec(&child, out);
+    if let Some(variant) = ast::Variant::cast(node.clone()) {
+        return Some((
+            true,
+            variant
+                .const_arg()
+                .and_then(|const_arg| const_arg.expr())
+                .or_else(|| variant.syntax().children().find_map(ast::Expr::cast)),
+        ));
+    }
+    if let Some(static_item) = ast::Static::cast(node.clone()) {
+        if static_item.mut_token().is_none() {
+            return Some((true, static_item.body()));
         }
+        return Some((false, None));
+    }
+    None
+}
+
+/// Walks `node`, pushing collectable literals to `out` (see [`super::collect_literal_occurrences`]).
+fn collect_literal_occurrences_rec<'a>(
+    node: &SyntaxNode,
+    file: &'a ParsedFile,
+    out: &mut Vec<LiteralOccurrence<'a>>,
+) {
+    let kind = node.kind();
+    if ast::Attr::can_cast(kind) || ast::Abi::can_cast(kind) {
+        return;
+    }
+    if let Some(macro_call) = ast::MacroCall::cast(node.clone())
+        && is_literal_exempt_macro(&macro_call_terminal_name(&macro_call))
+    {
+        return;
+    }
+    if kind == SyntaxKind::TOKEN_TREE {
+        if resolve_preceding_macro_path(node)
+            .is_some_and(|(_, terminal)| is_literal_exempt_macro(&terminal))
+        {
+            return;
+        }
+        let mut follows_minus = false;
+        for element in node.children_with_tokens() {
+            match element {
+                SyntaxElement::Node(child_node) => {
+                    follows_minus = false;
+                    collect_literal_occurrences_rec(&child_node, file, out);
+                }
+                SyntaxElement::Token(token) => {
+                    if token.kind().is_trivia() {
+                        continue;
+                    }
+                    let is_signed_number = follows_minus
+                        && matches!(
+                            token.kind(),
+                            SyntaxKind::INT_NUMBER | SyntaxKind::FLOAT_NUMBER
+                        );
+                    follows_minus = token.kind() == SyntaxKind::MINUS;
+                    if !is_signed_number && let Some(value) = token_literal_value(&token) {
+                        out.push(LiteralOccurrence {
+                            node: AstNode::from_span(
+                                file,
+                                span_from_rowan_range(token.text_range()),
+                            ),
+                            value,
+                            role: LiteralRole::Inline,
+                        });
+                    }
+                }
+            }
+        }
+        return;
+    }
+    if let Some(field_expr) = ast::FieldExpr::cast(node.clone()) {
+        if let Some(receiver) = field_expr.expr() {
+            collect_literal_occurrences_rec(receiver.syntax(), file, out);
+        }
+        return;
+    }
+    if let Some((true, initializer)) = constant_initializer_expr(node) {
+        if let Some(expr_node) = initializer
+            && let Some(value) = node_literal_value(expr_node.syntax())
+        {
+            out.push(LiteralOccurrence {
+                node: AstNode::from_span(
+                    file,
+                    span_from_rowan_range(expr_node.syntax().text_range()),
+                ),
+                value,
+                role: LiteralRole::ConstantDefinition,
+            });
+        }
+        return;
+    }
+    if let Some(value) = node_literal_value(node) {
+        out.push(LiteralOccurrence {
+            node: AstNode::from_span(file, span_from_rowan_range(node.text_range())),
+            value,
+            role: LiteralRole::Inline,
+        });
+        return;
+    }
+    for child in node.children() {
+        collect_literal_occurrences_rec(&child, file, out);
     }
 }
 
 /// Collects Rust literal occurrences (see [`super::collect_literal_occurrences`]).
 #[must_use]
 pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'_>> {
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
-    collect_literal_occurrences_rec(&file.grep.root(), &mut out);
+    collect_literal_occurrences_rec(parsed.tree().syntax(), file, &mut out);
     out
 }
 
-/// Resolves `(full_path, terminal_name)` of a Rust type constructor node (`type_identifier` or
-/// `scoped_type_identifier`), stripping whitespace and any leading `::`.
-fn resolve_rust_type_path(node: &RawNode<'_>) -> Option<(String, String)> {
-    if !matches!(
-        node.kind().as_ref(),
-        "type_identifier" | "scoped_type_identifier"
-    ) {
+/// Normalizes a raw type path string by stripping whitespace and any leading `::`,
+/// returning `(normalized_path, terminal_identifier)`.
+fn normalize_type_path_text(raw_text: &str) -> Option<(String, String)> {
+    let compact = compact_path_text(raw_text);
+    if compact.is_empty() || compact.contains('<') || compact.contains('[') || compact.contains('(')
+    {
         return None;
     }
-    let raw_path = compact_path_text(node.text().as_ref());
-    let normalized = raw_path
+    let normalized = compact
         .strip_prefix("::")
-        .unwrap_or(raw_path.as_str())
+        .unwrap_or(compact.as_str())
         .to_owned();
     let terminal = normalized
         .rsplit("::")
@@ -1357,42 +1601,44 @@ fn resolve_rust_type_path(node: &RawNode<'_>) -> Option<(String, String)> {
     Some((normalized, terminal))
 }
 
-/// Extracts `(base_type_node, type_argument_nodes)` from a Rust `generic_type` node, excluding
-/// lifetime parameters (`'a`, `'static`) and associated type bindings (`Item = T`).
-fn extract_rust_generic_base_and_args<'a>(
-    node: &RawNode<'a>,
-) -> Option<(RawNode<'a>, Vec<RawNode<'a>>)> {
-    if node.kind() != "generic_type" {
-        return None;
-    }
-    let base_node = node.field("type")?;
-    let args_node = node.field("type_arguments")?;
-    let type_args = args_node
-        .children()
-        .filter(|child| {
-            child.is_named()
-                && !child.is_extra()
-                && !matches!(child.kind().as_ref(), "lifetime" | "type_binding")
+/// Extracts `(base_span, (normalized_base_path, base_terminal), type_argument_nodes)` from an [`ast::PathType`]
+/// whose terminal segment has a `<...>` generic argument list, excluding lifetime and associated-type arguments.
+fn extract_path_type_generics(
+    path_type: &ast::PathType,
+    source: &str,
+) -> Option<(SourceSpan, (String, String), Vec<ast::Type>)> {
+    let path = path_type.path()?;
+    let segment = path.segment()?;
+    let name_ref = segment.name_ref()?;
+    let generic_args = segment.generic_arg_list()?;
+    let base_start: usize = path.syntax().text_range().start().into();
+    let base_end: usize = name_ref.syntax().text_range().end().into();
+    let base_span = SourceSpan::new(base_start, base_end);
+    let base_resolved = normalize_type_path_text(&source[base_start..base_end])?;
+    let type_arguments = generic_args
+        .generic_args()
+        .filter_map(|generic_arg| match generic_arg {
+            ast::GenericArg::TypeArg(type_arg) => type_arg.ty(),
+            _ => None,
         })
         .collect();
-    Some((base_node, type_args))
+    Some((base_span, base_resolved, type_arguments))
 }
 
-/// Unwraps outer `Result<T, ...>` and `Poll<T>` return type envelopes from `node`.
-fn unwrap_rust_return_envelope<'a>(node: &RawNode<'a>) -> RawNode<'a> {
-    let mut current = node.clone();
-    while current.kind() == "generic_type" {
-        let Some((base_node, type_args)) = extract_rust_generic_base_and_args(&current) else {
-            break;
-        };
-        let Some((base_path, base_terminal)) = resolve_rust_type_path(&base_node) else {
+/// Unwraps outer `Result<T, ...>` and `Poll<T>` return type envelopes from `type_node`.
+fn unwrap_rust_return_envelope(type_node: ast::Type, source: &str) -> ast::Type {
+    let mut current = type_node;
+    while let ast::Type::PathType(ref path_type) = current {
+        let Some((_, (base_path, base_terminal), type_args)) =
+            extract_path_type_generics(path_type, source)
+        else {
             break;
         };
         let is_result_or_poll = base_terminal == "Result"
-            || (base_terminal == "Poll"
+            || (base_terminal == POLL_TYPE_NAME
                 && matches!(
                     base_path.as_str(),
-                    "Poll" | "task::Poll" | "std::task::Poll" | "core::task::Poll"
+                    POLL_TYPE_NAME | "task::Poll" | "std::task::Poll" | "core::task::Poll"
                 ));
         if is_result_or_poll && let Some(first_arg) = type_args.into_iter().next() {
             current = first_arg;
@@ -1405,48 +1651,55 @@ fn unwrap_rust_return_envelope<'a>(node: &RawNode<'a>) -> RawNode<'a> {
 
 /// Unwraps transparent borrow and smart-pointer wrappers (`&T`, `&mut T`, `Box<T>`, `Rc<T>`,
 /// `Arc<T>`, `Cow<'_, T>`) around a Rust type node.
-fn unwrap_rust_pointer_wrappers<'a>(node: &RawNode<'a>) -> RawNode<'a> {
-    let mut current = node.clone();
+fn unwrap_rust_pointer_wrappers(type_node: ast::Type, source: &str) -> ast::Type {
+    let mut current = type_node;
     loop {
-        if current.kind() == "reference_type" {
-            if let Some(inner) = current.field("type") {
-                current = inner;
-                continue;
+        match &current {
+            ast::Type::RefType(ref_type) => {
+                if let Some(inner) = ref_type.ty() {
+                    current = inner;
+                    continue;
+                }
+                break;
             }
-            break;
-        }
-        if current.kind() == "generic_type"
-            && let Some((base_node, type_args)) = extract_rust_generic_base_and_args(&current)
-            && let Some((base_path, base_terminal)) = resolve_rust_type_path(&base_node)
-        {
-            let is_pointer_wrapper = match base_terminal.as_str() {
-                "Box" => matches!(
-                    base_path.as_str(),
-                    "Box" | "boxed::Box" | "std::boxed::Box" | "alloc::boxed::Box"
-                ),
-                "Rc" => matches!(
-                    base_path.as_str(),
-                    "Rc" | "rc::Rc" | "std::rc::Rc" | "alloc::rc::Rc"
-                ),
-                "Arc" => matches!(
-                    base_path.as_str(),
-                    "Arc" | "sync::Arc" | "std::sync::Arc" | "alloc::sync::Arc"
-                ),
-                "Cow" => matches!(
-                    base_path.as_str(),
-                    "Cow" | "borrow::Cow" | "std::borrow::Cow" | "alloc::borrow::Cow"
-                ),
-                _ => false,
-            };
-            if is_pointer_wrapper
-                && type_args.len() == 1
-                && let Some(first_arg) = type_args.into_iter().next()
-            {
-                current = first_arg;
-                continue;
+            ast::Type::PathType(path_type) => {
+                if let Some((_, (base_path, base_terminal), type_args)) =
+                    extract_path_type_generics(path_type, source)
+                {
+                    let is_pointer_wrapper = match base_terminal.as_str() {
+                        BOX_TYPE_NAME => matches!(
+                            base_path.as_str(),
+                            BOX_TYPE_NAME | "boxed::Box" | "std::boxed::Box" | "alloc::boxed::Box"
+                        ),
+                        RC_TYPE_NAME => matches!(
+                            base_path.as_str(),
+                            RC_TYPE_NAME | "rc::Rc" | "std::rc::Rc" | "alloc::rc::Rc"
+                        ),
+                        ARC_TYPE_NAME => matches!(
+                            base_path.as_str(),
+                            ARC_TYPE_NAME | "sync::Arc" | "std::sync::Arc" | "alloc::sync::Arc"
+                        ),
+                        COW_TYPE_NAME => matches!(
+                            base_path.as_str(),
+                            COW_TYPE_NAME
+                                | "borrow::Cow"
+                                | "std::borrow::Cow"
+                                | "alloc::borrow::Cow"
+                        ),
+                        _ => false,
+                    };
+                    if is_pointer_wrapper
+                        && type_args.len() == 1
+                        && let Some(first_arg) = type_args.into_iter().next()
+                    {
+                        current = first_arg;
+                        continue;
+                    }
+                }
+                break;
             }
+            _ => break,
         }
-        break;
     }
     current
 }
@@ -1464,23 +1717,48 @@ pub struct RustFunction<'a> {
     pub is_trait_or_trait_impl: bool,
 }
 
+/// Returns true if `function` is declared inside a `trait` block or an `impl Trait for Type` block.
+fn is_trait_or_trait_impl_function(function: &ast::Fn) -> bool {
+    let Some(assoc_items) = function.syntax().parent() else {
+        return false;
+    };
+    if !ast::AssocItemList::can_cast(assoc_items.kind()) {
+        return false;
+    }
+    let Some(enclosing_item) = assoc_items.parent() else {
+        return false;
+    };
+    ast::Trait::can_cast(enclosing_item.kind())
+        || ast::Impl::cast(enclosing_item).is_some_and(|impl_item| impl_item.trait_().is_some())
+}
+
 /// Collects all function and method definitions in `file`, in source order.
 #[must_use]
 pub fn collect_functions(file: &ParsedFile) -> Vec<RustFunction<'_>> {
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
-    for node in file.grep.root().dfs() {
-        if node.kind() != "function_item" {
-            continue;
-        }
-        let Some(name_node) = node.field("name") else {
+    for function in parsed
+        .tree()
+        .syntax()
+        .descendants()
+        .filter_map(ast::Fn::cast)
+    {
+        let Some(name_node) = function.name() else {
             continue;
         };
-        let is_trait_or_trait_impl = is_trait_or_trait_impl_function(&node);
+        let return_type = function
+            .ret_type()
+            .and_then(|ret| ret.ty())
+            .map(|type_node| {
+                AstNode::from_span(file, span_from_rowan_range(type_node.syntax().text_range()))
+            });
         out.push(RustFunction {
             name: name_node.text().trim().to_owned(),
-            return_type: node.field("return_type").map(AstNode::from_raw),
-            is_trait_or_trait_impl,
-            node: AstNode::from_raw(node),
+            return_type,
+            is_trait_or_trait_impl: is_trait_or_trait_impl_function(&function),
+            node: AstNode::from_span(file, span_from_rowan_range(function.syntax().text_range())),
         });
     }
     out
@@ -1489,82 +1767,89 @@ pub fn collect_functions(file: &ParsedFile) -> Vec<RustFunction<'_>> {
 /// Unwraps outer `Result<T, ...>` and `Poll<T>` return type envelopes from `node`.
 #[must_use]
 pub fn unwrap_return_envelope<'a>(node: &AstNode<'a>) -> AstNode<'a> {
-    node.raw_opt().map_or_else(
-        || node.clone(),
-        |raw| AstNode::from_raw(unwrap_rust_return_envelope(raw)),
-    )
+    let (Some(file), Some(type_node)) = (node.file_opt(), cast_at_span::<ast::Type>(node)) else {
+        return node.clone();
+    };
+    let unwrapped = unwrap_rust_return_envelope(type_node, &file.source);
+    AstNode::from_span(file, span_from_rowan_range(unwrapped.syntax().text_range()))
 }
 
 /// If `node` is `Option<T>` (unqualified, `std::option::Option`, or `core::option::Option`),
 /// returns the inner type node `T`.
 #[must_use]
 pub fn extract_option_payload<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
-    let raw = node.raw_opt()?;
-    let (option_base, option_args) = extract_rust_generic_base_and_args(raw)?;
-    let (option_path, option_terminal) = resolve_rust_type_path(&option_base)?;
-    if option_terminal != "Option"
+    let file = node.file_opt()?;
+    let path_type = cast_at_span::<ast::PathType>(node)?;
+    let (_, (option_path, option_terminal), option_args) =
+        extract_path_type_generics(&path_type, &file.source)?;
+    if option_terminal != OPTION_TYPE_NAME
         || !matches!(
             option_path.as_str(),
-            "Option" | "option::Option" | "std::option::Option" | "core::option::Option"
+            OPTION_TYPE_NAME | "option::Option" | "std::option::Option" | "core::option::Option"
         )
         || option_args.len() != 1
     {
         return None;
     }
-    Some(AstNode::from_raw(option_args.into_iter().next()?))
+    let payload = option_args.into_iter().next()?;
+    Some(AstNode::from_span(
+        file,
+        span_from_rowan_range(payload.syntax().text_range()),
+    ))
 }
 
 /// Unwraps transparent borrow and smart-pointer wrappers (`&T`, `&mut T`, `Box<T>`, `Rc<T>`,
 /// `Arc<T>`, `Cow<'_, T>`) around a Rust type node.
 #[must_use]
 pub fn unwrap_pointer_wrappers<'a>(node: &AstNode<'a>) -> AstNode<'a> {
-    node.raw_opt().map_or_else(
-        || node.clone(),
-        |raw| AstNode::from_raw(unwrap_rust_pointer_wrappers(raw)),
-    )
+    let (Some(file), Some(type_node)) = (node.file_opt(), cast_at_span::<ast::Type>(node)) else {
+        return node.clone();
+    };
+    let unwrapped = unwrap_rust_pointer_wrappers(type_node, &file.source);
+    AstNode::from_span(file, span_from_rowan_range(unwrapped.syntax().text_range()))
 }
 
 /// Extracts `(base_node, type_argument_nodes)` from a Rust `generic_type` node.
 #[must_use]
 pub fn extract_generic_type<'a>(node: &AstNode<'a>) -> Option<(AstNode<'a>, Vec<AstNode<'a>>)> {
-    let raw = node.raw_opt()?;
-    let (base, args) = extract_rust_generic_base_and_args(raw)?;
+    let file = node.file_opt()?;
+    let path_type = cast_at_span::<ast::PathType>(node)?;
+    let (base_span, _, type_args) = extract_path_type_generics(&path_type, &file.source)?;
     Some((
-        AstNode::from_raw(base),
-        args.into_iter().map(AstNode::from_raw).collect(),
+        AstNode::from_span(file, base_span),
+        type_args
+            .into_iter()
+            .map(|type_arg| {
+                AstNode::from_span(file, span_from_rowan_range(type_arg.syntax().text_range()))
+            })
+            .collect(),
     ))
 }
 
 /// Resolves a Rust type path node to its `(full_path, terminal_identifier)`.
 #[must_use]
 pub fn resolve_type_path(node: &AstNode<'_>) -> Option<(String, String)> {
-    resolve_rust_type_path(node.raw_opt()?)
+    if cast_at_span::<ast::Path>(node).is_none()
+        && cast_at_span::<ast::NameRef>(node).is_none()
+        && cast_at_span::<ast::PathType>(node).is_none()
+    {
+        return None;
+    }
+    normalize_type_path_text(&node.text())
 }
 
 /// Extracts the slice type representation if `node` represents a Rust slice or unsized array (e.g. `[T]`).
 #[must_use]
 pub fn extract_slice_type(node: &AstNode<'_>) -> Option<String> {
-    let raw = node.raw_opt()?;
-    match raw.kind().as_ref() {
-        "slice_type" => Some(node.text().trim().to_owned()),
-        "array_type" if raw.field("length").is_none() => Some(node.text().trim().to_owned()),
-        _ => None,
+    if cast_at_span::<ast::SliceType>(node).is_some() {
+        return Some(node.text().trim().to_owned());
     }
-}
-
-/// Returns true if `func_node` is declared inside a `trait` block or an `impl Trait for Type` block.
-fn is_trait_or_trait_impl_function(func_node: &RawNode<'_>) -> bool {
-    let Some(body) = func_node.parent() else {
-        return false;
-    };
-    if body.kind() != "declaration_list" {
-        return false;
+    if let Some(array_type) = cast_at_span::<ast::ArrayType>(node)
+        && array_type.const_arg().is_none()
+    {
+        return Some(node.text().trim().to_owned());
     }
-    let Some(enclosing_item) = body.parent() else {
-        return false;
-    };
-    enclosing_item.kind() == "trait_item"
-        || (enclosing_item.kind() == "impl_item" && enclosing_item.field("trait").is_some())
+    None
 }
 
 #[cfg(test)]
@@ -1799,8 +2084,8 @@ mod tests {
 
     #[rstest::rstest]
     #[case::raw_string("r#\"ab\"#", LiteralValue::Str("ab".to_string()))]
-    #[case::raw_backslash_spelled_plain("r\"a\\tb\"", LiteralValue::Str("a\\\\tb".to_string()))]
-    #[case::raw_quote_spelled_plain("r#\"a\"b\"#", LiteralValue::Str("a\\\"b".to_string()))]
+    #[case::raw_backslash_decoded("r\"a\\tb\"", LiteralValue::Str("a\\tb".to_string()))]
+    #[case::raw_quote_decoded("r#\"a\"b\"#", LiteralValue::Str("a\"b".to_string()))]
     #[case::empty_raw_string("r\"\"", LiteralValue::Str(String::new()))]
     #[case::byte_string("b\"ab\"", LiteralValue::Bytes("ab".to_string()))]
     #[case::raw_byte_string("br\"ab\"", LiteralValue::Bytes("ab".to_string()))]
