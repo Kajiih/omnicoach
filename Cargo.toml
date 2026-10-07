@@ -28,10 +28,18 @@ path = "src/bin/omni-command-lint.rs"
 name = "ast_dumper"
 path = "src/bin/ast_dumper.rs"
 
+[[bench]]
+name = "omni_bench"
+harness = false
+
 [profile.release]
 lto = "fat"
 strip = "symbols"
 
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = "none"
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -84,6 +92,7 @@ indoc = "2.0.7"
 
 [dev-dependencies]
 assert_cmd = "2.0"
+divan = "0.1.21"
 insta = "1.48"
 predicates = "3.0"
 pretty_assertions = "1.4.0"
