@@ -1,9 +1,11 @@
 //! Python logger calls (`logging` and `loguru`): receiver and method recognition, message and
 //! arguments.
 
-// omni:disable-file [repeated-literal] -- Tree-sitter node kinds and field names (see ROADMAP)
-
-use super::{AstNode, ParsedFile, RawNode, static_string_text};
+use super::{AstNode, ParsedFile, static_string_text};
+use crate::code_lint::ast::span_from_ruff_range;
+use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
+use ruff_python_ast::{Expr, ExprCall};
+use ruff_text_size::{Ranged as _, TextRange};
 use std::collections::HashSet;
 
 /// Bare variable/module names recognized as logger receivers (`logger.info`, `logging.error`, `_logger.info`).
@@ -45,89 +47,95 @@ pub struct PythonLoggerCall<'a> {
     pub keyword_names: HashSet<String>,
     /// Whether this method supports stdlib `logging` `%`-formatting (`false` for `trace`/`success`).
     pub(super) uses_printf: bool,
-    /// The message expression node (`arg 0`, or `arg 1` for `.log(level, msg, ...)`).
-    pub(super) message_node: RawNode<'a>,
+    /// Byte range of the message expression (`arg 0`, or `arg 1` for `.log(level, msg, ...)`).
+    pub(super) message_range: TextRange,
 }
 
 /// Returns true if `receiver` is a recognized logger variable, module, or attribute (`logger`,
 /// `_logger`, `logging`, `self.logger`, `app.logger`, etc.).
-fn is_logger_receiver(receiver: &RawNode<'_>) -> bool {
-    match receiver.kind().as_ref() {
-        "identifier" => LOGGER_RECEIVERS.contains(&receiver.text().as_ref()),
-        "attribute" => receiver
-            .field("attribute")
-            .is_some_and(|attribute| LOGGER_ATTRIBUTES.contains(&attribute.text().as_ref())),
+fn is_logger_receiver(receiver: &Expr) -> bool {
+    match receiver {
+        Expr::Name(name) => LOGGER_RECEIVERS.contains(&name.id.as_str()),
+        Expr::Attribute(attribute) => LOGGER_ATTRIBUTES.contains(&attribute.attr.as_str()),
         _ => false,
     }
 }
 
-/// Parses `call_node` as a logger call if its callee is a recognized logger receiver and method.
-pub(super) fn extract_logger_call<'a>(call_node: &RawNode<'a>) -> Option<PythonLoggerCall<'a>> {
-    if call_node.kind() != "call" {
+/// Parses `call` as a logger call if its callee is a recognized logger receiver and method.
+pub(super) fn extract_logger_call<'a>(
+    call: &ExprCall,
+    file: &'a ParsedFile,
+) -> Option<PythonLoggerCall<'a>> {
+    let Expr::Attribute(function) = call.func.as_ref() else {
+        return None;
+    };
+    if !is_logger_receiver(&function.value) {
         return None;
     }
-    let function = call_node.field("function")?;
-    if function.kind() != "attribute" {
-        return None;
-    }
-    let receiver = function.field("object")?;
-    if !is_logger_receiver(&receiver) {
-        return None;
-    }
-    let method_node = function.field("attribute")?;
-    let method = method_node.text();
-    let uses_printf = if PRINTF_LOGGER_METHODS.contains(&method.as_ref()) {
+    let method = function.attr.as_str();
+    let uses_printf = if PRINTF_LOGGER_METHODS.contains(&method) {
         true
-    } else if LOGURU_ONLY_METHODS.contains(&method.as_ref()) {
+    } else if LOGURU_ONLY_METHODS.contains(&method) {
         false
     } else {
         return None;
     };
 
-    let arguments = call_node.field("arguments")?;
-    let mut positional_or_splat = Vec::new();
     let mut keyword_names = HashSet::new();
     let mut has_keyword_splat = false;
-
-    for child in arguments
-        .children()
-        .filter(|child| child.is_named() && !child.is_extra())
-    {
-        match child.kind().as_ref() {
-            "dictionary_splat" => has_keyword_splat = true,
-            "keyword_argument" => {
-                if let Some(name_node) = child.field("name") {
-                    keyword_names.insert(name_node.text().into_owned());
-                }
-            }
-            _ => positional_or_splat.push(child),
+    for keyword in &call.arguments.keywords {
+        if let Some(arg_name) = &keyword.arg {
+            keyword_names.insert(arg_name.id.to_string());
+        } else {
+            has_keyword_splat = true;
         }
     }
 
     let message_index = usize::from(method == "log");
-    let message_node = positional_or_splat.get(message_index)?.clone();
-    if message_node.kind() == "list_splat" {
+    let message_expr = call.arguments.args.get(message_index)?;
+    if matches!(message_expr, Expr::Starred(_)) {
         return None;
     }
 
+    let func_span = span_from_ruff_range(function.range());
     Some(PythonLoggerCall {
-        node: AstNode::from_raw(call_node.clone()),
-        callee: function.text().into_owned(),
-        message: static_string_text(&message_node),
-        has_trailing_positional_args: positional_or_splat.len() > message_index + 1,
+        node: AstNode::from_span(file, span_from_ruff_range(call.range())),
+        callee: file.source[func_span.start..func_span.end].to_owned(),
+        message: static_string_text(message_expr, &file.source),
+        has_trailing_positional_args: call.arguments.args.len() > message_index + 1,
         has_keyword_splat,
         keyword_names,
         uses_printf,
-        message_node,
+        message_range: message_expr.range(),
     })
 }
 
 /// Collects the logger calls in `file`, in source order.
 #[must_use]
 pub fn collect_logger_calls(file: &ParsedFile) -> Vec<PythonLoggerCall<'_>> {
-    file.grep
-        .root()
-        .dfs()
-        .filter_map(|node| extract_logger_call(&node))
-        .collect()
+    struct LoggerCallVisitor<'a> {
+        file: &'a ParsedFile,
+        out: Vec<PythonLoggerCall<'a>>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for LoggerCallVisitor<'a> {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Call(call) = expr
+                && let Some(logger_call) = extract_logger_call(call, self.file)
+            {
+                self.out.push(logger_call);
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut visitor = LoggerCallVisitor {
+        file,
+        out: Vec::new(),
+    };
+    visitor.visit_body(&parsed.syntax().body);
+    visitor.out
 }

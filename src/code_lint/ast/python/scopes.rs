@@ -1,229 +1,178 @@
 //! Python binding extraction, lexical scope boundaries, and calls between sibling functions.
 
-// omni:disable-file [repeated-literal] -- Tree-sitter node kinds and field names (see ROADMAP)
-
 use super::{
-    AstNode, ParsedFile, RawNode, direct_function_definitions, extract_decorators_raw,
-    method_receiver_name, parse_param_parts,
+    AstNode, ParsedFile, direct_function_definitions, extract_decorators_from_slice,
+    method_receiver_name_ast,
 };
+use crate::code_lint::ast::span_from_ruff_range;
+use crate::diagnostic::SourceSpan;
+use ruff_python_ast::visitor::source_order::{
+    SourceOrderVisitor, walk_comprehension, walk_except_handler, walk_expr, walk_match_case,
+    walk_parameters, walk_stmt, walk_with_item,
+};
+use ruff_python_ast::{
+    Alias, Comprehension, ExceptHandler, Expr, MatchCase, Parameters, Pattern, Stmt, StmtClassDef,
+    StmtFunctionDef, WithItem,
+};
+use ruff_text_size::Ranged as _;
 use std::collections::{HashMap, HashSet};
 
-/// Recursively extracts binding identifiers from a pattern node, stopping at `attribute`,
-/// `subscript`, and `type` nodes so `self.ctx = 1` or `items[idx] = 1` does not record `ctx`
-/// or `idx` as a local variable binding.
-pub(super) fn extract_from_pattern<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
-    let kind = node.kind();
-    match kind.as_ref() {
-        "attribute" | "subscript" | "type" => {}
-        "identifier" => {
-            if node.text() != "_" {
-                bindings.push(AstNode::from_raw(node.clone()));
+/// Recursively extracts binding identifiers from an assignment/loop target expression, stopping
+/// at `Expr::Attribute` and `Expr::Subscript` so `self.ctx = 1` or `items[idx] = 1` does not
+/// record `ctx` or `idx` as a local variable binding.
+pub(super) fn extract_from_expr_target<'a>(
+    target: &Expr,
+    file: &'a ParsedFile,
+    bindings: &mut Vec<AstNode<'a>>,
+) {
+    match target {
+        Expr::Name(name) => {
+            if name.id.as_str() != "_" {
+                bindings.push(AstNode::from_span(file, span_from_ruff_range(name.range)));
             }
         }
-        "dotted_name" => {
-            if !node.text().contains('.') {
-                for child in node.children() {
-                    extract_from_pattern(&child, bindings);
-                }
+        Expr::Tuple(tuple) => {
+            for elt in &tuple.elts {
+                extract_from_expr_target(elt, file, bindings);
             }
         }
-        "class_pattern" => {
-            // In a class match pattern like `case Point(x, y):`, the first child
-            // is the class name identifier (`Point`), which is not a variable binding.
-            let mut first = true;
-            for child in node.children() {
-                if first {
-                    first = false;
-                    continue;
-                }
-                extract_from_pattern(&child, bindings);
+        Expr::List(list) => {
+            for elt in &list.elts {
+                extract_from_expr_target(elt, file, bindings);
             }
         }
-        "keyword_pattern" => {
-            // In keyword match patterns like `case Point(x=z):`, the identifier
-            // before the `=` (`x`) is the parameter name, and only the value (`z`) is the binding.
-            let mut seen_equals = false;
-            for child in node.children() {
-                if child.kind() == "=" {
-                    seen_equals = true;
-                    continue;
-                }
-                if !seen_equals {
-                    continue;
-                }
-                extract_from_pattern(&child, bindings);
-            }
-        }
-        "typed_parameter" | "default_parameter" | "typed_default_parameter" => {
-            if let Some(name_node) = node.field("name") {
-                extract_from_pattern(&name_node, bindings);
-            } else if let Some(first_child) = node.child(0)
-                && matches!(
-                    first_child.kind().as_ref(),
-                    "identifier" | "list_splat_pattern" | "dictionary_splat_pattern"
-                )
-            {
-                extract_from_pattern(&first_child, bindings);
-            }
-        }
-        _ => {
-            for child in node.children() {
-                extract_from_pattern(&child, bindings);
-            }
-        }
-    }
-}
-
-/// Inserts all identifier names bound by `pattern_node` into `names`.
-fn extend_binding_names(pattern_node: &RawNode<'_>, names: &mut HashSet<String>) {
-    let mut nodes = Vec::new();
-    extract_from_pattern(pattern_node, &mut nodes);
-    for node in nodes {
-        names.insert(node.text().into_owned());
-    }
-}
-
-/// Helper to extract the first segment from a dotted name.
-fn extract_first_segment<'a>(node: &RawNode<'a>) -> RawNode<'a> {
-    node.child(0).unwrap_or_else(|| node.clone())
-}
-
-/// Extracts bindings from Python import statements.
-fn extract_from_import<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
-    match node.kind().as_ref() {
-        "import_statement" => {
-            for child in node.children() {
-                let kind = child.kind();
-                if kind != "import" && kind != "," {
-                    extract_from_import(&child, bindings);
-                }
-            }
-        }
-        "import_from_statement" => {
-            let mut seen_import = false;
-            for child in node.children() {
-                if child.kind() == "import" {
-                    seen_import = true;
-                    continue;
-                }
-                if !seen_import {
-                    continue;
-                }
-                let kind = child.kind();
-                if kind != "," && kind != "(" && kind != ")" {
-                    extract_from_import(&child, bindings);
-                }
-            }
-        }
-        "aliased_import" => {
-            if let Some(alias) = node.field("alias")
-                && alias.text() != "_"
-            {
-                bindings.push(AstNode::from_raw(alias));
-            }
-        }
-        "dotted_name" | "identifier" => {
-            let first_seg = extract_first_segment(node);
-            if first_seg.text() != "_" {
-                bindings.push(AstNode::from_raw(first_seg));
-            }
+        Expr::Starred(starred) => {
+            extract_from_expr_target(&starred.value, file, bindings);
         }
         _ => {}
     }
 }
 
-fn traverse_children_skipping<'a>(
-    node: &RawNode<'a>,
-    skip: Option<&RawNode<'a>>,
+/// Recursively extracts binding identifiers from a `match` `Pattern`.
+fn extract_from_match_pattern<'a>(
+    pattern: &Pattern,
+    file: &'a ParsedFile,
     bindings: &mut Vec<AstNode<'a>>,
 ) {
-    for child in node.children() {
-        if let Some(skip_node) = skip
-            && child.range() == skip_node.range()
-        {
-            continue;
+    match pattern {
+        Pattern::MatchValue(_) | Pattern::MatchSingleton(_) => {}
+        Pattern::MatchSequence(seq) => {
+            for child in &seq.patterns {
+                extract_from_match_pattern(child, file, bindings);
+            }
         }
-        traverse_python(&child, bindings);
+        Pattern::MatchMapping(mapping) => {
+            for child in &mapping.patterns {
+                extract_from_match_pattern(child, file, bindings);
+            }
+            if let Some(rest) = &mapping.rest
+                && rest.id.as_str() != "_"
+            {
+                bindings.push(AstNode::from_span(file, span_from_ruff_range(rest.range)));
+            }
+        }
+        Pattern::MatchClass(class_pat) => {
+            for child in &class_pat.arguments.patterns {
+                extract_from_match_pattern(child, file, bindings);
+            }
+            for keyword in &class_pat.arguments.keywords {
+                extract_from_match_pattern(&keyword.pattern, file, bindings);
+            }
+        }
+        Pattern::MatchStar(star) => {
+            if let Some(name) = &star.name
+                && name.id.as_str() != "_"
+            {
+                bindings.push(AstNode::from_span(file, span_from_ruff_range(name.range)));
+            }
+        }
+        Pattern::MatchAs(as_pat) => {
+            if let Some(inner) = &as_pat.pattern {
+                extract_from_match_pattern(inner, file, bindings);
+            }
+            if let Some(name) = &as_pat.name
+                && name.id.as_str() != "_"
+            {
+                bindings.push(AstNode::from_span(file, span_from_ruff_range(name.range)));
+            }
+        }
+        Pattern::MatchOr(or_pat) => {
+            for child in &or_pat.patterns {
+                extract_from_match_pattern(child, file, bindings);
+            }
+        }
     }
 }
 
-fn traverse_python<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
-    let kind = node.kind();
-    match kind.as_ref() {
-        "assignment" => {
-            let left = node.field("left");
-            if let Some(ref left_node) = left {
-                extract_from_pattern(left_node, bindings);
-            } else if let Some(first_child) = node.child(0) {
-                extract_from_pattern(&first_child, bindings);
-            }
-            traverse_children_skipping(node, left.as_ref(), bindings);
+/// Inserts all identifier names bound by `target` into `names`.
+fn extend_expr_target_names(target: &Expr, file: &ParsedFile, names: &mut HashSet<String>) {
+    let mut nodes = Vec::new();
+    extract_from_expr_target(target, file, &mut nodes);
+    for node in nodes {
+        names.insert(node.text().into_owned());
+    }
+}
+
+/// Inserts all identifier names bound by `pattern` into `names`.
+fn extend_match_pattern_names(pattern: &Pattern, file: &ParsedFile, names: &mut HashSet<String>) {
+    let mut nodes = Vec::new();
+    extract_from_match_pattern(pattern, file, &mut nodes);
+    for node in nodes {
+        names.insert(node.text().into_owned());
+    }
+}
+
+/// Extracts parameter name bindings from `parameters` in source order.
+fn extract_from_parameters<'a>(
+    parameters: &Parameters,
+    file: &'a ParsedFile,
+    bindings: &mut Vec<AstNode<'a>>,
+) {
+    let mut param_idents = Vec::new();
+    for pwd in parameters.posonlyargs.iter().chain(parameters.args.iter()) {
+        param_idents.push(&pwd.parameter.name);
+    }
+    if let Some(vararg) = &parameters.vararg {
+        param_idents.push(&vararg.name);
+    }
+    for pwd in &parameters.kwonlyargs {
+        param_idents.push(&pwd.parameter.name);
+    }
+    if let Some(kwarg) = &parameters.kwarg {
+        param_idents.push(&kwarg.name);
+    }
+    for ident in param_idents {
+        if ident.id.as_str() != "_" {
+            bindings.push(AstNode::from_span(file, span_from_ruff_range(ident.range)));
         }
-        "for_statement" | "for_in_clause" => {
-            let left = node.field("left");
-            if let Some(ref left_node) = left {
-                extract_from_pattern(left_node, bindings);
-            } else {
-                let mut found_for = false;
-                for child in node.children() {
-                    if child.kind() == "for" {
-                        found_for = true;
-                        continue;
-                    }
-                    if found_for {
-                        extract_from_pattern(&child, bindings);
-                        break;
-                    }
-                }
-            }
-            traverse_children_skipping(node, left.as_ref(), bindings);
+    }
+}
+
+/// Extracts bindings from Python `import` or `from ... import` alias lists.
+fn extract_from_import_aliases<'a>(
+    aliases: &[Alias],
+    file: &'a ParsedFile,
+    bindings: &mut Vec<AstNode<'a>>,
+) {
+    for alias in aliases {
+        if alias.name.as_str() == "*" {
+            continue;
         }
-        "as_pattern" => {
-            let alias = node.field("alias");
-            if let Some(ref alias_node) = alias {
-                extract_from_pattern(alias_node, bindings);
+        if let Some(asname) = &alias.asname {
+            if asname.id.as_str() != "_" {
+                bindings.push(AstNode::from_span(file, span_from_ruff_range(asname.range)));
             }
-            traverse_children_skipping(node, alias.as_ref(), bindings);
-        }
-        "named_expression" => {
-            let name_node = node.field("name");
-            if let Some(ref name) = name_node {
-                extract_from_pattern(name, bindings);
-            }
-            traverse_children_skipping(node, name_node.as_ref(), bindings);
-        }
-        "parameters" | "lambda_parameters" => {
-            for child in node.children() {
-                if child.kind() != "(" && child.kind() != ")" && child.kind() != "," {
-                    extract_from_pattern(&child, bindings);
-                }
-            }
-        }
-        "case_clause" => {
-            for child in node.children() {
-                if child.kind() == "case_pattern" {
-                    extract_from_pattern(&child, bindings);
-                } else if child.kind() != "case" && child.kind() != ":" {
-                    traverse_python(&child, bindings);
-                }
-            }
-        }
-        "function_definition" | "class_definition" => {
-            let name_node = node.field("name");
-            if let Some(ref name) = name_node {
-                bindings.push(AstNode::from_raw(name.clone()));
-            }
-            if kind == "class_definition" {
-                extract_instance_attribute_declarations(node, bindings);
-            }
-            traverse_children_skipping(node, name_node.as_ref(), bindings);
-        }
-        "import_statement" | "import_from_statement" => {
-            extract_from_import(node, bindings);
-        }
-        _ => {
-            for child in node.children() {
-                traverse_python(&child, bindings);
+        } else {
+            let first_segment = alias.name.as_str().split('.').next().unwrap_or("");
+            if !first_segment.is_empty() && first_segment != "_" {
+                let start = usize::from(alias.name.range.start());
+                bindings.push(AstNode::from_span(
+                    file,
+                    SourceSpan {
+                        start,
+                        end: start + first_segment.len(),
+                    },
+                ));
             }
         }
     }
@@ -234,92 +183,242 @@ fn traverse_python<'a>(node: &RawNode<'a>, bindings: &mut Vec<AstNode<'a>>) {
 /// (`name: int`) are skipped, so a dataclass-style `self.name = name` is not a second
 /// declaration; later reassignments, other methods, and `self.name[key] = …` declare nothing.
 fn extract_instance_attribute_declarations<'a>(
-    class_node: &RawNode<'a>,
+    class_def: &StmtClassDef,
+    file: &'a ParsedFile,
     bindings: &mut Vec<AstNode<'a>>,
 ) {
-    let Some(class_body) = class_node.field("body") else {
-        return;
-    };
-    let Some(init) = direct_function_definitions(&class_body)
+    let Some(init) = direct_function_definitions(&class_def.body)
         .into_iter()
-        .map(|(_, function_node)| function_node)
-        .find(|function_node| {
-            function_node
-                .field("name")
-                .is_some_and(|name| name.text() == "__init__")
-        })
+        .find(|func_def| func_def.name.id == "__init__")
     else {
         return;
     };
-    let (Some(receiver), Some(init_body)) =
-        (method_receiver_name(&init, false), init.field("body"))
-    else {
+    let Some(receiver) = method_receiver_name_ast(init, false, file) else {
         return;
     };
 
     let mut declared = HashSet::new();
-    for statement in class_body.children() {
-        if statement.kind() == "expression_statement" {
-            for assignment in statement.children() {
-                if assignment.kind() == "assignment"
-                    && let Some(left) = assignment.field("left")
-                {
-                    extend_binding_names(&left, &mut declared);
+    for statement in &class_def.body {
+        match statement {
+            Stmt::Assign(assign) => {
+                for target in &assign.targets {
+                    extend_expr_target_names(target, file, &mut declared);
                 }
             }
+            Stmt::AnnAssign(ann) => {
+                extend_expr_target_names(&ann.target, file, &mut declared);
+            }
+            _ => {}
         }
     }
-    collect_receiver_attribute_targets(&init_body, &receiver, &mut declared, bindings);
+    collect_receiver_attribute_targets(&init.body, &receiver, file, &mut declared, bindings);
 }
 
-/// Walks `node` (without entering nested functions, classes, or lambdas) and appends the
+/// Walks `body` (without entering nested functions, classes, or lambdas) and appends the
 /// attribute identifier of every `receiver.name` assignment target whose name is not yet in
 /// `declared`.
 fn collect_receiver_attribute_targets<'a>(
-    node: &RawNode<'a>,
+    body: &[Stmt],
     receiver: &str,
+    file: &'a ParsedFile,
     declared: &mut HashSet<String>,
     bindings: &mut Vec<AstNode<'a>>,
 ) {
-    match node.kind().as_ref() {
-        "function_definition" | "class_definition" | "lambda" => return,
-        "assignment" => {
-            if let Some(left) = node.field("left") {
-                push_receiver_attributes(&left, receiver, declared, bindings);
+    struct ReceiverAttrVisitor<'a, 'b> {
+        receiver: &'b str,
+        file: &'a ParsedFile,
+        declared: &'b mut HashSet<String>,
+        bindings: &'b mut Vec<AstNode<'a>>,
+    }
+
+    impl SourceOrderVisitor<'_> for ReceiverAttrVisitor<'_, '_> {
+        fn visit_stmt(&mut self, statement: &Stmt) {
+            match statement {
+                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,
+                Stmt::Assign(assign) => {
+                    for target in &assign.targets {
+                        push_receiver_attributes(
+                            target,
+                            self.receiver,
+                            self.file,
+                            self.declared,
+                            self.bindings,
+                        );
+                    }
+                }
+                Stmt::AnnAssign(ann) => {
+                    push_receiver_attributes(
+                        &ann.target,
+                        self.receiver,
+                        self.file,
+                        self.declared,
+                        self.bindings,
+                    );
+                }
+                _ => {}
             }
+            walk_stmt(self, statement);
         }
-        _ => {}
+
+        fn visit_expr(&mut self, expr: &Expr) {
+            if matches!(expr, Expr::Lambda(_)) {
+                return;
+            }
+            walk_expr(self, expr);
+        }
     }
-    for child in node.children() {
-        collect_receiver_attribute_targets(&child, receiver, declared, bindings);
-    }
+
+    let mut visitor = ReceiverAttrVisitor {
+        receiver,
+        file,
+        declared,
+        bindings,
+    };
+    visitor.visit_body(body);
 }
 
 /// Appends the `receiver.name` attribute identifiers bound by the assignment target `target`
-/// (recursing through tuple and list targets) whose name is not yet in `declared`.
+/// (recursing through tuple, list, and starred targets) whose name is not yet in `declared`.
 fn push_receiver_attributes<'a>(
-    target: &RawNode<'a>,
+    target: &Expr,
     receiver: &str,
+    file: &'a ParsedFile,
     declared: &mut HashSet<String>,
     bindings: &mut Vec<AstNode<'a>>,
 ) {
-    match target.kind().as_ref() {
-        "attribute" => {
-            if target
-                .field("object")
-                .is_some_and(|object| object.kind() == "identifier" && object.text() == receiver)
-                && let Some(attribute) = target.field("attribute")
-                && declared.insert(attribute.text().into_owned())
+    match target {
+        Expr::Attribute(attr) => {
+            if let Expr::Name(object) = attr.value.as_ref()
+                && object.id.as_str() == receiver
+                && declared.insert(attr.attr.to_string())
             {
-                bindings.push(AstNode::from_raw(attribute));
+                bindings.push(AstNode::from_span(
+                    file,
+                    span_from_ruff_range(attr.attr.range),
+                ));
             }
         }
-        "subscript" => {}
-        _ => {
-            for child in target.children() {
-                push_receiver_attributes(&child, receiver, declared, bindings);
+        Expr::Tuple(tuple) => {
+            for elt in &tuple.elts {
+                push_receiver_attributes(elt, receiver, file, declared, bindings);
             }
         }
+        Expr::List(list) => {
+            for elt in &list.elts {
+                push_receiver_attributes(elt, receiver, file, declared, bindings);
+            }
+        }
+        Expr::Starred(starred) => {
+            push_receiver_attributes(&starred.value, receiver, file, declared, bindings);
+        }
+        _ => {}
+    }
+}
+
+struct BindingVisitor<'a> {
+    file: &'a ParsedFile,
+    bindings: Vec<AstNode<'a>>,
+}
+
+impl<'a> SourceOrderVisitor<'a> for BindingVisitor<'a> {
+    fn visit_stmt(&mut self, statement: &'a Stmt) {
+        match statement {
+            Stmt::Assign(assign) => {
+                for target in &assign.targets {
+                    extract_from_expr_target(target, self.file, &mut self.bindings);
+                }
+                self.visit_expr(&assign.value);
+                return;
+            }
+            Stmt::AnnAssign(ann) => {
+                extract_from_expr_target(&ann.target, self.file, &mut self.bindings);
+                self.visit_annotation(&ann.annotation);
+                if let Some(value) = &ann.value {
+                    self.visit_expr(value);
+                }
+                return;
+            }
+            Stmt::For(for_statement) => {
+                extract_from_expr_target(&for_statement.target, self.file, &mut self.bindings);
+                self.visit_expr(&for_statement.iter);
+                self.visit_body(&for_statement.body);
+                self.visit_body(&for_statement.orelse);
+                return;
+            }
+            Stmt::FunctionDef(func_def) => {
+                self.bindings.push(AstNode::from_span(
+                    self.file,
+                    span_from_ruff_range(func_def.name.range),
+                ));
+            }
+            Stmt::ClassDef(class_def) => {
+                self.bindings.push(AstNode::from_span(
+                    self.file,
+                    span_from_ruff_range(class_def.name.range),
+                ));
+                extract_instance_attribute_declarations(class_def, self.file, &mut self.bindings);
+            }
+            Stmt::Import(import_statement) => {
+                extract_from_import_aliases(&import_statement.names, self.file, &mut self.bindings);
+                return;
+            }
+            Stmt::ImportFrom(import_from) => {
+                extract_from_import_aliases(&import_from.names, self.file, &mut self.bindings);
+                return;
+            }
+            _ => {}
+        }
+        walk_stmt(self, statement);
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if let Expr::Named(named) = expr {
+            extract_from_expr_target(&named.target, self.file, &mut self.bindings);
+            self.visit_expr(&named.value);
+            return;
+        }
+        walk_expr(self, expr);
+    }
+
+    fn visit_parameters(&mut self, parameters: &'a Parameters) {
+        extract_from_parameters(parameters, self.file, &mut self.bindings);
+        walk_parameters(self, parameters);
+    }
+
+    fn visit_comprehension(&mut self, comprehension: &'a Comprehension) {
+        extract_from_expr_target(&comprehension.target, self.file, &mut self.bindings);
+        walk_comprehension(self, comprehension);
+    }
+
+    fn visit_with_item(&mut self, with_item: &'a WithItem) {
+        self.visit_expr(&with_item.context_expr);
+        if let Some(optional_vars) = &with_item.optional_vars {
+            extract_from_expr_target(optional_vars, self.file, &mut self.bindings);
+        }
+    }
+
+    fn visit_except_handler(&mut self, except_handler: &'a ExceptHandler) {
+        let ExceptHandler::ExceptHandler(handler) = except_handler;
+        if let Some(type_) = &handler.type_ {
+            self.visit_expr(type_);
+        }
+        if let Some(name) = &handler.name
+            && name.id.as_str() != "_"
+        {
+            self.bindings.push(AstNode::from_span(
+                self.file,
+                span_from_ruff_range(name.range),
+            ));
+        }
+        self.visit_body(&handler.body);
+    }
+
+    fn visit_match_case(&mut self, match_case: &'a MatchCase) {
+        extract_from_match_pattern(&match_case.pattern, self.file, &mut self.bindings);
+        if let Some(guard) = &match_case.guard {
+            self.visit_expr(guard);
+        }
+        self.visit_body(&match_case.body);
     }
 }
 
@@ -327,20 +426,38 @@ fn push_receiver_attributes<'a>(
 /// in `__init__`, etc.) within a Python file.
 #[must_use]
 pub fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
-    let mut bindings = Vec::new();
-    traverse_python(&file.grep.root(), &mut bindings);
-    bindings
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut visitor = BindingVisitor {
+        file,
+        bindings: Vec::new(),
+    };
+    visitor.visit_body(&parsed.syntax().body);
+    let _ = (
+        walk_with_item::<BindingVisitor<'_>>,
+        walk_except_handler::<BindingVisitor<'_>>,
+        walk_match_case::<BindingVisitor<'_>>,
+    );
+    visitor.bindings
 }
 
-/// Returns true if a nested `function_definition` or `lambda` declares a parameter named `parameter_name`.
-pub(super) fn scope_shadows_parameter(scope_node: &RawNode<'_>, parameter_name: &str) -> bool {
-    let Some(params) = scope_node.field("parameters") else {
-        return false;
-    };
-    params
-        .children()
-        .filter_map(|child| parse_param_parts(&child))
-        .any(|parts| parts.name == parameter_name)
+/// Returns true if `parameters` declares a parameter named `parameter_name`.
+pub(super) fn parameters_shadow_name(parameters: &Parameters, parameter_name: &str) -> bool {
+    parameters
+        .posonlyargs
+        .iter()
+        .chain(parameters.args.iter())
+        .chain(parameters.kwonlyargs.iter())
+        .any(|pwd| pwd.parameter.name.id.as_str() == parameter_name)
+        || parameters
+            .vararg
+            .as_ref()
+            .is_some_and(|vararg| vararg.name.id.as_str() == parameter_name)
+        || parameters
+            .kwarg
+            .as_ref()
+            .is_some_and(|kwarg| kwarg.name.id.as_str() == parameter_name)
 }
 
 /// A call from a function or method to a sibling in the same module or class scope: `callee(...)`
@@ -381,46 +498,55 @@ struct LogicalFunction<'a> {
     definition_order: usize,
     has_overload: bool,
     has_non_overload_definition: bool,
-    parts: Vec<RawNode<'a>>,
+    parts: Vec<&'a StmtFunctionDef>,
 }
 
-/// Collects `named_expression` (`:=`) targets inside a comprehension or generator expression,
+/// Collects `Expr::Named` (`:=`) targets inside a comprehension or generator expression,
 /// which PEP 572 binds in the enclosing function scope rather than the comprehension scope.
-fn collect_walrus_bindings_in_comprehension(node: &RawNode<'_>, bindings: &mut HashSet<String>) {
-    if matches!(
-        node.kind().as_ref(),
-        "function_definition" | "class_definition" | "lambda"
-    ) {
-        return;
+fn collect_walrus_bindings_in_comprehension(
+    expr: &Expr,
+    file: &ParsedFile,
+    bindings: &mut HashSet<String>,
+) {
+    struct WalrusVisitor<'a, 'b> {
+        file: &'a ParsedFile,
+        bindings: &'b mut HashSet<String>,
     }
-    if node.kind() == "named_expression"
-        && let Some(name_node) = node.field("name")
-    {
-        extend_binding_names(&name_node, bindings);
+
+    impl<'a> SourceOrderVisitor<'a> for WalrusVisitor<'a, '_> {
+        fn visit_stmt(&mut self, _statement: &'a Stmt) {}
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if matches!(expr, Expr::Lambda(_)) {
+                return;
+            }
+            if let Expr::Named(named) = expr {
+                extend_expr_target_names(&named.target, self.file, self.bindings);
+            }
+            walk_expr(self, expr);
+        }
     }
-    for child in node.children() {
-        collect_walrus_bindings_in_comprehension(&child, bindings);
-    }
+
+    let mut visitor = WalrusVisitor { file, bindings };
+    walk_expr(&mut visitor, expr);
 }
 
 /// Collects local variable, parameter, nested definition, and import bindings directly owned by
-/// `scope_node` (`function_definition` or `lambda`), without descending into nested
-/// `function_definition`, `lambda`, or `class_definition` bodies.
+/// `parameters` and `body`, without descending into nested `function_definition`, `lambda`, or
+/// `class_definition` bodies.
 fn collect_local_scope_bindings(
-    scope_node: &RawNode<'_>,
+    parameters: Option<&Parameters>,
+    body: &[Stmt],
     excluded_parameter: Option<&str>,
+    file: &ParsedFile,
 ) -> HashSet<String> {
     let mut bindings = HashSet::new();
     let mut globals = HashSet::new();
 
-    if let Some(parameters) = scope_node.field("parameters") {
-        let mut parameter_nodes = Vec::new();
-        for child in parameters.children() {
-            if !matches!(child.kind().as_ref(), "(" | ")" | ",") {
-                extract_from_pattern(&child, &mut parameter_nodes);
-            }
-        }
-        for node in parameter_nodes {
+    if let Some(params) = parameters {
+        let mut param_nodes = Vec::new();
+        extract_from_parameters(params, file, &mut param_nodes);
+        for node in param_nodes {
             let text = node.text();
             if excluded_parameter != Some(text.as_ref()) {
                 bindings.insert(text.into_owned());
@@ -428,9 +554,7 @@ fn collect_local_scope_bindings(
         }
     }
 
-    if let Some(body) = scope_node.field("body") {
-        collect_bindings_in_subtree(&body, &mut bindings, &mut globals);
-    }
+    collect_bindings_in_stmts(body, file, &mut bindings, &mut globals);
 
     for global_name in globals {
         bindings.remove(&global_name);
@@ -438,118 +562,162 @@ fn collect_local_scope_bindings(
     bindings
 }
 
-/// Walks `node` to collect local bindings and `global` declarations within a single function
-/// scope, stopping at nested scope boundaries (while still capturing PEP 572 `:=` targets inside
-/// comprehensions).
-fn collect_bindings_in_subtree(
-    node: &RawNode<'_>,
-    bindings: &mut HashSet<String>,
-    globals: &mut HashSet<String>,
-) {
-    let kind = node.kind();
-    match kind.as_ref() {
-        "assignment" | "augmented_assignment" => {
-            if let Some(left) = node.field("left") {
-                extend_binding_names(&left, bindings);
-            }
-            if let Some(right) = node.field("right") {
-                collect_bindings_in_subtree(&right, bindings, globals);
-            }
-            return;
-        }
-        "for_statement" => {
-            if let Some(left) = node.field("left") {
-                extend_binding_names(&left, bindings);
-            }
-        }
-        "as_pattern" => {
-            if let Some(alias) = node.field("alias") {
-                extend_binding_names(&alias, bindings);
-            }
-        }
-        "named_expression" => {
-            if let Some(name_node) = node.field("name") {
-                extend_binding_names(&name_node, bindings);
-            }
-        }
-        "case_clause" => {
-            for child in node.children() {
-                if child.kind() == "case_pattern" {
-                    extend_binding_names(&child, bindings);
-                } else {
-                    collect_bindings_in_subtree(&child, bindings, globals);
+struct LocalBindingVisitor<'a, 'b> {
+    file: &'a ParsedFile,
+    bindings: &'b mut HashSet<String>,
+    globals: &'b mut HashSet<String>,
+}
+
+impl<'a> SourceOrderVisitor<'a> for LocalBindingVisitor<'a, '_> {
+    fn visit_stmt(&mut self, statement: &'a Stmt) {
+        match statement {
+            Stmt::Assign(assign) => {
+                for target in &assign.targets {
+                    extend_expr_target_names(target, self.file, self.bindings);
                 }
+                self.visit_expr(&assign.value);
+                return;
             }
-            return;
-        }
-        "function_definition" | "class_definition" => {
-            if let Some(name_node) = node.field("name") {
-                bindings.insert(name_node.text().into_owned());
-            }
-            return;
-        }
-        "lambda" => return,
-        "list_comprehension"
-        | "set_comprehension"
-        | "dictionary_comprehension"
-        | "generator_expression" => {
-            collect_walrus_bindings_in_comprehension(node, bindings);
-            return;
-        }
-        "import_statement" | "import_from_statement" => {
-            let mut imported = Vec::new();
-            extract_from_import(node, &mut imported);
-            for item in imported {
-                bindings.insert(item.text().into_owned());
-            }
-            return;
-        }
-        "global_statement" => {
-            for child in node.children() {
-                if child.kind() == "identifier" {
-                    globals.insert(child.text().into_owned());
+            Stmt::AnnAssign(ann) => {
+                extend_expr_target_names(&ann.target, self.file, self.bindings);
+                if let Some(value) = &ann.value {
+                    self.visit_expr(value);
                 }
+                return;
             }
-            return;
+            Stmt::AugAssign(aug) => {
+                extend_expr_target_names(&aug.target, self.file, self.bindings);
+                self.visit_expr(&aug.value);
+                return;
+            }
+            Stmt::For(for_statement) => {
+                extend_expr_target_names(&for_statement.target, self.file, self.bindings);
+            }
+            Stmt::FunctionDef(func_def) => {
+                self.bindings.insert(func_def.name.id.to_string());
+                return;
+            }
+            Stmt::ClassDef(class_def) => {
+                self.bindings.insert(class_def.name.id.to_string());
+                return;
+            }
+            Stmt::Import(import_statement) => {
+                let mut imported = Vec::new();
+                extract_from_import_aliases(&import_statement.names, self.file, &mut imported);
+                for item in imported {
+                    self.bindings.insert(item.text().into_owned());
+                }
+                return;
+            }
+            Stmt::ImportFrom(import_from) => {
+                let mut imported = Vec::new();
+                extract_from_import_aliases(&import_from.names, self.file, &mut imported);
+                for item in imported {
+                    self.bindings.insert(item.text().into_owned());
+                }
+                return;
+            }
+            Stmt::Global(global_statement) => {
+                for name in &global_statement.names {
+                    self.globals.insert(name.id.to_string());
+                }
+                return;
+            }
+            _ => {}
         }
-        _ => {}
+        walk_stmt(self, statement);
     }
 
-    for child in node.children() {
-        collect_bindings_in_subtree(&child, bindings, globals);
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::Lambda(_) => return,
+            Expr::ListComp(_) | Expr::SetComp(_) | Expr::DictComp(_) | Expr::Generator(_) => {
+                collect_walrus_bindings_in_comprehension(expr, self.file, self.bindings);
+                return;
+            }
+            Expr::Named(named) => {
+                extend_expr_target_names(&named.target, self.file, self.bindings);
+            }
+            _ => {}
+        }
+        walk_expr(self, expr);
+    }
+
+    fn visit_with_item(&mut self, with_item: &'a WithItem) {
+        self.visit_expr(&with_item.context_expr);
+        if let Some(optional_vars) = &with_item.optional_vars {
+            extend_expr_target_names(optional_vars, self.file, self.bindings);
+        }
+    }
+
+    fn visit_except_handler(&mut self, except_handler: &'a ExceptHandler) {
+        let ExceptHandler::ExceptHandler(handler) = except_handler;
+        if let Some(type_) = &handler.type_ {
+            self.visit_expr(type_);
+        }
+        if let Some(name) = &handler.name
+            && name.id.as_str() != "_"
+        {
+            self.bindings.insert(name.id.to_string());
+        }
+        self.visit_body(&handler.body);
+    }
+
+    fn visit_match_case(&mut self, match_case: &'a MatchCase) {
+        extend_match_pattern_names(&match_case.pattern, self.file, self.bindings);
+        if let Some(guard) = &match_case.guard {
+            self.visit_expr(guard);
+        }
+        self.visit_body(&match_case.body);
     }
 }
 
-/// Extracts comprehension loop variable bindings (`for_in_clause`) owned directly by a
-/// comprehension or generator expression node.
-fn collect_comprehension_bindings(comprehension_node: &RawNode<'_>) -> HashSet<String> {
+/// Walks `stmts` to collect local bindings and `global` declarations within a single function
+/// scope, stopping at nested scope boundaries (while still capturing PEP 572 `:=` targets inside
+/// comprehensions).
+fn collect_bindings_in_stmts(
+    stmts: &[Stmt],
+    file: &ParsedFile,
+    bindings: &mut HashSet<String>,
+    globals: &mut HashSet<String>,
+) {
+    let mut visitor = LocalBindingVisitor {
+        file,
+        bindings,
+        globals,
+    };
+    visitor.visit_body(stmts);
+}
+
+/// Extracts comprehension loop variable bindings (`Comprehension.target`) owned directly by
+/// `generators`.
+fn collect_comprehension_bindings(
+    generators: &[Comprehension],
+    file: &ParsedFile,
+) -> HashSet<String> {
     let mut bindings = HashSet::new();
-    for child in comprehension_node.children() {
-        if child.kind() == "for_in_clause"
-            && let Some(left) = child.field("left")
-        {
-            extend_binding_names(&left, &mut bindings);
-        }
+    for generator in generators {
+        extend_expr_target_names(&generator.target, file, &mut bindings);
     }
     bindings
 }
 
-/// Collects direct function definitions in `scope_body` (`module` or class `block`), grouping
+/// Collects direct function definitions in `scope_body` (`module` or class `body`), grouping
 /// `@overload` stubs with their implementation and `@property` getters with `@<name>.setter` /
 /// `@<name>.deleter` at their first declaration position.
-fn collect_scope_functions<'a>(scope_body: &RawNode<'a>) -> Vec<LogicalFunction<'a>> {
+fn collect_scope_functions<'a>(
+    scope_body: &'a [Stmt],
+    file: &ParsedFile,
+) -> Vec<LogicalFunction<'a>> {
     let mut functions: Vec<LogicalFunction<'a>> = Vec::new();
     let mut index_by_name: HashMap<String, usize> = HashMap::new();
 
-    for (order, (statement, function_node)) in direct_function_definitions(scope_body)
+    for (order, function_def) in direct_function_definitions(scope_body)
         .into_iter()
         .enumerate()
     {
-        let Some(name_node) = function_node.field("name") else {
-            continue;
-        };
-        let name = name_node.text().into_owned();
-        let decorators = extract_decorators_raw(&statement);
+        let name = function_def.name.id.to_string();
+        let decorators = extract_decorators_from_slice(&function_def.decorator_list, file);
         let is_overload = decorators
             .iter()
             .any(|decorator| decorator.terminal_name == "overload");
@@ -563,7 +731,7 @@ fn collect_scope_functions<'a>(scope_body: &RawNode<'a>) -> Vec<LogicalFunction<
                 existing.has_overload && (!existing.has_non_overload_definition || is_overload);
             if is_property_accessor || continues_overload {
                 existing.has_non_overload_definition |= !is_overload;
-                existing.parts.push(function_node);
+                existing.parts.push(function_def);
                 continue;
             }
         }
@@ -575,7 +743,7 @@ fn collect_scope_functions<'a>(scope_body: &RawNode<'a>) -> Vec<LogicalFunction<
             definition_order: order,
             has_overload: is_overload,
             has_non_overload_definition: !is_overload,
-            parts: vec![function_node],
+            parts: vec![function_def],
         });
     }
 
@@ -583,97 +751,163 @@ fn collect_scope_functions<'a>(scope_body: &RawNode<'a>) -> Vec<LogicalFunction<
 }
 
 /// Context for walking a function or method body to collect sibling calls.
-struct CallWalkContext<'a> {
-    sibling_names: &'a HashSet<&'a str>,
-    receiver_name: Option<&'a str>,
+struct CallWalkContext<'a, 'b> {
+    file: &'a ParsedFile,
+    sibling_names: &'b HashSet<&'b str>,
+    receiver_name: Option<&'b str>,
     is_class: bool,
 }
 
-/// Recursively walks `node` inside a function/method body, tracking scoped local bindings and
-/// recording calls to sibling functions/methods in `out`.
-fn collect_calls_in_body<'a>(
-    node: &RawNode<'a>,
-    context: &CallWalkContext<'_>,
-    active_bindings: &HashSet<String>,
-    out: &mut Vec<(String, AstNode<'a>)>,
-) {
-    let kind = node.kind();
-    match kind.as_ref() {
-        "class_definition" => return,
-        "function_definition" | "lambda" => {
-            // Parameter default values, annotations, and decorators of a nested `def` or `lambda`
-            // are evaluated in the enclosing scope; only `body` uses `inner_bindings`.
-            let body = node.field("body");
-            for child in node.children() {
-                if body
-                    .as_ref()
-                    .is_some_and(|body_node| child.range() == body_node.range())
-                {
-                    continue;
-                }
-                collect_calls_in_body(&child, context, active_bindings, out);
-            }
-            if let Some(body_node) = body {
-                let mut inner_bindings = active_bindings.clone();
-                inner_bindings.extend(collect_local_scope_bindings(node, None));
-                collect_calls_in_body(&body_node, context, &inner_bindings, out);
-            }
-            return;
-        }
-        "list_comprehension"
-        | "set_comprehension"
-        | "dictionary_comprehension"
-        | "generator_expression" => {
-            let mut comprehension_bindings = active_bindings.clone();
-            comprehension_bindings.extend(collect_comprehension_bindings(node));
-            for child in node.children() {
-                collect_calls_in_body(&child, context, &comprehension_bindings, out);
-            }
-            return;
-        }
-        "call" => {
-            if let Some(callee_name) = match_sibling_call(node, context, active_bindings) {
-                out.push((callee_name, AstNode::from_raw(node.clone())));
-            }
-        }
-        _ => {}
-    }
+struct BodyCallVisitor<'a, 'b, 'c> {
+    context: &'b CallWalkContext<'a, 'c>,
+    active_bindings: &'b HashSet<String>,
+    out: &'b mut Vec<(String, AstNode<'a>)>,
+}
 
-    for child in node.children() {
-        collect_calls_in_body(&child, context, active_bindings, out);
+impl BodyCallVisitor<'_, '_, '_> {
+    fn visit_comprehension_expr(&mut self, expr: &Expr, generators: &[Comprehension]) {
+        let mut comp_bindings = self.active_bindings.clone();
+        comp_bindings.extend(collect_comprehension_bindings(
+            generators,
+            self.context.file,
+        ));
+        let mut sub = BodyCallVisitor {
+            context: self.context,
+            active_bindings: &comp_bindings,
+            out: self.out,
+        };
+        walk_expr(&mut sub, expr);
     }
 }
 
-/// Checks whether `call_node` invokes a sibling function or method in `context.sibling_names`.
+impl SourceOrderVisitor<'_> for BodyCallVisitor<'_, '_, '_> {
+    fn visit_stmt(&mut self, statement: &Stmt) {
+        match statement {
+            Stmt::ClassDef(_) => return,
+            Stmt::FunctionDef(func_def) => {
+                for decorator in &func_def.decorator_list {
+                    self.visit_decorator(decorator);
+                }
+                if let Some(type_params) = &func_def.type_params {
+                    self.visit_type_params(type_params);
+                }
+                self.visit_parameters(&func_def.parameters);
+                if let Some(returns) = &func_def.returns {
+                    self.visit_annotation(returns);
+                }
+                let mut inner_bindings = self.active_bindings.clone();
+                inner_bindings.extend(collect_local_scope_bindings(
+                    Some(&func_def.parameters),
+                    &func_def.body,
+                    None,
+                    self.context.file,
+                ));
+                collect_calls_in_stmts(&func_def.body, self.context, &inner_bindings, self.out);
+                return;
+            }
+            _ => {}
+        }
+        walk_stmt(self, statement);
+    }
+
+    fn visit_expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Lambda(lambda) => {
+                if let Some(parameters) = &lambda.parameters {
+                    self.visit_parameters(parameters);
+                }
+                let mut inner_bindings = self.active_bindings.clone();
+                inner_bindings.extend(collect_local_scope_bindings(
+                    lambda.parameters.as_deref(),
+                    &[],
+                    None,
+                    self.context.file,
+                ));
+                let mut sub = BodyCallVisitor {
+                    context: self.context,
+                    active_bindings: &inner_bindings,
+                    out: self.out,
+                };
+                sub.visit_expr(&lambda.body);
+                return;
+            }
+            Expr::ListComp(comp) => {
+                self.visit_comprehension_expr(expr, &comp.generators);
+                return;
+            }
+            Expr::SetComp(comp) => {
+                self.visit_comprehension_expr(expr, &comp.generators);
+                return;
+            }
+            Expr::DictComp(comp) => {
+                self.visit_comprehension_expr(expr, &comp.generators);
+                return;
+            }
+            Expr::Generator(generator) => {
+                self.visit_comprehension_expr(expr, &generator.generators);
+                return;
+            }
+            Expr::Call(call) => {
+                if let Some(callee_name) =
+                    match_sibling_call(call, self.context, self.active_bindings)
+                {
+                    self.out.push((
+                        callee_name,
+                        AstNode::from_span(self.context.file, span_from_ruff_range(call.range())),
+                    ));
+                }
+            }
+            _ => {}
+        }
+        walk_expr(self, expr);
+    }
+}
+
+/// Recursively walks `stmts` inside a function/method body, tracking scoped local bindings and
+/// recording calls to sibling functions/methods in `out`.
+fn collect_calls_in_stmts<'a>(
+    stmts: &[Stmt],
+    context: &CallWalkContext<'a, '_>,
+    active_bindings: &HashSet<String>,
+    out: &mut Vec<(String, AstNode<'a>)>,
+) {
+    let mut visitor = BodyCallVisitor {
+        context,
+        active_bindings,
+        out,
+    };
+    visitor.visit_body(stmts);
+}
+
+/// Checks whether `call` invokes a sibling function or method in `context.sibling_names`.
 fn match_sibling_call(
-    call_node: &RawNode<'_>,
-    context: &CallWalkContext<'_>,
+    call: &ruff_python_ast::ExprCall,
+    context: &CallWalkContext<'_, '_>,
     active_bindings: &HashSet<String>,
 ) -> Option<String> {
-    let function = call_node.field("function")?;
     if context.is_class {
         let receiver = context.receiver_name?;
-        if active_bindings.contains(receiver) || function.kind() != "attribute" {
+        if active_bindings.contains(receiver) {
             return None;
         }
-        let object = function.field("object")?;
-        let attribute = function.field("attribute")?;
-        let attribute_text = attribute.text();
-        if object.kind() == "identifier"
-            && object.text() == receiver
-            && context.sibling_names.contains(attribute_text.as_ref())
-        {
-            return Some(attribute_text.into_owned());
+        let Expr::Attribute(function) = call.func.as_ref() else {
+            return None;
+        };
+        let Expr::Name(object) = function.value.as_ref() else {
+            return None;
+        };
+        let attribute_name = function.attr.as_str();
+        if object.id.as_str() == receiver && context.sibling_names.contains(attribute_name) {
+            return Some(attribute_name.to_owned());
         }
         None
     } else {
-        if function.kind() != "identifier" {
+        let Expr::Name(function) = call.func.as_ref() else {
             return None;
-        }
-        let name = function.text();
-        if context.sibling_names.contains(name.as_ref()) && !active_bindings.contains(name.as_ref())
-        {
-            Some(name.into_owned())
+        };
+        let name = function.id.as_str();
+        if context.sibling_names.contains(name) && !active_bindings.contains(name) {
+            Some(name.to_owned())
         } else {
             None
         }
@@ -681,7 +915,11 @@ fn match_sibling_call(
 }
 
 /// Collects the sibling calls of each function in a single scope.
-fn function_scope(functions: Vec<LogicalFunction<'_>>, is_class: bool) -> PythonFunctionScope<'_> {
+fn function_scope<'a>(
+    functions: Vec<LogicalFunction<'a>>,
+    is_class: bool,
+    file: &'a ParsedFile,
+) -> PythonFunctionScope<'a> {
     let sibling_names: HashSet<&str> = functions
         .iter()
         .map(|function| function.name.as_str())
@@ -690,22 +928,30 @@ fn function_scope(functions: Vec<LogicalFunction<'_>>, is_class: bool) -> Python
     let mut sibling_calls_by_function = Vec::with_capacity(functions.len());
     for function in &functions {
         let mut sibling_calls = Vec::new();
-        for function_node in &function.parts {
-            let Some(body) = function_node.field("body") else {
-                continue;
-            };
+        for function_def in &function.parts {
             let receiver = if is_class {
-                method_receiver_name(function_node, true)
+                method_receiver_name_ast(function_def, true, file)
             } else {
                 None
             };
-            let initial_bindings = collect_local_scope_bindings(function_node, receiver.as_deref());
+            let initial_bindings = collect_local_scope_bindings(
+                Some(&function_def.parameters),
+                &function_def.body,
+                receiver.as_deref(),
+                file,
+            );
             let context = CallWalkContext {
+                file,
                 sibling_names: &sibling_names,
                 receiver_name: receiver.as_deref(),
                 is_class,
             };
-            collect_calls_in_body(&body, &context, &initial_bindings, &mut sibling_calls);
+            collect_calls_in_stmts(
+                &function_def.body,
+                &context,
+                &initial_bindings,
+                &mut sibling_calls,
+            );
         }
         sibling_calls_by_function.push(sibling_calls);
     }
@@ -732,14 +978,36 @@ fn function_scope(functions: Vec<LogicalFunction<'_>>, is_class: bool) -> Python
 /// calls to its siblings.
 #[must_use]
 pub fn collect_function_scopes(file: &ParsedFile) -> Vec<PythonFunctionScope<'_>> {
-    let root = file.grep.root();
-    let mut scopes = vec![function_scope(collect_scope_functions(&root), false)];
-    for node in root.dfs() {
-        if node.kind() == "class_definition"
-            && let Some(body) = node.field("body")
-        {
-            scopes.push(function_scope(collect_scope_functions(&body), true));
+    struct ScopeVisitor<'a> {
+        file: &'a ParsedFile,
+        scopes: Vec<PythonFunctionScope<'a>>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for ScopeVisitor<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if let Stmt::ClassDef(class_def) = statement {
+                self.scopes.push(function_scope(
+                    collect_scope_functions(&class_def.body, self.file),
+                    true,
+                    self.file,
+                ));
+            }
+            walk_stmt(self, statement);
         }
     }
-    scopes
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let module_body = &parsed.syntax().body;
+    let mut visitor = ScopeVisitor {
+        file,
+        scopes: vec![function_scope(
+            collect_scope_functions(module_body, file),
+            false,
+            file,
+        )],
+    };
+    visitor.visit_body(module_body);
+    visitor.scopes
 }

@@ -1,13 +1,11 @@
 //! Python format strings: f-strings, `str.format` templates and `%` (printf-style) templates,
 //! split into literal text and replacement fields, plus PEP 3101 field-name parsing.
 
-// omni:disable-file [repeated-literal] -- Tree-sitter node kinds and field names (see ROADMAP)
-
-use super::{
-    AstNode, ParsedFile, RawNode, delimited_string_parts, extract_logger_call,
-    fstring_segments_and_interpolations, outermost_string_expression, positional_call_arguments,
-    preceding_concatenated_literal_text, string_prefix_flags,
-};
+use super::{AstNode, ParsedFile, extract_logger_call, fstring_segments_and_interpolations};
+use crate::code_lint::ast::span_from_ruff_range;
+use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_arguments, walk_expr};
+use ruff_python_ast::{Expr, FStringPartRef, InterpolatedElement, Operator, StringLiteral};
+use ruff_text_size::{Ranged as _, TextRange};
 
 /// `%` conversion types accepted by printf-style formatting.
 const PRINTF_CONVERSIONS: &[u8] = b"diouxXeEfFgGcrsa";
@@ -57,147 +55,193 @@ pub struct PythonFormatString<'a> {
     pub placeholders: Vec<PythonFormatPlaceholder>,
 }
 
+struct FormatStringVisitor<'a> {
+    file: &'a ParsedFile,
+    context_style: Option<PythonFormatStyle>,
+    call_arg_target: Option<(TextRange, PythonFormatStyle)>,
+    out: Vec<PythonFormatString<'a>>,
+}
+
+impl FormatStringVisitor<'_> {
+    fn push_plain_part(
+        &mut self,
+        part: &StringLiteral,
+        style: PythonFormatStyle,
+        preceding_text: &mut String,
+    ) {
+        let content_range = part.content_range();
+        let content =
+            &self.file.source[usize::from(content_range.start())..usize::from(content_range.end())];
+        if !part.flags.prefix().is_raw() {
+            let (literals, placeholders) = match style {
+                PythonFormatStyle::StrFormat => split_brace_fields(content),
+                PythonFormatStyle::Printf => split_printf_fields(content),
+                PythonFormatStyle::FString => unreachable!(),
+            };
+            self.out.push(PythonFormatString {
+                node: AstNode::from_span(self.file, span_from_ruff_range(part.range)),
+                style,
+                preceding_text: preceding_text.clone(),
+                literals,
+                placeholders,
+            });
+        }
+        preceding_text.push_str(content);
+    }
+
+    fn visit_fstring(
+        &mut self,
+        expr_fstring: &ruff_python_ast::ExprFString,
+        current_style: Option<PythonFormatStyle>,
+    ) {
+        let mut preceding_text = String::new();
+        for part in &expr_fstring.value {
+            match part {
+                FStringPartRef::Literal(lit) => {
+                    if let Some(style) = current_style {
+                        self.push_plain_part(lit, style, &mut preceding_text);
+                    } else {
+                        let content_range = lit.content_range();
+                        preceding_text.push_str(
+                            &self.file.source[usize::from(content_range.start())
+                                ..usize::from(content_range.end())],
+                        );
+                    }
+                }
+                FStringPartRef::FString(fstring) => {
+                    let (literals, interpolations) =
+                        fstring_segments_and_interpolations(fstring, &self.file.source);
+                    if !fstring.flags.prefix().is_raw() {
+                        let placeholders = interpolations
+                            .iter()
+                            .map(|interp| fstring_placeholder(interp, &self.file.source))
+                            .collect();
+                        self.out.push(PythonFormatString {
+                            node: AstNode::from_span(
+                                self.file,
+                                span_from_ruff_range(fstring.range),
+                            ),
+                            style: PythonFormatStyle::FString,
+                            preceding_text: preceding_text.clone(),
+                            literals: literals.clone(),
+                            placeholders,
+                        });
+                    }
+                    for segment in &literals {
+                        preceding_text.push_str(segment);
+                    }
+                    for interpolation in interpolations {
+                        self.visit_expr(&interpolation.expression);
+                        if let Some(spec) = &interpolation.format_spec {
+                            for element in &spec.elements {
+                                self.visit_interpolated_string_element(element);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn visit_call(&mut self, call: &ruff_python_ast::ExprCall) {
+        if let Expr::Attribute(attr) = call.func.as_ref()
+            && matches!(attr.attr.as_str(), "format" | "format_map")
+        {
+            self.context_style = Some(PythonFormatStyle::StrFormat);
+            self.visit_expr(&attr.value);
+            self.context_style = None;
+        } else {
+            self.visit_expr(&call.func);
+        }
+
+        let func_span = span_from_ruff_range(call.func.range());
+        let func_text = &self.file.source[func_span.start..func_span.end];
+        let target = if func_text == "str.format" {
+            call.arguments
+                .args
+                .iter()
+                .find(|arg| !matches!(arg, Expr::Starred(_)))
+                .map(|arg| (arg.range(), PythonFormatStyle::StrFormat))
+        } else {
+            extract_logger_call(call, self.file)
+                .filter(|lc| lc.uses_printf && lc.has_trailing_positional_args)
+                .map(|lc| (lc.message_range, PythonFormatStyle::Printf))
+        };
+
+        let prev_target = self.call_arg_target;
+        self.call_arg_target = target;
+        walk_arguments(self, &call.arguments);
+        self.call_arg_target = prev_target;
+    }
+}
+
+impl SourceOrderVisitor<'_> for FormatStringVisitor<'_> {
+    fn visit_expr(&mut self, expr: &Expr) {
+        let current_style = self.context_style.take().or_else(|| {
+            self.call_arg_target
+                .filter(|(range, _)| *range == expr.range())
+                .map(|(_, style)| style)
+        });
+
+        match expr {
+            Expr::StringLiteral(string_literal) => {
+                if let Some(style) = current_style {
+                    let mut preceding_text = String::new();
+                    for part in string_literal.value.as_slice() {
+                        self.push_plain_part(part, style, &mut preceding_text);
+                    }
+                }
+            }
+            Expr::FString(expr_fstring) => self.visit_fstring(expr_fstring, current_style),
+            Expr::Call(call) => self.visit_call(call),
+            Expr::BinOp(bin_op) => {
+                self.context_style =
+                    (bin_op.op == Operator::Mod).then_some(PythonFormatStyle::Printf);
+                self.visit_expr(&bin_op.left);
+                self.context_style = None;
+                self.visit_expr(&bin_op.right);
+            }
+            _ => {
+                walk_expr(self, expr);
+            }
+        }
+    }
+}
+
 /// Collects the formatted string literals in `file`, in source order. Raw, byte and
 /// unformatted string literals are skipped.
 #[must_use]
 pub fn collect_format_strings(file: &ParsedFile) -> Vec<PythonFormatString<'_>> {
-    file.grep
-        .root()
-        .dfs()
-        .filter(|node| node.kind() == "string")
-        .filter_map(|node| format_string(&node))
-        .collect()
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut visitor = FormatStringVisitor {
+        file,
+        context_style: None,
+        call_arg_target: None,
+        out: Vec::new(),
+    };
+    visitor.visit_body(&parsed.syntax().body);
+    visitor.out
 }
 
-fn format_string<'a>(string_node: &RawNode<'a>) -> Option<PythonFormatString<'a>> {
-    let style = format_style(string_node)?;
-    let (literals, placeholders) = match style {
-        PythonFormatStyle::FString => {
-            let (literals, interpolations) = fstring_segments_and_interpolations(string_node)?;
-            (
-                literals,
-                interpolations.iter().map(fstring_placeholder).collect(),
-            )
-        }
-        PythonFormatStyle::StrFormat => split_brace_fields(&delimited_string_parts(string_node).1),
-        PythonFormatStyle::Printf => split_printf_fields(&delimited_string_parts(string_node).1),
-    };
-    Some(PythonFormatString {
-        node: AstNode::from_raw(string_node.clone()),
-        style,
-        preceding_text: preceding_concatenated_literal_text(string_node),
-        literals,
-        placeholders,
-    })
-}
-
-/// Returns how `string_node` is formatted, or `None` for raw, byte and unformatted literals.
-fn format_style(string_node: &RawNode<'_>) -> Option<PythonFormatStyle> {
-    let opening = string_node.child(0)?;
-    let opening_text = opening.text();
-    let prefix = string_prefix_flags(&opening_text);
-    if prefix.contains(['r', 'R', 'b', 'B']) {
-        return None;
-    }
-    if prefix.contains(['f', 'F']) {
-        return Some(PythonFormatStyle::FString);
-    }
-    let context_root = outermost_string_expression(string_node);
-    if is_str_format_target(&context_root) {
-        Some(PythonFormatStyle::StrFormat)
-    } else if is_printf_format_target(&context_root) {
-        Some(PythonFormatStyle::Printf)
-    } else {
-        None
-    }
-}
-
-/// Returns true if `context_root` is the receiver of `.format(...)` / `.format_map(...)` or the
-/// first positional argument of `str.format(...)`.
-fn is_str_format_target(context_root: &RawNode<'_>) -> bool {
-    let Some(parent) = context_root.parent() else {
-        return false;
-    };
-    if parent.kind() == "attribute"
-        && parent
-            .field("object")
-            .is_some_and(|object| object.range() == context_root.range())
-        && parent
-            .field("attribute")
-            .is_some_and(|attribute| matches!(attribute.text().as_ref(), "format" | "format_map"))
-        && parent.parent().is_some_and(|grandparent| {
-            grandparent.kind() == "call"
-                && grandparent
-                    .field("function")
-                    .is_some_and(|function| function.range() == parent.range())
-        })
-    {
-        return true;
-    }
-
-    if parent.kind() == "argument_list"
-        && let Some(call_node) = parent.parent()
-        && call_node.kind() == "call"
-        && call_node
-            .field("function")
-            .is_some_and(|function| function.text() == "str.format")
-    {
-        return positional_call_arguments(&parent)
-            .first()
-            .is_some_and(|first| first.range() == context_root.range());
-    }
-
-    false
-}
-
-/// Returns true if `context_root` is the left operand of `%` or the message argument of a
-/// logger call that `%`-formats it with at least one trailing argument.
-fn is_printf_format_target(context_root: &RawNode<'_>) -> bool {
-    let Some(parent) = context_root.parent() else {
-        return false;
-    };
-    if parent.kind() == "binary_operator"
-        && parent
-            .field("operator")
-            .is_some_and(|operator| operator.text() == "%")
-        && parent
-            .field("left")
-            .is_some_and(|left| left.range() == context_root.range())
-    {
-        return true;
-    }
-
-    if parent.kind() != "argument_list" {
-        return false;
-    }
-    let Some(call_node) = parent.parent() else {
-        return false;
-    };
-    let Some(call) = extract_logger_call(&call_node) else {
-        return false;
-    };
-    call.uses_printf
-        && call.has_trailing_positional_args
-        && call.message_node.range() == context_root.range()
-}
-
-/// Describes an f-string `interpolation` node.
-fn fstring_placeholder(interpolation: &RawNode<'_>) -> PythonFormatPlaceholder {
+/// Describes an f-string `InterpolatedElement` node.
+fn fstring_placeholder(
+    interpolation: &InterpolatedElement,
+    source: &str,
+) -> PythonFormatPlaceholder {
+    let text_span = span_from_ruff_range(interpolation.range);
+    let expr_span = span_from_ruff_range(interpolation.expression.range());
     PythonFormatPlaceholder {
-        text: interpolation.text().into_owned(),
-        field: interpolation
-            .field("expression")
-            .map(|expression| expression.text().trim().to_owned())
-            .unwrap_or_default(),
-        conversion: interpolation.field("type_conversion").map(|conversion| {
-            let text = conversion.text();
-            text.strip_prefix('!').unwrap_or(&text).to_owned()
+        text: source[text_span.start..text_span.end].to_owned(),
+        field: source[expr_span.start..expr_span.end].trim().to_owned(),
+        conversion: interpolation.conversion.to_char().map(String::from),
+        format_spec: interpolation.format_spec.as_ref().map(|spec| {
+            let spec_span = span_from_ruff_range(spec.range);
+            let spec_text = &source[spec_span.start..spec_span.end];
+            spec_text.strip_prefix(':').unwrap_or(spec_text).to_owned()
         }),
-        format_spec: interpolation.field("format_specifier").map(|specifier| {
-            let text = specifier.text();
-            text.strip_prefix(':').unwrap_or(&text).to_owned()
-        }),
-        is_self_documenting: interpolation.children().any(|child| child.kind() == "="),
+        is_self_documenting: interpolation.debug_text.is_some(),
     }
 }
 
@@ -370,7 +414,7 @@ fn is_python_identifier(name: &str) -> bool {
         && !first.is_ascii_digit()
 }
 
-/// Validates a PEP 3101 `field_name` (`arg_name(\".\" attribute | \"[\" index \"]\")*`) and returns
+/// Validates a PEP 3101 `field_name` (`arg_name("." attribute | "[" index "]")*`) and returns
 /// its root `arg_name` slice.
 #[must_use]
 pub fn extract_valid_field_root(field_name: &str) -> Option<&str> {

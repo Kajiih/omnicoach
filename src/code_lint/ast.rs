@@ -688,44 +688,20 @@ pub fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
 /// Returns true if the node represents an import binding.
 #[must_use]
 pub fn is_import_binding(node: &AstNode<'_>, lang: Language) -> bool {
-    match lang {
-        Language::Rust => rust::is_import_binding(node),
-        Language::Python => node
-            .raw_opt()
-            .and_then(RawNode::parent)
-            .is_some_and(|parent| python::is_import_binding_parent(parent.kind().as_ref())),
-    }
+    dispatch_lang!(lang, is_import_binding(node))
 }
 
 /// Returns true if the node represents a structural type, class, or function definition name.
 #[must_use]
 pub fn is_structural_definition(node: &AstNode<'_>, lang: Language) -> bool {
-    match lang {
-        Language::Rust => rust::is_structural_definition(node),
-        Language::Python => node
-            .raw_opt()
-            .and_then(RawNode::parent)
-            .is_some_and(|parent| python::is_structural_definition_parent(parent.kind().as_ref())),
-    }
+    dispatch_lang!(lang, is_structural_definition(node))
 }
 
 /// Returns true if the node is the name of a member defined inside a trait implementation
 /// (`impl Trait for Type` in Rust or `@override` method in Python), i.e. a name mandated by a contract.
 #[must_use]
 pub fn is_trait_impl_member(node: &AstNode<'_>, lang: Language) -> bool {
-    match lang {
-        Language::Rust => rust::is_trait_impl_member(node),
-        Language::Python => {
-            let Some(raw) = node.raw_opt() else {
-                return false;
-            };
-            let Some(raw_item) = raw.parent() else {
-                return false;
-            };
-            let item = AstNode::from_raw(raw_item);
-            python::is_trait_impl_member(&item)
-        }
-    }
+    dispatch_lang!(lang, is_trait_impl_member(node))
 }
 
 /// Collects all outermost test functions in `file` along with their identifier node, name, and assertion count.

@@ -94,3 +94,38 @@
   - doctests 8 passed, 1 ignored;
   - no rustdoc warnings.
 
+---
+
+## Slice 4 — Migrate `src/code_lint/ast/python/*` Submodules to `ruff_python_ast` (Decisions D1, D7) — DONE
+
+- **Goal**: Migrate all 7 `src/code_lint/ast/python/` submodules (`strings.rs`, `format_strings.rs`, `logging.rs`, `annotations.rs`, `classes.rs`, `functions.rs`, `scopes.rs`) and their coupled root helpers in `src/code_lint/ast/python.rs` from `ast-grep` / `tree-sitter-python` (`RawNode`) to `ruff_python_ast`, and lift `// omni:disable-file [repeated-literal]` on every migrated submodule.
+- **Changes**:
+  - `src/code_lint/ast/python/strings.rs`:
+    - Migrated `fstring_segments_and_interpolations`, `static_string_text`, and `extract_multiline_docstring_text` to `ruff_python_ast` (`Expr::StringLiteral`, `Expr::FString`, `FStringPartRef`, `InterpolatedStringElement`, `StringFlags`), using `StringLiteral::as_str()` directly and eliminating `normalize_string_content` / `delimited_string_parts` from `strings.rs`.
+    - Removed `// omni:disable-file [repeated-literal]`.
+  - `src/code_lint/ast/python/format_strings.rs`:
+    - Migrated `collect_format_strings` (f-strings, `.format()` calls, `%` binary operators) and `named_format_field_roots` to `ruff_python_ast::visitor::source_order::SourceOrderVisitor` over `Expr::FString`, `Expr::Call`, and `Expr::BinOp` (`Operator::Mod`).
+    - Removed `// omni:disable-file [repeated-literal]`.
+  - `src/code_lint/ast/python/logging.rs`:
+    - Migrated `collect_logger_calls` and `extract_logger_call` to `SourceOrderVisitor` over `Expr::Call` and `ExceptHandler::ExceptHandler`.
+  - `src/code_lint/ast/python/annotations.rs`:
+    - Migrated `has_unaliased_collections_abc_set_import`, `extract_generic_base_and_args`, `has_final_annotation_expr`, `is_bare_final_annotation_expr`, `collect_type_constructors_expr`, `collect_collection_types`, `collection_type`, `collection_display`, `extract_generic_type`, `return_type_union`, and `unwrap_return_envelope` to `ruff_python_ast` (`Expr::Subscript` uniformly represents both `Final[int]` and `typing.Final[int]`, eliminating the Tree-sitter `generic_type` vs `subscript` split; `Expr::BinOp` with `Operator::BitOr` represents PEP 604 `X | Y` unions).
+    - Deleted `unwrap_type_and_parens` (no longer needed with `ruff_python_ast`).
+    - Removed `// omni:disable-file [repeated-literal]`.
+  - `src/code_lint/ast/python/classes.rs`:
+    - Migrated `extract_classes`, `is_in_protocol_or_abc_class`, `collect_class_attributes`, and `collect_instance_attribute_annotations` to `Stmt::ClassDef`, `Stmt::FunctionDef`, and `Stmt::AnnAssign`.
+    - Removed `// omni:disable-file [repeated-literal]`.
+  - `src/code_lint/ast/python/functions.rs`:
+    - Migrated `extract_parameters`, `extract_function_signatures`, `find_nested_functions`, `direct_function_definitions`, `has_override_decorator`, `is_trait_impl_member`, `is_stub_function_body`, and `method_receiver_name_ast` to `Stmt::FunctionDef`, `Parameters`, and `ParameterWithDefault`.
+    - Deleted `parse_param_parts` and `extract_return_type_node` (replaced by `Parameters` and `func_def.returns`).
+    - Removed `// omni:disable-file [repeated-literal]`.
+  - `src/code_lint/ast/python/scopes.rs`:
+    - Migrated `collect_bindings`, `parameters_shadow_name`, and `collect_function_scopes` to `ruff_python_ast` (`Stmt::Import`, `Stmt::ImportFrom`, `Pattern`, `Comprehension`, `ExceptHandler`, `WithItem`, `Stmt::FunctionDef`).
+    - Removed `// omni:disable-file [repeated-literal]`.
+  - `src/code_lint/ast/python.rs` & `src/code_lint/ast.rs`:
+    - Migrated `is_import_binding`, `is_structural_definition`, `extract_decorators`, `has_decorator`, `collect_module_assignments`, `call_callee`, `find_unwrapped_multiline_strings`, `collect_locally_mutated_return_functions`, `is_parameter_mutated_or_escaping`, and `analyze_parameter_collection_capability` to `ruff_python_ast`.
+- **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo doc --no-deps --document-private-items` is green:
+  - lib 1397 passed;
+  - `architecture_conformance` 11, `cli` 23 (includes self-dogfooding), `registry` 17;
+  - doctests 8 passed, 1 ignored;
+  - no rustdoc warnings.

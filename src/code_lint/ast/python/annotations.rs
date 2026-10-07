@@ -1,8 +1,10 @@
 //! Python type annotation unwrapping, constructor resolution, union flattening, and collection type vocabularies.
 
-// omni:disable-file [repeated-literal] -- Tree-sitter node kinds and field names (see ROADMAP)
-
-use super::{AstNode, ParsedFile, RawNode, resolve_path_and_terminal_raw};
+use super::{AstNode, ParsedFile, find_expr_at_span, resolve_path_and_terminal_expr};
+use crate::code_lint::ast::span_from_ruff_range;
+use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
+use ruff_python_ast::{Expr, Operator, Stmt};
+use ruff_text_size::Ranged as _;
 
 /// Controls how deeply [`collect_collection_types`] traverses a Python type annotation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,17 +19,21 @@ pub enum AnnotationTraversalDepth {
     CovariantPositions,
 }
 
-/// Unwraps outer `"type"` and `"parenthesized_expression"` nodes from `node`.
-pub(super) fn unwrap_type_and_parens<'a>(node: &RawNode<'a>) -> Option<RawNode<'a>> {
-    let mut current = node.clone();
-    while matches!(current.kind().as_ref(), "type" | "parenthesized_expression") {
-        let inner = current
-            .children()
-            .find(|child| child.is_named() && !child.is_extra())?;
-        current = inner;
-    }
-    Some(current)
-}
+const TYPING_PREFIX: &str = "typing.";
+const TYPING_EXTENSIONS_PREFIX: &str = "typing_extensions.";
+const TYPE_ANNOTATED: &str = "Annotated";
+const TYPE_FINAL: &str = "Final";
+const TYPE_COROUTINE: &str = "Coroutine";
+const TYPE_MAPPING: &str = "Mapping";
+const LIST_CONSTRUCTOR: &str = "list";
+const SET_CONSTRUCTOR: &str = "set";
+const TYPING_SET_CONSTRUCTOR: &str = "Set";
+const DICT_CONSTRUCTOR: &str = "dict";
+const TYPING_DICT_CONSTRUCTOR: &str = "Dict";
+const TYPE_DEFAULTDICT: &str = "defaultdict";
+const TYPE_TYPING_DEFAULTDICT: &str = "DefaultDict";
+const TYPE_COUNTER: &str = "Counter";
+const ORDERED_DICT_CONSTRUCTOR: &str = "OrderedDict";
 
 /// Returns true if `(path, terminal)` refers to an unqualified or standard-library (`typing`,
 /// `typing_extensions`, `collections.abc`, `builtins`) type constructor.
@@ -36,7 +42,7 @@ fn is_std_type_constructor_prefix(path: &str, terminal: &str) -> bool {
         || path.strip_suffix(terminal).is_some_and(|prefix| {
             matches!(
                 prefix,
-                "typing." | "typing_extensions." | "collections.abc." | "builtins."
+                TYPING_PREFIX | TYPING_EXTENSIONS_PREFIX | "collections.abc." | "builtins."
             )
         })
 }
@@ -56,12 +62,29 @@ pub(super) fn is_std_type_constructor(path: &str, terminal: &str, targets: &[&st
 /// should be imported `as AbstractSet`).
 pub(super) fn is_concrete_collection_constructor(path: &str, terminal: &str) -> bool {
     match terminal {
-        "list" | "List" | "dict" | "Dict" | "set" => is_std_type_constructor_prefix(path, terminal),
-        "Set" => matches!(path, "Set" | "typing.Set" | "typing_extensions.Set"),
-        "defaultdict" | "DefaultDict" | "deque" | "Deque" | "Counter" | "OrderedDict" => {
+        LIST_CONSTRUCTOR
+        | "List"
+        | DICT_CONSTRUCTOR
+        | TYPING_DICT_CONSTRUCTOR
+        | SET_CONSTRUCTOR => is_std_type_constructor_prefix(path, terminal),
+        TYPING_SET_CONSTRUCTOR => {
+            matches!(
+                path,
+                TYPING_SET_CONSTRUCTOR | "typing.Set" | "typing_extensions.Set"
+            )
+        }
+        TYPE_DEFAULTDICT
+        | TYPE_TYPING_DEFAULTDICT
+        | "deque"
+        | "Deque"
+        | TYPE_COUNTER
+        | ORDERED_DICT_CONSTRUCTOR => {
             path == terminal
                 || path.strip_suffix(terminal).is_some_and(|prefix| {
-                    matches!(prefix, "collections." | "typing." | "typing_extensions.")
+                    matches!(
+                        prefix,
+                        "collections." | TYPING_PREFIX | TYPING_EXTENSIONS_PREFIX
+                    )
                 })
         }
         _ => false,
@@ -71,109 +94,84 @@ pub(super) fn is_concrete_collection_constructor(path: &str, terminal: &str) -> 
 /// Returns true if `file` contains an unaliased `from collections.abc import Set` statement.
 #[must_use]
 pub fn has_unaliased_collections_abc_set_import(file: &ParsedFile) -> bool {
-    file.grep.root().dfs().any(|node| {
-        node.kind() == "import_from_statement"
-            && node
-                .field("module_name")
-                .is_some_and(|module_node| module_node.text() == "collections.abc")
-            && node
-                .field_children("name")
-                .any(|imported| imported.kind() == "dotted_name" && imported.text() == "Set")
-    })
-}
-
-/// Extracts `(base_node, type_argument_nodes)` from a Python `generic_type` or expression-fallback
-/// `subscript` node inside a type annotation.
-pub(super) fn extract_generic_base_and_args<'a>(
-    node: &RawNode<'a>,
-) -> Option<(RawNode<'a>, Vec<RawNode<'a>>)> {
-    match node.kind().as_ref() {
-        "generic_type" => {
-            let mut base_node = None;
-            let mut type_args = Vec::new();
-            for child in node.children() {
-                if !child.is_named() || child.is_extra() {
-                    continue;
-                }
-                if child.kind() == "type_parameter" {
-                    for param_child in child.children() {
-                        if param_child.is_named() && !param_child.is_extra() {
-                            type_args.push(param_child);
-                        }
-                    }
-                } else if base_node.is_none() {
-                    base_node = Some(child);
-                }
-            }
-            Some((base_node?, type_args))
-        }
-        "subscript" => {
-            let base_node = node.field("value")?;
-            let raw_args: Vec<_> = node
-                .field_children("subscript")
-                .filter(|child| child.is_named() && !child.is_extra())
-                .collect();
-            let type_args = if raw_args.len() == 1 && raw_args[0].kind() == "tuple" {
-                raw_args[0]
-                    .children()
-                    .filter(|child| child.is_named() && !child.is_extra())
-                    .collect()
-            } else {
-                raw_args
-            };
-            Some((base_node, type_args))
-        }
-        _ => None,
+    struct ImportFinder {
+        found: bool,
     }
+
+    impl<'a> SourceOrderVisitor<'a> for ImportFinder {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if self.found {
+                return;
+            }
+            if let Stmt::ImportFrom(import_from) = statement
+                && import_from.level == 0
+                && import_from.module.as_deref() == Some("collections.abc")
+                && import_from.names.iter().any(|alias| {
+                    alias.name.as_str() == TYPING_SET_CONSTRUCTOR && alias.asname.is_none()
+                })
+            {
+                self.found = true;
+                return;
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let Some(parsed) = file.py_module() else {
+        return false;
+    };
+    let mut finder = ImportFinder { found: false };
+    finder.visit_body(&parsed.syntax().body);
+    finder.found
 }
 
-/// Unwraps outer `Annotated[T, ...]`, `type`, and `parenthesized_expression` wrappers from `type_node`.
-fn unwrap_annotated_and_parens<'a>(type_node: &RawNode<'a>) -> Option<RawNode<'a>> {
-    let mut current = unwrap_type_and_parens(type_node)?;
-    while matches!(current.kind().as_ref(), "generic_type" | "subscript") {
-        let Some((base_node, type_args)) = extract_generic_base_and_args(&current) else {
-            break;
-        };
-        let (base_path, base_terminal) = resolve_path_and_terminal_raw(&base_node);
-        if is_std_type_constructor(&base_path, &base_terminal, &["Annotated"])
-            && let Some(first_arg) = type_args.into_iter().next()
+/// Extracts `(base_expr, type_argument_exprs)` from a Python `Expr::Subscript` node inside a
+/// type annotation.
+pub(super) fn extract_generic_base_and_args(expr: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
+    let Expr::Subscript(subscript) = expr else {
+        return None;
+    };
+    let type_args = if let Expr::Tuple(tuple) = subscript.slice.as_ref() {
+        tuple.elts.iter().collect()
+    } else {
+        vec![subscript.slice.as_ref()]
+    };
+    Some((subscript.value.as_ref(), type_args))
+}
+
+/// Unwraps outer `Annotated[T, ...]` wrappers from `type_expr`.
+fn unwrap_annotated_expr<'a>(mut current: &'a Expr, source: &str) -> &'a Expr {
+    while let Some((base_node, type_args)) = extract_generic_base_and_args(current) {
+        let (base_path, base_terminal) = resolve_path_and_terminal_expr(base_node, source);
+        if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_ANNOTATED])
+            && let Some(&first_arg) = type_args.first()
         {
-            current = unwrap_type_and_parens(&first_arg)?;
+            current = first_arg;
         } else {
             break;
         }
     }
-    Some(current)
+    current
 }
 
-/// True if `type_node` is `Final` or `Final[T]` (qualified or not, optionally wrapped in `Annotated`).
-pub(super) fn has_final_annotation(type_node: &RawNode<'_>) -> bool {
-    let Some(unwrapped) = unwrap_annotated_and_parens(type_node) else {
-        return false;
-    };
-    let candidate = if matches!(unwrapped.kind().as_ref(), "generic_type" | "subscript") {
-        let Some((base_node, _)) = extract_generic_base_and_args(&unwrapped) else {
-            return false;
-        };
-        base_node
-    } else {
-        unwrapped
-    };
-    resolve_path_and_terminal_raw(&candidate).1 == "Final"
+/// True if `type_expr` is `Final` or `Final[T]` (qualified or not, optionally wrapped in `Annotated`).
+pub(super) fn has_final_annotation_expr(type_expr: &Expr, source: &str) -> bool {
+    let unwrapped = unwrap_annotated_expr(type_expr, source);
+    let candidate =
+        extract_generic_base_and_args(unwrapped).map_or(unwrapped, |(base_node, _)| base_node);
+    resolve_path_and_terminal_expr(candidate, source).1 == TYPE_FINAL
 }
 
-/// Returns true if `type_node` is an unparameterized `Final` qualifier (`Final`, `typing.Final`,
+/// Returns true if `type_expr` is an unparameterized `Final` qualifier (`Final`, `typing.Final`,
 /// or `typing_extensions.Final`, optionally wrapped in `Annotated[Final, ...]`), which PEP 591
 /// forbids in a class body without an initializer (`x: Final` is invalid; `x: Final[T]` is valid).
-pub(super) fn is_bare_final_annotation(type_node: &RawNode<'_>) -> bool {
-    let Some(unwrapped) = unwrap_annotated_and_parens(type_node) else {
-        return false;
-    };
-    if matches!(unwrapped.kind().as_ref(), "generic_type" | "subscript") {
+pub(super) fn is_bare_final_annotation_expr(type_expr: &Expr, source: &str) -> bool {
+    let unwrapped = unwrap_annotated_expr(type_expr, source);
+    if matches!(unwrapped, Expr::Subscript(_)) {
         return false;
     }
-    let (path, terminal) = resolve_path_and_terminal_raw(&unwrapped);
-    is_std_type_constructor(&path, &terminal, &["Final"])
+    let (path, terminal) = resolve_path_and_terminal_expr(unwrapped, source);
+    is_std_type_constructor(&path, &terminal, &[TYPE_FINAL])
 }
 
 /// Transparent type wrappers whose all type arguments preserve the enclosing variance.
@@ -181,9 +179,9 @@ const TRANSPARENT_UNION_WRAPPERS: &[&str] = &["Optional", "Union"];
 
 /// Transparent type qualifiers whose first type argument (`arg 0`) preserves the enclosing variance.
 const TRANSPARENT_FIRST_ARG_WRAPPERS: &[&str] = &[
-    "Annotated",
+    TYPE_ANNOTATED,
     "ClassVar",
-    "Final",
+    TYPE_FINAL,
     "Required",
     "NotRequired",
     "ReadOnly",
@@ -201,7 +199,7 @@ const SINGLE_ARG_COVARIANT_CONTAINERS: &[&str] = &[
     "AsyncIterator",
     "Awaitable",
     "AbstractSet",
-    "Set",
+    TYPING_SET_CONSTRUCTOR,
     "frozenset",
     "FrozenSet",
 ];
@@ -213,8 +211,8 @@ pub(super) const MUTABLE_COLLECTION_ABCS: &[&str] =
 /// Abstract read-only collection constructors in `collections.abc` and `typing`.
 const READ_ONLY_COLLECTION_ABCS: &[&str] = &[
     "Sequence",
-    "Mapping",
-    "Set",
+    TYPE_MAPPING,
+    TYPING_SET_CONSTRUCTOR,
     "AbstractSet",
     "Collection",
     "Iterable",
@@ -287,7 +285,7 @@ fn classify_collection(
     abc_set_imported: bool,
 ) -> Option<(CollectionKind, CollectionShape)> {
     let kind = if is_concrete_collection_constructor(path, terminal)
-        && !(abc_set_imported && path == "Set")
+        && !(abc_set_imported && path == TYPING_SET_CONSTRUCTOR)
     {
         CollectionKind::ConcreteMutable
     } else if is_std_type_constructor(path, terminal, MUTABLE_COLLECTION_ABCS) {
@@ -300,65 +298,62 @@ fn classify_collection(
         return None;
     };
     let shape = match terminal {
-        "dict" | "Dict" | "defaultdict" | "DefaultDict" | "Counter" | "OrderedDict"
-        | "MutableMapping" | "Mapping" => CollectionShape::Mapping,
-        "set" | "Set" | "MutableSet" | "AbstractSet" | "frozenset" | "FrozenSet" => {
-            CollectionShape::Set
-        }
+        DICT_CONSTRUCTOR
+        | TYPING_DICT_CONSTRUCTOR
+        | TYPE_DEFAULTDICT
+        | TYPE_TYPING_DEFAULTDICT
+        | TYPE_COUNTER
+        | ORDERED_DICT_CONSTRUCTOR
+        | "MutableMapping"
+        | TYPE_MAPPING => CollectionShape::Mapping,
+        SET_CONSTRUCTOR
+        | TYPING_SET_CONSTRUCTOR
+        | "MutableSet"
+        | "AbstractSet"
+        | "frozenset"
+        | "FrozenSet" => CollectionShape::Set,
         "Collection" | "Iterable" | "Iterator" | "Reversible" => CollectionShape::Iterable,
         _ => CollectionShape::Sequence,
     };
     Some((kind, shape))
 }
 
-/// Recursively collects matching type constructor `(path, terminal)` pairs from `node`
+/// Recursively collects matching type constructor `(path, terminal)` pairs from `expr`
 /// according to `depth`, deduplicated by path.
-pub(super) fn collect_type_constructors_raw<F>(
-    node: &RawNode<'_>,
+pub(super) fn collect_type_constructors_expr<F>(
+    expr: &Expr,
+    source: &str,
     depth: AnnotationTraversalDepth,
     predicate: &F,
     out: &mut Vec<(String, String)>,
 ) where
     F: Fn(&str, &str) -> bool,
 {
-    match node.kind().as_ref() {
-        "type" | "parenthesized_expression" | "union_type" => {
-            for child in node.children() {
-                if child.is_named() && !child.is_extra() {
-                    collect_type_constructors_raw(&child, depth, predicate, out);
-                }
-            }
+    match expr {
+        Expr::BinOp(bin_op) if bin_op.op == Operator::BitOr => {
+            collect_type_constructors_expr(&bin_op.left, source, depth, predicate, out);
+            collect_type_constructors_expr(&bin_op.right, source, depth, predicate, out);
         }
-        "binary_operator" => {
-            if node.field("operator").is_some_and(|op| op.text() == "|") {
-                if let Some(left) = node.field("left") {
-                    collect_type_constructors_raw(&left, depth, predicate, out);
-                }
-                if let Some(right) = node.field("right") {
-                    collect_type_constructors_raw(&right, depth, predicate, out);
-                }
-            }
-        }
-        "identifier" | "attribute" => {
-            let (path, terminal) = resolve_path_and_terminal_raw(node);
+        Expr::Name(_) | Expr::Attribute(_) => {
+            let (path, terminal) = resolve_path_and_terminal_expr(expr, source);
             push_type_constructor(path, terminal, predicate, out);
         }
-        "generic_type" | "subscript" => {
-            let Some((base_node, type_args)) = extract_generic_base_and_args(node) else {
+        Expr::Subscript(_) => {
+            let Some((base_node, type_args)) = extract_generic_base_and_args(expr) else {
                 return;
             };
-            let (base_path, base_terminal) = resolve_path_and_terminal_raw(&base_node);
+            let (base_path, base_terminal) = resolve_path_and_terminal_expr(base_node, source);
 
             if is_std_type_constructor(&base_path, &base_terminal, TRANSPARENT_UNION_WRAPPERS) {
                 for arg in &type_args {
-                    collect_type_constructors_raw(arg, depth, predicate, out);
+                    collect_type_constructors_expr(arg, source, depth, predicate, out);
                 }
                 return;
             }
 
             if is_std_type_constructor(&base_path, &base_terminal, TRANSPARENT_FIRST_ARG_WRAPPERS) {
                 if let Some(first_arg) = type_args.first() {
-                    collect_type_constructors_raw(first_arg, depth, predicate, out);
+                    collect_type_constructors_expr(first_arg, source, depth, predicate, out);
                 }
                 return;
             }
@@ -371,30 +366,40 @@ pub(super) fn collect_type_constructors_raw<F>(
                 match terminal.as_str() {
                     terminal_name if SINGLE_ARG_COVARIANT_CONTAINERS.contains(&terminal_name) => {
                         if let Some(first_arg) = type_args.first() {
-                            collect_type_constructors_raw(first_arg, depth, predicate, out);
+                            collect_type_constructors_expr(
+                                first_arg, source, depth, predicate, out,
+                            );
                         }
                     }
                     "tuple" | "Tuple" => {
                         for arg in &type_args {
-                            collect_type_constructors_raw(arg, depth, predicate, out);
+                            collect_type_constructors_expr(arg, source, depth, predicate, out);
                         }
                     }
-                    "Mapping" | "Callable" => {
+                    TYPE_MAPPING | "Callable" => {
                         if let Some(second_arg) = type_args.get(1) {
-                            collect_type_constructors_raw(second_arg, depth, predicate, out);
+                            collect_type_constructors_expr(
+                                second_arg, source, depth, predicate, out,
+                            );
                         }
                     }
-                    "Generator" | "Coroutine" => {
+                    "Generator" | TYPE_COROUTINE => {
                         if let Some(yield_arg) = type_args.first() {
-                            collect_type_constructors_raw(yield_arg, depth, predicate, out);
+                            collect_type_constructors_expr(
+                                yield_arg, source, depth, predicate, out,
+                            );
                         }
                         if let Some(return_arg) = type_args.get(2) {
-                            collect_type_constructors_raw(return_arg, depth, predicate, out);
+                            collect_type_constructors_expr(
+                                return_arg, source, depth, predicate, out,
+                            );
                         }
                     }
                     "AsyncGenerator" => {
                         if let Some(yield_arg) = type_args.first() {
-                            collect_type_constructors_raw(yield_arg, depth, predicate, out);
+                            collect_type_constructors_expr(
+                                yield_arg, source, depth, predicate, out,
+                            );
                         }
                     }
                     _ => {}
@@ -431,12 +436,19 @@ pub fn collect_collection_types(
     depth: AnnotationTraversalDepth,
     abc_set_imported: bool,
 ) -> Vec<PythonCollectionType> {
-    let Some(raw) = type_node.raw_opt() else {
+    let Some(file) = type_node.file_opt() else {
+        return Vec::new();
+    };
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let Some(expr) = find_expr_at_span(parsed.syntax(), type_node.span()) else {
         return Vec::new();
     };
     let mut constructors = Vec::new();
-    collect_type_constructors_raw(
-        raw,
+    collect_type_constructors_expr(
+        expr,
+        &file.source,
         depth,
         &|path, terminal| classify_collection(path, terminal, abc_set_imported).is_some(),
         &mut constructors,
@@ -464,11 +476,12 @@ pub fn collection_type(
     expression: &AstNode<'_>,
     abc_set_imported: bool,
 ) -> Option<PythonCollectionType> {
-    let raw = expression.raw_opt()?;
-    if !matches!(raw.kind().as_ref(), "identifier" | "attribute") {
+    let file = expression.file_opt()?;
+    let expr = find_expr_at_span(file.py_module()?.syntax(), expression.span())?;
+    if !matches!(expr, Expr::Name(_) | Expr::Attribute(_)) {
         return None;
     }
-    let (path, name) = resolve_path_and_terminal_raw(raw);
+    let (path, name) = resolve_path_and_terminal_expr(expr, &file.source);
     let (kind, shape) = classify_collection(&path, &name, abc_set_imported)?;
     Some(PythonCollectionType {
         path,
@@ -482,11 +495,12 @@ pub fn collection_type(
 /// (`[...]`, `{a, b}`, `{k: v}`) or comprehension.
 #[must_use]
 pub fn collection_display(expression: &AstNode<'_>) -> Option<PythonCollectionType> {
-    let raw = expression.raw_opt()?;
-    let (name, shape) = match raw.kind().as_ref() {
-        "list" | "list_comprehension" => ("list", CollectionShape::Sequence),
-        "set" | "set_comprehension" => ("set", CollectionShape::Set),
-        "dictionary" | "dictionary_comprehension" => ("dict", CollectionShape::Mapping),
+    let file = expression.file_opt()?;
+    let expr = find_expr_at_span(file.py_module()?.syntax(), expression.span())?;
+    let (name, shape) = match expr {
+        Expr::List(_) | Expr::ListComp(_) => (LIST_CONSTRUCTOR, CollectionShape::Sequence),
+        Expr::Set(_) | Expr::SetComp(_) => (SET_CONSTRUCTOR, CollectionShape::Set),
+        Expr::Dict(_) | Expr::DictComp(_) => (DICT_CONSTRUCTOR, CollectionShape::Mapping),
         _ => return None,
     };
     Some(PythonCollectionType {
@@ -500,12 +514,14 @@ pub fn collection_display(expression: &AstNode<'_>) -> Option<PythonCollectionTy
 /// Decomposes a generic type annotation or subscript into `(base_type_node, type_arguments)`.
 #[must_use]
 pub fn extract_generic_type<'a>(node: &AstNode<'a>) -> Option<(AstNode<'a>, Vec<AstNode<'a>>)> {
-    let raw = node.raw_opt()?;
-    let unwrapped = unwrap_type_and_parens(raw)?;
-    let (base, args) = extract_generic_base_and_args(&unwrapped)?;
+    let file = node.file_opt()?;
+    let expr = find_expr_at_span(file.py_module()?.syntax(), node.span())?;
+    let (base, args) = extract_generic_base_and_args(expr)?;
     Some((
-        AstNode::from_raw(base),
-        args.into_iter().map(AstNode::from_raw).collect(),
+        AstNode::from_span(file, span_from_ruff_range(base.range())),
+        args.into_iter()
+            .map(|arg| AstNode::from_span(file, span_from_ruff_range(arg.range())))
+            .collect(),
     ))
 }
 
@@ -519,103 +535,88 @@ pub struct PythonReturnTypeUnion<'a> {
     pub branches: Vec<AstNode<'a>>,
 }
 
-/// Unwraps outer return-annotation envelopes (`type`, `parenthesized_expression`,
-/// `Annotated[T, ...]`, `Awaitable[T]`, and `Coroutine[YieldT, SendT, ReturnT]`).
+/// Unwraps outer return-annotation envelopes (`Annotated[T, ...]`, `Awaitable[T]`, and
+/// `Coroutine[YieldT, SendT, ReturnT]`).
 #[must_use]
 pub fn unwrap_return_envelope<'a>(type_node: &AstNode<'a>) -> AstNode<'a> {
-    type_node.raw_opt().map_or_else(
-        || type_node.clone(),
-        |raw| AstNode::from_raw(unwrap_return_envelope_raw(raw)),
-    )
+    let Some(file) = type_node.file_opt() else {
+        return type_node.clone();
+    };
+    let Some(parsed) = file.py_module() else {
+        return type_node.clone();
+    };
+    let Some(expr) = find_expr_at_span(parsed.syntax(), type_node.span()) else {
+        return type_node.clone();
+    };
+    let unwrapped = unwrap_return_envelope_expr(expr, &file.source);
+    AstNode::from_span(file, span_from_ruff_range(unwrapped.range()))
 }
 
-fn unwrap_return_envelope_raw<'a>(node: &RawNode<'a>) -> RawNode<'a> {
-    let mut current = node.clone();
-    loop {
-        let Some(unwrapped) = unwrap_type_and_parens(&current) else {
-            return current;
-        };
-        current = unwrapped;
-        if matches!(current.kind().as_ref(), "generic_type" | "subscript")
-            && let Some((base_node, type_args)) = extract_generic_base_and_args(&current)
+fn unwrap_return_envelope_expr<'a>(mut current: &'a Expr, source: &str) -> &'a Expr {
+    while let Some((base_node, type_args)) = extract_generic_base_and_args(current) {
+        let (base_path, base_terminal) = resolve_path_and_terminal_expr(base_node, source);
+        if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_ANNOTATED, "Awaitable"])
+            && let Some(&first_arg) = type_args.first()
         {
-            let (base_path, base_terminal) = resolve_path_and_terminal_raw(&base_node);
-            if is_std_type_constructor(&base_path, &base_terminal, &["Annotated", "Awaitable"])
-                && let Some(first_arg) = type_args.first().cloned()
-            {
-                current = first_arg;
-                continue;
-            }
-            if is_std_type_constructor(&base_path, &base_terminal, &["Coroutine"])
-                && let Some(return_arg) = type_args.get(2).cloned()
-            {
-                current = return_arg;
-                continue;
-            }
+            current = first_arg;
+            continue;
         }
-        return current;
+        if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_COROUTINE])
+            && let Some(&return_arg) = type_args.get(2)
+        {
+            current = return_arg;
+            continue;
+        }
+        break;
     }
+    current
 }
 
 /// Flattens top-level union constructs (`|`, `Optional[...]`, `Union[...]`, and `Annotated[T, ...]`)
 /// into `branches` and sets `*has_none = true` if `None` (`none`) or `Optional[...]` is part of the union.
-fn collect_union_branches<'a>(
-    node: &RawNode<'a>,
+fn collect_union_branches_expr<'a>(
+    expr: &'a Expr,
+    source: &str,
     has_none: &mut bool,
-    branches: &mut Vec<RawNode<'a>>,
+    branches: &mut Vec<&'a Expr>,
 ) {
-    match node.kind().as_ref() {
-        "type" | "parenthesized_expression" | "union_type" => {
-            for child in node.children() {
-                if child.is_named() && !child.is_extra() {
-                    collect_union_branches(&child, has_none, branches);
-                }
-            }
+    match expr {
+        Expr::BinOp(bin_op) if bin_op.op == Operator::BitOr => {
+            collect_union_branches_expr(&bin_op.left, source, has_none, branches);
+            collect_union_branches_expr(&bin_op.right, source, has_none, branches);
         }
-        "binary_operator"
-            if node
-                .field("operator")
-                .is_some_and(|operator| operator.text() == "|") =>
-        {
-            if let Some(left) = node.field("left") {
-                collect_union_branches(&left, has_none, branches);
-            }
-            if let Some(right) = node.field("right") {
-                collect_union_branches(&right, has_none, branches);
-            }
-        }
-        "none" => {
+        Expr::NoneLiteral(_) => {
             *has_none = true;
         }
-        "generic_type" | "subscript" => {
-            let Some((base_node, type_args)) = extract_generic_base_and_args(node) else {
-                branches.push(node.clone());
+        Expr::Subscript(_) => {
+            let Some((base_node, type_args)) = extract_generic_base_and_args(expr) else {
+                branches.push(expr);
                 return;
             };
-            let (base_path, base_terminal) = resolve_path_and_terminal_raw(&base_node);
+            let (base_path, base_terminal) = resolve_path_and_terminal_expr(base_node, source);
             if is_std_type_constructor(&base_path, &base_terminal, &["Optional"]) {
                 *has_none = true;
-                for argument in &type_args {
-                    collect_union_branches(argument, has_none, branches);
+                for argument in type_args {
+                    collect_union_branches_expr(argument, source, has_none, branches);
                 }
                 return;
             }
             if is_std_type_constructor(&base_path, &base_terminal, &["Union"]) {
-                for argument in &type_args {
-                    collect_union_branches(argument, has_none, branches);
+                for argument in type_args {
+                    collect_union_branches_expr(argument, source, has_none, branches);
                 }
                 return;
             }
-            if is_std_type_constructor(&base_path, &base_terminal, &["Annotated"]) {
-                if let Some(first_arg) = type_args.first() {
-                    collect_union_branches(first_arg, has_none, branches);
+            if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_ANNOTATED]) {
+                if let Some(&first_arg) = type_args.first() {
+                    collect_union_branches_expr(first_arg, source, has_none, branches);
                 }
                 return;
             }
-            branches.push(node.clone());
+            branches.push(expr);
         }
         _ => {
-            branches.push(node.clone());
+            branches.push(expr);
         }
     }
 }
@@ -624,18 +625,33 @@ fn collect_union_branches<'a>(
 /// after unwrapping outer async and metadata envelopes (`Awaitable`, `Coroutine`, `Annotated`).
 #[must_use]
 pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnTypeUnion<'a> {
-    let Some(raw) = return_type_node.raw_opt() else {
+    let Some(file) = return_type_node.file_opt() else {
         return PythonReturnTypeUnion {
             has_none: false,
             branches: Vec::new(),
         };
     };
-    let unwrapped = unwrap_return_envelope_raw(raw);
+    let Some(parsed) = file.py_module() else {
+        return PythonReturnTypeUnion {
+            has_none: false,
+            branches: Vec::new(),
+        };
+    };
+    let Some(expr) = find_expr_at_span(parsed.syntax(), return_type_node.span()) else {
+        return PythonReturnTypeUnion {
+            has_none: false,
+            branches: Vec::new(),
+        };
+    };
+    let unwrapped = unwrap_return_envelope_expr(expr, &file.source);
     let mut has_none = false;
     let mut branches = Vec::new();
-    collect_union_branches(&unwrapped, &mut has_none, &mut branches);
+    collect_union_branches_expr(unwrapped, &file.source, &mut has_none, &mut branches);
     PythonReturnTypeUnion {
         has_none,
-        branches: branches.into_iter().map(AstNode::from_raw).collect(),
+        branches: branches
+            .into_iter()
+            .map(|branch| AstNode::from_span(file, span_from_ruff_range(branch.range())))
+            .collect(),
     }
 }
