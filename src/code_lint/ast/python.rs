@@ -34,46 +34,227 @@ pub use self::scopes::{
     collect_function_scopes,
 };
 
-use self::annotations::{has_final_annotation, is_bare_final_annotation};
+use self::annotations::{has_final_annotation_expr, is_bare_final_annotation_expr};
 use self::classes::is_in_protocol_or_abc_class;
-use self::functions::{direct_function_definitions, method_receiver_name, parse_param_parts};
+use self::functions::{direct_function_definitions, method_receiver_name_ast};
 use self::logging::extract_logger_call;
-use self::scopes::scope_shadows_parameter;
-use self::strings::{
-    fstring_segments_and_interpolations, is_triple_quoted, outermost_string_expression,
-    positional_call_arguments, preceding_concatenated_literal_text, static_string_text,
-    string_prefix_flags,
-};
+use self::scopes::parameters_shadow_name;
+use self::strings::{fstring_segments_and_interpolations, static_string_text};
 use crate::code_lint::ast::{
     AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, PositionalRead, RawNode,
     ScopePositionalReads, delimited_string_parts, parse_float_literal, parse_integer_literal,
+    span_from_ruff_range,
 };
+use crate::diagnostic::SourceSpan;
+use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
+use ruff_python_ast::{
+    Decorator, Expr, ModModule, Parameters, Stmt, StmtFunctionDef, StringFlags as _,
+};
+use ruff_text_size::Ranged as _;
 use std::collections::{HashMap, HashSet};
 
-/// Returns the `def` or `class` wrapped by a `decorated_definition` statement, so its header
-/// spans from the first decorator to the end of the definition's own header.
-#[must_use]
-pub(super) fn decorated_definition<'a>(statement: &RawNode<'a>) -> Option<RawNode<'a>> {
-    if statement.kind() == "decorated_definition" {
-        statement.field("definition")
-    } else {
-        None
+/// Finds the `Expr` node in `module` whose byte span equals `target_span`.
+pub(super) fn find_expr_at_span(module: &ModModule, target_span: SourceSpan) -> Option<&Expr> {
+    struct ExprFinder<'a> {
+        target_span: SourceSpan,
+        found: Option<&'a Expr>,
     }
+
+    impl<'a> SourceOrderVisitor<'a> for ExprFinder<'a> {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if self.found.is_some() {
+                return;
+            }
+            let span = span_from_ruff_range(expr.range());
+            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
+                return;
+            }
+            if span == self.target_span {
+                self.found = Some(expr);
+                return;
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut finder = ExprFinder {
+        target_span,
+        found: None,
+    };
+    finder.visit_body(&module.body);
+    finder.found
 }
 
-/// Returns true if a Python node of `parent_kind` makes a child identifier an import binding.
-#[must_use]
-pub(super) fn is_import_binding_parent(parent_kind: &str) -> bool {
-    matches!(
-        parent_kind,
-        "import_statement" | "import_from_statement" | "aliased_import" | "dotted_name"
-    )
+/// Finds the `StmtFunctionDef` node in `module` whose definition or name span equals `target_span`.
+pub(super) fn find_function_def_at_span(
+    module: &ModModule,
+    target_span: SourceSpan,
+) -> Option<&StmtFunctionDef> {
+    struct FunctionFinder<'a> {
+        target_span: SourceSpan,
+        found: Option<&'a StmtFunctionDef>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for FunctionFinder<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if self.found.is_some() {
+                return;
+            }
+            let span = span_from_ruff_range(statement.range());
+            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
+                return;
+            }
+            if let Stmt::FunctionDef(func_def) = statement
+                && (span == self.target_span
+                    || span_from_ruff_range(func_def.name.range) == self.target_span)
+            {
+                self.found = Some(func_def);
+                return;
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let mut finder = FunctionFinder {
+        target_span,
+        found: None,
+    };
+    finder.visit_body(&module.body);
+    finder.found
 }
 
-/// Returns true if a Python node of `parent_kind` declares a structural definition name.
+/// Finds the `Parameters` node in `module` matching `target_span` (either the `Parameters` span,
+/// the enclosing `StmtFunctionDef` span, or the first function's parameters when `target_span`
+/// spans the module).
+pub(super) fn find_parameters_at_span(
+    module: &ModModule,
+    target_span: SourceSpan,
+) -> Option<&Parameters> {
+    struct ParamsFinder<'a> {
+        target_span: SourceSpan,
+        module_span: SourceSpan,
+        found: Option<&'a Parameters>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for ParamsFinder<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if self.found.is_some() {
+                return;
+            }
+            if let Stmt::FunctionDef(func_def) = statement
+                && (span_from_ruff_range(func_def.range) == self.target_span
+                    || span_from_ruff_range(func_def.parameters.range) == self.target_span
+                    || self.target_span == self.module_span)
+            {
+                self.found = Some(&func_def.parameters);
+                return;
+            }
+            walk_stmt(self, statement);
+        }
+
+        fn visit_parameters(&mut self, parameters: &'a Parameters) {
+            if self.found.is_none() && span_from_ruff_range(parameters.range) == self.target_span {
+                self.found = Some(parameters);
+            }
+        }
+    }
+
+    let mut finder = ParamsFinder {
+        target_span,
+        module_span: span_from_ruff_range(module.range),
+        found: None,
+    };
+    finder.visit_body(&module.body);
+    finder.found
+}
+
+/// Returns true if `node` is a Python import binding (`import x` or `from m import y`).
 #[must_use]
-pub(super) fn is_structural_definition_parent(parent_kind: &str) -> bool {
-    matches!(parent_kind, "class_definition" | "function_definition")
+pub fn is_import_binding(node: &AstNode<'_>) -> bool {
+    struct ImportSpanChecker {
+        target_span: SourceSpan,
+        found: bool,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for ImportSpanChecker {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if self.found {
+                return;
+            }
+            let span = span_from_ruff_range(statement.range());
+            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
+                return;
+            }
+            if matches!(statement, Stmt::Import(_) | Stmt::ImportFrom(_)) {
+                self.found = true;
+                return;
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let Some(file) = node.file_opt() else {
+        return false;
+    };
+    let Some(parsed) = file.py_module() else {
+        return false;
+    };
+    let mut checker = ImportSpanChecker {
+        target_span: node.span(),
+        found: false,
+    };
+    checker.visit_body(&parsed.syntax().body);
+    checker.found
+}
+
+/// Returns true if `node` is the declared name of a Python `def` or `class`.
+#[must_use]
+pub fn is_structural_definition(node: &AstNode<'_>) -> bool {
+    struct StructuralDefChecker {
+        target_span: SourceSpan,
+        found: bool,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for StructuralDefChecker {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if self.found {
+                return;
+            }
+            let span = span_from_ruff_range(statement.range());
+            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
+                return;
+            }
+            match statement {
+                Stmt::FunctionDef(func_def)
+                    if span_from_ruff_range(func_def.name.range) == self.target_span =>
+                {
+                    self.found = true;
+                    return;
+                }
+                Stmt::ClassDef(class_def)
+                    if span_from_ruff_range(class_def.name.range) == self.target_span =>
+                {
+                    self.found = true;
+                    return;
+                }
+                _ => {}
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let Some(file) = node.file_opt() else {
+        return false;
+    };
+    let Some(parsed) = file.py_module() else {
+        return false;
+    };
+    let mut checker = StructuralDefChecker {
+        target_span: node.span(),
+        found: false,
+    };
+    checker.visit_body(&parsed.syntax().body);
+    checker.found
 }
 
 /// Returns true if a Python `function_definition` node is a test function (`test` or `test_*`).
@@ -126,39 +307,12 @@ impl KeywordArg<'_> {
     /// Evaluates literal boolean arguments (`True` / `False`).
     #[must_use]
     pub fn as_bool(&self) -> Option<bool> {
-        match self.value_node.raw_opt()?.kind().as_ref() {
-            "true" => Some(true),
-            "false" => Some(false),
+        match self.value_node.text().as_ref() {
+            "True" => Some(true),
+            "False" => Some(false),
             _ => None,
         }
     }
-}
-
-/// Extracts all keyword arguments from any Python `call` or `argument_list` node.
-fn extract_keyword_args_raw<'a>(call_or_args_node: &RawNode<'a>) -> Vec<KeywordArg<'a>> {
-    let args_node = if call_or_args_node.kind() == "argument_list" {
-        Some(call_or_args_node.clone())
-    } else {
-        call_or_args_node.field("arguments")
-    };
-
-    let Some(args) = args_node else {
-        return Vec::new();
-    };
-
-    let mut result = Vec::new();
-    for child in args.children() {
-        if child.kind() == "keyword_argument"
-            && let (Some(name_n), Some(val_n)) = (child.field("name"), child.field("value"))
-        {
-            result.push(KeywordArg {
-                name: name_n.text().to_string(),
-                name_node: AstNode::from_raw(name_n),
-                value_node: AstNode::from_raw(val_n),
-            });
-        }
-    }
-    result
 }
 
 /// Structured metadata for a Python decorator.
@@ -190,6 +344,18 @@ impl<'a> DecoratorInfo<'a> {
     }
 }
 
+/// Helper to resolve the dotted expression path and terminal identifier from an `Expr`.
+pub(super) fn resolve_path_and_terminal_expr(expr: &Expr, source: &str) -> (String, String) {
+    let span = span_from_ruff_range(expr.range());
+    let path = source[span.start..span.end].to_string();
+    let terminal = if let Expr::Attribute(attr) = expr {
+        attr.attr.to_string()
+    } else {
+        path.rsplit('.').next().unwrap_or("").to_string()
+    };
+    (path, terminal)
+}
+
 /// Helper to resolve the dotted expression path and terminal identifier.
 fn resolve_path_and_terminal_raw(expr: &RawNode<'_>) -> (String, String) {
     let path = expr.text().to_string();
@@ -200,57 +366,104 @@ fn resolve_path_and_terminal_raw(expr: &RawNode<'_>) -> (String, String) {
     (path, terminal)
 }
 
-/// Extracts all decorators from a `decorated_definition` or a definition node inside one.
-fn extract_decorators_raw<'a>(node: &RawNode<'a>) -> Vec<DecoratorInfo<'a>> {
-    let parent = if node.kind() == "decorated_definition" {
-        Some(node.clone())
-    } else {
-        node.parent()
-    };
+/// Converts a slice of `ruff_python_ast::Decorator` nodes into `DecoratorInfo` values.
+pub(super) fn extract_decorators_from_slice<'a>(
+    decorators: &[Decorator],
+    file: &'a ParsedFile,
+) -> Vec<DecoratorInfo<'a>> {
+    let mut out = Vec::with_capacity(decorators.len());
+    for decorator in decorators {
+        let (call_node, target_expr, keyword_args) = if let Expr::Call(call) = &decorator.expression
+        {
+            let kwargs = call
+                .arguments
+                .keywords
+                .iter()
+                .filter_map(|kw| {
+                    let arg_ident = kw.arg.as_ref()?;
+                    Some(KeywordArg {
+                        name: arg_ident.id.to_string(),
+                        name_node: AstNode::from_span(file, span_from_ruff_range(arg_ident.range)),
+                        value_node: AstNode::from_span(
+                            file,
+                            span_from_ruff_range(kw.value.range()),
+                        ),
+                    })
+                })
+                .collect();
+            (
+                Some(AstNode::from_span(file, span_from_ruff_range(call.range()))),
+                call.func.as_ref(),
+                kwargs,
+            )
+        } else {
+            (None, &decorator.expression, Vec::new())
+        };
 
-    let Some(dec_def) = parent else {
-        return Vec::new();
-    };
-    if dec_def.kind() != "decorated_definition" {
-        return Vec::new();
+        let (path, terminal_name) = resolve_path_and_terminal_expr(target_expr, &file.source);
+        out.push(DecoratorInfo {
+            node: AstNode::from_span(file, span_from_ruff_range(decorator.range)),
+            path,
+            terminal_name,
+            call_node,
+            keyword_args,
+        });
     }
-
-    let mut decorators = Vec::new();
-    for child in dec_def.children() {
-        if child.kind() == "decorator" {
-            // decorator children: "@" and expression (call or identifier/attribute)
-            let expr_node = child.children().find(|c| c.kind() != "@");
-            let Some(expr) = expr_node else {
-                continue;
-            };
-
-            let (call_node, target_expr, keyword_args) = if expr.kind() == "call" {
-                let call = expr.clone();
-                let func = call.field("function").unwrap_or_else(|| call.clone());
-                let kwargs = extract_keyword_args_raw(&call);
-                (Some(AstNode::from_raw(call)), func, kwargs)
-            } else {
-                (None, expr, Vec::new())
-            };
-
-            let (path, terminal_name) = resolve_path_and_terminal_raw(&target_expr);
-
-            decorators.push(DecoratorInfo {
-                node: AstNode::from_raw(child),
-                path,
-                terminal_name,
-                call_node,
-                keyword_args,
-            });
-        }
-    }
-    decorators
+    out
 }
 
-/// Extracts all decorators from a `decorated_definition` or a definition node inside one.
+/// Extracts all decorators from a `function_definition` or `class_definition` node.
 #[must_use]
 pub fn extract_decorators<'a>(node: &AstNode<'a>) -> Vec<DecoratorInfo<'a>> {
-    node.raw_opt().map_or_else(Vec::new, extract_decorators_raw)
+    struct DecoratorOwnerFinder<'a> {
+        target_span: SourceSpan,
+        found: Option<&'a [Decorator]>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for DecoratorOwnerFinder<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if self.found.is_some() {
+                return;
+            }
+            let span = span_from_ruff_range(statement.range());
+            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
+                return;
+            }
+            match statement {
+                Stmt::FunctionDef(func_def)
+                    if span == self.target_span
+                        || span_from_ruff_range(func_def.name.range) == self.target_span =>
+                {
+                    self.found = Some(&func_def.decorator_list);
+                    return;
+                }
+                Stmt::ClassDef(class_def)
+                    if span == self.target_span
+                        || span_from_ruff_range(class_def.name.range) == self.target_span =>
+                {
+                    self.found = Some(&class_def.decorator_list);
+                    return;
+                }
+                _ => {}
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let Some(file) = node.file_opt() else {
+        return Vec::new();
+    };
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut finder = DecoratorOwnerFinder {
+        target_span: node.span(),
+        found: None,
+    };
+    finder.visit_body(&parsed.syntax().body);
+    finder
+        .found
+        .map_or_else(Vec::new, |list| extract_decorators_from_slice(list, file))
 }
 
 /// Returns true if a Python `function_definition` or `class_definition` has a decorator whose
@@ -278,12 +491,81 @@ impl PythonModuleAssignment<'_> {
     /// annotation.
     #[must_use]
     pub fn is_constant(&self) -> bool {
-        is_constant_name(&self.name)
-            || self
-                .annotation
-                .as_ref()
-                .and_then(AstNode::raw_opt)
-                .is_some_and(has_final_annotation)
+        if is_constant_name(&self.name) {
+            return true;
+        }
+        let Some(annotation) = &self.annotation else {
+            return false;
+        };
+        let Some(file) = annotation.file_opt() else {
+            return false;
+        };
+        let Some(parsed) = file.py_module() else {
+            return false;
+        };
+        let Some(expr) = find_expr_at_span(parsed.syntax(), annotation.span()) else {
+            return false;
+        };
+        has_final_annotation_expr(expr, &file.source)
+    }
+}
+
+/// Collects single-name module-level assignments from `stmts`, recursing into top-level
+/// `if`, `try`, and `with` blocks.
+fn collect_module_assignments_in_stmts<'a>(
+    stmts: &[Stmt],
+    file: &'a ParsedFile,
+    out: &mut Vec<PythonModuleAssignment<'a>>,
+) {
+    for statement in stmts {
+        match statement {
+            Stmt::Assign(assign) => {
+                if let [Expr::Name(target)] = assign.targets.as_slice() {
+                    out.push(PythonModuleAssignment {
+                        name: target.id.to_string(),
+                        annotation: None,
+                        value: Some(AstNode::from_span(
+                            file,
+                            span_from_ruff_range(assign.value.range()),
+                        )),
+                    });
+                }
+            }
+            Stmt::AnnAssign(ann) => {
+                if let Expr::Name(target) = ann.target.as_ref() {
+                    out.push(PythonModuleAssignment {
+                        name: target.id.to_string(),
+                        annotation: Some(AstNode::from_span(
+                            file,
+                            span_from_ruff_range(ann.annotation.range()),
+                        )),
+                        value: ann
+                            .value
+                            .as_ref()
+                            .map(|val| AstNode::from_span(file, span_from_ruff_range(val.range()))),
+                    });
+                }
+            }
+            Stmt::If(if_statement) => {
+                collect_module_assignments_in_stmts(&if_statement.body, file, out);
+                for clause in &if_statement.elif_else_clauses {
+                    collect_module_assignments_in_stmts(&clause.body, file, out);
+                }
+            }
+            Stmt::Try(try_statement) => {
+                collect_module_assignments_in_stmts(&try_statement.body, file, out);
+                for handler in &try_statement.handlers {
+                    let ruff_python_ast::ExceptHandler::ExceptHandler(handler_clause) = handler;
+                    collect_module_assignments_in_stmts(&handler_clause.body, file, out);
+                }
+                collect_module_assignments_in_stmts(&try_statement.orelse, file, out);
+                collect_module_assignments_in_stmts(&try_statement.finalbody, file, out);
+            }
+            Stmt::With(with_statement) => {
+                collect_module_assignments_in_stmts(&with_statement.body, file, out);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -291,46 +573,31 @@ impl PythonModuleAssignment<'_> {
 /// unpacking targets are not collected.
 #[must_use]
 pub fn collect_module_assignments(file: &ParsedFile) -> Vec<PythonModuleAssignment<'_>> {
-    file.grep
-        .root()
-        .dfs()
-        .filter(|node| node.kind() == "assignment")
-        .filter(|assignment| {
-            assignment
-                .parent()
-                .filter(|statement| statement.kind() == "expression_statement")
-                .is_some_and(|statement| is_module_level(&statement))
-        })
-        .filter_map(|assignment| {
-            let target = assignment
-                .field("left")
-                .filter(|left| left.kind() == "identifier")?;
-            Some(PythonModuleAssignment {
-                name: target.text().into_owned(),
-                annotation: assignment.field("type").map(AstNode::from_raw),
-                value: assignment
-                    .field("right")
-                    .map(|right| AstNode::from_raw(without_parentheses(right))),
-            })
-        })
-        .collect()
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    collect_module_assignments_in_stmts(&parsed.syntax().body, file, &mut out);
+    out
 }
 
 /// The callee of `call` if it is a `call` node, without the type arguments of a generic
 /// instantiation (`list[str]()` has callee `list`).
 #[must_use]
 pub fn call_callee<'a>(call: &AstNode<'a>) -> Option<AstNode<'a>> {
-    let raw = call.raw_opt()?;
-    if raw.kind() != "call" {
+    let file = call.file_opt()?;
+    let Expr::Call(call_expr) = find_expr_at_span(file.py_module()?.syntax(), call.span())? else {
         return None;
-    }
-    let callee = raw.field("function")?;
-    let callee = if callee.kind() == "subscript" {
-        callee.field("value")?
-    } else {
-        callee
     };
-    Some(AstNode::from_raw(callee))
+    let callee = if let Expr::Subscript(subscript) = call_expr.func.as_ref() {
+        subscript.value.as_ref()
+    } else {
+        call_expr.func.as_ref()
+    };
+    Some(AstNode::from_span(
+        file,
+        span_from_ruff_range(callee.range()),
+    ))
 }
 
 /// Traverses upward from an expression to find if it is enclosed in a `with_item`.
@@ -390,16 +657,15 @@ pub fn is_inside_except_clause(node: &AstNode<'_>) -> bool {
 /// Finds the enclosing `WithItem` in `file` whose `context_expr` has byte span `target_span`.
 fn find_python_enclosing_with_item(
     file: &ParsedFile,
-    target_span: crate::diagnostic::SourceSpan,
+    target_span: SourceSpan,
 ) -> Option<AstNode<'_>> {
-    use crate::code_lint::ast::span_from_ruff_range;
     use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
     use ruff_python_ast::{Stmt, WithItem};
     use ruff_text_size::Ranged as _;
 
     struct WithItemFinder {
-        target_span: crate::diagnostic::SourceSpan,
-        found: Option<crate::diagnostic::SourceSpan>,
+        target_span: SourceSpan,
+        found: Option<SourceSpan>,
     }
 
     impl<'a> SourceOrderVisitor<'a> for WithItemFinder {
@@ -437,16 +703,15 @@ fn find_python_enclosing_with_item(
 /// Finds the nearest enclosing `Stmt::With` in `file` containing `target_span`.
 fn find_python_enclosing_with_statement(
     file: &ParsedFile,
-    target_span: crate::diagnostic::SourceSpan,
+    target_span: SourceSpan,
 ) -> Option<AstNode<'_>> {
-    use crate::code_lint::ast::span_from_ruff_range;
     use ruff_python_ast::Stmt;
     use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
     use ruff_text_size::Ranged as _;
 
     struct WithStatementFinder {
-        target_span: crate::diagnostic::SourceSpan,
-        found: Option<crate::diagnostic::SourceSpan>,
+        target_span: SourceSpan,
+        found: Option<SourceSpan>,
     }
 
     impl<'a> SourceOrderVisitor<'a> for WithStatementFinder {
@@ -472,11 +737,7 @@ fn find_python_enclosing_with_statement(
 }
 
 /// Returns true if `target_span` in `file` is enclosed inside an `ExceptHandler` within the same scope.
-fn is_python_span_inside_except_clause(
-    file: &ParsedFile,
-    target_span: crate::diagnostic::SourceSpan,
-) -> bool {
-    use crate::code_lint::ast::span_from_ruff_range;
+fn is_python_span_inside_except_clause(file: &ParsedFile, target_span: SourceSpan) -> bool {
     use ruff_python_ast::visitor::source_order::{
         SourceOrderVisitor, walk_except_handler, walk_expr, walk_stmt,
     };
@@ -484,7 +745,7 @@ fn is_python_span_inside_except_clause(
     use ruff_text_size::Ranged as _;
 
     struct ExceptScopeFinder {
-        target_span: crate::diagnostic::SourceSpan,
+        target_span: SourceSpan,
         in_except: bool,
         matched: Option<bool>,
     }
@@ -711,37 +972,126 @@ pub fn collect_environ_subscripts(file: &ParsedFile) -> Vec<PythonEnvironSubscri
         .collect()
 }
 
-/// Returns true if `node` is a Python multiline triple-quoted string literal.
-fn is_multiline_string_literal_raw(node: &RawNode<'_>) -> bool {
-    node.kind() == "string"
-        && node.end_pos().line() > node.start_pos().line()
-        && is_triple_quoted(node)
+struct UnwrappedMultilineFinder<'a, F> {
+    file: &'a ParsedFile,
+    is_allowed_wrapper: F,
+    docstring_expr_span: Option<SourceSpan>,
+    allowed_call_depth: usize,
+    out: Vec<AstNode<'a>>,
 }
 
-/// Returns true if a Python `string` node is a standalone docstring statement.
-fn is_docstring_raw(node: &RawNode<'_>) -> bool {
-    node.parent()
-        .is_some_and(|parent| parent.kind() == "expression_statement")
-}
-
-/// Returns true if `node` is enclosed in a Python `call` within the current scope whose
-/// `(full_path, terminal_name)` satisfies `predicate`.
-fn is_enclosed_in_call_raw(node: &RawNode<'_>, predicate: impl Fn(&str, &str) -> bool) -> bool {
-    for ancestor in node.ancestors() {
-        match ancestor.kind().as_ref() {
-            "function_definition" | "class_definition" | "lambda" => break,
-            "call" => {
-                if let Some(func_node) = ancestor.field("function") {
-                    let (path, terminal) = resolve_path_and_terminal_raw(&func_node);
-                    if predicate(&path, &terminal) {
-                        return true;
-                    }
-                }
-            }
-            _ => {}
+impl<F> UnwrappedMultilineFinder<'_, F> {
+    fn record_multiline_part(&mut self, span: SourceSpan, is_triple_quoted: bool) {
+        let is_docstring = self.docstring_expr_span == Some(span);
+        if is_triple_quoted
+            && self.file.source[span.start..span.end].contains('\n')
+            && !is_docstring
+            && self.allowed_call_depth == 0
+        {
+            self.out.push(AstNode::from_span(self.file, span));
         }
     }
-    false
+}
+
+impl<'a, F: Fn(&str, &str) -> bool> SourceOrderVisitor<'a> for UnwrappedMultilineFinder<'a, F> {
+    fn visit_stmt(&mut self, statement: &'a Stmt) {
+        match statement {
+            Stmt::FunctionDef(func) => {
+                for dec in &func.decorator_list {
+                    self.visit_decorator(dec);
+                }
+                self.visit_parameters(&func.parameters);
+                if let Some(returns) = &func.returns {
+                    self.visit_annotation(returns);
+                }
+                let prev_depth = self.allowed_call_depth;
+                self.allowed_call_depth = 0;
+                self.visit_body(&func.body);
+                self.allowed_call_depth = prev_depth;
+            }
+            Stmt::ClassDef(cls) => {
+                for dec in &cls.decorator_list {
+                    self.visit_decorator(dec);
+                }
+                if let Some(args) = &cls.arguments {
+                    self.visit_arguments(args);
+                }
+                let prev_depth = self.allowed_call_depth;
+                self.allowed_call_depth = 0;
+                self.visit_body(&cls.body);
+                self.allowed_call_depth = prev_depth;
+            }
+            Stmt::Expr(expr_statement) => {
+                let prev_doc = self.docstring_expr_span;
+                self.docstring_expr_span = Some(span_from_ruff_range(expr_statement.range()));
+                walk_stmt(self, statement);
+                self.docstring_expr_span = prev_doc;
+            }
+            _ => walk_stmt(self, statement),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::Lambda(lambda) => {
+                if let Some(params) = &lambda.parameters {
+                    self.visit_parameters(params);
+                }
+                let prev_depth = self.allowed_call_depth;
+                self.allowed_call_depth = 0;
+                self.visit_expr(&lambda.body);
+                self.allowed_call_depth = prev_depth;
+            }
+            Expr::Call(call) => {
+                let (path, terminal) =
+                    resolve_path_and_terminal_expr(&call.func, &self.file.source);
+                let is_allowed = (self.is_allowed_wrapper)(&path, &terminal);
+                if is_allowed {
+                    self.allowed_call_depth += 1;
+                }
+                walk_expr(self, expr);
+                if is_allowed {
+                    self.allowed_call_depth -= 1;
+                }
+            }
+            Expr::StringLiteral(str_lit) => {
+                for part in str_lit.value.as_slice() {
+                    self.record_multiline_part(
+                        span_from_ruff_range(part.range()),
+                        part.flags.is_triple_quoted(),
+                    );
+                }
+            }
+            Expr::FString(fstr) => {
+                for part in &fstr.value {
+                    match part {
+                        ruff_python_ast::FStringPartRef::Literal(lit) => {
+                            self.record_multiline_part(
+                                span_from_ruff_range(lit.range()),
+                                lit.flags.is_triple_quoted(),
+                            );
+                        }
+                        ruff_python_ast::FStringPartRef::FString(fpart) => {
+                            self.record_multiline_part(
+                                span_from_ruff_range(fpart.range()),
+                                fpart.flags.is_triple_quoted(),
+                            );
+                        }
+                    }
+                }
+                walk_expr(self, expr);
+            }
+            Expr::BytesLiteral(bytes_lit) => {
+                for part in bytes_lit.value.as_slice() {
+                    self.record_multiline_part(
+                        span_from_ruff_range(part.range()),
+                        part.flags.is_triple_quoted(),
+                    );
+                }
+            }
+            _ => walk_expr(self, expr),
+        }
+    }
 }
 
 /// Finds all multiline string literals in a Python file that are not docstrings
@@ -751,16 +1101,18 @@ pub fn find_unwrapped_multiline_strings(
     file: &ParsedFile,
     is_allowed_wrapper: impl Fn(&str, &str) -> bool,
 ) -> Vec<AstNode<'_>> {
-    file.grep
-        .root()
-        .dfs()
-        .filter(|node| {
-            is_multiline_string_literal_raw(node)
-                && !is_docstring_raw(node)
-                && !is_enclosed_in_call_raw(node, &is_allowed_wrapper)
-        })
-        .map(AstNode::from_raw)
-        .collect()
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut finder = UnwrappedMultilineFinder {
+        file,
+        is_allowed_wrapper,
+        docstring_expr_span: None,
+        allowed_call_depth: 0,
+        out: Vec::new(),
+    };
+    finder.visit_body(&parsed.syntax().body);
+    finder.out
 }
 
 /// Returns the value of a Python decimal `integer` literal (not `0x1`, `1_000`, ...).
@@ -838,35 +1190,38 @@ fn is_write_target(node: &RawNode<'_>) -> bool {
     false
 }
 
-/// If `node` mutates a collection receiver in place (`receiver.append(...)`, `receiver[k] = v`,
-/// `del receiver[k]`, `receiver += ...`), returns that `receiver` node.
-fn in_place_mutated_receiver<'a>(node: &RawNode<'a>) -> Option<RawNode<'a>> {
-    match node.kind().as_ref() {
-        "call" => {
-            let function_node = node.field("function")?;
-            if function_node.kind() != "attribute" {
+/// If `expr` mutates a collection receiver in place (`receiver.append(...)`, `receiver[k] = v`,
+/// `del receiver[k]`), returns that `receiver` expression.
+pub(super) fn in_place_mutated_receiver_expr(expr: &Expr) -> Option<&Expr> {
+    match expr {
+        Expr::Call(call) => {
+            let Expr::Attribute(attr) = call.func.as_ref() else {
                 return None;
-            }
-            let method = function_node.field("attribute")?;
-            if MUTATING_METHODS.contains(&method.text().as_ref()) {
-                function_node.field("object")
+            };
+            if MUTATING_METHODS.contains(&attr.attr.as_str()) {
+                Some(&attr.value)
             } else {
                 None
             }
         }
-        "subscript" if is_write_target(node) => node.field("value"),
-        "augmented_assignment" => node.field("left"),
+        Expr::Subscript(sub)
+            if matches!(
+                sub.ctx,
+                ruff_python_ast::ExprContext::Store | ruff_python_ast::ExprContext::Del
+            ) =>
+        {
+            Some(&sub.value)
+        }
         _ => None,
     }
 }
 
-/// Extracts the terminal function/method name if `node` is a `call` expression.
-fn called_terminal_name(node: &RawNode<'_>) -> Option<String> {
-    if node.kind() != "call" {
+/// Extracts the terminal function/method name if `expr` is a `call` expression.
+fn called_terminal_name_expr(expr: &Expr, source: &str) -> Option<String> {
+    let Expr::Call(call) = expr else {
         return None;
-    }
-    let function_node = node.field("function")?;
-    let (_, terminal) = resolve_path_and_terminal_raw(&function_node);
+    };
+    let (_, terminal) = resolve_path_and_terminal_expr(&call.func, source);
     (!terminal.is_empty()).then_some(terminal)
 }
 
@@ -880,46 +1235,101 @@ fn called_terminal_name(node: &RawNode<'_>) -> Option<String> {
 pub fn collect_locally_mutated_return_functions(file: &ParsedFile) -> HashSet<String> {
     // A binding is keyed by its enclosing function (`None` at module level) and its name.
     type ScopedName = (Option<usize>, String);
-    let enclosing_function = |node: &RawNode<'_>| {
-        node.ancestors()
-            .find(|ancestor| ancestor.kind() == "function_definition")
-            .map(|function_node| function_node.range().start)
-    };
-    let mut mutated_functions = HashSet::new();
-    let mut bindings_to_callee: HashMap<ScopedName, String> = HashMap::new();
-    let mut mutated_identifiers: HashSet<ScopedName> = HashSet::new();
 
-    for node in file.grep.root().dfs() {
-        let binding = match node.kind().as_ref() {
-            "assignment" => node.field("left").zip(node.field("right")),
-            "named_expression" => node.field("name").zip(node.field("value")),
-            _ => None,
-        };
-        if let Some((target, value)) = binding
-            && target.kind() == "identifier"
-            && let Some(callee_name) = called_terminal_name(&value)
-        {
-            let scoped_name = (enclosing_function(&node), target.text().into_owned());
-            bindings_to_callee.insert(scoped_name, callee_name);
+    struct MutatedReturnVisitor<'a> {
+        source: &'a str,
+        enclosing_function: Option<usize>,
+        mutated_functions: HashSet<String>,
+        bindings_to_callee: HashMap<ScopedName, String>,
+        mutated_identifiers: HashSet<ScopedName>,
+    }
+
+    impl MutatedReturnVisitor<'_> {
+        fn record_binding(&mut self, target: &Expr, value: &Expr) {
+            if let Expr::Name(name) = target
+                && let Some(callee_name) = called_terminal_name_expr(value, self.source)
+            {
+                let scoped_name = (self.enclosing_function, name.id.to_string());
+                self.bindings_to_callee.insert(scoped_name, callee_name);
+            }
         }
 
-        if let Some(receiver) = in_place_mutated_receiver(&node) {
-            if let Some(callee_name) = called_terminal_name(&receiver) {
-                mutated_functions.insert(callee_name);
-            } else if receiver.kind() == "identifier" {
-                mutated_identifiers
-                    .insert((enclosing_function(&receiver), receiver.text().into_owned()));
+        fn record_mutated_receiver(&mut self, receiver: &Expr) {
+            if let Some(callee_name) = called_terminal_name_expr(receiver, self.source) {
+                self.mutated_functions.insert(callee_name);
+            } else if let Expr::Name(name) = receiver {
+                self.mutated_identifiers
+                    .insert((self.enclosing_function, name.id.to_string()));
             }
         }
     }
 
-    for scoped_name in &mutated_identifiers {
-        if let Some(callee_name) = bindings_to_callee.get(scoped_name) {
-            mutated_functions.insert(callee_name.clone());
+    impl<'a> SourceOrderVisitor<'a> for MutatedReturnVisitor<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            match statement {
+                Stmt::FunctionDef(func) => {
+                    for dec in &func.decorator_list {
+                        self.visit_decorator(dec);
+                    }
+                    self.visit_parameters(&func.parameters);
+                    if let Some(returns) = &func.returns {
+                        self.visit_annotation(returns);
+                    }
+                    let prev_func = self.enclosing_function;
+                    self.enclosing_function = Some(func.range().start().to_usize());
+                    self.visit_body(&func.body);
+                    self.enclosing_function = prev_func;
+                }
+                Stmt::Assign(assign) => {
+                    if let [target] = assign.targets.as_slice() {
+                        self.record_binding(target, &assign.value);
+                    }
+                    walk_stmt(self, statement);
+                }
+                Stmt::AnnAssign(ann) => {
+                    if let Some(value) = &ann.value {
+                        self.record_binding(&ann.target, value);
+                    }
+                    walk_stmt(self, statement);
+                }
+                Stmt::AugAssign(aug) => {
+                    self.record_mutated_receiver(&aug.target);
+                    walk_stmt(self, statement);
+                }
+                _ => walk_stmt(self, statement),
+            }
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Named(named) = expr {
+                self.record_binding(&named.target, &named.value);
+            }
+            if let Some(receiver) = in_place_mutated_receiver_expr(expr) {
+                self.record_mutated_receiver(receiver);
+            }
+            walk_expr(self, expr);
         }
     }
 
-    mutated_functions
+    let Some(parsed) = file.py_module() else {
+        return HashSet::new();
+    };
+    let mut visitor = MutatedReturnVisitor {
+        source: &file.source,
+        enclosing_function: None,
+        mutated_functions: HashSet::new(),
+        bindings_to_callee: HashMap::new(),
+        mutated_identifiers: HashSet::new(),
+    };
+    visitor.visit_body(&parsed.syntax().body);
+
+    for scoped_name in &visitor.mutated_identifiers {
+        if let Some(callee_name) = visitor.bindings_to_callee.get(scoped_name) {
+            visitor.mutated_functions.insert(callee_name.clone());
+        }
+    }
+
+    visitor.mutated_functions
 }
 
 /// Read-only methods available on `Sequence`, `Mapping`, or `Set` (`collections.abc`).
@@ -995,184 +1405,257 @@ const SINGLE_PASS_ITERABLE_BUILTINS: &[&str] = &[
     "filter",
 ];
 
-/// Unwraps enclosing `parenthesized_expression` nodes around `node`, returning `(outermost_expr, parent)`.
-fn unwrap_parenthesized_with_parent<'a>(node: &RawNode<'a>) -> Option<(RawNode<'a>, RawNode<'a>)> {
-    let mut expr = node.clone();
-    while let Some(parent) = expr.parent() {
-        if parent.kind() == "parenthesized_expression" {
-            expr = parent;
-        } else {
-            return Some((expr, parent));
+/// Returns true if `expr` is a read reference (`ExprContext::Load`) to `parameter_name`.
+fn is_param_load(expr: &Expr, parameter_name: &str) -> bool {
+    matches!(
+        expr,
+        Expr::Name(name)
+            if name.id.as_str() == parameter_name
+                && matches!(name.ctx, ruff_python_ast::ExprContext::Load)
+    )
+}
+
+struct MutationOrEscapeFinder<'a> {
+    parameter_name: &'a str,
+    in_boolean_context: bool,
+    safe_starts: HashSet<usize>,
+    found_mutated_or_escaping: bool,
+}
+
+impl<'a> MutationOrEscapeFinder<'a> {
+    fn mark_if_param(&mut self, expr: &Expr) {
+        if is_param_load(expr, self.parameter_name) {
+            self.safe_starts.insert(expr.range().start().to_usize());
         }
     }
-    None
-}
 
-/// Returns true if `ident_node` (`identifier`) is a variable reference rather than an attribute
-/// name (`obj.x`), keyword argument name (`f(x=1)`), or declaration name.
-fn is_variable_reference(ident_node: &RawNode<'_>) -> bool {
-    let Some(parent) = ident_node.parent() else {
-        return false;
-    };
-    match parent.kind().as_ref() {
-        "attribute" => !parent
-            .field("attribute")
-            .is_some_and(|attr_node| attr_node.range() == ident_node.range()),
-        "keyword_argument" => !parent
-            .field("name")
-            .is_some_and(|name_node| name_node.range() == ident_node.range()),
-        "function_definition" | "class_definition" => !parent
-            .field("name")
-            .is_some_and(|name_node| name_node.range() == ident_node.range()),
-        "parameters"
-        | "lambda_parameters"
-        | "typed_parameter"
-        | "default_parameter"
-        | "typed_default_parameter"
-        | "list_splat_pattern"
-        | "dictionary_splat_pattern" => parent
-            .field("value")
-            .is_some_and(|value_node| value_node.range() == ident_node.range()),
-        _ => true,
+    fn visit_in_boolean_context(&mut self, expr: &'a Expr) {
+        self.mark_if_param(expr);
+        let prev = self.in_boolean_context;
+        self.in_boolean_context = true;
+        self.visit_expr(expr);
+        self.in_boolean_context = prev;
     }
-}
 
-/// Returns true if `call_node` is a direct call to a builtin in `SAFE_READONLY_BUILTINS`.
-fn is_safe_readonly_builtin_call(call_node: &RawNode<'_>) -> bool {
-    call_node.kind() == "call"
-        && call_node.field("function").is_some_and(|function_node| {
-            function_node.kind() == "identifier"
-                && SAFE_READONLY_BUILTINS.contains(&function_node.text().as_ref())
-        })
-}
-
-/// Returns true if `node` sits inside a boolean test position (`if`, `elif`, `while`, `assert`, or `bool(...)`).
-fn is_in_boolean_context(node: &RawNode<'_>) -> bool {
-    let mut current = node.clone();
-    while let Some(parent) = current.parent() {
-        match parent.kind().as_ref() {
-            "parenthesized_expression" | "boolean_operator" | "not_operator" => {
-                current = parent;
+    fn visit_call_expr(&mut self, call: &'a ruff_python_ast::ExprCall) {
+        if let Expr::Attribute(attr) = call.func.as_ref()
+            && READONLY_COLLECTION_METHODS.contains(&attr.attr.as_str())
+        {
+            self.mark_if_param(&attr.value);
+        }
+        let is_safe_builtin = matches!(
+            call.func.as_ref(),
+            Expr::Name(func_name)
+                if SAFE_READONLY_BUILTINS.contains(&func_name.id.as_str())
+        );
+        let is_bool_builtin = matches!(
+            call.func.as_ref(),
+            Expr::Name(func_name) if func_name.id.as_str() == "bool"
+        );
+        if is_safe_builtin {
+            for arg in &call.arguments.args {
+                match arg {
+                    Expr::Starred(starred) => self.mark_if_param(&starred.value),
+                    _ => self.mark_if_param(arg),
+                }
             }
-            "if_statement" | "elif_clause" | "while_statement" => {
-                return parent
-                    .field("condition")
-                    .is_some_and(|condition| condition.range() == current.range());
+            for kw in &call.arguments.keywords {
+                self.mark_if_param(&kw.value);
             }
-            "assert_statement" => return true,
-            "argument_list" => {
-                return parent.parent().is_some_and(|call_node| {
-                    call_node.kind() == "call"
-                        && call_node
-                            .field("function")
-                            .is_some_and(|func_node| func_node.text() == "bool")
-                });
+        }
+        let prev = self.in_boolean_context;
+        self.in_boolean_context = false;
+        self.visit_expr(&call.func);
+        for arg in &call.arguments.args {
+            self.in_boolean_context = is_bool_builtin;
+            self.visit_expr(arg);
+        }
+        self.in_boolean_context = false;
+        for kw in &call.arguments.keywords {
+            self.visit_keyword(kw);
+        }
+        self.in_boolean_context = prev;
+    }
+}
+
+impl<'a> SourceOrderVisitor<'a> for MutationOrEscapeFinder<'a> {
+    fn visit_annotation(&mut self, _expr: &'a Expr) {}
+
+    fn visit_stmt(&mut self, statement: &'a Stmt) {
+        if self.found_mutated_or_escaping {
+            return;
+        }
+        match statement {
+            Stmt::TypeAlias(_) => {}
+            Stmt::FunctionDef(func) => {
+                if parameters_shadow_name(&func.parameters, self.parameter_name) {
+                    // Defaults are evaluated in the enclosing scope; only the body is shadowed.
+                    let prev = self.in_boolean_context;
+                    self.in_boolean_context = false;
+                    self.visit_parameters(&func.parameters);
+                    self.in_boolean_context = prev;
+                } else {
+                    walk_stmt(self, statement);
+                }
             }
-            _ => return false,
+            Stmt::For(for_statement) => {
+                self.mark_if_param(&for_statement.iter);
+                walk_stmt(self, statement);
+            }
+            Stmt::If(if_statement) => {
+                self.visit_in_boolean_context(&if_statement.test);
+                self.visit_body(&if_statement.body);
+                for clause in &if_statement.elif_else_clauses {
+                    if let Some(test) = &clause.test {
+                        self.visit_in_boolean_context(test);
+                    }
+                    self.visit_body(&clause.body);
+                }
+            }
+            Stmt::While(while_statement) => {
+                self.visit_in_boolean_context(&while_statement.test);
+                self.visit_body(&while_statement.body);
+                self.visit_body(&while_statement.orelse);
+            }
+            Stmt::Assert(assert_statement) => {
+                self.visit_in_boolean_context(&assert_statement.test);
+                if let Some(message) = &assert_statement.msg {
+                    self.visit_in_boolean_context(message);
+                }
+            }
+            _ => walk_stmt(self, statement),
         }
     }
-    false
-}
 
-/// Returns true if `expr` is the middle condition child of a Python `conditional_expression` (`a if cond else b`).
-fn is_conditional_expression_condition(cond_expr: &RawNode<'_>, expr: &RawNode<'_>) -> bool {
-    let mut named = cond_expr
-        .children()
-        .filter(|child| child.is_named() && !child.is_extra());
-    let _consequence = named.next();
-    named
-        .next()
-        .is_some_and(|condition| condition.range() == expr.range())
-}
-
-/// Returns true if `ident_node` is used in a strictly read-only, non-escaping position.
-fn is_safe_readonly_parameter_reference(ident_node: &RawNode<'_>) -> bool {
-    if is_write_target(ident_node) {
-        return false;
+    fn visit_comprehension(&mut self, comp: &'a ruff_python_ast::Comprehension) {
+        self.mark_if_param(&comp.iter);
+        ruff_python_ast::visitor::source_order::walk_comprehension(self, comp);
     }
-    let Some((expr, parent)) = unwrap_parenthesized_with_parent(ident_node) else {
-        return false;
-    };
-    match parent.kind().as_ref() {
-        "attribute" => {
-            parent
-                .field("object")
-                .is_some_and(|object_node| object_node.range() == expr.range())
-                && parent.field("attribute").is_some_and(|attr_node| {
-                    READONLY_COLLECTION_METHODS.contains(&attr_node.text().as_ref())
-                })
-                && unwrap_parenthesized_with_parent(&parent).is_some_and(|(attr_expr, grand)| {
-                    grand.kind() == "call"
-                        && grand
-                            .field("function")
-                            .is_some_and(|func_node| func_node.range() == attr_expr.range())
-                })
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if self.found_mutated_or_escaping {
+            return;
         }
-        "subscript" => !is_write_target(&parent),
-        "argument_list" => parent
-            .parent()
-            .is_some_and(|call_node| is_safe_readonly_builtin_call(&call_node)),
-        "keyword_argument" => parent.parent().is_some_and(|arguments| {
-            arguments.kind() == "argument_list"
-                && arguments
-                    .parent()
-                    .is_some_and(|call_node| is_safe_readonly_builtin_call(&call_node))
-        }),
-        "list_splat" | "dictionary_splat" => {
-            unwrap_parenthesized_with_parent(&parent).is_some_and(|(_, grand)| {
-                matches!(
-                    grand.kind().as_ref(),
-                    "list" | "tuple" | "set" | "dictionary"
-                ) || (grand.kind() == "argument_list"
-                    && grand
-                        .parent()
-                        .is_some_and(|call_node| is_safe_readonly_builtin_call(&call_node)))
-            })
+        match expr {
+            Expr::Lambda(lambda) => {
+                if lambda
+                    .parameters
+                    .as_deref()
+                    .is_some_and(|params| parameters_shadow_name(params, self.parameter_name))
+                {
+                    if let Some(params) = &lambda.parameters {
+                        let prev = self.in_boolean_context;
+                        self.in_boolean_context = false;
+                        self.visit_parameters(params);
+                        self.in_boolean_context = prev;
+                    }
+                    return;
+                }
+            }
+            Expr::Name(name) if name.id.as_str() == self.parameter_name => {
+                if !self.safe_starts.contains(&name.range().start().to_usize()) {
+                    self.found_mutated_or_escaping = true;
+                }
+                return;
+            }
+            Expr::BoolOp(bool_op) => {
+                if self.in_boolean_context {
+                    for val in &bool_op.values {
+                        self.mark_if_param(val);
+                    }
+                }
+                walk_expr(self, expr);
+                return;
+            }
+            Expr::UnaryOp(unary) if unary.op == ruff_python_ast::UnaryOp::Not => {
+                self.mark_if_param(&unary.operand);
+                walk_expr(self, expr);
+                return;
+            }
+            Expr::Call(call) => {
+                self.visit_call_expr(call);
+                return;
+            }
+            Expr::Subscript(sub) if matches!(sub.ctx, ruff_python_ast::ExprContext::Load) => {
+                self.mark_if_param(&sub.value);
+                self.mark_if_param(&sub.slice);
+            }
+            Expr::List(list) if matches!(list.ctx, ruff_python_ast::ExprContext::Load) => {
+                for elt in &list.elts {
+                    if let Expr::Starred(starred) = elt {
+                        self.mark_if_param(&starred.value);
+                    }
+                }
+            }
+            Expr::Tuple(tuple) if matches!(tuple.ctx, ruff_python_ast::ExprContext::Load) => {
+                for elt in &tuple.elts {
+                    if let Expr::Starred(starred) = elt {
+                        self.mark_if_param(&starred.value);
+                    }
+                }
+            }
+            Expr::Set(set) => {
+                for elt in &set.elts {
+                    if let Expr::Starred(starred) = elt {
+                        self.mark_if_param(&starred.value);
+                    }
+                }
+            }
+            Expr::Dict(dict) => {
+                for item in &dict.items {
+                    if item.key.is_none() {
+                        self.mark_if_param(&item.value);
+                    }
+                }
+            }
+            Expr::Compare(comp) => {
+                for operand in &comp.operands {
+                    self.mark_if_param(operand);
+                }
+            }
+            Expr::BinOp(bin) => {
+                self.mark_if_param(&bin.left);
+                self.mark_if_param(&bin.right);
+            }
+            Expr::If(if_expr) => {
+                self.visit_in_boolean_context(&if_expr.test);
+                let prev = self.in_boolean_context;
+                self.in_boolean_context = false;
+                self.visit_expr(&if_expr.body);
+                self.visit_expr(&if_expr.orelse);
+                self.in_boolean_context = prev;
+                return;
+            }
+            _ => {}
         }
-        "for_statement" | "for_in_clause" => parent
-            .field("right")
-            .is_some_and(|right| right.range() == expr.range()),
-        "comparison_operator" | "not_operator" | "binary_operator" | "assert_statement" => true,
-        "boolean_operator" => is_in_boolean_context(&parent),
-        "if_statement" | "elif_clause" | "while_statement" => parent
-            .field("condition")
-            .is_some_and(|condition| condition.range() == expr.range()),
-        "conditional_expression" => is_conditional_expression_condition(&parent, &expr),
-        _ => false,
+        let prev = self.in_boolean_context;
+        self.in_boolean_context = false;
+        walk_expr(self, expr);
+        self.in_boolean_context = prev;
     }
-}
-
-fn check_parameter_mutated_or_escaping_rec(node: &RawNode<'_>, parameter_name: &str) -> bool {
-    if node.kind() == "type" {
-        return false;
-    }
-    if matches!(node.kind().as_ref(), "function_definition" | "lambda")
-        && scope_shadows_parameter(node, parameter_name)
-    {
-        // Defaults are evaluated in the enclosing scope; only the body is shadowed.
-        return node.field("parameters").is_some_and(|params| {
-            check_parameter_mutated_or_escaping_rec(&params, parameter_name)
-        });
-    }
-    if node.kind() == "identifier"
-        && node.text() == parameter_name
-        && is_variable_reference(node)
-        && !is_safe_readonly_parameter_reference(node)
-    {
-        return true;
-    }
-    node.children()
-        .any(|child| check_parameter_mutated_or_escaping_rec(&child, parameter_name))
 }
 
 /// Returns true if `parameter_name` is mutated in place or escapes (aliased, returned, yielded,
 /// or passed to an unknown function/method) anywhere in `func_node`'s body.
 #[must_use]
 pub fn is_parameter_mutated_or_escaping(func_node: &AstNode<'_>, parameter_name: &str) -> bool {
-    let Some(body) = func_node.raw_opt().and_then(|raw| raw.field("body")) else {
+    let Some(file) = func_node.file_opt() else {
         return false;
     };
-    check_parameter_mutated_or_escaping_rec(&body, parameter_name)
+    let Some(parsed) = file.py_module() else {
+        return false;
+    };
+    let Some(func) = find_function_def_at_span(parsed.syntax(), func_node.span()) else {
+        return false;
+    };
+    let mut finder = MutationOrEscapeFinder {
+        parameter_name,
+        in_boolean_context: false,
+        safe_starts: HashSet::new(),
+        found_mutated_or_escaping: false,
+    };
+    finder.visit_body(&func.body);
+    finder.found_mutated_or_escaping
 }
 
 /// Minimum read-only `collections.abc` capability required by a parameter's usages inside
@@ -1196,196 +1679,310 @@ struct CapabilityTracker {
     needs_sequence: bool,
 }
 
-/// Inspects a `comparison_operator` node containing `expr` and updates `tracker`.
-fn record_comparison_capability(
-    comp_node: &RawNode<'_>,
-    expr: &RawNode<'_>,
-    tracker: &mut CapabilityTracker,
-) {
-    let has_in_operator = comp_node
-        .children()
-        .any(|child| matches!(child.kind().as_ref(), "in" | "not in"));
-    let is_identity_check = comp_node
-        .children()
-        .any(|child| matches!(child.kind().as_ref(), "is" | "is not"));
-    let last_named = comp_node
-        .children()
-        .filter(|child| child.is_named() && !child.is_extra())
-        .last();
-    if has_in_operator && last_named.is_some_and(|last| last.range() == expr.range()) {
-        tracker.needs_collection = true;
-    } else if !is_identity_check {
-        tracker.needs_sequence = true;
-    }
+struct CapabilityVisitor<'a> {
+    parameter_name: &'a str,
+    loop_or_closure_depth: usize,
+    in_boolean_context: bool,
+    handled_starts: HashSet<usize>,
+    tracker: CapabilityTracker,
 }
 
-/// Updates `tracker` for a single variable reference `ident_node` at `loop_or_closure_depth`.
-fn record_reference_capability(
-    ident_node: &RawNode<'_>,
-    loop_or_closure_depth: usize,
-    tracker: &mut CapabilityTracker,
-) {
-    if is_write_target(ident_node) {
-        tracker.needs_sequence = true;
-        return;
-    }
-    let Some((expr, parent)) = unwrap_parenthesized_with_parent(ident_node) else {
-        tracker.needs_sequence = true;
-        return;
-    };
-    match parent.kind().as_ref() {
-        "for_statement" | "for_in_clause"
-            if parent
-                .field("right")
-                .is_some_and(|right| right.range() == expr.range()) =>
-        {
-            tracker.iteration_count += 1;
-            if loop_or_closure_depth > 0 {
-                tracker.needs_collection = true;
+impl<'a> CapabilityVisitor<'a> {
+    fn record_iteration(&mut self, expr: &Expr) {
+        if is_param_load(expr, self.parameter_name) {
+            self.handled_starts.insert(expr.range().start().to_usize());
+            self.tracker.iteration_count += 1;
+            if self.loop_or_closure_depth > 0 {
+                self.tracker.needs_collection = true;
             }
         }
-        "list_splat" => {
-            if let Some((_, grand)) = unwrap_parenthesized_with_parent(&parent)
-                && matches!(grand.kind().as_ref(), "list" | "tuple" | "set")
-            {
-                tracker.iteration_count += 1;
-                if loop_or_closure_depth > 0 {
-                    tracker.needs_collection = true;
+    }
+
+    fn record_collection(&mut self, expr: &Expr) {
+        if is_param_load(expr, self.parameter_name) {
+            self.handled_starts.insert(expr.range().start().to_usize());
+            self.tracker.needs_collection = true;
+        }
+    }
+
+    fn visit_in_boolean_context(&mut self, expr: &'a Expr) {
+        self.record_collection(expr);
+        let prev = self.in_boolean_context;
+        self.in_boolean_context = true;
+        self.visit_expr(expr);
+        self.in_boolean_context = prev;
+    }
+
+    fn visit_generators(&mut self, generators: &'a [ruff_python_ast::Comprehension]) {
+        for (idx, comp) in generators.iter().enumerate() {
+            if idx == 0 {
+                self.record_iteration(&comp.iter);
+                self.visit_expr(&comp.iter);
+                self.loop_or_closure_depth += 1;
+                self.visit_expr(&comp.target);
+                for if_expr in &comp.ifs {
+                    self.visit_expr(if_expr);
                 }
             } else {
-                tracker.needs_sequence = true;
+                self.loop_or_closure_depth += 1;
+                self.record_iteration(&comp.iter);
+                ruff_python_ast::visitor::source_order::walk_comprehension(self, comp);
+            }
+            self.loop_or_closure_depth -= 1;
+        }
+    }
+
+    fn visit_single_elt_comprehension(
+        &mut self,
+        generators: &'a [ruff_python_ast::Comprehension],
+        elt: &'a Expr,
+    ) {
+        let prev = self.in_boolean_context;
+        self.in_boolean_context = false;
+        self.visit_generators(generators);
+        self.loop_or_closure_depth += 1;
+        self.visit_expr(elt);
+        self.loop_or_closure_depth -= 1;
+        self.in_boolean_context = prev;
+    }
+
+    fn visit_dict_comprehension(&mut self, comp: &'a ruff_python_ast::ExprDictComp) {
+        let prev = self.in_boolean_context;
+        self.in_boolean_context = false;
+        self.visit_generators(&comp.generators);
+        self.loop_or_closure_depth += 1;
+        if let Some(key) = &comp.key {
+            self.visit_expr(key);
+        }
+        self.visit_expr(&comp.value);
+        self.loop_or_closure_depth -= 1;
+        self.in_boolean_context = prev;
+    }
+
+    fn record_starred_elements(&mut self, elements: &[Expr]) {
+        for elt in elements {
+            if let Expr::Starred(starred) = elt {
+                self.record_iteration(&starred.value);
             }
         }
-        "argument_list" => {
-            let Some(call_node) = parent.parent() else {
-                tracker.needs_sequence = true;
-                return;
-            };
-            let Some(func_node) = call_node.field("function") else {
-                tracker.needs_sequence = true;
-                return;
-            };
-            if func_node.kind() != "identifier" {
-                tracker.needs_sequence = true;
-                return;
-            }
-            match func_node.text().as_ref() {
-                "len" | "bool" => tracker.needs_collection = true,
+    }
+
+    fn visit_call_expr(&mut self, call: &'a ruff_python_ast::ExprCall) {
+        let is_bool_builtin = matches!(
+            call.func.as_ref(),
+            Expr::Name(func_name) if func_name.id.as_str() == "bool"
+        );
+        if let Expr::Name(func_name) = call.func.as_ref() {
+            match func_name.id.as_str() {
+                "len" | "bool" => {
+                    for arg in &call.arguments.args {
+                        self.record_collection(arg);
+                    }
+                }
                 name if SINGLE_PASS_ITERABLE_BUILTINS.contains(&name) => {
-                    tracker.iteration_count += 1;
-                    if loop_or_closure_depth > 0 {
-                        tracker.needs_collection = true;
+                    for arg in &call.arguments.args {
+                        self.record_iteration(arg);
                     }
                 }
-                _ => tracker.needs_sequence = true,
+                _ => {}
             }
         }
-        "comparison_operator" => record_comparison_capability(&parent, &expr, tracker),
-        "not_operator" => tracker.needs_collection = true,
-        "boolean_operator" => {
-            if is_in_boolean_context(&parent) {
-                tracker.needs_collection = true;
-            } else {
-                tracker.needs_sequence = true;
+        let prev = self.in_boolean_context;
+        self.in_boolean_context = false;
+        self.visit_expr(&call.func);
+        for arg in &call.arguments.args {
+            self.in_boolean_context = is_bool_builtin;
+            self.visit_expr(arg);
+        }
+        self.in_boolean_context = false;
+        for kw in &call.arguments.keywords {
+            self.visit_keyword(kw);
+        }
+        self.in_boolean_context = prev;
+    }
+
+    fn visit_compare_expr(&mut self, comp: &ruff_python_ast::ExprCompare) {
+        let has_in_operator = comp.ops.iter().any(|op| {
+            matches!(
+                op,
+                ruff_python_ast::CmpOp::In | ruff_python_ast::CmpOp::NotIn
+            )
+        });
+        let is_identity_check = comp.ops.iter().any(|op| {
+            matches!(
+                op,
+                ruff_python_ast::CmpOp::Is | ruff_python_ast::CmpOp::IsNot
+            )
+        });
+        for (idx, operand) in comp.operands.iter().enumerate() {
+            if is_param_load(operand, self.parameter_name) {
+                let is_last = idx + 1 == comp.operands.len();
+                self.handled_starts
+                    .insert(operand.range().start().to_usize());
+                if has_in_operator && is_last {
+                    self.tracker.needs_collection = true;
+                } else if !is_identity_check {
+                    self.tracker.needs_sequence = true;
+                }
             }
         }
-        "if_statement" | "elif_clause" | "while_statement"
-            if parent
-                .field("condition")
-                .is_some_and(|condition| condition.range() == expr.range()) =>
-        {
-            tracker.needs_collection = true;
-        }
-        "conditional_expression" if is_conditional_expression_condition(&parent, &expr) => {
-            tracker.needs_collection = true;
-        }
-        _ => tracker.needs_sequence = true,
     }
 }
 
-fn analyze_capability_rec(
-    node: &RawNode<'_>,
-    parameter_name: &str,
-    loop_or_closure_depth: usize,
-    tracker: &mut CapabilityTracker,
-) {
-    if tracker.needs_sequence || node.kind() == "type" {
-        return;
+impl<'a> SourceOrderVisitor<'a> for CapabilityVisitor<'a> {
+    fn visit_annotation(&mut self, _expr: &'a Expr) {}
+
+    fn visit_stmt(&mut self, statement: &'a Stmt) {
+        if self.tracker.needs_sequence {
+            return;
+        }
+        match statement {
+            Stmt::TypeAlias(_) => {}
+            Stmt::FunctionDef(func) => {
+                if parameters_shadow_name(&func.parameters, self.parameter_name) {
+                    let prev = self.in_boolean_context;
+                    self.in_boolean_context = false;
+                    self.visit_parameters(&func.parameters);
+                    self.in_boolean_context = prev;
+                } else {
+                    self.loop_or_closure_depth += 1;
+                    walk_stmt(self, statement);
+                    self.loop_or_closure_depth -= 1;
+                }
+            }
+            Stmt::For(for_statement) => {
+                self.record_iteration(&for_statement.iter);
+                self.visit_expr(&for_statement.iter);
+                self.loop_or_closure_depth += 1;
+                self.visit_expr(&for_statement.target);
+                self.visit_body(&for_statement.body);
+                self.visit_body(&for_statement.orelse);
+                self.loop_or_closure_depth -= 1;
+            }
+            Stmt::While(while_statement) => {
+                self.loop_or_closure_depth += 1;
+                self.visit_in_boolean_context(&while_statement.test);
+                self.visit_body(&while_statement.body);
+                self.visit_body(&while_statement.orelse);
+                self.loop_or_closure_depth -= 1;
+            }
+            Stmt::If(if_statement) => {
+                self.visit_in_boolean_context(&if_statement.test);
+                self.visit_body(&if_statement.body);
+                for clause in &if_statement.elif_else_clauses {
+                    if let Some(test) = &clause.test {
+                        self.visit_in_boolean_context(test);
+                    }
+                    self.visit_body(&clause.body);
+                }
+            }
+            Stmt::Assert(assert_statement) => {
+                let prev = self.in_boolean_context;
+                self.in_boolean_context = true;
+                self.visit_expr(&assert_statement.test);
+                if let Some(message) = &assert_statement.msg {
+                    self.visit_expr(message);
+                }
+                self.in_boolean_context = prev;
+            }
+            _ => walk_stmt(self, statement),
+        }
     }
-    match node.kind().as_ref() {
-        "function_definition" | "lambda" => {
-            if scope_shadows_parameter(node, parameter_name) {
-                // Defaults are evaluated in the enclosing scope; only the body is shadowed.
-                if let Some(params) = node.field("parameters") {
-                    analyze_capability_rec(&params, parameter_name, loop_or_closure_depth, tracker);
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if self.tracker.needs_sequence {
+            return;
+        }
+        match expr {
+            Expr::Lambda(lambda) => {
+                let prev = self.in_boolean_context;
+                self.in_boolean_context = false;
+                if lambda
+                    .parameters
+                    .as_deref()
+                    .is_some_and(|params| parameters_shadow_name(params, self.parameter_name))
+                {
+                    if let Some(params) = &lambda.parameters {
+                        self.visit_parameters(params);
+                    }
+                } else {
+                    self.loop_or_closure_depth += 1;
+                    walk_expr(self, expr);
+                    self.loop_or_closure_depth -= 1;
+                }
+                self.in_boolean_context = prev;
+                return;
+            }
+            Expr::Name(name) if name.id.as_str() == self.parameter_name => {
+                if !self
+                    .handled_starts
+                    .contains(&name.range().start().to_usize())
+                {
+                    self.tracker.needs_sequence = true;
                 }
                 return;
             }
-            for child in node.children() {
-                analyze_capability_rec(&child, parameter_name, loop_or_closure_depth + 1, tracker);
+            Expr::ListComp(comp) => {
+                self.visit_single_elt_comprehension(&comp.generators, &comp.elt);
+                return;
             }
-            return;
-        }
-        "for_statement" => {
-            let right_range = node.field("right").map(|right| right.range());
-            for child in node.children() {
-                let child_depth = if right_range.as_ref() == Some(&child.range()) {
-                    loop_or_closure_depth
-                } else {
-                    loop_or_closure_depth + 1
-                };
-                analyze_capability_rec(&child, parameter_name, child_depth, tracker);
+            Expr::SetComp(comp) => {
+                self.visit_single_elt_comprehension(&comp.generators, &comp.elt);
+                return;
             }
-            return;
-        }
-        "while_statement" => {
-            for child in node.children() {
-                analyze_capability_rec(&child, parameter_name, loop_or_closure_depth + 1, tracker);
+            Expr::Generator(comp) => {
+                self.visit_single_elt_comprehension(&comp.generators, &comp.elt);
+                return;
             }
-            return;
-        }
-        "list_comprehension"
-        | "set_comprehension"
-        | "dictionary_comprehension"
-        | "generator_expression" => {
-            let mut seen_first_for_clause = false;
-            for child in node.children() {
-                if child.kind() == "for_in_clause" && !seen_first_for_clause {
-                    seen_first_for_clause = true;
-                    let right_range = child.field("right").map(|right| right.range());
-                    for clause_child in child.children() {
-                        let clause_depth = if right_range.as_ref() == Some(&clause_child.range()) {
-                            loop_or_closure_depth
-                        } else {
-                            loop_or_closure_depth + 1
-                        };
-                        analyze_capability_rec(
-                            &clause_child,
-                            parameter_name,
-                            clause_depth,
-                            tracker,
-                        );
+            Expr::DictComp(comp) => {
+                self.visit_dict_comprehension(comp);
+                return;
+            }
+            Expr::List(list) if matches!(list.ctx, ruff_python_ast::ExprContext::Load) => {
+                self.record_starred_elements(&list.elts);
+            }
+            Expr::Tuple(tuple) if matches!(tuple.ctx, ruff_python_ast::ExprContext::Load) => {
+                self.record_starred_elements(&tuple.elts);
+            }
+            Expr::Set(set) => {
+                self.record_starred_elements(&set.elts);
+            }
+            Expr::Call(call) => {
+                self.visit_call_expr(call);
+                return;
+            }
+            Expr::Compare(comp) => {
+                self.visit_compare_expr(comp);
+            }
+            Expr::UnaryOp(unary) if unary.op == ruff_python_ast::UnaryOp::Not => {
+                self.record_collection(&unary.operand);
+                walk_expr(self, expr);
+                return;
+            }
+            Expr::BoolOp(bool_op) => {
+                if self.in_boolean_context {
+                    for val in &bool_op.values {
+                        self.record_collection(val);
                     }
-                } else {
-                    analyze_capability_rec(
-                        &child,
-                        parameter_name,
-                        loop_or_closure_depth + 1,
-                        tracker,
-                    );
                 }
+                walk_expr(self, expr);
+                return;
             }
-            return;
+            Expr::If(if_expr) => {
+                self.visit_in_boolean_context(&if_expr.test);
+                let prev = self.in_boolean_context;
+                self.in_boolean_context = false;
+                self.visit_expr(&if_expr.body);
+                self.visit_expr(&if_expr.orelse);
+                self.in_boolean_context = prev;
+                return;
+            }
+            _ => {}
         }
-        "identifier" if node.text() == parameter_name && is_variable_reference(node) => {
-            record_reference_capability(node, loop_or_closure_depth, tracker);
-            return;
-        }
-        _ => {}
-    }
-
-    for child in node.children() {
-        analyze_capability_rec(&child, parameter_name, loop_or_closure_depth, tracker);
+        let prev = self.in_boolean_context;
+        self.in_boolean_context = false;
+        walk_expr(self, expr);
+        self.in_boolean_context = prev;
     }
 }
 
@@ -1396,17 +1993,29 @@ pub fn analyze_parameter_collection_capability(
     func_node: &AstNode<'_>,
     parameter_name: &str,
 ) -> ParameterCollectionCapability {
-    let Some(body) = func_node.raw_opt().and_then(|raw| raw.field("body")) else {
+    let Some(file) = func_node.file_opt() else {
         return ParameterCollectionCapability::Unused;
     };
-    let mut tracker = CapabilityTracker::default();
-    analyze_capability_rec(&body, parameter_name, 0, &mut tracker);
+    let Some(parsed) = file.py_module() else {
+        return ParameterCollectionCapability::Unused;
+    };
+    let Some(func) = find_function_def_at_span(parsed.syntax(), func_node.span()) else {
+        return ParameterCollectionCapability::Unused;
+    };
+    let mut visitor = CapabilityVisitor {
+        parameter_name,
+        loop_or_closure_depth: 0,
+        in_boolean_context: false,
+        handled_starts: HashSet::new(),
+        tracker: CapabilityTracker::default(),
+    };
+    visitor.visit_body(&func.body);
 
-    if tracker.needs_sequence {
+    if visitor.tracker.needs_sequence {
         ParameterCollectionCapability::Sequence
-    } else if tracker.needs_collection || tracker.iteration_count > 1 {
+    } else if visitor.tracker.needs_collection || visitor.tracker.iteration_count > 1 {
         ParameterCollectionCapability::Collection
-    } else if tracker.iteration_count == 1 {
+    } else if visitor.tracker.iteration_count == 1 {
         ParameterCollectionCapability::Iterable
     } else {
         ParameterCollectionCapability::Unused
@@ -1621,22 +2230,6 @@ const CONSTANT_TRANSPARENT_STATEMENTS: &[&str] = &[
     "with_statement",
 ];
 
-/// Returns true if `statement` sits at module level, possibly inside the bodies of
-/// [`CONSTANT_TRANSPARENT_STATEMENTS`].
-fn is_module_level(statement: &RawNode<'_>) -> bool {
-    let mut container = statement.parent();
-    while let Some(node) = container {
-        match node.kind().as_ref() {
-            "module" => return true,
-            "block" => {}
-            kind if CONSTANT_TRANSPARENT_STATEMENTS.contains(&kind) => {}
-            _ => return false,
-        }
-        container = node.parent();
-    }
-    false
-}
-
 /// Returns true if `statement` sits at module or class level, possibly inside the bodies of
 /// [`CONSTANT_TRANSPARENT_STATEMENTS`].
 fn is_module_or_class_level(statement: &RawNode<'_>) -> bool {
@@ -1660,16 +2253,28 @@ fn is_module_or_class_level(statement: &RawNode<'_>) -> bool {
     false
 }
 
+/// Returns true if a Python `string` node is a standalone docstring statement.
+fn is_docstring_raw(node: &RawNode<'_>) -> bool {
+    node.parent()
+        .is_some_and(|parent| parent.kind() == "expression_statement")
+}
+
 /// Returns true if an `assignment` defines a module- or class-level constant: an
 /// `UPPER_SNAKE_CASE` name or a `Final` annotation.
-fn is_constant_assignment(assignment: &RawNode<'_>) -> bool {
+fn is_constant_assignment(assignment: &RawNode<'_>, file: &ParsedFile) -> bool {
     let is_module_or_class_level = assignment
         .parent()
         .filter(|statement| statement.kind() == "expression_statement")
         .is_some_and(|statement| is_module_or_class_level(&statement));
     let is_final = assignment
         .field("type")
-        .is_some_and(|type_node| has_final_annotation(&type_node));
+        .and_then(|type_node| {
+            let parsed = file.py_module()?;
+            let expr =
+                find_expr_at_span(parsed.syntax(), SourceSpan::from_range(type_node.range()))?;
+            Some(has_final_annotation_expr(expr, &file.source))
+        })
+        .unwrap_or(false);
     let is_constant_target = assignment
         .field("left")
         .is_some_and(|target| target.kind() == "identifier" && is_constant_name(&target.text()));
@@ -1690,12 +2295,16 @@ fn without_parentheses(node: RawNode<'_>) -> RawNode<'_> {
 }
 
 /// Walks `node`, pushing collectable literals to `out` (see [`super::collect_literal_occurrences`]).
-fn collect_literal_occurrences_rec<'a>(node: &RawNode<'a>, out: &mut Vec<LiteralOccurrence<'a>>) {
+fn collect_literal_occurrences_rec<'a>(
+    node: &RawNode<'a>,
+    file: &'a ParsedFile,
+    out: &mut Vec<LiteralOccurrence<'a>>,
+) {
     match node.kind().as_ref() {
         // Annotations and docstrings are not values.
         "type" => return,
         "string" if is_docstring_raw(node) => return,
-        "assignment" if is_constant_assignment(node) => {
+        "assignment" if is_constant_assignment(node, file) => {
             // A scalar constant defines its value; a composite one (`URLS = ["a", "b"]`)
             // is a named value whose parts are not collected.
             if let Some(right) = node.field("right").map(without_parentheses)
@@ -1731,7 +2340,7 @@ fn collect_literal_occurrences_rec<'a>(node: &RawNode<'a>, out: &mut Vec<Literal
                         .as_ref()
                         .is_some_and(|first| first.range() == argument.range());
                     if !is_first {
-                        collect_literal_occurrences_rec(&argument, out);
+                        collect_literal_occurrences_rec(&argument, file, out);
                     }
                 }
                 return;
@@ -1759,7 +2368,7 @@ fn collect_literal_occurrences_rec<'a>(node: &RawNode<'a>, out: &mut Vec<Literal
             follows_minus && matches!(child.kind().as_ref(), "integer" | "float");
         follows_minus = is_pattern && child.kind() == "-";
         if !is_signed_number {
-            collect_literal_occurrences_rec(&child, out);
+            collect_literal_occurrences_rec(&child, file, out);
         }
     }
 }
@@ -1768,7 +2377,7 @@ fn collect_literal_occurrences_rec<'a>(node: &RawNode<'a>, out: &mut Vec<Literal
 #[must_use]
 pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'_>> {
     let mut out = Vec::new();
-    collect_literal_occurrences_rec(&file.grep.root(), &mut out);
+    collect_literal_occurrences_rec(&file.grep.root(), file, &mut out);
     out
 }
 
@@ -1776,6 +2385,7 @@ pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'
 mod tests {
     use super::functions::is_stub_function_body;
     use super::*;
+    use crate::code_lint::ast::collect_call_candidates;
     use crate::diagnostic::Language;
     use LiteralRole::{ConstantDefinition, Inline};
 
@@ -1862,11 +2472,9 @@ mod tests {
             x = suppress(KeyError)
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let calls: Vec<_> = file
-            .grep
-            .root()
-            .find_all("suppress($$$ARGS)")
-            .map(|matched| AstNode::from_raw(matched.get_node().clone()))
+        let calls: Vec<_> = collect_call_candidates(&file)
+            .into_iter()
+            .map(|candidate| candidate.node)
             .collect();
         assert_eq!(calls.len(), 2);
 
@@ -1889,15 +2497,8 @@ mod tests {
                 pass
         "#};
         let file = ParsedFile::new(source, Language::Python);
-        let func = AstNode::from_raw(
-            file.grep
-                .root()
-                .find("def foo(): $$$BODY")
-                .unwrap()
-                .get_node()
-                .clone(),
-        );
-        let decorators = extract_decorators(&func);
+        let func = &extract_function_signatures(&file)[0].node;
+        let decorators = extract_decorators(func);
         assert_eq!(decorators.len(), 3);
     }
 
@@ -1909,15 +2510,8 @@ mod tests {
                 pass
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let func = AstNode::from_raw(
-            file.grep
-                .root()
-                .find("def foo(): $$$BODY")
-                .unwrap()
-                .get_node()
-                .clone(),
-        );
-        let decorators = extract_decorators(&func);
+        let func = &extract_function_signatures(&file)[0].node;
+        let decorators = extract_decorators(func);
 
         let dec0 = &decorators[0];
         assert_eq!(dec0.terminal_name, "dataclass");
@@ -1941,15 +2535,8 @@ mod tests {
                 pass
         "#};
         let file = ParsedFile::new(source, Language::Python);
-        let func = AstNode::from_raw(
-            file.grep
-                .root()
-                .find("def foo(): $$$BODY")
-                .unwrap()
-                .get_node()
-                .clone(),
-        );
-        let decorators = extract_decorators(&func);
+        let func = &extract_function_signatures(&file)[0].node;
+        let decorators = extract_decorators(func);
 
         let dec0 = &decorators[0];
         assert_eq!(dec0.terminal_name, "parametrize");
@@ -1968,18 +2555,11 @@ mod tests {
                 pass
         "#};
         let file = ParsedFile::new(source, Language::Python);
-        let func = AstNode::from_raw(
-            file.grep
-                .root()
-                .find("def foo(): $$$BODY")
-                .unwrap()
-                .get_node()
-                .clone(),
-        );
+        let func = &extract_function_signatures(&file)[0].node;
 
-        assert!(has_decorator(&func, |name| name == "parametrize"));
-        assert!(has_decorator(&func, |path| path == "pytest.mark.parametrize"));
-        assert!(!has_decorator(&func, |name| name == "override"));
+        assert!(has_decorator(func, |name| name == "parametrize"));
+        assert!(has_decorator(func, |path| path == "pytest.mark.parametrize"));
+        assert!(!has_decorator(func, |name| name == "override"));
     }
 
     #[test]
@@ -2036,8 +2616,8 @@ mod tests {
                 pass
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let root = AstNode::from_raw(file.grep.root());
-        let params = extract_parameters(&root);
+        let func = &extract_function_signatures(&file)[0].node;
+        let params = extract_parameters(func);
 
         assert_eq!(params[0].kind, PythonParameterKind::Receiver);
         assert_eq!(params[1].kind, PythonParameterKind::Positional);
@@ -2052,8 +2632,8 @@ mod tests {
                 pass
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let root = AstNode::from_raw(file.grep.root());
-        let params = extract_parameters(&root);
+        let func = &extract_function_signatures(&file)[0].node;
+        let params = extract_parameters(func);
 
         assert_eq!(params[1].name, "a");
         assert_eq!(params[1].type_text.as_deref(), Some("int"));

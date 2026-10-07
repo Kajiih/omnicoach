@@ -1,13 +1,22 @@
 //! Python class definitions, base-class classification, and class/instance attribute walkers.
 
-// omni:disable-file [repeated-literal] -- Tree-sitter node kinds and field names (see ROADMAP)
-
 use super::{
-    AstNode, DecoratorInfo, ParsedFile, RawNode, direct_function_definitions,
-    extract_decorators_raw, in_place_mutated_receiver, is_bare_final_annotation,
-    method_receiver_name, resolve_path_and_terminal_raw,
+    AstNode, DecoratorInfo, ParsedFile, direct_function_definitions, extract_decorators_from_slice,
+    find_expr_at_span, in_place_mutated_receiver_expr, is_bare_final_annotation_expr,
+    method_receiver_name_ast, resolve_path_and_terminal_expr,
 };
+use crate::code_lint::ast::span_from_ruff_range;
+use crate::diagnostic::SourceSpan;
+use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
+use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef};
+use ruff_text_size::Ranged as _;
 use std::collections::HashSet;
+
+const PROTOCOL_CLASS: &str = "Protocol";
+const ABC_CLASS: &str = "ABC";
+const SELF_RECEIVER: &str = "self";
+const DATACLASS_DECORATOR: &str = "dataclass";
+const QUALIFIED_DATACLASS_DECORATOR: &str = "dataclasses.dataclass";
 
 /// Represents a base class expression in a Python class definition.
 #[derive(Clone)]
@@ -38,10 +47,10 @@ impl PythonBaseClass<'_> {
                 | "Generic"
                 | "typing.Generic"
                 | "typing_extensions.Generic"
-                | "Protocol"
+                | PROTOCOL_CLASS
                 | "typing.Protocol"
                 | "typing_extensions.Protocol"
-                | "ABC"
+                | ABC_CLASS
                 | "abc.ABC"
         )
     }
@@ -50,7 +59,7 @@ impl PythonBaseClass<'_> {
 /// Structured representation of a Python class definition.
 #[derive(Clone)]
 pub struct PythonClassInfo<'a> {
-    /// The `class_definition` AST node (or enclosing `decorated_definition`).
+    /// The `class_definition` AST node (including any decorators).
     pub node: AstNode<'a>,
     /// Class name identifier text.
     pub name: String,
@@ -84,105 +93,75 @@ impl<'a> PythonClassInfo<'a> {
         self.decorators.iter().find(|decorator| {
             matches!(
                 decorator.path.as_str(),
-                "dataclass" | "dataclasses.dataclass"
+                DATACLASS_DECORATOR | QUALIFIED_DATACLASS_DECORATOR
             )
         })
     }
 }
 
-/// Returns the positional base-class expression nodes from a `class_definition` node,
-/// skipping `keyword_argument` (`metaclass=...`) and `dictionary_splat` (`**kwargs`).
-fn positional_base_class_nodes<'a>(class_node: &RawNode<'a>) -> Vec<RawNode<'a>> {
-    let Some(superclasses) = class_node.field("superclasses") else {
-        return Vec::new();
-    };
-    superclasses
-        .children()
-        .filter(|child| {
-            child.is_named()
-                && !child.is_extra()
-                && !matches!(
-                    child.kind().as_ref(),
-                    "keyword_argument" | "dictionary_splat"
-                )
-        })
-        .collect()
-}
-
-/// Returns the terminal name of each positional base class of a Python `class_definition`,
+/// Returns the terminal name of each positional base class of a Python `StmtClassDef`,
 /// unwrapping generic subscripts (`Protocol[T]` yields `Protocol`).
-fn base_class_terminals_raw(class_node: &RawNode<'_>) -> Vec<String> {
-    positional_base_class_nodes(class_node)
-        .into_iter()
-        .map(|child| {
-            let base_expr = if matches!(child.kind().as_ref(), "subscript" | "generic_type") {
-                child
-                    .field("value")
-                    .or_else(|| {
-                        child
-                            .children()
-                            .find(|inner| inner.is_named() && !inner.is_extra())
-                    })
-                    .unwrap_or(child)
+fn base_class_terminals(class_def: &StmtClassDef, source: &str) -> Vec<String> {
+    class_def
+        .bases()
+        .iter()
+        .map(|base| {
+            let base_expr = if let Expr::Subscript(subscript) = base {
+                subscript.value.as_ref()
             } else {
-                child
+                base
             };
-            resolve_path_and_terminal_raw(&base_expr).1
+            resolve_path_and_terminal_expr(base_expr, source).1
         })
         .collect()
 }
 
-/// Returns true if a Python `class_definition` inherits from `Protocol` or `ABC` or declares
+/// Returns true if a Python `StmtClassDef` inherits from `Protocol` or `ABC` or declares
 /// `metaclass=ABCMeta`.
-pub(super) fn is_protocol_or_abc_class_raw(class_node: &RawNode<'_>) -> bool {
-    let has_abc_metaclass = class_node
-        .field("superclasses")
-        .is_some_and(|superclasses| {
-            superclasses.children().any(|child| {
-                child.kind() == "keyword_argument"
-                    && child
-                        .field("name")
-                        .is_some_and(|name_node| name_node.text() == "metaclass")
-                    && child.field("value").is_some_and(|value_node| {
-                        let (_, terminal) = resolve_path_and_terminal_raw(&value_node);
-                        terminal == "ABCMeta"
-                    })
-            })
-        });
+pub(super) fn is_protocol_or_abc_class(class_def: &StmtClassDef, source: &str) -> bool {
+    let has_abc_metaclass = class_def.keywords().iter().any(|keyword| {
+        keyword
+            .arg
+            .as_ref()
+            .is_some_and(|arg| arg.id == "metaclass")
+            && resolve_path_and_terminal_expr(&keyword.value, source).1 == "ABCMeta"
+    });
     has_abc_metaclass
-        || base_class_terminals_raw(class_node)
+        || base_class_terminals(class_def, source)
             .iter()
-            .any(|terminal| matches!(terminal.as_str(), "Protocol" | "ABC"))
+            .any(|terminal| matches!(terminal.as_str(), PROTOCOL_CLASS | ABC_CLASS))
 }
 
-/// Returns true if a Python `class_definition` inherits from `TypedDict`.
-pub(super) fn is_typed_dict_class_raw(class_node: &RawNode<'_>) -> bool {
-    base_class_terminals_raw(class_node)
+/// Returns true if a Python `StmtClassDef` inherits from `TypedDict`.
+pub(super) fn is_typed_dict_class(class_def: &StmtClassDef, source: &str) -> bool {
+    base_class_terminals(class_def, source)
         .iter()
         .any(|terminal| terminal == "TypedDict")
 }
 
-/// Returns true if `class_node` synthesizes constructor fields from class-body annotations
+/// Returns true if `class_def` synthesizes constructor fields from class-body annotations
 /// (`@dataclass`, `attrs` decorators, or Pydantic `BaseModel` subclasses).
-fn is_field_synthesizing_class_raw(class_node: &RawNode<'_>) -> bool {
-    let has_field_decorator = extract_decorators_raw(class_node).iter().any(|decorator| {
-        matches!(
-            decorator.path.as_str(),
-            "dataclass"
-                | "dataclasses.dataclass"
-                | "define"
-                | "frozen"
-                | "mutable"
-                | "attr.s"
-                | "attr.attrs"
-                | "attr.dataclass"
-                | "attrs.define"
-                | "attrs.frozen"
-                | "attrs.mutable"
-        )
-    });
+fn is_field_synthesizing_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
+    let has_field_decorator = extract_decorators_from_slice(&class_def.decorator_list, file)
+        .iter()
+        .any(|decorator| {
+            matches!(
+                decorator.path.as_str(),
+                DATACLASS_DECORATOR
+                    | QUALIFIED_DATACLASS_DECORATOR
+                    | "define"
+                    | "frozen"
+                    | "mutable"
+                    | "attr.s"
+                    | "attr.attrs"
+                    | "attr.dataclass"
+                    | "attrs.define"
+                    | "attrs.frozen"
+                    | "attrs.mutable"
+            )
+        });
     has_field_decorator
-        || base_class_terminals_raw(class_node)
+        || base_class_terminals(class_def, &file.source)
             .iter()
             .any(|terminal| terminal == "BaseModel")
 }
@@ -190,64 +169,136 @@ fn is_field_synthesizing_class_raw(class_node: &RawNode<'_>) -> bool {
 /// Returns true if `node` (a method `function_definition` or class attribute node) is directly
 /// enclosed in a `Protocol` or `ABC` class definition.
 pub(super) fn is_in_protocol_or_abc_class(node: &AstNode<'_>) -> bool {
-    let Some(raw) = node.raw_opt() else {
-        return false;
-    };
-    for ancestor in raw.ancestors() {
-        match ancestor.kind().as_ref() {
-            "function_definition" | "lambda" => return false,
-            "class_definition" => return is_protocol_or_abc_class_raw(&ancestor),
-            _ => {}
+    struct EnclosingScopeFinder<'a> {
+        target_span: SourceSpan,
+        source: &'a str,
+        in_protocol_or_abc: bool,
+        matched: Option<bool>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for EnclosingScopeFinder<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if self.matched.is_some() {
+                return;
+            }
+            let span = span_from_ruff_range(statement.range());
+            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
+                return;
+            }
+            if span == self.target_span {
+                self.matched = Some(self.in_protocol_or_abc);
+                return;
+            }
+            let prev = self.in_protocol_or_abc;
+            match statement {
+                Stmt::ClassDef(class_def) => {
+                    self.in_protocol_or_abc = is_protocol_or_abc_class(class_def, self.source);
+                }
+                Stmt::FunctionDef(_) => {
+                    self.in_protocol_or_abc = false;
+                }
+                _ => {}
+            }
+            walk_stmt(self, statement);
+            self.in_protocol_or_abc = prev;
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if self.matched.is_some() {
+                return;
+            }
+            let span = span_from_ruff_range(expr.range());
+            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
+                return;
+            }
+            let prev = self.in_protocol_or_abc;
+            if matches!(expr, Expr::Lambda(_)) {
+                self.in_protocol_or_abc = false;
+            }
+            walk_expr(self, expr);
+            self.in_protocol_or_abc = prev;
         }
     }
-    false
+
+    let Some(file) = node.file_opt() else {
+        return false;
+    };
+    let Some(parsed) = file.py_module() else {
+        return false;
+    };
+    let mut finder = EnclosingScopeFinder {
+        target_span: node.span(),
+        source: &file.source,
+        in_protocol_or_abc: false,
+        matched: None,
+    };
+    finder.visit_body(&parsed.syntax().body);
+    finder.matched.unwrap_or(false)
 }
 
 /// Discovers and extracts all class definitions from a Python file.
 #[must_use]
 pub fn extract_classes(file: &ParsedFile) -> Vec<PythonClassInfo<'_>> {
-    let mut classes = Vec::new();
-
-    for class_node in file.grep.root().dfs() {
-        if class_node.kind() != "class_definition" {
-            continue;
-        }
-
-        let Some(name_node) = class_node.field("name") else {
-            continue;
-        };
-        let name = name_node.text().to_string();
-
-        let bases = positional_base_class_nodes(&class_node)
-            .into_iter()
-            .map(|child| PythonBaseClass {
-                name: child.text().to_string(),
-                node: AstNode::from_raw(child),
-            })
-            .collect();
-
-        let decorators = extract_decorators_raw(&class_node);
-        let body_node = class_node.field("body").map(AstNode::from_raw);
-
-        let effective_node = if let Some(parent) = class_node.parent()
-            && parent.kind() == "decorated_definition"
-        {
-            parent
-        } else {
-            class_node
-        };
-
-        classes.push(PythonClassInfo {
-            node: AstNode::from_raw(effective_node),
-            name,
-            name_node: AstNode::from_raw(name_node),
-            bases,
-            decorators,
-            body_node,
-        });
+    struct ClassVisitor<'a> {
+        file: &'a ParsedFile,
+        classes: Vec<PythonClassInfo<'a>>,
     }
 
-    classes
+    impl<'a> SourceOrderVisitor<'a> for ClassVisitor<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if let Stmt::ClassDef(class_def) = statement {
+                let bases = class_def
+                    .bases()
+                    .iter()
+                    .map(|base| {
+                        let base_span = span_from_ruff_range(base.range());
+                        PythonBaseClass {
+                            name: self.file.source[base_span.start..base_span.end].to_string(),
+                            node: AstNode::from_span(self.file, base_span),
+                        }
+                    })
+                    .collect();
+                let decorators =
+                    extract_decorators_from_slice(&class_def.decorator_list, self.file);
+                let body_node =
+                    class_def
+                        .body
+                        .first()
+                        .zip(class_def.body.last())
+                        .map(|(first, last)| {
+                            AstNode::from_span(
+                                self.file,
+                                SourceSpan {
+                                    start: usize::from(first.range().start()),
+                                    end: usize::from(last.range().end()),
+                                },
+                            )
+                        });
+                self.classes.push(PythonClassInfo {
+                    node: AstNode::from_span(self.file, span_from_ruff_range(class_def.range)),
+                    name: class_def.name.id.to_string(),
+                    name_node: AstNode::from_span(
+                        self.file,
+                        span_from_ruff_range(class_def.name.range),
+                    ),
+                    bases,
+                    decorators,
+                    body_node,
+                });
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut visitor = ClassVisitor {
+        file,
+        classes: Vec::new(),
+    };
+    visitor.visit_body(&parsed.syntax().body);
+    visitor.classes
 }
 
 /// A Python class or `__init__` instance attribute carrying a type annotation.
@@ -268,129 +319,162 @@ pub struct PythonAnnotatedAttribute<'a> {
     pub is_typed_dict_key: bool,
 }
 
-/// Walks `node` (without entering nested `class_definition`s) and records attribute names
-/// mutated in place on `self`, `cls`, or `class_name`.
-fn collect_mutated_class_attr_names_rec(
-    node: &RawNode<'_>,
-    class_name: &str,
-    out: &mut HashSet<String>,
-) {
-    if node.kind() == "class_definition" {
-        return;
-    }
-    if let Some(receiver) = in_place_mutated_receiver(node)
-        && receiver.kind() == "attribute"
-        && let (Some(object_node), Some(attribute_node)) =
-            (receiver.field("object"), receiver.field("attribute"))
+/// Checks if `receiver` is `self.<attr>`, `cls.<attr>`, or `<class_name>.<attr>`, and inserts
+/// `<attr>` into `out`.
+fn record_mutated_class_receiver(receiver: &Expr, class_name: &str, out: &mut HashSet<String>) {
+    if let Expr::Attribute(attr) = receiver
+        && let Expr::Name(object) = attr.value.as_ref()
+        && (matches!(object.id.as_str(), SELF_RECEIVER | "cls") || object.id.as_str() == class_name)
     {
-        let object_text = object_node.text();
-        if matches!(object_text.as_ref(), "self" | "cls") || object_text == class_name {
-            out.insert(attribute_node.text().into_owned());
-        }
-    }
-    for child in node.children() {
-        collect_mutated_class_attr_names_rec(&child, class_name, out);
+        out.insert(attr.attr.to_string());
     }
 }
 
+/// Walks `body` (without entering nested `Stmt::ClassDef`s) and records attribute names
+/// mutated in place on `self`, `cls`, or `class_name`.
+fn collect_mutated_class_attr_names(body: &[Stmt], class_name: &str) -> HashSet<String> {
+    struct MutationVisitor<'a> {
+        class_name: &'a str,
+        out: HashSet<String>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for MutationVisitor<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            match statement {
+                Stmt::ClassDef(_) => return,
+                Stmt::AugAssign(aug) => {
+                    let receiver = if let Expr::Subscript(sub) = aug.target.as_ref() {
+                        sub.value.as_ref()
+                    } else {
+                        aug.target.as_ref()
+                    };
+                    record_mutated_class_receiver(receiver, self.class_name, &mut self.out);
+                }
+                _ => {}
+            }
+            walk_stmt(self, statement);
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Some(receiver) = in_place_mutated_receiver_expr(expr) {
+                record_mutated_class_receiver(receiver, self.class_name, &mut self.out);
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut visitor = MutationVisitor {
+        class_name,
+        out: HashSet::new(),
+    };
+    visitor.visit_body(body);
+    visitor.out
+}
+
 /// Walks statements inside a method body (without entering nested functions, classes, or lambdas)
-/// and collects `(assignment_node, attr_name, type_node)` for `self.<attr>: <type>` annotations.
-fn collect_self_annotated_assignments_rec<'a>(
-    node: &RawNode<'a>,
-    out: &mut Vec<(RawNode<'a>, String, RawNode<'a>)>,
-) {
-    if matches!(
-        node.kind().as_ref(),
-        "function_definition" | "class_definition" | "lambda"
-    ) {
-        return;
+/// and collects `(ann_assign, attr_name, annotation_expr)` for `self.<attr>: <type>` annotations.
+fn collect_self_annotated_assignments(body: &[Stmt]) -> Vec<(&StmtAnnAssign, String, &Expr)> {
+    struct SelfAnnVisitor<'a> {
+        out: Vec<(&'a StmtAnnAssign, String, &'a Expr)>,
     }
-    if node.kind() == "assignment"
-        && let (Some(left), Some(type_node)) = (node.field("left"), node.field("type"))
-        && left.kind() == "attribute"
-        && left.field("object").is_some_and(|object_node| {
-            object_node.kind() == "identifier" && object_node.text() == "self"
-        })
-        && let Some(attribute_node) = left.field("attribute")
-    {
-        out.push((node.clone(), attribute_node.text().into_owned(), type_node));
+
+    impl<'a> SourceOrderVisitor<'a> for SelfAnnVisitor<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            match statement {
+                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,
+                Stmt::AnnAssign(ann) => {
+                    if let Expr::Attribute(left) = ann.target.as_ref()
+                        && let Expr::Name(object) = left.value.as_ref()
+                        && object.id == SELF_RECEIVER
+                    {
+                        self.out
+                            .push((ann, left.attr.to_string(), ann.annotation.as_ref()));
+                    }
+                }
+                _ => {}
+            }
+            walk_stmt(self, statement);
+        }
+
+        fn visit_expr(&mut self, _expr: &'a Expr) {}
     }
-    for child in node.children() {
-        collect_self_annotated_assignments_rec(&child, out);
-    }
+
+    let mut visitor = SelfAnnVisitor { out: Vec::new() };
+    visitor.visit_body(body);
+    visitor.out
 }
 
 /// Collects annotated class and `__init__` attributes, recording whether each attribute is
 /// mutated in place within its class.
 #[must_use]
 pub fn collect_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotatedAttribute<'_>> {
-    let mut out = Vec::new();
-    for class_node in file.grep.root().dfs() {
-        if class_node.kind() != "class_definition" {
-            continue;
-        }
-        let Some(name_node) = class_node.field("name") else {
-            continue;
-        };
-        let Some(body) = class_node.field("body") else {
-            continue;
-        };
-        let class_name = name_node.text().into_owned();
-        let is_typed_dict = is_typed_dict_class_raw(&class_node);
-        let is_in_protocol_or_abc = is_protocol_or_abc_class_raw(&class_node);
+    struct ClassAttrVisitor<'a> {
+        file: &'a ParsedFile,
+        out: Vec<PythonAnnotatedAttribute<'a>>,
+    }
 
-        let mut mutated_attrs = HashSet::new();
-        for child in body.children() {
-            collect_mutated_class_attr_names_rec(&child, &class_name, &mut mutated_attrs);
-        }
+    impl<'a> SourceOrderVisitor<'a> for ClassAttrVisitor<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if let Stmt::ClassDef(class_def) = statement {
+                let class_name = class_def.name.id.to_string();
+                let is_typed_dict = is_typed_dict_class(class_def, &self.file.source);
+                let is_in_protocol_or_abc = is_protocol_or_abc_class(class_def, &self.file.source);
+                let mutated_attrs = collect_mutated_class_attr_names(&class_def.body, &class_name);
 
-        for child in body.children() {
-            if child.kind() == "expression_statement"
-                && let Some(assign) = child
-                    .children()
-                    .find(|inner| inner.is_named() && !inner.is_extra())
-                && assign.kind() == "assignment"
-                && let (Some(left), Some(type_node)) = (assign.field("left"), assign.field("type"))
-                && left.kind() == "identifier"
-            {
-                let attr_name = left.text().into_owned();
-                let is_mutated_in_class = mutated_attrs.contains(&attr_name);
-                out.push(PythonAnnotatedAttribute {
-                    class_name: class_name.clone(),
-                    is_in_protocol_or_abc,
-                    name: attr_name,
-                    type_node: AstNode::from_raw(type_node),
-                    is_mutated_in_class,
-                    is_typed_dict_key: is_typed_dict,
-                });
-            }
-        }
-
-        for (_, function_node) in direct_function_definitions(&body) {
-            if function_node
-                .field("name")
-                .is_some_and(|method_name| method_name.text() == "__init__")
-                && let Some(init_body) = function_node.field("body")
-            {
-                let mut annotated = Vec::new();
-                for statement in init_body.children() {
-                    collect_self_annotated_assignments_rec(&statement, &mut annotated);
+                for child in &class_def.body {
+                    if let Stmt::AnnAssign(ann) = child
+                        && let Expr::Name(left) = ann.target.as_ref()
+                    {
+                        let attr_name = left.id.to_string();
+                        let is_mutated_in_class = mutated_attrs.contains(&attr_name);
+                        self.out.push(PythonAnnotatedAttribute {
+                            class_name: class_name.clone(),
+                            is_in_protocol_or_abc,
+                            name: attr_name,
+                            type_node: AstNode::from_span(
+                                self.file,
+                                span_from_ruff_range(ann.annotation.range()),
+                            ),
+                            is_mutated_in_class,
+                            is_typed_dict_key: is_typed_dict,
+                        });
+                    }
                 }
-                for (_, attr_name, type_node) in annotated {
-                    let is_mutated_in_class = mutated_attrs.contains(&attr_name);
-                    out.push(PythonAnnotatedAttribute {
-                        class_name: class_name.clone(),
-                        is_in_protocol_or_abc,
-                        name: attr_name,
-                        type_node: AstNode::from_raw(type_node),
-                        is_mutated_in_class,
-                        is_typed_dict_key: false,
-                    });
+
+                for function_def in direct_function_definitions(&class_def.body) {
+                    if function_def.name.id == "__init__" {
+                        for (_, attr_name, type_expr) in
+                            collect_self_annotated_assignments(&function_def.body)
+                        {
+                            let is_mutated_in_class = mutated_attrs.contains(&attr_name);
+                            self.out.push(PythonAnnotatedAttribute {
+                                class_name: class_name.clone(),
+                                is_in_protocol_or_abc,
+                                name: attr_name,
+                                type_node: AstNode::from_span(
+                                    self.file,
+                                    span_from_ruff_range(type_expr.range()),
+                                ),
+                                is_mutated_in_class,
+                                is_typed_dict_key: false,
+                            });
+                        }
+                    }
                 }
             }
+            walk_stmt(self, statement);
         }
     }
-    out
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut visitor = ClassAttrVisitor {
+        file,
+        out: Vec::new(),
+    };
+    visitor.visit_body(&parsed.syntax().body);
+    visitor.out
 }
 
 /// A Python instance attribute annotated inline (`self.<name>: <type>`) inside an instance method.
@@ -417,9 +501,16 @@ impl PythonInstanceAttributeAnnotation<'_> {
     /// an initializer.
     #[must_use]
     pub fn is_bare_final(&self) -> bool {
-        self.annotation
-            .raw_opt()
-            .is_some_and(is_bare_final_annotation)
+        let Some(file) = self.annotation.file_opt() else {
+            return false;
+        };
+        let Some(parsed) = file.py_module() else {
+            return false;
+        };
+        let Some(expr) = find_expr_at_span(parsed.syntax(), self.annotation.span()) else {
+            return false;
+        };
+        is_bare_final_annotation_expr(expr, &file.source)
     }
 }
 
@@ -432,42 +523,53 @@ impl PythonInstanceAttributeAnnotation<'_> {
 pub fn collect_instance_attribute_annotations(
     file: &ParsedFile,
 ) -> Vec<PythonInstanceAttributeAnnotation<'_>> {
-    let mut out = Vec::new();
-    for class_node in file.grep.root().dfs() {
-        if class_node.kind() != "class_definition" {
-            continue;
-        }
-        let Some(name_node) = class_node.field("name") else {
-            continue;
-        };
-        let Some(body) = class_node.field("body") else {
-            continue;
-        };
-        let class_name = name_node.text().into_owned();
-        let is_in_field_synthesizing_class = is_field_synthesizing_class_raw(&class_node);
+    struct InstanceAttrVisitor<'a> {
+        file: &'a ParsedFile,
+        out: Vec<PythonInstanceAttributeAnnotation<'a>>,
+    }
 
-        for (_, function_node) in direct_function_definitions(&body) {
-            if method_receiver_name(&function_node, false).is_some()
-                && let Some(method_name_node) = function_node.field("name")
-                && let Some(method_body) = function_node.field("body")
-            {
-                let method_name = method_name_node.text().into_owned();
-                let mut annotated = Vec::new();
-                for statement in method_body.children() {
-                    collect_self_annotated_assignments_rec(&statement, &mut annotated);
-                }
-                for (assignment_node, attribute_name, type_node) in annotated {
-                    out.push(PythonInstanceAttributeAnnotation {
-                        class_name: class_name.clone(),
-                        is_in_field_synthesizing_class,
-                        method_name: method_name.clone(),
-                        name: attribute_name,
-                        annotation: AstNode::from_raw(type_node),
-                        assignment_node: AstNode::from_raw(assignment_node),
-                    });
+    impl<'a> SourceOrderVisitor<'a> for InstanceAttrVisitor<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if let Stmt::ClassDef(class_def) = statement {
+                let class_name = class_def.name.id.to_string();
+                let is_in_field_synthesizing_class =
+                    is_field_synthesizing_class(class_def, self.file);
+
+                for function_def in direct_function_definitions(&class_def.body) {
+                    if method_receiver_name_ast(function_def, false, self.file).is_some() {
+                        let method_name = function_def.name.id.to_string();
+                        for (ann_assign, attribute_name, type_expr) in
+                            collect_self_annotated_assignments(&function_def.body)
+                        {
+                            self.out.push(PythonInstanceAttributeAnnotation {
+                                class_name: class_name.clone(),
+                                is_in_field_synthesizing_class,
+                                method_name: method_name.clone(),
+                                name: attribute_name,
+                                annotation: AstNode::from_span(
+                                    self.file,
+                                    span_from_ruff_range(type_expr.range()),
+                                ),
+                                assignment_node: AstNode::from_span(
+                                    self.file,
+                                    span_from_ruff_range(ann_assign.range),
+                                ),
+                            });
+                        }
+                    }
                 }
             }
+            walk_stmt(self, statement);
         }
     }
-    out
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut visitor = InstanceAttrVisitor {
+        file,
+        out: Vec::new(),
+    };
+    visitor.visit_body(&parsed.syntax().body);
+    visitor.out
 }
