@@ -1,9 +1,9 @@
 //! AST helper predicates and structural extractors for Rust (`ra_ap_syntax`).
 
 use crate::code_lint::ast::{
-    AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, PositionalRead,
-    ScopePositionalReads, is_rust_comment_kind, parse_float_literal, parse_integer_literal,
-    span_from_rowan_range,
+    AstNode, Binding, BindingKind, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile,
+    PositionalRead, ScopePositionalReads, is_rust_comment_kind, parse_float_literal,
+    parse_integer_literal, push_bindings, span_from_rowan_range,
 };
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast::{
@@ -57,64 +57,30 @@ fn cast_at_span<T: ra_ap_syntax::AstNode>(node: &AstNode<'_>) -> Option<T> {
         .find_map(T::cast)
 }
 
-/// Returns true if `node` is an import binding introduced by a `use` declaration.
-#[must_use]
-pub(super) fn is_import_binding(node: &AstNode<'_>) -> bool {
-    syntax_node(node).is_some_and(|syntax| {
-        syntax
-            .ancestors()
-            .any(|ancestor| ast::Use::can_cast(ancestor.kind()))
-    })
-}
-
-/// Returns true if `node` is the declared name of a struct, enum, trait, type alias, or function.
-#[must_use]
-pub(super) fn is_structural_definition(node: &AstNode<'_>) -> bool {
-    syntax_node(node)
-        .and_then(|syntax| syntax.parent())
-        .is_some_and(|parent| {
-            matches!(
-                parent.kind(),
-                SyntaxKind::STRUCT
-                    | SyntaxKind::ENUM
-                    | SyntaxKind::TRAIT
-                    | SyntaxKind::TYPE_ALIAS
-                    | SyntaxKind::FN
-            )
-        })
-}
-
-/// Returns true if `item`, the definition (or its identifier) owning a name, has that name
-/// mandated by a trait implementation contract (`impl Trait for Type`).
-#[must_use]
-pub(super) fn is_trait_impl_member(item: &AstNode<'_>) -> bool {
-    let Some(syntax) = syntax_node(item) else {
-        return false;
-    };
-    let member_node = if syntax.kind() == SyntaxKind::NAME {
-        let Some(parent) = syntax.parent() else {
-            return false;
-        };
-        parent
-    } else {
-        syntax
-    };
-    if !matches!(
-        member_node.kind(),
+/// Returns the kind of the binding declared by the named item `item`: a contract member if it is
+/// a function, type alias, or constant defined in an `impl Trait for Type`, a structural
+/// definition if it is a struct, enum, trait, type alias, or function, and a value otherwise.
+fn named_item_binding_kind(item: &SyntaxNode) -> BindingKind {
+    let is_trait_impl_member = matches!(
+        item.kind(),
         SyntaxKind::FN | SyntaxKind::TYPE_ALIAS | SyntaxKind::CONST
-    ) {
-        return false;
-    }
-    let Some(assoc_items) = member_node.parent() else {
-        return false;
-    };
-    if !ast::AssocItemList::can_cast(assoc_items.kind()) {
-        return false;
-    }
-    assoc_items
+    ) && item
         .parent()
+        .filter(|assoc_items| ast::AssocItemList::can_cast(assoc_items.kind()))
+        .and_then(|assoc_items| assoc_items.parent())
         .and_then(ast::Impl::cast)
-        .is_some_and(|impl_item| impl_item.trait_().is_some())
+        .is_some_and(|impl_item| impl_item.trait_().is_some());
+    if is_trait_impl_member {
+        return BindingKind::ContractMember;
+    }
+    match item.kind() {
+        SyntaxKind::STRUCT
+        | SyntaxKind::ENUM
+        | SyntaxKind::TRAIT
+        | SyntaxKind::TYPE_ALIAS
+        | SyntaxKind::FN => BindingKind::StructuralDefinition,
+        _ => BindingKind::Value,
+    }
 }
 
 /// Extracts binding identifiers in source order from a pattern subtree.
@@ -223,25 +189,29 @@ fn named_item_identifier(node: &SyntaxNode) -> Option<ast::Name> {
     }
 }
 
-fn traverse_rust<'a>(node: &SyntaxNode, file: &'a ParsedFile, bindings: &mut Vec<AstNode<'a>>) {
+fn traverse_rust<'a>(node: &SyntaxNode, file: &'a ParsedFile, bindings: &mut Vec<Binding<'a>>) {
     if let Some(use_item) = ast::Use::cast(node.clone()) {
         if let Some(use_tree) = use_item.use_tree() {
-            extract_from_use_tree(&use_tree, None, file, bindings);
+            push_bindings(bindings, BindingKind::Import, |out| {
+                extract_from_use_tree(&use_tree, None, file, out);
+            });
         }
         return;
     }
     if node.kind() == SyntaxKind::RECORD_FIELD {
         if let Some(name) = named_item_identifier(node) {
-            bindings.push(AstNode::from_span(
-                file,
-                span_from_rowan_range(name.syntax().text_range()),
-            ));
+            bindings.push(Binding {
+                node: AstNode::from_span(file, span_from_rowan_range(name.syntax().text_range())),
+                kind: BindingKind::Value,
+            });
         }
         return;
     }
     if let Some(pattern) = node_pattern(node) {
         let pattern_range = pattern.syntax().text_range();
-        extract_from_pattern(&pattern, file, bindings);
+        push_bindings(bindings, BindingKind::Value, |out| {
+            extract_from_pattern(&pattern, file, out);
+        });
         for child in node.children() {
             if child.text_range() != pattern_range {
                 traverse_rust(&child, file, bindings);
@@ -251,7 +221,10 @@ fn traverse_rust<'a>(node: &SyntaxNode, file: &'a ParsedFile, bindings: &mut Vec
     }
     if let Some(name) = named_item_identifier(node) {
         let name_range = name.syntax().text_range();
-        bindings.push(AstNode::from_span(file, span_from_rowan_range(name_range)));
+        bindings.push(Binding {
+            node: AstNode::from_span(file, span_from_rowan_range(name_range)),
+            kind: named_item_binding_kind(node),
+        });
         for child in node.children() {
             if child.text_range() != name_range {
                 traverse_rust(&child, file, bindings);
@@ -265,9 +238,9 @@ fn traverse_rust<'a>(node: &SyntaxNode, file: &'a ParsedFile, bindings: &mut Vec
 }
 
 /// Collects all binding definitions (variables, functions, structs, named struct fields, etc.)
-/// within `file`.
+/// within `file`, with what introduced each.
 #[must_use]
-pub(super) fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
+pub(super) fn collect_bindings(file: &ParsedFile) -> Vec<Binding<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -1864,7 +1837,7 @@ mod tests {
         let bindings = collect_bindings(&file);
         let names: Vec<String> = bindings
             .iter()
-            .map(|node| node.text().to_string())
+            .map(|binding| binding.node.text().to_string())
             .collect();
         assert_eq!(
             names,
@@ -1912,7 +1885,7 @@ mod tests {
         let bindings = collect_bindings(&file);
         let names: Vec<String> = bindings
             .iter()
-            .map(|node| node.text().to_string())
+            .map(|binding| binding.node.text().to_string())
             .collect();
         assert_eq!(names, vec!["main", "x"]);
     }

@@ -38,6 +38,8 @@ pub(in crate::code_lint::ast) struct CachedCallCandidate {
     method_name: Option<String>,
     receiver_call_callee: Option<String>,
     argument_spans: Vec<SourceSpan>,
+    is_with_context_manager: bool,
+    is_in_except_clause: bool,
 }
 
 /// Dedicated language-specific parsed syntax tree.
@@ -64,7 +66,7 @@ pub struct ParsedFile {
     pub(in crate::code_lint::ast) ast: CodeLintAst,
     lang: Language,
     pub(in crate::code_lint::ast) comment_spans: OnceLock<Vec<SourceSpan>>,
-    pub(in crate::code_lint::ast) binding_spans: OnceLock<Vec<SourceSpan>>,
+    pub(in crate::code_lint::ast) bindings: OnceLock<Vec<(SourceSpan, BindingKind)>>,
     pub(in crate::code_lint::ast) call_candidates: OnceLock<Vec<CachedCallCandidate>>,
     pub(in crate::code_lint::ast) rust_inline_test_ranges: OnceLock<Vec<std::ops::Range<usize>>>,
     pub(in crate::code_lint::ast) abc_set_imported: OnceLock<bool>,
@@ -88,7 +90,7 @@ impl ParsedFile {
             ast,
             lang,
             comment_spans: OnceLock::new(),
-            binding_spans: OnceLock::new(),
+            bindings: OnceLock::new(),
             call_candidates: OnceLock::new(),
             rust_inline_test_ranges: OnceLock::new(),
             abc_set_imported: OnceLock::new(),
@@ -294,29 +296,70 @@ pub struct AstCallCandidate<'a> {
     pub receiver_call_callee: Option<String>,
     /// Semantic argument nodes passed to the call.
     pub arguments: Vec<AstNode<'a>>,
+    /// True if the call is the context-manager expression of a Python `with` item (`with
+    /// suppress(KeyError):`). Always false in Rust.
+    pub is_with_context_manager: bool,
+    /// True if the call is inside a Python `except` handler without an intervening `def`,
+    /// `class`, or `lambda` boundary. Always false in Rust.
+    pub is_in_except_clause: bool,
 }
 
 /// Collects all direct call expressions in a Python file using `ruff_python_ast`.
 fn collect_python_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate> {
-    use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
-    use ruff_python_ast::{Expr, ExprCall};
+    use ruff_python_ast::visitor::source_order::{
+        SourceOrderVisitor, walk_except_handler, walk_expr, walk_stmt, walk_with_item,
+    };
+    use ruff_python_ast::{ExceptHandler, Expr, ExprCall, Stmt, WithItem};
 
     struct CallVisitor<'a> {
         file: &'a ParsedFile,
+        /// Span of the context-manager expression of the `with` item being visited.
+        with_item_context_span: Option<SourceSpan>,
+        /// True while inside an `except` handler of the current function scope.
+        in_except_clause: bool,
         out: Vec<CachedCallCandidate>,
     }
 
     impl<'a> SourceOrderVisitor<'a> for CallVisitor<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            let enclosing = self.in_except_clause;
+            if matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
+                self.in_except_clause = false;
+            }
+            walk_stmt(self, statement);
+            self.in_except_clause = enclosing;
+        }
+
         fn visit_expr(&mut self, expr: &'a Expr) {
-            if let Expr::Call(call) = expr {
-                self.record_call(call);
+            let enclosing = self.in_except_clause;
+            match expr {
+                Expr::Call(call) => self.record_call(call),
+                Expr::Lambda(_) => self.in_except_clause = false,
+                _ => {}
             }
             walk_expr(self, expr);
+            self.in_except_clause = enclosing;
+        }
+
+        fn visit_with_item(&mut self, with_item: &'a WithItem) {
+            let enclosing = self.with_item_context_span;
+            self.with_item_context_span =
+                Some(span_from_ruff_range(with_item.context_expr.range()));
+            walk_with_item(self, with_item);
+            self.with_item_context_span = enclosing;
+        }
+
+        fn visit_except_handler(&mut self, except_handler: &'a ExceptHandler) {
+            let enclosing = self.in_except_clause;
+            self.in_except_clause = true;
+            walk_except_handler(self, except_handler);
+            self.in_except_clause = enclosing;
         }
     }
 
     impl CallVisitor<'_> {
         fn record_call(&mut self, call: &ExprCall) {
+            let span = span_from_ruff_range(call.range());
             let func_span = span_from_ruff_range(call.func.range());
             let callee = self.file.source[func_span.start..func_span.end].to_string();
             let (method_name, receiver_call_callee) =
@@ -345,11 +388,13 @@ fn collect_python_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate>
                 .collect();
             argument_spans.sort_by_key(|span| (span.start, span.end));
             self.out.push(CachedCallCandidate {
-                span: span_from_ruff_range(call.range()),
+                span,
                 callee,
                 method_name,
                 receiver_call_callee,
                 argument_spans,
+                is_with_context_manager: self.with_item_context_span == Some(span),
+                is_in_except_clause: self.in_except_clause,
             });
         }
     }
@@ -359,6 +404,8 @@ fn collect_python_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate>
     };
     let mut visitor = CallVisitor {
         file,
+        with_item_context_span: None,
+        in_except_clause: false,
         out: Vec::new(),
     };
     visitor.visit_body(&parsed.syntax().body);
@@ -411,6 +458,8 @@ fn collect_rust_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate> {
                 method_name: None,
                 receiver_call_callee: None,
                 argument_spans,
+                is_with_context_manager: false,
+                is_in_except_clause: false,
             });
         } else if let Some(method_call) = ast::MethodCallExpr::cast(syntax_node) {
             let (Some(receiver), Some(name_ref)) = (method_call.receiver(), method_call.name_ref())
@@ -434,6 +483,8 @@ fn collect_rust_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate> {
                 method_name,
                 receiver_call_callee,
                 argument_spans,
+                is_with_context_manager: false,
+                is_in_except_clause: false,
             });
         }
     }
@@ -460,6 +511,8 @@ pub fn collect_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> {
                 .iter()
                 .map(|&span| AstNode::from_span(file, span))
                 .collect(),
+            is_with_context_manager: entry.is_with_context_manager,
+            is_in_except_clause: entry.is_in_except_clause,
         })
         .collect()
 }
@@ -574,38 +627,57 @@ pub(in crate::code_lint::ast) fn parse_float_literal(text: &str) -> Option<Liter
     text.replace('_', "").parse().ok().map(LiteralValue::float)
 }
 
-/// Collects all binding definition nodes from a parsed file.
+/// What introduced a binding name, recorded by the walk that collects the binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BindingKind {
+    /// A name introduced by an import (`import x`, `from m import y`, `use a::b`).
+    Import,
+    /// The name of a member mandated by a contract: a function, type alias, or constant defined
+    /// in a Rust `impl Trait for Type`, or a Python method decorated with `@override`.
+    ContractMember,
+    /// The declared name of a function, class, struct, enum, trait, or type alias that is not a
+    /// [`Self::ContractMember`].
+    StructuralDefinition,
+    /// Any other binding: a variable, parameter, constant, static, field, or attribute.
+    Value,
+}
+
+/// A binding definition name and what introduced it.
+#[derive(Clone, Copy)]
+pub struct Binding<'a> {
+    /// The binding identifier node.
+    pub node: AstNode<'a>,
+    /// What introduced the binding.
+    pub kind: BindingKind,
+}
+
+/// Appends each node that `extract` collects to `bindings` as a binding of `kind`.
+pub(in crate::code_lint::ast) fn push_bindings<'a>(
+    bindings: &mut Vec<Binding<'a>>,
+    kind: BindingKind,
+    extract: impl FnOnce(&mut Vec<AstNode<'a>>),
+) {
+    let mut nodes = Vec::new();
+    extract(&mut nodes);
+    bindings.extend(nodes.into_iter().map(|node| Binding { node, kind }));
+}
+
+/// Collects all binding definitions from a parsed file, in source order.
 #[must_use]
-pub fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
-    let spans = file.binding_spans.get_or_init(|| {
+pub fn collect_bindings(file: &ParsedFile) -> Vec<Binding<'_>> {
+    let cached = file.bindings.get_or_init(|| {
         dispatch_lang!(file.lang(), collect_bindings(file))
             .into_iter()
-            .map(|node| node.span())
+            .map(|binding| (binding.node.span(), binding.kind))
             .collect()
     });
-    spans
+    cached
         .iter()
-        .map(|&span| AstNode::from_span(file, span))
+        .map(|&(span, kind)| Binding {
+            node: AstNode::from_span(file, span),
+            kind,
+        })
         .collect()
-}
-
-/// Returns true if the node represents an import binding.
-#[must_use]
-pub fn is_import_binding(node: &AstNode<'_>, lang: Language) -> bool {
-    dispatch_lang!(lang, is_import_binding(node))
-}
-
-/// Returns true if the node represents a structural type, class, or function definition name.
-#[must_use]
-pub fn is_structural_definition(node: &AstNode<'_>, lang: Language) -> bool {
-    dispatch_lang!(lang, is_structural_definition(node))
-}
-
-/// Returns true if the node is the name of a member defined inside a trait implementation
-/// (`impl Trait for Type` in Rust or `@override` method in Python), i.e. a name mandated by a contract.
-#[must_use]
-pub fn is_trait_impl_member(node: &AstNode<'_>, lang: Language) -> bool {
-    dispatch_lang!(lang, is_trait_impl_member(node))
 }
 
 /// Collects all outermost test functions in `file` along with their identifier node, name, and assertion count.

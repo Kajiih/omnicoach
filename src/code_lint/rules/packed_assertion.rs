@@ -145,26 +145,26 @@ fn check_rust_assertion_macro(
     None
 }
 
-/// Evaluates a single Python `assert` statement node for packed conditions.
+/// Evaluates a single Python `assert` statement for packed conditions.
 fn check_python_assert_statement(
     rule: &CodeRule,
-    assert_node: &AstNode<'_>,
+    assert_statement: &ast::python::PythonAssert<'_>,
     path: &Path,
 ) -> Option<Diagnostic> {
     // 1. Compound boolean condition: assert a and b
-    if ast::python::has_top_level_logical_and(assert_node) {
+    if assert_statement.has_top_level_logical_and {
         return Some(rule.diagnostic_at_node(
             path,
-            assert_node,
+            &assert_statement.node,
             &[(CONSTRUCT, "a compound `and` condition")],
         ));
     }
 
     // 2. Boolean tuple/list equality: assert (a, b) == (True, True)
-    if ast::python::has_boolean_literal_comparison(assert_node) {
+    if assert_statement.has_boolean_literal_comparison {
         return Some(rule.diagnostic_at_node(
             path,
-            assert_node,
+            &assert_statement.node,
             &[(CONSTRUCT, BOOLEAN_COLLECTION_COMPARISON)],
         ));
     }
@@ -180,7 +180,9 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             .collect(),
         Language::Python => ast::python::collect_assert_statements(file)
             .iter()
-            .filter_map(|node| check_python_assert_statement(rule, node, path))
+            .filter_map(|assert_statement| {
+                check_python_assert_statement(rule, assert_statement, path)
+            })
             .collect(),
     }
 }

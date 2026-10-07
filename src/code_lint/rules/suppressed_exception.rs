@@ -1,7 +1,6 @@
 //! Flags `contextlib.suppress` blocks.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::ast::python::is_with_context_manager;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -91,7 +90,7 @@ fn check_file(
     banned_calls: &HashSet<String>,
 ) -> Vec<Diagnostic> {
     rule.check_banned_calls_where(path, file, banned_calls, |matched| {
-        is_with_context_manager(&matched.node)
+        matched.is_with_context_manager
     })
 }
 
