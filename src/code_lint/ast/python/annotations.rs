@@ -436,10 +436,7 @@ pub fn collect_collection_types(
     depth: AnnotationTraversalDepth,
     abc_set_imported: bool,
 ) -> Vec<PythonCollectionType> {
-    let Some(file) = type_node.file_opt() else {
-        return Vec::new();
-    };
-    let Some(parsed) = file.py_module() else {
+    let Some(parsed) = type_node.file.py_module() else {
         return Vec::new();
     };
     let Some(expr) = find_expr_at_span(parsed.syntax(), type_node.span()) else {
@@ -448,7 +445,7 @@ pub fn collect_collection_types(
     let mut constructors = Vec::new();
     collect_type_constructors_expr(
         expr,
-        &file.source,
+        &type_node.file.source,
         depth,
         &|path, terminal| classify_collection(path, terminal, abc_set_imported).is_some(),
         &mut constructors,
@@ -476,12 +473,11 @@ pub fn collection_type(
     expression: &AstNode<'_>,
     abc_set_imported: bool,
 ) -> Option<PythonCollectionType> {
-    let file = expression.file_opt()?;
-    let expr = find_expr_at_span(file.py_module()?.syntax(), expression.span())?;
+    let expr = find_expr_at_span(expression.file.py_module()?.syntax(), expression.span())?;
     if !matches!(expr, Expr::Name(_) | Expr::Attribute(_)) {
         return None;
     }
-    let (path, name) = resolve_path_and_terminal_expr(expr, &file.source);
+    let (path, name) = resolve_path_and_terminal_expr(expr, &expression.file.source);
     let (kind, shape) = classify_collection(&path, &name, abc_set_imported)?;
     Some(PythonCollectionType {
         path,
@@ -495,8 +491,7 @@ pub fn collection_type(
 /// (`[...]`, `{a, b}`, `{k: v}`) or comprehension.
 #[must_use]
 pub fn collection_display(expression: &AstNode<'_>) -> Option<PythonCollectionType> {
-    let file = expression.file_opt()?;
-    let expr = find_expr_at_span(file.py_module()?.syntax(), expression.span())?;
+    let expr = find_expr_at_span(expression.file.py_module()?.syntax(), expression.span())?;
     let (name, shape) = match expr {
         Expr::List(_) | Expr::ListComp(_) => (LIST_CONSTRUCTOR, CollectionShape::Sequence),
         Expr::Set(_) | Expr::SetComp(_) => (SET_CONSTRUCTOR, CollectionShape::Set),
@@ -514,13 +509,12 @@ pub fn collection_display(expression: &AstNode<'_>) -> Option<PythonCollectionTy
 /// Decomposes a generic type annotation or subscript into `(base_type_node, type_arguments)`.
 #[must_use]
 pub fn extract_generic_type<'a>(node: &AstNode<'a>) -> Option<(AstNode<'a>, Vec<AstNode<'a>>)> {
-    let file = node.file_opt()?;
-    let expr = find_expr_at_span(file.py_module()?.syntax(), node.span())?;
+    let expr = find_expr_at_span(node.file.py_module()?.syntax(), node.span())?;
     let (base, args) = extract_generic_base_and_args(expr)?;
     Some((
-        AstNode::from_span(file, span_from_ruff_range(base.range())),
+        AstNode::from_span(node.file, span_from_ruff_range(base.range())),
         args.into_iter()
-            .map(|arg| AstNode::from_span(file, span_from_ruff_range(arg.range())))
+            .map(|arg| AstNode::from_span(node.file, span_from_ruff_range(arg.range())))
             .collect(),
     ))
 }
@@ -539,17 +533,14 @@ pub struct PythonReturnTypeUnion<'a> {
 /// `Coroutine[YieldT, SendT, ReturnT]`).
 #[must_use]
 pub fn unwrap_return_envelope<'a>(type_node: &AstNode<'a>) -> AstNode<'a> {
-    let Some(file) = type_node.file_opt() else {
-        return type_node.clone();
-    };
-    let Some(parsed) = file.py_module() else {
-        return type_node.clone();
+    let Some(parsed) = type_node.file.py_module() else {
+        return *type_node;
     };
     let Some(expr) = find_expr_at_span(parsed.syntax(), type_node.span()) else {
-        return type_node.clone();
+        return *type_node;
     };
-    let unwrapped = unwrap_return_envelope_expr(expr, &file.source);
-    AstNode::from_span(file, span_from_ruff_range(unwrapped.range()))
+    let unwrapped = unwrap_return_envelope_expr(expr, &type_node.file.source);
+    AstNode::from_span(type_node.file, span_from_ruff_range(unwrapped.range()))
 }
 
 fn unwrap_return_envelope_expr<'a>(mut current: &'a Expr, source: &str) -> &'a Expr {
@@ -625,13 +616,7 @@ fn collect_union_branches_expr<'a>(
 /// after unwrapping outer async and metadata envelopes (`Awaitable`, `Coroutine`, `Annotated`).
 #[must_use]
 pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnTypeUnion<'a> {
-    let Some(file) = return_type_node.file_opt() else {
-        return PythonReturnTypeUnion {
-            has_none: false,
-            branches: Vec::new(),
-        };
-    };
-    let Some(parsed) = file.py_module() else {
+    let Some(parsed) = return_type_node.file.py_module() else {
         return PythonReturnTypeUnion {
             has_none: false,
             branches: Vec::new(),
@@ -643,15 +628,22 @@ pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnType
             branches: Vec::new(),
         };
     };
-    let unwrapped = unwrap_return_envelope_expr(expr, &file.source);
+    let unwrapped = unwrap_return_envelope_expr(expr, &return_type_node.file.source);
     let mut has_none = false;
     let mut branches = Vec::new();
-    collect_union_branches_expr(unwrapped, &file.source, &mut has_none, &mut branches);
+    collect_union_branches_expr(
+        unwrapped,
+        &return_type_node.file.source,
+        &mut has_none,
+        &mut branches,
+    );
     PythonReturnTypeUnion {
         has_none,
         branches: branches
             .into_iter()
-            .map(|branch| AstNode::from_span(file, span_from_ruff_range(branch.range())))
+            .map(|branch| {
+                AstNode::from_span(return_type_node.file, span_from_ruff_range(branch.range()))
+            })
             .collect(),
     }
 }

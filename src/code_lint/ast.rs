@@ -1,9 +1,8 @@
-//! Concrete syntax tree (CST) and grammar encapsulation.
+//! Dedicated AST and CST parser encapsulation.
 //!
-//! Encapsulates `ast_grep_core` (`AstGrep`, `StrDoc`, `Node`) behind [`ParsedFile`] and an opaque
-//! [`AstNode`], and provides language-dispatched and language-specific CST extractors.
-//! No module outside `crate::code_lint::ast` imports `ast_grep_core` or accesses raw Tree-sitter
-//! node kinds, field names, or traversal iterators.
+//! Encapsulates `ruff_python_parser` / `ruff_python_ast` (Python) and `ra_ap_syntax` (Rust) behind
+//! [`ParsedFile`] and an opaque [`AstNode`], and provides language-dispatched and language-specific
+//! syntax extractors. No module outside `crate::code_lint::ast` imports parser crates directly.
 
 architecture_component!(CodeLintAst);
 
@@ -25,72 +24,11 @@ pub mod python;
 pub mod rust;
 pub mod statements;
 
-use crate::diagnostic::{Language, LineColumn, SourceLocation, SourceSpan};
-use ast_grep_core::AstGrep;
-use ast_grep_core::tree_sitter::StrDoc;
-use ast_grep_language::SupportLang;
+use crate::diagnostic::{Language, LineColumn, LineIndex, SourceLocation, SourceSpan};
 use ra_ap_syntax::AstNode as _;
 use ruff_text_size::Ranged;
 use std::collections::HashSet;
 use std::path::PathBuf;
-
-/// Type alias for an in-memory source document parsed by `ast-grep`.
-pub(in crate::code_lint::ast) type SourceDoc = StrDoc<SupportLang>;
-
-/// Internal type alias for a raw `ast-grep` syntax tree node.
-pub(in crate::code_lint::ast) type RawNode<'a> = ast_grep_core::Node<'a, SourceDoc>;
-
-/// The `ast-grep` grammar that parses `lang`.
-const fn to_support_lang(lang: Language) -> SupportLang {
-    match lang {
-        Language::Python => SupportLang::Python,
-        Language::Rust => SupportLang::Rust,
-    }
-}
-
-/// Precomputed byte offsets of line starts in a source file for O(log L) line/column lookup.
-pub(in crate::code_lint::ast) struct LineIndex {
-    /// Byte offset of the start of each 0-indexed line. Always starts with `0`.
-    line_starts: Vec<u32>,
-}
-
-impl LineIndex {
-    #[must_use]
-    pub(in crate::code_lint::ast) fn new(source: &str) -> Self {
-        let mut line_starts = vec![0_u32];
-        for (idx, byte) in source.bytes().enumerate() {
-            if byte == b'\n'
-                && let Ok(next) = u32::try_from(idx + 1)
-            {
-                line_starts.push(next);
-            }
-        }
-        Self { line_starts }
-    }
-
-    /// Returns the 1-indexed line number containing `byte_offset`.
-    #[must_use]
-    pub(in crate::code_lint::ast) fn line(&self, byte_offset: usize) -> usize {
-        let offset_u32 = u32::try_from(byte_offset).unwrap_or(u32::MAX);
-        self.line_starts
-            .partition_point(|&start| start <= offset_u32)
-    }
-
-    /// Returns the 1-indexed `(line, column)` (where `column` counts Unicode scalar values)
-    /// for `byte_offset` in `source`.
-    #[must_use]
-    pub(in crate::code_lint::ast) fn line_column(
-        &self,
-        source: &str,
-        byte_offset: usize,
-    ) -> LineColumn {
-        let line = self.line(byte_offset);
-        let line_start = self.line_starts[line - 1] as usize;
-        let clamped_end = byte_offset.min(source.len()).max(line_start);
-        let column = source[line_start..clamped_end].chars().count() + 1;
-        LineColumn { line, column }
-    }
-}
 
 /// Dedicated language-specific parsed syntax tree.
 pub(in crate::code_lint::ast) enum CodeLintAst {
@@ -110,7 +48,6 @@ pub(in crate::code_lint::ast) enum CodeLintAst {
 /// The inner syntax tree is restricted to `crate::code_lint::ast` so that higher layers
 /// (semantic engines, rule traits, and lint rules) interact strictly through typed AST helpers.
 pub struct ParsedFile {
-    pub(in crate::code_lint::ast) grep: AstGrep<SourceDoc>,
     pub(in crate::code_lint::ast) source: String,
     pub(in crate::code_lint::ast) line_index: LineIndex,
     pub(in crate::code_lint::ast) ast: CodeLintAst,
@@ -129,7 +66,6 @@ impl ParsedFile {
             )),
         };
         Self {
-            grep: AstGrep::new(source, to_support_lang(lang)),
             source: source.to_string(),
             line_index: LineIndex::new(source),
             ast,
@@ -188,132 +124,63 @@ impl ParsedFile {
     }
 }
 
-/// Internal backing representation of an [`AstNode`] during the P3 migration.
-#[derive(Clone)]
-pub(in crate::code_lint::ast) enum AstNodeRepr<'a> {
-    /// Transitional `ast-grep` node (removed in Slice 5).
-    Raw(RawNode<'a>),
-    /// Dedicated byte span within `file`.
-    Span {
-        file: &'a ParsedFile,
-        span: SourceSpan,
-    },
-}
-
 /// An opaque syntax tree node exposing source text and span coordinates without leaking
 /// low-level grammar vocabulary.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct AstNode<'a> {
-    pub(in crate::code_lint::ast) repr: AstNodeRepr<'a>,
+    pub(in crate::code_lint::ast) file: &'a ParsedFile,
+    pub(in crate::code_lint::ast) span: SourceSpan,
 }
 
 impl<'a> AstNode<'a> {
-    #[must_use]
-    pub(in crate::code_lint::ast) const fn from_raw(raw: RawNode<'a>) -> Self {
-        Self {
-            repr: AstNodeRepr::Raw(raw),
-        }
-    }
-
     #[must_use]
     pub(in crate::code_lint::ast) const fn from_span(
         file: &'a ParsedFile,
         span: SourceSpan,
     ) -> Self {
-        Self {
-            repr: AstNodeRepr::Span { file, span },
-        }
-    }
-
-    /// Returns the transitional `RawNode` if backed by `ast-grep`.
-    #[must_use]
-    pub(in crate::code_lint::ast) const fn raw_opt(&self) -> Option<&RawNode<'a>> {
-        match &self.repr {
-            AstNodeRepr::Raw(raw) => Some(raw),
-            AstNodeRepr::Span { .. } => None,
-        }
-    }
-
-    /// Returns the owning [`ParsedFile`] if backed by a dedicated span.
-    #[must_use]
-    pub(in crate::code_lint::ast) const fn file_opt(&self) -> Option<&'a ParsedFile> {
-        match &self.repr {
-            AstNodeRepr::Span { file, .. } => Some(file),
-            AstNodeRepr::Raw(_) => None,
-        }
+        Self { file, span }
     }
 
     /// Returns the source text slice spanned by this node.
     #[must_use]
     pub fn text(&self) -> std::borrow::Cow<'_, str> {
-        match &self.repr {
-            AstNodeRepr::Raw(raw) => raw.text(),
-            AstNodeRepr::Span { file, span } => {
-                std::borrow::Cow::Borrowed(&file.source[span.start..span.end])
-            }
-        }
+        std::borrow::Cow::Borrowed(&self.file.source[self.span.start..self.span.end])
     }
 
     /// Returns the programming language of the file containing this node.
     #[must_use]
-    pub fn lang(&self) -> Language {
-        match &self.repr {
-            AstNodeRepr::Raw(raw) => match *raw.lang() {
-                SupportLang::Python => Language::Python,
-                _ => Language::Rust,
-            },
-            AstNodeRepr::Span { file, .. } => file.lang(),
-        }
+    pub const fn lang(&self) -> Language {
+        self.file.lang()
     }
 
     /// Returns the [`SourceSpan`] (byte range) of this node.
     #[must_use]
-    pub fn span(&self) -> SourceSpan {
-        match &self.repr {
-            AstNodeRepr::Raw(raw) => SourceSpan::from_range(raw.range()),
-            AstNodeRepr::Span { span, .. } => *span,
-        }
+    pub const fn span(&self) -> SourceSpan {
+        self.span
     }
 
     /// Returns the 1-indexed starting line number of this node.
     #[must_use]
     pub fn start_line(&self) -> usize {
-        match &self.repr {
-            AstNodeRepr::Raw(raw) => raw.start_pos().line() + 1,
-            AstNodeRepr::Span { file, span } => file.line_index.line(span.start),
-        }
+        self.file.line_index.line(self.span.start)
     }
 
     /// Returns the 1-indexed ending line number of this node.
     #[must_use]
     pub fn end_line(&self) -> usize {
-        match &self.repr {
-            AstNodeRepr::Raw(raw) => raw.end_pos().line() + 1,
-            AstNodeRepr::Span { file, span } => file.line_index.line(span.end),
-        }
+        self.file.line_index.line(self.span.end)
     }
 
     /// Resolves the 1-indexed start `(line, column)` coordinate of this node.
     #[must_use]
     pub fn start_coordinate(&self) -> LineColumn {
-        match &self.repr {
-            AstNodeRepr::Raw(raw) => {
-                let start_pos = raw.start_pos();
-                LineColumn {
-                    line: start_pos.line() + 1,
-                    column: start_pos.column(raw) + 1,
-                }
-            }
-            AstNodeRepr::Span { file, span } => {
-                file.line_index.line_column(&file.source, span.start)
-            }
-        }
+        self.file.line_index.lookup(self.span.start)
     }
 
     /// Constructs a [`SourceLocation`] for this node inside the file at `path`.
     #[must_use]
     pub fn to_source_location(&self, path: impl Into<PathBuf>) -> SourceLocation {
-        SourceLocation::file_span(path, self.span(), self.start_coordinate())
+        SourceLocation::file_span(path, self.span, self.start_coordinate())
     }
 }
 
@@ -589,9 +456,9 @@ pub fn collect_positional_reads(file: &ParsedFile) -> Vec<ScopePositionalReads<'
 /// A literal's normalized value: equal values are the same literal whatever their spelling.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LiteralValue {
-    /// String content as written between the delimiters (escapes not decoded).
+    /// Decoded string content.
     Str(String),
-    /// Byte-string content as written between the delimiters.
+    /// Decoded byte-string content.
     Bytes(String),
     /// Integer value, with digit separators, base prefix and type suffix resolved.
     Int(i128),
@@ -661,22 +528,6 @@ pub(in crate::code_lint::ast) fn parse_integer_literal(text: &str) -> Option<Lit
 /// Parses a decimal float literal with digit separators (`1_000.5`, `1e3`, `.5`).
 pub(in crate::code_lint::ast) fn parse_float_literal(text: &str) -> Option<LiteralValue> {
     text.replace('_', "").parse().ok().map(LiteralValue::float)
-}
-
-/// Splits a string node whose first and last children are its delimiters into the opening
-/// delimiter (prefix included, e.g. `b"`) and the content between the delimiters.
-pub(in crate::code_lint::ast) fn delimited_string_parts(node: &RawNode<'_>) -> (String, String) {
-    let text = node.text();
-    let opening = node
-        .child(0)
-        .map(|child| child.text().into_owned())
-        .unwrap_or_default();
-    let closing_len = node.children().last().map_or(0, |child| child.text().len());
-    let content = text
-        .get(opening.len()..text.len().saturating_sub(closing_len))
-        .unwrap_or_default()
-        .to_owned();
-    (opening, content)
 }
 
 /// Collects all binding definition nodes from a parsed file.
@@ -828,31 +679,12 @@ pub fn enclosing_non_exempt_function_name(
     lang: Language,
     is_exempt: impl Fn(&str, bool) -> bool,
 ) -> Option<String> {
-    if let Some(file) = node.file_opt() {
-        let span = node.span();
-        return match lang {
-            Language::Python => python_enclosing_non_exempt_function_name(file, span, is_exempt),
-            Language::Rust => rust_enclosing_non_exempt_function_name(file, span, is_exempt),
-        };
-    }
-
-    let raw = node.raw_opt()?;
-    let mut nearest_function_name: Option<String> = None;
-    for ancestor in raw.ancestors() {
-        let func_info = match lang {
-            Language::Python => python::function_name_and_is_top_level(&ancestor),
-            Language::Rust => None,
-        };
-        if let Some((func_name, is_top_level)) = func_info {
-            if is_exempt(&func_name, is_top_level) {
-                return None;
-            }
-            if nearest_function_name.is_none() {
-                nearest_function_name = Some(func_name.into_owned());
-            }
+    match lang {
+        Language::Python => {
+            python_enclosing_non_exempt_function_name(node.file, node.span, is_exempt)
         }
+        Language::Rust => rust_enclosing_non_exempt_function_name(node.file, node.span, is_exempt),
     }
-    nearest_function_name
 }
 
 #[cfg(test)]

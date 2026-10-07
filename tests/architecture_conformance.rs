@@ -16,8 +16,11 @@ use omni::code_lint::ast::rust::{
 };
 use strum::VariantArray;
 
-/// The only modules allowed to handle raw ast-grep types.
-const AST_GREP_OWNERS: &[&str] = &["code_lint::ast", "command_lint::command", "bin::ast_dumper"];
+/// The only modules allowed to handle raw ast-grep types (`ast_grep_core`, `ast_grep_language`).
+const AST_GREP_OWNERS: &[&str] = &["command_lint::command"];
+
+/// The only modules allowed to handle dedicated Python/Rust parser crates directly.
+const DEDICATED_AST_OWNERS: &[&str] = &["code_lint::ast", "bin::ast_dumper"];
 
 /// Cached structural and dependency summary of a single `.rs` file under `src/`.
 #[derive(Debug, Clone)]
@@ -424,11 +427,27 @@ static ARCHITECTURE_CONFORMANCE_RULES: LazyLock<Vec<ForbiddenDependencyRule>> =
     });
 
 fn ast_grep_encapsulation_rules() -> Vec<ForbiddenDependencyRule> {
-    vec![ForbiddenDependencyRule {
-        subject_prefix: String::new(),
-        forbidden_prefixes: vec!["ast_grep_core".to_string()],
-        exempt_prefixes: AST_GREP_OWNERS.iter().copied().map(str::to_owned).collect(),
-    }]
+    vec![
+        ForbiddenDependencyRule {
+            subject_prefix: String::new(),
+            forbidden_prefixes: vec!["ast_grep_core".to_string(), "ast_grep_language".to_string()],
+            exempt_prefixes: AST_GREP_OWNERS.iter().copied().map(str::to_owned).collect(),
+        },
+        ForbiddenDependencyRule {
+            subject_prefix: String::new(),
+            forbidden_prefixes: vec![
+                "ruff_python_parser".to_string(),
+                "ruff_python_ast".to_string(),
+                "ruff_text_size".to_string(),
+                "ra_ap_syntax".to_string(),
+            ],
+            exempt_prefixes: DEDICATED_AST_OWNERS
+                .iter()
+                .copied()
+                .map(str::to_owned)
+                .collect(),
+        },
+    ]
 }
 
 fn violations_in(files: &[SourceFileEntry], rules: &[ForbiddenDependencyRule]) -> Vec<String> {

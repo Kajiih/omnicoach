@@ -36,8 +36,7 @@ const COW_TYPE_NAME: &str = "Cow";
 
 /// Resolves the deepest [`SyntaxNode`] in `node`'s file covering `node.span()`.
 fn syntax_node(node: &AstNode<'_>) -> Option<SyntaxNode> {
-    let file = node.file_opt()?;
-    let parsed = file.rs_parsed()?;
+    let parsed = node.file.rs_parsed()?;
     let span = node.span();
     let start_offset = u32::try_from(span.start).ok()?;
     let end_offset = u32::try_from(span.end).ok()?;
@@ -536,9 +535,6 @@ pub fn has_top_level_logical_and(macro_node: &AstNode<'_>) -> bool {
 /// Extracts the argument nodes inside a Rust `macro_invocation`'s `token_tree`.
 #[must_use]
 pub fn extract_macro_arguments<'a>(macro_node: &AstNode<'a>) -> Vec<AstNode<'a>> {
-    let Some(file) = macro_node.file_opt() else {
-        return Vec::new();
-    };
     let Some(macro_call) = cast_at_span::<ast::MacroCall>(macro_node) else {
         return Vec::new();
     };
@@ -547,7 +543,9 @@ pub fn extract_macro_arguments<'a>(macro_node: &AstNode<'a>) -> Vec<AstNode<'a>>
     };
     meaningful_token_tree_elements(&token_tree)
         .into_iter()
-        .map(|element| AstNode::from_span(file, span_from_rowan_range(element.text_range())))
+        .map(|element| {
+            AstNode::from_span(macro_node.file, span_from_rowan_range(element.text_range()))
+        })
         .collect()
 }
 
@@ -1767,21 +1765,23 @@ pub fn collect_functions(file: &ParsedFile) -> Vec<RustFunction<'_>> {
 /// Unwraps outer `Result<T, ...>` and `Poll<T>` return type envelopes from `node`.
 #[must_use]
 pub fn unwrap_return_envelope<'a>(node: &AstNode<'a>) -> AstNode<'a> {
-    let (Some(file), Some(type_node)) = (node.file_opt(), cast_at_span::<ast::Type>(node)) else {
-        return node.clone();
+    let Some(type_node) = cast_at_span::<ast::Type>(node) else {
+        return *node;
     };
-    let unwrapped = unwrap_rust_return_envelope(type_node, &file.source);
-    AstNode::from_span(file, span_from_rowan_range(unwrapped.syntax().text_range()))
+    let unwrapped = unwrap_rust_return_envelope(type_node, &node.file.source);
+    AstNode::from_span(
+        node.file,
+        span_from_rowan_range(unwrapped.syntax().text_range()),
+    )
 }
 
 /// If `node` is `Option<T>` (unqualified, `std::option::Option`, or `core::option::Option`),
 /// returns the inner type node `T`.
 #[must_use]
 pub fn extract_option_payload<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
-    let file = node.file_opt()?;
     let path_type = cast_at_span::<ast::PathType>(node)?;
     let (_, (option_path, option_terminal), option_args) =
-        extract_path_type_generics(&path_type, &file.source)?;
+        extract_path_type_generics(&path_type, &node.file.source)?;
     if option_terminal != OPTION_TYPE_NAME
         || !matches!(
             option_path.as_str(),
@@ -1793,7 +1793,7 @@ pub fn extract_option_payload<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
     }
     let payload = option_args.into_iter().next()?;
     Some(AstNode::from_span(
-        file,
+        node.file,
         span_from_rowan_range(payload.syntax().text_range()),
     ))
 }
@@ -1802,25 +1802,30 @@ pub fn extract_option_payload<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
 /// `Arc<T>`, `Cow<'_, T>`) around a Rust type node.
 #[must_use]
 pub fn unwrap_pointer_wrappers<'a>(node: &AstNode<'a>) -> AstNode<'a> {
-    let (Some(file), Some(type_node)) = (node.file_opt(), cast_at_span::<ast::Type>(node)) else {
-        return node.clone();
+    let Some(type_node) = cast_at_span::<ast::Type>(node) else {
+        return *node;
     };
-    let unwrapped = unwrap_rust_pointer_wrappers(type_node, &file.source);
-    AstNode::from_span(file, span_from_rowan_range(unwrapped.syntax().text_range()))
+    let unwrapped = unwrap_rust_pointer_wrappers(type_node, &node.file.source);
+    AstNode::from_span(
+        node.file,
+        span_from_rowan_range(unwrapped.syntax().text_range()),
+    )
 }
 
 /// Extracts `(base_node, type_argument_nodes)` from a Rust `generic_type` node.
 #[must_use]
 pub fn extract_generic_type<'a>(node: &AstNode<'a>) -> Option<(AstNode<'a>, Vec<AstNode<'a>>)> {
-    let file = node.file_opt()?;
     let path_type = cast_at_span::<ast::PathType>(node)?;
-    let (base_span, _, type_args) = extract_path_type_generics(&path_type, &file.source)?;
+    let (base_span, _, type_args) = extract_path_type_generics(&path_type, &node.file.source)?;
     Some((
-        AstNode::from_span(file, base_span),
+        AstNode::from_span(node.file, base_span),
         type_args
             .into_iter()
             .map(|type_arg| {
-                AstNode::from_span(file, span_from_rowan_range(type_arg.syntax().text_range()))
+                AstNode::from_span(
+                    node.file,
+                    span_from_rowan_range(type_arg.syntax().text_range()),
+                )
             })
             .collect(),
     ))

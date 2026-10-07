@@ -45,7 +45,10 @@ rust_2018_idioms = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
-# TODO: Why not in clippy.toml?
+# Clippy lint severity levels (`allow` / `warn` / `deny`) can only be configured in
+# `[lints.clippy]` (`clippy.toml` only accepts lint-specific configuration parameters);
+# `ruff_python_parser` and `ra_ap_syntax` pull in different versions of shared transitive
+# crates (such as `itertools` and `hashbrown`).
 multiple_crate_versions = "allow"
 unwrap_used = "deny"
 expect_used = "deny"
@@ -62,13 +65,12 @@ private_intra_doc_links = "deny"
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 toml = { version = "1.1", features = ["preserve_order"] }
-ast-grep-core = "0.45" # SOTA structural search using tree-sitter
-ast-grep-language = "0.45"
-# TODO: Why hardcode the versions?
-ruff_python_parser = "=0.0.16"
-ruff_python_ast = "=0.0.16"
-ruff_text_size = "=0.0.16"
-ra_ap_syntax = "=0.0.357"
+ast-grep-core = "0.45" # SOTA structural search using tree-sitter (used by command_lint)
+ast-grep-language = { version = "0.45", default-features = false, features = ["tree-sitter-bash"] }
+ruff_python_parser = "0.0.16"
+ruff_python_ast = "0.0.16"
+ruff_text_size = "0.0.16"
+ra_ap_syntax = "0.0.357"
 shell-words = "1.1" # Safe shell tokenization for cmd guard
 serde_json = "1.0"
 clap = { version = "4.5", features = ["derive"] }

@@ -1,34 +1,42 @@
 //! AST Dumper
-//! A utility to dump concrete syntax trees for Rust and Python constructs.
+//! A utility to dump syntax trees for Rust and Python constructs.
 
 omni::architecture_component!(Bin);
 
-use ast_grep_core::AstGrep;
-use ast_grep_core::tree_sitter::StrDoc;
-use ast_grep_language::SupportLang;
+use ra_ap_syntax::{Edition, SourceFile, SyntaxElement, SyntaxNode};
 
-type AstNode<'a> = ast_grep_core::Node<'a, StrDoc<SupportLang>>;
-
-fn print_tree(node: &AstNode<'_>, depth: usize) {
+fn print_rust_tree(node: &SyntaxNode, depth: usize) {
     let indent = "  ".repeat(depth);
     println!(
-        "{}{:?} ({}) [{:?}]",
+        "{}{:?} ({:?}) [{:?}]",
         indent,
         node.kind(),
         node.text(),
-        node.range()
+        node.text_range()
     );
 
-    for child in node.children() {
-        print_tree(&child, depth + 1);
+    for child in node.children_with_tokens() {
+        match child {
+            SyntaxElement::Node(child_node) => print_rust_tree(&child_node, depth + 1),
+            SyntaxElement::Token(token) => {
+                let token_indent = "  ".repeat(depth + 1);
+                println!(
+                    "{}{:?} ({:?}) [{:?}]",
+                    token_indent,
+                    token.kind(),
+                    token.text(),
+                    token.text_range()
+                );
+            }
+        }
     }
 }
 
 fn main() {
     println!("--- RUST STRUCT DESTRUCTURING EXPLICIT AST ---");
-    let rust_source = "let Point { x: f, y: _ } = p;";
-    let grep_rust = AstGrep::new(rust_source, SupportLang::Rust);
-    print_tree(&grep_rust.root(), 0);
+    let rust_source = "fn sample() { let Point { x: first, y: _ } = point; }";
+    let parsed_rust = SourceFile::parse(rust_source, Edition::Edition2024);
+    print_rust_tree(&parsed_rust.syntax_node(), 0);
 
     println!("\n--- PYTHON COMPREHENSIONS AST ---");
     let python_source = indoc::indoc! {r"
@@ -37,6 +45,6 @@ fn main() {
         {c for c in range(10)}
         (d for d in range(10))
     "};
-    let grep_python = AstGrep::new(python_source, SupportLang::Python);
-    print_tree(&grep_python.root(), 0);
+    let parsed_python = ruff_python_parser::parse_module(python_source);
+    println!("{parsed_python:#?}");
 }

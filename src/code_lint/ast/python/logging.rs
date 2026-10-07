@@ -101,7 +101,7 @@ pub(super) fn extract_logger_call<'a>(
     Some(PythonLoggerCall {
         node: AstNode::from_span(file, span_from_ruff_range(call.range())),
         callee: file.source[func_span.start..func_span.end].to_owned(),
-        message: static_string_text(message_expr, &file.source),
+        message: static_string_text(message_expr),
         has_trailing_positional_args: call.arguments.args.len() > message_index + 1,
         has_keyword_splat,
         keyword_names,
