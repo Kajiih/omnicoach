@@ -122,7 +122,7 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
     let inline_test_ranges = if !is_test && lang == Language::Rust {
         ast::rust::collect_inline_test_ranges(&file)
     } else {
-        Vec::new()
+        &[][..]
     };
     let has_inline_tests = !inline_test_ranges.is_empty();
     let mut raw_diagnostics = Vec::new();
@@ -138,7 +138,7 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
             rule.check_file(path, &file, overrides),
             rule.target(),
             is_test,
-            &inline_test_ranges,
+            inline_test_ranges,
         ));
     }
 

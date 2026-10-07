@@ -165,18 +165,10 @@ impl<'a> LiteralGroup<'a> {
 /// Groups the file's non-trivial literals by value, in first-seen order. Rust test code is
 /// left out so a test literal cannot pair with a production one.
 fn group_literals(file: &ParsedFile) -> Vec<LiteralGroup<'_>> {
-    let test_ranges = if file.lang() == Language::Rust {
-        ast::rust::collect_inline_test_ranges(file)
-    } else {
-        Vec::new()
-    };
     let mut index_by_value: HashMap<LiteralValue, usize> = HashMap::new();
     let mut groups: Vec<LiteralGroup<'_>> = Vec::new();
     for occurrence in ast::collect_literal_occurrences(file) {
-        let start = occurrence.node.span().start;
-        if is_trivial_literal(&occurrence.value)
-            || test_ranges.iter().any(|range| range.contains(&start))
-        {
+        if is_trivial_literal(&occurrence.value) || occurrence.node.is_in_rust_inline_test() {
             continue;
         }
         let index = *index_by_value.entry(occurrence.value).or_insert_with(|| {

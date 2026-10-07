@@ -78,11 +78,7 @@ pub const RULE: CodeRule = CodeRule {
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     extract_classes(file)
         .into_iter()
-        .filter(|class| {
-            class
-                .dataclass_decorator()
-                .is_some_and(|decorator| !decorator.has_arg("slots"))
-        })
+        .filter(|class| class.is_dataclass_missing_arg("slots"))
         .map(|class| rule.diagnostic_at_node(path, &class.name_node, &[("class", &class.name)]))
         .collect()
 }

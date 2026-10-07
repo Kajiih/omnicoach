@@ -252,7 +252,7 @@ Each slice is designed to compile cleanly and pass `cargo fmt --check && cargo c
 3. [Slice 3: Rust AST (ra_ap_syntax)]    → verify: ast/rust.rs 100% migrated; 0 RawNode in rust.rs (DONE)
 4. [Slice 4: Python AST Submodules]      → verify: ast/python/{strings,format_strings,logging,annotations,classes,functions,scopes}.rs migrated (DONE)
 5. [Slice 5: Python Root + Drop AstGrep] → verify: ast/python.rs migrated; 0 AstGrep in code_lint; ast-grep-language trimmed to bash (DONE)
-6. [Slice 6: Boundaries + Memoization + Zero-Legacy Audit] → verify: OnceLock caches + visibility tightening + Phase 5/6 audit 100% green
+6. [Slice 6: Boundaries + Memoization + Zero-Legacy Audit] → verify: OnceLock caches + visibility tightening + Phase 5/6 audit 100% green (DONE)
 ```
 
 ### Slice 0 — Toolchain Update (`rustc 1.99.0`) — DONE

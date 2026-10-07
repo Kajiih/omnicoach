@@ -115,8 +115,22 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
         file: &ParsedFile,
         banned: &HashSet<String>,
     ) -> Vec<Diagnostic> {
+        self.check_banned_calls_where(path, file, banned, |_| true)
+    }
+
+    /// Emits a diagnostic with `("callee", &matched.callee)` for every call in `file` to one of
+    /// the `banned` callees that satisfies `predicate`.
+    #[must_use]
+    pub fn check_banned_calls_where(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        banned: &HashSet<String>,
+        predicate: impl FnMut(&calls::CallMatch<'_>) -> bool,
+    ) -> Vec<Diagnostic> {
         calls::find_banned_calls(file, banned)
             .into_iter()
+            .filter(predicate)
             .map(|matched| {
                 self.diagnostic_at_node(path, &matched.node, &[("callee", &matched.callee)])
             })

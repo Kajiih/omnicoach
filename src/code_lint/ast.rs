@@ -29,6 +29,16 @@ use ra_ap_syntax::AstNode as _;
 use ruff_text_size::Ranged;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::OnceLock;
+
+/// Cached call expression metadata without lifetime ties to `ParsedFile`.
+pub(in crate::code_lint::ast) struct CachedCallCandidate {
+    span: SourceSpan,
+    callee: String,
+    method_name: Option<String>,
+    receiver_call_callee: Option<String>,
+    argument_spans: Vec<SourceSpan>,
+}
 
 /// Dedicated language-specific parsed syntax tree.
 pub(in crate::code_lint::ast) enum CodeLintAst {
@@ -47,11 +57,18 @@ pub(in crate::code_lint::ast) enum CodeLintAst {
 ///
 /// The inner syntax tree is restricted to `crate::code_lint::ast` so that higher layers
 /// (semantic engines, rule traits, and lint rules) interact strictly through typed AST helpers.
+/// File-level queries shared across multiple rules or semantic engines are memoized via `OnceLock`.
 pub struct ParsedFile {
     pub(in crate::code_lint::ast) source: String,
     pub(in crate::code_lint::ast) line_index: LineIndex,
     pub(in crate::code_lint::ast) ast: CodeLintAst,
     lang: Language,
+    pub(in crate::code_lint::ast) comment_spans: OnceLock<Vec<SourceSpan>>,
+    pub(in crate::code_lint::ast) binding_spans: OnceLock<Vec<SourceSpan>>,
+    pub(in crate::code_lint::ast) call_candidates: OnceLock<Vec<CachedCallCandidate>>,
+    pub(in crate::code_lint::ast) rust_inline_test_ranges: OnceLock<Vec<std::ops::Range<usize>>>,
+    pub(in crate::code_lint::ast) abc_set_imported: OnceLock<bool>,
+    pub(in crate::code_lint::ast) locally_mutated_return_functions: OnceLock<HashSet<String>>,
 }
 
 impl ParsedFile {
@@ -70,6 +87,12 @@ impl ParsedFile {
             line_index: LineIndex::new(source),
             ast,
             lang,
+            comment_spans: OnceLock::new(),
+            binding_spans: OnceLock::new(),
+            call_candidates: OnceLock::new(),
+            rust_inline_test_ranges: OnceLock::new(),
+            abc_set_imported: OnceLock::new(),
+            locally_mutated_return_functions: OnceLock::new(),
         }
     }
 
@@ -99,6 +122,15 @@ impl ParsedFile {
             CodeLintAst::Python(Err(_)) => true,
             CodeLintAst::Rust(parsed) => !parsed.errors().is_empty(),
         }
+    }
+
+    /// Returns true if `offset` lies inside a Rust `#[cfg(test)]` or `#[test]` item.
+    #[must_use]
+    pub fn is_in_rust_inline_test(&self, offset: usize) -> bool {
+        self.lang == Language::Rust
+            && rust::collect_inline_test_ranges(self)
+                .iter()
+                .any(|range| range.contains(&offset))
     }
 
     /// Returns the parsed Python module if this is a Python file without fatal parse failure.
@@ -177,6 +209,12 @@ impl<'a> AstNode<'a> {
         self.file.line_index.lookup(self.span.start)
     }
 
+    /// Returns true if this node starts inside a Rust `#[cfg(test)]` or `#[test]` item.
+    #[must_use]
+    pub fn is_in_rust_inline_test(&self) -> bool {
+        self.file.is_in_rust_inline_test(self.span.start)
+    }
+
     /// Constructs a [`SourceLocation`] for this node inside the file at `path`.
     #[must_use]
     pub fn to_source_location(&self, path: impl Into<PathBuf>) -> SourceLocation {
@@ -218,12 +256,12 @@ pub(in crate::code_lint::ast) const fn is_rust_comment_kind(
 /// for Rust so non-comment trivia (such as Python line continuations) is never included.
 #[must_use]
 pub fn collect_comment_nodes(file: &ParsedFile) -> Vec<AstNode<'_>> {
-    match &file.ast {
+    let spans = file.comment_spans.get_or_init(|| match &file.ast {
         CodeLintAst::Python(Ok(parsed)) => parsed
             .tokens()
             .iter()
             .filter(|token| token.kind() == ruff_python_ast::token::TokenKind::Comment)
-            .map(|token| AstNode::from_span(file, span_from_ruff_range(token.range())))
+            .map(|token| span_from_ruff_range(token.range()))
             .collect(),
         CodeLintAst::Python(Err(_)) => Vec::new(),
         CodeLintAst::Rust(parsed) => parsed
@@ -233,10 +271,14 @@ pub fn collect_comment_nodes(file: &ParsedFile) -> Vec<AstNode<'_>> {
             .filter_map(|element| {
                 let token = element.into_token()?;
                 is_rust_comment_kind(token.kind())
-                    .then(|| AstNode::from_span(file, span_from_rowan_range(token.text_range())))
+                    .then(|| span_from_rowan_range(token.text_range()))
             })
             .collect(),
-    }
+    });
+    spans
+        .iter()
+        .map(|&span| AstNode::from_span(file, span))
+        .collect()
 }
 
 /// Candidate call expression extracted from the syntax tree.
@@ -255,13 +297,13 @@ pub struct AstCallCandidate<'a> {
 }
 
 /// Collects all direct call expressions in a Python file using `ruff_python_ast`.
-fn collect_python_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> {
+fn collect_python_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate> {
     use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
     use ruff_python_ast::{Expr, ExprCall};
 
     struct CallVisitor<'a> {
         file: &'a ParsedFile,
-        out: Vec<AstCallCandidate<'a>>,
+        out: Vec<CachedCallCandidate>,
     }
 
     impl<'a> SourceOrderVisitor<'a> for CallVisitor<'a> {
@@ -289,9 +331,7 @@ fn collect_python_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>
                 } else {
                     (None, None)
                 };
-            let mut arguments =
-                Vec::with_capacity(call.arguments.args.len() + call.arguments.keywords.len());
-            let mut arg_spans: Vec<SourceSpan> = call
+            let mut argument_spans: Vec<SourceSpan> = call
                 .arguments
                 .args
                 .iter()
@@ -303,16 +343,13 @@ fn collect_python_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>
                         .map(|kw| span_from_ruff_range(kw.range())),
                 )
                 .collect();
-            arg_spans.sort_by_key(|span| (span.start, span.end));
-            for span in arg_spans {
-                arguments.push(AstNode::from_span(self.file, span));
-            }
-            self.out.push(AstCallCandidate {
-                node: AstNode::from_span(self.file, span_from_ruff_range(call.range())),
+            argument_spans.sort_by_key(|span| (span.start, span.end));
+            self.out.push(CachedCallCandidate {
+                span: span_from_ruff_range(call.range()),
                 callee,
                 method_name,
                 receiver_call_callee,
-                arguments,
+                argument_spans,
             });
         }
     }
@@ -348,7 +385,7 @@ fn rust_call_callee_text(expr: &ra_ap_syntax::ast::Expr, source: &str) -> Option
 }
 
 /// Collects all direct call and method-call expressions in a Rust file using `ra_ap_syntax`.
-fn collect_rust_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> {
+fn collect_rust_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate> {
     use ra_ap_syntax::ast::{self, HasArgList as _};
 
     let Some(parsed) = file.rs_parsed() else {
@@ -362,20 +399,18 @@ fn collect_rust_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> 
             };
             let func_span = span_from_rowan_range(func.syntax().text_range());
             let callee = file.source[func_span.start..func_span.end].to_string();
-            let arguments = call.arg_list().map_or_else(Vec::new, |arguments| {
+            let argument_spans = call.arg_list().map_or_else(Vec::new, |arguments| {
                 arguments
                     .args()
-                    .map(|arg| {
-                        AstNode::from_span(file, span_from_rowan_range(arg.syntax().text_range()))
-                    })
+                    .map(|arg| span_from_rowan_range(arg.syntax().text_range()))
                     .collect()
             });
-            out.push(AstCallCandidate {
-                node: AstNode::from_span(file, span_from_rowan_range(call.syntax().text_range())),
+            out.push(CachedCallCandidate {
+                span: span_from_rowan_range(call.syntax().text_range()),
                 callee,
                 method_name: None,
                 receiver_call_callee: None,
-                arguments,
+                argument_spans,
             });
         } else if let Some(method_call) = ast::MethodCallExpr::cast(syntax_node) {
             let (Some(receiver), Some(name_ref)) = (method_call.receiver(), method_call.name_ref())
@@ -387,23 +422,18 @@ fn collect_rust_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> 
             let callee = file.source[start..end].to_string();
             let method_name = Some(name_ref.text().to_string());
             let receiver_call_callee = rust_call_callee_text(&receiver, &file.source);
-            let arguments = method_call.arg_list().map_or_else(Vec::new, |arguments| {
+            let argument_spans = method_call.arg_list().map_or_else(Vec::new, |arguments| {
                 arguments
                     .args()
-                    .map(|arg| {
-                        AstNode::from_span(file, span_from_rowan_range(arg.syntax().text_range()))
-                    })
+                    .map(|arg| span_from_rowan_range(arg.syntax().text_range()))
                     .collect()
             });
-            out.push(AstCallCandidate {
-                node: AstNode::from_span(
-                    file,
-                    span_from_rowan_range(method_call.syntax().text_range()),
-                ),
+            out.push(CachedCallCandidate {
+                span: span_from_rowan_range(method_call.syntax().text_range()),
                 callee,
                 method_name,
                 receiver_call_callee,
-                arguments,
+                argument_spans,
             });
         }
     }
@@ -414,10 +444,24 @@ fn collect_rust_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> 
 /// target name, and semantic argument nodes.
 #[must_use]
 pub fn collect_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> {
-    match file.lang() {
+    let cached = file.call_candidates.get_or_init(|| match file.lang() {
         Language::Python => collect_python_call_candidates(file),
         Language::Rust => collect_rust_call_candidates(file),
-    }
+    });
+    cached
+        .iter()
+        .map(|entry| AstCallCandidate {
+            node: AstNode::from_span(file, entry.span),
+            callee: entry.callee.clone(),
+            method_name: entry.method_name.clone(),
+            receiver_call_callee: entry.receiver_call_callee.clone(),
+            arguments: entry
+                .argument_spans
+                .iter()
+                .map(|&span| AstNode::from_span(file, span))
+                .collect(),
+        })
+        .collect()
 }
 
 /// A read of one positional element through an integer literal: `receiver[1]` or
@@ -533,7 +577,16 @@ pub(in crate::code_lint::ast) fn parse_float_literal(text: &str) -> Option<Liter
 /// Collects all binding definition nodes from a parsed file.
 #[must_use]
 pub fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
-    dispatch_lang!(file.lang(), collect_bindings(file))
+    let spans = file.binding_spans.get_or_init(|| {
+        dispatch_lang!(file.lang(), collect_bindings(file))
+            .into_iter()
+            .map(|node| node.span())
+            .collect()
+    });
+    spans
+        .iter()
+        .map(|&span| AstNode::from_span(file, span))
+        .collect()
 }
 
 /// Returns true if the node represents an import binding.

@@ -12,7 +12,6 @@ pub use self::annotations::{
     AnnotationTraversalDepth, CollectionKind, CollectionShape, PythonCollectionType,
     PythonReturnTypeUnion, collect_collection_types, collection_display, collection_type,
     extract_generic_type, has_unaliased_collections_abc_set_import, return_type_union,
-    unwrap_return_envelope,
 };
 pub use self::classes::{
     PythonAnnotatedAttribute, PythonBaseClass, PythonClassInfo, PythonInstanceAttributeAnnotation,
@@ -22,18 +21,21 @@ pub use self::format_strings::{
     PythonFormatPlaceholder, PythonFormatString, PythonFormatStyle, collect_format_strings,
     extract_valid_field_root, named_format_field_roots,
 };
+pub(super) use self::functions::is_trait_impl_member;
 pub use self::functions::{
     PythonFunctionSignature, PythonParameterInfo, PythonParameterKind, extract_function_signatures,
-    extract_parameters, find_nested_functions, has_override_decorator, is_trait_impl_member,
+    find_nested_functions,
 };
 pub use self::logging::{PythonLoggerCall, collect_logger_calls};
+pub(super) use self::scopes::collect_bindings;
 pub use self::scopes::{
-    PythonFunctionScope, PythonScopeFunction, PythonSiblingCall, collect_bindings,
-    collect_function_scopes,
+    PythonFunctionScope, PythonScopeFunction, PythonSiblingCall, collect_function_scopes,
 };
 
 use self::annotations::{has_final_annotation_expr, is_bare_final_annotation_expr};
 use self::classes::is_in_protocol_or_abc_class;
+#[cfg(test)]
+use self::functions::extract_parameters;
 use self::functions::{direct_function_definitions, method_receiver_name_ast};
 use self::logging::extract_logger_call;
 use self::scopes::parameters_shadow_name;
@@ -43,12 +45,14 @@ use crate::code_lint::ast::{
     ScopePositionalReads, parse_float_literal, parse_integer_literal, span_from_ruff_range,
 };
 use crate::diagnostic::SourceSpan;
+#[cfg(test)]
+use ruff_python_ast::Parameters;
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, walk_except_handler, walk_expr, walk_stmt,
 };
 use ruff_python_ast::{
-    Decorator, ExceptHandler, Expr, ModModule, Parameters, Stmt, StmtAssert, StmtFunctionDef,
-    StringFlags as _, WithItem,
+    Decorator, ExceptHandler, Expr, ModModule, Stmt, StmtAssert, StmtFunctionDef, StringFlags as _,
+    WithItem,
 };
 use ruff_text_size::Ranged as _;
 use std::collections::{HashMap, HashSet};
@@ -129,6 +133,7 @@ pub(super) fn find_function_def_at_span(
 /// Finds the `Parameters` node in `module` matching `target_span` (either the `Parameters` span,
 /// the enclosing `StmtFunctionDef` span, or the first function's parameters when `target_span`
 /// spans the module).
+#[cfg(test)]
 pub(super) fn find_parameters_at_span(
     module: &ModModule,
     target_span: SourceSpan,
@@ -207,7 +212,7 @@ fn find_assert_at_span(module: &ModModule, target_span: SourceSpan) -> Option<&S
 
 /// Returns true if `node` is a Python import binding (`import x` or `from m import y`).
 #[must_use]
-pub fn is_import_binding(node: &AstNode<'_>) -> bool {
+pub(super) fn is_import_binding(node: &AstNode<'_>) -> bool {
     struct ImportSpanChecker {
         target_span: SourceSpan,
         found: bool,
@@ -243,7 +248,7 @@ pub fn is_import_binding(node: &AstNode<'_>) -> bool {
 
 /// Returns true if `node` is the declared name of a Python `def` or `class`.
 #[must_use]
-pub fn is_structural_definition(node: &AstNode<'_>) -> bool {
+pub(super) fn is_structural_definition(node: &AstNode<'_>) -> bool {
     struct StructuralDefChecker {
         target_span: SourceSpan,
         found: bool,
@@ -427,7 +432,7 @@ pub(super) fn extract_decorators_from_slice<'a>(
 
 /// Extracts all decorators from a `function_definition` or `class_definition` node.
 #[must_use]
-pub fn extract_decorators<'a>(node: &AstNode<'a>) -> Vec<DecoratorInfo<'a>> {
+fn extract_decorators<'a>(node: &AstNode<'a>) -> Vec<DecoratorInfo<'a>> {
     struct DecoratorOwnerFinder<'a> {
         target_span: SourceSpan,
         found: Option<&'a [Decorator]>,
@@ -479,7 +484,7 @@ pub fn extract_decorators<'a>(node: &AstNode<'a>) -> Vec<DecoratorInfo<'a>> {
 /// Returns true if a Python `function_definition` or `class_definition` has a decorator whose
 /// terminal identifier or full path satisfies `predicate`.
 #[must_use]
-pub fn has_decorator(node: &AstNode<'_>, predicate: impl Fn(&str) -> bool) -> bool {
+pub(super) fn has_decorator(node: &AstNode<'_>, predicate: impl Fn(&str) -> bool) -> bool {
     extract_decorators(node)
         .into_iter()
         .any(|dec| predicate(&dec.terminal_name) || predicate(&dec.path))
@@ -609,7 +614,7 @@ pub fn call_callee<'a>(call: &AstNode<'a>) -> Option<AstNode<'a>> {
 
 /// Traverses upward from an expression to find if it is enclosed in a `WithItem`.
 #[must_use]
-pub fn find_enclosing_with_item<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
+fn find_enclosing_with_item<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
     struct WithItemFinder {
         target_span: SourceSpan,
         found: Option<SourceSpan>,
@@ -649,7 +654,7 @@ pub fn find_enclosing_with_item<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
 
 /// Traverses upward from a node to find its nearest enclosing `Stmt::With`.
 #[must_use]
-pub fn find_enclosing_with_statement<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
+fn find_enclosing_with_statement<'a>(node: &AstNode<'a>) -> Option<AstNode<'a>> {
     struct WithStatementFinder {
         target_span: SourceSpan,
         found: Option<SourceSpan>,
@@ -830,40 +835,6 @@ pub fn has_boolean_literal_comparison(assert_node: &AstNode<'_>) -> bool {
     comp.operands.iter().any(is_boolean_literal_collection_expr)
 }
 
-/// Collects all outermost Python test function definitions (`def test` or `def test_*`).
-#[must_use]
-pub fn collect_outer_test_functions(file: &ParsedFile) -> Vec<AstNode<'_>> {
-    struct OuterTestFinder<'a> {
-        file: &'a ParsedFile,
-        out: Vec<AstNode<'a>>,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for OuterTestFinder<'a> {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if let Stmt::FunctionDef(func_def) = statement {
-                if is_test_function_def(func_def) {
-                    self.out.push(AstNode::from_span(
-                        self.file,
-                        span_from_ruff_range(func_def.range),
-                    ));
-                }
-                return;
-            }
-            walk_stmt(self, statement);
-        }
-    }
-
-    let Some(parsed) = file.py_module() else {
-        return Vec::new();
-    };
-    let mut finder = OuterTestFinder {
-        file,
-        out: Vec::new(),
-    };
-    finder.visit_body(&parsed.syntax().body);
-    finder.out
-}
-
 /// Counts top-level assertion constructs in a Python test function body.
 fn count_python_assertions_in_body(body: &[Stmt]) -> usize {
     struct AssertionCounter {
@@ -899,7 +870,7 @@ fn count_python_assertions_in_body(body: &[Stmt]) -> usize {
 
 /// Collects all outermost Python test functions along with their identifier node, name, and assertion count.
 #[must_use]
-pub fn collect_test_function_assertion_counts(
+pub(super) fn collect_test_function_assertion_counts(
     file: &ParsedFile,
 ) -> Vec<(AstNode<'_>, String, usize)> {
     struct TestAssertionCollector<'a> {
@@ -1113,7 +1084,7 @@ impl<'a, F: Fn(&str, &str) -> bool> SourceOrderVisitor<'a> for UnwrappedMultilin
 /// Finds all multiline string literals in a Python file that are not docstrings
 /// and not wrapped in an allowed call.
 #[must_use]
-pub fn find_unwrapped_multiline_strings(
+pub(super) fn find_unwrapped_multiline_strings(
     file: &ParsedFile,
     is_allowed_wrapper: impl Fn(&str, &str) -> bool,
 ) -> Vec<AstNode<'_>> {
@@ -1252,104 +1223,106 @@ fn called_terminal_name_expr(expr: &Expr, source: &str) -> Option<String> {
 /// (or module) scope that assigns it. Callees are matched by name only, so a mutated
 /// `obj.get()` result also exempts an unrelated function named `get`.
 #[must_use]
-pub fn collect_locally_mutated_return_functions(file: &ParsedFile) -> HashSet<String> {
-    // A binding is keyed by its enclosing function (`None` at module level) and its name.
-    type ScopedName = (Option<usize>, String);
+pub fn collect_locally_mutated_return_functions(file: &ParsedFile) -> &HashSet<String> {
+    file.locally_mutated_return_functions.get_or_init(|| {
+        // A binding is keyed by its enclosing function (`None` at module level) and its name.
+        type ScopedName = (Option<usize>, String);
 
-    struct MutatedReturnVisitor<'a> {
-        source: &'a str,
-        enclosing_function: Option<usize>,
-        mutated_functions: HashSet<String>,
-        bindings_to_callee: HashMap<ScopedName, String>,
-        mutated_identifiers: HashSet<ScopedName>,
-    }
-
-    impl MutatedReturnVisitor<'_> {
-        fn record_binding(&mut self, target: &Expr, value: &Expr) {
-            if let Expr::Name(name) = target
-                && let Some(callee_name) = called_terminal_name_expr(value, self.source)
-            {
-                let scoped_name = (self.enclosing_function, name.id.to_string());
-                self.bindings_to_callee.insert(scoped_name, callee_name);
-            }
+        struct MutatedReturnVisitor<'a> {
+            source: &'a str,
+            enclosing_function: Option<usize>,
+            mutated_functions: HashSet<String>,
+            bindings_to_callee: HashMap<ScopedName, String>,
+            mutated_identifiers: HashSet<ScopedName>,
         }
 
-        fn record_mutated_receiver(&mut self, receiver: &Expr) {
-            if let Some(callee_name) = called_terminal_name_expr(receiver, self.source) {
-                self.mutated_functions.insert(callee_name);
-            } else if let Expr::Name(name) = receiver {
-                self.mutated_identifiers
-                    .insert((self.enclosing_function, name.id.to_string()));
-            }
-        }
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for MutatedReturnVisitor<'a> {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            match statement {
-                Stmt::FunctionDef(func) => {
-                    for dec in &func.decorator_list {
-                        self.visit_decorator(dec);
-                    }
-                    self.visit_parameters(&func.parameters);
-                    if let Some(returns) = &func.returns {
-                        self.visit_annotation(returns);
-                    }
-                    let prev_func = self.enclosing_function;
-                    self.enclosing_function = Some(func.range().start().to_usize());
-                    self.visit_body(&func.body);
-                    self.enclosing_function = prev_func;
+        impl MutatedReturnVisitor<'_> {
+            fn record_binding(&mut self, target: &Expr, value: &Expr) {
+                if let Expr::Name(name) = target
+                    && let Some(callee_name) = called_terminal_name_expr(value, self.source)
+                {
+                    let scoped_name = (self.enclosing_function, name.id.to_string());
+                    self.bindings_to_callee.insert(scoped_name, callee_name);
                 }
-                Stmt::Assign(assign) => {
-                    if let [target] = assign.targets.as_slice() {
-                        self.record_binding(target, &assign.value);
+            }
+
+            fn record_mutated_receiver(&mut self, receiver: &Expr) {
+                if let Some(callee_name) = called_terminal_name_expr(receiver, self.source) {
+                    self.mutated_functions.insert(callee_name);
+                } else if let Expr::Name(name) = receiver {
+                    self.mutated_identifiers
+                        .insert((self.enclosing_function, name.id.to_string()));
+                }
+            }
+        }
+
+        impl<'a> SourceOrderVisitor<'a> for MutatedReturnVisitor<'a> {
+            fn visit_stmt(&mut self, statement: &'a Stmt) {
+                match statement {
+                    Stmt::FunctionDef(func) => {
+                        for dec in &func.decorator_list {
+                            self.visit_decorator(dec);
+                        }
+                        self.visit_parameters(&func.parameters);
+                        if let Some(returns) = &func.returns {
+                            self.visit_annotation(returns);
+                        }
+                        let prev_func = self.enclosing_function;
+                        self.enclosing_function = Some(func.range().start().to_usize());
+                        self.visit_body(&func.body);
+                        self.enclosing_function = prev_func;
                     }
-                    walk_stmt(self, statement);
-                }
-                Stmt::AnnAssign(ann) => {
-                    if let Some(value) = &ann.value {
-                        self.record_binding(&ann.target, value);
+                    Stmt::Assign(assign) => {
+                        if let [target] = assign.targets.as_slice() {
+                            self.record_binding(target, &assign.value);
+                        }
+                        walk_stmt(self, statement);
                     }
-                    walk_stmt(self, statement);
+                    Stmt::AnnAssign(ann) => {
+                        if let Some(value) = &ann.value {
+                            self.record_binding(&ann.target, value);
+                        }
+                        walk_stmt(self, statement);
+                    }
+                    Stmt::AugAssign(aug) => {
+                        self.record_mutated_receiver(&aug.target);
+                        walk_stmt(self, statement);
+                    }
+                    _ => walk_stmt(self, statement),
                 }
-                Stmt::AugAssign(aug) => {
-                    self.record_mutated_receiver(&aug.target);
-                    walk_stmt(self, statement);
+            }
+
+            fn visit_expr(&mut self, expr: &'a Expr) {
+                if let Expr::Named(named) = expr {
+                    self.record_binding(&named.target, &named.value);
                 }
-                _ => walk_stmt(self, statement),
+                if let Some(receiver) = in_place_mutated_receiver_expr(expr) {
+                    self.record_mutated_receiver(receiver);
+                }
+                walk_expr(self, expr);
             }
         }
 
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if let Expr::Named(named) = expr {
-                self.record_binding(&named.target, &named.value);
+        let Some(parsed) = file.py_module() else {
+            return HashSet::new();
+        };
+        let mut visitor = MutatedReturnVisitor {
+            source: &file.source,
+            enclosing_function: None,
+            mutated_functions: HashSet::new(),
+            bindings_to_callee: HashMap::new(),
+            mutated_identifiers: HashSet::new(),
+        };
+        visitor.visit_body(&parsed.syntax().body);
+
+        for scoped_name in &visitor.mutated_identifiers {
+            if let Some(callee_name) = visitor.bindings_to_callee.get(scoped_name) {
+                visitor.mutated_functions.insert(callee_name.clone());
             }
-            if let Some(receiver) = in_place_mutated_receiver_expr(expr) {
-                self.record_mutated_receiver(receiver);
-            }
-            walk_expr(self, expr);
         }
-    }
 
-    let Some(parsed) = file.py_module() else {
-        return HashSet::new();
-    };
-    let mut visitor = MutatedReturnVisitor {
-        source: &file.source,
-        enclosing_function: None,
-        mutated_functions: HashSet::new(),
-        bindings_to_callee: HashMap::new(),
-        mutated_identifiers: HashSet::new(),
-    };
-    visitor.visit_body(&parsed.syntax().body);
-
-    for scoped_name in &visitor.mutated_identifiers {
-        if let Some(callee_name) = visitor.bindings_to_callee.get(scoped_name) {
-            visitor.mutated_functions.insert(callee_name.clone());
-        }
-    }
-
-    visitor.mutated_functions
+        visitor.mutated_functions
+    })
 }
 
 /// Read-only methods available on `Sequence`, `Mapping`, or `Set` (`collections.abc`).
@@ -2153,7 +2126,7 @@ impl<'a> SourceOrderVisitor<'a> for PositionalReadsCollector<'a> {
 
 /// Collects Python positional reads grouped by scope (see [`super::collect_positional_reads`]).
 #[must_use]
-pub fn collect_positional_reads(file: &ParsedFile) -> Vec<ScopePositionalReads<'_>> {
+pub(super) fn collect_positional_reads(file: &ParsedFile) -> Vec<ScopePositionalReads<'_>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
@@ -2500,7 +2473,7 @@ impl<'a> SourceOrderVisitor<'a> for LiteralOccurrenceCollector<'a> {
 
 /// Collects Python literal occurrences (see [`super::collect_literal_occurrences`]).
 #[must_use]
-pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'_>> {
+pub(super) fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'_>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
@@ -3256,7 +3229,7 @@ mod tests {
         let source = format!("def make():\n    return []\n{usage}");
         let file = ParsedFile::new(&source, Language::Python);
         let expected: HashSet<String> = expected.iter().map(|name| (*name).to_string()).collect();
-        assert_eq!(collect_locally_mutated_return_functions(&file), expected);
+        assert_eq!(*collect_locally_mutated_return_functions(&file), expected);
     }
 
     #[rstest::rstest]
