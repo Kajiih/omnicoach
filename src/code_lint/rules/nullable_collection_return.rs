@@ -143,57 +143,67 @@ const RUST_COLLECTION_TYPES: &[&str] = &[
     "BinaryHeap",
 ];
 
+/// A return annotation that makes a collection type nullable.
+struct NullableCollectionReturn<'a> {
+    /// The function's name.
+    function: String,
+    /// The return annotation.
+    return_type: AstNode<'a>,
+    /// The collection types made nullable, joined with `", "`.
+    collections: String,
+}
+
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    match file.lang() {
-        Language::Python => check_python(rule, path, file),
-        Language::Rust => check_rust(rule, path, file),
-    }
+    let findings = match file.lang() {
+        Language::Python => python_nullable_collection_returns(file),
+        Language::Rust => rust_nullable_collection_returns(file),
+    };
+    findings
+        .iter()
+        .map(|finding| {
+            let expression = finding.return_type.text();
+            rule.diagnostic_at_node(
+                path,
+                &finding.return_type,
+                &[
+                    (FUNCTION, &finding.function),
+                    (EXPRESSION, expression.as_ref()),
+                    (TOKEN, &finding.collections),
+                ],
+            )
+        })
+        .collect()
 }
 
 const FUNCTION: &str = "function";
 const EXPRESSION: &str = "expression";
 const TOKEN: &str = "token";
 
-fn check_python(rule: &CodeRule, path: &Path, file: &ParsedFile) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-    for signature in ast::python::extract_function_signatures(file) {
-        if signature.is_exempt_from_signature_rules() {
-            continue;
-        }
-        let Some(ref return_type_node) = signature.return_type_node else {
-            continue;
-        };
-        let union = ast::python::return_type_union(return_type_node);
-        if !union.has_none || union.branches.is_empty() {
-            continue;
-        }
-        let mut collection_types = Vec::new();
-        let mut all_branches_are_collections = true;
-        for branch in &union.branches {
-            if let Some(type_name) = python_collection_branch_type(branch) {
+/// Python return annotations whose union contains `None` and only collection branches.
+fn python_nullable_collection_returns(file: &ParsedFile) -> Vec<NullableCollectionReturn<'_>> {
+    ast::python::extract_function_signatures(file)
+        .into_iter()
+        .filter(|signature| !signature.is_exempt_from_signature_rules())
+        .filter_map(|signature| {
+            let return_type = signature.return_type_node?;
+            let union = ast::python::return_type_union(&return_type);
+            if !union.has_none {
+                return None;
+            }
+            let mut collection_types = Vec::new();
+            for branch in &union.branches {
+                let type_name = python_collection_branch_type(branch)?;
                 if !collection_types.contains(&type_name) {
                     collection_types.push(type_name);
                 }
-            } else {
-                all_branches_are_collections = false;
-                break;
             }
-        }
-        if all_branches_are_collections && !collection_types.is_empty() {
-            let token = collection_types.join(", ");
-            let expression = return_type_node.text();
-            diagnostics.push(rule.diagnostic_at_node(
-                path,
-                return_type_node,
-                &[
-                    (FUNCTION, &signature.name),
-                    (EXPRESSION, expression.as_ref()),
-                    (TOKEN, &token),
-                ],
-            ));
-        }
-    }
-    diagnostics
+            (!collection_types.is_empty()).then(|| NullableCollectionReturn {
+                function: signature.name,
+                return_type,
+                collections: collection_types.join(", "),
+            })
+        })
+        .collect()
 }
 
 fn python_collection_branch_type(branch: &PythonReturnTypeBranch<'_>) -> Option<String> {
@@ -209,29 +219,23 @@ fn python_collection_branch_type(branch: &PythonReturnTypeBranch<'_>) -> Option<
     Some(collection.path.clone())
 }
 
-fn check_rust(rule: &CodeRule, path: &Path, file: &ParsedFile) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-    for func in ast::rust::collect_functions(file) {
-        if func.node.is_in_rust_inline_test() || func.is_trait_or_trait_impl {
-            continue;
-        }
-        let Some(ref return_type_node) = func.return_type else {
-            continue;
-        };
-        if let Some(collection_type) = extract_rust_nullable_collection_type(return_type_node) {
-            let expression = return_type_node.text();
-            diagnostics.push(rule.diagnostic_at_node(
-                path,
-                return_type_node,
-                &[
-                    (FUNCTION, &func.name),
-                    (EXPRESSION, expression.as_ref()),
-                    (TOKEN, &collection_type),
-                ],
-            ));
-        }
-    }
-    diagnostics
+/// Rust return types that wrap a collection in `Option`, outside tests, traits and trait impls.
+fn rust_nullable_collection_returns(file: &ParsedFile) -> Vec<NullableCollectionReturn<'_>> {
+    ast::rust::collect_functions(file)
+        .into_iter()
+        .filter(|function| {
+            !function.node.is_in_rust_inline_test() && !function.is_trait_or_trait_impl
+        })
+        .filter_map(|function| {
+            let return_type = function.return_type?;
+            let collections = extract_rust_nullable_collection_type(&return_type)?;
+            Some(NullableCollectionReturn {
+                function: function.name,
+                return_type,
+                collections,
+            })
+        })
+        .collect()
 }
 
 fn extract_rust_nullable_collection_type(return_type_node: &AstNode<'_>) -> Option<String> {
