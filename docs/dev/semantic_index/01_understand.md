@@ -23,13 +23,18 @@ during the walk, and callers re-derive it by span.
 | P6 | 5 multi-language rules branch on `file.lang()` and duplicate logic; rule files hold AST logic. | `nullable_collection_return.rs`, `identical_positional_types.rs`, `packed_assertion.rs`, `call_before_definition.rs`, `environment_variable_in_function.rs` |
 | P7 | `ast/python.rs` is 3,791 lines across 7 domains. | |
 
-### Divergence bugs between the parameter visitors (P4)
+### Suspected divergence bugs between the parameter visitors (P4): not confirmed
 
-| ID | Rule affected | Repro | Cause |
-| :--- | :--- | :--- | :--- |
-| B1 | `specific-collection-parameter` | `def f(flag, items: Sequence[int]): return flag and items` suggests `Collection`, but `items` escapes. | `CapabilityVisitor` treats every `BoolOp` operand as a truthiness check; the last one is the result. |
-| B2 | `mutable-collection-parameter` | `sorted(items, reverse=True)`, `sum(items, start=0)`, `enumerate(items, start=1)`, `dict(items)`, `map(f, items)`, `filter(f, items)` count as mutation or escape. | `MutationOrEscapeFinder` requires no keywords and omits `dict`/`map`/`filter`. |
-| B3 | `mutable-collection-parameter` | `items == other` counts as mutation or escape. | Only `in`/`not in` and `is None` are treated as read-only comparisons. |
+The audit read three bugs from the code. Regression cases written before the change passed on
+the old code, so none was real; the cases stay as behavior pins (they were the only coverage).
+
+| ID | Suspected | Why it was not a bug |
+| :--- | :--- | :--- |
+| B1 | `return flag and items` suggests `Collection`. | `BoolOp` operands count as truthiness only inside a boolean context (`if`, `while`, `assert`, `bool()`); a `return` is not one. |
+| B2 | `sorted(items, reverse=True)`, `dict(items)`, `map`/`filter` count as mutation. | The read-only builtin list already has `dict`/`map`/`filter`, and keywords were never rejected. |
+| B3 | `items == other` counts as mutation. | Every `Compare` operand, the left one included, is read-only. |
+
+Lesson: an audit by reading is a hypothesis; reproduce before recording a bug.
 
 ## 2. How SOTA tools avoid this
 
@@ -46,7 +51,11 @@ walk that extracts the fact**, and memoize shared projections on `ParsedFile`.
 ## 3. Plan (one atomic commit per slice)
 
 1. **Parameter use summary.** One visitor classifies the uses of all parameters of a function in a
-   single pass; both rules read their answer from it. Fixes B1–B3 (regression cases first).
+   single pass; both rules read their answer from it. **Done:** `summarize_parameter_usages`
+   returns a `ParameterUsage` per parameter; a `UseRole` passed down the walk replaces the
+   byte-offset sets. Unified edge cases: `assert x` now reads like `if x` (`Collection`), `not`
+   always opens a truthiness context, and nested `def` decorators/defaults are visited at the
+   enclosing loop depth.
 2. **No root re-walks; memoized projections.** Record context flags at extraction time (bindings,
    function signatures, call candidates, asserts, module assignments); keep chained type queries on
    parser types inside `ast/`; memoize the multi-consumer collectors and `CommentIndex`; delete the

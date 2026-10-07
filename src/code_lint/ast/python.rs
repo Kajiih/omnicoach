@@ -45,14 +45,12 @@ use crate::code_lint::ast::{
     ScopePositionalReads, parse_float_literal, parse_integer_literal, span_from_ruff_range,
 };
 use crate::diagnostic::SourceSpan;
-#[cfg(test)]
-use ruff_python_ast::Parameters;
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, walk_except_handler, walk_expr, walk_stmt,
 };
 use ruff_python_ast::{
-    Decorator, ExceptHandler, Expr, ModModule, Stmt, StmtAssert, StmtFunctionDef, StringFlags as _,
-    WithItem,
+    Decorator, ExceptHandler, Expr, ModModule, Parameters, Stmt, StmtAssert, StmtFunctionDef,
+    StringFlags as _, WithItem,
 };
 use ruff_text_size::Ranged as _;
 use std::collections::{HashMap, HashSet};
@@ -1404,254 +1402,54 @@ fn is_safe_readonly_builtin(name: &str) -> bool {
         || OTHER_SAFE_READONLY_BUILTINS.contains(&name)
 }
 
-/// Returns true if `expr` is a read reference (`ExprContext::Load`) to `parameter_name`.
-fn is_param_load(expr: &Expr, parameter_name: &str) -> bool {
-    matches!(
-        expr,
-        Expr::Name(name)
-            if name.id.as_str() == parameter_name
-                && matches!(name.ctx, ruff_python_ast::ExprContext::Load)
-    )
+/// How a function body reads a parameter at one use site.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UseRole {
+    /// Mutated, rebound, aliased, returned, yielded, or passed to an unknown function or method.
+    Escape,
+    /// Read without mutation by an operation that needs more than `Collection`: indexing,
+    /// `reversed`, `.index()`, equality, arithmetic, `repr`, `print`, ...
+    Read,
+    /// Truth-tested: `if x`, `not x`, `bool(x)`; propagates to `and`/`or` operands.
+    Truthiness,
+    /// Sized or membership-tested: `len(x)`, `v in x`.
+    Sized,
+    /// Iterated once: `for _ in x`, a comprehension, a single-pass builtin, or `*x` in a display.
+    Iterated,
+    /// Compared by identity: `x is None`.
+    Identity,
 }
 
-struct MutationOrEscapeFinder<'a> {
-    parameter_name: &'a str,
-    in_boolean_context: bool,
-    safe_starts: HashSet<usize>,
-    found_mutated_or_escaping: bool,
+/// How a function body uses one of its parameters; see [`summarize_parameter_usages`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ParameterUsage {
+    mutated_or_escaping: bool,
+    needs_sequence: bool,
+    needs_collection: bool,
+    iteration_count: usize,
 }
 
-impl<'a> MutationOrEscapeFinder<'a> {
-    fn mark_if_param(&mut self, expr: &Expr) {
-        if is_param_load(expr, self.parameter_name) {
-            self.safe_starts.insert(expr.range().start().to_usize());
-        }
+impl ParameterUsage {
+    /// Returns true if the parameter is mutated in place or escapes (aliased, returned, yielded,
+    /// or passed to an unknown function or method).
+    #[must_use]
+    pub const fn is_mutated_or_escaping(self) -> bool {
+        self.mutated_or_escaping
     }
 
-    fn visit_in_boolean_context(&mut self, expr: &'a Expr) {
-        self.mark_if_param(expr);
-        let prev = self.in_boolean_context;
-        self.in_boolean_context = true;
-        self.visit_expr(expr);
-        self.in_boolean_context = prev;
-    }
-
-    fn visit_call_expr(&mut self, call: &'a ruff_python_ast::ExprCall) {
-        if let Expr::Attribute(attr) = call.func.as_ref()
-            && READONLY_COLLECTION_METHODS.contains(&attr.attr.as_str())
-        {
-            self.mark_if_param(&attr.value);
-        }
-        let is_safe_builtin = matches!(
-            call.func.as_ref(),
-            Expr::Name(func_name)
-                if is_safe_readonly_builtin(func_name.id.as_str())
-        );
-        let is_bool_builtin = matches!(
-            call.func.as_ref(),
-            Expr::Name(func_name) if func_name.id.as_str() == BOOL_CONSTRUCTOR
-        );
-        if is_safe_builtin {
-            for arg in &call.arguments.args {
-                match arg {
-                    Expr::Starred(starred) => self.mark_if_param(&starred.value),
-                    _ => self.mark_if_param(arg),
-                }
-            }
-            for kw in &call.arguments.keywords {
-                self.mark_if_param(&kw.value);
-            }
-        }
-        let prev = self.in_boolean_context;
-        self.in_boolean_context = false;
-        self.visit_expr(&call.func);
-        for arg in &call.arguments.args {
-            self.in_boolean_context = is_bool_builtin;
-            self.visit_expr(arg);
-        }
-        self.in_boolean_context = false;
-        for kw in &call.arguments.keywords {
-            self.visit_keyword(kw);
-        }
-        self.in_boolean_context = prev;
-    }
-}
-
-impl<'a> SourceOrderVisitor<'a> for MutationOrEscapeFinder<'a> {
-    fn visit_annotation(&mut self, _expr: &'a Expr) {}
-
-    fn visit_stmt(&mut self, statement: &'a Stmt) {
-        if self.found_mutated_or_escaping {
-            return;
-        }
-        match statement {
-            Stmt::TypeAlias(_) => {}
-            Stmt::FunctionDef(func) => {
-                if parameters_shadow_name(&func.parameters, self.parameter_name) {
-                    // Defaults are evaluated in the enclosing scope; only the body is shadowed.
-                    let prev = self.in_boolean_context;
-                    self.in_boolean_context = false;
-                    self.visit_parameters(&func.parameters);
-                    self.in_boolean_context = prev;
-                } else {
-                    walk_stmt(self, statement);
-                }
-            }
-            Stmt::For(for_statement) => {
-                self.mark_if_param(&for_statement.iter);
-                walk_stmt(self, statement);
-            }
-            Stmt::If(if_statement) => {
-                self.visit_in_boolean_context(&if_statement.test);
-                self.visit_body(&if_statement.body);
-                for clause in &if_statement.elif_else_clauses {
-                    if let Some(test) = &clause.test {
-                        self.visit_in_boolean_context(test);
-                    }
-                    self.visit_body(&clause.body);
-                }
-            }
-            Stmt::While(while_statement) => {
-                self.visit_in_boolean_context(&while_statement.test);
-                self.visit_body(&while_statement.body);
-                self.visit_body(&while_statement.orelse);
-            }
-            Stmt::Assert(assert_statement) => {
-                self.visit_in_boolean_context(&assert_statement.test);
-                if let Some(message) = &assert_statement.msg {
-                    self.visit_in_boolean_context(message);
-                }
-            }
-            _ => walk_stmt(self, statement),
+    /// Returns the minimum read-only collection capability the parameter's uses require.
+    #[must_use]
+    pub const fn collection_capability(self) -> ParameterCollectionCapability {
+        if self.needs_sequence {
+            ParameterCollectionCapability::Sequence
+        } else if self.needs_collection || self.iteration_count > 1 {
+            ParameterCollectionCapability::Collection
+        } else if self.iteration_count == 1 {
+            ParameterCollectionCapability::Iterable
+        } else {
+            ParameterCollectionCapability::Unused
         }
     }
-
-    fn visit_comprehension(&mut self, comp: &'a ruff_python_ast::Comprehension) {
-        self.mark_if_param(&comp.iter);
-        ruff_python_ast::visitor::source_order::walk_comprehension(self, comp);
-    }
-
-    fn visit_expr(&mut self, expr: &'a Expr) {
-        if self.found_mutated_or_escaping {
-            return;
-        }
-        match expr {
-            Expr::Lambda(lambda) => {
-                if lambda
-                    .parameters
-                    .as_deref()
-                    .is_some_and(|params| parameters_shadow_name(params, self.parameter_name))
-                {
-                    if let Some(params) = &lambda.parameters {
-                        let prev = self.in_boolean_context;
-                        self.in_boolean_context = false;
-                        self.visit_parameters(params);
-                        self.in_boolean_context = prev;
-                    }
-                    return;
-                }
-            }
-            Expr::Name(name) if name.id.as_str() == self.parameter_name => {
-                if !self.safe_starts.contains(&name.range().start().to_usize()) {
-                    self.found_mutated_or_escaping = true;
-                }
-                return;
-            }
-            Expr::BoolOp(bool_op) => {
-                if self.in_boolean_context {
-                    for val in &bool_op.values {
-                        self.mark_if_param(val);
-                    }
-                }
-                walk_expr(self, expr);
-                return;
-            }
-            Expr::UnaryOp(unary) if unary.op == ruff_python_ast::UnaryOp::Not => {
-                self.mark_if_param(&unary.operand);
-                walk_expr(self, expr);
-                return;
-            }
-            Expr::Call(call) => {
-                self.visit_call_expr(call);
-                return;
-            }
-            Expr::Subscript(sub) if matches!(sub.ctx, ruff_python_ast::ExprContext::Load) => {
-                self.mark_if_param(&sub.value);
-                self.mark_if_param(&sub.slice);
-            }
-            Expr::List(list) if matches!(list.ctx, ruff_python_ast::ExprContext::Load) => {
-                for elt in &list.elts {
-                    if let Expr::Starred(starred) = elt {
-                        self.mark_if_param(&starred.value);
-                    }
-                }
-            }
-            Expr::Tuple(tuple) if matches!(tuple.ctx, ruff_python_ast::ExprContext::Load) => {
-                for elt in &tuple.elts {
-                    if let Expr::Starred(starred) = elt {
-                        self.mark_if_param(&starred.value);
-                    }
-                }
-            }
-            Expr::Set(set) => {
-                for elt in &set.elts {
-                    if let Expr::Starred(starred) = elt {
-                        self.mark_if_param(&starred.value);
-                    }
-                }
-            }
-            Expr::Dict(dict) => {
-                for item in &dict.items {
-                    if item.key.is_none() {
-                        self.mark_if_param(&item.value);
-                    }
-                }
-            }
-            Expr::Compare(comp) => {
-                for operand in &comp.operands {
-                    self.mark_if_param(operand);
-                }
-            }
-            Expr::BinOp(bin) => {
-                self.mark_if_param(&bin.left);
-                self.mark_if_param(&bin.right);
-            }
-            Expr::If(if_expr) => {
-                self.visit_in_boolean_context(&if_expr.test);
-                let prev = self.in_boolean_context;
-                self.in_boolean_context = false;
-                self.visit_expr(&if_expr.body);
-                self.visit_expr(&if_expr.orelse);
-                self.in_boolean_context = prev;
-                return;
-            }
-            _ => {}
-        }
-        let prev = self.in_boolean_context;
-        self.in_boolean_context = false;
-        walk_expr(self, expr);
-        self.in_boolean_context = prev;
-    }
-}
-
-/// Returns true if `parameter_name` is mutated in place or escapes (aliased, returned, yielded,
-/// or passed to an unknown function/method) anywhere in `func_node`'s body.
-#[must_use]
-pub fn is_parameter_mutated_or_escaping(func_node: &AstNode<'_>, parameter_name: &str) -> bool {
-    let Some(parsed) = func_node.file.py_module() else {
-        return false;
-    };
-    let Some(func) = find_function_def_at_span(parsed.syntax(), func_node.span()) else {
-        return false;
-    };
-    let mut finder = MutationOrEscapeFinder {
-        parameter_name,
-        in_boolean_context: false,
-        safe_starts: HashSet::new(),
-        found_mutated_or_escaping: false,
-    };
-    finder.visit_body(&func.body);
-    finder.found_mutated_or_escaping
 }
 
 /// Minimum read-only `collections.abc` capability required by a parameter's usages inside
@@ -1668,136 +1466,137 @@ pub enum ParameterCollectionCapability {
     Sequence,
 }
 
-#[derive(Default)]
-struct CapabilityTracker {
-    iteration_count: usize,
-    needs_collection: bool,
-    needs_sequence: bool,
-}
-
-struct CapabilityVisitor<'a> {
-    parameter_name: &'a str,
+/// Classifies every use of a function's parameters in one walk of its body.
+struct ParameterUseVisitor<'a> {
+    usages: HashMap<&'a str, ParameterUsage>,
+    /// Parameters shadowed by the parameters of an enclosing nested `def` or `lambda`.
+    shadowed: Vec<&'a str>,
     loop_or_closure_depth: usize,
-    in_boolean_context: bool,
-    handled_starts: HashSet<usize>,
-    tracker: CapabilityTracker,
 }
 
-impl<'a> CapabilityVisitor<'a> {
-    fn record_iteration(&mut self, expr: &Expr) {
-        if is_param_load(expr, self.parameter_name) {
-            self.handled_starts.insert(expr.range().start().to_usize());
-            self.tracker.iteration_count += 1;
-            if self.loop_or_closure_depth > 0 {
-                self.tracker.needs_collection = true;
+impl<'a> ParameterUseVisitor<'a> {
+    fn record(&mut self, name: &str, role: UseRole) {
+        if self.shadowed.contains(&name) {
+            return;
+        }
+        let Some(usage) = self.usages.get_mut(name) else {
+            return;
+        };
+        match role {
+            UseRole::Escape => {
+                usage.mutated_or_escaping = true;
+                usage.needs_sequence = true;
             }
-        }
-    }
-
-    fn record_collection(&mut self, expr: &Expr) {
-        if is_param_load(expr, self.parameter_name) {
-            self.handled_starts.insert(expr.range().start().to_usize());
-            self.tracker.needs_collection = true;
-        }
-    }
-
-    fn visit_in_boolean_context(&mut self, expr: &'a Expr) {
-        self.record_collection(expr);
-        let prev = self.in_boolean_context;
-        self.in_boolean_context = true;
-        self.visit_expr(expr);
-        self.in_boolean_context = prev;
-    }
-
-    fn visit_generators(&mut self, generators: &'a [ruff_python_ast::Comprehension]) {
-        for (idx, comp) in generators.iter().enumerate() {
-            if idx == 0 {
-                self.record_iteration(&comp.iter);
-                self.visit_expr(&comp.iter);
-                self.loop_or_closure_depth += 1;
-                self.visit_expr(&comp.target);
-                for if_expr in &comp.ifs {
-                    self.visit_expr(if_expr);
+            UseRole::Read => usage.needs_sequence = true,
+            UseRole::Truthiness | UseRole::Sized => usage.needs_collection = true,
+            UseRole::Iterated => {
+                usage.iteration_count += 1;
+                if self.loop_or_closure_depth > 0 {
+                    usage.needs_collection = true;
                 }
-            } else {
-                self.loop_or_closure_depth += 1;
-                self.record_iteration(&comp.iter);
-                ruff_python_ast::visitor::source_order::walk_comprehension(self, comp);
             }
-            self.loop_or_closure_depth -= 1;
+            UseRole::Identity => {}
         }
     }
 
-    fn visit_single_elt_comprehension(
+    /// Visits `expr`, recording `role` if it is a direct read of a parameter.
+    fn visit_expr_as(&mut self, expr: &'a Expr, role: UseRole) {
+        match expr {
+            Expr::Name(name) if matches!(name.ctx, ruff_python_ast::ExprContext::Load) => {
+                self.record(name.id.as_str(), role);
+            }
+            Expr::BoolOp(bool_op) if role == UseRole::Truthiness => {
+                for value in &bool_op.values {
+                    self.visit_expr_as(value, role);
+                }
+            }
+            _ => self.visit_expr(expr),
+        }
+    }
+
+    /// Visits the body of a nested `def` or `lambda`, whose `parameters` shadow ours.
+    fn visit_nested_scope(
+        &mut self,
+        parameters: Option<&'a Parameters>,
+        visit_body: impl FnOnce(&mut Self),
+    ) {
+        let outer_shadowed = self.shadowed.len();
+        if let Some(parameters) = parameters {
+            self.shadowed.extend(
+                self.usages
+                    .keys()
+                    .filter(|name| parameters_shadow_name(parameters, name)),
+            );
+        }
+        self.loop_or_closure_depth += 1;
+        visit_body(self);
+        self.loop_or_closure_depth -= 1;
+        self.shadowed.truncate(outer_shadowed);
+    }
+
+    /// Visits a comprehension: later iterables and the elements run once per outer item.
+    fn visit_comprehension_scope(
         &mut self,
         generators: &'a [ruff_python_ast::Comprehension],
-        elt: &'a Expr,
+        elements: impl IntoIterator<Item = &'a Expr>,
     ) {
-        let prev = self.in_boolean_context;
-        self.in_boolean_context = false;
-        self.visit_generators(generators);
-        self.loop_or_closure_depth += 1;
-        self.visit_expr(elt);
-        self.loop_or_closure_depth -= 1;
-        self.in_boolean_context = prev;
-    }
-
-    fn visit_dict_comprehension(&mut self, comp: &'a ruff_python_ast::ExprDictComp) {
-        let prev = self.in_boolean_context;
-        self.in_boolean_context = false;
-        self.visit_generators(&comp.generators);
-        self.loop_or_closure_depth += 1;
-        if let Some(key) = &comp.key {
-            self.visit_expr(key);
+        let outer_depth = self.loop_or_closure_depth;
+        for generator in generators {
+            self.visit_expr_as(&generator.iter, UseRole::Iterated);
+            self.loop_or_closure_depth += 1;
+            self.visit_expr(&generator.target);
+            for condition in &generator.ifs {
+                self.visit_expr(condition);
+            }
         }
-        self.visit_expr(&comp.value);
-        self.loop_or_closure_depth -= 1;
-        self.in_boolean_context = prev;
+        for element in elements {
+            self.visit_expr(element);
+        }
+        self.loop_or_closure_depth = outer_depth;
     }
 
-    fn record_starred_elements(&mut self, elements: &[Expr]) {
-        for elt in elements {
-            if let Expr::Starred(starred) = elt {
-                self.record_iteration(&starred.value);
+    fn visit_display_elements(&mut self, elements: &'a [Expr]) {
+        for element in elements {
+            match element {
+                Expr::Starred(starred) => self.visit_expr_as(&starred.value, UseRole::Iterated),
+                _ => self.visit_expr(element),
             }
         }
     }
 
     fn visit_call_expr(&mut self, call: &'a ruff_python_ast::ExprCall) {
-        let is_bool_builtin = matches!(
-            call.func.as_ref(),
-            Expr::Name(func_name) if func_name.id.as_str() == BOOL_CONSTRUCTOR
-        );
-        if let Expr::Name(func_name) = call.func.as_ref() {
-            match func_name.id.as_str() {
-                BUILTIN_LEN | BOOL_CONSTRUCTOR => {
-                    for arg in &call.arguments.args {
-                        self.record_collection(arg);
-                    }
-                }
-                name if is_single_pass_iterable_builtin(name) => {
-                    for arg in &call.arguments.args {
-                        self.record_iteration(arg);
-                    }
-                }
-                _ => {}
+        let positional_role = match call.func.as_ref() {
+            Expr::Name(func_name) => match func_name.id.as_str() {
+                BUILTIN_LEN => Some(UseRole::Sized),
+                BOOL_CONSTRUCTOR => Some(UseRole::Truthiness),
+                name if is_single_pass_iterable_builtin(name) => Some(UseRole::Iterated),
+                name if is_safe_readonly_builtin(name) => Some(UseRole::Read),
+                _ => None,
+            },
+            _ => None,
+        };
+        match call.func.as_ref() {
+            Expr::Attribute(attr) if READONLY_COLLECTION_METHODS.contains(&attr.attr.as_str()) => {
+                self.visit_expr_as(&attr.value, UseRole::Read);
+            }
+            func => self.visit_expr(func),
+        }
+        let Some(positional_role) = positional_role else {
+            self.visit_arguments(&call.arguments);
+            return;
+        };
+        for arg in &call.arguments.args {
+            match arg {
+                Expr::Starred(starred) => self.visit_expr_as(&starred.value, UseRole::Read),
+                _ => self.visit_expr_as(arg, positional_role),
             }
         }
-        let prev = self.in_boolean_context;
-        self.in_boolean_context = false;
-        self.visit_expr(&call.func);
-        for arg in &call.arguments.args {
-            self.in_boolean_context = is_bool_builtin;
-            self.visit_expr(arg);
+        for keyword in &call.arguments.keywords {
+            self.visit_expr_as(&keyword.value, UseRole::Read);
         }
-        self.in_boolean_context = false;
-        for kw in &call.arguments.keywords {
-            self.visit_keyword(kw);
-        }
-        self.in_boolean_context = prev;
     }
 
-    fn visit_compare_expr(&mut self, comp: &ruff_python_ast::ExprCompare) {
+    fn visit_compare_expr(&mut self, comp: &'a ruff_python_ast::ExprCompare) {
         let has_in_operator = comp.ops.iter().any(|op| {
             matches!(
                 op,
@@ -1811,44 +1610,36 @@ impl<'a> CapabilityVisitor<'a> {
             )
         });
         for (idx, operand) in comp.operands.iter().enumerate() {
-            if is_param_load(operand, self.parameter_name) {
-                let is_last = idx + 1 == comp.operands.len();
-                self.handled_starts
-                    .insert(operand.range().start().to_usize());
-                if has_in_operator && is_last {
-                    self.tracker.needs_collection = true;
-                } else if !is_identity_check {
-                    self.tracker.needs_sequence = true;
-                }
-            }
+            let role = if has_in_operator && idx + 1 == comp.operands.len() {
+                UseRole::Sized
+            } else if is_identity_check {
+                UseRole::Identity
+            } else {
+                UseRole::Read
+            };
+            self.visit_expr_as(operand, role);
         }
     }
 }
 
-impl<'a> SourceOrderVisitor<'a> for CapabilityVisitor<'a> {
+impl<'a> SourceOrderVisitor<'a> for ParameterUseVisitor<'a> {
     fn visit_annotation(&mut self, _expr: &'a Expr) {}
 
     fn visit_stmt(&mut self, statement: &'a Stmt) {
-        if self.tracker.needs_sequence {
-            return;
-        }
         match statement {
             Stmt::TypeAlias(_) => {}
             Stmt::FunctionDef(func) => {
-                if parameters_shadow_name(&func.parameters, self.parameter_name) {
-                    let prev = self.in_boolean_context;
-                    self.in_boolean_context = false;
-                    self.visit_parameters(&func.parameters);
-                    self.in_boolean_context = prev;
-                } else {
-                    self.loop_or_closure_depth += 1;
-                    walk_stmt(self, statement);
-                    self.loop_or_closure_depth -= 1;
+                for decorator in &func.decorator_list {
+                    self.visit_decorator(decorator);
                 }
+                // Defaults are evaluated in the enclosing scope; only the body is shadowed.
+                self.visit_parameters(&func.parameters);
+                self.visit_nested_scope(Some(&func.parameters), |visitor| {
+                    visitor.visit_body(&func.body);
+                });
             }
             Stmt::For(for_statement) => {
-                self.record_iteration(&for_statement.iter);
-                self.visit_expr(&for_statement.iter);
+                self.visit_expr_as(&for_statement.iter, UseRole::Iterated);
                 self.loop_or_closure_depth += 1;
                 self.visit_expr(&for_statement.target);
                 self.visit_body(&for_statement.body);
@@ -1857,162 +1648,112 @@ impl<'a> SourceOrderVisitor<'a> for CapabilityVisitor<'a> {
             }
             Stmt::While(while_statement) => {
                 self.loop_or_closure_depth += 1;
-                self.visit_in_boolean_context(&while_statement.test);
+                self.visit_expr_as(&while_statement.test, UseRole::Truthiness);
                 self.visit_body(&while_statement.body);
                 self.visit_body(&while_statement.orelse);
                 self.loop_or_closure_depth -= 1;
             }
             Stmt::If(if_statement) => {
-                self.visit_in_boolean_context(&if_statement.test);
+                self.visit_expr_as(&if_statement.test, UseRole::Truthiness);
                 self.visit_body(&if_statement.body);
                 for clause in &if_statement.elif_else_clauses {
                     if let Some(test) = &clause.test {
-                        self.visit_in_boolean_context(test);
+                        self.visit_expr_as(test, UseRole::Truthiness);
                     }
                     self.visit_body(&clause.body);
                 }
             }
             Stmt::Assert(assert_statement) => {
-                let prev = self.in_boolean_context;
-                self.in_boolean_context = true;
-                self.visit_expr(&assert_statement.test);
+                self.visit_expr_as(&assert_statement.test, UseRole::Truthiness);
                 if let Some(message) = &assert_statement.msg {
-                    self.visit_expr(message);
+                    self.visit_expr_as(message, UseRole::Read);
                 }
-                self.in_boolean_context = prev;
             }
             _ => walk_stmt(self, statement),
         }
     }
 
     fn visit_expr(&mut self, expr: &'a Expr) {
-        if self.tracker.needs_sequence {
-            return;
-        }
         match expr {
+            Expr::Name(name) => self.record(name.id.as_str(), UseRole::Escape),
             Expr::Lambda(lambda) => {
-                let prev = self.in_boolean_context;
-                self.in_boolean_context = false;
-                if lambda
-                    .parameters
-                    .as_deref()
-                    .is_some_and(|params| parameters_shadow_name(params, self.parameter_name))
-                {
-                    if let Some(params) = &lambda.parameters {
-                        self.visit_parameters(params);
-                    }
-                } else {
-                    self.loop_or_closure_depth += 1;
-                    walk_expr(self, expr);
-                    self.loop_or_closure_depth -= 1;
+                if let Some(parameters) = &lambda.parameters {
+                    self.visit_parameters(parameters);
                 }
-                self.in_boolean_context = prev;
-                return;
-            }
-            Expr::Name(name) if name.id.as_str() == self.parameter_name => {
-                if !self
-                    .handled_starts
-                    .contains(&name.range().start().to_usize())
-                {
-                    self.tracker.needs_sequence = true;
-                }
-                return;
-            }
-            Expr::ListComp(comp) => {
-                self.visit_single_elt_comprehension(&comp.generators, &comp.elt);
-                return;
-            }
-            Expr::SetComp(comp) => {
-                self.visit_single_elt_comprehension(&comp.generators, &comp.elt);
-                return;
-            }
-            Expr::Generator(comp) => {
-                self.visit_single_elt_comprehension(&comp.generators, &comp.elt);
-                return;
-            }
-            Expr::DictComp(comp) => {
-                self.visit_dict_comprehension(comp);
-                return;
-            }
-            Expr::List(list) if matches!(list.ctx, ruff_python_ast::ExprContext::Load) => {
-                self.record_starred_elements(&list.elts);
-            }
-            Expr::Tuple(tuple) if matches!(tuple.ctx, ruff_python_ast::ExprContext::Load) => {
-                self.record_starred_elements(&tuple.elts);
-            }
-            Expr::Set(set) => {
-                self.record_starred_elements(&set.elts);
-            }
-            Expr::Call(call) => {
-                self.visit_call_expr(call);
-                return;
-            }
-            Expr::Compare(comp) => {
-                self.visit_compare_expr(comp);
+                self.visit_nested_scope(lambda.parameters.as_deref(), |visitor| {
+                    visitor.visit_expr(&lambda.body);
+                });
             }
             Expr::UnaryOp(unary) if unary.op == ruff_python_ast::UnaryOp::Not => {
-                self.record_collection(&unary.operand);
-                walk_expr(self, expr);
-                return;
-            }
-            Expr::BoolOp(bool_op) => {
-                if self.in_boolean_context {
-                    for val in &bool_op.values {
-                        self.record_collection(val);
-                    }
-                }
-                walk_expr(self, expr);
-                return;
+                self.visit_expr_as(&unary.operand, UseRole::Truthiness);
             }
             Expr::If(if_expr) => {
-                self.visit_in_boolean_context(&if_expr.test);
-                let prev = self.in_boolean_context;
-                self.in_boolean_context = false;
+                self.visit_expr_as(&if_expr.test, UseRole::Truthiness);
                 self.visit_expr(&if_expr.body);
                 self.visit_expr(&if_expr.orelse);
-                self.in_boolean_context = prev;
-                return;
             }
-            _ => {}
+            Expr::Call(call) => self.visit_call_expr(call),
+            Expr::Compare(comp) => self.visit_compare_expr(comp),
+            Expr::Subscript(sub) if matches!(sub.ctx, ruff_python_ast::ExprContext::Load) => {
+                self.visit_expr_as(&sub.value, UseRole::Read);
+                self.visit_expr_as(&sub.slice, UseRole::Read);
+            }
+            Expr::BinOp(bin) => {
+                self.visit_expr_as(&bin.left, UseRole::Read);
+                self.visit_expr_as(&bin.right, UseRole::Read);
+            }
+            Expr::List(list) if matches!(list.ctx, ruff_python_ast::ExprContext::Load) => {
+                self.visit_display_elements(&list.elts);
+            }
+            Expr::Tuple(tuple) if matches!(tuple.ctx, ruff_python_ast::ExprContext::Load) => {
+                self.visit_display_elements(&tuple.elts);
+            }
+            Expr::Set(set) => self.visit_display_elements(&set.elts),
+            Expr::Dict(dict) => {
+                for item in &dict.items {
+                    match &item.key {
+                        Some(key) => {
+                            self.visit_expr(key);
+                            self.visit_expr(&item.value);
+                        }
+                        None => self.visit_expr_as(&item.value, UseRole::Read),
+                    }
+                }
+            }
+            Expr::ListComp(comp) => self.visit_comprehension_scope(&comp.generators, [&*comp.elt]),
+            Expr::SetComp(comp) => self.visit_comprehension_scope(&comp.generators, [&*comp.elt]),
+            Expr::Generator(comp) => {
+                self.visit_comprehension_scope(&comp.generators, [&*comp.elt]);
+            }
+            Expr::DictComp(comp) => self.visit_comprehension_scope(
+                &comp.generators,
+                comp.key.as_deref().into_iter().chain([&*comp.value]),
+            ),
+            _ => walk_expr(self, expr),
         }
-        let prev = self.in_boolean_context;
-        self.in_boolean_context = false;
-        walk_expr(self, expr);
-        self.in_boolean_context = prev;
     }
 }
 
-/// Determines the minimum read-only collection capability (`Iterable`, `Collection`, or `Sequence`)
-/// required by `parameter_name` across `func_node`'s body.
+/// Classifies how `func_node`'s body uses each of its parameters, keyed by parameter name.
 #[must_use]
-pub fn analyze_parameter_collection_capability(
-    func_node: &AstNode<'_>,
-    parameter_name: &str,
-) -> ParameterCollectionCapability {
+pub fn summarize_parameter_usages<'a>(func_node: &AstNode<'a>) -> HashMap<&'a str, ParameterUsage> {
     let Some(parsed) = func_node.file.py_module() else {
-        return ParameterCollectionCapability::Unused;
+        return HashMap::new();
     };
     let Some(func) = find_function_def_at_span(parsed.syntax(), func_node.span()) else {
-        return ParameterCollectionCapability::Unused;
+        return HashMap::new();
     };
-    let mut visitor = CapabilityVisitor {
-        parameter_name,
+    let mut visitor = ParameterUseVisitor {
+        usages: func
+            .parameters
+            .iter()
+            .map(|parameter| (parameter.name().as_str(), ParameterUsage::default()))
+            .collect(),
+        shadowed: Vec::new(),
         loop_or_closure_depth: 0,
-        in_boolean_context: false,
-        handled_starts: HashSet::new(),
-        tracker: CapabilityTracker::default(),
     };
     visitor.visit_body(&func.body);
-
-    if visitor.tracker.needs_sequence {
-        ParameterCollectionCapability::Sequence
-    } else if visitor.tracker.needs_collection || visitor.tracker.iteration_count > 1 {
-        ParameterCollectionCapability::Collection
-    } else if visitor.tracker.iteration_count == 1 {
-        ParameterCollectionCapability::Iterable
-    } else {
-        ParameterCollectionCapability::Unused
-    }
+    visitor.usages
 }
 
 struct PositionalReadsCollector<'a> {
@@ -3139,6 +2880,10 @@ mod tests {
         "def f(x):\n    return not x",
         ParameterCollectionCapability::Collection
     )]
+    #[case::assert_truthiness(
+        "def f(x):\n    assert x\n    return 1",
+        ParameterCollectionCapability::Collection
+    )]
     #[case::two_passes(
         "def f(x):\n    return sum(x) + max(x)",
         ParameterCollectionCapability::Collection
@@ -3168,14 +2913,14 @@ mod tests {
         "def f(x):\n    def g(x=x[0]):\n        return x\n    return g",
         ParameterCollectionCapability::Sequence
     )]
-    fn test_analyze_parameter_collection_capability(
+    fn test_parameter_collection_capability(
         #[case] source: &str,
         #[case] expected: ParameterCollectionCapability,
     ) {
         let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
         assert_eq!(
-            analyze_parameter_collection_capability(&sigs[0].node, "x"),
+            summarize_parameter_usages(&sigs[0].node)["x"].collection_capability(),
             expected
         );
     }
@@ -3206,11 +2951,15 @@ mod tests {
         "def f(x):\n    g = lambda x: x.append(1)\n    return len(x)",
         false
     )]
-    fn test_is_parameter_mutated_or_escaping(#[case] source: &str, #[case] expected: bool) {
+    #[case::shadowed_while_sibling_mutated(
+        "def f(x, y):\n    def g(x):\n        y.append(x)\n    return len(x)",
+        false
+    )]
+    fn test_parameter_mutated_or_escaping(#[case] source: &str, #[case] expected: bool) {
         let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
         assert_eq!(
-            is_parameter_mutated_or_escaping(&sigs[0].node, "x"),
+            summarize_parameter_usages(&sigs[0].node)["x"].is_mutated_or_escaping(),
             expected
         );
     }

@@ -3,8 +3,8 @@
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     AnnotationTraversalDepth, CollectionKind, ParameterCollectionCapability, PythonCollectionType,
-    PythonParameterKind, analyze_parameter_collection_capability, collect_collection_types,
-    extract_function_signatures, has_unaliased_collections_abc_set_import,
+    PythonParameterKind, collect_collection_types, extract_function_signatures,
+    has_unaliased_collections_abc_set_import, summarize_parameter_usages,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
@@ -12,6 +12,7 @@ use crate::rule_declaration::{
     Classification, Consensus, Declaration, EnforcementMode, Example, ImpactedQuality,
     LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
+use std::cell::LazyCell;
 use std::path::Path;
 
 /// The ABC the rule narrows to `Collection` when the parameter needs no positional access.
@@ -107,6 +108,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         if signature.is_exempt_from_body_usage_rules() {
             continue;
         }
+        let usages = LazyCell::new(|| summarize_parameter_usages(&signature.node));
         for parameter in &signature.parameters {
             if parameter.is_variadic() || parameter.kind == PythonParameterKind::Receiver {
                 continue;
@@ -128,8 +130,11 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             if matched.is_empty() {
                 continue;
             }
-            let capability =
-                analyze_parameter_collection_capability(&signature.node, &parameter.name);
+            let capability = usages
+                .get(parameter.name.as_str())
+                .copied()
+                .unwrap_or_default()
+                .collection_capability();
             let replacement = match capability {
                 ParameterCollectionCapability::Unused | ParameterCollectionCapability::Sequence => {
                     continue;
@@ -244,6 +249,13 @@ crate::test_utils::rule_test!(
 
                     def delegate(items: Sequence[int]) -> int:
                         return helper(items)
+                ",
+
+                bool_op_operand_escapes => r"
+                    from collections.abc import Sequence
+
+                    def pick(flag: bool, items: Sequence[int]) -> Sequence[int] | bool:
+                        return flag and items
                 ",
 
                 explained_sequence_parameter => r"

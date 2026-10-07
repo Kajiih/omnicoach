@@ -4,7 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     AnnotationTraversalDepth, CollectionKind, PythonCollectionType, PythonParameterKind,
     collect_collection_types, extract_function_signatures,
-    has_unaliased_collections_abc_set_import, is_parameter_mutated_or_escaping,
+    has_unaliased_collections_abc_set_import, summarize_parameter_usages,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::read_only_collection_replacements;
@@ -13,6 +13,7 @@ use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
     RuleDoc, RuleOptions, Topic,
 };
+use std::cell::LazyCell;
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -93,6 +94,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         if signature.is_exempt_from_body_usage_rules() {
             continue;
         }
+        let usages = LazyCell::new(|| summarize_parameter_usages(&signature.node));
         for parameter in &signature.parameters {
             if parameter.is_variadic() || parameter.kind == PythonParameterKind::Receiver {
                 continue;
@@ -111,7 +113,11 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             if matched.is_empty() {
                 continue;
             }
-            if is_parameter_mutated_or_escaping(&signature.node, &parameter.name) {
+            let usage = usages
+                .get(parameter.name.as_str())
+                .copied()
+                .unwrap_or_default();
+            if usage.is_mutated_or_escaping() {
                 continue;
             }
             let token = PythonCollectionType::joined_paths(&matched);
@@ -344,6 +350,31 @@ crate::test_utils::rule_test!(
                         for index, value in enumerate(reversed(items)):
                             total += index * value
                         return total
+                " => "MutableSequence[int]",
+
+                readonly_builtins_with_keyword_arguments => r"
+                    from collections.abc import MutableSequence
+
+                    def stats(items: MutableSequence[int]) -> int:
+                        return (
+                            sum(items, start=0)
+                            + len(sorted(items, reverse=True))
+                            + len(list(enumerate(items, start=1)))
+                        )
+                " => "MutableSequence[int]",
+
+                readonly_mapping_and_filtering_builtins => r"
+                    from collections.abc import MutableSequence
+
+                    def index(pairs: MutableSequence[tuple[str, int]]) -> int:
+                        return len(dict(pairs)) + len(list(map(str, pairs))) + len(list(filter(None, pairs)))
+                " => "MutableSequence[tuple[str, int]]",
+
+                equality_comparison_is_readonly => r"
+                    from collections.abc import MutableSequence
+
+                    def same(items: MutableSequence[int], other: object) -> bool:
+                        return items == other or items != other
                 " => "MutableSequence[int]",
 
                 // Mutating `rows[0]` mutates an element, not the outer container.
