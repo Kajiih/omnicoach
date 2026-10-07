@@ -688,41 +688,44 @@ pub fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
 /// Returns true if the node represents an import binding.
 #[must_use]
 pub fn is_import_binding(node: &AstNode<'_>, lang: Language) -> bool {
-    let Some(raw) = node.raw_opt() else {
-        return false;
-    };
-    let Some(parent) = raw.parent() else {
-        return false;
-    };
-    let parent_kind = parent.kind();
-    dispatch_lang!(lang, is_import_binding_parent(parent_kind.as_ref()))
+    match lang {
+        Language::Rust => rust::is_import_binding(node),
+        Language::Python => node
+            .raw_opt()
+            .and_then(RawNode::parent)
+            .is_some_and(|parent| python::is_import_binding_parent(parent.kind().as_ref())),
+    }
 }
 
 /// Returns true if the node represents a structural type, class, or function definition name.
 #[must_use]
 pub fn is_structural_definition(node: &AstNode<'_>, lang: Language) -> bool {
-    let Some(raw) = node.raw_opt() else {
-        return false;
-    };
-    let Some(parent) = raw.parent() else {
-        return false;
-    };
-    let parent_kind = parent.kind();
-    dispatch_lang!(lang, is_structural_definition_parent(parent_kind.as_ref()))
+    match lang {
+        Language::Rust => rust::is_structural_definition(node),
+        Language::Python => node
+            .raw_opt()
+            .and_then(RawNode::parent)
+            .is_some_and(|parent| python::is_structural_definition_parent(parent.kind().as_ref())),
+    }
 }
 
 /// Returns true if the node is the name of a member defined inside a trait implementation
 /// (`impl Trait for Type` in Rust or `@override` method in Python), i.e. a name mandated by a contract.
 #[must_use]
 pub fn is_trait_impl_member(node: &AstNode<'_>, lang: Language) -> bool {
-    let Some(raw) = node.raw_opt() else {
-        return false;
-    };
-    let Some(raw_item) = raw.parent() else {
-        return false;
-    };
-    let item = AstNode::from_raw(raw_item);
-    dispatch_lang!(lang, is_trait_impl_member(&item))
+    match lang {
+        Language::Rust => rust::is_trait_impl_member(node),
+        Language::Python => {
+            let Some(raw) = node.raw_opt() else {
+                return false;
+            };
+            let Some(raw_item) = raw.parent() else {
+                return false;
+            };
+            let item = AstNode::from_raw(raw_item);
+            python::is_trait_impl_member(&item)
+        }
+    }
 }
 
 /// Collects all outermost test functions in `file` along with their identifier node, name, and assertion count.
@@ -860,7 +863,10 @@ pub fn enclosing_non_exempt_function_name(
     let raw = node.raw_opt()?;
     let mut nearest_function_name: Option<String> = None;
     for ancestor in raw.ancestors() {
-        let func_info = dispatch_lang!(lang, function_name_and_is_top_level(&ancestor));
+        let func_info = match lang {
+            Language::Python => python::function_name_and_is_top_level(&ancestor),
+            Language::Rust => None,
+        };
         if let Some((func_name, is_top_level)) = func_info {
             if is_exempt(&func_name, is_top_level) {
                 return None;
@@ -881,12 +887,7 @@ mod tests {
     fn test_source_location_from_node() {
         let source = "fn main() {\n    let value = 42;\n}\n";
         let file = ParsedFile::new(source, Language::Rust);
-        let matched = file
-            .grep
-            .root()
-            .find("let $VAR = $VAL")
-            .expect("let statement node should match pattern");
-        let node = AstNode::from_raw(matched.get_node().clone());
+        let node = AstNode::from_span(&file, SourceSpan::new(16, 31));
         assert_eq!(
             node.to_source_location("src/main.rs"),
             SourceLocation::file_span(

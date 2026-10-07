@@ -67,3 +67,30 @@
   - `architecture_conformance` 11, `cli` 23 (includes self-dogfooding), `registry` 17;
   - doctests 8 passed, 1 ignored;
   - no rustdoc warnings.
+
+---
+
+## Slice 3 — Migrate `src/code_lint/ast/rust.rs` to `ra_ap_syntax` (Decisions D1, D6, D7) — DONE
+
+- **Goal**: Migrate `src/code_lint/ast/rust.rs` 100% from `ast-grep` / `tree-sitter-rust` (`RawNode`) to `ra_ap_syntax` (`SourceFile`, `SyntaxNode`, `SyntaxToken`, `SyntaxKind`, typed `ast::*` wrappers, and native literal decoding), and lift `// omni:disable-file [repeated-literal]` from `rust.rs`.
+- **Changes**:
+  - `src/code_lint/ast/rust.rs`:
+    - Migrated all Rust AST extractors to `ra_ap_syntax`:
+      - Binding and import extraction (`is_import_binding`, `is_structural_definition`, `is_trait_impl_member`, `collect_bindings`) via `ast::Use`, `ast::UseTree`, `ast::Pat`, `ast::LetStmt`, `ast::ForExpr`, `ast::Param`, `ast::ClosureExpr`, `ast::MatchArm`, and `HasName`.
+      - Attribute and inline test range detection (`collect_inline_test_ranges`, `is_test_attribute`, `is_conditional_test_attribute`, `is_doc_attribute`) using `ast::Attr`, `ast::Meta::CfgMeta`, and `ast::CfgPredicate::CfgAtom`.
+      - Test assertion and macro argument inspection (`collect_test_function_assertion_counts`, `macro_terminal_name`, `has_top_level_logical_and`, `extract_macro_arguments`, `is_boolean_literal_collection`) using `ast::Fn`, `ast::MacroCall`, `ast::TokenTree`, `ast::ArrayExpr`, and `ast::TupleExpr`.
+      - Multiline string detection (`find_unwrapped_multiline_strings`) over `SyntaxKind::STRING | BYTE_STRING | C_STRING` tokens with `insta` snapshot, `#[doc = "..."]`, and wrapper-macro exclusions.
+      - Production file summary (`summarize_rust_file`) over typed `ast::Module`, `ast::MacroRules`, `ast::MacroCall`, `ast::Use`, `ast::Path`, and `ast::Attr`.
+      - Positional tuple-field reads (`collect_positional_reads`) over `ast::FieldExpr` with `ast::NameRef::as_tuple_field` and mutation/borrow exclusions.
+      - Literal occurrence extraction (`collect_literal_occurrences`) using `ast::String::value()` and `ast::ByteString::value()` (`AstToken`) for native escape and raw-string decoding (Decision D6), plus macro `TokenTree` traversal (`rust_string_body` deleted).
+      - Function & return type unwrapping (`collect_functions`, `unwrap_return_envelope`, `extract_option_payload`, `unwrap_pointer_wrappers`, `extract_generic_type`, `resolve_type_path`, `extract_slice_type`) over `ast::Fn`, `ast::PathType`, `ast::RefType`, `ast::SliceType`, and `ast::ArrayType`.
+    - Removed `// omni:disable-file [repeated-literal]` from `src/code_lint/ast/rust.rs` and extracted module-level constants for shared type/keyword identifiers.
+    - Zero `RawNode` or `ast-grep` references remain in `src/code_lint/ast/rust.rs`.
+  - `src/code_lint/ast.rs`:
+    - Dispatched `is_import_binding` and `is_structural_definition` for Rust directly to `rust::is_import_binding(node)` and `rust::is_structural_definition(node)`.
+- **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo doc --no-deps --document-private-items` is green:
+  - lib 1397 passed;
+  - `architecture_conformance` 11, `cli` 23 (includes self-dogfooding), `registry` 17;
+  - doctests 8 passed, 1 ignored;
+  - no rustdoc warnings.
+
