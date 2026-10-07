@@ -212,14 +212,9 @@ fn python_collection_branch_type(branch: &AstNode<'_>, abc_set_imported: bool) -
 }
 
 fn check_rust(rule: &CodeRule, path: &Path, file: &ParsedFile) -> Vec<Diagnostic> {
-    let test_ranges = ast::rust::collect_inline_test_ranges(file);
     let mut diagnostics = Vec::new();
     for func in ast::rust::collect_functions(file) {
-        if test_ranges
-            .iter()
-            .any(|range| range.contains(&func.node.span().start))
-            || func.is_trait_or_trait_impl
-        {
+        if func.node.is_in_rust_inline_test() || func.is_trait_or_trait_impl {
             continue;
         }
         let Some(ref return_type_node) = func.return_type else {

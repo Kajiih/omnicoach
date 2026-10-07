@@ -3,7 +3,6 @@
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::is_with_context_manager;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::code_lint::semantic::calls;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, EnforcementMode, Example, FilterListDefaults,
@@ -91,11 +90,9 @@ fn check_file(
     file: &ParsedFile,
     banned_calls: &HashSet<String>,
 ) -> Vec<Diagnostic> {
-    calls::find_banned_calls(file, banned_calls)
-        .into_iter()
-        .filter(|matched| is_with_context_manager(&matched.node))
-        .map(|matched| rule.diagnostic_at_node(path, &matched.node, &[("callee", &matched.callee)]))
-        .collect()
+    rule.check_banned_calls_where(path, file, banned_calls, |matched| {
+        is_with_context_manager(&matched.node)
+    })
 }
 
 #[cfg(test)]

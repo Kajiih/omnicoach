@@ -1,9 +1,10 @@
 //! Python function signatures, parameter extraction, method receivers, and direct scope definitions.
 
+#[cfg(test)]
+use super::find_parameters_at_span;
 use super::{
-    AstNode, ParsedFile, extract_decorators_from_slice, find_function_def_at_span,
-    find_parameters_at_span, has_decorator, is_in_protocol_or_abc_class,
-    resolve_path_and_terminal_expr,
+    AstNode, ParsedFile, extract_decorators_from_slice, find_function_def_at_span, has_decorator,
+    is_in_protocol_or_abc_class, resolve_path_and_terminal_expr,
 };
 use crate::code_lint::ast::span_from_ruff_range;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
@@ -206,8 +207,11 @@ pub(super) fn extract_parameters_from_ast<'a>(
 }
 
 /// Extracts all parameters in order from a Python `parameters` or `function_definition` node.
+#[cfg(test)]
 #[must_use]
-pub fn extract_parameters<'a>(func_or_params_node: &AstNode<'a>) -> Vec<PythonParameterInfo<'a>> {
+pub(super) fn extract_parameters<'a>(
+    func_or_params_node: &AstNode<'a>,
+) -> Vec<PythonParameterInfo<'a>> {
     let Some(parsed) = func_or_params_node.file.py_module() else {
         return Vec::new();
     };
@@ -376,7 +380,7 @@ pub(super) fn is_stub_function_body(func_node: &AstNode<'_>) -> bool {
 
 /// Returns true if a Python `function_definition` is decorated with `@override`.
 #[must_use]
-pub fn has_override_decorator(func_node: &AstNode<'_>) -> bool {
+fn has_override_decorator(func_node: &AstNode<'_>) -> bool {
     has_decorator(func_node, |terminal| terminal == OVERRIDE_DECORATOR)
 }
 
@@ -385,7 +389,7 @@ pub fn has_override_decorator(func_node: &AstNode<'_>) -> bool {
 /// Python has no structural trait implementations, so the contract is an explicit
 /// `@override` decorator on a method.
 #[must_use]
-pub fn is_trait_impl_member(item: &AstNode<'_>) -> bool {
+pub(in crate::code_lint::ast) fn is_trait_impl_member(item: &AstNode<'_>) -> bool {
     let Some(parsed) = item.file.py_module() else {
         return false;
     };

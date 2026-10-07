@@ -94,35 +94,37 @@ pub(super) fn is_concrete_collection_constructor(path: &str, terminal: &str) -> 
 /// Returns true if `file` contains an unaliased `from collections.abc import Set` statement.
 #[must_use]
 pub fn has_unaliased_collections_abc_set_import(file: &ParsedFile) -> bool {
-    struct ImportFinder {
-        found: bool,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for ImportFinder {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if self.found {
-                return;
-            }
-            if let Stmt::ImportFrom(import_from) = statement
-                && import_from.level == 0
-                && import_from.module.as_deref() == Some("collections.abc")
-                && import_from.names.iter().any(|alias| {
-                    alias.name.as_str() == TYPING_SET_CONSTRUCTOR && alias.asname.is_none()
-                })
-            {
-                self.found = true;
-                return;
-            }
-            walk_stmt(self, statement);
+    *file.abc_set_imported.get_or_init(|| {
+        struct ImportFinder {
+            found: bool,
         }
-    }
 
-    let Some(parsed) = file.py_module() else {
-        return false;
-    };
-    let mut finder = ImportFinder { found: false };
-    finder.visit_body(&parsed.syntax().body);
-    finder.found
+        impl<'a> SourceOrderVisitor<'a> for ImportFinder {
+            fn visit_stmt(&mut self, statement: &'a Stmt) {
+                if self.found {
+                    return;
+                }
+                if let Stmt::ImportFrom(import_from) = statement
+                    && import_from.level == 0
+                    && import_from.module.as_deref() == Some("collections.abc")
+                    && import_from.names.iter().any(|alias| {
+                        alias.name.as_str() == TYPING_SET_CONSTRUCTOR && alias.asname.is_none()
+                    })
+                {
+                    self.found = true;
+                    return;
+                }
+                walk_stmt(self, statement);
+            }
+        }
+
+        let Some(parsed) = file.py_module() else {
+            return false;
+        };
+        let mut finder = ImportFinder { found: false };
+        finder.visit_body(&parsed.syntax().body);
+        finder.found
+    })
 }
 
 /// Extracts `(base_expr, type_argument_exprs)` from a Python `Expr::Subscript` node inside a
@@ -531,18 +533,6 @@ pub struct PythonReturnTypeUnion<'a> {
 
 /// Unwraps outer return-annotation envelopes (`Annotated[T, ...]`, `Awaitable[T]`, and
 /// `Coroutine[YieldT, SendT, ReturnT]`).
-#[must_use]
-pub fn unwrap_return_envelope<'a>(type_node: &AstNode<'a>) -> AstNode<'a> {
-    let Some(parsed) = type_node.file.py_module() else {
-        return *type_node;
-    };
-    let Some(expr) = find_expr_at_span(parsed.syntax(), type_node.span()) else {
-        return *type_node;
-    };
-    let unwrapped = unwrap_return_envelope_expr(expr, &type_node.file.source);
-    AstNode::from_span(type_node.file, span_from_ruff_range(unwrapped.range()))
-}
-
 fn unwrap_return_envelope_expr<'a>(mut current: &'a Expr, source: &str) -> &'a Expr {
     while let Some((base_node, type_args)) = extract_generic_base_and_args(current) {
         let (base_path, base_terminal) = resolve_path_and_terminal_expr(base_node, source);

@@ -87,7 +87,7 @@ pub(super) fn is_structural_definition(node: &AstNode<'_>) -> bool {
 /// Returns true if `item`, the definition (or its identifier) owning a name, has that name
 /// mandated by a trait implementation contract (`impl Trait for Type`).
 #[must_use]
-pub fn is_trait_impl_member(item: &AstNode<'_>) -> bool {
+pub(super) fn is_trait_impl_member(item: &AstNode<'_>) -> bool {
     let Some(syntax) = syntax_node(item) else {
         return false;
     };
@@ -267,7 +267,7 @@ fn traverse_rust<'a>(node: &SyntaxNode, file: &'a ParsedFile, bindings: &mut Vec
 /// Collects all binding definitions (variables, functions, structs, named struct fields, etc.)
 /// within `file`.
 #[must_use]
-pub fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
+pub(super) fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -369,13 +369,15 @@ fn collect_inline_test_ranges_rec(node: &SyntaxNode, ranges: &mut Vec<std::ops::
 /// Collects byte spans for all inline test items (`#[cfg(test)]` modules/items and `#[test]` functions)
 /// within a Rust source file.
 #[must_use]
-pub fn collect_inline_test_ranges(file: &ParsedFile) -> Vec<std::ops::Range<usize>> {
-    let Some(parsed) = file.rs_parsed() else {
-        return Vec::new();
-    };
-    let mut ranges = Vec::new();
-    collect_inline_test_ranges_rec(parsed.tree().syntax(), &mut ranges);
-    ranges
+pub fn collect_inline_test_ranges(file: &ParsedFile) -> &[std::ops::Range<usize>] {
+    file.rust_inline_test_ranges.get_or_init(|| {
+        let Some(parsed) = file.rs_parsed() else {
+            return Vec::new();
+        };
+        let mut ranges = Vec::new();
+        collect_inline_test_ranges_rec(parsed.tree().syntax(), &mut ranges);
+        ranges
+    })
 }
 
 /// Returns true if `function` is a test function (`#[test]` / `#[rstest]` or named `test` / `test_*`).
@@ -448,7 +450,7 @@ fn count_rust_assertions(node: &SyntaxNode) -> usize {
 
 /// Collects all outermost Rust test functions together with their `(name_node, func_name, assertion_count)`.
 #[must_use]
-pub fn collect_test_function_assertion_counts(
+pub(super) fn collect_test_function_assertion_counts(
     file: &ParsedFile,
 ) -> Vec<(AstNode<'_>, String, usize)> {
     let Some(parsed) = file.rs_parsed() else {
@@ -703,7 +705,7 @@ fn is_multiline_string_token(token: &SyntaxToken) -> bool {
 /// Collects all Rust multiline string literal nodes in `file` that are not doc attributes,
 /// `insta` inline snapshots, or enclosed in a macro matching `is_allowed_wrapper`.
 #[must_use]
-pub fn find_unwrapped_multiline_strings(
+pub(super) fn find_unwrapped_multiline_strings(
     file: &ParsedFile,
     is_allowed_wrapper: impl Fn(&str, &str) -> bool,
 ) -> Vec<AstNode<'_>> {
@@ -742,7 +744,7 @@ pub struct RustPathReference {
     /// 1-indexed starting line number of the reference or enclosing `use` declaration.
     pub line: usize,
     /// Raw syntactic path segments joined by `::` (e.g. `"crate::code_lint::ast::ParsedFile"`,
-    /// `"super::AstNode"`, `"self::rust::collect_bindings"`, `"ast_grep_core::Node"`).
+    /// `"super::AstNode"`, `"self::rust::collect_bindings"`, `"ra_ap_syntax::SyntaxNode"`).
     pub raw_path: String,
     /// Trimmed source text of the enclosing `use` declaration or inline path node for diagnostics.
     pub statement_text: String,
@@ -951,18 +953,11 @@ fn item_line_and_text(file: &ParsedFile, node: &SyntaxNode) -> (usize, String) {
 fn summarize_use_item(
     use_item: &ast::Use,
     file: &ParsedFile,
-    test_ranges: &[std::ops::Range<usize>],
     defined_macros: &std::collections::HashSet<String>,
     summary: &mut RustFileSummary,
 ) {
     for attribute in use_item.attrs() {
-        summarize_rust_node(
-            attribute.syntax(),
-            file,
-            test_ranges,
-            defined_macros,
-            summary,
-        );
+        summarize_rust_node(attribute.syntax(), file, defined_macros, summary);
     }
     let (line, declaration_text) = item_line_and_text(file, use_item.syntax());
     let mut target_paths = Vec::new();
@@ -995,7 +990,6 @@ fn summarize_use_item(
 fn summarize_qualified_path(
     path: &ast::Path,
     file: &ParsedFile,
-    test_ranges: &[std::ops::Range<usize>],
     defined_macros: &std::collections::HashSet<String>,
     summary: &mut RustFileSummary,
 ) {
@@ -1017,31 +1011,13 @@ fn summarize_qualified_path(
             statement_text: slice_text.to_string(),
         });
         if let Some(generic_args) = segment.generic_arg_list() {
-            summarize_rust_node(
-                generic_args.syntax(),
-                file,
-                test_ranges,
-                defined_macros,
-                summary,
-            );
+            summarize_rust_node(generic_args.syntax(), file, defined_macros, summary);
         }
         if let Some(paren_args) = segment.parenthesized_arg_list() {
-            summarize_rust_node(
-                paren_args.syntax(),
-                file,
-                test_ranges,
-                defined_macros,
-                summary,
-            );
+            summarize_rust_node(paren_args.syntax(), file, defined_macros, summary);
         }
         if let Some(ret_type) = segment.ret_type() {
-            summarize_rust_node(
-                ret_type.syntax(),
-                file,
-                test_ranges,
-                defined_macros,
-                summary,
-            );
+            summarize_rust_node(ret_type.syntax(), file, defined_macros, summary);
         }
     }
 }
@@ -1049,15 +1025,11 @@ fn summarize_qualified_path(
 fn summarize_rust_node(
     node: &SyntaxNode,
     file: &ParsedFile,
-    test_ranges: &[std::ops::Range<usize>],
     defined_macros: &std::collections::HashSet<String>,
     summary: &mut RustFileSummary,
 ) {
     let start_offset: usize = node.text_range().start().into();
-    if test_ranges
-        .iter()
-        .any(|range| range.contains(&start_offset))
-    {
+    if file.is_in_rust_inline_test(start_offset) {
         return;
     }
 
@@ -1070,26 +1042,20 @@ fn summarize_rust_node(
         }
         for child in node.children() {
             if child.kind() != SyntaxKind::TOKEN_TREE {
-                summarize_rust_node(&child, file, test_ranges, defined_macros, summary);
+                summarize_rust_node(&child, file, defined_macros, summary);
             }
         }
         return;
     }
 
     if let Some(use_item) = ast::Use::cast(node.clone()) {
-        summarize_use_item(&use_item, file, test_ranges, defined_macros, summary);
+        summarize_use_item(&use_item, file, defined_macros, summary);
         return;
     }
 
     if let Some(macro_rules) = ast::MacroRules::cast(node.clone()) {
         for attribute in macro_rules.attrs() {
-            summarize_rust_node(
-                attribute.syntax(),
-                file,
-                test_ranges,
-                defined_macros,
-                summary,
-            );
+            summarize_rust_node(attribute.syntax(), file, defined_macros, summary);
         }
         return;
     }
@@ -1120,13 +1086,13 @@ fn summarize_rust_node(
     if let Some(path) = ast::Path::cast(node.clone())
         && has_pure_qualifiers(&path)
     {
-        summarize_qualified_path(&path, file, test_ranges, defined_macros, summary);
+        summarize_qualified_path(&path, file, defined_macros, summary);
         return;
     }
 
     for child in node.children() {
         if child.kind() != SyntaxKind::TOKEN_TREE {
-            summarize_rust_node(&child, file, test_ranges, defined_macros, summary);
+            summarize_rust_node(&child, file, defined_macros, summary);
         }
     }
 }
@@ -1139,16 +1105,12 @@ pub fn summarize_rust_file(file: &ParsedFile) -> RustFileSummary {
         return RustFileSummary::default();
     };
     let source_file = parsed.tree();
-    let test_ranges = collect_inline_test_ranges(file);
     let mut summary = RustFileSummary::default();
     let mut defined_macros = std::collections::HashSet::new();
 
     for item in source_file.items() {
         let start_offset: usize = item.syntax().text_range().start().into();
-        if test_ranges
-            .iter()
-            .any(|range| range.contains(&start_offset))
-        {
+        if file.is_in_rust_inline_test(start_offset) {
             continue;
         }
         let (item_line, declaration_text) = item_line_and_text(file, item.syntax());
@@ -1180,7 +1142,7 @@ pub fn summarize_rust_file(file: &ParsedFile) -> RustFileSummary {
     }
 
     for child in source_file.syntax().children() {
-        summarize_rust_node(&child, file, &test_ranges, &defined_macros, &mut summary);
+        summarize_rust_node(&child, file, &defined_macros, &mut summary);
     }
 
     summary
@@ -1296,7 +1258,7 @@ fn collect_positional_reads_rec<'a>(
 
 /// Collects Rust tuple-field reads grouped by function (see [`super::collect_positional_reads`]).
 #[must_use]
-pub fn collect_positional_reads(file: &ParsedFile) -> Vec<ScopePositionalReads<'_>> {
+pub(super) fn collect_positional_reads(file: &ParsedFile) -> Vec<ScopePositionalReads<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -1570,7 +1532,7 @@ fn collect_literal_occurrences_rec<'a>(
 
 /// Collects Rust literal occurrences (see [`super::collect_literal_occurrences`]).
 #[must_use]
-pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'_>> {
+pub(super) fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };

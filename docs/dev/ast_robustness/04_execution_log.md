@@ -1,6 +1,6 @@
 # Phase 4 — Execution Log (P3 Dedicated AST Migration)
 
-> **Status**: IN PROGRESS
+> **Status**: DONE
 
 ---
 
@@ -157,3 +157,28 @@
   - doctests 8 passed, 1 ignored;
   - no rustdoc warnings.
 
+---
+
+## Slice 6 — Architecture & Boundary Refinement, `ParsedFile` Memoization, and Zero-Legacy Audit (Decisions D6, D7) — DONE
+
+- **Goal**: Tighten `code_lint::ast` visibility boundaries (`pub` → `pub(super)` / `pub(in crate::code_lint::ast)` / private) and delete unused public helpers; memoize shared file-level queries on `ParsedFile` via `OnceLock`; add declarative rule helpers on `CodeRule` and `PythonClassInfo`; complete Phase 5 (`05_cleanup.md`), Phase 6 (`06_review_and_audit.md`), and Phase 7 (`07_learn.md`).
+- **Changes**:
+  - `src/code_lint/ast.rs`:
+    - Added `OnceLock` fields on `ParsedFile` (`comment_spans`, `binding_spans`, `call_candidates`, `rust_inline_test_ranges`, `abc_set_imported`, `locally_mutated_return_functions`) to memoize all multi-caller file-level AST queries.
+    - Added `ParsedFile::is_in_rust_inline_test(&self, offset: usize) -> bool` and `AstNode::is_in_rust_inline_test(&self) -> bool`.
+    - Updated `collect_comment_nodes`, `collect_call_candidates`, and `collect_bindings` to materialize `AstNode<'_>` handles in $O(k)$ from cached spans without re-walking the AST.
+  - `src/code_lint/ast/rust.rs`:
+    - Tightened `is_trait_impl_member`, `collect_bindings`, `collect_test_function_assertion_counts`, `find_unwrapped_multiline_strings`, `collect_positional_reads`, and `collect_literal_occurrences` from `pub fn` to `pub(super) fn`.
+    - Memoized `collect_inline_test_ranges(file: &ParsedFile) -> &[std::ops::Range<usize>]` via `file.rust_inline_test_ranges` and simplified `summarize_rust_file` / `summarize_rust_node` to call `file.is_in_rust_inline_test(start_offset)` directly without threading `test_ranges`.
+    - Updated stale `"ast_grep_core::Node"` example in `RustPathReference` doc comment to `"ra_ap_syntax::SyntaxNode"`.
+  - `src/code_lint/ast/python.rs` & `src/code_lint/ast/python/{annotations,classes,functions,scopes}.rs`:
+    - Deleted unused public functions `python::collect_outer_test_functions` and `python::annotations::unwrap_return_envelope`.
+    - Tightened `is_import_binding`, `is_structural_definition`, `has_decorator`, `collect_test_function_assertion_counts`, `find_unwrapped_multiline_strings`, `collect_positional_reads`, `collect_literal_occurrences`, `is_trait_impl_member`, and `collect_bindings` to `pub(super)` / `pub(in crate::code_lint::ast)`.
+    - Tightened `extract_decorators`, `find_enclosing_with_item`, `find_enclosing_with_statement`, and `has_override_decorator` to private `fn`, and `extract_parameters` to `#[cfg(test)] pub(super) fn`.
+    - Memoized `has_unaliased_collections_abc_set_import` (`file.abc_set_imported`) and `collect_locally_mutated_return_functions` (`file.locally_mutated_return_functions`).
+    - Added `PythonClassInfo::is_dataclass_missing_arg(&self, key: &str) -> bool`.
+  - `src/code_lint/contract.rs`, `src/code_lint/runner.rs`, and `src/code_lint/rules/*.rs`:
+    - Added `CodeRule::check_banned_calls_where` and refactored `sleep_in_tests.rs`, `suppressed_exception.rs`, and `error_log_in_except.rs` to use it.
+    - Refactored `mutable_dataclass.rs` and `unslotted_dataclass.rs` to use `PythonClassInfo::is_dataclass_missing_arg`.
+    - Refactored `repeated_literal.rs` and `nullable_collection_return.rs` to use `AstNode::is_in_rust_inline_test()`.
+- **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo doc --no-deps --document-private-items` is 100% green, and all 8 Zero-Legacy & Zero-Compat Bloat Audit checks pass.

@@ -97,6 +97,14 @@ impl<'a> PythonClassInfo<'a> {
             )
         })
     }
+
+    /// Returns true if the class carries a `@dataclass` or `@dataclasses.dataclass` decorator
+    /// that does not pass the keyword argument `key`.
+    #[must_use]
+    pub fn is_dataclass_missing_arg(&self, key: &str) -> bool {
+        self.dataclass_decorator()
+            .is_some_and(|decorator| !decorator.has_arg(key))
+    }
 }
 
 /// Returns the terminal name of each positional base class of a Python `StmtClassDef`,

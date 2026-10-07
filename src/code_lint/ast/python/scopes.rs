@@ -425,7 +425,7 @@ impl<'a> SourceOrderVisitor<'a> for BindingVisitor<'a> {
 /// Collects all binding definitions (variables, functions, classes, instance attributes declared
 /// in `__init__`, etc.) within a Python file.
 #[must_use]
-pub fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
+pub(in crate::code_lint::ast) fn collect_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };

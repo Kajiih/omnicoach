@@ -2,7 +2,7 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::code_lint::semantic::calls::{self, CallMatch};
+use crate::code_lint::semantic::calls::CallMatch;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
@@ -244,22 +244,15 @@ fn has_zero_duration_argument(call_match: &CallMatch<'_>) -> bool {
     )
 }
 
-/// Template placeholder naming the sleep call.
-const CALLEE: &str = "callee";
-
 fn check_sleep(
     rule: &CodeRule<ListOption>,
     path: &Path,
     file: &ParsedFile,
     banned: &HashSet<String>,
 ) -> Vec<Diagnostic> {
-    calls::find_banned_calls(file, banned)
-        .into_iter()
-        .filter(|call_match| !has_zero_duration_argument(call_match))
-        .map(|call_match| {
-            rule.diagnostic_at_node(path, &call_match.node, &[(CALLEE, &call_match.callee)])
-        })
-        .collect()
+    rule.check_banned_calls_where(path, file, banned, |call_match| {
+        !has_zero_duration_argument(call_match)
+    })
 }
 
 fn check_zero_sleep(
@@ -268,13 +261,7 @@ fn check_zero_sleep(
     file: &ParsedFile,
     banned: &HashSet<String>,
 ) -> Vec<Diagnostic> {
-    calls::find_banned_calls(file, banned)
-        .into_iter()
-        .filter(has_zero_duration_argument)
-        .map(|call_match| {
-            rule.diagnostic_at_node(path, &call_match.node, &[(CALLEE, &call_match.callee)])
-        })
-        .collect()
+    rule.check_banned_calls_where(path, file, banned, has_zero_duration_argument)
 }
 
 #[cfg(test)]
