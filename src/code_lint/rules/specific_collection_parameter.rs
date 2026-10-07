@@ -108,7 +108,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         if signature.is_exempt_from_body_usage_rules() {
             continue;
         }
-        let usages = LazyCell::new(|| summarize_parameter_usages(&signature.node));
+        let usages = LazyCell::new(|| summarize_parameter_usages(&signature));
         for parameter in &signature.parameters {
             if parameter.is_variadic() || parameter.kind == PythonParameterKind::Receiver {
                 continue;

@@ -84,6 +84,8 @@ pub struct PythonFunctionSignature<'a> {
     pub(super) is_in_protocol_or_abc_class: bool,
     /// True if the body is a stub ([`is_stub_body`]).
     pub(super) has_stub_body: bool,
+    /// The parsed definition, for analyses of the body.
+    pub(super) definition: &'a StmtFunctionDef,
 }
 
 impl PythonFunctionSignature<'_> {
@@ -263,6 +265,7 @@ pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSigna
                         has_exempt_signature_decorator: has_exempt_signature_decorator(&decorators),
                         is_in_protocol_or_abc_class: enclosing,
                         has_stub_body: is_stub_body(&func_def.body, &self.file.source),
+                        definition: func_def,
                     });
                     self.in_protocol_or_abc_class = false;
                 }
