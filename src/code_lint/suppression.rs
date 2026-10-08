@@ -266,38 +266,6 @@ impl SuppressionTracker {
         Self { directives }
     }
 
-    /// Helper to parse a single comment's text into a `ParsedDirective` if it is an omni directive.
-    fn parse_comment_text(
-        text: &str,
-        span: SourceSpan,
-        coord: LineColumn,
-        content: &str,
-    ) -> Option<ParsedDirective> {
-        let stripped = strip_comment_delimiters(text)?;
-        let (is_file, remainder) = parse_directive_prefix(stripped)?;
-        let (target_rules, is_blanket, after_rules) = parse_bracketed_rules(remainder.trim_start());
-
-        let reason = after_rules
-            .trim_start()
-            .strip_prefix("--")
-            .map(str::trim)
-            .filter(|reason_text| !reason_text.is_empty())
-            .map(ToString::to_string);
-
-        let placement = resolve_directive_placement(is_file, content, span, coord.line);
-        let matched_count = target_rules.iter().map(|rule| (rule.clone(), 0)).collect();
-
-        Some(ParsedDirective {
-            placement,
-            span,
-            coord,
-            target_rules,
-            reason,
-            is_blanket,
-            matched_count,
-        })
-    }
-
     /// Filters diagnostics against active directives, marking matched rules as used.
     #[must_use]
     pub fn filter_diagnostics(&mut self, diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
@@ -357,6 +325,38 @@ impl SuppressionTracker {
             );
         }
         diagnostics
+    }
+
+    /// Helper to parse a single comment's text into a `ParsedDirective` if it is an omni directive.
+    fn parse_comment_text(
+        text: &str,
+        span: SourceSpan,
+        coord: LineColumn,
+        content: &str,
+    ) -> Option<ParsedDirective> {
+        let stripped = strip_comment_delimiters(text)?;
+        let (is_file, remainder) = parse_directive_prefix(stripped)?;
+        let (target_rules, is_blanket, after_rules) = parse_bracketed_rules(remainder.trim_start());
+
+        let reason = after_rules
+            .trim_start()
+            .strip_prefix("--")
+            .map(str::trim)
+            .filter(|reason_text| !reason_text.is_empty())
+            .map(ToString::to_string);
+
+        let placement = resolve_directive_placement(is_file, content, span, coord.line);
+        let matched_count = target_rules.iter().map(|rule| (rule.clone(), 0)).collect();
+
+        Some(ParsedDirective {
+            placement,
+            span,
+            coord,
+            target_rules,
+            reason,
+            is_blanket,
+            matched_count,
+        })
     }
 }
 

@@ -6,16 +6,19 @@ expression: "output.replace(binary, \"<binary>\")"
 0
 --- stdout ---
 - `abbreviated-name` (python, rust): Flags names that contain an abbreviation such as `ctx` or `msg`.
+- `associated-item-after-method` (rust): Flags Rust associated `type` and `const` items declared after `fn` items in an `impl` or `trait` block.
 - `bare-multiline-string` (python, rust): Flags multiline string literals that are not wrapped in a dedent helper.
 - `blanket-suppression` (python, rust): Flags suppression directives that name no rule.
 - `concrete-collection-attribute` (python): Flags public Python class and instance attributes annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
 - `concrete-collection-parameter` (python): Flags Python function parameters annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
 - `concrete-collection-return` (python): Flags Python function return annotations using concrete mutable collection types such as `list`, `dict`, or `set`.
+- `constructor-after-method` (python, rust): Flags class and inherent `impl` constructors defined after regular methods.
 - `dynamic-attribute-access` (python): Flags `getattr`, `hasattr`, `setattr` and `delattr` calls in Python.
 - `edit-of-described-commit` (command): Flags `jj edit` on a commit that already has a description.
 - `environment-variable-in-function` (python, rust): Flags environment variable access inside functions.
 - `error-log-in-except` (python): Flags error-level logging calls inside Python `except` blocks.
 - `fake-without-protocol` (python): Requires Python `Fake*` classes to inherit from a `Protocol` or base class.
+- `field-after-method` (python): Flags type-annotated class and instance attributes declared after methods in a Python class body.
 - `identical-positional-types` (python): Flags Python functions whose positional parameters share a type annotation.
 - `inline-public-attribute-annotation` (python): Flags public Python instance attributes annotated inline inside methods instead of in the class body.
 - `missing-suppression-reason` (python, rust): Requires every suppression directive to give a reason.
@@ -30,12 +33,14 @@ expression: "output.replace(binary, \"<binary>\")"
 - `nullable-collection-return` (python, rust): Flags function return annotations that wrap a collection type in `| None`, `Optional`, or `Option`.
 - `packed-assertion` (python, rust): Flags assertions that pack several checks into one condition.
 - `primitive-duration` (python, rust): Flags durations held as plain numbers, detected by a time-unit suffix such as `timeout_secs` or `delay_ms`.
+- `private-before-public-method` (python, rust): Flags private helper methods defined before public methods in a class or inherent `impl` block.
 - `quote-wrapped-placeholder` (python): Flags Python format placeholders wrapped in literal single or double quotes.
 - `repeated-index-access` (python, rust): Flags a value read at several literal positions instead of being unpacked once.
 - `repeated-literal` (python, rust): Flags a string or number literal repeated inline in one file instead of being named once.
 - `single-letter-name` (python, rust): Flags names made of a single letter.
 - `sleep-in-tests` (python, rust): Flags fixed-duration sleeps in tests.
 - `specific-collection-parameter` (python): Flags Python function parameters annotated with `Sequence` or `Collection` when the body only uses `Collection` or `Iterable` operations.
+- `statement-after-main-guard` (python): Flags top-level Python statements placed after the `if __name__ == "__main__":` guard.
 - `suppressed-exception` (python): Flags `contextlib.suppress` blocks.
 - `too-many-assertions` (python, rust): Flags test functions with more assertions than the limit.
 - `type-cast` (python): Flags `typing.cast` calls in Python source files.

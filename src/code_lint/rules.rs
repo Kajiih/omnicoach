@@ -4,15 +4,17 @@ architecture_component!(CodeLintRules);
 use crate::code_lint::contract::AnyCodeRule;
 
 pub mod abbreviated_name;
+pub mod associated_item_after_method;
 pub mod bare_multiline_string;
-pub mod call_before_definition;
 pub mod concrete_collection_attribute;
 pub mod concrete_collection_parameter;
 pub mod concrete_collection_return;
+pub mod constructor_after_method;
 pub mod dynamic_attribute_access;
 pub mod environment_variable_in_function;
 pub mod error_log_in_except;
 pub mod fake_without_protocol;
+pub mod field_after_method;
 pub mod identical_positional_types;
 pub mod inline_public_attribute_annotation;
 pub mod mock_call_assertion;
@@ -26,12 +28,14 @@ pub mod nested_function;
 pub mod nullable_collection_return;
 pub mod packed_assertion;
 pub mod primitive_duration;
+pub mod private_before_public_method;
 pub mod quote_wrapped_placeholder;
 pub mod repeated_index_access;
 pub mod repeated_literal;
 pub mod single_letter_name;
 pub mod sleep_in_tests;
 pub mod specific_collection_parameter;
+pub mod statement_after_main_guard;
 pub mod suppressed_exception;
 pub mod too_many_assertions;
 pub mod type_cast;
@@ -76,8 +80,11 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &repeated_literal::RULE,
     &mutable_module_constant::RULE,
     &inline_public_attribute_annotation::RULE,
-    // Disabled pending SOTA declaration-order research (functions, methods, objects) in ROADMAP.md:
-    // &call_before_definition::RULE,
+    &constructor_after_method::RULE,
+    &private_before_public_method::RULE,
+    &field_after_method::RULE,
+    &associated_item_after_method::RULE,
+    &statement_after_main_guard::RULE,
     &unmatched_logger_placeholder::RULE,
     &quote_wrapped_placeholder::RULE,
 ];

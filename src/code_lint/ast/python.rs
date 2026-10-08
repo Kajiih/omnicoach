@@ -16,9 +16,11 @@ pub use self::annotations::{
     PythonReturnTypeBranch, PythonReturnTypeUnion, collect_collection_types, collection_display,
     collection_type, return_type_union,
 };
+pub(super) use self::classes::collect_type_method_scopes;
 pub use self::classes::{
-    PythonAnnotatedAttribute, PythonBaseClass, PythonClassInfo, PythonInstanceAttributeAnnotation,
-    collect_class_attributes, collect_instance_attribute_annotations, extract_classes,
+    PythonAnnotatedAttribute, PythonBaseClass, PythonClassInfo, PythonFieldAfterMethod,
+    PythonInstanceAttributeAnnotation, collect_class_attributes, collect_fields_after_methods,
+    collect_instance_attribute_annotations, extract_classes,
 };
 pub use self::format_strings::{
     PythonFormatPlaceholder, PythonFormatString, PythonFormatStyle, collect_format_strings,
@@ -35,9 +37,6 @@ pub use self::parameter_usage::{
 };
 pub(super) use self::positional_reads::collect_positional_reads;
 pub(super) use self::scopes::collect_bindings;
-pub use self::scopes::{
-    PythonFunctionScope, PythonScopeFunction, PythonSiblingCall, collect_function_scopes,
-};
 pub(super) use self::strings::find_unwrapped_multiline_strings;
 
 use self::annotations::{has_final_annotation_expr, is_bare_final_annotation_expr};
@@ -384,6 +383,49 @@ pub fn collect_module_assignments(file: &ParsedFile) -> Vec<PythonModuleAssignme
     let mut out = Vec::new();
     collect_module_assignments_in_stmts(&parsed.syntax().body, file, &mut out);
     out
+}
+
+/// Returns true if `expr` is the identifier `__name__`.
+fn is_dunder_name_expr(expr: &Expr) -> bool {
+    matches!(expr, Expr::Name(name) if name.id.as_str() == "__name__")
+}
+
+/// Returns true if `expr` is a string literal with value `"__main__"`.
+fn is_dunder_main_literal(expr: &Expr) -> bool {
+    matches!(expr, Expr::StringLiteral(literal) if literal.value.to_str() == "__main__")
+}
+
+/// Returns true if `statement` is `if __name__ == "__main__":` or `if "__main__" == __name__:`.
+fn is_main_guard_statement(statement: &Stmt) -> bool {
+    let Stmt::If(if_statement) = statement else {
+        return false;
+    };
+    let Expr::Compare(compare) = if_statement.test.as_ref() else {
+        return false;
+    };
+    let ([ruff_python_ast::CmpOp::Eq], [left, right]) = (&*compare.ops, &*compare.operands) else {
+        return false;
+    };
+    (is_dunder_name_expr(left) && is_dunder_main_literal(right))
+        || (is_dunder_main_literal(left) && is_dunder_name_expr(right))
+}
+
+/// Collects top-level module statements that appear after an `if __name__ == "__main__":`
+/// guard block.
+#[must_use]
+pub fn collect_statements_after_main_guard(file: &ParsedFile) -> Vec<AstNode<'_>> {
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let body = &parsed.syntax().body;
+    let Some(guard_index) = body.iter().position(is_main_guard_statement) else {
+        return Vec::new();
+    };
+    body[guard_index + 1..]
+        .iter()
+        .filter(|statement| !is_main_guard_statement(statement))
+        .map(|statement| AstNode::from_span(file, span_from_ruff_range(statement.range())))
+        .collect()
 }
 
 /// The callee of `call` if it is a `call` node, without the type arguments of a generic
@@ -1695,74 +1737,105 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_function_scopes_sibling_calls() {
+    fn test_collect_type_method_scopes_python() {
+        use crate::code_lint::ast::MethodVisibility::{Private, Public};
+
         let source = indoc::indoc! {r"
-            def orchestrate(x: int) -> int:
-                first = step_one(x)
-                second = step_two(first)
-                return second + is_even(second)
+            class Service:
+                @overload
+                def __init__(self, port: int) -> None: ...
+                @overload
+                def __init__(self, port: str) -> None: ...
+                def __init__(self, port: int | str) -> None:
+                    pass
 
-            def step_one(x: int) -> int:
-                return x + 1
-
-            def step_two(x: int) -> int:
-                return x * 2
-
-            def is_even(n: int) -> bool:
-                return True if n == 0 else is_odd(n - 1)
-
-            def is_odd(n: int) -> bool:
-                return False if n == 0 else is_even(n - 1)
-
-            class Greeter:
-                def greet(self) -> str:
-                    return self.name() + format_name(self)
-
-                def name(self) -> str:
+                @property
+                def _token(self) -> str:
                     return 'x'
+
+                @_token.setter
+                def _token(self, value: str) -> None:
+                    pass
+
+                def execute(self) -> None:
+                    pass
+
+                def __repr__(self) -> str:
+                    return 'Service'
+
+                def __secret(self) -> None:
+                    pass
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let scopes = collect_function_scopes(&file);
-        let summary: Vec<(bool, &str, usize, Vec<String>)> = scopes
+        let scopes = collect_type_method_scopes(&file);
+        let summary: Vec<_> = scopes
             .iter()
-            .flat_map(|scope| {
-                scope.functions.iter().map(|function| {
-                    (
-                        scope.is_class,
-                        function.name.as_str(),
-                        function.definition_order,
-                        function
-                            .sibling_calls
-                            .iter()
-                            .map(|call| format!("{} at {}", call.callee_name, call.node.text()))
-                            .collect(),
-                    )
-                })
+            .map(|scope| {
+                let methods: Vec<_> = scope
+                    .methods
+                    .iter()
+                    .map(|method| {
+                        (
+                            method.name.as_str(),
+                            method.visibility,
+                            method.is_constructor,
+                        )
+                    })
+                    .collect();
+                (scope.type_name.as_str(), methods)
             })
             .collect();
-        let calls = |texts: &[&str]| -> Vec<String> {
-            texts.iter().map(|text| (*text).to_string()).collect()
-        };
         assert_eq!(
             summary,
-            vec![
-                (
-                    false,
-                    "orchestrate",
-                    0,
-                    calls(&[
-                        "step_one at step_one(x)",
-                        "step_two at step_two(first)",
-                        "is_even at is_even(second)",
-                    ])
-                ),
-                (false, "step_one", 1, calls(&[])),
-                (false, "step_two", 2, calls(&[])),
-                (false, "is_even", 3, calls(&["is_odd at is_odd(n - 1)"])),
-                (false, "is_odd", 4, calls(&["is_even at is_even(n - 1)"])),
-                (true, "greet", 0, calls(&["name at self.name()"])),
-                (true, "name", 1, calls(&[])),
-            ]
+            vec![(
+                "Service",
+                vec![
+                    ("__init__", Public, true),
+                    ("_token", Private, false),
+                    ("execute", Public, false),
+                    ("__repr__", Public, false),
+                    ("__secret", Private, false),
+                ],
+            )]
+        );
+    }
+
+    #[test]
+    fn test_collect_fields_after_methods_and_statements_after_main_guard() {
+        let source = indoc::indoc! {r#"
+            class Config:
+                host: str
+
+                def reset(self) -> None:
+                    pass
+
+                __repr__ = reset
+                retries: int = 3
+
+            if __name__ == "__main__":
+                pass
+
+            EXTRA = 1
+        "#};
+        let file = ParsedFile::new(source, Language::Python);
+        let fields: Vec<(String, String, String)> = collect_fields_after_methods(&file)
+            .into_iter()
+            .map(|field| (field.class_name, field.name, field.node.text().into_owned()))
+            .collect();
+        let trailing: Vec<String> = collect_statements_after_main_guard(&file)
+            .into_iter()
+            .map(|node| node.text().into_owned())
+            .collect();
+        assert_eq!(
+            (fields, trailing),
+            (
+                vec![(
+                    "Config".to_owned(),
+                    "retries".to_owned(),
+                    "retries: int = 3".to_owned(),
+                )],
+                vec!["EXTRA = 1".to_owned()],
+            )
         );
     }
 

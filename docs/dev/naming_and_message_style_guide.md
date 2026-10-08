@@ -91,7 +91,7 @@ Templates use a fixed vocabulary so the same thing has the same name in every me
 | :--- | :--- | :--- |
 | `{callee}` | The function, method or macro that was called | `` `{callee}()` `` or `` `{callee}!` `` |
 | `{function}` | A function that is *defined* at the flagged site | `` `{function}` `` |
-| `{class}` | A class, struct or enum defined at the flagged site | `` `{class}` `` |
+| `{class}` | The class, struct, enum, trait, or implemented type at the flagged site | `` `{class}` `` |
 | `{name}` | An identifier being named (variable, parameter, field) | `` `{name}` `` |
 | `{suffix}`, `{token}` | The offending part of an identifier | `` `{suffix}` `` |
 | `{stem}` | The identifier without its offending suffix | `` `{stem}` `` |

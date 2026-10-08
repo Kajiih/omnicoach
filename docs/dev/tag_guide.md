@@ -181,7 +181,7 @@ There are no aliases for old labels: renaming a topic breaks configs that name i
 | `logging` | — | | Use of logging APIs. | Log calls and their arguments. Not `print` or metrics. |
 | `concurrency` | — | | Concurrent execution: coroutines, tasks and threads. | Spawning, awaiting and joining concurrent work and its lifetimes. Not sleeping or waiting in tests (see `test-timing`). |
 | `suppression-directives` | — | | Hygiene of `omni:` suppression comments. | `omni:` directives that silence Omni. Not `contextlib.suppress` (see `error-handling`). |
-<!-- | `declaration-order` | — | | Order in which declarations appear in a scope. | Ordering of functions, methods and items within a module or class. Not nesting depth (see `nesting`) or naming. | -->
+| `declaration-order` | — | | Order in which declarations appear in a scope. | Ordering of functions, methods and items within a module or class. Not nesting depth (see `nesting`) or naming. |
 
 ---
 
