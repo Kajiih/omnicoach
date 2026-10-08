@@ -61,14 +61,26 @@ fn run() -> anyhow::Result<()> {
         diff_rev: cli.diff_rev,
     };
 
-    let all_diagnostics = run_code_lint(&options, &config)?;
+    let report = run_code_lint(&options, &config)?;
 
     // Print diagnostics according to format
-    if !all_diagnostics.is_empty() {
-        print_diagnostics(&all_diagnostics, cli.format)?;
+    if !report.diagnostics.is_empty() {
+        print_diagnostics(&report.diagnostics, cli.format)?;
         if cli.format == OutputFormat::Plain {
             println!("{}", explain_footer(env!("CARGO_BIN_NAME")));
         }
+    }
+    for unreadable in &report.unreadable_files {
+        eprintln!(
+            "Error: Failed to read file '{}': {}",
+            unreadable.path.display(),
+            unreadable.error
+        );
+    }
+    if !report.unreadable_files.is_empty() {
+        std::process::exit(2);
+    }
+    if !report.diagnostics.is_empty() {
         std::process::exit(1);
     }
     Ok(())

@@ -11,6 +11,7 @@ use crate::diagnostic::{Diagnostic, Language};
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// Returns true if `rule` runs on `path`: it is enabled there, analyzes `lang`, and its
@@ -173,6 +174,24 @@ struct LintTarget {
     changed_lines: Option<HashSet<usize>>,
 }
 
+/// A target file that could not be read (for example, because it is not valid UTF-8).
+#[derive(Debug)]
+pub struct UnreadableFile {
+    /// The path of the file.
+    pub path: PathBuf,
+    /// Why reading it failed.
+    pub error: io::Error,
+}
+
+/// The outcome of [`run_code_lint`].
+#[derive(Debug, Default)]
+pub struct LintReport {
+    /// Diagnostics from every file that could be read.
+    pub diagnostics: Vec<Diagnostic>,
+    /// Files that could not be read, sorted by path; the run still lints every other file.
+    pub unreadable_files: Vec<UnreadableFile>,
+}
+
 /// Executes codebase linting over the specified targets using parallel analysis.
 ///
 /// # Errors
@@ -180,17 +199,28 @@ struct LintTarget {
 /// Returns an error if:
 /// - A specified input path does not exist on disk.
 /// - VCS diff detection fails in `--diff` mode.
-/// - A source file cannot be read from disk.
-pub fn run_code_lint(options: &LintOptions, config: &Config) -> anyhow::Result<Vec<Diagnostic>> {
+///
+/// A source file that cannot be read is not an error: it is listed in
+/// [`LintReport::unreadable_files`].
+pub fn run_code_lint(options: &LintOptions, config: &Config) -> anyhow::Result<LintReport> {
     let targets = collect_targets(options)?;
 
-    let nested_diagnostics: Vec<Vec<Diagnostic>> = targets
+    let results: Vec<Result<Vec<Diagnostic>, UnreadableFile>> = targets
         .into_par_iter()
         .map(|target| lint_single_file(&target.path, config, target.changed_lines.as_ref()))
-        .collect::<anyhow::Result<Vec<_>>>()?;
+        .collect();
 
-    let all_diagnostics = nested_diagnostics.into_iter().flatten().collect();
-    Ok(all_diagnostics)
+    let mut report = LintReport::default();
+    for result in results {
+        match result {
+            Ok(diagnostics) => report.diagnostics.extend(diagnostics),
+            Err(unreadable) => report.unreadable_files.push(unreadable),
+        }
+    }
+    report
+        .unreadable_files
+        .sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(report)
 }
 
 fn collect_targets(options: &LintOptions) -> anyhow::Result<Vec<LintTarget>> {
@@ -274,13 +304,15 @@ fn lint_single_file(
     path: &Path,
     config: &Config,
     changed_lines: Option<&HashSet<usize>>,
-) -> anyhow::Result<Vec<Diagnostic>> {
+) -> Result<Vec<Diagnostic>, UnreadableFile> {
     if !path.is_file() || Language::from_path(path).is_none() {
         return Ok(Vec::new());
     }
 
-    let content = fs::read_to_string(path)
-        .map_err(|error| anyhow::anyhow!("Failed to read file '{}': {}", path.display(), error))?;
+    let content = fs::read_to_string(path).map_err(|error| UnreadableFile {
+        path: path.to_path_buf(),
+        error,
+    })?;
 
     let diagnostics = lint_file(path, &content, config);
 

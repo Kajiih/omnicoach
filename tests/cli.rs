@@ -284,6 +284,31 @@ fn test_code_lint_non_existent_file_fails() {
 }
 
 #[test]
+fn test_code_lint_unreadable_file_reports_error_and_lints_the_rest() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    fs::write(temp_dir.path().join("latin1.py"), b"name = '\xe9'\n").unwrap();
+    fs::write(
+        temp_dir.path().join("nested.py"),
+        "def outer():\n    def inner():\n        pass\n",
+    )
+    .unwrap();
+
+    let output = run_and_sanitize_cli(
+        "omni-code-lint",
+        &[temp_dir.path().to_str().unwrap()],
+        None,
+        &[temp_dir.path()],
+    );
+
+    assert!(output.contains("exit code ---\n2"), "{output}");
+    assert!(output.contains("[TEMP_PATH]/nested.py:2:"), "{output}");
+    assert!(
+        output.contains("Error: Failed to read file '[TEMP_PATH]/latin1.py'"),
+        "{output}"
+    );
+}
+
+#[test]
 fn test_code_lint_diff_complex_revset_jj() {
     let temp_repo = setup_temp_jj_repo();
     let repo_path = temp_repo.path();
