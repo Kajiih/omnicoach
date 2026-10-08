@@ -137,26 +137,62 @@ impl PythonCollectionType {
     }
 }
 
-/// A Python return type flattened across union constructs (`|`, `Union[...]`, `Optional[...]`),
-/// with async envelopes (`Awaitable`, `Coroutine`) and metadata wrappers (`Annotated`) unwrapped.
-#[derive(Clone)]
-pub struct PythonReturnTypeUnion<'a> {
-    /// True if `None` (`none`) or an `Optional[...]` wrapper is part of the union.
-    pub has_none: bool,
-    /// The non-`None` alternative branches in source order.
-    pub branches: Vec<PythonReturnTypeBranch<'a>>,
+/// Extracts `(base_expr, type_argument_exprs)` from a Python `Expr::Subscript` node inside a
+/// type annotation.
+pub(super) fn extract_generic_base_and_args(expr: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
+    let Expr::Subscript(subscript) = expr else {
+        return None;
+    };
+    let type_args = if let Expr::Tuple(tuple) = subscript.slice.as_ref() {
+        tuple.elts.iter().collect()
+    } else {
+        vec![subscript.slice.as_ref()]
+    };
+    Some((subscript.value.as_ref(), type_args))
 }
 
-/// A non-`None` alternative of a [`PythonReturnTypeUnion`].
-#[derive(Clone)]
-pub struct PythonReturnTypeBranch<'a> {
-    /// The branch type expression.
-    pub node: AstNode<'a>,
-    /// The collection type the branch names, directly (`list`) or as the base of a subscript
-    /// (`list[int]`); see [`collection_type`].
-    pub collection: Option<PythonCollectionType>,
-    /// The type arguments if the branch is a subscript (`int` and `...` in `tuple[int, ...]`).
-    pub type_arguments: Option<Vec<AstNode<'a>>>,
+/// Returns true if `(path, terminal)` matches one of `targets` in the standard typing namespaces.
+pub(super) fn is_std_type_constructor(path: &str, terminal: &str, targets: &[&str]) -> bool {
+    targets.contains(&terminal) && is_std_type_constructor_prefix(path, terminal)
+}
+
+/// Returns true if `(path, terminal)` is a concrete mutable collection constructor (`list`, `dict`,
+/// `set`, `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, `typing.Set`, etc.), or a
+/// `collections` container (`defaultdict`, `deque`, `Counter`, `OrderedDict`) or its `typing`
+/// alias (`DefaultDict`, `Deque`).
+///
+/// Qualified `collections.abc.Set` is excluded because it is the abstract set ABC, whereas
+/// unqualified `Set` and `typing.Set` are flagged as concrete (per Ruff `PYI025`, `collections.abc.Set`
+/// should be imported `as AbstractSet`).
+pub(super) fn is_concrete_collection_constructor(path: &str, terminal: &str) -> bool {
+    match terminal {
+        LIST_CONSTRUCTOR
+        | "List"
+        | DICT_CONSTRUCTOR
+        | TYPING_DICT_CONSTRUCTOR
+        | SET_CONSTRUCTOR => is_std_type_constructor_prefix(path, terminal),
+        TYPING_SET_CONSTRUCTOR => {
+            matches!(
+                path,
+                TYPING_SET_CONSTRUCTOR | "typing.Set" | "typing_extensions.Set"
+            )
+        }
+        TYPE_DEFAULTDICT
+        | TYPE_TYPING_DEFAULTDICT
+        | "deque"
+        | "Deque"
+        | TYPE_COUNTER
+        | ORDERED_DICT_CONSTRUCTOR => {
+            path == terminal
+                || path.strip_suffix(terminal).is_some_and(|prefix| {
+                    matches!(
+                        prefix,
+                        "collections." | TYPING_PREFIX | TYPING_EXTENSIONS_PREFIX
+                    )
+                })
+        }
+        _ => false,
+    }
 }
 
 /// True if `type_expr` is `Final` or `Final[T]` (qualified or not, optionally wrapped in `Annotated`).
@@ -319,6 +355,28 @@ pub fn collection_display(expression: &AstNode<'_>) -> Option<PythonCollectionTy
     })
 }
 
+/// A Python return type flattened across union constructs (`|`, `Union[...]`, `Optional[...]`),
+/// with async envelopes (`Awaitable`, `Coroutine`) and metadata wrappers (`Annotated`) unwrapped.
+#[derive(Clone)]
+pub struct PythonReturnTypeUnion<'a> {
+    /// True if `None` (`none`) or an `Optional[...]` wrapper is part of the union.
+    pub has_none: bool,
+    /// The non-`None` alternative branches in source order.
+    pub branches: Vec<PythonReturnTypeBranch<'a>>,
+}
+
+/// A non-`None` alternative of a [`PythonReturnTypeUnion`].
+#[derive(Clone)]
+pub struct PythonReturnTypeBranch<'a> {
+    /// The branch type expression.
+    pub node: AstNode<'a>,
+    /// The collection type the branch names, directly (`list`) or as the base of a subscript
+    /// (`list[int]`); see [`collection_type`].
+    pub collection: Option<PythonCollectionType>,
+    /// The type arguments if the branch is a subscript (`int` and `...` in `tuple[int, ...]`).
+    pub type_arguments: Option<Vec<AstNode<'a>>>,
+}
+
 /// Flattens `return_type_node` across union constructs (`|`, `Union[...]`, `Optional[...]`)
 /// after unwrapping outer async and metadata envelopes (`Awaitable`, `Coroutine`, `Annotated`).
 #[must_use]
@@ -432,64 +490,6 @@ fn collect_union_branches_expr<'a>(
         _ => {
             branches.push(expr);
         }
-    }
-}
-
-/// Extracts `(base_expr, type_argument_exprs)` from a Python `Expr::Subscript` node inside a
-/// type annotation.
-pub(super) fn extract_generic_base_and_args(expr: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
-    let Expr::Subscript(subscript) = expr else {
-        return None;
-    };
-    let type_args = if let Expr::Tuple(tuple) = subscript.slice.as_ref() {
-        tuple.elts.iter().collect()
-    } else {
-        vec![subscript.slice.as_ref()]
-    };
-    Some((subscript.value.as_ref(), type_args))
-}
-
-/// Returns true if `(path, terminal)` matches one of `targets` in the standard typing namespaces.
-pub(super) fn is_std_type_constructor(path: &str, terminal: &str, targets: &[&str]) -> bool {
-    targets.contains(&terminal) && is_std_type_constructor_prefix(path, terminal)
-}
-
-/// Returns true if `(path, terminal)` is a concrete mutable collection constructor (`list`, `dict`,
-/// `set`, `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, `typing.Set`, etc.), or a
-/// `collections` container (`defaultdict`, `deque`, `Counter`, `OrderedDict`) or its `typing`
-/// alias (`DefaultDict`, `Deque`).
-///
-/// Qualified `collections.abc.Set` is excluded because it is the abstract set ABC, whereas
-/// unqualified `Set` and `typing.Set` are flagged as concrete (per Ruff `PYI025`, `collections.abc.Set`
-/// should be imported `as AbstractSet`).
-pub(super) fn is_concrete_collection_constructor(path: &str, terminal: &str) -> bool {
-    match terminal {
-        LIST_CONSTRUCTOR
-        | "List"
-        | DICT_CONSTRUCTOR
-        | TYPING_DICT_CONSTRUCTOR
-        | SET_CONSTRUCTOR => is_std_type_constructor_prefix(path, terminal),
-        TYPING_SET_CONSTRUCTOR => {
-            matches!(
-                path,
-                TYPING_SET_CONSTRUCTOR | "typing.Set" | "typing_extensions.Set"
-            )
-        }
-        TYPE_DEFAULTDICT
-        | TYPE_TYPING_DEFAULTDICT
-        | "deque"
-        | "Deque"
-        | TYPE_COUNTER
-        | ORDERED_DICT_CONSTRUCTOR => {
-            path == terminal
-                || path.strip_suffix(terminal).is_some_and(|prefix| {
-                    matches!(
-                        prefix,
-                        "collections." | TYPING_PREFIX | TYPING_EXTENSIONS_PREFIX
-                    )
-                })
-        }
-        _ => false,
     }
 }
 

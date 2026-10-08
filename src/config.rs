@@ -111,6 +111,12 @@ impl Config {
             .is_match(normalize_path_for_glob(path))
     }
 
+    /// Returns true if the given rule is enabled in this configuration.
+    #[must_use]
+    pub fn is_rule_enabled(&self, rule: RuleName) -> bool {
+        !self.disabled_rules.contains(&rule)
+    }
+
     /// Returns true if the given rule is enabled for a specific file path.
     #[must_use]
     pub fn is_rule_enabled_for_path(&self, rule: RuleName, path: &Path) -> bool {
@@ -126,12 +132,6 @@ impl Config {
             .per_file_ignores
             .iter()
             .any(|(matcher, rules)| matcher.is_match(&normalized) && rules.contains(&rule))
-    }
-
-    /// Returns true if the given rule is enabled in this configuration.
-    #[must_use]
-    pub fn is_rule_enabled(&self, rule: RuleName) -> bool {
-        !self.disabled_rules.contains(&rule)
     }
 }
 

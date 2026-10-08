@@ -12,7 +12,7 @@ use std::path::Path;
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Private helper `{function}` is defined before public entrypoint `{caller}`.",
     rationale: "Placing lower-abstraction private helpers above `{caller}` buries the public contract of the scope behind implementation details.",
-    suggestion: "Move `{function}` below `{caller}` into its owning component unit or the trailing shared helper layer.",
+    suggestion: "Move `{function}` below `{caller}` (either immediately after `{caller}` if single-use, or into the trailing private helper section).",
 };
 
 /// The rule's declaration.
@@ -35,12 +35,13 @@ pub const RULE: CodeRule = CodeRule {
                 for private functions or methods declared before the public entrypoints they serve.
 
                 Using the scope's private-subgraph root ownership `Roots(h)`:
-                - An **exclusive private helper** (`Roots(h) = {p}`) is flagged when declared above
-                  its owning public entrypoint `p`, but is allowed immediately below `p` even when
-                  other public entrypoints follow `Cluster(p)` (`[pub_a, _a1, pub_b, _b1]`).
+                - A **single-user private helper** (`Roots(h) = {p}`) is flagged when declared
+                  above its owning public entrypoint `p`, and is allowed below `p` (either
+                  immediately after `p` or in the trailing private helper section after all public
+                  functions, as checked by `uncolocated-helper`).
                 - A **shared private helper** (`|Roots(h)| >= 2`) belongs to a lower abstraction
-                  layer than any single component unit and is flagged when declared above any of its
-                  public callers (`pos(h) < max(Roots(h))`).
+                  layer than any single public entrypoint and is flagged when declared above any of
+                  its public callers (`pos(h) < max(Roots(h))`).
                 - An **unrooted private function** (`Roots(h) = empty`) is flagged when declared
                   above the last public entrypoint in the scope.
 
@@ -48,8 +49,8 @@ pub const RULE: CodeRule = CodeRule {
                 single-underscore (`_name`) and name-mangled (`__name`) names are private. In Rust,
                 items with a visibility qualifier (`pub`, `pub(crate)`, `pub(super)`, `pub(in ...)`)
                 or `fn main` are public; bare `fn` items are private. Together with
-                `uncolocated-helper` (Priority 1) and `callee-before-caller` (Priority 3), this rule
-                runs at Priority 2."},
+                `uncolocated-helper` and `callee-before-caller`, this rule forms a disjoint
+                three-stage call-cluster check."},
             why_is_this_bad: indoc::indoc! {r"
                 A private helper is a lower-abstraction building block than the public entrypoint
                 that calls it, and a helper shared across multiple public entrypoints is at a lower
@@ -57,9 +58,9 @@ pub const RULE: CodeRule = CodeRule {
                 the abstraction hierarchy and forces readers to wade through internal mechanics
                 before seeing the scope's public interface.
 
-                Place exclusive helpers immediately below their owning public entrypoint, and place
-                shared helpers in the shared helper layer below all public entrypoints that call
-                them."},
+                Place single-use helpers either immediately below their owning public entrypoint or
+                in the trailing private helper section, and place shared helpers in the trailing
+                private helper section below all public functions."},
             references: &[
                 Reference {
                     title: "Robert C. Martin: Clean Code — Chapter 5 & Chapter 10 (The Newspaper Metaphor, The Stepdown Rule, Class Organization)",
@@ -164,11 +165,11 @@ crate::test_utils::rule_test!(
                         def format_summary(self, text: str) -> str:
                             return self._normalize(text)
 
-                        def _normalize(self, text: str) -> str:
-                            return text.strip()
-
                         def __repr__(self) -> str:
                             return self.prefix
+
+                        def _normalize(self, text: str) -> str:
+                            return text.strip()
                 "#,
                 property_accessors_and_private_only_scope_exempt => r#"
                     from typing import overload

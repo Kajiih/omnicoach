@@ -117,18 +117,6 @@ impl LanguageText {
         }
     }
 
-    /// Interpolates named `{key}` placeholders on the base text (for language-independent rules).
-    #[must_use]
-    pub fn render(&self, params: &[(&str, &str)]) -> String {
-        Self::interpolate(self.base, params)
-    }
-
-    /// Resolves and interpolates named `{key}` placeholders for the given language.
-    #[must_use]
-    pub fn render_for_lang(&self, lang: Language, params: &[(&str, &str)]) -> String {
-        Self::interpolate(self.resolve_for_lang(lang), params)
-    }
-
     /// Resolves the raw static text for the given language.
     #[must_use]
     pub fn resolve_for_lang(&self, lang: Language) -> &'static str {
@@ -138,6 +126,18 @@ impl LanguageText {
             }
         }
         self.base
+    }
+
+    /// Resolves and interpolates named `{key}` placeholders for the given language.
+    #[must_use]
+    pub fn render_for_lang(&self, lang: Language, params: &[(&str, &str)]) -> String {
+        Self::interpolate(self.resolve_for_lang(lang), params)
+    }
+
+    /// Interpolates named `{key}` placeholders on the base text (for language-independent rules).
+    #[must_use]
+    pub fn render(&self, params: &[(&str, &str)]) -> String {
+        Self::interpolate(self.base, params)
     }
 
     /// Replaces each known `{key}` in one left-to-right pass, so substituted values are never
@@ -454,12 +454,6 @@ impl LineIndex {
         }
     }
 
-    /// Resolves a byte offset to a 1-indexed line number.
-    #[must_use]
-    pub(crate) fn line(&self, offset: usize) -> usize {
-        self.lookup(offset).line
-    }
-
     /// Resolves a byte offset to a 1-indexed (line, column) coordinate.
     #[must_use]
     pub(crate) fn lookup(&self, offset: usize) -> LineColumn {
@@ -470,6 +464,12 @@ impl LineIndex {
             line: line_col.line as usize + 1,
             column: line_col.col as usize + 1,
         }
+    }
+
+    /// Resolves a byte offset to a 1-indexed line number.
+    #[must_use]
+    pub(crate) fn line(&self, offset: usize) -> usize {
+        self.lookup(offset).line
     }
 }
 

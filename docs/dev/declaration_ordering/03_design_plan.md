@@ -10,13 +10,13 @@ This document records **Phase 3 (Design Plan)** for the **7-rule Declaration Ord
 
 | ID | Decision | Rationale |
 | :--- | :--- | :--- |
-| **`D1`** | **Model intra-file function and method ordering on ADR 006's Architectural Isolation & Layering Principles ([decisions/011_colocated_abstraction_ordering.md](../../../decisions/011_colocated_abstraction_ordering.md))** | Each public entrypoint `p` and its exclusive private helpers (`Roots(h) = {p}`) form an in-file **component unit** that stays contiguous. Private helpers shared across multiple public entrypoints (`\|Roots(h)\| >= 2`) belong to a lower level of abstraction and form the **shared helper layer** at the end of the scope. |
-| **`D2`** | **Replace `private-before-public-method` and `call-before-definition` with 3 precedence-linked rules (`uncolocated-helper`, `private-before-public-function`, `callee-before-caller`) sharing one call-cluster engine** | The three rules evaluate the same per-scope call graph (`Roots(h)`, SCCs, and declaration order) across both module-level functions and class/inherent-`impl` methods in Python and Rust, with strict priority `P1 -> P2 -> P3` so a single misplaced helper is never double-reported. |
-| **`D3`** | **Reverse intra-unit call ordering from bottom-up (`call-before-definition`) to top-down (`callee-before-caller`)** | A helper is a lower-abstraction building block than its caller. Within each component unit (`pub -> pub`, exclusive `priv -> priv` of the same owner) and within the shared helper layer (`shared priv -> shared priv`), callers precede callees so abstraction decreases monotonically top-to-bottom. |
-| **`D4`** | **Enforce 2-tier visibility in `private-before-public-function`** | Exported (`pub`, `pub(crate)`, `pub(super)`, `pub(in ...)`) vs. Private (bare `fn`) in Rust; Public & dunder (`name`, `__dunder__`) vs. Private (`_name`, `__mangled`) in Python. In modules without explicit `pub fn` items (such as Rust rule modules exposing `pub const RULE` or trait `impl`s, or Python scripts), private functions referenced outside top-level function bodies or having zero in-scope callers act as the top-level entrypoints. |
+| **`D1`** | **Model intra-file function and method ordering on ADR 006's Architectural Isolation & Layering Principles ([decisions/011_colocated_abstraction_ordering.md](../../../decisions/011_colocated_abstraction_ordering.md))** | Once placed after its public callers, a single-user private helper (`Roots(h) = {p}`) may sit either in **Place 1** (immediately after `p` in its contiguous cluster) or in **Place 2** (in the trailing private helper section at the end of the scope, provided `p`'s helpers are not split between both places). Private helpers shared across multiple public entrypoints (`\|Roots(h)\| >= 2`) must sit in **Place 2** at the end of the scope. |
+| **`D2`** | **Replace `private-before-public-method` and `call-before-definition` with 3 mutually exclusive rules (`private-before-public-function`, `uncolocated-helper`, `callee-before-caller`) sharing one call-cluster engine** | The three rules evaluate the same per-scope call graph (`Roots(h)`, SCCs, and declaration order) across both module-level functions and class/inherent-`impl` methods in Python and Rust in three disjoint stages so a single misplaced helper is never double-reported. |
+| **`D3`** | **Reverse private-helper call ordering from bottom-up (`call-before-definition`) to top-down (`callee-before-caller`)** | A private helper is a lower-abstraction building block than its caller. Among private helpers (`Private -> Private`), callers precede callees so abstraction decreases monotonically top-to-bottom (`_exclusive -> _shared`), while `Public -> Public` peer entrypoints remain unconstrained. |
+| **`D4`** | **Enforce 2-tier visibility in `private-before-public-function`** | Exported (`pub`, `pub(crate)`, `pub(super)`, `pub(in ...)`, `fn main`) vs. Private (bare `fn`) in Rust; Public & dunder (`name`, `__dunder__`) vs. Private (`_name`, `__mangled`) in Python. |
 | **`D5`** | **Include the 4 structural envelope rules (`field-after-method`, `associated-item-after-method`, `constructor-after-method`, `statement-after-main-guard`)** | Enforces the top-of-scope data/constructor headers and bottom-of-scope `__main__` execution footer around the function/method body. |
-| **`D6`** | **Add `{caller}` to the shared placeholder vocabulary in [naming_and_message_style_guide.md](../naming_and_message_style_guide.md) and `tests/registry.rs`** | Allows `uncolocated-helper`, `private-before-public-function`, and `callee-before-caller` to anchor on the misplaced function definition `{function}` while naming the exact `{caller}` entrypoint or caller it must move below. |
-| **`D7`** | **Dogfood all 7 rules across Omni's own `src/` with zero suppressions** | Reorders misplaced helpers in Omni `src/` (including `SuppressionTracker::parse_comment_text`, `InterceptedCommand::parse_single`, and bottom-up helper clusters in `src/code_lint/ast/` and `src/diff.rs`) so `test_self_dogfooding_code_lint` passes cleanly. |
+| **`D6`** | **Add `{caller}` to the shared placeholder vocabulary in [naming_and_message_style_guide.md](../naming_and_message_style_guide.md) and `tests/registry.rs`** | Allows `uncolocated-helper`, `private-before-public-function`, and `callee-before-caller` to anchor on the misplaced function definition `{function}` while naming the exact `{caller}` entrypoint or caller it relates to. |
+| **`D7`** | **Dogfood all 7 rules across Omni's own `src/` with zero suppressions** | Supports both public-first scopes (`InterceptedCommand`, `SuppressionTracker`, `CommentIndex`, `test_utils.rs`, `scopes.rs`) and vertical-slice modules (`ast.rs`, `config.rs`) while reordering misplaced helpers in Omni `src/` (`read_config_file` in `rule_selection.rs` and bottom-up helper clusters) so `test_self_dogfooding_code_lint` passes cleanly. |
 
 ---
 
@@ -33,47 +33,40 @@ For every module scope (Python `ModModule`, Rust `SourceFile` / inline `ast::Mod
      - `visibility: MethodVisibility` (`Public` vs. `Private`)
      - `is_constructor: bool` (Tier 0 constructor methods in classes/inherent `impl`s)
      - `callees: Vec<usize>` (indices in `V` of sibling callables directly called by `f_i`)
-     - ` referenced_externally: bool` (true if `f_i` is referenced from module-level non-function items such as `pub const RULE`, `static`, `impl` blocks, or module-level statements/`__main__` guards)
-   - **Effective Entrypoints (`is_entrypoint`)**:
-     - If the scope contains at least one `MethodVisibility::Public` callable, the entrypoints `P` are all `MethodVisibility::Public` callables (except in a module scope where a private function is referenced from a module-level exported item like `pub const RULE = CodeRule { check_file, ... }` and has no `Public` caller, or when the module has zero `Public` functions, in which case `referenced_externally` functions or zero-indegree roots serve as entrypoints for intra-module `callee-before-caller`).
-     - Specifically:
-       - `Public` / `Private` visibility for **Priority 1 (`uncolocated-helper`)** and **Priority 2 (`private-before-public-function`)** uses syntactic visibility (`MethodVisibility::Public` vs. `MethodVisibility::Private`). If a scope has zero `MethodVisibility::Public` callables, P1 and P2 produce no findings in that scope.
-       - For **Priority 3 (`callee-before-caller`)**, within a scope where all callables are `Private`, all callables belong to the same visibility tier and same unrooted group (`Roots(h) = empty`), so `callee-before-caller` still checks every non-SCC `caller -> callee` edge!
+   - **Visibility Tiers**:
+     - `Public` / `Private` visibility for all three rules uses syntactic visibility (`MethodVisibility::Public` vs. `MethodVisibility::Private`). If a scope has zero `MethodVisibility::Public` callables, `private-before-public-function` and `uncolocated-helper` produce no findings in that scope, while `callee-before-caller` checks all non-SCC `Private -> Private` call edges.
 
 2. **Private-Subgraph Root Ownership (`Roots(h)`)**:
    - For each `p in P` (indices of `MethodVisibility::Public` callables in `V`), perform a DFS/BFS starting from the direct `MethodVisibility::Private` callees of `p` and traversing **only** `Private -> Private` edges (`u -> v` where both `u` and `v` are `Private`).
    - Add `p` to `Roots(h)` for every private callable `h` visited.
-   - Because traversal stops at `Public` boundaries, if `pub_b` calls `pub_a` and `pub_a` calls `_a1`, `Roots(_a1) = {pub_a}` (exclusive to `pub_a`).
+   - Because traversal stops at `Public` boundaries, if `pub_b` calls `pub_a` and `pub_a` calls `_a1`, `Roots(_a1) = {pub_a}` (single-user helper of `pub_a`).
    - Classification of each private callable `h`:
-     - **Exclusive Helper**: `Roots(h) == [p]` (owned by a single public entrypoint `p`).
-     - **Shared Helper**: `Roots(h).len() >= 2` (reached by 2 or more public entrypoints).
+     - **Single-User (Exclusive) Helper**: `Roots(h) == [p]` (owned by a single public entrypoint `p`).
+     - **Multi-User (Shared) Helper**: `Roots(h).len() >= 2` (reached by 2 or more public entrypoints).
      - **Unrooted Private Callable**: `Roots(h).is_empty()` (not reachable from any `Public` callable in the scope).
 
 3. **Strongly Connected Components (`scc_id`)**:
    - Tarjan's algorithm over `(V, E)` assigns each callable `f_i` an `scc_id`. Any call edge `u -> v` with `scc_id[u] == scc_id[v]` (self-recursion or mutual recursion) is exempt from `callee-before-caller`.
 
-4. **Priority 1 — `uncolocated-helper` Findings**:
-   - For each private callable `h` with **exclusive** ownership `Roots(h) == [p]`:
-     - If `h > p` (i.e., `h` is declared after `p`, since `h < p` is handled by Priority 2) and there exists any callable `m` with `p < m < h` that does **not** belong to `Cluster(p)` (meaning `m != p` and `Roots(m) != [p]`):
-       - Flag `h` with `caller = V[p].name` and mark `h` as `flagged_p1_or_p2 = true`.
+4. **Stage 1 — `private-before-public-function` Findings (`pos < max(Roots(h))`)**:
+   - For each private callable `h` at index `pos`:
+     - **Unrooted Private Callable (`Roots(h).is_empty()`)**: if `last_pub` exists and `pos < last_pub`, flag `h` with `caller = V[last_pub].name` and mark `flagged_p1_or_p2[pos] = true`.
+     - **Rooted Helper (`max_root = *Roots(h).last().unwrap()`)**: if `pos < max_root`, flag `h` with `caller = V[max_root].name` and mark `flagged_p1_or_p2[pos] = true`.
 
-5. **Priority 2 — `private-before-public-function` Findings**:
-   - For each private callable `h` not flagged by Priority 1:
-     - **Exclusive Helper (`Roots(h) == [p]`)**: if `h < p`, flag `h` with `caller = V[p].name` and mark `flagged_p1_or_p2 = true`.
-     - **Shared Helper (`Roots(h).len() >= 2`)**: let `last_pub_caller = *Roots(h).iter().max().unwrap()`. If `h < last_pub_caller`, flag `h` with `caller = V[last_pub_caller].name` and mark `flagged_p1_or_p2 = true`.
-     - **Unrooted Private Callable (`Roots(h).is_empty()`)**: if the scope has at least one `Public` callable, let `last_pub = Public.iter().max().unwrap()`. If `h < last_pub`, flag `h` with `caller = V[last_pub].name` and mark `flagged_p1_or_p2 = true`.
+5. **Stage 2 — `uncolocated-helper` Findings (`pos > max(Roots(h))`)**:
+   - For each rooted private callable `h` at index `pos > max_root`:
+     - Check `is_valid_helper_placement(callables, &roots_of, pos, last_pub.unwrap())`:
+       - **Place 2 (Trailing private helper section at the end of the scope)**: `pos > last_pub` is valid for any `|Roots(h)| >= 1`, provided that if `Roots(h) == [owner]`, `owner` does not also have another helper placed in Place 1 (`owner < m < last_pub` with `Roots(m) == [owner]`).
+       - **Place 1 (Immediately after consumer)**: when `pos < last_pub`, valid only if `Roots(h) == [owner]` and every callable `m` in `(owner + 1)..pos` either has `Roots(m) == [owner]` or (when `V[owner].is_constructor`) belongs to the contiguous constructor cluster at the top of the scope.
+     - If neither Place 1 nor Place 2 holds, flag `h` with `caller = V[max_root].name` and mark `flagged_p1_or_p2[pos] = true`.
 
-6. **Priority 3 — `callee-before-caller` Findings**:
-   - For each callable `callee` not flagged by Priority 1 or Priority 2 (`!flagged_p1_or_p2[callee]` and `!V[callee].is_constructor`):
+6. **Stage 3 — `callee-before-caller` Findings (`Private -> Private`)**:
+   - For each private callable `callee` not flagged by Stage 1 or Stage 2 (`!flagged_p1_or_p2[callee]` and `V[callee].visibility == MethodVisibility::Private`):
      - Find all direct callers `caller` such that:
        - `caller > callee` (`callee` is declared before `caller`),
-       - `!flagged_p1_or_p2[caller]` and `!V[caller].is_constructor`,
+       - `!flagged_p1_or_p2[caller]` and `V[caller].visibility == MethodVisibility::Private`,
        - `scc_id[caller] != scc_id[callee]` (not mutually recursive),
-       - `V[caller].visibility == V[callee].visibility` (same visibility tier),
-       - If `Private`: `same_private_group(Roots(caller), Roots(callee))` holds, meaning either:
-         - both are exclusive to the same public entrypoint (`Roots(caller) == [p] && Roots(callee) == [p]`),
-         - both are shared helpers (`Roots(caller).len() >= 2 && Roots(callee).len() >= 2`), or
-         - both are unrooted (`Roots(caller).is_empty() && Roots(callee).is_empty()`).
+       - `!(Roots(caller).is_empty() && !Roots(callee).is_empty())`.
      - If at least one such `caller` exists, let `last_caller = callers.max()` and flag `callee` once with `caller = V[last_caller].name`.
 
 ### 2.2 Scope Extraction Details for Python and Rust
@@ -116,8 +109,8 @@ For every module scope (Python `ModModule`, Rust `SourceFile` / inline `ast::Mod
 - **File**: [src/code_lint/rules/constructor_after_method.rs](../../../src/code_lint/rules/constructor_after_method.rs)
 - **Summary**: `"Constructor `{function}` of `{class}` is defined after a non-constructor method."`
 
-### 3.4 `uncolocated-helper` (Python, Rust) — Priority 1
-- **File**: `src/code_lint/rules/uncolocated_helper.rs`
+### 3.4 `uncolocated-helper` (Python, Rust)
+- **File**: [src/code_lint/rules/uncolocated_helper.rs](../../../src/code_lint/rules/uncolocated_helper.rs)
 - **Target**: `RuleTarget::SourceOnly`
 - **Languages**: `&[Language::Python, Language::Rust]`
 - **Options**: `RuleOptions::code_rule(())`
@@ -127,22 +120,22 @@ For every module scope (Python `ModModule`, Rust `SourceFile` / inline `ast::Mod
   - `consensus`: `Consensus::Opinionated`
   - `impacted_quality`: `ImpactedQuality::Maintainability`
 - **`ViolationTemplate`**:
-  - `summary`: `"Exclusive helper `{function}` is separated from its owning public entrypoint `{caller}` by an unrelated function."`
-  - `rationale`: `"Splitting `{function}` away from `{caller}` fractures the component unit of `{caller}` across the scope and forces readers to jump over unrelated definitions."`
-  - `suggestion`: `"Move `{function}` into the contiguous helper cluster immediately below `{caller}`."`
+  - `summary`: `"Private helper `{function}` is neither colocated after `{caller}` nor placed at the end of the scope."`
+  - `rationale`: `"Placing `{function}` between unrelated public functions instead of immediately after `{caller}` or in the trailing helper section fractures the scope's layout."`
+  - `suggestion`: `"Move `{function}` either immediately below `{caller}` (if single-use) or to the trailing private helper section after all public functions."`
 - **`RuleDoc`**:
-  - `summary`: `"Flags exclusive private helpers separated from their owning public function or method by unrelated definitions."`
+  - `summary`: `"Flags private helpers that are neither colocated right after their single public consumer nor placed in the trailing helper section at the end of the scope."`
 - **Diagnostic Anchor**: `&finding.name_node` with placeholders `[("function", &finding.function), ("caller", &finding.caller)]`.
 - **Named Exemptions**:
-  - `E1` (**Shared private helpers `|Roots(h)| >= 2`**): A private helper reachable from two or more public entrypoints belongs to the trailing shared helper layer, not to any single public entrypoint's contiguous cluster.
-  - `E2` (**Transitive exclusive helper chains `p -> _h1 -> _h2`**): When `p` calls `_h1` and `_h1` calls `_h2`, both `_h1` and `_h2` have `Roots = {p}`, so `[p, _h1, _h2]` is a contiguous cluster and `_h1` does not separate `_h2` from `p`.
-  - `E3` (**Public-to-public calls `pub_b -> pub_a -> _a1`**): Root propagation stops at public boundaries, so `_a1` has `Roots(_a1) = {pub_a}` (exclusive to `pub_a`, not shared with `pub_b`).
-  - `E4` (**Uncalled private functions `Roots(h) = empty`**): Private functions not reachable from any public entrypoint have no owning public entrypoint and are not flagged by `uncolocated-helper`.
-  - `E5` (**Helper placed above its owning public entrypoint `pos(h) < pos(p)`**): Handled by Priority 2 (`private-before-public-function`), never double-reported by `uncolocated-helper`.
+  - `E1` (**Place 1: Single-user helpers `[p, _h1, _h2]` immediately after consumer `p`**): When `Roots(h) = {p}` and every callable between `p` and `h` also belongs to `p` (or the constructor cluster when `p` is a constructor), `h` is in Place 1.
+  - `E2` (**Place 2: Single-user or multi-user helpers in the trailing helper section `pos(h) > last_pub`**): Any helper `h` (`|Roots(h)| >= 1`) placed after all public functions in the scope is valid, provided a single-user helper does not split its owner's helpers between Place 1 and Place 2.
+  - `E3` (**Public-to-public calls `pub_b -> pub_a -> _a1`**): Root propagation stops at public boundaries, so `_a1` has `Roots(_a1) = {pub_a}` (single-user helper of `pub_a`, not shared with `pub_b`).
+  - `E4` (**Uncalled private functions `Roots(h) = empty`**): Private functions not reachable from any public entrypoint are governed by `private-before-public-function` (`pos > last_pub`) and are not flagged by `uncolocated-helper`.
+  - `E5` (**Helper placed above a public caller `pos(h) < max(Roots(h))`**): Handled by `private-before-public-function`, never double-reported by `uncolocated-helper`.
   - `E6` (**Rust trait `impl` blocks and `#[cfg(test)]` / `#[test]` items**): Trait `impl` blocks and inline test modules/functions are excluded.
 
-### 3.5 `private-before-public-function` (Python, Rust) — Priority 2
-- **File**: `src/code_lint/rules/private_before_public_function.rs` (replaces `private_before_public_method.rs`)
+### 3.5 `private-before-public-function` (Python, Rust)
+- **File**: [src/code_lint/rules/private_before_public_function.rs](../../../src/code_lint/rules/private_before_public_function.rs) (replaces `private_before_public_method.rs`)
 - **Target**: `RuleTarget::SourceOnly`
 - **Languages**: `&[Language::Python, Language::Rust]`
 - **Options**: `RuleOptions::code_rule(())`
@@ -154,20 +147,20 @@ For every module scope (Python `ModModule`, Rust `SourceFile` / inline `ast::Mod
 - **`ViolationTemplate`**:
   - `summary`: `"Private helper `{function}` is defined before public entrypoint `{caller}`."`
   - `rationale`: `"Placing lower-abstraction private helpers above `{caller}` buries the public contract of the scope behind implementation details."`
-  - `suggestion`: `"Move `{function}` below `{caller}` into its owning component unit or the trailing shared helper layer."`
+  - `suggestion`: `"Move `{function}` below `{caller}` (either immediately after `{caller}` if single-use, or into the trailing private helper section)."`
 - **`RuleDoc`**:
   - `summary`: `"Flags private functions and methods defined above their owning or calling public entrypoints."`
 - **Diagnostic Anchor**: `&finding.name_node` with placeholders `[("function", &finding.function), ("caller", &finding.caller)]`.
 - **Named Exemptions**:
-  - `E1` (**Colocated exclusive helper `[pub_a, _a1, pub_b, _b1]`**): When `Roots(_a1) = {pub_a}` and `_a1` appears below `pub_a` (`pos(_a1) > pos(pub_a)`), `_a1` is **not** flagged even though `pub_b` appears below `_a1`.
-  - `E2` (**Shared helper placed below all of its public callers `[pub_a, pub_b, _shared, pub_c]`**): When `Roots(_shared) = {pub_a, pub_b}` and `pos(_shared) > max(pos(pub_a), pos(pub_b))`, `_shared` is below all of its public callers and is not flagged.
+  - `E1` (**Colocated single-user helper `[pub_a, _a1, pub_b, _b1]`**): When `Roots(_a1) = {pub_a}` and `_a1` appears below `pub_a` (`pos(_a1) > pos(pub_a)`), `_a1` is **not** flagged by `private-before-public-function` even though `pub_b` appears below `_a1`.
+  - `E2` (**Shared helper placed below all of its public callers**): When `Roots(_shared) = {pub_a, pub_b}` and `pos(_shared) > max(pos(pub_a), pos(pub_b))`, `_shared` is not flagged by `private-before-public-function` (and if another `pub_c` follows it, `uncolocated-helper` flags it instead).
   - `E3` (**Python dunder methods `__name__` and Rust restricted visibility `pub(crate)` / `pub(super)`**): Treated as `MethodVisibility::Public`.
   - `E4` (**Python `@overload` and `@property` getter/setter/deleter grouping**): Grouped at the primary definition's position.
   - `E5` (**Scopes with only private functions**): Modules or classes with zero `Public` functions have no public-before-private boundary to violate.
   - `E6` (**Rust trait `impl` blocks and `#[cfg(test)]` / `#[test]` items**): Excluded.
 
-### 3.6 `callee-before-caller` (Python, Rust) — Priority 3
-- **File**: `src/code_lint/rules/callee_before_caller.rs`
+### 3.6 `callee-before-caller` (Python, Rust)
+- **File**: [src/code_lint/rules/callee_before_caller.rs](../../../src/code_lint/rules/callee_before_caller.rs)
 - **Target**: `RuleTarget::SourceOnly`
 - **Languages**: `&[Language::Python, Language::Rust]`
 - **Options**: `RuleOptions::code_rule(())`
@@ -177,20 +170,18 @@ For every module scope (Python `ModModule`, Rust `SourceFile` / inline `ast::Mod
   - `consensus`: `Consensus::Opinionated`
   - `impacted_quality`: `ImpactedQuality::Maintainability`
 - **`ViolationTemplate`**:
-  - `summary`: `"Callee `{function}` is defined before its caller `{caller}` within the same abstraction tier."`
-  - `rationale`: `"Defining lower-abstraction callees above `{caller}` inverts the top-down reading flow inside the component unit or shared helper layer."`
+  - `summary`: `"Private callee `{function}` is defined before its private caller `{caller}`."`
+  - `rationale`: `"Defining lower-abstraction private helpers above `{caller}` inverts the top-down reading flow."`
   - `suggestion`: `"Move `{function}` below `{caller}` so higher-level callers precede lower-level callees."`
 - **`RuleDoc`**:
-  - `summary`: `"Flags functions and methods defined before their callers within the same visibility tier and component cluster."`
+  - `summary`: `"Flags private functions and methods defined before their private callers."`
 - **Diagnostic Anchor**: `&finding.name_node` with placeholders `[("function", &finding.function), ("caller", &finding.caller)]`.
 - **Named Exemptions**:
-  - `E1` (**Cross-visibility calls `pub -> priv` or `priv -> pub`**): Governed by `private-before-public-function` (Priority 2), never checked by `callee-before-caller`.
-  - `E2` (**Cross-cluster calls `exclusive_priv -> shared_priv`**): An exclusive helper (`|Roots| = 1`) is at a higher abstraction layer than a shared helper (`|Roots| >= 2`); calls between different private groups are not same-cluster edges.
-  - `E3` (**Precedence suppression (`P1` / `P2` already flagged)**): Any callable already flagged by `uncolocated-helper` or `private-before-public-function` is skipped by `callee-before-caller` so a single misplaced helper is never double-reported.
-  - `E4` (**Self-recursion and mutual recursion (Strongly Connected Components)**): Call edges within the same Tarjan SCC (`f <-> g`) are exempt.
-  - `E5` (**Constructors (`__init__`, `pub fn new`)**): Constructors belong to Tier 0 at the top of a class/`impl` (`constructor-after-method`), so calls between a public method and a constructor (`reset() -> __init__()` or `with_capacity() -> new()`) are exempt.
-  - `E6` (**Local variable / parameter shadowing**): Calls to a local variable or parameter that shadows a sibling function name (`check = ...; check()`) do not create a call edge to the sibling function.
-  - `E7` (**Rust trait `impl` blocks and `#[cfg(test)]` / `#[test]` items**): Excluded.
+  - `E1` (**Public functions and methods (`Public -> Public`) and cross-visibility calls (`Public -> Private`, `Private -> Public`)**): Public entrypoints are peer API items that legitimately order either top-down or core-primitive-first, and `Public -> Private` is governed by `private-before-public-function` and `uncolocated-helper`.
+  - `E2` (**Precedence suppression (Stage 1 / Stage 2 already flagged)**): Any callable already flagged by `private-before-public-function` or `uncolocated-helper` is skipped by `callee-before-caller` so a single misplaced helper is never double-reported.
+  - `E3` (**Self-recursion and mutual recursion (Strongly Connected Components)**): Call edges within the same Tarjan SCC (`f <-> g`) are exempt.
+  - `E4` (**Local variable / parameter shadowing**): Calls to a local variable or parameter that shadows a sibling function name (`check = ...; check()`) do not create a call edge to the sibling function.
+  - `E5` (**Rust trait `impl` blocks and `#[cfg(test)]` / `#[test]` items**): Excluded.
 
 ### 3.7 `statement-after-main-guard` (Python) — Already Implemented
 - **File**: [src/code_lint/rules/statement_after_main_guard.rs](../../../src/code_lint/rules/statement_after_main_guard.rs)

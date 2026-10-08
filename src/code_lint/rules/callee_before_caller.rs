@@ -1,5 +1,4 @@
-//! Flags functions and methods defined before their callers within the same visibility tier and
-//! component cluster.
+//! Flags private functions and methods defined before their private callers.
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
@@ -11,8 +10,8 @@ use crate::rule_declaration::{
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Callee `{function}` is defined before its caller `{caller}` within the same abstraction tier.",
-    rationale: "Defining lower-abstraction callees above `{caller}` inverts the top-down reading flow inside the component unit or shared helper layer.",
+    summary: "Private callee `{function}` is defined before its private caller `{caller}`.",
+    rationale: "Defining lower-abstraction private helpers above `{caller}` inverts the top-down reading flow.",
     suggestion: "Move `{function}` below `{caller}` so higher-level callers precede lower-level callees.",
 };
 
@@ -30,26 +29,27 @@ pub const RULE: CodeRule = CodeRule {
             impacted_quality: ImpactedQuality::Maintainability,
         },
         doc: RuleDoc {
-            summary: "Flags functions and methods defined before their callers within the same visibility tier.",
+            summary: "Flags private functions and methods defined before their private callers.",
             what_it_does: indoc::indoc! {r"
                 Checks module scopes, Python `class` definitions, and Rust inherent `impl` blocks
-                for a non-constructor function or method `callee` declared above its caller
-                `caller` when both belong to the same visibility tier (`Public -> Public` or
-                `Private -> Private`).
+                for a private function or method `callee` declared above its private caller
+                `caller` (`Private -> Private`).
 
+                Public functions and methods (`Public -> Public`) are not constrained because
+                public APIs legitimately order either top-down (orchestrator before step) or
+                core-primitive-first (fundamental accessor before convenience wrapper).
                 Self-recursive and mutually recursive functions (Strongly Connected Components in
-                the scope's call graph), Tier 0 constructors (`__init__`, `pub fn new`), and
-                cross-tier calls (`pub -> priv`) are exempt. Any function already flagged by
-                `private-before-public-function` or `uncolocated-helper` is skipped so a misplaced
-                helper is never reported twice."},
+                the scope's call graph) and cross-tier calls (`Public -> Private`, governed by
+                `private-before-public-function` and `uncolocated-helper`) are also exempt. Any
+                function already flagged by `private-before-public-function` or
+                `uncolocated-helper` is skipped so a misplaced helper is never reported twice."},
             why_is_this_bad: indoc::indoc! {r"
-                Within the same visibility tier, a callee is a lower-abstraction building block
-                than the function that calls it. Defining callees above their callers forces
-                readers to encounter low-level leaf utilities before the higher-level orchestration
-                logic that gives them context.
+                Unlike public entrypoints, a private helper exists solely as an internal
+                decomposition step of its callers. Defining private callees above their private
+                callers forces readers to encounter low-level leaf utilities before the
+                higher-level helper logic that gives them context.
 
-                Order functions within each visibility tier from higher-level callers down to
-                lower-level callees."},
+                Order private helpers from higher-level callers down to lower-level callees."},
             references: &[
                 Reference {
                     title: "Robert C. Martin: Clean Code — Chapter 5: Formatting (The Stepdown Rule)",
@@ -155,6 +155,13 @@ crate::test_utils::rule_test!(
                     def _strip_whitespace(raw: str) -> str:
                         return raw.strip()
                 "#,
+                public_callee_before_public_caller_exempt => r#"
+                    def parse_item(raw: str) -> str:
+                        return raw.strip()
+
+                    def parse_batch(items: list[str]) -> list[str]:
+                        return [parse_item(item) for item in items]
+                "#,
                 mutual_recursion_and_constructors_exempt => r#"
                     def _even(number: int) -> bool:
                         return True if number == 0 else _odd(number - 1)
@@ -188,13 +195,6 @@ crate::test_utils::rule_test!(
                 "#,
             ],
             fail: [
-                public_callee_before_public_caller => r#"
-                    def parse_item(raw: str) -> str:
-                        return raw.strip()
-
-                    def parse_batch(items: list[str]) -> list[str]:
-                        return [parse_item(item) for item in items]
-                "# => "parse_item",
                 exclusive_helper_callee_before_caller => r#"
                     def run_pipeline(raw: str) -> str:
                         return _step_one(raw)

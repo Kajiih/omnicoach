@@ -14,6 +14,43 @@ use crate::rule_declaration::{
 use std::fmt::Write;
 use std::path::Path;
 
+/// Executes the rule's `check_file` with its default options (including `RequireExplanation` filtering).
+///
+/// # Panics
+/// Panics if `filename` does not have a recognized file extension (`.py` or `.rs`).
+#[must_use]
+pub fn run_code_rule<Options: OptionsDeclaration>(
+    rule: &CodeRule<Options>,
+    source: &str,
+    filename: &str,
+) -> Vec<Diagnostic> {
+    let path = Path::new(filename);
+    let lang = Language::from_path(path).unwrap_or_else(|| {
+        panic!("run_code_rule: unsupported extension in test file '{filename}'")
+    });
+    rule.check_file(path, &ParsedFile::new(source, lang), None)
+}
+
+/// Formats a list of diagnostics to a clean, human-readable simplified snapshot string.
+#[must_use]
+pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic]) -> String {
+    let mut sorted_diags = diagnostics.to_vec();
+    sorted_diags.sort_unstable();
+
+    let mut output = String::new();
+    for diagnostic in &sorted_diags {
+        let _ = writeln!(
+            output,
+            "[{}] Line {}, Col {}: {}",
+            diagnostic.rule_name,
+            diagnostic.location.line,
+            diagnostic.location.column,
+            diagnostic.message.summary
+        );
+    }
+    output
+}
+
 /// Helper to execute `check_command` on a [`CommandRule`] and return its formatted diagnostics snapshot.
 #[must_use]
 pub fn assert_command_rule_snapshot(
@@ -26,31 +63,26 @@ pub fn assert_command_rule_snapshot(
     format_diagnostics_for_test(&diags)
 }
 
-/// Validates that the languages tested in `rule_test!` exactly match the rule's declared languages.
+/// Asserts that a `pass` test case produces zero diagnostics.
 ///
 /// # Panics
-/// Panics if a supported language is missing or an unsupported language is included.
+/// Panics if the rule emits any diagnostics on `code`.
 #[track_caller]
-pub fn assert_language_completeness<Options: OptionsDeclaration>(
+pub fn assert_rule_pass<Options: OptionsDeclaration>(
     rule: &CodeRule<Options>,
-    tested_languages: &[Language],
+    lang: Language,
+    case_name: &str,
+    code: &str,
 ) {
     let rule_name = rule.declaration.name.0;
-    let supported = rule.declaration.languages;
-
-    for lang in tested_languages {
-        assert!(
-            supported.contains(lang),
-            "rule_test! [{rule_name}]: {lang:?} is not in the rule's languages."
-        );
-    }
-
-    for lang in supported {
-        assert!(
-            tested_languages.contains(lang),
-            "rule_test! [{rule_name}]: Rule supports {lang:?}, but it is missing from rule_test!."
-        );
-    }
+    let filename = dummy_filename(lang);
+    let diags = run_code_rule(rule, code, filename);
+    assert!(
+        diags.is_empty(),
+        "rule_test! [{rule_name}] ({lang:?}) PASS case '{case_name}' failed:\nExpected 0 diagnostics, got {}:\n{}\nSource:\n{code}",
+        diags.len(),
+        format_diagnostics_for_test(&diags),
+    );
 }
 
 /// How the repeated-occurrence check of a `fail` case builds the second copy of the code.
@@ -61,6 +93,54 @@ pub enum RepeatCheck {
     /// The second copy's non-trivial literals get new values, so each copy forms its own
     /// groups in rules that group equal literals across the file (`repeated-literal`).
     DistinctLiterals,
+}
+
+/// Asserts that a `fail` test case produces exactly one matching diagnostic.
+///
+/// Asserts that the produced diagnostic AST span matches `expected_snippet` (or `code.trim()` when
+/// `expected_snippet` is `None`), and that the same span is reported in both copies when `code` is
+/// repeated twice in one file (the second copy built as `repeat` says).
+///
+/// # Panics
+/// Panics if diagnostic count, `rule_name`, normalized AST span slice, or repeated-occurrence
+/// spans do not match.
+#[track_caller]
+pub fn assert_rule_fail<Options: OptionsDeclaration>(
+    rule: &CodeRule<Options>,
+    lang: Language,
+    case_name: &str,
+    code: &str,
+    expected_snippet: Option<&str>,
+    repeat: RepeatCheck,
+) {
+    let rule_name = rule.declaration.name.0;
+    let filename = dummy_filename(lang);
+    let diags = run_code_rule(rule, code, filename);
+    let expected_slice = expected_snippet.unwrap_or(code).trim();
+
+    let [diagnostic] = diags.as_slice() else {
+        panic!(
+            "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}' diagnostic count mismatch:\nExpected exactly 1 diagnostic, got {}:\n{}\nSource:\n{code}",
+            diags.len(),
+            format_diagnostics_for_test(&diags),
+        );
+    };
+
+    assert_eq!(
+        diagnostic.rule_name.0, rule_name,
+        "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': diagnostic rule_name '{}' does not match rule name.",
+        diagnostic.rule_name.0
+    );
+
+    let raw_slice = &code[diagnostic.location.span.start..diagnostic.location.span.end];
+    let actual_slice = normalize_span_indentation(code, diagnostic.location.span.start, raw_slice);
+    assert_eq!(
+        actual_slice, expected_slice,
+        "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}' flagged span mismatch:\nExpected flagged slice:\n{expected_slice}\nActual flagged slice:\n{actual_slice}\n(Tip: if the flagged AST node is a sub-expression of the test code, add `=> r#\"...\"#` to specify the inner slice.)",
+    );
+
+    let span = diagnostic.location.span.start..diagnostic.location.span.end;
+    assert_every_occurrence_reported(rule, lang, case_name, code, span, repeat);
 }
 
 /// Asserts each of the rule's documented examples exactly like a `rule_test!` case: the flagged
@@ -114,111 +194,31 @@ pub fn assert_documented_examples<Options: OptionsDeclaration>(
     }
 }
 
-/// Asserts that a `fail` test case produces exactly one matching diagnostic.
-///
-/// Asserts that the produced diagnostic AST span matches `expected_snippet` (or `code.trim()` when
-/// `expected_snippet` is `None`), and that the same span is reported in both copies when `code` is
-/// repeated twice in one file (the second copy built as `repeat` says).
+/// Validates that the languages tested in `rule_test!` exactly match the rule's declared languages.
 ///
 /// # Panics
-/// Panics if diagnostic count, `rule_name`, normalized AST span slice, or repeated-occurrence
-/// spans do not match.
+/// Panics if a supported language is missing or an unsupported language is included.
 #[track_caller]
-pub fn assert_rule_fail<Options: OptionsDeclaration>(
+pub fn assert_language_completeness<Options: OptionsDeclaration>(
     rule: &CodeRule<Options>,
-    lang: Language,
-    case_name: &str,
-    code: &str,
-    expected_snippet: Option<&str>,
-    repeat: RepeatCheck,
+    tested_languages: &[Language],
 ) {
     let rule_name = rule.declaration.name.0;
-    let filename = dummy_filename(lang);
-    let diags = run_code_rule(rule, code, filename);
-    let expected_slice = expected_snippet.unwrap_or(code).trim();
+    let supported = rule.declaration.languages;
 
-    let [diagnostic] = diags.as_slice() else {
-        panic!(
-            "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}' diagnostic count mismatch:\nExpected exactly 1 diagnostic, got {}:\n{}\nSource:\n{code}",
-            diags.len(),
-            format_diagnostics_for_test(&diags),
-        );
-    };
-
-    assert_eq!(
-        diagnostic.rule_name.0, rule_name,
-        "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': diagnostic rule_name '{}' does not match rule name.",
-        diagnostic.rule_name.0
-    );
-
-    let raw_slice = &code[diagnostic.location.span.start..diagnostic.location.span.end];
-    let actual_slice = normalize_span_indentation(code, diagnostic.location.span.start, raw_slice);
-    assert_eq!(
-        actual_slice, expected_slice,
-        "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}' flagged span mismatch:\nExpected flagged slice:\n{expected_slice}\nActual flagged slice:\n{actual_slice}\n(Tip: if the flagged AST node is a sub-expression of the test code, add `=> r#\"...\"#` to specify the inner slice.)",
-    );
-
-    let span = diagnostic.location.span.start..diagnostic.location.span.end;
-    assert_every_occurrence_reported(rule, lang, case_name, code, span, repeat);
-}
-
-/// Asserts that a `pass` test case produces zero diagnostics.
-///
-/// # Panics
-/// Panics if the rule emits any diagnostics on `code`.
-#[track_caller]
-pub fn assert_rule_pass<Options: OptionsDeclaration>(
-    rule: &CodeRule<Options>,
-    lang: Language,
-    case_name: &str,
-    code: &str,
-) {
-    let rule_name = rule.declaration.name.0;
-    let filename = dummy_filename(lang);
-    let diags = run_code_rule(rule, code, filename);
-    assert!(
-        diags.is_empty(),
-        "rule_test! [{rule_name}] ({lang:?}) PASS case '{case_name}' failed:\nExpected 0 diagnostics, got {}:\n{}\nSource:\n{code}",
-        diags.len(),
-        format_diagnostics_for_test(&diags),
-    );
-}
-
-/// Executes the rule's `check_file` with its default options (including `RequireExplanation` filtering).
-///
-/// # Panics
-/// Panics if `filename` does not have a recognized file extension (`.py` or `.rs`).
-#[must_use]
-pub fn run_code_rule<Options: OptionsDeclaration>(
-    rule: &CodeRule<Options>,
-    source: &str,
-    filename: &str,
-) -> Vec<Diagnostic> {
-    let path = Path::new(filename);
-    let lang = Language::from_path(path).unwrap_or_else(|| {
-        panic!("run_code_rule: unsupported extension in test file '{filename}'")
-    });
-    rule.check_file(path, &ParsedFile::new(source, lang), None)
-}
-
-/// Formats a list of diagnostics to a clean, human-readable simplified snapshot string.
-#[must_use]
-pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic]) -> String {
-    let mut sorted_diags = diagnostics.to_vec();
-    sorted_diags.sort_unstable();
-
-    let mut output = String::new();
-    for diagnostic in &sorted_diags {
-        let _ = writeln!(
-            output,
-            "[{}] Line {}, Col {}: {}",
-            diagnostic.rule_name,
-            diagnostic.location.line,
-            diagnostic.location.column,
-            diagnostic.message.summary
+    for lang in tested_languages {
+        assert!(
+            supported.contains(lang),
+            "rule_test! [{rule_name}]: {lang:?} is not in the rule's languages."
         );
     }
-    output
+
+    for lang in supported {
+        assert!(
+            tested_languages.contains(lang),
+            "rule_test! [{rule_name}]: Rule supports {lang:?}, but it is missing from rule_test!."
+        );
+    }
 }
 
 /// Repeats `code` twice in one file and asserts the rule flags the same span in both copies,
