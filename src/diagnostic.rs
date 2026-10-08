@@ -3,6 +3,7 @@
 architecture_component!(Diagnostic);
 
 use serde::{Deserialize, Serialize};
+use std::io::{self, BufWriter, Write as _};
 use std::path::{Path, PathBuf};
 use strum::VariantArray;
 
@@ -487,7 +488,7 @@ pub enum OutputFormat {
 ///
 /// # Errors
 ///
-/// Returns an error if JSON serialization fails.
+/// Returns an error if JSON serialization or writing to stdout fails.
 pub fn print_diagnostics(diagnostics: &[Diagnostic], format: OutputFormat) -> anyhow::Result<()> {
     let mut sorted: Vec<&Diagnostic> = diagnostics.iter().collect();
     sorted.sort_unstable();
@@ -495,6 +496,7 @@ pub fn print_diagnostics(diagnostics: &[Diagnostic], format: OutputFormat) -> an
     if format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&sorted)?);
     } else {
+        let mut stdout = BufWriter::new(io::stdout().lock());
         for diagnostic in sorted {
             let location_header = diagnostic.location.format_header();
             let hint_line = diagnostic
@@ -504,7 +506,8 @@ pub fn print_diagnostics(diagnostics: &[Diagnostic], format: OutputFormat) -> an
                 .map(|hint| format!("  Or: {hint}\n"))
                 .unwrap_or_default();
 
-            println!(
+            writeln!(
+                stdout,
                 "{}: [{}] {}\n  Rationale: {}\n  Suggestion: {}\n{}",
                 location_header,
                 diagnostic.rule_name,
@@ -512,8 +515,9 @@ pub fn print_diagnostics(diagnostics: &[Diagnostic], format: OutputFormat) -> an
                 diagnostic.message.rationale,
                 diagnostic.message.suggestion,
                 hint_line
-            );
+            )?;
         }
+        stdout.flush()?;
     }
     Ok(())
 }
