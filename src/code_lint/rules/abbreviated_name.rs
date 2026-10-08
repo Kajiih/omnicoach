@@ -32,43 +32,6 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     suggestion: "Rename `{name}` to spell out `{token}` in full.",
 };
 
-/// Helper to split identifiers into sub-word segments.
-fn split_segments(name: &str) -> Vec<String> {
-    let mut segments = Vec::new();
-    let mut current = String::new();
-    let mut previous_char: Option<char> = None;
-
-    for character in name.chars() {
-        if character == '_' {
-            if !current.is_empty() {
-                segments.push(current.to_lowercase());
-                current.clear();
-            }
-            previous_char = None;
-            continue;
-        }
-
-        // Split at lowercase/digit -> uppercase transition
-        if let Some(prev) = previous_char
-            && character.is_uppercase()
-            && (prev.is_lowercase() || prev.is_numeric())
-            && !current.is_empty()
-        {
-            segments.push(current.to_lowercase());
-            current.clear();
-        }
-
-        current.push(character);
-        previous_char = Some(character);
-    }
-
-    if !current.is_empty() {
-        segments.push(current.to_lowercase());
-    }
-
-    segments
-}
-
 /// The rule's declaration.
 pub const RULE: CodeRule<ListOption> = CodeRule {
     declaration: Declaration {
@@ -166,6 +129,43 @@ fn check_file(
     }
 
     diagnostics
+}
+
+/// Helper to split identifiers into sub-word segments.
+fn split_segments(name: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut previous_char: Option<char> = None;
+
+    for character in name.chars() {
+        if character == '_' {
+            if !current.is_empty() {
+                segments.push(current.to_lowercase());
+                current.clear();
+            }
+            previous_char = None;
+            continue;
+        }
+
+        // Split at lowercase/digit -> uppercase transition
+        if let Some(prev) = previous_char
+            && character.is_uppercase()
+            && (prev.is_lowercase() || prev.is_numeric())
+            && !current.is_empty()
+        {
+            segments.push(current.to_lowercase());
+            current.clear();
+        }
+
+        current.push(character);
+        previous_char = Some(character);
+    }
+
+    if !current.is_empty() {
+        segments.push(current.to_lowercase());
+    }
+
+    segments
 }
 
 #[cfg(test)]

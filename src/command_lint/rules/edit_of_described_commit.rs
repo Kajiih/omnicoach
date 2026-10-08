@@ -27,23 +27,6 @@ const JJ_CLI_SCHEMA: ProgramCliSchema = ProgramCliSchema {
     ],
 };
 
-/// Helper to extract revision from a `jj edit` command.
-///
-/// It ignores global options (e.g. `jj -R . edit`) and options passed to the `edit` subcommand
-/// (e.g. `jj edit --ignore-working-copy revision`).
-#[must_use]
-fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
-    let args = cmd.parse_args(&JJ_CLI_SCHEMA);
-    if !args.has_subcommand_sequence(&["edit"]) {
-        return None;
-    }
-    if args.positionals.len() > 1 {
-        Some(args.positionals[1].clone())
-    } else {
-        Some("@".to_string())
-    }
-}
-
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "`jj edit {revision}` targets a described commit.",
     rationale: "Editing a described commit rewrites reviewed history in place and tangles unrelated work into an existing change.",
@@ -119,6 +102,23 @@ fn check_command(
             SourceSpan::new(start, end),
         ),
     )]
+}
+
+/// Helper to extract revision from a `jj edit` command.
+///
+/// It ignores global options (e.g. `jj -R . edit`) and options passed to the `edit` subcommand
+/// (e.g. `jj edit --ignore-working-copy revision`).
+#[must_use]
+fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
+    let args = cmd.parse_args(&JJ_CLI_SCHEMA);
+    if !args.has_subcommand_sequence(&["edit"]) {
+        return None;
+    }
+    if args.positionals.len() > 1 {
+        Some(args.positionals[1].clone())
+    } else {
+        Some("@".to_string())
+    }
 }
 
 #[cfg(test)]

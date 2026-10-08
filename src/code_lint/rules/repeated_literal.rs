@@ -162,6 +162,26 @@ impl<'a> LiteralGroup<'a> {
     }
 }
 
+fn check_file(
+    rule: &CodeRule<CountOption>,
+    path: &Path,
+    file: &ParsedFile,
+    min_occurrences: usize,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for group in group_literals(file) {
+        let count = (group.definitions + group.inline_uses.len()).to_string();
+        for node in group.flagged_uses(min_occurrences) {
+            diagnostics.push(rule.diagnostic_at_node(
+                path,
+                node,
+                &[("expression", &node.text()), ("count", &count)],
+            ));
+        }
+    }
+    diagnostics
+}
+
 /// Groups the file's non-trivial literals by value, in first-seen order. Rust test code is
 /// left out so a test literal cannot pair with a production one.
 fn group_literals(file: &ParsedFile) -> Vec<LiteralGroup<'_>> {
@@ -185,26 +205,6 @@ fn group_literals(file: &ParsedFile) -> Vec<LiteralGroup<'_>> {
         }
     }
     groups
-}
-
-fn check_file(
-    rule: &CodeRule<CountOption>,
-    path: &Path,
-    file: &ParsedFile,
-    min_occurrences: usize,
-) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-    for group in group_literals(file) {
-        let count = (group.definitions + group.inline_uses.len()).to_string();
-        for node in group.flagged_uses(min_occurrences) {
-            diagnostics.push(rule.diagnostic_at_node(
-                path,
-                node,
-                &[("expression", &node.text()), ("count", &count)],
-            ));
-        }
-    }
-    diagnostics
 }
 
 #[cfg(test)]

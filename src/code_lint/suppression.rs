@@ -200,24 +200,6 @@ enum DirectivePlacement {
     File,
 }
 
-/// Computes the declaration line after skipping contiguous attributes, decorators, or comments.
-fn compute_effective_target_line(content: &str, raw_line: usize) -> usize {
-    let mut current_line = raw_line + 1;
-    for line_text in content.lines().skip(raw_line) {
-        let trimmed = line_text.trim();
-        if trimmed.starts_with("#[")
-            || trimmed.starts_with('@')
-            || trimmed.starts_with("//")
-            || trimmed.starts_with('#')
-        {
-            current_line += 1;
-        } else {
-            break;
-        }
-    }
-    current_line
-}
-
 /// A parsed omni suppression directive comment.
 #[derive(Debug, Clone)]
 struct ParsedDirective {
@@ -264,6 +246,38 @@ impl SuppressionTracker {
             .collect();
 
         Self { directives }
+    }
+
+    /// Helper to parse a single comment's text into a `ParsedDirective` if it is an omni directive.
+    fn parse_comment_text(
+        text: &str,
+        span: SourceSpan,
+        coord: LineColumn,
+        content: &str,
+    ) -> Option<ParsedDirective> {
+        let stripped = strip_comment_delimiters(text)?;
+        let (is_file, remainder) = parse_directive_prefix(stripped)?;
+        let (target_rules, is_blanket, after_rules) = parse_bracketed_rules(remainder.trim_start());
+
+        let reason = after_rules
+            .trim_start()
+            .strip_prefix("--")
+            .map(str::trim)
+            .filter(|reason_text| !reason_text.is_empty())
+            .map(ToString::to_string);
+
+        let placement = resolve_directive_placement(is_file, content, span, coord.line);
+        let matched_count = target_rules.iter().map(|rule| (rule.clone(), 0)).collect();
+
+        Some(ParsedDirective {
+            placement,
+            span,
+            coord,
+            target_rules,
+            reason,
+            is_blanket,
+            matched_count,
+        })
     }
 
     /// Filters diagnostics against active directives, marking matched rules as used.
@@ -326,38 +340,6 @@ impl SuppressionTracker {
         }
         diagnostics
     }
-
-    /// Helper to parse a single comment's text into a `ParsedDirective` if it is an omni directive.
-    fn parse_comment_text(
-        text: &str,
-        span: SourceSpan,
-        coord: LineColumn,
-        content: &str,
-    ) -> Option<ParsedDirective> {
-        let stripped = strip_comment_delimiters(text)?;
-        let (is_file, remainder) = parse_directive_prefix(stripped)?;
-        let (target_rules, is_blanket, after_rules) = parse_bracketed_rules(remainder.trim_start());
-
-        let reason = after_rules
-            .trim_start()
-            .strip_prefix("--")
-            .map(str::trim)
-            .filter(|reason_text| !reason_text.is_empty())
-            .map(ToString::to_string);
-
-        let placement = resolve_directive_placement(is_file, content, span, coord.line);
-        let matched_count = target_rules.iter().map(|rule| (rule.clone(), 0)).collect();
-
-        Some(ParsedDirective {
-            placement,
-            span,
-            coord,
-            target_rules,
-            reason,
-            is_blanket,
-            matched_count,
-        })
-    }
 }
 
 /// Parses the `omni:disable-file` or `omni:ignore` prefix and validates boundary delimiters.
@@ -419,6 +401,24 @@ fn resolve_directive_placement(
     } else {
         DirectivePlacement::SameLine { line: raw_line }
     }
+}
+
+/// Computes the declaration line after skipping contiguous attributes, decorators, or comments.
+fn compute_effective_target_line(content: &str, raw_line: usize) -> usize {
+    let mut current_line = raw_line + 1;
+    for line_text in content.lines().skip(raw_line) {
+        let trimmed = line_text.trim();
+        if trimmed.starts_with("#[")
+            || trimmed.starts_with('@')
+            || trimmed.starts_with("//")
+            || trimmed.starts_with('#')
+        {
+            current_line += 1;
+        } else {
+            break;
+        }
+    }
+    current_line
 }
 
 /// Returns true if `placement` covers `diagnostic_line`.

@@ -234,24 +234,6 @@ pub const ZERO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
     check: check_zero_sleep,
 };
 
-/// Returns true if the call's single argument is a literal zero duration, such as `sleep(0)` or
-/// `sleep(Duration::ZERO)`.
-fn has_zero_duration_argument(call_match: &CallMatch<'_>) -> bool {
-    let [argument] = call_match.arguments.as_slice() else {
-        return false;
-    };
-    matches!(
-        argument.text().trim(),
-        "0" | "0.0"
-            | "0."
-            | "Duration::ZERO"
-            | "std::time::Duration::ZERO"
-            | "tokio::time::Duration::ZERO"
-            | "Duration::from_secs(0)"
-            | "Duration::from_millis(0)"
-    )
-}
-
 fn check_sleep(
     rule: &CodeRule<ListOption>,
     path: &Path,
@@ -270,6 +252,24 @@ fn check_zero_sleep(
     banned: &HashSet<String>,
 ) -> Vec<Diagnostic> {
     rule.check_banned_calls_where(path, file, banned, has_zero_duration_argument)
+}
+
+/// Returns true if the call's single argument is a literal zero duration, such as `sleep(0)` or
+/// `sleep(Duration::ZERO)`.
+fn has_zero_duration_argument(call_match: &CallMatch<'_>) -> bool {
+    let [argument] = call_match.arguments.as_slice() else {
+        return false;
+    };
+    matches!(
+        argument.text().trim(),
+        "0" | "0.0"
+            | "0."
+            | "Duration::ZERO"
+            | "std::time::Duration::ZERO"
+            | "tokio::time::Duration::ZERO"
+            | "Duration::from_secs(0)"
+            | "Duration::from_millis(0)"
+    )
 }
 
 #[cfg(test)]

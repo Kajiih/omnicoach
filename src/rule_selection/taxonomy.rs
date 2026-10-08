@@ -54,20 +54,6 @@ pub enum Facet {
 }
 
 impl Facet {
-    /// The display label.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Topic => "Topic",
-            Self::Precision => "Precision",
-            Self::Consensus => "Consensus",
-            Self::ImpactedQuality => "Impacted quality",
-            Self::Languages => "Languages",
-            Self::Input => "Analyzed input",
-            Self::FileScope => "File scope",
-        }
-    }
-
     /// Whether `candidate` names this facet (case-insensitively, spaces/underscores/hyphens
     /// equivalent).
     #[must_use]
@@ -83,6 +69,20 @@ impl Facet {
                 .iter()
                 .zip(candidate)
                 .all(|(&left, &right)| normalize(left) == normalize(right))
+    }
+
+    /// The display label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Topic => "Topic",
+            Self::Precision => "Precision",
+            Self::Consensus => "Consensus",
+            Self::ImpactedQuality => "Impacted quality",
+            Self::Languages => "Languages",
+            Self::Input => "Analyzed input",
+            Self::FileScope => "File scope",
+        }
     }
 }
 
@@ -208,11 +208,6 @@ pub static REGISTERED_RULES: LazyLock<Vec<RegisteredRule>> = LazyLock::new(|| {
 });
 
 impl Topic {
-    /// The topic's ancestors, nearest first.
-    fn ancestors(self) -> impl Iterator<Item = Self> {
-        std::iter::successors(self.parent.copied(), |topic| topic.parent.copied())
-    }
-
     /// The path from the root down to the topic.
     fn path(self) -> Vec<Self> {
         let mut path: Vec<_> = self.ancestors().collect();
@@ -220,16 +215,11 @@ impl Topic {
         path.push(self);
         path
     }
-}
 
-/// Every topic in use, collected from registered rules and their ancestors.
-fn all_topics() -> impl Iterator<Item = Topic> {
-    let topics: BTreeSet<Topic> = REGISTERED_RULES
-        .iter()
-        .flat_map(|rule| rule.classification.topics.iter().copied())
-        .flat_map(Topic::path)
-        .collect();
-    topics.into_iter()
+    /// The topic's ancestors, nearest first.
+    fn ancestors(self) -> impl Iterator<Item = Self> {
+        std::iter::successors(self.parent.copied(), |topic| topic.parent.copied())
+    }
 }
 
 /// Every tag of every facet.
@@ -243,6 +233,30 @@ pub fn all_tags() -> impl Iterator<Item = Tag> {
 }
 
 impl RegisteredRule {
+    /// A rule outside the registry, with no derived facets.
+    #[cfg(test)]
+    pub(crate) fn synthetic(name: &'static str, classification: Classification) -> Self {
+        static TEMPLATE: ViolationTemplate = ViolationTemplate::from_static("", "", "");
+        Self {
+            name: RuleName(name),
+            doc: RuleDoc::TODO,
+            template: &TEMPLATE,
+            options: crate::rule_declaration::RuleOptions::none().declared(),
+            languages: &[],
+            classification,
+            derived: Vec::new(),
+        }
+    }
+
+    /// Whether `selector` selects the rule.
+    #[must_use]
+    pub fn matches(&self, selector: Selector) -> bool {
+        match selector {
+            Selector::Rule(name) => name == self.name,
+            Selector::Tag(tag) => self.branches().iter().flatten().any(|&own| own == tag),
+        }
+    }
+
     /// The rule's branches: each root-to-leaf tag path it sits on. A topic branch is the
     /// topic's path; every other facet value is a one-tag branch. The rule is the implicit leaf.
     pub fn branches(&self) -> Vec<Vec<Tag>> {
@@ -261,30 +275,21 @@ impl RegisteredRule {
         .map(|tag| vec![tag]);
         topic_paths.chain(values).collect()
     }
+}
 
-    /// Whether `selector` selects the rule.
-    #[must_use]
-    pub fn matches(&self, selector: Selector) -> bool {
-        match selector {
-            Selector::Rule(name) => name == self.name,
-            Selector::Tag(tag) => self.branches().iter().flatten().any(|&own| own == tag),
-        }
-    }
+/// Resolves a label (canonical or synonym) to its canonical selector.
+pub fn lookup(label: &str) -> Option<Selector> {
+    labels().find_map(|(known, selector)| (known == label).then_some(selector))
+}
 
-    /// A rule outside the registry, with no derived facets.
-    #[cfg(test)]
-    pub(crate) fn synthetic(name: &'static str, classification: Classification) -> Self {
-        static TEMPLATE: ViolationTemplate = ViolationTemplate::from_static("", "", "");
-        Self {
-            name: RuleName(name),
-            doc: RuleDoc::TODO,
-            template: &TEMPLATE,
-            options: crate::rule_declaration::RuleOptions::none().declared(),
-            languages: &[],
-            classification,
-            derived: Vec::new(),
-        }
-    }
+/// The registered label closest to `label`, if it is close enough to be a typo.
+pub fn closest_label(label: &str) -> Option<&'static str> {
+    closest_match(label, labels().map(|(known, _)| known))
+}
+
+/// The registered rule name closest to `label`, if it is close enough to be a typo.
+pub fn closest_rule_name(label: &str) -> Option<&'static str> {
+    closest_match(label, REGISTERED_RULES.iter().map(|rule| rule.name.0))
 }
 
 /// The single global label registry: rule names, tag labels and topic synonyms.
@@ -303,19 +308,14 @@ fn labels() -> impl Iterator<Item = (&'static str, Selector)> {
     rules.chain(tags).chain(synonyms)
 }
 
-/// Resolves a label (canonical or synonym) to its canonical selector.
-pub fn lookup(label: &str) -> Option<Selector> {
-    labels().find_map(|(known, selector)| (known == label).then_some(selector))
-}
-
-/// The registered label closest to `label`, if it is close enough to be a typo.
-pub fn closest_label(label: &str) -> Option<&'static str> {
-    closest_match(label, labels().map(|(known, _)| known))
-}
-
-/// The registered rule name closest to `label`, if it is close enough to be a typo.
-pub fn closest_rule_name(label: &str) -> Option<&'static str> {
-    closest_match(label, REGISTERED_RULES.iter().map(|rule| rule.name.0))
+/// Every topic in use, collected from registered rules and their ancestors.
+fn all_topics() -> impl Iterator<Item = Topic> {
+    let topics: BTreeSet<Topic> = REGISTERED_RULES
+        .iter()
+        .flat_map(|rule| rule.classification.topics.iter().copied())
+        .flat_map(Topic::path)
+        .collect();
+    topics.into_iter()
 }
 
 #[cfg(test)]

@@ -104,6 +104,21 @@ const CALLEE: &str = "callee";
 /// `construct` value shared by the Python and Rust boolean collection checks.
 const BOOLEAN_COLLECTION_COMPARISON: &str = "a comparison against a collection of boolean literals";
 
+fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
+    match file.lang() {
+        Language::Rust => ast::rust::collect_macro_invocations(file)
+            .iter()
+            .filter_map(|node| check_rust_assertion_macro(rule, node, path))
+            .collect(),
+        Language::Python => ast::python::collect_assert_statements(file)
+            .iter()
+            .filter_map(|assert_statement| {
+                check_python_assert_statement(rule, assert_statement, path)
+            })
+            .collect(),
+    }
+}
+
 /// Evaluates a single Rust assertion macro invocation node for packed conditions.
 fn check_rust_assertion_macro(
     rule: &CodeRule,
@@ -170,21 +185,6 @@ fn check_python_assert_statement(
     }
 
     None
-}
-
-fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    match file.lang() {
-        Language::Rust => ast::rust::collect_macro_invocations(file)
-            .iter()
-            .filter_map(|node| check_rust_assertion_macro(rule, node, path))
-            .collect(),
-        Language::Python => ast::python::collect_assert_statements(file)
-            .iter()
-            .filter_map(|assert_statement| {
-                check_python_assert_statement(rule, assert_statement, path)
-            })
-            .collect(),
-    }
 }
 
 #[cfg(test)]

@@ -16,12 +16,12 @@ pub use self::annotations::{
     PythonReturnTypeBranch, PythonReturnTypeUnion, collect_collection_types, collection_display,
     collection_type, return_type_union,
 };
-pub(super) use self::classes::collect_type_method_scopes;
 pub use self::classes::{
     PythonAnnotatedAttribute, PythonBaseClass, PythonClassInfo, PythonFieldAfterMethod,
     PythonInstanceAttributeAnnotation, collect_class_attributes, collect_fields_after_methods,
     collect_instance_attribute_annotations, extract_classes,
 };
+pub(super) use self::classes::{collect_callable_scopes, collect_type_method_scopes};
 pub use self::format_strings::{
     PythonFormatPlaceholder, PythonFormatString, PythonFormatStyle, collect_format_strings,
     extract_valid_field_root, named_format_field_roots,
@@ -63,6 +63,25 @@ use std::sync::Arc;
 
 const PYTEST_RAISES: &str = "raises";
 const ENVIRON_NAME: &str = "environ";
+
+/// The callee of `call` if it is a `call` node, without the type arguments of a generic
+/// instantiation (`list[str]()` has callee `list`).
+#[must_use]
+pub fn call_callee<'a>(call: &AstNode<'a>) -> Option<AstNode<'a>> {
+    let Expr::Call(call_expr) = find_expr_at_span(call.file.py_module()?.syntax(), call.span())?
+    else {
+        return None;
+    };
+    let callee = if let Expr::Subscript(subscript) = call_expr.func.as_ref() {
+        subscript.value.as_ref()
+    } else {
+        call_expr.func.as_ref()
+    };
+    Some(AstNode::from_span(
+        call.file,
+        span_from_ruff_range(callee.range()),
+    ))
+}
 
 /// Finds the `Expr` node in `module` whose byte span equals `target_span`.
 pub(super) fn find_expr_at_span(module: &ModModule, target_span: SourceSpan) -> Option<&Expr> {
@@ -152,33 +171,6 @@ pub(super) fn find_parameters_at_span(
     finder.found
 }
 
-/// Returns true if a Python `StmtFunctionDef` is a test function (`test` or `test_*`).
-fn is_test_function_def(func_def: &StmtFunctionDef) -> bool {
-    let func_name = func_def.name.as_str();
-    func_name == "test" || func_name.starts_with("test_")
-}
-
-/// Returns true if a Python `ExprCall` is a test assertion call
-/// (`self.assert*()`, `pytest.raises(...)`, `raises(...)`, `pytest.warns(...)`, `self.fail(...)`).
-fn is_assertion_call_expr(call: &ruff_python_ast::ExprCall) -> bool {
-    match call.func.as_ref() {
-        Expr::Name(name) => name.id.as_str() == PYTEST_RAISES,
-        Expr::Attribute(attr) => {
-            let attr_name = attr.attr.as_str();
-            if attr_name.starts_with("assert") {
-                return true;
-            }
-            let Expr::Name(obj) = attr.value.as_ref() else {
-                return false;
-            };
-            let obj_text = obj.id.as_str();
-            (obj_text == "pytest" && (attr_name == PYTEST_RAISES || attr_name == "warns"))
-                || (obj_text == "self" && attr_name == "fail")
-        }
-        _ => false,
-    }
-}
-
 /// Represents a keyword argument (`key=value`) in a Python call or argument list.
 #[derive(Clone)]
 pub struct KeywordArg<'a> {
@@ -218,29 +210,17 @@ pub struct DecoratorInfo<'a> {
 }
 
 impl<'a> DecoratorInfo<'a> {
-    /// Looks up a keyword argument by name.
-    #[must_use]
-    pub fn get_arg(&self, key: &str) -> Option<&KeywordArg<'a>> {
-        self.keyword_args.iter().find(|kw| kw.name == key)
-    }
-
     /// Returns true if a keyword argument with `key` was explicitly passed.
     #[must_use]
     pub fn has_arg(&self, key: &str) -> bool {
         self.get_arg(key).is_some()
     }
-}
 
-/// Helper to resolve the dotted expression path and terminal identifier from an `Expr`.
-pub(super) fn resolve_path_and_terminal_expr(expr: &Expr, source: &str) -> (String, String) {
-    let span = span_from_ruff_range(expr.range());
-    let path = source[span.start..span.end].to_string();
-    let terminal = if let Expr::Attribute(attr) = expr {
-        attr.attr.to_string()
-    } else {
-        path.rsplit('.').next().unwrap_or("").to_string()
-    };
-    (path, terminal)
+    /// Looks up a keyword argument by name.
+    #[must_use]
+    pub fn get_arg(&self, key: &str) -> Option<&KeywordArg<'a>> {
+        self.keyword_args.iter().find(|kw| kw.name == key)
+    }
 }
 
 /// Converts a slice of `ruff_python_ast::Decorator` nodes into `DecoratorInfo` values.
@@ -312,6 +292,18 @@ impl PythonModuleAssignment<'_> {
     }
 }
 
+/// Collects the single-name module-level assignments of `file`, in source order. Attribute and
+/// unpacking targets are not collected.
+#[must_use]
+pub fn collect_module_assignments(file: &ParsedFile) -> Vec<PythonModuleAssignment<'_>> {
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    collect_module_assignments_in_stmts(&parsed.syntax().body, file, &mut out);
+    out
+}
+
 /// Collects single-name module-level assignments from `stmts`, recursing into top-level
 /// `if`, `try`, and `with` blocks.
 fn collect_module_assignments_in_stmts<'a>(
@@ -373,43 +365,6 @@ fn collect_module_assignments_in_stmts<'a>(
     }
 }
 
-/// Collects the single-name module-level assignments of `file`, in source order. Attribute and
-/// unpacking targets are not collected.
-#[must_use]
-pub fn collect_module_assignments(file: &ParsedFile) -> Vec<PythonModuleAssignment<'_>> {
-    let Some(parsed) = file.py_module() else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    collect_module_assignments_in_stmts(&parsed.syntax().body, file, &mut out);
-    out
-}
-
-/// Returns true if `expr` is the identifier `__name__`.
-fn is_dunder_name_expr(expr: &Expr) -> bool {
-    matches!(expr, Expr::Name(name) if name.id.as_str() == "__name__")
-}
-
-/// Returns true if `expr` is a string literal with value `"__main__"`.
-fn is_dunder_main_literal(expr: &Expr) -> bool {
-    matches!(expr, Expr::StringLiteral(literal) if literal.value.to_str() == "__main__")
-}
-
-/// Returns true if `statement` is `if __name__ == "__main__":` or `if "__main__" == __name__:`.
-fn is_main_guard_statement(statement: &Stmt) -> bool {
-    let Stmt::If(if_statement) = statement else {
-        return false;
-    };
-    let Expr::Compare(compare) = if_statement.test.as_ref() else {
-        return false;
-    };
-    let ([ruff_python_ast::CmpOp::Eq], [left, right]) = (&*compare.ops, &*compare.operands) else {
-        return false;
-    };
-    (is_dunder_name_expr(left) && is_dunder_main_literal(right))
-        || (is_dunder_main_literal(left) && is_dunder_name_expr(right))
-}
-
 /// Collects top-level module statements that appear after an `if __name__ == "__main__":`
 /// guard block.
 #[must_use]
@@ -428,36 +383,29 @@ pub fn collect_statements_after_main_guard(file: &ParsedFile) -> Vec<AstNode<'_>
         .collect()
 }
 
-/// The callee of `call` if it is a `call` node, without the type arguments of a generic
-/// instantiation (`list[str]()` has callee `list`).
-#[must_use]
-pub fn call_callee<'a>(call: &AstNode<'a>) -> Option<AstNode<'a>> {
-    let Expr::Call(call_expr) = find_expr_at_span(call.file.py_module()?.syntax(), call.span())?
-    else {
-        return None;
+/// Returns true if `statement` is `if __name__ == "__main__":` or `if "__main__" == __name__:`.
+fn is_main_guard_statement(statement: &Stmt) -> bool {
+    let Stmt::If(if_statement) = statement else {
+        return false;
     };
-    let callee = if let Expr::Subscript(subscript) = call_expr.func.as_ref() {
-        subscript.value.as_ref()
-    } else {
-        call_expr.func.as_ref()
+    let Expr::Compare(compare) = if_statement.test.as_ref() else {
+        return false;
     };
-    Some(AstNode::from_span(
-        call.file,
-        span_from_ruff_range(callee.range()),
-    ))
+    let ([ruff_python_ast::CmpOp::Eq], [left, right]) = (&*compare.ops, &*compare.operands) else {
+        return false;
+    };
+    (is_dunder_name_expr(left) && is_dunder_main_literal(right))
+        || (is_dunder_main_literal(left) && is_dunder_name_expr(right))
 }
 
-/// Returns true if `expr` is a Python `tuple` or `list` consisting solely of `>= 2` boolean literals (`True` / `False`).
-fn is_boolean_literal_collection_expr(expr: &Expr) -> bool {
-    let elements = match expr {
-        Expr::Tuple(tuple) => &tuple.elts,
-        Expr::List(list) => &list.elts,
-        _ => return false,
-    };
-    elements.len() >= 2
-        && elements
-            .iter()
-            .all(|element| matches!(element, Expr::BooleanLiteral(_)))
+/// Returns true if `expr` is the identifier `__name__`.
+fn is_dunder_name_expr(expr: &Expr) -> bool {
+    matches!(expr, Expr::Name(name) if name.id.as_str() == "__name__")
+}
+
+/// Returns true if `expr` is a string literal with value `"__main__"`.
+fn is_dunder_main_literal(expr: &Expr) -> bool {
+    matches!(expr, Expr::StringLiteral(literal) if literal.value.to_str() == "__main__")
 }
 
 /// A Python `assert` statement with the facts about its condition that packing checks need.
@@ -514,37 +462,17 @@ pub fn collect_assert_statements(file: &ParsedFile) -> Vec<PythonAssert<'_>> {
     collector.out
 }
 
-/// Counts top-level assertion constructs in a Python test function body.
-fn count_python_assertions_in_body(body: &[Stmt]) -> usize {
-    struct AssertionCounter {
-        count: usize,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for AssertionCounter {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            match statement {
-                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
-                Stmt::Assert(_) => {
-                    self.count += 1;
-                }
-                _ => walk_stmt(self, statement),
-            }
-        }
-
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if let Expr::Call(call) = expr
-                && is_assertion_call_expr(call)
-            {
-                self.count += 1;
-                return;
-            }
-            walk_expr(self, expr);
-        }
-    }
-
-    let mut counter = AssertionCounter { count: 0 };
-    counter.visit_body(body);
-    counter.count
+/// Returns true if `expr` is a Python `tuple` or `list` consisting solely of `>= 2` boolean literals (`True` / `False`).
+fn is_boolean_literal_collection_expr(expr: &Expr) -> bool {
+    let elements = match expr {
+        Expr::Tuple(tuple) => &tuple.elts,
+        Expr::List(list) => &list.elts,
+        _ => return false,
+    };
+    elements.len() >= 2
+        && elements
+            .iter()
+            .all(|element| matches!(element, Expr::BooleanLiteral(_)))
 }
 
 /// Collects all outermost Python test functions along with their identifier node, name, and assertion count.
@@ -583,6 +511,66 @@ pub(super) fn collect_test_function_assertion_counts(
     };
     collector.visit_body(&parsed.syntax().body);
     collector.out
+}
+
+/// Returns true if a Python `StmtFunctionDef` is a test function (`test` or `test_*`).
+fn is_test_function_def(func_def: &StmtFunctionDef) -> bool {
+    let func_name = func_def.name.as_str();
+    func_name == "test" || func_name.starts_with("test_")
+}
+
+/// Counts top-level assertion constructs in a Python test function body.
+fn count_python_assertions_in_body(body: &[Stmt]) -> usize {
+    struct AssertionCounter {
+        count: usize,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for AssertionCounter {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            match statement {
+                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
+                Stmt::Assert(_) => {
+                    self.count += 1;
+                }
+                _ => walk_stmt(self, statement),
+            }
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Call(call) = expr
+                && is_assertion_call_expr(call)
+            {
+                self.count += 1;
+                return;
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut counter = AssertionCounter { count: 0 };
+    counter.visit_body(body);
+    counter.count
+}
+
+/// Returns true if a Python `ExprCall` is a test assertion call
+/// (`self.assert*()`, `pytest.raises(...)`, `raises(...)`, `pytest.warns(...)`, `self.fail(...)`).
+fn is_assertion_call_expr(call: &ruff_python_ast::ExprCall) -> bool {
+    match call.func.as_ref() {
+        Expr::Name(name) => name.id.as_str() == PYTEST_RAISES,
+        Expr::Attribute(attr) => {
+            let attr_name = attr.attr.as_str();
+            if attr_name.starts_with("assert") {
+                return true;
+            }
+            let Expr::Name(obj) = attr.value.as_ref() else {
+                return false;
+            };
+            let obj_text = obj.id.as_str();
+            (obj_text == "pytest" && (attr_name == PYTEST_RAISES || attr_name == "warns"))
+                || (obj_text == "self" && attr_name == "fail")
+        }
+        _ => false,
+    }
 }
 
 /// Tracks the functions enclosing the statement visited by a source-order walk.
@@ -631,18 +619,6 @@ pub struct PythonEnvironSubscript<'a> {
     pub enclosing_functions: Arc<[EnclosingFunction]>,
 }
 
-/// Returns true if `value` is Python's `os.environ` or bare `environ`.
-fn is_environ_mapping_expr(value: &Expr) -> bool {
-    match value {
-        Expr::Name(name) => name.id.as_str() == ENVIRON_NAME,
-        Expr::Attribute(attr) => {
-            attr.attr.as_str() == ENVIRON_NAME
-                && matches!(attr.value.as_ref(), Expr::Name(obj) if obj.id.as_str() == "os")
-        }
-        _ => false,
-    }
-}
-
 /// Collects all Python subscript expressions indexing into `os.environ` or `environ`.
 #[must_use]
 pub fn collect_environ_subscripts(file: &ParsedFile) -> Vec<PythonEnvironSubscript<'_>> {
@@ -685,6 +661,18 @@ pub fn collect_environ_subscripts(file: &ParsedFile) -> Vec<PythonEnvironSubscri
     collector.out
 }
 
+/// Returns true if `value` is Python's `os.environ` or bare `environ`.
+fn is_environ_mapping_expr(value: &Expr) -> bool {
+    match value {
+        Expr::Name(name) => name.id.as_str() == ENVIRON_NAME,
+        Expr::Attribute(attr) => {
+            attr.attr.as_str() == ENVIRON_NAME
+                && matches!(attr.value.as_ref(), Expr::Name(obj) if obj.id.as_str() == "os")
+        }
+        _ => false,
+    }
+}
+
 /// Methods that mutate a `list`, `dict` or `set` in place.
 const MUTATING_METHODS: &[&str] = &[
     "append",
@@ -704,41 +692,6 @@ const MUTATING_METHODS: &[&str] = &[
     "difference_update",
     "symmetric_difference_update",
 ];
-
-/// If `expr` mutates a collection receiver in place (`receiver.append(...)`, `receiver[k] = v`,
-/// `del receiver[k]`), returns that `receiver` expression.
-pub(super) fn in_place_mutated_receiver_expr(expr: &Expr) -> Option<&Expr> {
-    match expr {
-        Expr::Call(call) => {
-            let Expr::Attribute(attr) = call.func.as_ref() else {
-                return None;
-            };
-            if MUTATING_METHODS.contains(&attr.attr.as_str()) {
-                Some(&attr.value)
-            } else {
-                None
-            }
-        }
-        Expr::Subscript(sub)
-            if matches!(
-                sub.ctx,
-                ruff_python_ast::ExprContext::Store | ruff_python_ast::ExprContext::Del
-            ) =>
-        {
-            Some(&sub.value)
-        }
-        _ => None,
-    }
-}
-
-/// Extracts the terminal function/method name if `expr` is a `call` expression.
-fn called_terminal_name_expr(expr: &Expr, source: &str) -> Option<String> {
-    let Expr::Call(call) = expr else {
-        return None;
-    };
-    let (_, terminal) = resolve_path_and_terminal_expr(&call.func, source);
-    (!terminal.is_empty()).then_some(terminal)
-}
 
 /// Collects function or method names whose return values are mutated in place in `file`.
 ///
@@ -847,6 +800,53 @@ pub fn collect_locally_mutated_return_functions(file: &ParsedFile) -> &HashSet<S
 
         visitor.mutated_functions
     })
+}
+
+/// Extracts the terminal function/method name if `expr` is a `call` expression.
+fn called_terminal_name_expr(expr: &Expr, source: &str) -> Option<String> {
+    let Expr::Call(call) = expr else {
+        return None;
+    };
+    let (_, terminal) = resolve_path_and_terminal_expr(&call.func, source);
+    (!terminal.is_empty()).then_some(terminal)
+}
+
+/// Helper to resolve the dotted expression path and terminal identifier from an `Expr`.
+pub(super) fn resolve_path_and_terminal_expr(expr: &Expr, source: &str) -> (String, String) {
+    let span = span_from_ruff_range(expr.range());
+    let path = source[span.start..span.end].to_string();
+    let terminal = if let Expr::Attribute(attr) = expr {
+        attr.attr.to_string()
+    } else {
+        path.rsplit('.').next().unwrap_or("").to_string()
+    };
+    (path, terminal)
+}
+
+/// If `expr` mutates a collection receiver in place (`receiver.append(...)`, `receiver[k] = v`,
+/// `del receiver[k]`), returns that `receiver` expression.
+pub(super) fn in_place_mutated_receiver_expr(expr: &Expr) -> Option<&Expr> {
+    match expr {
+        Expr::Call(call) => {
+            let Expr::Attribute(attr) = call.func.as_ref() else {
+                return None;
+            };
+            if MUTATING_METHODS.contains(&attr.attr.as_str()) {
+                Some(&attr.value)
+            } else {
+                None
+            }
+        }
+        Expr::Subscript(sub)
+            if matches!(
+                sub.ctx,
+                ruff_python_ast::ExprContext::Store | ruff_python_ast::ExprContext::Del
+            ) =>
+        {
+            Some(&sub.value)
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

@@ -1,78 +1,123 @@
 # Phase 3: Design Plan — Declaration Ordering Rule Suite
 
-This document records **Phase 3 (Design Plan)** for the **Declaration Ordering** rule suite (`Topic::DECLARATION_ORDER`) in [ROADMAP.md](../../../ROADMAP.md), building on the first-principles derivations and 5-corpus empirical measurements in [01_understand.md](01_understand.md) and the cross-ecosystem reference survey in [02_references.md](02_references.md).
+This document records **Phase 3 (Design Plan)** for the **7-rule Declaration Ordering suite** (`Topic::DECLARATION_ORDER`) in [ROADMAP.md](../../../ROADMAP.md), implementing [decisions/011_colocated_abstraction_ordering.md](../../../decisions/011_colocated_abstraction_ordering.md) and building on [01_understand.md](01_understand.md) and [02_references.md](02_references.md).
 
 > Status: **VALIDATED — Ready for Phase 4 Implementation** (2026-10-08).
 
 ---
 
-## 1. Summary of Validated Decisions (`D1`–`D6`)
+## 1. Summary of Validated Decisions (`D1`–`D7`)
 
 | ID | Decision | Rationale |
 | :--- | :--- | :--- |
-| **`D1`** | **Retire `call-before-definition`** (`src/code_lint/rules/call_before_definition.rs`, `collect_function_scopes` in `src/code_lint/ast/python/scopes.rs`, and `docs/dev/define_before_use/`). | Directly contradicts `private-before-public-method` on `99.4%` (`163 / 164`) of multi-visibility Python classes with intra-class calls in CPython, and fires on `66.1%` of CPython files (`1,729` violations) and `56 / 84` (`66.7%`) of Omni's own Rust files. |
-| **`D2`** | **Implement 5 targeted, orthogonal declaration-ordering rules** under `Topic::DECLARATION_ORDER`: `constructor-after-method` (Python, Rust), `private-before-public-method` (Python, Rust), `field-after-method` (Python), `associated-item-after-method` (Rust), and `statement-after-main-guard` (Python). | Each rule targets a single structural boundary with an orthogonal failure mode and a deterministic, conflict-free fix. |
-| **`D3`** | **Reject global module-level kind/visibility bucketing** (and defer Python import-order `E402` to Ruff). | Global module-level `pub fn` before `fn` or `struct` before `fn` breaks feature-cluster cohesion (`56 / 84` Omni files, `1,326` CPython classes). |
-| **`D4`** | **Enforce 2-tier visibility in `private-before-public-method`**: Exported (`pub`, `pub(crate)`, `pub(super)`, `pub(in ...)`) before Private (bare `fn`) in Rust inherent `impl` blocks; Public & dunder (`name`, `__dunder__`) before Private (`_name`, `__mangled`) in Python classes. | A 3-tier split (`pub` > `pub(crate)` > `fn`) falsely flags the idiomatic Rust restricted-constructor / public-accessor pattern (`AstNode::from_span`, `ripgrep::Error::new`, `cargo::Artifact::parse`), whereas a 2-tier split preserves it and achieves `90.9%`–`91.0%` compliance across Omni and ripgrep. |
-| **`D5`** | **Uncomment `declaration-order` in [tag_guide.md](../tag_guide.md)** and register all 5 rules in `CODE_RULES` (`src/code_lint/rules.rs`). | Activates `Topic::DECLARATION_ORDER` in the rule taxonomy and CLI `--list-rules` output. |
-| **`D6`** | **Reorder the 3 misplaced private methods in Omni's own `src/`** (`LiteralValue::float` in `src/code_lint/ast.rs`, `SuppressionTracker::parse_comment_text` in `src/code_lint/suppression.rs`, and `InterceptedCommand::parse_single` in `src/command_lint/command.rs`). | Ensures `test_self_dogfooding_code_lint` passes with zero suppressions when all 5 rules are enabled. |
-
-### Formal Consistency Invariant Between `constructor-after-method` and `private-before-public-method`
-To guarantee that `constructor-after-method` (which moves constructors *above* non-constructor methods) and `private-before-public-method` (which moves private methods *below* public/exported methods) can **never** conflict on any method $m$:
-$$\text{is\_constructor}(m) \implies \text{visibility}(m) = \text{Public}$$
-- **In Python**: Every lifecycle constructor (`__prepare__`, `__init_subclass__`, `__new__`, `__init__`, `__post_init__`, `__attrs_pre_init__`, `__attrs_post_init__`) is a `__dunder__` method, which belongs to `MethodVisibility::Public`.
-- **In Rust**: A constructor in an inherent `impl` block must carry an explicit visibility qualifier (`pub`, `pub(crate)`, `pub(super)`, or `pub(in ...)`), so it always belongs to `MethodVisibility::Public`. A bare private `fn new_helper()` without `pub` is classified as a private non-constructor helper and belongs in the private section below exported methods.
+| **`D1`** | **Model intra-file function and method ordering on ADR 006's Architectural Isolation & Layering Principles ([decisions/011_colocated_abstraction_ordering.md](../../../decisions/011_colocated_abstraction_ordering.md))** | Each public entrypoint `p` and its exclusive private helpers (`Roots(h) = {p}`) form an in-file **component unit** that stays contiguous. Private helpers shared across multiple public entrypoints (`\|Roots(h)\| >= 2`) belong to a lower level of abstraction and form the **shared helper layer** at the end of the scope. |
+| **`D2`** | **Replace `private-before-public-method` and `call-before-definition` with 3 precedence-linked rules (`uncolocated-helper`, `private-before-public-function`, `callee-before-caller`) sharing one call-cluster engine** | The three rules evaluate the same per-scope call graph (`Roots(h)`, SCCs, and declaration order) across both module-level functions and class/inherent-`impl` methods in Python and Rust, with strict priority `P1 -> P2 -> P3` so a single misplaced helper is never double-reported. |
+| **`D3`** | **Reverse intra-unit call ordering from bottom-up (`call-before-definition`) to top-down (`callee-before-caller`)** | A helper is a lower-abstraction building block than its caller. Within each component unit (`pub -> pub`, exclusive `priv -> priv` of the same owner) and within the shared helper layer (`shared priv -> shared priv`), callers precede callees so abstraction decreases monotonically top-to-bottom. |
+| **`D4`** | **Enforce 2-tier visibility in `private-before-public-function`** | Exported (`pub`, `pub(crate)`, `pub(super)`, `pub(in ...)`) vs. Private (bare `fn`) in Rust; Public & dunder (`name`, `__dunder__`) vs. Private (`_name`, `__mangled`) in Python. In modules without explicit `pub fn` items (such as Rust rule modules exposing `pub const RULE` or trait `impl`s, or Python scripts), private functions referenced outside top-level function bodies or having zero in-scope callers act as the top-level entrypoints. |
+| **`D5`** | **Include the 4 structural envelope rules (`field-after-method`, `associated-item-after-method`, `constructor-after-method`, `statement-after-main-guard`)** | Enforces the top-of-scope data/constructor headers and bottom-of-scope `__main__` execution footer around the function/method body. |
+| **`D6`** | **Add `{caller}` to the shared placeholder vocabulary in [naming_and_message_style_guide.md](../naming_and_message_style_guide.md) and `tests/registry.rs`** | Allows `uncolocated-helper`, `private-before-public-function`, and `callee-before-caller` to anchor on the misplaced function definition `{function}` while naming the exact `{caller}` entrypoint or caller it must move below. |
+| **`D7`** | **Dogfood all 7 rules across Omni's own `src/` with zero suppressions** | Reorders misplaced helpers in Omni `src/` (including `SuppressionTracker::parse_comment_text`, `InterceptedCommand::parse_single`, and bottom-up helper clusters in `src/code_lint/ast/` and `src/diff.rs`) so `test_self_dogfooding_code_lint` passes cleanly. |
 
 ---
 
-## 2. Shared AST Helper Inventory
+## 2. Shared Call-Cluster & Abstraction-Order Engine (`src/code_lint/ast.rs`)
 
-Following `src/architecture.rs` (`CodeLintRules` depends on `CodeLintContract`, `CodeLintPolicy`, `RuleDeclaration`, and transitively `CodeLintAst`), all AST traversal lives in `src/code_lint/ast/`:
+### 2.1 Core Data Structures & Definitions
 
-| Helper | Location | Used By | Purpose |
-| :--- | :--- | :--- | :--- |
-| `MethodVisibility`, `TypeMethod<'a>`, `TypeMethodScope<'a>`, `collect_type_method_scopes(file)` | `src/code_lint/ast.rs` (dispatching to `ast::python::collect_type_method_scopes` in `src/code_lint/ast/python/classes.rs` and `ast::rust::collect_type_method_scopes` in `src/code_lint/ast/rust.rs`) | `constructor-after-method`, `private-before-public-method` | Extracts ordered direct methods per Python `class` body and Rust inherent `impl` block, classifying each method's `MethodVisibility` (`Public` vs. `Private`) and `is_constructor: bool`. Groups Python `@overload` series and `@<prop>.setter` / `@<prop>.deleter` accessors with their primary definition. |
-| `PythonFieldAfterMethod<'a>`, `collect_fields_after_methods(file)` | `src/code_lint/ast/python/classes.rs` (re-exported by `src/code_lint/ast/python.rs`) | `field-after-method` | Walks each Python `Stmt::ClassDef` body in source order and collects direct `Stmt::AnnAssign` statements with `Expr::Name` targets that appear after at least one direct `Stmt::FunctionDef`. |
-| `RustAssociatedItemAfterMethod<'a>`, `collect_associated_items_after_methods(file)` | `src/code_lint/ast/rust.rs` | `associated-item-after-method` | Walks each Rust `ast::Impl` (inherent or trait) and `ast::Trait` `AssocItemList` in source order and collects `ast::AssocItem::TypeAlias` and `ast::AssocItem::Const` items that appear after at least one `ast::AssocItem::Fn`. |
-| `collect_statements_after_main_guard(file)` | `src/code_lint/ast/python.rs` | `statement-after-main-guard` | Scans `module.body` for a top-level `if __name__ == "__main__":` (or `if "__main__" == __name__:`) statement and returns every subsequent top-level `Stmt` as an `AstNode`. |
+For every module scope (Python `ModModule`, Rust `SourceFile` / inline `ast::Module`), Python `StmtClassDef`, and Rust inherent `ast::Impl`:
+
+1. **Ordered Callables (`V = [f_0, f_1, ..., f_{k-1}]`)**:
+   - Each callable records:
+     - `name: String`
+     - `name_node: AstNode<'a>` (diagnostic anchor)
+     - `visibility: MethodVisibility` (`Public` vs. `Private`)
+     - `is_constructor: bool` (Tier 0 constructor methods in classes/inherent `impl`s)
+     - `callees: Vec<usize>` (indices in `V` of sibling callables directly called by `f_i`)
+     - ` referenced_externally: bool` (true if `f_i` is referenced from module-level non-function items such as `pub const RULE`, `static`, `impl` blocks, or module-level statements/`__main__` guards)
+   - **Effective Entrypoints (`is_entrypoint`)**:
+     - If the scope contains at least one `MethodVisibility::Public` callable, the entrypoints `P` are all `MethodVisibility::Public` callables (except in a module scope where a private function is referenced from a module-level exported item like `pub const RULE = CodeRule { check_file, ... }` and has no `Public` caller, or when the module has zero `Public` functions, in which case `referenced_externally` functions or zero-indegree roots serve as entrypoints for intra-module `callee-before-caller`).
+     - Specifically:
+       - `Public` / `Private` visibility for **Priority 1 (`uncolocated-helper`)** and **Priority 2 (`private-before-public-function`)** uses syntactic visibility (`MethodVisibility::Public` vs. `MethodVisibility::Private`). If a scope has zero `MethodVisibility::Public` callables, P1 and P2 produce no findings in that scope.
+       - For **Priority 3 (`callee-before-caller`)**, within a scope where all callables are `Private`, all callables belong to the same visibility tier and same unrooted group (`Roots(h) = empty`), so `callee-before-caller` still checks every non-SCC `caller -> callee` edge!
+
+2. **Private-Subgraph Root Ownership (`Roots(h)`)**:
+   - For each `p in P` (indices of `MethodVisibility::Public` callables in `V`), perform a DFS/BFS starting from the direct `MethodVisibility::Private` callees of `p` and traversing **only** `Private -> Private` edges (`u -> v` where both `u` and `v` are `Private`).
+   - Add `p` to `Roots(h)` for every private callable `h` visited.
+   - Because traversal stops at `Public` boundaries, if `pub_b` calls `pub_a` and `pub_a` calls `_a1`, `Roots(_a1) = {pub_a}` (exclusive to `pub_a`).
+   - Classification of each private callable `h`:
+     - **Exclusive Helper**: `Roots(h) == [p]` (owned by a single public entrypoint `p`).
+     - **Shared Helper**: `Roots(h).len() >= 2` (reached by 2 or more public entrypoints).
+     - **Unrooted Private Callable**: `Roots(h).is_empty()` (not reachable from any `Public` callable in the scope).
+
+3. **Strongly Connected Components (`scc_id`)**:
+   - Tarjan's algorithm over `(V, E)` assigns each callable `f_i` an `scc_id`. Any call edge `u -> v` with `scc_id[u] == scc_id[v]` (self-recursion or mutual recursion) is exempt from `callee-before-caller`.
+
+4. **Priority 1 — `uncolocated-helper` Findings**:
+   - For each private callable `h` with **exclusive** ownership `Roots(h) == [p]`:
+     - If `h > p` (i.e., `h` is declared after `p`, since `h < p` is handled by Priority 2) and there exists any callable `m` with `p < m < h` that does **not** belong to `Cluster(p)` (meaning `m != p` and `Roots(m) != [p]`):
+       - Flag `h` with `caller = V[p].name` and mark `h` as `flagged_p1_or_p2 = true`.
+
+5. **Priority 2 — `private-before-public-function` Findings**:
+   - For each private callable `h` not flagged by Priority 1:
+     - **Exclusive Helper (`Roots(h) == [p]`)**: if `h < p`, flag `h` with `caller = V[p].name` and mark `flagged_p1_or_p2 = true`.
+     - **Shared Helper (`Roots(h).len() >= 2`)**: let `last_pub_caller = *Roots(h).iter().max().unwrap()`. If `h < last_pub_caller`, flag `h` with `caller = V[last_pub_caller].name` and mark `flagged_p1_or_p2 = true`.
+     - **Unrooted Private Callable (`Roots(h).is_empty()`)**: if the scope has at least one `Public` callable, let `last_pub = Public.iter().max().unwrap()`. If `h < last_pub`, flag `h` with `caller = V[last_pub].name` and mark `flagged_p1_or_p2 = true`.
+
+6. **Priority 3 — `callee-before-caller` Findings**:
+   - For each callable `callee` not flagged by Priority 1 or Priority 2 (`!flagged_p1_or_p2[callee]` and `!V[callee].is_constructor`):
+     - Find all direct callers `caller` such that:
+       - `caller > callee` (`callee` is declared before `caller`),
+       - `!flagged_p1_or_p2[caller]` and `!V[caller].is_constructor`,
+       - `scc_id[caller] != scc_id[callee]` (not mutually recursive),
+       - `V[caller].visibility == V[callee].visibility` (same visibility tier),
+       - If `Private`: `same_private_group(Roots(caller), Roots(callee))` holds, meaning either:
+         - both are exclusive to the same public entrypoint (`Roots(caller) == [p] && Roots(callee) == [p]`),
+         - both are shared helpers (`Roots(caller).len() >= 2 && Roots(callee).len() >= 2`), or
+         - both are unrooted (`Roots(caller).is_empty() && Roots(callee).is_empty()`).
+     - If at least one such `caller` exists, let `last_caller = callers.max()` and flag `callee` once with `caller = V[last_caller].name`.
+
+### 2.2 Scope Extraction Details for Python and Rust
+
+- **Python (`src/code_lint/ast/python/classes.rs`)**:
+  - Extracts scopes for:
+    1. `ModModule.body` (module-level functions),
+    2. Each `StmtClassDef.body` (class methods, recursively visiting nested classes as independent scopes).
+  - Groups `@overload` stubs and `@<prop>.getter` / `@<prop>.setter` / `@<prop>.deleter` accessors into a single `CallableItem` at the primary definition's position, merging calls made across all grouped bodies.
+  - Collects intra-scope calls inside each callable body (without descending into nested `def`, `class`, or `lambda` scopes for local assignments, while walking expressions inside the callable):
+    - In a **module scope**: bare `Expr::Call` with `func = Expr::Name(id)` where `id` is a sibling module-level function name and `id` is **not** bound as a parameter or local variable (`Assign`, `AnnAssign`, `AugAssign`, `For`, `With`, `NamedExpr`, `Import`, `ImportFrom`, `ExceptHandler`) in that function.
+    - In a **class scope**: `Expr::Call` with `func = Expr::Attribute { value: Expr::Name("self" | "cls" | <ClassName>), attr }` where `attr` is a sibling method name on the class (filtering out `self` if shadowed).
+
+- **Rust (`src/code_lint/ast/rust.rs`)**:
+  - Extracts scopes for:
+    1. `ast::SourceFile` top-level `ast::Item::Fn` items and non-test inline `ast::Module` item lists, excluding any item inside `collect_inline_test_ranges` (`#[cfg(test)]` / `#[test]`).
+    2. Each inherent `ast::Impl` block (`impl_item.trait_().is_none()`), excluding `#[cfg(test)]` / `#[test]` items.
+  - Collects intra-scope calls inside each `ast::Fn` body (without descending into nested `ast::Item` definitions such as inner `fn` or `impl` blocks, while descending into closures and blocks):
+    - In a **module scope**:
+      - `ast::CallExpr` whose callee is a single-segment `ast::PathExpr` (`foo(...)`) matching a sibling `fn` in the same module (not shadowed by a parameter or `let` binding in that `fn`), AND
+      - Single-segment `ast::PathExpr` references passed as function pointers (`check_file` in `CodeRule { check_file }` or `.map(helper)`) matching a sibling `fn` in the same module!
+    - In an **inherent `impl` scope**:
+      - `ast::MethodCallExpr` where receiver is `self` (`self.helper(...)`) matching a sibling method in the `impl` block,
+      - `ast::CallExpr` where callee path is `Self::helper(...)` or `<TypeName>::helper(...)` matching a sibling method in the `impl` block, and
+      - `Self::helper` / `<TypeName>::helper` path references passed as function values (`Option::map(Self::helper)`).
 
 ---
 
-## 3. Per-Rule Specifications
+## 3. Per-Rule Specifications (The 7-Rule Suite)
 
-### 3.1 `constructor-after-method` (Python, Rust)
-- **File**: `src/code_lint/rules/constructor_after_method.rs`
-- **Target**: `RuleTarget::SourceOnly`
-- **Languages**: `&[Language::Python, Language::Rust]`
-- **Options**: `RuleOptions::code_rule(())`
-- **Classification**:
-  - `topics`: `&[Topic::DECLARATION_ORDER]`
-  - `precision`: `Precision::Exact`
-  - `consensus`: `Consensus::Unopinionated`
-  - `impacted_quality`: `ImpactedQuality::Maintainability`
-- **`ViolationTemplate`**:
-  - `summary`: `"Constructor `{function}` of `{class}` is defined after a non-constructor method."`
-  - `rationale`: `"Burying initialization logic below regular methods forces readers to scan the body of `{class}` to find how instances are constructed."`
-  - `suggestion`:
-    - `base`: `"Move `{function}` above all non-constructor methods in `{class}`."`
-    - `Python =>` `"Move `{function}` to the top of `{class}`, before any regular methods."`
-    - `Rust =>` `"Move `{function}` to the top of the `impl {class}` block, before any methods."`
-- **`RuleDoc`**:
-  - `summary`: `"Flags class and inherent `impl` constructors defined after regular methods."`
-- **Diagnostic Anchor**: `&method.name_node` with placeholders `[("function", &method.name), ("class", &scope.type_name)]`.
-- **Named Exemptions**:
-  - `E1` (**Multiple lifecycle constructors in any order**): Python `__prepare__`, `__init_subclass__`, `__new__`, `__init__`, `__post_init__`, `__attrs_pre_init__`, `__attrs_post_init__` and Rust exported `new`, `try_new`, `new_*`, `try_new_*` associated functions do not set `seen_non_constructor`, so multiple constructors at the top of a type never flag one another.
-  - `E2` (**Python `@overload` constructor signatures**): `@overload` stubs for `__init__` or `__new__` are grouped with their implementation at the first declaration position.
-  - `E3` (**Rust trait `impl` blocks**): `impl Trait for Type` blocks are not checked (`impl_item.trait_().is_none()`), as trait method order follows the trait definition.
-  - `E4` (**Rust private `fn new*` helpers and associated functions returning non-`Self`**): Bare `fn new_helper()` without a `pub` visibility qualifier and associated functions whose return type does not reference `Self` or the enclosing type (`pub fn new_request_id() -> u64`) are not constructors of `Self`.
-  - `E5` (**Rust methods with a `self` receiver named `new_*`**): Methods taking `self`, `&self`, or `&mut self` (such as `pub fn new_child(&self)`) are instance methods, not type constructors (`self_param().is_none()`).
-  - `E6` (**Rust `#[test]` / `#[cfg(test)]` functions in `impl` blocks**): Test functions inside an `impl` block are ignored.
-  - `E7` (**Independent scopes for nested classes / multiple `impl` blocks**): Each Python `class` and each Rust inherent `impl` block tracks constructor ordering independently.
+### 3.1 `field-after-method` (Python) — Already Implemented
+- **File**: [src/code_lint/rules/field_after_method.rs](../../../src/code_lint/rules/field_after_method.rs)
+- **Summary**: `"Attribute `{name}` of `{class}` is declared after a method definition."`
 
----
+### 3.2 `associated-item-after-method` (Rust) — Already Implemented
+- **File**: [src/code_lint/rules/associated_item_after_method.rs](../../../src/code_lint/rules/associated_item_after_method.rs)
+- **Summary**: `"Associated item `{name}` of `{class}` is declared after a `fn` item."`
 
-### 3.2 `private-before-public-method` (Python, Rust)
-- **File**: `src/code_lint/rules/private_before_public_method.rs`
+### 3.3 `constructor-after-method` (Python, Rust) — Already Implemented
+- **File**: [src/code_lint/rules/constructor_after_method.rs](../../../src/code_lint/rules/constructor_after_method.rs)
+- **Summary**: `"Constructor `{function}` of `{class}` is defined after a non-constructor method."`
+
+### 3.4 `uncolocated-helper` (Python, Rust) — Priority 1
+- **File**: `src/code_lint/rules/uncolocated_helper.rs`
 - **Target**: `RuleTarget::SourceOnly`
 - **Languages**: `&[Language::Python, Language::Rust]`
 - **Options**: `RuleOptions::code_rule(())`
@@ -82,92 +127,71 @@ Following `src/architecture.rs` (`CodeLintRules` depends on `CodeLintContract`, 
   - `consensus`: `Consensus::Opinionated`
   - `impacted_quality`: `ImpactedQuality::Maintainability`
 - **`ViolationTemplate`**:
-  - `summary`: `"Private method `{function}` of `{class}` is defined before a public method."`
-  - `rationale`: `"Placing internal helpers above public methods buries the external interface of `{class}` behind implementation details."`
-  - `suggestion`:
-    - `base`: `"Move `{function}` below all public methods in `{class}`."`
-    - `Python =>` `"Move `{function}` below all public and dunder methods in `{class}`."`
-    - `Rust =>` `"Move `{function}` below all `pub` methods in the `impl {class}` block."`
+  - `summary`: `"Exclusive helper `{function}` is separated from its owning public entrypoint `{caller}` by an unrelated function."`
+  - `rationale`: `"Splitting `{function}` away from `{caller}` fractures the component unit of `{caller}` across the scope and forces readers to jump over unrelated definitions."`
+  - `suggestion`: `"Move `{function}` into the contiguous helper cluster immediately below `{caller}`."`
 - **`RuleDoc`**:
-  - `summary`: `"Flags private helper methods defined before public methods in a class or inherent `impl` block."`
-- **Diagnostic Anchor**: `&method.name_node` of each `MethodVisibility::Private` method that precedes at least one `MethodVisibility::Public` method in the same `TypeMethodScope`, with placeholders `[("function", &method.name), ("class", &scope.type_name)]`.
+  - `summary`: `"Flags exclusive private helpers separated from their owning public function or method by unrelated definitions."`
+- **Diagnostic Anchor**: `&finding.name_node` with placeholders `[("function", &finding.function), ("caller", &finding.caller)]`.
 - **Named Exemptions**:
-  - `E1` (**Python dunder methods `__name__` are public/contract tier**): Special methods starting and ending with `__` (`len > 4`) are treated as `MethodVisibility::Public`, so `_helper` after `__init__` and `__repr__` is valid, while `_helper` before `__repr__` or `run` is flagged.
-  - `E2` (**Python `@overload` and `@<prop>.getter` / `@<prop>.setter` / `@<prop>.deleter` grouping**): Overloaded signatures and property getter/setter/deleter methods (including overloaded setters) are grouped with their primary definition at its first declaration position, avoiding duplicate findings or false splits.
-  - `E3` (**Rust restricted visibility `pub(crate)` / `pub(super)` / `pub(in ...)` is exported tier**): Any `fn` with `visibility().is_some()` is treated as `MethodVisibility::Public` (2-tier model `D4`), so `pub(crate) fn from_span` before `pub fn span` is not flagged.
-  - `E4` (**Rust trait `impl` blocks**): `impl Trait for Type` blocks are not checked.
-  - `E5` (**Rust `#[test]` / `#[cfg(test)]` functions in `impl` blocks**): Test functions inside an `impl` block are ignored.
-  - `E6` (**Independent scopes for nested classes / multiple `impl` blocks**): Each Python `class` and each Rust inherent `impl` block is checked independently; module-level free functions are not checked.
+  - `E1` (**Shared private helpers `|Roots(h)| >= 2`**): A private helper reachable from two or more public entrypoints belongs to the trailing shared helper layer, not to any single public entrypoint's contiguous cluster.
+  - `E2` (**Transitive exclusive helper chains `p -> _h1 -> _h2`**): When `p` calls `_h1` and `_h1` calls `_h2`, both `_h1` and `_h2` have `Roots = {p}`, so `[p, _h1, _h2]` is a contiguous cluster and `_h1` does not separate `_h2` from `p`.
+  - `E3` (**Public-to-public calls `pub_b -> pub_a -> _a1`**): Root propagation stops at public boundaries, so `_a1` has `Roots(_a1) = {pub_a}` (exclusive to `pub_a`, not shared with `pub_b`).
+  - `E4` (**Uncalled private functions `Roots(h) = empty`**): Private functions not reachable from any public entrypoint have no owning public entrypoint and are not flagged by `uncolocated-helper`.
+  - `E5` (**Helper placed above its owning public entrypoint `pos(h) < pos(p)`**): Handled by Priority 2 (`private-before-public-function`), never double-reported by `uncolocated-helper`.
+  - `E6` (**Rust trait `impl` blocks and `#[cfg(test)]` / `#[test]` items**): Trait `impl` blocks and inline test modules/functions are excluded.
 
----
-
-### 3.3 `field-after-method` (Python)
-- **File**: `src/code_lint/rules/field_after_method.rs`
+### 3.5 `private-before-public-function` (Python, Rust) — Priority 2
+- **File**: `src/code_lint/rules/private_before_public_function.rs` (replaces `private_before_public_method.rs`)
 - **Target**: `RuleTarget::SourceOnly`
-- **Languages**: `&[Language::Python]`
+- **Languages**: `&[Language::Python, Language::Rust]`
 - **Options**: `RuleOptions::code_rule(())`
 - **Classification**:
   - `topics`: `&[Topic::DECLARATION_ORDER]`
   - `precision`: `Precision::Exact`
-  - `consensus`: `Consensus::Unopinionated`
+  - `consensus`: `Consensus::Opinionated`
   - `impacted_quality`: `ImpactedQuality::Maintainability`
 - **`ViolationTemplate`**:
-  - `summary`: `"Attribute `{name}` of `{class}` is declared after a method definition."`
-  - `rationale`: `"Declaring class or instance attributes after methods scatters the data layout of `{class}` across its body and obscures the synthesized `__init__` parameter order in `@dataclass`, `attrs`, and `NamedTuple` classes."`
-  - `suggestion`: `"Move the `{name}` attribute declaration to the top of `{class}`, before any method definitions."`
+  - `summary`: `"Private helper `{function}` is defined before public entrypoint `{caller}`."`
+  - `rationale`: `"Placing lower-abstraction private helpers above `{caller}` buries the public contract of the scope behind implementation details."`
+  - `suggestion`: `"Move `{function}` below `{caller}` into its owning component unit or the trailing shared helper layer."`
 - **`RuleDoc`**:
-  - `summary`: `"Flags type-annotated class and instance attributes declared after methods in a Python class body."`
-- **Diagnostic Anchor**: `&field.node` (the `Stmt::AnnAssign` node) with placeholders `[("name", &field.name), ("class", &field.class_name)]`.
+  - `summary`: `"Flags private functions and methods defined above their owning or calling public entrypoints."`
+- **Diagnostic Anchor**: `&finding.name_node` with placeholders `[("function", &finding.function), ("caller", &finding.caller)]`.
 - **Named Exemptions**:
-  - `E1` (**Unannotated `Stmt::Assign` after `def`**): Unannotated class-body assignments such as method aliases (`__repr__ = __str__`) and `property(get_x)` bindings must follow the `def` they reference to avoid `NameError`, so only `Stmt::AnnAssign` is checked.
-  - `E2` (**Non-identifier `Stmt::AnnAssign` targets**): Subscript or attribute targets (`cls.attr: int = 1`, `items[0]: int = 1`) are not class attribute declarations (`Expr::Name`).
-  - `E3` (**Nested classes and method-local annotations**): Each `Stmt::ClassDef` has its own independent method-seen state, and annotated assignments inside method bodies (`x: int = 1` or `self.x: int = 1`) are not class-body statements.
+  - `E1` (**Colocated exclusive helper `[pub_a, _a1, pub_b, _b1]`**): When `Roots(_a1) = {pub_a}` and `_a1` appears below `pub_a` (`pos(_a1) > pos(pub_a)`), `_a1` is **not** flagged even though `pub_b` appears below `_a1`.
+  - `E2` (**Shared helper placed below all of its public callers `[pub_a, pub_b, _shared, pub_c]`**): When `Roots(_shared) = {pub_a, pub_b}` and `pos(_shared) > max(pos(pub_a), pos(pub_b))`, `_shared` is below all of its public callers and is not flagged.
+  - `E3` (**Python dunder methods `__name__` and Rust restricted visibility `pub(crate)` / `pub(super)`**): Treated as `MethodVisibility::Public`.
+  - `E4` (**Python `@overload` and `@property` getter/setter/deleter grouping**): Grouped at the primary definition's position.
+  - `E5` (**Scopes with only private functions**): Modules or classes with zero `Public` functions have no public-before-private boundary to violate.
+  - `E6` (**Rust trait `impl` blocks and `#[cfg(test)]` / `#[test]` items**): Excluded.
 
----
-
-### 3.4 `associated-item-after-method` (Rust)
-- **File**: `src/code_lint/rules/associated_item_after_method.rs`
+### 3.6 `callee-before-caller` (Python, Rust) — Priority 3
+- **File**: `src/code_lint/rules/callee_before_caller.rs`
 - **Target**: `RuleTarget::SourceOnly`
-- **Languages**: `&[Language::Rust]`
+- **Languages**: `&[Language::Python, Language::Rust]`
 - **Options**: `RuleOptions::code_rule(())`
 - **Classification**:
   - `topics`: `&[Topic::DECLARATION_ORDER]`
   - `precision`: `Precision::Exact`
-  - `consensus`: `Consensus::Unopinionated`
+  - `consensus`: `Consensus::Opinionated`
   - `impacted_quality`: `ImpactedQuality::Maintainability`
 - **`ViolationTemplate`**:
-  - `summary`: `"Associated item `{name}` of `{class}` is declared after a `fn` item."`
-  - `rationale`: `"Placing associated types or constants after `fn` items hides the type-level parameters and constants that method signatures in `{class}` depend on."`
-  - `suggestion`: `"Move `{name}` to the top of the `{class}` `trait` or `impl` block, before any `fn` items."`
+  - `summary`: `"Callee `{function}` is defined before its caller `{caller}` within the same abstraction tier."`
+  - `rationale`: `"Defining lower-abstraction callees above `{caller}` inverts the top-down reading flow inside the component unit or shared helper layer."`
+  - `suggestion`: `"Move `{function}` below `{caller}` so higher-level callers precede lower-level callees."`
 - **`RuleDoc`**:
-  - `summary`: `"Flags Rust associated `type` and `const` items declared after `fn` items in an `impl` or `trait` block."`
-- **Diagnostic Anchor**: `&item.name_node` with placeholders `[("name", &item.name), ("class", &item.container_name)]`.
+  - `summary`: `"Flags functions and methods defined before their callers within the same visibility tier and component cluster."`
+- **Diagnostic Anchor**: `&finding.name_node` with placeholders `[("function", &finding.function), ("caller", &finding.caller)]`.
 - **Named Exemptions**:
-  - `E1` (**Macro invocations inside `impl` / `trait` blocks**): `ast::AssocItem::MacroCall` items neither set `seen_fn` nor get flagged after a `fn`.
-  - `E2` (**Local `const` / `type` items inside a `fn` body**): Items inside a method's `BlockExpr` are not associated items of the enclosing `impl` or `trait`.
-  - `E3` (**Independent `impl` and `trait` blocks**): Each `impl` or `trait` block tracks its own `seen_fn` state independently.
+  - `E1` (**Cross-visibility calls `pub -> priv` or `priv -> pub`**): Governed by `private-before-public-function` (Priority 2), never checked by `callee-before-caller`.
+  - `E2` (**Cross-cluster calls `exclusive_priv -> shared_priv`**): An exclusive helper (`|Roots| = 1`) is at a higher abstraction layer than a shared helper (`|Roots| >= 2`); calls between different private groups are not same-cluster edges.
+  - `E3` (**Precedence suppression (`P1` / `P2` already flagged)**): Any callable already flagged by `uncolocated-helper` or `private-before-public-function` is skipped by `callee-before-caller` so a single misplaced helper is never double-reported.
+  - `E4` (**Self-recursion and mutual recursion (Strongly Connected Components)**): Call edges within the same Tarjan SCC (`f <-> g`) are exempt.
+  - `E5` (**Constructors (`__init__`, `pub fn new`)**): Constructors belong to Tier 0 at the top of a class/`impl` (`constructor-after-method`), so calls between a public method and a constructor (`reset() -> __init__()` or `with_capacity() -> new()`) are exempt.
+  - `E6` (**Local variable / parameter shadowing**): Calls to a local variable or parameter that shadows a sibling function name (`check = ...; check()`) do not create a call edge to the sibling function.
+  - `E7` (**Rust trait `impl` blocks and `#[cfg(test)]` / `#[test]` items**): Excluded.
 
----
-
-### 3.5 `statement-after-main-guard` (Python)
-- **File**: `src/code_lint/rules/statement_after_main_guard.rs`
-- **Target**: `RuleTarget::SourceOnly`
-- **Languages**: `&[Language::Python]`
-- **Options**: `RuleOptions::code_rule(())`
-- **Classification**:
-  - `topics`: `&[Topic::DECLARATION_ORDER]`
-  - `precision`: `Precision::Exact`
-  - `consensus`: `Consensus::Unopinionated`
-  - `impacted_quality`: `ImpactedQuality::Reliability`
-- **`ViolationTemplate`**:
-  - `summary`: `"Top-level statement appears after the `if __name__ == \"__main__\":` guard."`
-  - `rationale`: `"Code inside the `__main__` block executes before any declarations below it are bound, so calling a function or referencing a binding defined below the guard raises `NameError` at runtime when the module is run as a script."`
-  - `suggestion`: `"Move all module-level definitions above the `if __name__ == \"__main__\":` block, or move script-only cleanup inside the guard."`
-- **`RuleDoc`**:
-  - `summary`: `"Flags top-level Python statements placed after the `if __name__ == \"__main__\":` guard."`
-- **Diagnostic Anchor**: `&statement_node` with placeholders `&[]`.
-- **Named Exemptions**:
-  - `E1` (**Both comparison orders recognized**): Both `if __name__ == "__main__":` and `if "__main__" == __name__:` act as the main-guard boundary.
-  - `E2` (**Statements inside the `if` / `elif` / `else` suite of the main guard and duplicate main guards**): Statements inside the guard's own branches and subsequent `if __name__ == "__main__":` guards are not flagged.
-  - `E3` (**Non-guard `if` statements comparing `__name__`**): `if __name__ != "__main__":` or `if __name__ == "pkg.mod":` or multi-comparator chains are not main guards.
-  - `E4` (**Nested `if __name__ == "__main__":` inside a function or class**): Only top-level statements in `module.body` are checked.
+### 3.7 `statement-after-main-guard` (Python) — Already Implemented
+- **File**: [src/code_lint/rules/statement_after_main_guard.rs](../../../src/code_lint/rules/statement_after_main_guard.rs)
+- **Summary**: `"Top-level statement appears after the `if __name__ == \"__main__\":` guard."`

@@ -14,95 +14,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Returns true if `rule` runs on `path`: it is enabled there, analyzes `lang`, and its
-/// [`RuleTarget`] matches.
-///
-/// `has_inline_tests` says whether a non-test file holds inline tests (Rust `#[cfg(test)]`),
-/// which `TestsOnly` rules check.
-fn is_rule_applicable(
-    rule: &dyn AnyCodeRule,
-    path: &Path,
-    lang: Language,
-    is_test: bool,
-    has_inline_tests: bool,
-    config: &Config,
-) -> bool {
-    config.is_rule_enabled_for_path(rule.name(), path)
-        && rule.supports_language(lang)
-        && match rule.target() {
-            RuleTarget::SourceOnly => !is_test,
-            RuleTarget::TestsOnly => is_test || has_inline_tests,
-            RuleTarget::All => true,
-        }
-}
-
-/// Filters rule diagnostics according to `RuleTarget` and inline `#[cfg(test)]` / `#[test]` byte ranges.
-fn filter_diagnostics_by_target(
-    rule_diagnostics: Vec<Diagnostic>,
-    target: RuleTarget,
-    is_test: bool,
-    inline_test_ranges: &[std::ops::Range<usize>],
-) -> Vec<Diagnostic> {
-    if is_test || inline_test_ranges.is_empty() {
-        return rule_diagnostics;
-    }
-    match target {
-        RuleTarget::TestsOnly => rule_diagnostics
-            .into_iter()
-            .filter(|diagnostic| {
-                let pos = diagnostic.location.span.start;
-                inline_test_ranges.iter().any(|range| range.contains(&pos))
-            })
-            .collect(),
-        RuleTarget::SourceOnly => rule_diagnostics
-            .into_iter()
-            .filter(|diagnostic| {
-                let pos = diagnostic.location.span.start;
-                !inline_test_ranges.iter().any(|range| range.contains(&pos))
-            })
-            .collect(),
-        RuleTarget::All => rule_diagnostics,
-    }
-}
-
-/// Returns true if any active suppression hygiene rule is enabled and applicable to `path`,
-/// and the file content contains a suppression directive prefix (`"omni:"`).
-#[must_use]
-fn has_active_suppression_audit(
-    path: &Path,
-    lang: Language,
-    content: &str,
-    config: &Config,
-) -> bool {
-    if !content.contains("omni:") {
-        return false;
-    }
-    SUPPRESSION_AUDITS.iter().any(|audit| {
-        config.is_rule_enabled_for_path(audit.name, path) && audit.languages.contains(&lang)
-    })
-}
-
-/// Determines whether AST parsing can be skipped entirely for a file.
-///
-/// Skips Tree-sitter parsing when neither standard code rules nor active suppression audit
-/// directives can produce findings for the file given its language, test-path status, and config.
-/// Before parsing, any Rust file may hold inline tests; Omni has no inline Python tests.
-#[must_use]
-fn should_skip_ast_parse(
-    path: &Path,
-    lang: Language,
-    content: &str,
-    is_test: bool,
-    config: &Config,
-) -> bool {
-    let may_have_inline_tests = lang == Language::Rust;
-    let has_code_rules = CODE_RULES
-        .iter()
-        .any(|&rule| is_rule_applicable(rule, path, lang, is_test, may_have_inline_tests, config));
-
-    !has_code_rules && !has_active_suppression_audit(path, lang, content, config)
-}
-
 static SUPPRESSIBLE_RULES: std::sync::LazyLock<HashSet<&'static str>> =
     std::sync::LazyLock::new(|| CODE_RULES.iter().map(|rule| rule.name().0).collect());
 
@@ -146,6 +57,95 @@ pub fn lint_file(path: &Path, content: &str, config: &Config) -> Vec<Diagnostic>
     let mut diagnostics = tracker.filter_diagnostics(raw_diagnostics);
     diagnostics.extend(tracker.audit(path, config, &SUPPRESSIBLE_RULES, &evaluated_rules));
     diagnostics
+}
+
+/// Determines whether AST parsing can be skipped entirely for a file.
+///
+/// Skips Tree-sitter parsing when neither standard code rules nor active suppression audit
+/// directives can produce findings for the file given its language, test-path status, and config.
+/// Before parsing, any Rust file may hold inline tests; Omni has no inline Python tests.
+#[must_use]
+fn should_skip_ast_parse(
+    path: &Path,
+    lang: Language,
+    content: &str,
+    is_test: bool,
+    config: &Config,
+) -> bool {
+    let may_have_inline_tests = lang == Language::Rust;
+    let has_code_rules = CODE_RULES
+        .iter()
+        .any(|&rule| is_rule_applicable(rule, path, lang, is_test, may_have_inline_tests, config));
+
+    !has_code_rules && !has_active_suppression_audit(path, lang, content, config)
+}
+
+/// Returns true if `rule` runs on `path`: it is enabled there, analyzes `lang`, and its
+/// [`RuleTarget`] matches.
+///
+/// `has_inline_tests` says whether a non-test file holds inline tests (Rust `#[cfg(test)]`),
+/// which `TestsOnly` rules check.
+fn is_rule_applicable(
+    rule: &dyn AnyCodeRule,
+    path: &Path,
+    lang: Language,
+    is_test: bool,
+    has_inline_tests: bool,
+    config: &Config,
+) -> bool {
+    config.is_rule_enabled_for_path(rule.name(), path)
+        && rule.supports_language(lang)
+        && match rule.target() {
+            RuleTarget::SourceOnly => !is_test,
+            RuleTarget::TestsOnly => is_test || has_inline_tests,
+            RuleTarget::All => true,
+        }
+}
+
+/// Returns true if any active suppression hygiene rule is enabled and applicable to `path`,
+/// and the file content contains a suppression directive prefix (`"omni:"`).
+#[must_use]
+fn has_active_suppression_audit(
+    path: &Path,
+    lang: Language,
+    content: &str,
+    config: &Config,
+) -> bool {
+    if !content.contains("omni:") {
+        return false;
+    }
+    SUPPRESSION_AUDITS.iter().any(|audit| {
+        config.is_rule_enabled_for_path(audit.name, path) && audit.languages.contains(&lang)
+    })
+}
+
+/// Filters rule diagnostics according to `RuleTarget` and inline `#[cfg(test)]` / `#[test]` byte ranges.
+fn filter_diagnostics_by_target(
+    rule_diagnostics: Vec<Diagnostic>,
+    target: RuleTarget,
+    is_test: bool,
+    inline_test_ranges: &[std::ops::Range<usize>],
+) -> Vec<Diagnostic> {
+    if is_test || inline_test_ranges.is_empty() {
+        return rule_diagnostics;
+    }
+    match target {
+        RuleTarget::TestsOnly => rule_diagnostics
+            .into_iter()
+            .filter(|diagnostic| {
+                let pos = diagnostic.location.span.start;
+                inline_test_ranges.iter().any(|range| range.contains(&pos))
+            })
+            .collect(),
+        RuleTarget::SourceOnly => rule_diagnostics
+            .into_iter()
+            .filter(|diagnostic| {
+                let pos = diagnostic.location.span.start;
+                !inline_test_ranges.iter().any(|range| range.contains(&pos))
+            })
+            .collect(),
+        RuleTarget::All => rule_diagnostics,
+    }
 }
 
 /// Configuration options for the codebase linting pipeline.

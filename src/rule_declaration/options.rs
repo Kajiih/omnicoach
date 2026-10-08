@@ -690,18 +690,6 @@ fn expect_table<'value>(
     })
 }
 
-fn wrong_type(expected: &str, value: &toml::Value) -> OptionProblem {
-    let found = match value {
-        toml::Value::String(text) => format!("\"{text}\""),
-        toml::Value::Integer(number) => number.to_string(),
-        other => other.type_str().to_owned(),
-    };
-    OptionProblem::WrongType {
-        expected: expected.to_owned(),
-        found,
-    }
-}
-
 fn parse_enforcement_mode(value: &toml::Value) -> Result<EnforcementMode, OptionProblem> {
     EnforcementMode::iter()
         .find(|&mode| value.as_str() == Some(mode.into()))
@@ -728,6 +716,18 @@ fn parse_items(value: &toml::Value) -> Result<HashSet<String>, OptionProblem> {
                 .collect()
         })
         .ok_or_else(|| wrong_type("an array of strings", value))
+}
+
+fn wrong_type(expected: &str, value: &toml::Value) -> OptionProblem {
+    let found = match value {
+        toml::Value::String(text) => format!("\"{text}\""),
+        toml::Value::Integer(number) => number.to_string(),
+        other => other.type_str().to_owned(),
+    };
+    OptionProblem::WrongType {
+        expected: expected.to_owned(),
+        found,
+    }
 }
 
 #[cfg(test)]

@@ -14,43 +14,6 @@ use crate::rule_declaration::{
 use std::fmt::Write;
 use std::path::Path;
 
-/// Formats a list of diagnostics to a clean, human-readable simplified snapshot string.
-#[must_use]
-pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic]) -> String {
-    let mut sorted_diags = diagnostics.to_vec();
-    sorted_diags.sort_unstable();
-
-    let mut output = String::new();
-    for diagnostic in &sorted_diags {
-        let _ = writeln!(
-            output,
-            "[{}] Line {}, Col {}: {}",
-            diagnostic.rule_name,
-            diagnostic.location.line,
-            diagnostic.location.column,
-            diagnostic.message.summary
-        );
-    }
-    output
-}
-
-/// Executes the rule's `check_file` with its default options (including `RequireExplanation` filtering).
-///
-/// # Panics
-/// Panics if `filename` does not have a recognized file extension (`.py` or `.rs`).
-#[must_use]
-pub fn run_code_rule<Options: OptionsDeclaration>(
-    rule: &CodeRule<Options>,
-    source: &str,
-    filename: &str,
-) -> Vec<Diagnostic> {
-    let path = Path::new(filename);
-    let lang = Language::from_path(path).unwrap_or_else(|| {
-        panic!("run_code_rule: unsupported extension in test file '{filename}'")
-    });
-    rule.check_file(path, &ParsedFile::new(source, lang), None)
-}
-
 /// Helper to execute `check_command` on a [`CommandRule`] and return its formatted diagnostics snapshot.
 #[must_use]
 pub fn assert_command_rule_snapshot(
@@ -90,28 +53,6 @@ pub fn assert_language_completeness<Options: OptionsDeclaration>(
     }
 }
 
-/// Asserts that a `pass` test case produces zero diagnostics.
-///
-/// # Panics
-/// Panics if the rule emits any diagnostics on `code`.
-#[track_caller]
-pub fn assert_rule_pass<Options: OptionsDeclaration>(
-    rule: &CodeRule<Options>,
-    lang: Language,
-    case_name: &str,
-    code: &str,
-) {
-    let rule_name = rule.declaration.name.0;
-    let filename = dummy_filename(lang);
-    let diags = run_code_rule(rule, code, filename);
-    assert!(
-        diags.is_empty(),
-        "rule_test! [{rule_name}] ({lang:?}) PASS case '{case_name}' failed:\nExpected 0 diagnostics, got {}:\n{}\nSource:\n{code}",
-        diags.len(),
-        format_diagnostics_for_test(&diags),
-    );
-}
-
 /// How the repeated-occurrence check of a `fail` case builds the second copy of the code.
 #[derive(Clone, Copy, Debug)]
 pub enum RepeatCheck {
@@ -120,6 +61,57 @@ pub enum RepeatCheck {
     /// The second copy's non-trivial literals get new values, so each copy forms its own
     /// groups in rules that group equal literals across the file (`repeated-literal`).
     DistinctLiterals,
+}
+
+/// Asserts each of the rule's documented examples exactly like a `rule_test!` case: the flagged
+/// snippet as a `fail` case expecting its `flagged_span`, the fixed snippet as a `pass` case.
+///
+/// For a rule with an enforcement mode, the fixed snippet must also pass in `ban` mode, so a
+/// documented fix never relies on an explanatory comment.
+///
+/// # Panics
+/// Panics as [`assert_rule_fail`] and [`assert_rule_pass`] do.
+#[track_caller]
+pub fn assert_documented_examples<Options: OptionsDeclaration>(
+    rule: &CodeRule<Options>,
+    repeat: RepeatCheck,
+) {
+    let declaration = &rule.declaration;
+    let banned = CodeRule {
+        declaration: Declaration {
+            name: declaration.name,
+            template: declaration.template,
+            languages: declaration.languages,
+            options: RuleOptions {
+                enforcement_mode: declaration
+                    .options
+                    .enforcement_mode
+                    .map(|_| LanguageDefaults::new(EnforcementMode::Ban, &[])),
+                options: declaration.options.options,
+            },
+            classification: declaration.classification,
+            doc: declaration.doc,
+        },
+        target: rule.target,
+        check: rule.check,
+    };
+    for example in rule.declaration.doc.examples {
+        assert_rule_fail(
+            rule,
+            example.language,
+            "documented example",
+            example.flagged,
+            Some(example.flagged_span),
+            repeat,
+        );
+        assert_rule_pass(rule, example.language, "documented fix", example.fixed);
+        assert_rule_pass(
+            &banned,
+            example.language,
+            "documented fix in `ban` mode",
+            example.fixed,
+        );
+    }
 }
 
 /// Asserts that a `fail` test case produces exactly one matching diagnostic.
@@ -346,55 +338,63 @@ fn normalize_span_indentation(code: &str, span_start: usize, raw_slice: &str) ->
     normalized
 }
 
-/// Asserts each of the rule's documented examples exactly like a `rule_test!` case: the flagged
-/// snippet as a `fail` case expecting its `flagged_span`, the fixed snippet as a `pass` case.
-///
-/// For a rule with an enforcement mode, the fixed snippet must also pass in `ban` mode, so a
-/// documented fix never relies on an explanatory comment.
+/// Asserts that a `pass` test case produces zero diagnostics.
 ///
 /// # Panics
-/// Panics as [`assert_rule_fail`] and [`assert_rule_pass`] do.
+/// Panics if the rule emits any diagnostics on `code`.
 #[track_caller]
-pub fn assert_documented_examples<Options: OptionsDeclaration>(
+pub fn assert_rule_pass<Options: OptionsDeclaration>(
     rule: &CodeRule<Options>,
-    repeat: RepeatCheck,
+    lang: Language,
+    case_name: &str,
+    code: &str,
 ) {
-    let declaration = &rule.declaration;
-    let banned = CodeRule {
-        declaration: Declaration {
-            name: declaration.name,
-            template: declaration.template,
-            languages: declaration.languages,
-            options: RuleOptions {
-                enforcement_mode: declaration
-                    .options
-                    .enforcement_mode
-                    .map(|_| LanguageDefaults::new(EnforcementMode::Ban, &[])),
-                options: declaration.options.options,
-            },
-            classification: declaration.classification,
-            doc: declaration.doc,
-        },
-        target: rule.target,
-        check: rule.check,
-    };
-    for example in rule.declaration.doc.examples {
-        assert_rule_fail(
-            rule,
-            example.language,
-            "documented example",
-            example.flagged,
-            Some(example.flagged_span),
-            repeat,
-        );
-        assert_rule_pass(rule, example.language, "documented fix", example.fixed);
-        assert_rule_pass(
-            &banned,
-            example.language,
-            "documented fix in `ban` mode",
-            example.fixed,
+    let rule_name = rule.declaration.name.0;
+    let filename = dummy_filename(lang);
+    let diags = run_code_rule(rule, code, filename);
+    assert!(
+        diags.is_empty(),
+        "rule_test! [{rule_name}] ({lang:?}) PASS case '{case_name}' failed:\nExpected 0 diagnostics, got {}:\n{}\nSource:\n{code}",
+        diags.len(),
+        format_diagnostics_for_test(&diags),
+    );
+}
+
+/// Executes the rule's `check_file` with its default options (including `RequireExplanation` filtering).
+///
+/// # Panics
+/// Panics if `filename` does not have a recognized file extension (`.py` or `.rs`).
+#[must_use]
+pub fn run_code_rule<Options: OptionsDeclaration>(
+    rule: &CodeRule<Options>,
+    source: &str,
+    filename: &str,
+) -> Vec<Diagnostic> {
+    let path = Path::new(filename);
+    let lang = Language::from_path(path).unwrap_or_else(|| {
+        panic!("run_code_rule: unsupported extension in test file '{filename}'")
+    });
+    rule.check_file(path, &ParsedFile::new(source, lang), None)
+}
+
+/// Formats a list of diagnostics to a clean, human-readable simplified snapshot string.
+#[must_use]
+pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic]) -> String {
+    let mut sorted_diags = diagnostics.to_vec();
+    sorted_diags.sort_unstable();
+
+    let mut output = String::new();
+    for diagnostic in &sorted_diags {
+        let _ = writeln!(
+            output,
+            "[{}] Line {}, Col {}: {}",
+            diagnostic.rule_name,
+            diagnostic.location.line,
+            diagnostic.location.column,
+            diagnostic.message.summary
         );
     }
+    output
 }
 
 fn dummy_filename(lang: Language) -> &'static str {

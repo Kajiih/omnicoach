@@ -45,7 +45,7 @@ pub struct EnclosingFunction {
 }
 
 /// Returns `outer` (innermost first) with `function` prepended as the new innermost function.
-fn with_innermost_function(
+pub(in crate::code_lint::ast) fn with_innermost_function(
     function: EnclosingFunction,
     outer: &[EnclosingFunction],
 ) -> Arc<[EnclosingFunction]> {
@@ -64,6 +64,22 @@ pub(in crate::code_lint::ast) struct CachedCallCandidate {
     is_with_context_manager: bool,
     is_in_except_clause: bool,
     enclosing_functions: Arc<[EnclosingFunction]>,
+}
+
+/// Cached call-cluster ordering finding without lifetime ties to `ParsedFile`.
+#[derive(Clone)]
+pub(in crate::code_lint::ast) struct CachedCallOrderFinding {
+    span: SourceSpan,
+    function: String,
+    caller: String,
+}
+
+/// Cached priority-ordered call-cluster findings for a file.
+#[derive(Default)]
+pub(in crate::code_lint::ast) struct CachedCallClusterFindings {
+    uncolocated_helpers: Vec<CachedCallOrderFinding>,
+    private_before_public: Vec<CachedCallOrderFinding>,
+    callee_before_caller: Vec<CachedCallOrderFinding>,
 }
 
 /// Dedicated language-specific parsed syntax tree.
@@ -95,6 +111,7 @@ pub struct ParsedFile {
     pub(in crate::code_lint::ast) rust_inline_test_ranges: OnceLock<Vec<std::ops::Range<usize>>>,
     pub(in crate::code_lint::ast) imports: OnceLock<imports::ImportMap>,
     pub(in crate::code_lint::ast) locally_mutated_return_functions: OnceLock<HashSet<String>>,
+    pub(in crate::code_lint::ast) call_cluster_findings: OnceLock<CachedCallClusterFindings>,
 }
 
 impl ParsedFile {
@@ -119,6 +136,7 @@ impl ParsedFile {
             rust_inline_test_ranges: OnceLock::new(),
             imports: OnceLock::new(),
             locally_mutated_return_functions: OnceLock::new(),
+            call_cluster_findings: OnceLock::new(),
         }
     }
 
@@ -229,12 +247,6 @@ impl<'a> AstNode<'a> {
         self.file.line_index.line(self.span.end)
     }
 
-    /// Resolves the 1-indexed start `(line, column)` coordinate of this node.
-    #[must_use]
-    pub fn start_coordinate(&self) -> LineColumn {
-        self.file.line_index.lookup(self.span.start)
-    }
-
     /// Returns true if this node starts inside a Rust `#[cfg(test)]` or `#[test]` item.
     #[must_use]
     pub fn is_in_rust_inline_test(&self) -> bool {
@@ -246,34 +258,12 @@ impl<'a> AstNode<'a> {
     pub fn to_source_location(&self, path: impl Into<PathBuf>) -> SourceLocation {
         SourceLocation::file_span(path, self.span, self.start_coordinate())
     }
-}
 
-/// Converts a `ruff_text_size::TextRange` into a [`SourceSpan`].
-#[must_use]
-pub(in crate::code_lint::ast) const fn span_from_ruff_range(
-    range: ruff_text_size::TextRange,
-) -> SourceSpan {
-    SourceSpan::new(range.start().to_usize(), range.end().to_usize())
-}
-
-/// Converts a `ra_ap_syntax::TextRange` into a [`SourceSpan`].
-#[must_use]
-pub(in crate::code_lint::ast) fn span_from_rowan_range(
-    range: ra_ap_syntax::TextRange,
-) -> SourceSpan {
-    SourceSpan::new(range.start().into(), range.end().into())
-}
-
-/// Returns true if `kind` is a Rust comment token (`//`, `/* */`, `///`, `//!`, `/** */`, `/*! */`).
-#[must_use]
-pub(in crate::code_lint::ast) const fn is_rust_comment_kind(
-    kind: ra_ap_syntax::SyntaxKind,
-) -> bool {
-    use ra_ap_syntax::SyntaxKind;
-    matches!(
-        kind,
-        SyntaxKind::COMMENT | SyntaxKind::OUTER_DOC_COMMENT | SyntaxKind::INNER_DOC_COMMENT
-    )
+    /// Resolves the 1-indexed start `(line, column)` coordinate of this node.
+    #[must_use]
+    pub fn start_coordinate(&self) -> LineColumn {
+        self.file.line_index.lookup(self.span.start)
+    }
 }
 
 /// Collects all comment nodes in `file` in source order.
@@ -307,6 +297,34 @@ pub fn collect_comment_nodes(file: &ParsedFile) -> Vec<AstNode<'_>> {
         .collect()
 }
 
+/// Converts a `ruff_text_size::TextRange` into a [`SourceSpan`].
+#[must_use]
+pub(in crate::code_lint::ast) const fn span_from_ruff_range(
+    range: ruff_text_size::TextRange,
+) -> SourceSpan {
+    SourceSpan::new(range.start().to_usize(), range.end().to_usize())
+}
+
+/// Converts a `ra_ap_syntax::TextRange` into a [`SourceSpan`].
+#[must_use]
+pub(in crate::code_lint::ast) fn span_from_rowan_range(
+    range: ra_ap_syntax::TextRange,
+) -> SourceSpan {
+    SourceSpan::new(range.start().into(), range.end().into())
+}
+
+/// Returns true if `kind` is a Rust comment token (`//`, `/* */`, `///`, `//!`, `/** */`, `/*! */`).
+#[must_use]
+pub(in crate::code_lint::ast) const fn is_rust_comment_kind(
+    kind: ra_ap_syntax::SyntaxKind,
+) -> bool {
+    use ra_ap_syntax::SyntaxKind;
+    matches!(
+        kind,
+        SyntaxKind::COMMENT | SyntaxKind::OUTER_DOC_COMMENT | SyntaxKind::INNER_DOC_COMMENT
+    )
+}
+
 /// Candidate call expression extracted from the syntax tree.
 pub struct AstCallCandidate<'a> {
     /// The call expression AST node.
@@ -329,6 +347,33 @@ pub struct AstCallCandidate<'a> {
     /// The functions enclosing the call, innermost first. A Python function encloses its
     /// decorators, parameters, and body; lambdas and Rust closures are not functions.
     pub enclosing_functions: Arc<[EnclosingFunction]>,
+}
+
+/// Collects all direct call expressions in `file` along with their callee text, optional method
+/// target name, and semantic argument nodes.
+#[must_use]
+pub fn collect_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> {
+    let cached = file.call_candidates.get_or_init(|| match file.lang() {
+        Language::Python => collect_python_call_candidates(file),
+        Language::Rust => collect_rust_call_candidates(file),
+    });
+    cached
+        .iter()
+        .map(|entry| AstCallCandidate {
+            node: AstNode::from_span(file, entry.span),
+            callee: entry.callee.clone(),
+            method_name: entry.method_name.clone(),
+            receiver_call_callee: entry.receiver_call_callee.clone(),
+            arguments: entry
+                .argument_spans
+                .iter()
+                .map(|&span| AstNode::from_span(file, span))
+                .collect(),
+            is_with_context_manager: entry.is_with_context_manager,
+            is_in_except_clause: entry.is_in_except_clause,
+            enclosing_functions: Arc::clone(&entry.enclosing_functions),
+        })
+        .collect()
 }
 
 /// Collects all direct call expressions in a Python file using `ruff_python_ast`.
@@ -444,25 +489,6 @@ fn collect_python_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate>
     visitor.out
 }
 
-/// Extracts the callee string of a Rust call or method-call expression.
-fn rust_call_callee_text(expr: &ra_ap_syntax::ast::Expr, source: &str) -> Option<String> {
-    match expr {
-        ra_ap_syntax::ast::Expr::CallExpr(call) => {
-            let func = call.expr()?;
-            let span = span_from_rowan_range(func.syntax().text_range());
-            Some(source[span.start..span.end].to_string())
-        }
-        ra_ap_syntax::ast::Expr::MethodCallExpr(method_call) => {
-            let receiver = method_call.receiver()?;
-            let name_ref = method_call.name_ref()?;
-            let start: usize = receiver.syntax().text_range().start().into();
-            let end: usize = name_ref.syntax().text_range().end().into();
-            Some(source[start..end].to_string())
-        }
-        _ => None,
-    }
-}
-
 /// Collects all direct call and method-call expressions in a Rust file using `ra_ap_syntax`.
 fn collect_rust_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate> {
     use ra_ap_syntax::ast::{self, HasArgList as _};
@@ -542,31 +568,23 @@ fn collect_rust_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate> {
     out
 }
 
-/// Collects all direct call expressions in `file` along with their callee text, optional method
-/// target name, and semantic argument nodes.
-#[must_use]
-pub fn collect_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> {
-    let cached = file.call_candidates.get_or_init(|| match file.lang() {
-        Language::Python => collect_python_call_candidates(file),
-        Language::Rust => collect_rust_call_candidates(file),
-    });
-    cached
-        .iter()
-        .map(|entry| AstCallCandidate {
-            node: AstNode::from_span(file, entry.span),
-            callee: entry.callee.clone(),
-            method_name: entry.method_name.clone(),
-            receiver_call_callee: entry.receiver_call_callee.clone(),
-            arguments: entry
-                .argument_spans
-                .iter()
-                .map(|&span| AstNode::from_span(file, span))
-                .collect(),
-            is_with_context_manager: entry.is_with_context_manager,
-            is_in_except_clause: entry.is_in_except_clause,
-            enclosing_functions: Arc::clone(&entry.enclosing_functions),
-        })
-        .collect()
+/// Extracts the callee string of a Rust call or method-call expression.
+fn rust_call_callee_text(expr: &ra_ap_syntax::ast::Expr, source: &str) -> Option<String> {
+    match expr {
+        ra_ap_syntax::ast::Expr::CallExpr(call) => {
+            let func = call.expr()?;
+            let span = span_from_rowan_range(func.syntax().text_range());
+            Some(source[span.start..span.end].to_string())
+        }
+        ra_ap_syntax::ast::Expr::MethodCallExpr(method_call) => {
+            let receiver = method_call.receiver()?;
+            let name_ref = method_call.name_ref()?;
+            let start: usize = receiver.syntax().text_range().start().into();
+            let end: usize = name_ref.syntax().text_range().end().into();
+            Some(source[start..end].to_string())
+        }
+        _ => None,
+    }
 }
 
 /// A read of one positional element through an integer literal: `receiver[1]` or
@@ -795,6 +813,315 @@ pub struct TypeMethodScope<'a> {
 #[must_use]
 pub fn collect_type_method_scopes(file: &ParsedFile) -> Vec<TypeMethodScope<'_>> {
     dispatch_lang!(file.lang(), collect_type_method_scopes(file))
+}
+
+/// A function or method definition inside a module, Python `class`, or Rust inherent `impl` scope.
+#[derive(Clone)]
+pub struct CallableItem<'a> {
+    /// Identifier AST node of the function or method declaration.
+    pub name_node: AstNode<'a>,
+    /// Function or method identifier name.
+    pub name: String,
+    /// Visibility tier (`Public` vs. `Private`).
+    pub visibility: MethodVisibility,
+    /// True if this callable is a Tier 0 lifecycle constructor.
+    pub is_constructor: bool,
+    /// Indices in the enclosing [`CallableScope::callables`] slice of sibling callables directly
+    /// called or referenced by this callable.
+    pub callees: Vec<usize>,
+}
+
+/// A module, Python `class`, or Rust inherent `impl` scope with its direct functions or
+/// methods in source order and their intra-scope call edges.
+pub struct CallableScope<'a> {
+    /// Direct functions or methods in source order.
+    pub callables: Vec<CallableItem<'a>>,
+}
+
+/// A misplaced function or method reported by the call-cluster ordering analyzer.
+pub struct CallOrderFinding<'a> {
+    /// Identifier AST node of the misplaced function or method.
+    pub name_node: AstNode<'a>,
+    /// Name of the misplaced function or method (`{function}`).
+    pub function: String,
+    /// Name of the owning or calling function/method it relates to (`{caller}`).
+    pub caller: String,
+}
+
+/// Priority-ordered findings for the three call-cluster ordering rules across a file:
+/// 1. `uncolocated-helper` (Priority 1)
+/// 2. `private-before-public-function` (Priority 2)
+/// 3. `callee-before-caller` (Priority 3)
+///
+/// Evaluating all three together guarantees strict precedence (`P1 -> P2 -> P3`) so a single
+/// misplaced function or method is never double-reported across rules.
+pub struct CallClusterFindings<'a> {
+    /// Priority 1 findings (`uncolocated-helper`).
+    pub uncolocated_helpers: Vec<CallOrderFinding<'a>>,
+    /// Priority 2 findings (`private-before-public-function`).
+    pub private_before_public: Vec<CallOrderFinding<'a>>,
+    /// Priority 3 findings (`callee-before-caller`).
+    pub callee_before_caller: Vec<CallOrderFinding<'a>>,
+}
+
+/// Computes and memoizes the priority-ordered call-cluster findings (`uncolocated-helper`,
+/// `private-before-public-function`, and `callee-before-caller`) across all module and
+/// class/`impl` scopes in `file`.
+#[must_use]
+pub fn collect_call_cluster_findings(file: &ParsedFile) -> CallClusterFindings<'_> {
+    let cached = file.call_cluster_findings.get_or_init(|| {
+        let scopes = dispatch_lang!(file.lang(), collect_callable_scopes(file));
+        let mut out = CachedCallClusterFindings::default();
+        for scope in &scopes {
+            analyze_callable_scope(scope, &mut out);
+        }
+        out
+    });
+    let materialize = |items: &[CachedCallOrderFinding]| -> Vec<CallOrderFinding<'_>> {
+        items
+            .iter()
+            .map(|entry| CallOrderFinding {
+                name_node: AstNode::from_span(file, entry.span),
+                function: entry.function.clone(),
+                caller: entry.caller.clone(),
+            })
+            .collect()
+    };
+    CallClusterFindings {
+        uncolocated_helpers: materialize(&cached.uncolocated_helpers),
+        private_before_public: materialize(&cached.private_before_public),
+        callee_before_caller: materialize(&cached.callee_before_caller),
+    }
+}
+
+/// Analyzes a single [`CallableScope`] and appends Priority 1 (`uncolocated-helper`),
+/// Priority 2 (`private-before-public-function`), and Priority 3 (`callee-before-caller`)
+/// findings to `out`.
+fn analyze_callable_scope(scope: &CallableScope<'_>, out: &mut CachedCallClusterFindings) {
+    let callables = &scope.callables;
+    let count = callables.len();
+    if count < 2 {
+        return;
+    }
+
+    let mut callers_of = vec![Vec::new(); count];
+    for (caller_idx, callable) in callables.iter().enumerate() {
+        for &callee_idx in &callable.callees {
+            if caller_idx != callee_idx
+                && callee_idx < count
+                && !callers_of[callee_idx].contains(&caller_idx)
+            {
+                callers_of[callee_idx].push(caller_idx);
+            }
+        }
+    }
+
+    let scc_id = compute_tarjan_scc(callables);
+    let roots_of = compute_public_roots(callables, &callers_of);
+
+    let last_pub = (0..count)
+        .rev()
+        .find(|&idx| callables[idx].visibility == MethodVisibility::Public);
+    let mut flagged_p1_or_p2 = vec![false; count];
+
+    let is_in_constructor_cluster = |idx: usize| -> bool {
+        callables[idx].is_constructor
+            || (roots_of[idx].len() == 1 && callables[roots_of[idx][0]].is_constructor)
+    };
+
+    for pos in 0..count {
+        if callables[pos].visibility == MethodVisibility::Public {
+            continue;
+        }
+        let roots = &roots_of[pos];
+        if roots.len() == 1 {
+            let owner = roots[0];
+            if pos > owner {
+                let separated = ((owner + 1)..pos).any(|mid| {
+                    roots_of[mid] != *roots
+                        && !(callables[owner].is_constructor && is_in_constructor_cluster(mid))
+                });
+                if separated {
+                    out.uncolocated_helpers.push(CachedCallOrderFinding {
+                        span: callables[pos].name_node.span(),
+                        function: callables[pos].name.clone(),
+                        caller: callables[owner].name.clone(),
+                    });
+                    flagged_p1_or_p2[pos] = true;
+                    continue;
+                }
+            }
+        }
+        if let Some(&max_root) = roots.last() {
+            if pos < max_root {
+                out.private_before_public.push(CachedCallOrderFinding {
+                    span: callables[pos].name_node.span(),
+                    function: callables[pos].name.clone(),
+                    caller: callables[max_root].name.clone(),
+                });
+                flagged_p1_or_p2[pos] = true;
+            }
+        } else if let Some(last_pub_idx) = last_pub
+            && pos < last_pub_idx
+        {
+            out.private_before_public.push(CachedCallOrderFinding {
+                span: callables[pos].name_node.span(),
+                function: callables[pos].name.clone(),
+                caller: callables[last_pub_idx].name.clone(),
+            });
+            flagged_p1_or_p2[pos] = true;
+        }
+    }
+
+    for callee in 0..count {
+        if flagged_p1_or_p2[callee] || callables[callee].is_constructor {
+            continue;
+        }
+        let last_caller = callers_of[callee]
+            .iter()
+            .copied()
+            .filter(|&caller| {
+                caller > callee
+                    && !flagged_p1_or_p2[caller]
+                    && !callables[caller].is_constructor
+                    && scc_id[caller] != scc_id[callee]
+                    && is_same_tier_and_group(callables, &roots_of, caller, callee)
+            })
+            .max();
+        if let Some(caller_idx) = last_caller {
+            out.callee_before_caller.push(CachedCallOrderFinding {
+                span: callables[callee].name_node.span(),
+                function: callables[callee].name.clone(),
+                caller: callables[caller_idx].name.clone(),
+            });
+        }
+    }
+}
+
+/// Returns true if `first` and `second` belong to the same visibility tier and component/shared
+/// group for `callee-before-caller` comparison.
+fn is_same_tier_and_group(
+    callables: &[CallableItem<'_>],
+    roots_of: &[Vec<usize>],
+    first: usize,
+    second: usize,
+) -> bool {
+    if callables[first].visibility != callables[second].visibility {
+        return false;
+    }
+    match callables[first].visibility {
+        MethodVisibility::Public => true,
+        MethodVisibility::Private => {
+            let first_roots = &roots_of[first];
+            let second_roots = &roots_of[second];
+            (first_roots.len() == 1 && first_roots == second_roots)
+                || (first_roots.len() >= 2 && second_roots.len() >= 2)
+                || (first_roots.is_empty() && second_roots.is_empty())
+        }
+    }
+}
+
+/// Computes `Roots(f)` for each callable in `callables`: the sorted indices of public entrypoints
+/// that reach `f` through private call paths (stopping at public boundaries).
+fn compute_public_roots(
+    callables: &[CallableItem<'_>],
+    callers_of: &[Vec<usize>],
+) -> Vec<Vec<usize>> {
+    let count = callables.len();
+    let mut roots_of = vec![Vec::new(); count];
+    for idx in 0..count {
+        if callables[idx].visibility == MethodVisibility::Public {
+            roots_of[idx] = vec![idx];
+        } else {
+            let mut visited = vec![false; count];
+            let mut stack = vec![idx];
+            let mut pub_roots = Vec::new();
+            while let Some(cur) = stack.pop() {
+                if visited[cur] {
+                    continue;
+                }
+                visited[cur] = true;
+                for &caller in &callers_of[cur] {
+                    if callables[caller].visibility == MethodVisibility::Public {
+                        pub_roots.push(caller);
+                    } else {
+                        stack.push(caller);
+                    }
+                }
+            }
+            pub_roots.sort_unstable();
+            pub_roots.dedup();
+            roots_of[idx] = pub_roots;
+        }
+    }
+    roots_of
+}
+
+/// Computes Strongly Connected Component IDs for `callables` using Tarjan's algorithm.
+fn compute_tarjan_scc(callables: &[CallableItem<'_>]) -> Vec<usize> {
+    struct TarjanState {
+        next_index: usize,
+        next_scc: usize,
+        indices: Vec<Option<usize>>,
+        lowlink: Vec<usize>,
+        on_stack: Vec<bool>,
+        stack: Vec<usize>,
+        scc_id: Vec<usize>,
+    }
+
+    impl TarjanState {
+        fn strongconnect(&mut self, node: usize, callables: &[CallableItem<'_>]) {
+            let current_index = self.next_index;
+            self.next_index += 1;
+            self.indices[node] = Some(current_index);
+            self.lowlink[node] = current_index;
+            self.stack.push(node);
+            self.on_stack[node] = true;
+
+            for &callee in &callables[node].callees {
+                if callee >= callables.len() {
+                    continue;
+                }
+                if self.indices[callee].is_none() {
+                    self.strongconnect(callee, callables);
+                    self.lowlink[node] = self.lowlink[node].min(self.lowlink[callee]);
+                } else if self.on_stack[callee]
+                    && let Some(callee_index) = self.indices[callee]
+                {
+                    self.lowlink[node] = self.lowlink[node].min(callee_index);
+                }
+            }
+
+            if Some(self.lowlink[node]) == self.indices[node] {
+                let id = self.next_scc;
+                self.next_scc += 1;
+                while let Some(member) = self.stack.pop() {
+                    self.on_stack[member] = false;
+                    self.scc_id[member] = id;
+                    if member == node {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let count = callables.len();
+    let mut state = TarjanState {
+        next_index: 0,
+        next_scc: 0,
+        indices: vec![None; count],
+        lowlink: vec![0; count],
+        on_stack: vec![false; count],
+        stack: Vec::new(),
+        scc_id: vec![0; count],
+    };
+    for node in 0..count {
+        if state.indices[node].is_none() {
+            state.strongconnect(node, callables);
+        }
+    }
+    state.scc_id
 }
 
 #[cfg(test)]

@@ -10,63 +10,24 @@ use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk
 use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::Ranged as _;
 
-/// Returns the value of a Python decimal `integer` literal (not `0x1`, `1_000`, ...).
-fn decimal_literal_expr(expr: &Expr, source: &str) -> Option<i64> {
-    let Expr::NumberLiteral(number) = expr else {
-        return None;
+/// Collects Python positional reads grouped by scope (see [`crate::code_lint::ast::collect_positional_reads`]).
+#[must_use]
+pub(in crate::code_lint::ast) fn collect_positional_reads(
+    file: &ParsedFile,
+) -> Vec<ScopePositionalReads<'_>> {
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
     };
-    if !matches!(number.value, ruff_python_ast::Number::Int(_)) {
-        return None;
+    let mut collector = PositionalReadsCollector {
+        file,
+        current_scope: Some(ScopePositionalReads::default()),
+        out: Vec::new(),
+    };
+    collector.visit_body(&parsed.syntax().body);
+    if let Some(module_scope) = collector.current_scope {
+        collector.out.push(module_scope);
     }
-    let text = &source[number.range().start().to_usize()..number.range().end().to_usize()];
-    if !text.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    text.parse().ok()
-}
-
-/// Returns the position read by a Python `subscript` index: a decimal literal, or its negation
-/// for end-relative reads (`xs[-1]`).
-fn literal_position_expr(index: &Expr, source: &str) -> Option<i64> {
-    if let Expr::UnaryOp(unary) = index
-        && unary.op == ruff_python_ast::UnaryOp::USub
-    {
-        return decimal_literal_expr(&unary.operand, source).map(std::ops::Neg::neg);
-    }
-    decimal_literal_expr(index, source)
-}
-
-/// Returns true if `expr` contains any call expression (`Expr::Call`).
-fn expr_contains_call(expr: &Expr) -> bool {
-    struct CallDetector {
-        found: bool,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for CallDetector {
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if self.found {
-                return;
-            }
-            if matches!(expr, Expr::Call(_)) {
-                self.found = true;
-                return;
-            }
-            walk_expr(self, expr);
-        }
-    }
-
-    let mut detector = CallDetector { found: false };
-    detector.visit_expr(expr);
-    detector.found
-}
-
-/// Returns true if `receiver` names a stable value: a name, attribute or subscript chain with no
-/// call inside, so that identical text means the same value.
-fn is_stable_receiver_expr(receiver: &Expr) -> bool {
-    matches!(
-        receiver,
-        Expr::Name(_) | Expr::Attribute(_) | Expr::Subscript(_)
-    ) && !expr_contains_call(receiver)
+    collector.out
 }
 
 struct PositionalReadsCollector<'a> {
@@ -76,18 +37,6 @@ struct PositionalReadsCollector<'a> {
 }
 
 impl PositionalReadsCollector<'_> {
-    fn expr_text(&self, expr: &Expr) -> String {
-        let range = expr.range();
-        self.file.source[range.start().to_usize()..range.end().to_usize()].to_string()
-    }
-
-    fn record_exempt_receiver(&mut self, expr: &Expr) {
-        let text = self.expr_text(expr);
-        if let Some(scope) = &mut self.current_scope {
-            scope.exempt_receivers.insert(text);
-        }
-    }
-
     fn record_subscript(&mut self, subscript: &ruff_python_ast::ExprSubscript) {
         let receiver_text = self.expr_text(&subscript.value);
         let is_load = matches!(subscript.ctx, ruff_python_ast::ExprContext::Load);
@@ -123,6 +72,18 @@ impl PositionalReadsCollector<'_> {
             }
             _ => {}
         }
+    }
+
+    fn record_exempt_receiver(&mut self, expr: &Expr) {
+        let text = self.expr_text(expr);
+        if let Some(scope) = &mut self.current_scope {
+            scope.exempt_receivers.insert(text);
+        }
+    }
+
+    fn expr_text(&self, expr: &Expr) -> String {
+        let range = expr.range();
+        self.file.source[range.start().to_usize()..range.end().to_usize()].to_string()
     }
 }
 
@@ -178,24 +139,63 @@ impl<'a> SourceOrderVisitor<'a> for PositionalReadsCollector<'a> {
     }
 }
 
-/// Collects Python positional reads grouped by scope (see [`crate::code_lint::ast::collect_positional_reads`]).
-#[must_use]
-pub(in crate::code_lint::ast) fn collect_positional_reads(
-    file: &ParsedFile,
-) -> Vec<ScopePositionalReads<'_>> {
-    let Some(parsed) = file.py_module() else {
-        return Vec::new();
-    };
-    let mut collector = PositionalReadsCollector {
-        file,
-        current_scope: Some(ScopePositionalReads::default()),
-        out: Vec::new(),
-    };
-    collector.visit_body(&parsed.syntax().body);
-    if let Some(module_scope) = collector.current_scope {
-        collector.out.push(module_scope);
+/// Returns the position read by a Python `subscript` index: a decimal literal, or its negation
+/// for end-relative reads (`xs[-1]`).
+fn literal_position_expr(index: &Expr, source: &str) -> Option<i64> {
+    if let Expr::UnaryOp(unary) = index
+        && unary.op == ruff_python_ast::UnaryOp::USub
+    {
+        return decimal_literal_expr(&unary.operand, source).map(std::ops::Neg::neg);
     }
-    collector.out
+    decimal_literal_expr(index, source)
+}
+
+/// Returns the value of a Python decimal `integer` literal (not `0x1`, `1_000`, ...).
+fn decimal_literal_expr(expr: &Expr, source: &str) -> Option<i64> {
+    let Expr::NumberLiteral(number) = expr else {
+        return None;
+    };
+    if !matches!(number.value, ruff_python_ast::Number::Int(_)) {
+        return None;
+    }
+    let text = &source[number.range().start().to_usize()..number.range().end().to_usize()];
+    if !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+/// Returns true if `receiver` names a stable value: a name, attribute or subscript chain with no
+/// call inside, so that identical text means the same value.
+fn is_stable_receiver_expr(receiver: &Expr) -> bool {
+    matches!(
+        receiver,
+        Expr::Name(_) | Expr::Attribute(_) | Expr::Subscript(_)
+    ) && !expr_contains_call(receiver)
+}
+
+/// Returns true if `expr` contains any call expression (`Expr::Call`).
+fn expr_contains_call(expr: &Expr) -> bool {
+    struct CallDetector {
+        found: bool,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for CallDetector {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if self.found {
+                return;
+            }
+            if matches!(expr, Expr::Call(_)) {
+                self.found = true;
+                return;
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut detector = CallDetector { found: false };
+    detector.visit_expr(expr);
+    detector.found
 }
 
 #[cfg(test)]

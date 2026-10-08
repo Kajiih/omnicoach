@@ -182,17 +182,6 @@ pub fn find_rule(name: &str) -> Result<&'static RegisteredRule, UnknownLabel> {
         })
 }
 
-fn read_config_file() -> Result<Option<String>, ConfigError> {
-    match std::fs::read_to_string(CONFIG_FILE_NAME) {
-        Ok(content) => Ok(Some(content)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(ConfigError::Io {
-            path: CONFIG_FILE_NAME,
-            source,
-        }),
-    }
-}
-
 /// Loads `.omnilint.toml` from the current directory, or the default config if it is absent.
 ///
 /// # Errors
@@ -209,6 +198,17 @@ pub fn load_config() -> Result<Config, ConfigError> {
 /// Returns [`ConfigError`] if the file cannot be read or is rejected by [`rule_status`].
 pub fn load_rule_status(rule: &RegisteredRule) -> Result<RuleStatus, ConfigError> {
     rule_status(&read_config_file()?.unwrap_or_default(), rule)
+}
+
+fn read_config_file() -> Result<Option<String>, ConfigError> {
+    match std::fs::read_to_string(CONFIG_FILE_NAME) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(ConfigError::Io {
+            path: CONFIG_FILE_NAME,
+            source,
+        }),
+    }
 }
 
 /// Whether `rule` is on under `config_toml`'s `select` and `ignore`, and why.
@@ -265,6 +265,14 @@ pub fn parse_config(config_toml: &str) -> Result<Config, ConfigError> {
     })
 }
 
+fn rule_names(mut predicate: impl FnMut(&RegisteredRule) -> bool) -> HashSet<RuleName> {
+    REGISTERED_RULES
+        .iter()
+        .filter(|rule| predicate(rule))
+        .map(|rule| rule.name)
+        .collect()
+}
+
 fn parse_plan(select: Option<Vec<String>>, ignore: Vec<String>) -> Result<Plan, ConfigError> {
     let select = select
         .map(|labels| resolve_all(labels, &Location::Select))
@@ -278,14 +286,6 @@ fn parse_plan(select: Option<Vec<String>>, ignore: Vec<String>) -> Result<Plan, 
         return Err(ConfigError::Conflict(both.label()));
     }
     Ok(Plan { select, ignore })
-}
-
-fn rule_names(mut predicate: impl FnMut(&RegisteredRule) -> bool) -> HashSet<RuleName> {
-    REGISTERED_RULES
-        .iter()
-        .filter(|rule| predicate(rule))
-        .map(|rule| rule.name)
-        .collect()
 }
 
 fn resolve_all(
@@ -335,16 +335,6 @@ struct Plan {
 }
 
 impl Plan {
-    fn verdict(&self, selector: Selector) -> Option<Verdict> {
-        if self.ignore.contains(&selector) {
-            Some(Verdict::Ignore)
-        } else if self.select.as_ref()?.contains(&selector) {
-            Some(Verdict::Select)
-        } else {
-            None
-        }
-    }
-
     /// Model B: nearest selector per branch, then ignore wins across branches.
     fn decide(&self, rule: &RegisteredRule) -> RuleStatus {
         let decisions = rule.branches().into_iter().filter_map(|branch| {
@@ -361,6 +351,16 @@ impl Plan {
             selected_by_default: self.select.is_none(),
             // The first `ignore` decision if any, else the first `select` one.
             deciding: decisions.min_by_key(|decision| decision.verdict == Verdict::Select),
+        }
+    }
+
+    fn verdict(&self, selector: Selector) -> Option<Verdict> {
+        if self.ignore.contains(&selector) {
+            Some(Verdict::Ignore)
+        } else if self.select.as_ref()?.contains(&selector) {
+            Some(Verdict::Select)
+        } else {
+            None
         }
     }
 }

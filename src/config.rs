@@ -32,16 +32,6 @@ pub(crate) fn compile_glob(pattern: &str) -> Result<globset::Glob, globset::Erro
         .build()
 }
 
-fn compile_glob_set<'a>(
-    patterns: impl IntoIterator<Item = &'a str>,
-) -> Result<globset::GlobSet, globset::Error> {
-    let mut builder = globset::GlobSetBuilder::new();
-    for pattern in patterns {
-        builder.add(compile_glob(pattern)?);
-    }
-    builder.build()
-}
-
 fn default_test_patterns() -> globset::GlobSet {
     // The defaults are constants covered by `test_context_test_path_detection`.
     compile_glob_set(DEFAULT_TEST_PATTERNS.iter().copied()).unwrap_or_default()
@@ -53,6 +43,16 @@ where
 {
     let patterns = Vec::<String>::deserialize(deserializer)?;
     compile_glob_set(patterns.iter().map(String::as_str)).map_err(serde::de::Error::custom)
+}
+
+fn compile_glob_set<'a>(
+    patterns: impl IntoIterator<Item = &'a str>,
+) -> Result<globset::GlobSet, globset::Error> {
+    let mut builder = globset::GlobSetBuilder::new();
+    for pattern in patterns {
+        builder.add(compile_glob(pattern)?);
+    }
+    builder.build()
 }
 
 /// Configuration settings for path context detection (e.g. test paths).
@@ -111,12 +111,6 @@ impl Config {
             .is_match(normalize_path_for_glob(path))
     }
 
-    /// Returns true if the given rule is enabled in this configuration.
-    #[must_use]
-    pub fn is_rule_enabled(&self, rule: RuleName) -> bool {
-        !self.disabled_rules.contains(&rule)
-    }
-
     /// Returns true if the given rule is enabled for a specific file path.
     #[must_use]
     pub fn is_rule_enabled_for_path(&self, rule: RuleName, path: &Path) -> bool {
@@ -132,6 +126,12 @@ impl Config {
             .per_file_ignores
             .iter()
             .any(|(matcher, rules)| matcher.is_match(&normalized) && rules.contains(&rule))
+    }
+
+    /// Returns true if the given rule is enabled in this configuration.
+    #[must_use]
+    pub fn is_rule_enabled(&self, rule: RuleName) -> bool {
+        !self.disabled_rules.contains(&rule)
     }
 }
 
