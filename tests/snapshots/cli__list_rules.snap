@@ -9,7 +9,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `associated-item-after-method` (rust): Flags Rust associated `type` and `const` items declared after `fn` items in an `impl` or `trait` block.
 - `bare-multiline-string` (python, rust): Flags multiline string literals that are not wrapped in a dedent helper.
 - `blanket-suppression` (python, rust): Flags suppression directives that name no rule.
-- `callee-before-caller` (python, rust): Flags functions and methods defined before their callers within the same visibility tier and component cluster.
+- `callee-before-caller` (python, rust): Flags functions and methods defined before their callers within the same visibility tier.
 - `concrete-collection-attribute` (python): Flags public Python class and instance attributes annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
 - `concrete-collection-parameter` (python): Flags Python function parameters annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
 - `concrete-collection-return` (python): Flags Python function return annotations using concrete mutable collection types such as `list`, `dict`, or `set`.
@@ -46,7 +46,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `too-many-assertions` (python, rust): Flags test functions with more assertions than the limit.
 - `type-cast` (python): Flags `typing.cast` calls in Python source files.
 - `type-suffixed-name` (python, rust): Flags names that end with a type suffix such as `_list` or `_str`.
-- `uncolocated-helper` (python, rust): Flags exclusive private helpers separated from their owning public function or method by unrelated definitions.
+- `uncolocated-helper` (python, rust): Flags private helpers that are neither colocated right after their single public consumer nor placed in the trailing helper section at the end of the scope.
 - `unknown-suppression-rule` (python, rust): Flags suppression directives that name an unknown or unsuppressible rule.
 - `unmatched-logger-placeholder` (python): Flags logger calls that pass positional arguments to a message with an unmatched named placeholder.
 - `unslotted-dataclass` (python): Requires Python dataclasses to declare `slots=True`.

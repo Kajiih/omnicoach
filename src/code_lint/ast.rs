@@ -924,50 +924,38 @@ fn analyze_callable_scope(scope: &CallableScope<'_>, out: &mut CachedCallCluster
         .find(|&idx| callables[idx].visibility == MethodVisibility::Public);
     let mut flagged_p1_or_p2 = vec![false; count];
 
-    let is_in_constructor_cluster = |idx: usize| -> bool {
-        callables[idx].is_constructor
-            || (roots_of[idx].len() == 1 && callables[roots_of[idx][0]].is_constructor)
-    };
-
     for pos in 0..count {
         if callables[pos].visibility == MethodVisibility::Public {
             continue;
         }
         let roots = &roots_of[pos];
-        if roots.len() == 1 {
-            let owner = roots[0];
-            if pos > owner {
-                let separated = ((owner + 1)..pos).any(|mid| {
-                    roots_of[mid] != *roots
-                        && !(callables[owner].is_constructor && is_in_constructor_cluster(mid))
-                });
-                if separated {
-                    out.uncolocated_helpers.push(CachedCallOrderFinding {
-                        span: callables[pos].name_node.span(),
-                        function: callables[pos].name.clone(),
-                        caller: callables[owner].name.clone(),
-                    });
-                    flagged_p1_or_p2[pos] = true;
-                    continue;
-                }
-            }
-        }
-        if let Some(&max_root) = roots.last() {
-            if pos < max_root {
+        let Some(&max_root) = roots.last() else {
+            if let Some(last_pub_idx) = last_pub
+                && pos < last_pub_idx
+            {
                 out.private_before_public.push(CachedCallOrderFinding {
                     span: callables[pos].name_node.span(),
                     function: callables[pos].name.clone(),
-                    caller: callables[max_root].name.clone(),
+                    caller: callables[last_pub_idx].name.clone(),
                 });
                 flagged_p1_or_p2[pos] = true;
             }
-        } else if let Some(last_pub_idx) = last_pub
-            && pos < last_pub_idx
-        {
+            continue;
+        };
+        if pos < max_root {
             out.private_before_public.push(CachedCallOrderFinding {
                 span: callables[pos].name_node.span(),
                 function: callables[pos].name.clone(),
-                caller: callables[last_pub_idx].name.clone(),
+                caller: callables[max_root].name.clone(),
+            });
+            flagged_p1_or_p2[pos] = true;
+        } else if let Some(last_pub_idx) = last_pub
+            && !is_valid_helper_placement(callables, &roots_of, pos, last_pub_idx)
+        {
+            out.uncolocated_helpers.push(CachedCallOrderFinding {
+                span: callables[pos].name_node.span(),
+                function: callables[pos].name.clone(),
+                caller: callables[max_root].name.clone(),
             });
             flagged_p1_or_p2[pos] = true;
         }
@@ -985,7 +973,7 @@ fn analyze_callable_scope(scope: &CallableScope<'_>, out: &mut CachedCallCluster
                     && !flagged_p1_or_p2[caller]
                     && !callables[caller].is_constructor
                     && scc_id[caller] != scc_id[callee]
-                    && is_same_tier_and_group(callables, &roots_of, caller, callee)
+                    && is_same_visibility_tier(callables, &roots_of, caller, callee)
             })
             .max();
         if let Some(caller_idx) = last_caller {
@@ -998,9 +986,35 @@ fn analyze_callable_scope(scope: &CallableScope<'_>, out: &mut CachedCallCluster
     }
 }
 
-/// Returns true if `first` and `second` belong to the same visibility tier and component/shared
-/// group for `callee-before-caller` comparison.
-fn is_same_tier_and_group(
+/// Returns true if a private helper at `pos` (already after all of its `roots_of[pos]`) is
+/// either immediately after its single consumer or in the trailing helper section after
+/// `last_pub_idx`.
+fn is_valid_helper_placement(
+    callables: &[CallableItem<'_>],
+    roots_of: &[Vec<usize>],
+    pos: usize,
+    last_pub_idx: usize,
+) -> bool {
+    let roots = &roots_of[pos];
+    if roots.len() != 1 {
+        return pos > last_pub_idx;
+    }
+    let owner = roots[0];
+    let in_owner_cluster = |idx: usize| -> bool {
+        roots_of[idx] == *roots
+            || (callables[owner].is_constructor
+                && (callables[idx].is_constructor
+                    || (roots_of[idx].len() == 1 && callables[roots_of[idx][0]].is_constructor)))
+    };
+    let is_just_after_owner = ((owner + 1)..pos).all(in_owner_cluster);
+    let is_at_scope_end =
+        pos > last_pub_idx && ((owner + 1)..last_pub_idx).all(|mid| !in_owner_cluster(mid));
+    is_just_after_owner || is_at_scope_end
+}
+
+/// Returns true if `first` and `second` belong to the same visibility tier for
+/// `callee-before-caller` comparison.
+fn is_same_visibility_tier(
     callables: &[CallableItem<'_>],
     roots_of: &[Vec<usize>],
     first: usize,
@@ -1009,16 +1023,9 @@ fn is_same_tier_and_group(
     if callables[first].visibility != callables[second].visibility {
         return false;
     }
-    match callables[first].visibility {
-        MethodVisibility::Public => true,
-        MethodVisibility::Private => {
-            let first_roots = &roots_of[first];
-            let second_roots = &roots_of[second];
-            (first_roots.len() == 1 && first_roots == second_roots)
-                || (first_roots.len() >= 2 && second_roots.len() >= 2)
-                || (first_roots.is_empty() && second_roots.is_empty())
-        }
-    }
+    !(callables[first].visibility == MethodVisibility::Private
+        && roots_of[first].is_empty()
+        && !roots_of[second].is_empty())
 }
 
 /// Computes `Roots(f)` for each callable in `callables`: the sorted indices of public entrypoints

@@ -200,17 +200,6 @@ pub fn load_rule_status(rule: &RegisteredRule) -> Result<RuleStatus, ConfigError
     rule_status(&read_config_file()?.unwrap_or_default(), rule)
 }
 
-fn read_config_file() -> Result<Option<String>, ConfigError> {
-    match std::fs::read_to_string(CONFIG_FILE_NAME) {
-        Ok(content) => Ok(Some(content)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(ConfigError::Io {
-            path: CONFIG_FILE_NAME,
-            source,
-        }),
-    }
-}
-
 /// Whether `rule` is on under `config_toml`'s `select` and `ignore`, and why.
 ///
 /// # Errors
@@ -263,6 +252,17 @@ pub fn parse_config(config_toml: &str) -> Result<Config, ConfigError> {
         context: raw.context,
         per_file_ignores,
     })
+}
+
+fn read_config_file() -> Result<Option<String>, ConfigError> {
+    match std::fs::read_to_string(CONFIG_FILE_NAME) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(ConfigError::Io {
+            path: CONFIG_FILE_NAME,
+            source,
+        }),
+    }
 }
 
 fn rule_names(mut predicate: impl FnMut(&RegisteredRule) -> bool) -> HashSet<RuleName> {

@@ -171,143 +171,6 @@ impl<'a> SourceOrderVisitor<'a> for BindingVisitor<'a> {
     }
 }
 
-/// Extracts the attribute names that `__init__` declares on its receiver: the first
-/// `self.name = …` per name, in source order. Names the class body already declares
-/// (`name: int`) are skipped, so a dataclass-style `self.name = name` is not a second
-/// declaration; later reassignments, other methods, and `self.name[key] = …` declare nothing.
-fn extract_instance_attribute_declarations<'a>(
-    class_def: &StmtClassDef,
-    file: &'a ParsedFile,
-    bindings: &mut Vec<AstNode<'a>>,
-) {
-    let Some(init) = direct_function_definitions(&class_def.body)
-        .into_iter()
-        .find(|func_def| func_def.name.id == "__init__")
-    else {
-        return;
-    };
-    let Some(receiver) = method_receiver_name_ast(init, false, file) else {
-        return;
-    };
-
-    let mut declared = HashSet::new();
-    for statement in &class_def.body {
-        match statement {
-            Stmt::Assign(assign) => {
-                for target in &assign.targets {
-                    extend_expr_target_names(target, file, &mut declared);
-                }
-            }
-            Stmt::AnnAssign(ann) => {
-                extend_expr_target_names(&ann.target, file, &mut declared);
-            }
-            _ => {}
-        }
-    }
-    collect_receiver_attribute_targets(&init.body, &receiver, file, &mut declared, bindings);
-}
-
-/// Walks `body` (without entering nested functions, classes, or lambdas) and appends the
-/// attribute identifier of every `receiver.name` assignment target whose name is not yet in
-/// `declared`.
-fn collect_receiver_attribute_targets<'a>(
-    body: &[Stmt],
-    receiver: &str,
-    file: &'a ParsedFile,
-    declared: &mut HashSet<String>,
-    bindings: &mut Vec<AstNode<'a>>,
-) {
-    struct ReceiverAttrVisitor<'a, 'b> {
-        receiver: &'b str,
-        file: &'a ParsedFile,
-        declared: &'b mut HashSet<String>,
-        bindings: &'b mut Vec<AstNode<'a>>,
-    }
-
-    impl SourceOrderVisitor<'_> for ReceiverAttrVisitor<'_, '_> {
-        fn visit_stmt(&mut self, statement: &Stmt) {
-            match statement {
-                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,
-                Stmt::Assign(assign) => {
-                    for target in &assign.targets {
-                        push_receiver_attributes(
-                            target,
-                            self.receiver,
-                            self.file,
-                            self.declared,
-                            self.bindings,
-                        );
-                    }
-                }
-                Stmt::AnnAssign(ann) => {
-                    push_receiver_attributes(
-                        &ann.target,
-                        self.receiver,
-                        self.file,
-                        self.declared,
-                        self.bindings,
-                    );
-                }
-                _ => {}
-            }
-            walk_stmt(self, statement);
-        }
-
-        fn visit_expr(&mut self, expr: &Expr) {
-            if matches!(expr, Expr::Lambda(_)) {
-                return;
-            }
-            walk_expr(self, expr);
-        }
-    }
-
-    let mut visitor = ReceiverAttrVisitor {
-        receiver,
-        file,
-        declared,
-        bindings,
-    };
-    visitor.visit_body(body);
-}
-
-/// Appends the `receiver.name` attribute identifiers bound by the assignment target `target`
-/// (recursing through tuple, list, and starred targets) whose name is not yet in `declared`.
-fn push_receiver_attributes<'a>(
-    target: &Expr,
-    receiver: &str,
-    file: &'a ParsedFile,
-    declared: &mut HashSet<String>,
-    bindings: &mut Vec<AstNode<'a>>,
-) {
-    match target {
-        Expr::Attribute(attr) => {
-            if let Expr::Name(object) = attr.value.as_ref()
-                && object.id.as_str() == receiver
-                && declared.insert(attr.attr.to_string())
-            {
-                bindings.push(AstNode::from_span(
-                    file,
-                    span_from_ruff_range(attr.attr.range),
-                ));
-            }
-        }
-        Expr::Tuple(tuple) => {
-            for elt in &tuple.elts {
-                push_receiver_attributes(elt, receiver, file, declared, bindings);
-            }
-        }
-        Expr::List(list) => {
-            for elt in &list.elts {
-                push_receiver_attributes(elt, receiver, file, declared, bindings);
-            }
-        }
-        Expr::Starred(starred) => {
-            push_receiver_attributes(&starred.value, receiver, file, declared, bindings);
-        }
-        _ => {}
-    }
-}
-
 /// Collects all local variable, parameter, import, and nested-definition names bound directly
 /// inside `function_def` (without descending into nested `def` or `class` bodies).
 pub(super) fn collect_local_bound_names(
@@ -462,6 +325,143 @@ pub(super) fn parameters_shadow_name(parameters: &Parameters, parameter_name: &s
             .kwarg
             .as_ref()
             .is_some_and(|kwarg| kwarg.name.id.as_str() == parameter_name)
+}
+
+/// Extracts the attribute names that `__init__` declares on its receiver: the first
+/// `self.name = …` per name, in source order. Names the class body already declares
+/// (`name: int`) are skipped, so a dataclass-style `self.name = name` is not a second
+/// declaration; later reassignments, other methods, and `self.name[key] = …` declare nothing.
+fn extract_instance_attribute_declarations<'a>(
+    class_def: &StmtClassDef,
+    file: &'a ParsedFile,
+    bindings: &mut Vec<AstNode<'a>>,
+) {
+    let Some(init) = direct_function_definitions(&class_def.body)
+        .into_iter()
+        .find(|func_def| func_def.name.id == "__init__")
+    else {
+        return;
+    };
+    let Some(receiver) = method_receiver_name_ast(init, false, file) else {
+        return;
+    };
+
+    let mut declared = HashSet::new();
+    for statement in &class_def.body {
+        match statement {
+            Stmt::Assign(assign) => {
+                for target in &assign.targets {
+                    extend_expr_target_names(target, file, &mut declared);
+                }
+            }
+            Stmt::AnnAssign(ann) => {
+                extend_expr_target_names(&ann.target, file, &mut declared);
+            }
+            _ => {}
+        }
+    }
+    collect_receiver_attribute_targets(&init.body, &receiver, file, &mut declared, bindings);
+}
+
+/// Walks `body` (without entering nested functions, classes, or lambdas) and appends the
+/// attribute identifier of every `receiver.name` assignment target whose name is not yet in
+/// `declared`.
+fn collect_receiver_attribute_targets<'a>(
+    body: &[Stmt],
+    receiver: &str,
+    file: &'a ParsedFile,
+    declared: &mut HashSet<String>,
+    bindings: &mut Vec<AstNode<'a>>,
+) {
+    struct ReceiverAttrVisitor<'a, 'b> {
+        receiver: &'b str,
+        file: &'a ParsedFile,
+        declared: &'b mut HashSet<String>,
+        bindings: &'b mut Vec<AstNode<'a>>,
+    }
+
+    impl SourceOrderVisitor<'_> for ReceiverAttrVisitor<'_, '_> {
+        fn visit_stmt(&mut self, statement: &Stmt) {
+            match statement {
+                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,
+                Stmt::Assign(assign) => {
+                    for target in &assign.targets {
+                        push_receiver_attributes(
+                            target,
+                            self.receiver,
+                            self.file,
+                            self.declared,
+                            self.bindings,
+                        );
+                    }
+                }
+                Stmt::AnnAssign(ann) => {
+                    push_receiver_attributes(
+                        &ann.target,
+                        self.receiver,
+                        self.file,
+                        self.declared,
+                        self.bindings,
+                    );
+                }
+                _ => {}
+            }
+            walk_stmt(self, statement);
+        }
+
+        fn visit_expr(&mut self, expr: &Expr) {
+            if matches!(expr, Expr::Lambda(_)) {
+                return;
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut visitor = ReceiverAttrVisitor {
+        receiver,
+        file,
+        declared,
+        bindings,
+    };
+    visitor.visit_body(body);
+}
+
+/// Appends the `receiver.name` attribute identifiers bound by the assignment target `target`
+/// (recursing through tuple, list, and starred targets) whose name is not yet in `declared`.
+fn push_receiver_attributes<'a>(
+    target: &Expr,
+    receiver: &str,
+    file: &'a ParsedFile,
+    declared: &mut HashSet<String>,
+    bindings: &mut Vec<AstNode<'a>>,
+) {
+    match target {
+        Expr::Attribute(attr) => {
+            if let Expr::Name(object) = attr.value.as_ref()
+                && object.id.as_str() == receiver
+                && declared.insert(attr.attr.to_string())
+            {
+                bindings.push(AstNode::from_span(
+                    file,
+                    span_from_ruff_range(attr.attr.range),
+                ));
+            }
+        }
+        Expr::Tuple(tuple) => {
+            for elt in &tuple.elts {
+                push_receiver_attributes(elt, receiver, file, declared, bindings);
+            }
+        }
+        Expr::List(list) => {
+            for elt in &list.elts {
+                push_receiver_attributes(elt, receiver, file, declared, bindings);
+            }
+        }
+        Expr::Starred(starred) => {
+            push_receiver_attributes(&starred.value, receiver, file, declared, bindings);
+        }
+        _ => {}
+    }
 }
 
 /// Inserts all identifier names bound by `target` into `names`.

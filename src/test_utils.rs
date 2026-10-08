@@ -162,6 +162,65 @@ pub fn assert_rule_fail<Options: OptionsDeclaration>(
     assert_every_occurrence_reported(rule, lang, case_name, code, span, repeat);
 }
 
+/// Asserts that a `pass` test case produces zero diagnostics.
+///
+/// # Panics
+/// Panics if the rule emits any diagnostics on `code`.
+#[track_caller]
+pub fn assert_rule_pass<Options: OptionsDeclaration>(
+    rule: &CodeRule<Options>,
+    lang: Language,
+    case_name: &str,
+    code: &str,
+) {
+    let rule_name = rule.declaration.name.0;
+    let filename = dummy_filename(lang);
+    let diags = run_code_rule(rule, code, filename);
+    assert!(
+        diags.is_empty(),
+        "rule_test! [{rule_name}] ({lang:?}) PASS case '{case_name}' failed:\nExpected 0 diagnostics, got {}:\n{}\nSource:\n{code}",
+        diags.len(),
+        format_diagnostics_for_test(&diags),
+    );
+}
+
+/// Executes the rule's `check_file` with its default options (including `RequireExplanation` filtering).
+///
+/// # Panics
+/// Panics if `filename` does not have a recognized file extension (`.py` or `.rs`).
+#[must_use]
+pub fn run_code_rule<Options: OptionsDeclaration>(
+    rule: &CodeRule<Options>,
+    source: &str,
+    filename: &str,
+) -> Vec<Diagnostic> {
+    let path = Path::new(filename);
+    let lang = Language::from_path(path).unwrap_or_else(|| {
+        panic!("run_code_rule: unsupported extension in test file '{filename}'")
+    });
+    rule.check_file(path, &ParsedFile::new(source, lang), None)
+}
+
+/// Formats a list of diagnostics to a clean, human-readable simplified snapshot string.
+#[must_use]
+pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic]) -> String {
+    let mut sorted_diags = diagnostics.to_vec();
+    sorted_diags.sort_unstable();
+
+    let mut output = String::new();
+    for diagnostic in &sorted_diags {
+        let _ = writeln!(
+            output,
+            "[{}] Line {}, Col {}: {}",
+            diagnostic.rule_name,
+            diagnostic.location.line,
+            diagnostic.location.column,
+            diagnostic.message.summary
+        );
+    }
+    output
+}
+
 /// Repeats `code` twice in one file and asserts the rule flags the same span in both copies,
 /// so a rule that stops after its first match cannot pass.
 #[track_caller]
@@ -336,65 +395,6 @@ fn normalize_span_indentation(code: &str, span_start: usize, raw_slice: &str) ->
         normalized.push_str(&line[strip..]);
     }
     normalized
-}
-
-/// Asserts that a `pass` test case produces zero diagnostics.
-///
-/// # Panics
-/// Panics if the rule emits any diagnostics on `code`.
-#[track_caller]
-pub fn assert_rule_pass<Options: OptionsDeclaration>(
-    rule: &CodeRule<Options>,
-    lang: Language,
-    case_name: &str,
-    code: &str,
-) {
-    let rule_name = rule.declaration.name.0;
-    let filename = dummy_filename(lang);
-    let diags = run_code_rule(rule, code, filename);
-    assert!(
-        diags.is_empty(),
-        "rule_test! [{rule_name}] ({lang:?}) PASS case '{case_name}' failed:\nExpected 0 diagnostics, got {}:\n{}\nSource:\n{code}",
-        diags.len(),
-        format_diagnostics_for_test(&diags),
-    );
-}
-
-/// Executes the rule's `check_file` with its default options (including `RequireExplanation` filtering).
-///
-/// # Panics
-/// Panics if `filename` does not have a recognized file extension (`.py` or `.rs`).
-#[must_use]
-pub fn run_code_rule<Options: OptionsDeclaration>(
-    rule: &CodeRule<Options>,
-    source: &str,
-    filename: &str,
-) -> Vec<Diagnostic> {
-    let path = Path::new(filename);
-    let lang = Language::from_path(path).unwrap_or_else(|| {
-        panic!("run_code_rule: unsupported extension in test file '{filename}'")
-    });
-    rule.check_file(path, &ParsedFile::new(source, lang), None)
-}
-
-/// Formats a list of diagnostics to a clean, human-readable simplified snapshot string.
-#[must_use]
-pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic]) -> String {
-    let mut sorted_diags = diagnostics.to_vec();
-    sorted_diags.sort_unstable();
-
-    let mut output = String::new();
-    for diagnostic in &sorted_diags {
-        let _ = writeln!(
-            output,
-            "[{}] Line {}, Col {}: {}",
-            diagnostic.rule_name,
-            diagnostic.location.line,
-            diagnostic.location.column,
-            diagnostic.message.summary
-        );
-    }
-    output
 }
 
 fn dummy_filename(lang: Language) -> &'static str {

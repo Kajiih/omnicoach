@@ -432,6 +432,39 @@ pub fn named_format_field_roots(message: &str) -> Option<Vec<String>> {
     Some(roots)
 }
 
+/// Validates a PEP 3101 `field_name` (`arg_name("." attribute | "[" index "]")*`) and returns
+/// its root `arg_name` slice.
+#[must_use]
+pub fn extract_valid_field_root(field_name: &str) -> Option<&str> {
+    let split_at = field_name.find(['.', '[']).unwrap_or(field_name.len());
+    let root = &field_name[..split_at];
+    let valid_root = root.is_empty()
+        || root.chars().all(|character| character.is_ascii_digit())
+        || is_python_identifier(root);
+    if !valid_root {
+        return None;
+    }
+
+    let mut tail = &field_name[split_at..];
+    while !tail.is_empty() {
+        if let Some(after_dot) = tail.strip_prefix('.') {
+            let end = after_dot.find(['.', '[']).unwrap_or(after_dot.len());
+            if !is_python_identifier(&after_dot[..end]) {
+                return None;
+            }
+            tail = &after_dot[end..];
+        } else {
+            let after_bracket = tail.strip_prefix('[')?;
+            let close = after_bracket.find(']')?;
+            if close == 0 {
+                return None;
+            }
+            tail = &after_bracket[close + 1..];
+        }
+    }
+    Some(root)
+}
+
 /// Parses one `{...}` replacement field whose body starts at `start` (immediately after `{`),
 /// returning the byte index after the matching `}` and the root `arg_name`s found inside it.
 fn parse_replacement_field(message: &str, start: usize) -> Option<(usize, Vec<&str>)> {
@@ -507,39 +540,6 @@ fn parse_format_spec_section<'a>(
         }
     }
     None
-}
-
-/// Validates a PEP 3101 `field_name` (`arg_name("." attribute | "[" index "]")*`) and returns
-/// its root `arg_name` slice.
-#[must_use]
-pub fn extract_valid_field_root(field_name: &str) -> Option<&str> {
-    let split_at = field_name.find(['.', '[']).unwrap_or(field_name.len());
-    let root = &field_name[..split_at];
-    let valid_root = root.is_empty()
-        || root.chars().all(|character| character.is_ascii_digit())
-        || is_python_identifier(root);
-    if !valid_root {
-        return None;
-    }
-
-    let mut tail = &field_name[split_at..];
-    while !tail.is_empty() {
-        if let Some(after_dot) = tail.strip_prefix('.') {
-            let end = after_dot.find(['.', '[']).unwrap_or(after_dot.len());
-            if !is_python_identifier(&after_dot[..end]) {
-                return None;
-            }
-            tail = &after_dot[end..];
-        } else {
-            let after_bracket = tail.strip_prefix('[')?;
-            let close = after_bracket.find(']')?;
-            if close == 0 {
-                return None;
-            }
-            tail = &after_bracket[close + 1..];
-        }
-    }
-    Some(root)
 }
 
 /// Returns true if `name` is a valid Python identifier (`order_id`, `_item2`, `café`).
