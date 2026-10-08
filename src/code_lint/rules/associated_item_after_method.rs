@@ -1,0 +1,204 @@
+//! Flags Rust associated `type` and `const` items declared after `fn` items in an `impl` or `trait` block.
+
+use crate::code_lint::ast::ParsedFile;
+use crate::code_lint::ast::rust::collect_associated_items_after_methods;
+use crate::code_lint::contract::{CodeRule, RuleTarget};
+use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
+use crate::rule_declaration::{
+    Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
+    RuleDoc, RuleOptions, Topic,
+};
+use std::path::Path;
+
+const TEMPLATE: ViolationTemplate = violation_template! {
+    summary: "Associated item `{name}` of `{class}` is declared after a `fn` item.",
+    rationale: "Placing associated types or constants after `fn` items hides the type-level parameters and constants that method signatures in `{class}` depend on.",
+    suggestion: "Move `{name}` to the top of the `{class}` `trait` or `impl` block, before any `fn` items.",
+};
+
+/// The rule's declaration.
+pub const RULE: CodeRule = CodeRule {
+    declaration: Declaration {
+        name: RuleName("associated-item-after-method"),
+        template: &TEMPLATE,
+        languages: &[Language::Rust],
+        options: RuleOptions::code_rule(()),
+        classification: Classification {
+            topics: &[Topic::DECLARATION_ORDER],
+            precision: Precision::Exact,
+            consensus: Consensus::Unopinionated,
+            impacted_quality: ImpactedQuality::Maintainability,
+        },
+        doc: RuleDoc {
+            summary: "Flags Rust associated `type` and `const` items declared after `fn` items in an `impl` or `trait` block.",
+            what_it_does: indoc::indoc! {r"
+                Checks Rust `impl` (both inherent and trait `impl`) and `trait` blocks for
+                associated `type` and associated `const` items declared after a `fn` item in the
+                same block.
+
+                Macro invocations inside an `impl` or `trait` block, local `const` or `type` items
+                declared inside a function body, test files, and `#[cfg(test)]` / `#[test]` items
+                are not flagged."},
+            why_is_this_bad: indoc::indoc! {r"
+                Associated types (`type Output = ...;`) and associated constants (`const MAX: usize
+                = ...;`) parameterize the signatures and contracts of the methods in a `trait` or
+                `impl` block. When they are placed after `fn` items, a reader encounters `Self::Output`
+                or `Self::MAX` in method signatures before seeing what type or constant those names
+                refer to.
+
+                Declare all associated `type` and `const` items at the top of the `trait` or `impl`
+                block, before any `fn` items."},
+            references: &[Reference {
+                title: "The Rust Reference: Associated Items",
+                url: "https://doc.rust-lang.org/reference/items/associated-items.html",
+            }],
+            examples: &[Example {
+                language: Language::Rust,
+                flagged: indoc::indoc! {r"
+                    pub trait Decoder {
+                        fn decode(&self, input: &str) -> Self::Output;
+
+                        type Output;
+                    }
+                "},
+                flagged_span: "Output",
+                fixed: indoc::indoc! {r"
+                    pub trait Decoder {
+                        type Output;
+
+                        fn decode(&self, input: &str) -> Self::Output;
+                    }
+                "},
+            }],
+        },
+    },
+    target: RuleTarget::SourceOnly,
+    check: check_file,
+};
+
+fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
+    collect_associated_items_after_methods(file)
+        .into_iter()
+        .map(|item| {
+            rule.diagnostic_at_node(
+                path,
+                &item.name_node,
+                &[("name", &item.name), ("class", &item.container_name)],
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+crate::test_utils::rule_test!(
+    RULE,
+    {
+        Rust => {
+            pass: [
+                assoc_types_and_consts_before_methods => r#"
+                    pub trait Codec {
+                        type Input;
+                        type Output;
+                        const VERSION: u32 = 1;
+
+                        fn encode(&self, payload: Self::Input) -> Self::Output;
+                    }
+
+                    pub struct FrameCodec;
+
+                    impl Codec for FrameCodec {
+                        type Input = u32;
+                        type Output = u64;
+                        const VERSION: u32 = 2;
+
+                        fn encode(&self, payload: Self::Input) -> Self::Output {
+                            u64::from(payload)
+                        }
+                    }
+
+                    impl FrameCodec {
+                        pub const DEFAULT_LIMIT: usize = 16;
+
+                        pub fn limit(&self) -> usize {
+                            Self::DEFAULT_LIMIT
+                        }
+                    }
+                "#,
+                macro_call_and_local_items_inside_fn_exempt => r#"
+                    macro_rules! declare_marker {
+                        () => {};
+                    }
+
+                    pub struct Service;
+
+                    impl Service {
+                        pub fn run(&self) -> usize {
+                            type LocalCount = usize;
+                            const STEP: LocalCount = 1;
+                            STEP
+                        }
+
+                        declare_marker!();
+                    }
+                "#,
+                separate_impl_blocks_and_inline_test_fn_exempt => r#"
+                    pub struct Buffer;
+
+                    impl Buffer {
+                        pub fn clear(&self) {}
+                    }
+
+                    impl Buffer {
+                        pub const CAPACITY: usize = 64;
+                    }
+
+                    pub struct Reader;
+
+                    impl Reader {
+                        /// Test-only helper method.
+                        #[cfg(test)]
+                        fn test_helper(&self) {}
+
+                        pub const HEADER_SIZE: usize = 8;
+                    }
+                "#,
+            ],
+            fail: [
+                assoc_type_after_fn_in_trait => r#"
+                    pub trait Stream {
+                        fn next_item(&mut self) -> Option<Self::Item>;
+
+                        type Item;
+                    }
+                "# => "Item",
+                assoc_const_after_fn_in_inherent_impl => r#"
+                    pub struct Worker;
+
+                    impl Worker {
+                        pub fn max_retries(&self) -> usize {
+                            Self::MAX_RETRIES
+                        }
+
+                        pub const MAX_RETRIES: usize = 3;
+                    }
+                "# => "MAX_RETRIES",
+                assoc_type_after_fn_in_trait_impl => r#"
+                    pub trait Handler {
+                        type Output;
+                        fn handle(&self) -> Self::Output;
+                    }
+
+                    pub struct Processor;
+
+                    impl Handler for Processor {
+                        fn handle(&self) -> Self::Output {
+                            1
+                        }
+
+                        type Output = u32;
+                    }
+                "# => "Output",
+            ],
+        },
+    }
+);

@@ -616,11 +616,6 @@ pub enum LiteralValue {
 }
 
 impl LiteralValue {
-    /// Builds a float value, storing `-0.0` as `0.0` so both spellings compare equal.
-    fn float(value: f64) -> Self {
-        Self::Float(if value == 0.0 { 0.0_f64 } else { value }.to_bits())
-    }
-
     /// Returns the arithmetic negation of a number, or `None` for strings and overflow.
     pub(in crate::code_lint::ast) fn negated(&self) -> Option<Self> {
         match self {
@@ -628,6 +623,11 @@ impl LiteralValue {
             Self::Float(bits) => Some(Self::float(-f64::from_bits(*bits))),
             Self::Str(_) | Self::Bytes(_) => None,
         }
+    }
+
+    /// Builds a float value, storing `-0.0` as `0.0` so both spellings compare equal.
+    fn float(value: f64) -> Self {
+        Self::Float(if value == 0.0 { 0.0_f64 } else { value }.to_bits())
     }
 }
 
@@ -751,6 +751,50 @@ pub fn find_unwrapped_multiline_strings(
         file.lang(),
         find_unwrapped_multiline_strings(file, is_allowed_wrapper)
     )
+}
+
+/// Visibility tier of a method or associated function in a Python class or Rust inherent `impl`
+/// block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MethodVisibility {
+    /// Public or dunder (`__name__`) method in Python; exported (`pub`, `pub(crate)`, `pub(super)`,
+    /// `pub(in ...)`) method or associated function in Rust.
+    Public,
+    /// Single-underscore (`_name`) or name-mangled (`__name`) method in Python; bare `fn` without
+    /// a visibility qualifier in Rust.
+    Private,
+}
+
+/// A direct method or associated function of a Python `class` or Rust inherent `impl` block.
+#[derive(Clone)]
+pub struct TypeMethod<'a> {
+    /// Identifier AST node of the method declaration.
+    pub name_node: AstNode<'a>,
+    /// Method identifier name.
+    pub name: String,
+    /// Visibility tier (`Public` vs. `Private`).
+    pub visibility: MethodVisibility,
+    /// True if this method is a lifecycle constructor in Python (`__prepare__`,
+    /// `__init_subclass__`, `__new__`, `__init__`, `__post_init__`, `__attrs_pre_init__`,
+    /// `__attrs_post_init__`) or an exported `new` / `try_new` / `new_*` / `try_new_*` associated
+    /// function without a `self` receiver in a Rust inherent `impl` block.
+    pub is_constructor: bool,
+}
+
+/// A Python `class` or Rust inherent `impl` block and its direct methods in source order.
+pub struct TypeMethodScope<'a> {
+    /// Name of the enclosing class or implemented type.
+    pub type_name: String,
+    /// Direct methods in source order (with Python `@overload` signatures and
+    /// `@<prop>.setter` / `@<prop>.deleter` accessors grouped at their first declaration).
+    pub methods: Vec<TypeMethod<'a>>,
+}
+
+/// Collects each Python `class` and Rust inherent `impl` block in `file` with its direct methods
+/// in source order.
+#[must_use]
+pub fn collect_type_method_scopes(file: &ParsedFile) -> Vec<TypeMethodScope<'_>> {
+    dispatch_lang!(file.lang(), collect_type_method_scopes(file))
 }
 
 #[cfg(test)]

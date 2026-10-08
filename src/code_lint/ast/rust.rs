@@ -2,8 +2,9 @@
 
 use crate::code_lint::ast::{
     AstNode, Binding, BindingKind, EnclosingFunction, LiteralOccurrence, LiteralRole, LiteralValue,
-    ParsedFile, PositionalRead, ScopePositionalReads, is_rust_comment_kind, parse_float_literal,
-    parse_integer_literal, push_bindings, span_from_rowan_range,
+    MethodVisibility, ParsedFile, PositionalRead, ScopePositionalReads, TypeMethod,
+    TypeMethodScope, is_rust_comment_kind, parse_float_literal, parse_integer_literal,
+    push_bindings, span_from_rowan_range,
 };
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast::{
@@ -327,19 +328,15 @@ fn is_doc_attribute(attribute: &ast::Attr) -> bool {
 }
 
 fn collect_inline_test_ranges_rec(node: &SyntaxNode, ranges: &mut Vec<std::ops::Range<usize>>) {
-    let mut first_attribute_start: Option<usize> = None;
-    let mut has_test_attr = false;
-    for attribute in node.children().filter_map(ast::Attr::cast) {
-        if attribute.kind() != ast::AttrKind::Outer {
-            continue;
-        }
-        first_attribute_start.get_or_insert_with(|| attribute.syntax().text_range().start().into());
-        if is_conditional_test_attribute(&attribute) || is_test_attribute(&attribute) {
-            has_test_attr = true;
-        }
-    }
+    let has_test_attr = node
+        .children()
+        .filter_map(ast::Attr::cast)
+        .any(|attribute| {
+            attribute.kind() == ast::AttrKind::Outer
+                && (is_conditional_test_attribute(&attribute) || is_test_attribute(&attribute))
+        });
     if has_test_attr {
-        let start = first_attribute_start.unwrap_or_else(|| node.text_range().start().into());
+        let start: usize = node.text_range().start().into();
         let end: usize = node.text_range().end().into();
         ranges.push(start..end);
         return;
@@ -1780,6 +1777,188 @@ pub fn nullable_return_payload(return_type: &AstNode<'_>) -> Option<NullableRetu
     }
 }
 
+/// Extracts the terminal type name of `impl_item.self_ty()` (or its trimmed source text when
+/// the self type is not a path type).
+fn impl_self_type_name(impl_item: &ast::Impl, source: &str) -> Option<String> {
+    let self_type = impl_item.self_ty()?;
+    if let ast::Type::PathType(path_type) = &self_type
+        && let Some(path) = path_type.path()
+        && let Some(segment) = path.segment()
+        && let Some(name_ref) = segment.name_ref()
+    {
+        return Some(name_ref.text().trim().to_owned());
+    }
+    let span = span_from_rowan_range(self_type.syntax().text_range());
+    Some(source[span.start..span.end].trim().to_owned())
+}
+
+/// Returns true if `name` is a standard Rust constructor identifier (`new`, `try_new`, `new_*`,
+/// or `try_new_*`).
+fn is_rust_constructor_name(name: &str) -> bool {
+    matches!(name, "new" | "try_new") || name.starts_with("new_") || name.starts_with("try_new_")
+}
+
+/// Returns true if `function` has a return type that references `Self` or `type_name`.
+fn returns_self_type(function: &ast::Fn, type_name: &str) -> bool {
+    function.ret_type().is_some_and(|ret_type| {
+        ret_type
+            .syntax()
+            .descendants_with_tokens()
+            .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+            .any(|token| {
+                token.kind() == SyntaxKind::SELF_TYPE_KW
+                    || (token.kind() == SyntaxKind::IDENT && token.text() == type_name)
+            })
+    })
+}
+
+/// Collects each Rust inherent `impl` block in `file` with its direct non-test `fn` items in
+/// source order.
+#[must_use]
+pub(super) fn collect_type_method_scopes(file: &ParsedFile) -> Vec<TypeMethodScope<'_>> {
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
+    let mut scopes = Vec::new();
+    for impl_item in parsed
+        .tree()
+        .syntax()
+        .descendants()
+        .filter_map(ast::Impl::cast)
+    {
+        if impl_item.trait_().is_some()
+            || file.is_in_rust_inline_test(impl_item.syntax().text_range().start().into())
+        {
+            continue;
+        }
+        let Some(type_name) = impl_self_type_name(&impl_item, &file.source) else {
+            continue;
+        };
+        let Some(associated_items) = impl_item.assoc_item_list() else {
+            continue;
+        };
+        let mut methods = Vec::new();
+        for assoc_item in associated_items.assoc_items() {
+            let ast::AssocItem::Fn(function) = assoc_item else {
+                continue;
+            };
+            if file.is_in_rust_inline_test(function.syntax().text_range().start().into()) {
+                continue;
+            }
+            let Some(name_node) = function.name() else {
+                continue;
+            };
+            let name = name_node.text().trim().to_owned();
+            let is_exported = function.visibility().is_some();
+            let visibility = if is_exported {
+                MethodVisibility::Public
+            } else {
+                MethodVisibility::Private
+            };
+            let has_self = function
+                .param_list()
+                .is_some_and(|params| params.self_param().is_some());
+            let is_constructor = is_exported
+                && !has_self
+                && is_rust_constructor_name(&name)
+                && returns_self_type(&function, &type_name);
+            methods.push(TypeMethod {
+                name_node: AstNode::from_span(
+                    file,
+                    span_from_rowan_range(name_node.syntax().text_range()),
+                ),
+                name,
+                visibility,
+                is_constructor,
+            });
+        }
+        scopes.push(TypeMethodScope { type_name, methods });
+    }
+    scopes
+}
+
+/// An associated `type` or `const` item declared after a `fn` item inside a Rust `impl` or
+/// `trait` block.
+pub struct RustAssociatedItemAfterMethod<'a> {
+    /// Name of the enclosing `impl` self-type or `trait`.
+    pub container_name: String,
+    /// Associated item identifier name.
+    pub name: String,
+    /// Identifier AST node of the associated `type` or `const` item.
+    pub name_node: AstNode<'a>,
+}
+
+/// Collects associated `type` and `const` items declared after at least one `fn` item inside a
+/// single `AssocItemList`.
+fn collect_misplaced_assoc_items<'a>(
+    associated_items: &ast::AssocItemList,
+    container_name: &str,
+    file: &'a ParsedFile,
+    out: &mut Vec<RustAssociatedItemAfterMethod<'a>>,
+) {
+    let mut seen_fn = false;
+    for assoc_item in associated_items.assoc_items() {
+        if file.is_in_rust_inline_test(assoc_item.syntax().text_range().start().into()) {
+            continue;
+        }
+        let misplaced_name = match assoc_item {
+            ast::AssocItem::Fn(_) => {
+                seen_fn = true;
+                None
+            }
+            ast::AssocItem::TypeAlias(type_alias) if seen_fn => type_alias.name(),
+            ast::AssocItem::Const(const_item) if seen_fn => const_item.name(),
+            _ => None,
+        };
+        if let Some(name_node) = misplaced_name {
+            out.push(RustAssociatedItemAfterMethod {
+                container_name: container_name.to_owned(),
+                name: name_node.text().trim().to_owned(),
+                name_node: AstNode::from_span(
+                    file,
+                    span_from_rowan_range(name_node.syntax().text_range()),
+                ),
+            });
+        }
+    }
+}
+
+/// Collects associated `type` and `const` items declared after `fn` items inside Rust `impl`
+/// (inherent or trait) and `trait` blocks across `file`.
+#[must_use]
+pub fn collect_associated_items_after_methods(
+    file: &ParsedFile,
+) -> Vec<RustAssociatedItemAfterMethod<'_>> {
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for node in parsed.tree().syntax().descendants() {
+        if file.is_in_rust_inline_test(node.text_range().start().into()) {
+            continue;
+        }
+        if let Some(impl_item) = ast::Impl::cast(node.clone()) {
+            if let (Some(container_name), Some(associated_items)) = (
+                impl_self_type_name(&impl_item, &file.source),
+                impl_item.assoc_item_list(),
+            ) {
+                collect_misplaced_assoc_items(&associated_items, &container_name, file, &mut out);
+            }
+        } else if let Some(trait_item) = ast::Trait::cast(node)
+            && let (Some(name_node), Some(associated_items)) =
+                (trait_item.name(), trait_item.assoc_item_list())
+        {
+            collect_misplaced_assoc_items(
+                &associated_items,
+                name_node.text().trim(),
+                file,
+                &mut out,
+            );
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2107,5 +2286,99 @@ mod tests {
         assert_eq!(payload.syntax().text().to_string(), expected_payload);
         let inner = unwrap_rust_pointer_wrappers(payload, &file.source);
         assert_eq!(inner.syntax().text().to_string(), expected_unwrapped);
+    }
+
+    #[test]
+    fn test_collect_type_method_scopes_rust() {
+        use MethodVisibility::{Private, Public};
+
+        let source = indoc::indoc! {r"
+            impl<'a> Client<'a> {
+                pub fn new() -> Self { todo!() }
+                pub(crate) fn try_new_from_env() -> Self { todo!() }
+                pub fn new_session(&self) -> Self { todo!() }
+                fn new_internal() -> Self { todo!() }
+            }
+
+            impl Default for Client<'_> {
+                fn default() -> Self { todo!() }
+            }
+        "};
+        let file = ParsedFile::rust(source);
+        let scopes = collect_type_method_scopes(&file);
+        let summary: Vec<_> = scopes
+            .iter()
+            .map(|scope| {
+                let methods: Vec<_> = scope
+                    .methods
+                    .iter()
+                    .map(|method| {
+                        (
+                            method.name.as_str(),
+                            method.visibility,
+                            method.is_constructor,
+                        )
+                    })
+                    .collect();
+                (scope.type_name.as_str(), methods)
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![(
+                "Client",
+                vec![
+                    ("new", Public, true),
+                    ("try_new_from_env", Public, true),
+                    ("new_session", Public, false),
+                    ("new_internal", Private, false),
+                ],
+            )]
+        );
+    }
+
+    #[test]
+    fn test_collect_associated_items_after_methods_rust() {
+        let source = indoc::indoc! {r"
+            trait Codec {
+                type Input;
+                fn decode(&self);
+                type Output;
+                const VERSION: u32 = 1;
+            }
+
+            impl Codec for JsonCodec {
+                type Input = String;
+                fn decode(&self) {}
+                type Output = Vec<u8>;
+            }
+        "};
+        let file = ParsedFile::rust(source);
+        let items: Vec<(String, String, String)> = collect_associated_items_after_methods(&file)
+            .into_iter()
+            .map(|item| {
+                (
+                    item.container_name,
+                    item.name,
+                    item.name_node.text().into_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            items,
+            vec![
+                ("Codec".to_owned(), "Output".to_owned(), "Output".to_owned()),
+                (
+                    "Codec".to_owned(),
+                    "VERSION".to_owned(),
+                    "VERSION".to_owned()
+                ),
+                (
+                    "JsonCodec".to_owned(),
+                    "Output".to_owned(),
+                    "Output".to_owned()
+                ),
+            ]
+        );
     }
 }

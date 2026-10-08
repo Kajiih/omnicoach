@@ -5,18 +5,27 @@ use super::{
     in_place_mutated_receiver_expr, is_bare_final_annotation_expr, method_receiver_name_ast,
     resolve_path_and_terminal_expr,
 };
-use crate::code_lint::ast::span_from_ruff_range;
+use crate::code_lint::ast::{MethodVisibility, TypeMethod, TypeMethodScope, span_from_ruff_range};
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef};
 use ruff_text_size::Ranged as _;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const PROTOCOL_CLASS: &str = "Protocol";
 const ABC_CLASS: &str = "ABC";
 const SELF_RECEIVER: &str = "self";
 const DATACLASS_DECORATOR: &str = "dataclass";
 const QUALIFIED_DATACLASS_DECORATOR: &str = "dataclasses.dataclass";
+const PYTHON_CONSTRUCTOR_NAMES: &[&str] = &[
+    "__prepare__",
+    "__init_subclass__",
+    "__new__",
+    "__init__",
+    "__post_init__",
+    "__attrs_pre_init__",
+    "__attrs_post_init__",
+];
 
 /// Represents a base class expression in a Python class definition.
 #[derive(Clone)]
@@ -499,6 +508,167 @@ pub fn collect_instance_attribute_annotations(
         return Vec::new();
     };
     let mut visitor = InstanceAttrVisitor {
+        file,
+        out: Vec::new(),
+    };
+    visitor.visit_body(&parsed.syntax().body);
+    visitor.out
+}
+
+/// Classifies the visibility tier of a Python method identifier: public or `__dunder__` methods
+/// are `Public`; single-underscore (`_name`) and name-mangled (`__name`) methods are `Private`.
+fn python_method_visibility(name: &str) -> MethodVisibility {
+    let is_dunder = name.starts_with("__") && name.ends_with("__") && name.len() > 4;
+    if is_dunder || !name.starts_with('_') {
+        MethodVisibility::Public
+    } else {
+        MethodVisibility::Private
+    }
+}
+
+/// Collects the direct methods of `class_def` in source order, grouping `@overload` signatures
+/// and `@<prop>.setter` / `@<prop>.deleter` accessors with their first definition.
+fn collect_class_methods<'a>(
+    class_def: &StmtClassDef,
+    file: &'a ParsedFile,
+) -> Vec<TypeMethod<'a>> {
+    struct SeenMethod {
+        has_overload: bool,
+        has_non_overload: bool,
+    }
+
+    let mut methods = Vec::new();
+    let mut seen_by_name: HashMap<String, SeenMethod> = HashMap::new();
+
+    for function_def in direct_function_definitions(&class_def.body) {
+        let name = function_def.name.id.to_string();
+        let decorators = extract_decorators_from_slice(&function_def.decorator_list, file);
+        let is_overload = decorators
+            .iter()
+            .any(|decorator| decorator.terminal_name == "overload");
+        let is_property_accessor = decorators.iter().any(|decorator| {
+            matches!(
+                decorator.terminal_name.as_str(),
+                "getter" | "setter" | "deleter"
+            )
+        });
+
+        if let Some(seen) = seen_by_name.get_mut(&name) {
+            let continues_overload = is_overload || (seen.has_overload && !seen.has_non_overload);
+            if is_property_accessor || continues_overload {
+                seen.has_overload |= is_overload;
+                seen.has_non_overload |= !is_overload;
+                continue;
+            }
+        }
+
+        seen_by_name.insert(
+            name.clone(),
+            SeenMethod {
+                has_overload: is_overload,
+                has_non_overload: !is_overload,
+            },
+        );
+        let visibility = python_method_visibility(&name);
+        let is_constructor = PYTHON_CONSTRUCTOR_NAMES.contains(&name.as_str());
+        methods.push(TypeMethod {
+            name_node: AstNode::from_span(file, span_from_ruff_range(function_def.name.range)),
+            name,
+            visibility,
+            is_constructor,
+        });
+    }
+
+    methods
+}
+
+/// Collects each Python `class` definition in `file` with its direct methods in source order.
+#[must_use]
+pub(in crate::code_lint::ast) fn collect_type_method_scopes(
+    file: &ParsedFile,
+) -> Vec<TypeMethodScope<'_>> {
+    struct ClassMethodVisitor<'a> {
+        file: &'a ParsedFile,
+        scopes: Vec<TypeMethodScope<'a>>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for ClassMethodVisitor<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if let Stmt::ClassDef(class_def) = statement {
+                self.scopes.push(TypeMethodScope {
+                    type_name: class_def.name.id.to_string(),
+                    methods: collect_class_methods(class_def, self.file),
+                });
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut visitor = ClassMethodVisitor {
+        file,
+        scopes: Vec::new(),
+    };
+    visitor.visit_body(&parsed.syntax().body);
+    visitor.scopes
+}
+
+/// A type-annotated class or instance attribute (`name: Type` or `name: Type = value`) declared
+/// after a method definition in a Python class body.
+pub struct PythonFieldAfterMethod<'a> {
+    /// Name of the enclosing class.
+    pub class_name: String,
+    /// Attribute identifier name.
+    pub name: String,
+    /// The full `Stmt::AnnAssign` AST node.
+    pub node: AstNode<'a>,
+}
+
+/// Collects type-annotated class-body attribute declarations (`Stmt::AnnAssign` with an
+/// identifier target) that appear after at least one direct method definition in the same class.
+#[must_use]
+pub fn collect_fields_after_methods(file: &ParsedFile) -> Vec<PythonFieldAfterMethod<'_>> {
+    struct FieldAfterMethodVisitor<'a> {
+        file: &'a ParsedFile,
+        out: Vec<PythonFieldAfterMethod<'a>>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for FieldAfterMethodVisitor<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if let Stmt::ClassDef(class_def) = statement {
+                let class_name = class_def.name.id.to_string();
+                let mut seen_method = false;
+                for child in &class_def.body {
+                    match child {
+                        Stmt::FunctionDef(_) => {
+                            seen_method = true;
+                        }
+                        Stmt::AnnAssign(ann) if seen_method => {
+                            if let Expr::Name(target) = ann.target.as_ref() {
+                                self.out.push(PythonFieldAfterMethod {
+                                    class_name: class_name.clone(),
+                                    name: target.id.to_string(),
+                                    node: AstNode::from_span(
+                                        self.file,
+                                        span_from_ruff_range(ann.range),
+                                    ),
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut visitor = FieldAfterMethodVisitor {
         file,
         out: Vec::new(),
     };
