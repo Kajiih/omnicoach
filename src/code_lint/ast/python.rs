@@ -73,6 +73,16 @@ pub(super) fn find_expr_at_span(module: &ModModule, target_span: SourceSpan) -> 
     }
 
     impl<'a> SourceOrderVisitor<'a> for ExprFinder<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            let span = span_from_ruff_range(statement.range());
+            if self.found.is_none()
+                && span.start <= self.target_span.start
+                && self.target_span.end <= span.end
+            {
+                walk_stmt(self, statement);
+            }
+        }
+
         fn visit_expr(&mut self, expr: &'a Expr) {
             if self.found.is_some() {
                 return;
