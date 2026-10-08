@@ -55,6 +55,23 @@ pub struct PythonFormatString<'a> {
     pub placeholders: Vec<PythonFormatPlaceholder>,
 }
 
+/// Collects the formatted string literals in `file`, in source order. Raw, byte and
+/// unformatted string literals are skipped.
+#[must_use]
+pub fn collect_format_strings(file: &ParsedFile) -> Vec<PythonFormatString<'_>> {
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut visitor = FormatStringVisitor {
+        file,
+        context_style: None,
+        call_arg_target: None,
+        out: Vec::new(),
+    };
+    visitor.visit_body(&parsed.syntax().body);
+    visitor.out
+}
+
 struct FormatStringVisitor<'a> {
     file: &'a ParsedFile,
     context_style: Option<PythonFormatStyle>,
@@ -63,32 +80,6 @@ struct FormatStringVisitor<'a> {
 }
 
 impl FormatStringVisitor<'_> {
-    fn push_plain_part(
-        &mut self,
-        part: &StringLiteral,
-        style: PythonFormatStyle,
-        preceding_text: &mut String,
-    ) {
-        let content_range = part.content_range();
-        let content =
-            &self.file.source[usize::from(content_range.start())..usize::from(content_range.end())];
-        if !part.flags.prefix().is_raw() {
-            let (literals, placeholders) = match style {
-                PythonFormatStyle::StrFormat => split_brace_fields(content),
-                PythonFormatStyle::Printf => split_printf_fields(content),
-                PythonFormatStyle::FString => unreachable!(),
-            };
-            self.out.push(PythonFormatString {
-                node: AstNode::from_span(self.file, span_from_ruff_range(part.range)),
-                style,
-                preceding_text: preceding_text.clone(),
-                literals,
-                placeholders,
-            });
-        }
-        preceding_text.push_str(content);
-    }
-
     fn visit_fstring(
         &mut self,
         expr_fstring: &ruff_python_ast::ExprFString,
@@ -173,6 +164,32 @@ impl FormatStringVisitor<'_> {
         walk_arguments(self, &call.arguments);
         self.call_arg_target = prev_target;
     }
+
+    fn push_plain_part(
+        &mut self,
+        part: &StringLiteral,
+        style: PythonFormatStyle,
+        preceding_text: &mut String,
+    ) {
+        let content_range = part.content_range();
+        let content =
+            &self.file.source[usize::from(content_range.start())..usize::from(content_range.end())];
+        if !part.flags.prefix().is_raw() {
+            let (literals, placeholders) = match style {
+                PythonFormatStyle::StrFormat => split_brace_fields(content),
+                PythonFormatStyle::Printf => split_printf_fields(content),
+                PythonFormatStyle::FString => unreachable!(),
+            };
+            self.out.push(PythonFormatString {
+                node: AstNode::from_span(self.file, span_from_ruff_range(part.range)),
+                style,
+                preceding_text: preceding_text.clone(),
+                literals,
+                placeholders,
+            });
+        }
+        preceding_text.push_str(content);
+    }
 }
 
 impl SourceOrderVisitor<'_> for FormatStringVisitor<'_> {
@@ -208,23 +225,6 @@ impl SourceOrderVisitor<'_> for FormatStringVisitor<'_> {
     }
 }
 
-/// Collects the formatted string literals in `file`, in source order. Raw, byte and
-/// unformatted string literals are skipped.
-#[must_use]
-pub fn collect_format_strings(file: &ParsedFile) -> Vec<PythonFormatString<'_>> {
-    let Some(parsed) = file.py_module() else {
-        return Vec::new();
-    };
-    let mut visitor = FormatStringVisitor {
-        file,
-        context_style: None,
-        call_arg_target: None,
-        out: Vec::new(),
-    };
-    visitor.visit_body(&parsed.syntax().body);
-    visitor.out
-}
-
 /// Describes an f-string `InterpolatedElement` node.
 fn fstring_placeholder(
     interpolation: &InterpolatedElement,
@@ -243,6 +243,37 @@ fn fstring_placeholder(
         }),
         is_self_documenting: interpolation.debug_text.is_some(),
     }
+}
+
+/// Splits `str.format` template text into literals and `{...}` fields. Escaped `{{` and `}}`
+/// stay in the literals.
+fn split_brace_fields(content: &str) -> (Vec<String>, Vec<PythonFormatPlaceholder>) {
+    let bytes = content.as_bytes();
+    let mut literals = Vec::new();
+    let mut placeholders = Vec::new();
+    let mut literal_start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        let current = bytes[index];
+        let is_escaped = (current == b'{' && bytes.get(index + 1) == Some(&b'{'))
+            || (current == b'}' && bytes.get(index + 1) == Some(&b'}'));
+        if is_escaped {
+            index += 2;
+            continue;
+        }
+        if current == b'{'
+            && let Some(close_index) = find_brace_field_end(bytes, index)
+        {
+            literals.push(content[literal_start..index].to_owned());
+            placeholders.push(brace_placeholder(&content[index..=close_index]));
+            index = close_index + 1;
+            literal_start = index;
+            continue;
+        }
+        index += 1;
+    }
+    literals.push(content[literal_start..].to_owned());
+    (literals, placeholders)
 }
 
 /// Finds the closing `}` byte offset of a `{...}` field opening at `open_index`, returning
@@ -284,28 +315,27 @@ fn brace_placeholder(text: &str) -> PythonFormatPlaceholder {
     }
 }
 
-/// Splits `str.format` template text into literals and `{...}` fields. Escaped `{{` and `}}`
-/// stay in the literals.
-fn split_brace_fields(content: &str) -> (Vec<String>, Vec<PythonFormatPlaceholder>) {
+/// Splits printf-style template text into literals and `%` fields. Escaped `%%` and `%`
+/// signs that start no valid field stay in the literals.
+fn split_printf_fields(content: &str) -> (Vec<String>, Vec<PythonFormatPlaceholder>) {
     let bytes = content.as_bytes();
     let mut literals = Vec::new();
     let mut placeholders = Vec::new();
     let mut literal_start = 0;
     let mut index = 0;
     while index < bytes.len() {
-        let current = bytes[index];
-        let is_escaped = (current == b'{' && bytes.get(index + 1) == Some(&b'{'))
-            || (current == b'}' && bytes.get(index + 1) == Some(&b'}'));
-        if is_escaped {
+        if bytes[index] != b'%' {
+            index += 1;
+            continue;
+        }
+        if bytes.get(index + 1) == Some(&b'%') {
             index += 2;
             continue;
         }
-        if current == b'{'
-            && let Some(close_index) = find_brace_field_end(bytes, index)
-        {
+        if let Some((end, placeholder)) = parse_printf_field(content, index) {
             literals.push(content[literal_start..index].to_owned());
-            placeholders.push(brace_placeholder(&content[index..=close_index]));
-            index = close_index + 1;
+            placeholders.push(placeholder);
+            index = end;
             literal_start = index;
             continue;
         }
@@ -313,17 +343,6 @@ fn split_brace_fields(content: &str) -> (Vec<String>, Vec<PythonFormatPlaceholde
     }
     literals.push(content[literal_start..].to_owned());
     (literals, placeholders)
-}
-
-/// Advances `cursor` past a printf width or precision (`*` or digits).
-fn skip_printf_count(bytes: &[u8], cursor: &mut usize) {
-    if bytes.get(*cursor) == Some(&b'*') {
-        *cursor += 1;
-        return;
-    }
-    while bytes.get(*cursor).is_some_and(u8::is_ascii_digit) {
-        *cursor += 1;
-    }
 }
 
 /// Parses the `%[(key)][flags][width][.precision][length]type` field starting at
@@ -372,114 +391,45 @@ fn parse_printf_field(
     ))
 }
 
-/// Splits printf-style template text into literals and `%` fields. Escaped `%%` and `%`
-/// signs that start no valid field stay in the literals.
-fn split_printf_fields(content: &str) -> (Vec<String>, Vec<PythonFormatPlaceholder>) {
-    let bytes = content.as_bytes();
-    let mut literals = Vec::new();
-    let mut placeholders = Vec::new();
-    let mut literal_start = 0;
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] != b'%' {
-            index += 1;
-            continue;
-        }
-        if bytes.get(index + 1) == Some(&b'%') {
-            index += 2;
-            continue;
-        }
-        if let Some((end, placeholder)) = parse_printf_field(content, index) {
-            literals.push(content[literal_start..index].to_owned());
-            placeholders.push(placeholder);
-            index = end;
-            literal_start = index;
-            continue;
-        }
-        index += 1;
+/// Advances `cursor` past a printf width or precision (`*` or digits).
+fn skip_printf_count(bytes: &[u8], cursor: &mut usize) {
+    if bytes.get(*cursor) == Some(&b'*') {
+        *cursor += 1;
+        return;
     }
-    literals.push(content[literal_start..].to_owned());
-    (literals, placeholders)
+    while bytes.get(*cursor).is_some_and(u8::is_ascii_digit) {
+        *cursor += 1;
+    }
 }
 
-/// Returns true if `name` is a valid Python identifier (`order_id`, `_item2`, `café`).
-fn is_python_identifier(name: &str) -> bool {
-    let mut characters = name.chars();
-    let Some(first) = characters.next() else {
-        return false;
-    };
-    let valid_start = first == '_' || first.is_alphabetic();
-    valid_start
-        && characters.all(|character| character == '_' || character.is_alphanumeric())
-        && !first.is_ascii_digit()
-}
-
-/// Validates a PEP 3101 `field_name` (`arg_name("." attribute | "[" index "]")*`) and returns
-/// its root `arg_name` slice.
+/// Returns the identifier roots of the named PEP 3101 replacement fields in `message`.
+///
+/// Roots come in source order (`order` for `{order.id}`, `width` for `{:>{width}}`); the result
+/// is `None` if `message` has unbalanced braces. Positional fields (`{}`, `{0}`) have no named root.
 #[must_use]
-pub fn extract_valid_field_root(field_name: &str) -> Option<&str> {
-    let split_at = field_name.find(['.', '[']).unwrap_or(field_name.len());
-    let root = &field_name[..split_at];
-    let valid_root = root.is_empty()
-        || root.chars().all(|character| character.is_ascii_digit())
-        || is_python_identifier(root);
-    if !valid_root {
-        return None;
-    }
-
-    let mut tail = &field_name[split_at..];
-    while !tail.is_empty() {
-        if let Some(after_dot) = tail.strip_prefix('.') {
-            let end = after_dot.find(['.', '[']).unwrap_or(after_dot.len());
-            if !is_python_identifier(&after_dot[..end]) {
-                return None;
-            }
-            tail = &after_dot[end..];
-        } else {
-            let after_bracket = tail.strip_prefix('[')?;
-            let close = after_bracket.find(']')?;
-            if close == 0 {
-                return None;
-            }
-            tail = &after_bracket[close + 1..];
-        }
-    }
-    Some(root)
-}
-
-/// Parses the `:format_spec` portion of a PEP 3101 replacement field starting at `start`,
-/// appending any nested `{nested_field}` root names to `roots` and returning the byte index
-/// immediately after the outer closing `}`.
-fn parse_format_spec_section<'a>(
-    message: &'a str,
-    start: usize,
-    roots: &mut Vec<&'a str>,
-) -> Option<usize> {
-    let mut cursor = start;
+pub fn named_format_field_roots(message: &str) -> Option<Vec<String>> {
+    let mut cursor = 0;
+    let mut roots = Vec::new();
     while cursor < message.len() {
         let rest = &message[cursor..];
-        if rest.starts_with('}') {
-            return Some(cursor + 1);
-        }
-        if rest.starts_with('{') {
-            let after_open = &message[cursor + 1..];
-            let close_offset = after_open.find('}')?;
-            let nested_body = &after_open[..close_offset];
-            if nested_body.contains('{') {
-                return None;
-            }
-            let nested_field = nested_body
-                .split_once('!')
-                .map_or(nested_body, |(before, _)| before);
-            if let Some(nested_root) = extract_valid_field_root(nested_field) {
-                roots.push(nested_root);
-            }
-            cursor += 1 + close_offset + 1;
+        if rest.starts_with("{{") || rest.starts_with("}}") {
+            cursor += 2;
+        } else if rest.starts_with('}') {
+            return None;
+        } else if rest.starts_with('{') {
+            let (next_cursor, field_roots) = parse_replacement_field(message, cursor + 1)?;
+            roots.extend(
+                field_roots
+                    .into_iter()
+                    .filter(|root| is_python_identifier(root))
+                    .map(str::to_owned),
+            );
+            cursor = next_cursor;
         } else {
             cursor += rest.chars().next()?.len_utf8();
         }
     }
-    None
+    Some(roots)
 }
 
 /// Parses one `{...}` replacement field whose body starts at `start` (immediately after `{`),
@@ -524,32 +474,82 @@ fn parse_replacement_field(message: &str, start: usize) -> Option<(usize, Vec<&s
     Some((next_cursor, roots))
 }
 
-/// Returns the identifier roots of the named PEP 3101 replacement fields in `message`.
-///
-/// Roots come in source order (`order` for `{order.id}`, `width` for `{:>{width}}`); the result
-/// is `None` if `message` has unbalanced braces. Positional fields (`{}`, `{0}`) have no named root.
-#[must_use]
-pub fn named_format_field_roots(message: &str) -> Option<Vec<String>> {
-    let mut cursor = 0;
-    let mut roots = Vec::new();
+/// Parses the `:format_spec` portion of a PEP 3101 replacement field starting at `start`,
+/// appending any nested `{nested_field}` root names to `roots` and returning the byte index
+/// immediately after the outer closing `}`.
+fn parse_format_spec_section<'a>(
+    message: &'a str,
+    start: usize,
+    roots: &mut Vec<&'a str>,
+) -> Option<usize> {
+    let mut cursor = start;
     while cursor < message.len() {
         let rest = &message[cursor..];
-        if rest.starts_with("{{") || rest.starts_with("}}") {
-            cursor += 2;
-        } else if rest.starts_with('}') {
-            return None;
-        } else if rest.starts_with('{') {
-            let (next_cursor, field_roots) = parse_replacement_field(message, cursor + 1)?;
-            roots.extend(
-                field_roots
-                    .into_iter()
-                    .filter(|root| is_python_identifier(root))
-                    .map(str::to_owned),
-            );
-            cursor = next_cursor;
+        if rest.starts_with('}') {
+            return Some(cursor + 1);
+        }
+        if rest.starts_with('{') {
+            let after_open = &message[cursor + 1..];
+            let close_offset = after_open.find('}')?;
+            let nested_body = &after_open[..close_offset];
+            if nested_body.contains('{') {
+                return None;
+            }
+            let nested_field = nested_body
+                .split_once('!')
+                .map_or(nested_body, |(before, _)| before);
+            if let Some(nested_root) = extract_valid_field_root(nested_field) {
+                roots.push(nested_root);
+            }
+            cursor += 1 + close_offset + 1;
         } else {
             cursor += rest.chars().next()?.len_utf8();
         }
     }
-    Some(roots)
+    None
+}
+
+/// Validates a PEP 3101 `field_name` (`arg_name("." attribute | "[" index "]")*`) and returns
+/// its root `arg_name` slice.
+#[must_use]
+pub fn extract_valid_field_root(field_name: &str) -> Option<&str> {
+    let split_at = field_name.find(['.', '[']).unwrap_or(field_name.len());
+    let root = &field_name[..split_at];
+    let valid_root = root.is_empty()
+        || root.chars().all(|character| character.is_ascii_digit())
+        || is_python_identifier(root);
+    if !valid_root {
+        return None;
+    }
+
+    let mut tail = &field_name[split_at..];
+    while !tail.is_empty() {
+        if let Some(after_dot) = tail.strip_prefix('.') {
+            let end = after_dot.find(['.', '[']).unwrap_or(after_dot.len());
+            if !is_python_identifier(&after_dot[..end]) {
+                return None;
+            }
+            tail = &after_dot[end..];
+        } else {
+            let after_bracket = tail.strip_prefix('[')?;
+            let close = after_bracket.find(']')?;
+            if close == 0 {
+                return None;
+            }
+            tail = &after_bracket[close + 1..];
+        }
+    }
+    Some(root)
+}
+
+/// Returns true if `name` is a valid Python identifier (`order_id`, `_item2`, `café`).
+fn is_python_identifier(name: &str) -> bool {
+    let mut characters = name.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    let valid_start = first == '_' || first.is_alphabetic();
+    valid_start
+        && characters.all(|character| character == '_' || character.is_alphanumeric())
+        && !first.is_ascii_digit()
 }

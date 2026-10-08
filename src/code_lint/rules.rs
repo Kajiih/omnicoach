@@ -6,6 +6,7 @@ use crate::code_lint::contract::AnyCodeRule;
 pub mod abbreviated_name;
 pub mod associated_item_after_method;
 pub mod bare_multiline_string;
+pub mod callee_before_caller;
 pub mod concrete_collection_attribute;
 pub mod concrete_collection_parameter;
 pub mod concrete_collection_return;
@@ -28,7 +29,7 @@ pub mod nested_function;
 pub mod nullable_collection_return;
 pub mod packed_assertion;
 pub mod primitive_duration;
-pub mod private_before_public_method;
+pub mod private_before_public_function;
 pub mod quote_wrapped_placeholder;
 pub mod repeated_index_access;
 pub mod repeated_literal;
@@ -40,6 +41,7 @@ pub mod suppressed_exception;
 pub mod too_many_assertions;
 pub mod type_cast;
 pub mod type_suffixed_name;
+pub mod uncolocated_helper;
 pub mod unmatched_logger_placeholder;
 pub mod unslotted_dataclass;
 pub mod unstructured_task;
@@ -81,7 +83,9 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &mutable_module_constant::RULE,
     &inline_public_attribute_annotation::RULE,
     &constructor_after_method::RULE,
-    &private_before_public_method::RULE,
+    &uncolocated_helper::RULE,
+    &private_before_public_function::RULE,
+    &callee_before_caller::RULE,
     &field_after_method::RULE,
     &associated_item_after_method::RULE,
     &statement_after_main_guard::RULE,

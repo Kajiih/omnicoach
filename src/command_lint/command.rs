@@ -44,21 +44,6 @@ impl InterceptedCommand {
             .collect()
     }
 
-    /// Extracts positional arguments (skipping option flags and their values) and option key-values.
-    #[must_use]
-    pub fn parse_args(&self, schema: &ProgramCliSchema) -> ParsedArgs {
-        ArgParser::new(&self.arguments, schema.options_with_values).parse()
-    }
-
-    /// Returns the base name of the program (e.g. "jj" from "/usr/bin/jj").
-    #[must_use]
-    pub fn program_base_name(&self) -> &str {
-        std::path::Path::new(&self.program_name)
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .unwrap_or(&self.program_name)
-    }
-
     fn parse_single(node: &BashNode<'_>, raw_string: &str) -> Option<Self> {
         let mut children = node.children();
         let command_name_node = children.find(|child| child.kind() == "command_name")?;
@@ -81,6 +66,21 @@ impl InterceptedCommand {
             arguments,
             span: (range.start, range.end),
         })
+    }
+
+    /// Extracts positional arguments (skipping option flags and their values) and option key-values.
+    #[must_use]
+    pub fn parse_args(&self, schema: &ProgramCliSchema) -> ParsedArgs {
+        ArgParser::new(&self.arguments, schema.options_with_values).parse()
+    }
+
+    /// Returns the base name of the program (e.g. "jj" from "/usr/bin/jj").
+    #[must_use]
+    pub fn program_base_name(&self) -> &str {
+        std::path::Path::new(&self.program_name)
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            .unwrap_or(&self.program_name)
     }
 }
 

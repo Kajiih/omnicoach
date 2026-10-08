@@ -213,22 +213,6 @@ fn placeholder_neighbors(
     }
 }
 
-/// Replaces escape sequences (`\n`, `\t`, `\"`, etc.) with spaces so escape letters are not
-/// mistaken for prose words.
-fn strip_escape_sequences(text: &str) -> String {
-    let mut cleaned = String::with_capacity(text.len());
-    let mut characters = text.chars();
-    while let Some(character) = characters.next() {
-        if character == '\\' {
-            characters.next();
-            cleaned.push(' ');
-        } else {
-            cleaned.push(character);
-        }
-    }
-    cleaned
-}
-
 /// Extracted quote pair surrounding a placeholder, together with the text before the opening
 /// quote and after the closing quote.
 struct MatchedQuotePair<'a> {
@@ -236,6 +220,35 @@ struct MatchedQuotePair<'a> {
     closing: &'a str,
     prefix_before: &'a str,
     suffix_after: &'a str,
+}
+
+/// Checks whether a placeholder surrounded by `neighbors` is quote-wrapped in a prose context,
+/// returning the quote-wrapped expression if so.
+fn match_prose_quoted_placeholder(
+    neighbors: &PlaceholderNeighbors,
+    placeholder_body: &str,
+) -> Option<String> {
+    let matched = extract_matching_quote_pair(&neighbors.before, &neighbors.after)?;
+    let opening_length = matched.opening.len();
+    let full_prefix_before_quote =
+        &neighbors.full_before[..neighbors.full_before.len() - opening_length];
+    let structure_prefix_before_quote =
+        &neighbors.structure_before[..neighbors.structure_before.len() - opening_length];
+    if !has_valid_left_prose_boundary(
+        matched.prefix_before,
+        full_prefix_before_quote,
+        structure_prefix_before_quote,
+    ) {
+        return None;
+    }
+    if !has_valid_right_prose_boundary(matched.suffix_after, neighbors.followed_by_placeholder) {
+        return None;
+    }
+    Some(format!(
+        "{open}{placeholder_body}{close}",
+        open = matched.opening,
+        close = matched.closing,
+    ))
 }
 
 /// Checks whether `before` ends with a single or double quote (unescaped or single-backslash
@@ -286,36 +299,8 @@ fn extract_matching_quote_pair<'a>(
     })
 }
 
-/// Returns true if `text` has any unclosed `{` / `{{` or `[` delimiter, such as inside a JSON or
-/// list literal (`f'{{"key": "{value}"}}'`).
-fn has_unclosed_structured_delimiter(text: &str) -> bool {
-    let mut brace_depth = 0_i32;
-    let mut bracket_depth = 0_i32;
-    let bytes = text.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        let current = bytes[index];
-        if current == b'{' && bytes.get(index + 1) == Some(&b'{') {
-            brace_depth += 1;
-            index += 2;
-            continue;
-        }
-        if current == b'}' && bytes.get(index + 1) == Some(&b'}') {
-            brace_depth = (brace_depth - 1).max(0);
-            index += 2;
-            continue;
-        }
-        match current {
-            b'{' => brace_depth += 1,
-            b'}' => brace_depth = (brace_depth - 1).max(0),
-            b'[' => bracket_depth += 1,
-            b']' => bracket_depth = (bracket_depth - 1).max(0),
-            _ => {}
-        }
-        index += 1;
-    }
-    brace_depth > 0 || bracket_depth > 0
-}
+/// Whitespace escape sequences as they appear in undecoded source text.
+const WHITESPACE_ESCAPES: [&str; 3] = ["\\n", "\\t", "\\r"];
 
 /// Returns true if the text before the opening quote satisfies the left prose boundary rules.
 fn has_valid_left_prose_boundary(
@@ -348,13 +333,51 @@ fn has_valid_left_prose_boundary(
     last_char.is_ascii_alphanumeric() || matches!(last_char, ':' | ',' | '(' | '.' | '!' | '?')
 }
 
-/// Whitespace escape sequences as they appear in undecoded source text.
-const WHITESPACE_ESCAPES: [&str; 3] = ["\\n", "\\t", "\\r"];
+/// Returns true if `text` has any unclosed `{` / `{{` or `[` delimiter, such as inside a JSON or
+/// list literal (`f'{{"key": "{value}"}}'`).
+fn has_unclosed_structured_delimiter(text: &str) -> bool {
+    let mut brace_depth = 0_i32;
+    let mut bracket_depth = 0_i32;
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let current = bytes[index];
+        if current == b'{' && bytes.get(index + 1) == Some(&b'{') {
+            brace_depth += 1;
+            index += 2;
+            continue;
+        }
+        if current == b'}' && bytes.get(index + 1) == Some(&b'}') {
+            brace_depth = (brace_depth - 1).max(0);
+            index += 2;
+            continue;
+        }
+        match current {
+            b'{' => brace_depth += 1,
+            b'}' => brace_depth = (brace_depth - 1).max(0),
+            b'[' => bracket_depth += 1,
+            b']' => bracket_depth = (bracket_depth - 1).max(0),
+            _ => {}
+        }
+        index += 1;
+    }
+    brace_depth > 0 || bracket_depth > 0
+}
 
-/// Returns true if `character` is a sentence punctuation mark allowed immediately after a closing
-/// prose quote.
-const fn is_prose_punctuation(character: char) -> bool {
-    matches!(character, '.' | ',' | ';' | ':' | '!' | '?' | ')')
+/// Replaces escape sequences (`\n`, `\t`, `\"`, etc.) with spaces so escape letters are not
+/// mistaken for prose words.
+fn strip_escape_sequences(text: &str) -> String {
+    let mut cleaned = String::with_capacity(text.len());
+    let mut characters = text.chars();
+    while let Some(character) = characters.next() {
+        if character == '\\' {
+            characters.next();
+            cleaned.push(' ');
+        } else {
+            cleaned.push(character);
+        }
+    }
+    cleaned
 }
 
 /// Returns true if `suffix_after_quote` satisfies the right prose boundary rules.
@@ -387,33 +410,10 @@ fn has_valid_right_prose_boundary(suffix_after_quote: &str, followed_by_placehol
         })
 }
 
-/// Checks whether a placeholder surrounded by `neighbors` is quote-wrapped in a prose context,
-/// returning the quote-wrapped expression if so.
-fn match_prose_quoted_placeholder(
-    neighbors: &PlaceholderNeighbors,
-    placeholder_body: &str,
-) -> Option<String> {
-    let matched = extract_matching_quote_pair(&neighbors.before, &neighbors.after)?;
-    let opening_length = matched.opening.len();
-    let full_prefix_before_quote =
-        &neighbors.full_before[..neighbors.full_before.len() - opening_length];
-    let structure_prefix_before_quote =
-        &neighbors.structure_before[..neighbors.structure_before.len() - opening_length];
-    if !has_valid_left_prose_boundary(
-        matched.prefix_before,
-        full_prefix_before_quote,
-        structure_prefix_before_quote,
-    ) {
-        return None;
-    }
-    if !has_valid_right_prose_boundary(matched.suffix_after, neighbors.followed_by_placeholder) {
-        return None;
-    }
-    Some(format!(
-        "{open}{placeholder_body}{close}",
-        open = matched.opening,
-        close = matched.closing,
-    ))
+/// Returns true if `character` is a sentence punctuation mark allowed immediately after a closing
+/// prose quote.
+const fn is_prose_punctuation(character: char) -> bool {
+    matches!(character, '.' | ',' | ';' | ':' | '!' | '?' | ')')
 }
 
 #[cfg(test)]

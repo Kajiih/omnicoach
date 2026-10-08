@@ -34,127 +34,6 @@ const TYPE_TYPING_DEFAULTDICT: &str = "DefaultDict";
 const TYPE_COUNTER: &str = "Counter";
 const ORDERED_DICT_CONSTRUCTOR: &str = "OrderedDict";
 
-/// Returns true if `(path, terminal)` refers to an unqualified or standard-library (`typing`,
-/// `typing_extensions`, `collections.abc`, `builtins`) type constructor.
-fn is_std_type_constructor_prefix(path: &str, terminal: &str) -> bool {
-    path == terminal
-        || path.strip_suffix(terminal).is_some_and(|prefix| {
-            matches!(
-                prefix,
-                TYPING_PREFIX | TYPING_EXTENSIONS_PREFIX | "collections.abc." | "builtins."
-            )
-        })
-}
-
-/// Returns true if `(path, terminal)` matches one of `targets` in the standard typing namespaces.
-pub(super) fn is_std_type_constructor(path: &str, terminal: &str, targets: &[&str]) -> bool {
-    targets.contains(&terminal) && is_std_type_constructor_prefix(path, terminal)
-}
-
-/// Returns true if `(path, terminal)` is a concrete mutable collection constructor (`list`, `dict`,
-/// `set`, `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, `typing.Set`, etc.), or a
-/// `collections` container (`defaultdict`, `deque`, `Counter`, `OrderedDict`) or its `typing`
-/// alias (`DefaultDict`, `Deque`).
-///
-/// Qualified `collections.abc.Set` is excluded because it is the abstract set ABC, whereas
-/// unqualified `Set` and `typing.Set` are flagged as concrete (per Ruff `PYI025`, `collections.abc.Set`
-/// should be imported `as AbstractSet`).
-pub(super) fn is_concrete_collection_constructor(path: &str, terminal: &str) -> bool {
-    match terminal {
-        LIST_CONSTRUCTOR
-        | "List"
-        | DICT_CONSTRUCTOR
-        | TYPING_DICT_CONSTRUCTOR
-        | SET_CONSTRUCTOR => is_std_type_constructor_prefix(path, terminal),
-        TYPING_SET_CONSTRUCTOR => {
-            matches!(
-                path,
-                TYPING_SET_CONSTRUCTOR | "typing.Set" | "typing_extensions.Set"
-            )
-        }
-        TYPE_DEFAULTDICT
-        | TYPE_TYPING_DEFAULTDICT
-        | "deque"
-        | "Deque"
-        | TYPE_COUNTER
-        | ORDERED_DICT_CONSTRUCTOR => {
-            path == terminal
-                || path.strip_suffix(terminal).is_some_and(|prefix| {
-                    matches!(
-                        prefix,
-                        "collections." | TYPING_PREFIX | TYPING_EXTENSIONS_PREFIX
-                    )
-                })
-        }
-        _ => false,
-    }
-}
-
-/// Extracts `(base_expr, type_argument_exprs)` from a Python `Expr::Subscript` node inside a
-/// type annotation.
-pub(super) fn extract_generic_base_and_args(expr: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
-    let Expr::Subscript(subscript) = expr else {
-        return None;
-    };
-    let type_args = if let Expr::Tuple(tuple) = subscript.slice.as_ref() {
-        tuple.elts.iter().collect()
-    } else {
-        vec![subscript.slice.as_ref()]
-    };
-    Some((subscript.value.as_ref(), type_args))
-}
-
-/// The `(path, terminal)` that the type constructor expression `expr` names, resolved through the
-/// imports of `file` (`t.List` after `import typing as t` is `("typing.List", "List")`), or `None`
-/// if it names a definition of `file` (see [`resolve_name`]).
-fn resolved_path_and_terminal_expr(expr: &Expr, file: &ParsedFile) -> Option<(String, String)> {
-    let (path, terminal) = resolve_path_and_terminal_expr(expr, &file.source);
-    match resolve_name(file, &path) {
-        ResolvedName::Imported(resolved) => {
-            let terminal = resolved
-                .rsplit_once('.')
-                .map_or(resolved.as_str(), |(_, terminal)| terminal)
-                .to_owned();
-            Some((resolved, terminal))
-        }
-        ResolvedName::Local => None,
-        ResolvedName::Unbound => Some((path, terminal)),
-    }
-}
-
-/// Unwraps outer `Annotated[T, ...]` wrappers from `type_expr`.
-fn unwrap_annotated_expr<'a>(mut current: &'a Expr, file: &ParsedFile) -> &'a Expr {
-    while let Some((base_node, type_args)) = extract_generic_base_and_args(current)
-        && let Some((base_path, base_terminal)) = resolved_path_and_terminal_expr(base_node, file)
-        && is_std_type_constructor(&base_path, &base_terminal, &[TYPE_ANNOTATED])
-        && let Some(&first_arg) = type_args.first()
-    {
-        current = first_arg;
-    }
-    current
-}
-
-/// True if `type_expr` is `Final` or `Final[T]` (qualified or not, optionally wrapped in `Annotated`).
-pub(super) fn has_final_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> bool {
-    let unwrapped = unwrap_annotated_expr(type_expr, file);
-    let candidate =
-        extract_generic_base_and_args(unwrapped).map_or(unwrapped, |(base_node, _)| base_node);
-    resolved_path_and_terminal_expr(candidate, file)
-        .is_some_and(|(_, terminal)| terminal == TYPE_FINAL)
-}
-
-/// Returns true if `type_expr` is an unparameterized `Final` qualifier (`Final`, `typing.Final`,
-/// or `typing_extensions.Final`, optionally wrapped in `Annotated[Final, ...]`), which PEP 591
-/// forbids in a class body without an initializer (`x: Final` is invalid; `x: Final[T]` is valid).
-pub(super) fn is_bare_final_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> bool {
-    let unwrapped = unwrap_annotated_expr(type_expr, file);
-    if matches!(unwrapped, Expr::Subscript(_)) {
-        return false;
-    }
-    resolved_path_and_terminal_expr(unwrapped, file)
-        .is_some_and(|(path, terminal)| is_std_type_constructor(&path, &terminal, &[TYPE_FINAL]))
-}
-
 /// Transparent type wrappers whose all type arguments preserve the enclosing variance.
 const TRANSPARENT_UNION_WRAPPERS: &[&str] = &["Optional", "Union"];
 
@@ -258,39 +137,69 @@ impl PythonCollectionType {
     }
 }
 
-/// Classifies the import-resolved `(path, terminal)` as a standard-library collection type
-/// constructor.
-fn classify_collection(path: &str, terminal: &str) -> Option<(CollectionKind, CollectionShape)> {
-    let kind = if is_concrete_collection_constructor(path, terminal) {
-        CollectionKind::ConcreteMutable
-    } else if is_std_type_constructor(path, terminal, MUTABLE_COLLECTION_ABCS) {
-        CollectionKind::AbstractMutable
-    } else if is_std_type_constructor(path, terminal, READ_ONLY_COLLECTION_ABCS) {
-        CollectionKind::AbstractReadOnly
-    } else if is_std_type_constructor(path, terminal, IMMUTABLE_COLLECTIONS) {
-        CollectionKind::Immutable
-    } else {
-        return None;
+/// A Python return type flattened across union constructs (`|`, `Union[...]`, `Optional[...]`),
+/// with async envelopes (`Awaitable`, `Coroutine`) and metadata wrappers (`Annotated`) unwrapped.
+#[derive(Clone)]
+pub struct PythonReturnTypeUnion<'a> {
+    /// True if `None` (`none`) or an `Optional[...]` wrapper is part of the union.
+    pub has_none: bool,
+    /// The non-`None` alternative branches in source order.
+    pub branches: Vec<PythonReturnTypeBranch<'a>>,
+}
+
+/// A non-`None` alternative of a [`PythonReturnTypeUnion`].
+#[derive(Clone)]
+pub struct PythonReturnTypeBranch<'a> {
+    /// The branch type expression.
+    pub node: AstNode<'a>,
+    /// The collection type the branch names, directly (`list`) or as the base of a subscript
+    /// (`list[int]`); see [`collection_type`].
+    pub collection: Option<PythonCollectionType>,
+    /// The type arguments if the branch is a subscript (`int` and `...` in `tuple[int, ...]`).
+    pub type_arguments: Option<Vec<AstNode<'a>>>,
+}
+
+/// True if `type_expr` is `Final` or `Final[T]` (qualified or not, optionally wrapped in `Annotated`).
+pub(super) fn has_final_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> bool {
+    let unwrapped = unwrap_annotated_expr(type_expr, file);
+    let candidate =
+        extract_generic_base_and_args(unwrapped).map_or(unwrapped, |(base_node, _)| base_node);
+    resolved_path_and_terminal_expr(candidate, file)
+        .is_some_and(|(_, terminal)| terminal == TYPE_FINAL)
+}
+
+/// Returns true if `type_expr` is an unparameterized `Final` qualifier (`Final`, `typing.Final`,
+/// or `typing_extensions.Final`, optionally wrapped in `Annotated[Final, ...]`), which PEP 591
+/// forbids in a class body without an initializer (`x: Final` is invalid; `x: Final[T]` is valid).
+pub(super) fn is_bare_final_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> bool {
+    let unwrapped = unwrap_annotated_expr(type_expr, file);
+    if matches!(unwrapped, Expr::Subscript(_)) {
+        return false;
+    }
+    resolved_path_and_terminal_expr(unwrapped, file)
+        .is_some_and(|(path, terminal)| is_std_type_constructor(&path, &terminal, &[TYPE_FINAL]))
+}
+
+/// Collects the standard-library collection types in `type_node` according to `depth`, in
+/// source order and deduplicated by path.
+///
+/// Names are resolved through the file's imports (see [`resolve_name`]), so
+/// `from collections.abc import Set` makes `Set` the abstract `collections.abc.Set` rather than
+/// the concrete `typing.Set`, and a locally defined `class Set` is not a collection type.
+#[must_use]
+pub fn collect_collection_types(
+    type_node: &AstNode<'_>,
+    depth: AnnotationTraversalDepth,
+) -> Vec<PythonCollectionType> {
+    let Some(parsed) = type_node.file.py_module() else {
+        return Vec::new();
     };
-    let shape = match terminal {
-        DICT_CONSTRUCTOR
-        | TYPING_DICT_CONSTRUCTOR
-        | TYPE_DEFAULTDICT
-        | TYPE_TYPING_DEFAULTDICT
-        | TYPE_COUNTER
-        | ORDERED_DICT_CONSTRUCTOR
-        | "MutableMapping"
-        | TYPE_MAPPING => CollectionShape::Mapping,
-        SET_CONSTRUCTOR
-        | TYPING_SET_CONSTRUCTOR
-        | "MutableSet"
-        | "AbstractSet"
-        | "frozenset"
-        | "FrozenSet" => CollectionShape::Set,
-        "Collection" | "Iterable" | "Iterator" | "Reversible" => CollectionShape::Iterable,
-        _ => CollectionShape::Sequence,
+    let Some(expr) = find_expr_at_span(parsed.syntax(), type_node.span()) else {
+        return Vec::new();
     };
-    Some((kind, shape))
+    let mut collection_types = Vec::new();
+    collect_collection_types_expr(expr, type_node.file, depth, &mut collection_types);
+    collection_types
 }
 
 /// Recursively collects the collection types named in `expr` according to `depth`, deduplicated
@@ -381,28 +290,6 @@ fn push_collection_type(expr: &Expr, file: &ParsedFile, out: &mut Vec<PythonColl
     }
 }
 
-/// Collects the standard-library collection types in `type_node` according to `depth`, in
-/// source order and deduplicated by path.
-///
-/// Names are resolved through the file's imports (see [`resolve_name`]), so
-/// `from collections.abc import Set` makes `Set` the abstract `collections.abc.Set` rather than
-/// the concrete `typing.Set`, and a locally defined `class Set` is not a collection type.
-#[must_use]
-pub fn collect_collection_types(
-    type_node: &AstNode<'_>,
-    depth: AnnotationTraversalDepth,
-) -> Vec<PythonCollectionType> {
-    let Some(parsed) = type_node.file.py_module() else {
-        return Vec::new();
-    };
-    let Some(expr) = find_expr_at_span(parsed.syntax(), type_node.span()) else {
-        return Vec::new();
-    };
-    let mut collection_types = Vec::new();
-    collect_collection_types_expr(expr, type_node.file, depth, &mut collection_types);
-    collection_types
-}
-
 /// The standard-library collection type that `expression` (an identifier or a dotted attribute,
 /// such as the callee of `deque()` or `collections.Counter()`) names.
 ///
@@ -411,22 +298,6 @@ pub fn collect_collection_types(
 pub fn collection_type(expression: &AstNode<'_>) -> Option<PythonCollectionType> {
     let expr = find_expr_at_span(expression.file.py_module()?.syntax(), expression.span())?;
     collection_type_expr(expr, expression.file)
-}
-
-/// See [`collection_type`].
-fn collection_type_expr(expr: &Expr, file: &ParsedFile) -> Option<PythonCollectionType> {
-    if !matches!(expr, Expr::Name(_) | Expr::Attribute(_)) {
-        return None;
-    }
-    let (resolved_path, name) = resolved_path_and_terminal_expr(expr, file)?;
-    let (kind, shape) = classify_collection(&resolved_path, &name)?;
-    let span = span_from_ruff_range(expr.range());
-    Some(PythonCollectionType {
-        path: file.source[span.start..span.end].to_owned(),
-        name,
-        kind,
-        shape,
-    })
 }
 
 /// The builtin collection that `expression` builds if it is a list, set or dictionary display
@@ -448,26 +319,44 @@ pub fn collection_display(expression: &AstNode<'_>) -> Option<PythonCollectionTy
     })
 }
 
-/// A Python return type flattened across union constructs (`|`, `Union[...]`, `Optional[...]`),
-/// with async envelopes (`Awaitable`, `Coroutine`) and metadata wrappers (`Annotated`) unwrapped.
-#[derive(Clone)]
-pub struct PythonReturnTypeUnion<'a> {
-    /// True if `None` (`none`) or an `Optional[...]` wrapper is part of the union.
-    pub has_none: bool,
-    /// The non-`None` alternative branches in source order.
-    pub branches: Vec<PythonReturnTypeBranch<'a>>,
-}
-
-/// A non-`None` alternative of a [`PythonReturnTypeUnion`].
-#[derive(Clone)]
-pub struct PythonReturnTypeBranch<'a> {
-    /// The branch type expression.
-    pub node: AstNode<'a>,
-    /// The collection type the branch names, directly (`list`) or as the base of a subscript
-    /// (`list[int]`); see [`collection_type`].
-    pub collection: Option<PythonCollectionType>,
-    /// The type arguments if the branch is a subscript (`int` and `...` in `tuple[int, ...]`).
-    pub type_arguments: Option<Vec<AstNode<'a>>>,
+/// Flattens `return_type_node` across union constructs (`|`, `Union[...]`, `Optional[...]`)
+/// after unwrapping outer async and metadata envelopes (`Awaitable`, `Coroutine`, `Annotated`).
+#[must_use]
+pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnTypeUnion<'a> {
+    let Some(parsed) = return_type_node.file.py_module() else {
+        return PythonReturnTypeUnion {
+            has_none: false,
+            branches: Vec::new(),
+        };
+    };
+    let Some(expr) = find_expr_at_span(parsed.syntax(), return_type_node.span()) else {
+        return PythonReturnTypeUnion {
+            has_none: false,
+            branches: Vec::new(),
+        };
+    };
+    let file = return_type_node.file;
+    let unwrapped = unwrap_return_envelope_expr(expr, file);
+    let mut has_none = false;
+    let mut branches = Vec::new();
+    collect_union_branches_expr(unwrapped, file, &mut has_none, &mut branches);
+    let node_of = |expr: &Expr| AstNode::from_span(file, span_from_ruff_range(expr.range()));
+    PythonReturnTypeUnion {
+        has_none,
+        branches: branches
+            .into_iter()
+            .map(|branch| {
+                let generic = extract_generic_base_and_args(branch);
+                let constructor = generic.as_ref().map_or(branch, |&(base, _)| base);
+                PythonReturnTypeBranch {
+                    node: node_of(branch),
+                    collection: collection_type_expr(constructor, file),
+                    type_arguments: generic
+                        .map(|(_, arguments)| arguments.into_iter().map(node_of).collect()),
+                }
+            })
+            .collect(),
+    }
 }
 
 /// Unwraps outer return-annotation envelopes (`Annotated[T, ...]`, `Awaitable[T]`, and
@@ -546,42 +435,153 @@ fn collect_union_branches_expr<'a>(
     }
 }
 
-/// Flattens `return_type_node` across union constructs (`|`, `Union[...]`, `Optional[...]`)
-/// after unwrapping outer async and metadata envelopes (`Awaitable`, `Coroutine`, `Annotated`).
-#[must_use]
-pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnTypeUnion<'a> {
-    let Some(parsed) = return_type_node.file.py_module() else {
-        return PythonReturnTypeUnion {
-            has_none: false,
-            branches: Vec::new(),
-        };
+/// Extracts `(base_expr, type_argument_exprs)` from a Python `Expr::Subscript` node inside a
+/// type annotation.
+pub(super) fn extract_generic_base_and_args(expr: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
+    let Expr::Subscript(subscript) = expr else {
+        return None;
     };
-    let Some(expr) = find_expr_at_span(parsed.syntax(), return_type_node.span()) else {
-        return PythonReturnTypeUnion {
-            has_none: false,
-            branches: Vec::new(),
-        };
+    let type_args = if let Expr::Tuple(tuple) = subscript.slice.as_ref() {
+        tuple.elts.iter().collect()
+    } else {
+        vec![subscript.slice.as_ref()]
     };
-    let file = return_type_node.file;
-    let unwrapped = unwrap_return_envelope_expr(expr, file);
-    let mut has_none = false;
-    let mut branches = Vec::new();
-    collect_union_branches_expr(unwrapped, file, &mut has_none, &mut branches);
-    let node_of = |expr: &Expr| AstNode::from_span(file, span_from_ruff_range(expr.range()));
-    PythonReturnTypeUnion {
-        has_none,
-        branches: branches
-            .into_iter()
-            .map(|branch| {
-                let generic = extract_generic_base_and_args(branch);
-                let constructor = generic.as_ref().map_or(branch, |&(base, _)| base);
-                PythonReturnTypeBranch {
-                    node: node_of(branch),
-                    collection: collection_type_expr(constructor, file),
-                    type_arguments: generic
-                        .map(|(_, arguments)| arguments.into_iter().map(node_of).collect()),
-                }
-            })
-            .collect(),
+    Some((subscript.value.as_ref(), type_args))
+}
+
+/// Returns true if `(path, terminal)` matches one of `targets` in the standard typing namespaces.
+pub(super) fn is_std_type_constructor(path: &str, terminal: &str, targets: &[&str]) -> bool {
+    targets.contains(&terminal) && is_std_type_constructor_prefix(path, terminal)
+}
+
+/// Returns true if `(path, terminal)` is a concrete mutable collection constructor (`list`, `dict`,
+/// `set`, `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, `typing.Set`, etc.), or a
+/// `collections` container (`defaultdict`, `deque`, `Counter`, `OrderedDict`) or its `typing`
+/// alias (`DefaultDict`, `Deque`).
+///
+/// Qualified `collections.abc.Set` is excluded because it is the abstract set ABC, whereas
+/// unqualified `Set` and `typing.Set` are flagged as concrete (per Ruff `PYI025`, `collections.abc.Set`
+/// should be imported `as AbstractSet`).
+pub(super) fn is_concrete_collection_constructor(path: &str, terminal: &str) -> bool {
+    match terminal {
+        LIST_CONSTRUCTOR
+        | "List"
+        | DICT_CONSTRUCTOR
+        | TYPING_DICT_CONSTRUCTOR
+        | SET_CONSTRUCTOR => is_std_type_constructor_prefix(path, terminal),
+        TYPING_SET_CONSTRUCTOR => {
+            matches!(
+                path,
+                TYPING_SET_CONSTRUCTOR | "typing.Set" | "typing_extensions.Set"
+            )
+        }
+        TYPE_DEFAULTDICT
+        | TYPE_TYPING_DEFAULTDICT
+        | "deque"
+        | "Deque"
+        | TYPE_COUNTER
+        | ORDERED_DICT_CONSTRUCTOR => {
+            path == terminal
+                || path.strip_suffix(terminal).is_some_and(|prefix| {
+                    matches!(
+                        prefix,
+                        "collections." | TYPING_PREFIX | TYPING_EXTENSIONS_PREFIX
+                    )
+                })
+        }
+        _ => false,
     }
+}
+
+/// Unwraps outer `Annotated[T, ...]` wrappers from `type_expr`.
+fn unwrap_annotated_expr<'a>(mut current: &'a Expr, file: &ParsedFile) -> &'a Expr {
+    while let Some((base_node, type_args)) = extract_generic_base_and_args(current)
+        && let Some((base_path, base_terminal)) = resolved_path_and_terminal_expr(base_node, file)
+        && is_std_type_constructor(&base_path, &base_terminal, &[TYPE_ANNOTATED])
+        && let Some(&first_arg) = type_args.first()
+    {
+        current = first_arg;
+    }
+    current
+}
+
+/// See [`collection_type`].
+fn collection_type_expr(expr: &Expr, file: &ParsedFile) -> Option<PythonCollectionType> {
+    if !matches!(expr, Expr::Name(_) | Expr::Attribute(_)) {
+        return None;
+    }
+    let (resolved_path, name) = resolved_path_and_terminal_expr(expr, file)?;
+    let (kind, shape) = classify_collection(&resolved_path, &name)?;
+    let span = span_from_ruff_range(expr.range());
+    Some(PythonCollectionType {
+        path: file.source[span.start..span.end].to_owned(),
+        name,
+        kind,
+        shape,
+    })
+}
+
+/// Classifies the import-resolved `(path, terminal)` as a standard-library collection type
+/// constructor.
+fn classify_collection(path: &str, terminal: &str) -> Option<(CollectionKind, CollectionShape)> {
+    let kind = if is_concrete_collection_constructor(path, terminal) {
+        CollectionKind::ConcreteMutable
+    } else if is_std_type_constructor(path, terminal, MUTABLE_COLLECTION_ABCS) {
+        CollectionKind::AbstractMutable
+    } else if is_std_type_constructor(path, terminal, READ_ONLY_COLLECTION_ABCS) {
+        CollectionKind::AbstractReadOnly
+    } else if is_std_type_constructor(path, terminal, IMMUTABLE_COLLECTIONS) {
+        CollectionKind::Immutable
+    } else {
+        return None;
+    };
+    let shape = match terminal {
+        DICT_CONSTRUCTOR
+        | TYPING_DICT_CONSTRUCTOR
+        | TYPE_DEFAULTDICT
+        | TYPE_TYPING_DEFAULTDICT
+        | TYPE_COUNTER
+        | ORDERED_DICT_CONSTRUCTOR
+        | "MutableMapping"
+        | TYPE_MAPPING => CollectionShape::Mapping,
+        SET_CONSTRUCTOR
+        | TYPING_SET_CONSTRUCTOR
+        | "MutableSet"
+        | "AbstractSet"
+        | "frozenset"
+        | "FrozenSet" => CollectionShape::Set,
+        "Collection" | "Iterable" | "Iterator" | "Reversible" => CollectionShape::Iterable,
+        _ => CollectionShape::Sequence,
+    };
+    Some((kind, shape))
+}
+
+/// The `(path, terminal)` that the type constructor expression `expr` names, resolved through the
+/// imports of `file` (`t.List` after `import typing as t` is `("typing.List", "List")`), or `None`
+/// if it names a definition of `file` (see [`resolve_name`]).
+fn resolved_path_and_terminal_expr(expr: &Expr, file: &ParsedFile) -> Option<(String, String)> {
+    let (path, terminal) = resolve_path_and_terminal_expr(expr, &file.source);
+    match resolve_name(file, &path) {
+        ResolvedName::Imported(resolved) => {
+            let terminal = resolved
+                .rsplit_once('.')
+                .map_or(resolved.as_str(), |(_, terminal)| terminal)
+                .to_owned();
+            Some((resolved, terminal))
+        }
+        ResolvedName::Local => None,
+        ResolvedName::Unbound => Some((path, terminal)),
+    }
+}
+
+/// Returns true if `(path, terminal)` refers to an unqualified or standard-library (`typing`,
+/// `typing_extensions`, `collections.abc`, `builtins`) type constructor.
+fn is_std_type_constructor_prefix(path: &str, terminal: &str) -> bool {
+    path == terminal
+        || path.strip_suffix(terminal).is_some_and(|prefix| {
+            matches!(
+                prefix,
+                TYPING_PREFIX | TYPING_EXTENSIONS_PREFIX | "collections.abc." | "builtins."
+            )
+        })
 }

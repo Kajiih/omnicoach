@@ -7,20 +7,21 @@
 
 ## Reusable Engineering Lessons
 
-1. **Test Call-Graph vs. Tier Ordering as a Formal Compatibility Proof Before Implementing**:
-   - The retired `call-before-definition` rule failed in practice because a call-graph partial order ($\text{pos}(v) < \text{pos}(u)$ for every call $u \to v$) is mathematically incompatible with visibility-tier ordering ($\text{pos}(\text{Public}) < \text{pos}(\text{Private})$) whenever a public entrypoint calls a private helper.
-   - Framing candidate ordering rules as partial orders over a scope and checking compatibility on cross-tier edges, same-tier abstraction gradients, and multi-entrypoint DAGs (`36%–48%` of real-world scopes have both forward and backward same-tier calls) eliminated an entire class of noisy rules (`call-before-definition`, `stepdown`, and rigid module-level item-kind buckets) before writing rule code.
+1. **Decompose Call-Graph Ordering into Orthogonal, Priority-Partitioned Rules (`P1 -> P2 -> P3`)**:
+   - A monolithic "stepdown rule" or bottom-up `call-before-definition` rule fails on real codebases because visibility tiers, component colocation, and caller-callee direction collide whenever a file has multiple public entrypoints sharing private helpers (`|Roots(h)| >= 2`).
+   - Partitioning private callables by their public entrypoint reachability `Roots(h)` (stopping at public boundaries) and evaluating three orthogonal rules in strict priority order — `uncolocated-helper` (P1, exclusive helpers `|Roots(h)| == 1` contiguous with their owner), `private-before-public-function` (P2, private helpers after their public roots `max(Roots(h))`), and `callee-before-caller` (P3, top-down caller-before-callee within the same tier and group, outside Tarjan SCC cycles) — guarantees zero contradictory advice and at most one diagnostic per misplaced function ([ADR 011](../../../decisions/011_colocated_abstraction_ordering.md)).
 
-2. **2-Tier Visibility (`Exported` vs. `Private`) Preserves Restricted-Constructor Encapsulation in Rust**:
+2. **Bridge Module Call Graphs Through Visitor / Helper Struct `impl` Blocks While Respecting Method-Local Bindings**:
+   - In both Python and Rust, module-level public entrypoints frequently instantiate a module-private visitor or state struct (`LiteralOccurrenceCollector`, `ParameterUseVisitor`, `BindingVisitor`) whose methods call module-level private helpers. Bridging call edges through module-local classes and `impl` blocks accurately attributes those helpers to the owning public entrypoint.
+   - When collecting module-level function references inside a Rust `impl` block (`collect_rust_impl_callees` in [src/code_lint/ast/rust.rs](../../../src/code_lint/ast/rust.rs)), local bindings (`collect_rust_fn_local_names`) must be collected per `ast::AssocItem::Fn` method so that method parameters and closure variables (`|collection_type|`) are never mistaken for calls to same-named module functions.
+
+3. **2-Tier Visibility (`Exported` vs. `Private`) Preserves Restricted-Constructor Encapsulation in Rust**:
    - In Rust inherent `impl` blocks, types are frequently constructed via subsystem-scoped constructors (`pub(crate) fn new`, `pub(in crate::...) fn from_span`, `pub(super) fn new_from_str`) while exposing `pub fn` accessors.
-   - A 3-tier visibility rule (`pub` $\to$ `pub(...)` $\to$ `fn`) would force `pub(crate) fn new` below `pub fn` getters, directly contradicting `constructor-after-method`. Partitioning inherent `impl` methods into 2 tiers (`Exported`: any `visibility().is_some()` vs. `Private`: bare `fn`) aligns visibility ordering with constructor-first lifecycle ordering.
+   - A 3-tier visibility rule (`pub -> pub(...) -> fn`) would force `pub(crate) fn new` below `pub fn` getters, directly contradicting `constructor-after-method`. Partitioning callables into 2 tiers (`Exported`: any `visibility().is_some()`, plus `fn main`; vs. `Private`: bare `fn`) aligns visibility ordering with constructor-first lifecycle ordering.
 
-3. **Rust `ra_ap_syntax` Outer Doc Comments Precede Outer Attributes Inside `SyntaxNode::text_range()`**:
+4. **Rust `ra_ap_syntax` Outer Doc Comments Precede Outer Attributes Inside `SyntaxNode::text_range()`**:
    - Unlike `tree-sitter-rust` (where outer attributes and doc comments are preceding siblings of an item), `ra_ap_syntax` attaches both `///` doc comments and `#[...]` outer attributes as leading children inside the item's `SyntaxNode`.
    - Any range collector over `ra_ap_syntax` nodes (such as `collect_inline_test_ranges_rec` in [src/code_lint/ast/rust.rs](../../../src/code_lint/ast/rust.rs)) must start at `node.text_range().start()` rather than the first `ast::Attr`'s start offset so that `item.syntax().text_range().start()` on documented `#[cfg(test)]` items is covered by the range.
 
-4. **Rust Constructor Detection Requires Checking the Return Type for `Self`**:
-   - Matching exported `new_*` / `try_new_*` associated functions without a `self` receiver is necessary but not sufficient to identify constructors in Rust inherent `impl` blocks: factory functions that produce a different type (such as `pub fn new_request_id() -> u64`) share the `new_*` prefix. Checking that `function.ret_type()` contains a `Self` (`SELF_TYPE_KW`) or self-type identifier token eliminates false positives on non-`Self` factory functions.
-
-5. **`rule_test!` Doubled-Snippet Check on Module-Level Boundary Rules**:
-   - Because `assert_rule_fail` in [src/test_utils.rs](../../../src/test_utils.rs) concatenates `{code}\n\n{code}` into a single file and expects exactly the two copies' diagnostic spans, a module-level boundary rule like `statement-after-main-guard` will flag any setup statement that precedes the first `if __name__ == "__main__":` guard when that setup statement reappears in the second copy after the first guard. Starting `fail` snippets in `rule_test!` with the boundary statement itself (and testing pre-boundary statements in unit tests on the AST collector) keeps the doubled-file check strict without distorting rule semantics.
+5. **Segment Module Call Scopes on Redefined Function Names**:
+   - Both `rule_test!`'s doubled-snippet check (`format!("{code}\n{second_copy}")`) and conditional platform definitions in real code can define the same function name twice in a single module body. Starting a new `CallableScope` segment whenever a non-overload, non-property function name is redefined keeps each segment's name-to-index map 1:1 and ensures `rule_test!` reports exact diagnostics in both copies.

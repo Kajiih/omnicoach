@@ -63,25 +63,6 @@ pub enum VcsType {
     Jujutsu,
 }
 
-/// Walks up from the current working directory to locate the repository root
-/// and determine the active VCS type.
-#[must_use]
-fn find_repo_root() -> Option<(PathBuf, VcsType)> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        if dir.join(".jj").is_dir() {
-            return Some((dir, VcsType::Jujutsu));
-        }
-        if dir.join(".git").exists() {
-            return Some((dir, VcsType::Git));
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    None
-}
-
 /// Mapping of changed file paths to their 1-indexed changed line numbers.
 pub type ChangedLines = HashMap<PathBuf, HashSet<usize>>;
 
@@ -126,12 +107,60 @@ pub fn detect_vcs_diff(custom_rev: Option<&str>) -> Result<DetectedDiff, DiffErr
     Ok((vcs_type, resolved_rev.to_string(), absolute_diff))
 }
 
+/// Walks up from the current working directory to locate the repository root
+/// and determine the active VCS type.
+#[must_use]
+fn find_repo_root() -> Option<(PathBuf, VcsType)> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        if dir.join(".jj").is_dir() {
+            return Some((dir, VcsType::Jujutsu));
+        }
+        if dir.join(".git").exists() {
+            return Some((dir, VcsType::Git));
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
+}
+
+/// Jujutsu CLI binary, both spawned and named in errors.
+const JJ_BINARY: &str = "jj";
+/// Git CLI binary, both spawned and named in errors.
+const GIT_BINARY: &str = "git";
+
+fn get_jj_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
+    let mut cmd = Command::new(JJ_BINARY);
+    cmd.current_dir(repo_root).arg("diff").arg("--git");
+    if is_complex_jj_revset(rev) {
+        cmd.arg("-r").arg(rev);
+    } else {
+        cmd.arg("--from").arg(rev);
+    }
+    run_vcs_command(cmd, "Jujutsu", JJ_BINARY)
+}
+
 fn is_complex_jj_revset(rev: &str) -> bool {
     rev.contains("..")
         || rev.contains("::")
         || rev.contains('(')
         || rev.contains(')')
         || rev.chars().any(|c| matches!(c, '|' | '&' | '~' | ' '))
+}
+
+fn get_git_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
+    let mut cmd = Command::new(GIT_BINARY);
+    cmd.current_dir(repo_root).args([
+        "-c",
+        "core.quotepath=false",
+        "diff", // omni:ignore [repeated-literal] -- Git's subcommand, unrelated to Jujutsu's
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        rev,
+    ]);
+    run_vcs_command(cmd, "Git", GIT_BINARY)
 }
 
 fn run_vcs_command(
@@ -159,66 +188,6 @@ fn run_vcs_command(
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-/// Jujutsu CLI binary, both spawned and named in errors.
-const JJ_BINARY: &str = "jj";
-/// Git CLI binary, both spawned and named in errors.
-const GIT_BINARY: &str = "git";
-
-fn get_jj_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
-    let mut cmd = Command::new(JJ_BINARY);
-    cmd.current_dir(repo_root).arg("diff").arg("--git");
-    if is_complex_jj_revset(rev) {
-        cmd.arg("-r").arg(rev);
-    } else {
-        cmd.arg("--from").arg(rev);
-    }
-    run_vcs_command(cmd, "Jujutsu", JJ_BINARY)
-}
-
-fn get_git_diff(repo_root: &Path, rev: &str) -> Result<String, DiffError> {
-    let mut cmd = Command::new(GIT_BINARY);
-    cmd.current_dir(repo_root).args([
-        "-c",
-        "core.quotepath=false",
-        "diff", // omni:ignore [repeated-literal] -- Git's subcommand, unrelated to Jujutsu's
-        "--src-prefix=a/",
-        "--dst-prefix=b/",
-        rev,
-    ]);
-    run_vcs_command(cmd, "Git", GIT_BINARY)
-}
-
-/// Commits a parsed file's changed line numbers into `changed_lines` if the file was not deleted.
-fn commit_file_changes(
-    current_file: &mut Option<(PathBuf, HashSet<usize>)>,
-    is_deleted: bool,
-    changed_lines: &mut ChangedLines,
-) {
-    if let Some((path, lines)) = current_file.take()
-        && !is_deleted
-        && !lines.is_empty()
-    {
-        changed_lines.insert(path, lines);
-    }
-}
-
-/// Extracts the normalized relative file path from a `+++ b/...` diff header line, or `None` if `/dev/null`.
-fn extract_diff_header_path(line: &str) -> Option<PathBuf> {
-    let path_part = &line[4..];
-    if path_part == "/dev/null" {
-        return None;
-    }
-    let parsed_path = path_part
-        .split_once('\t')
-        .map_or(path_part, |(path, _)| path)
-        .trim_matches('"');
-    let parsed_path = parsed_path
-        .strip_prefix("b/")
-        .unwrap_or(parsed_path)
-        .trim_matches('"');
-    Some(PathBuf::from(parsed_path))
 }
 
 /// Parses a unified git-compatible diff output and returns a mapping from relative file paths
@@ -260,7 +229,39 @@ fn parse_git_diff(content: &str) -> HashMap<PathBuf, HashSet<usize>> {
     }
 
     commit_file_changes(&mut current_file, is_deleted, &mut changed_lines);
+
     changed_lines
+}
+
+/// Commits a parsed file's changed line numbers into `changed_lines` if the file was not deleted.
+fn commit_file_changes(
+    current_file: &mut Option<(PathBuf, HashSet<usize>)>,
+    is_deleted: bool,
+    changed_lines: &mut ChangedLines,
+) {
+    if let Some((path, lines)) = current_file.take()
+        && !is_deleted
+        && !lines.is_empty()
+    {
+        changed_lines.insert(path, lines);
+    }
+}
+
+/// Extracts the normalized relative file path from a `+++ b/...` diff header line, or `None` if `/dev/null`.
+fn extract_diff_header_path(line: &str) -> Option<PathBuf> {
+    let path_part = &line[4..];
+    if path_part == "/dev/null" {
+        return None;
+    }
+    let parsed_path = path_part
+        .split_once('\t')
+        .map_or(path_part, |(path, _)| path)
+        .trim_matches('"');
+    let parsed_path = parsed_path
+        .strip_prefix("b/")
+        .unwrap_or(parsed_path)
+        .trim_matches('"');
+    Some(PathBuf::from(parsed_path))
 }
 
 fn parse_hunk_header(line: &str) -> Option<usize> {

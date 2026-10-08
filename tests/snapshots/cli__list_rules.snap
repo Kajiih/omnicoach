@@ -9,6 +9,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `associated-item-after-method` (rust): Flags Rust associated `type` and `const` items declared after `fn` items in an `impl` or `trait` block.
 - `bare-multiline-string` (python, rust): Flags multiline string literals that are not wrapped in a dedent helper.
 - `blanket-suppression` (python, rust): Flags suppression directives that name no rule.
+- `callee-before-caller` (python, rust): Flags functions and methods defined before their callers within the same visibility tier and component cluster.
 - `concrete-collection-attribute` (python): Flags public Python class and instance attributes annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
 - `concrete-collection-parameter` (python): Flags Python function parameters annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
 - `concrete-collection-return` (python): Flags Python function return annotations using concrete mutable collection types such as `list`, `dict`, or `set`.
@@ -33,7 +34,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `nullable-collection-return` (python, rust): Flags function return annotations that wrap a collection type in `| None`, `Optional`, or `Option`.
 - `packed-assertion` (python, rust): Flags assertions that pack several checks into one condition.
 - `primitive-duration` (python, rust): Flags durations held as plain numbers, detected by a time-unit suffix such as `timeout_secs` or `delay_ms`.
-- `private-before-public-method` (python, rust): Flags private helper methods defined before public methods in a class or inherent `impl` block.
+- `private-before-public-function` (python, rust): Flags private functions and methods defined above their owning or calling public entrypoints.
 - `quote-wrapped-placeholder` (python): Flags Python format placeholders wrapped in literal single or double quotes.
 - `repeated-index-access` (python, rust): Flags a value read at several literal positions instead of being unpacked once.
 - `repeated-literal` (python, rust): Flags a string or number literal repeated inline in one file instead of being named once.
@@ -45,6 +46,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `too-many-assertions` (python, rust): Flags test functions with more assertions than the limit.
 - `type-cast` (python): Flags `typing.cast` calls in Python source files.
 - `type-suffixed-name` (python, rust): Flags names that end with a type suffix such as `_list` or `_str`.
+- `uncolocated-helper` (python, rust): Flags exclusive private helpers separated from their owning public function or method by unrelated definitions.
 - `unknown-suppression-rule` (python, rust): Flags suppression directives that name an unknown or unsuppressible rule.
 - `unmatched-logger-placeholder` (python): Flags logger calls that pass positional arguments to a message with an unmatched named placeholder.
 - `unslotted-dataclass` (python): Requires Python dataclasses to declare `slots=True`.

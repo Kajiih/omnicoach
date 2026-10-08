@@ -8,24 +8,18 @@ use crate::code_lint::ast::{ParsedFile, span_from_ruff_range};
 use crate::diagnostic::{Language, SourceSpan};
 use std::ops::RangeInclusive;
 
-/// Returns the byte offset where the body of a Python compound `statement` begins, or `None`
-/// for simple statements without a suite.
-fn python_statement_body_start(
-    statement: &ruff_python_ast::Stmt,
-) -> Option<ruff_text_size::TextSize> {
-    use ruff_python_ast::Stmt;
-    use ruff_text_size::Ranged as _;
-
-    match statement {
-        Stmt::FunctionDef(node) => node.body.first().map(|first| first.range().start()),
-        Stmt::ClassDef(node) => node.body.first().map(|first| first.range().start()),
-        Stmt::For(node) => node.body.first().map(|first| first.range().start()),
-        Stmt::While(node) => node.body.first().map(|first| first.range().start()),
-        Stmt::If(node) => node.body.first().map(|first| first.range().start()),
-        Stmt::With(node) => node.body.first().map(|first| first.range().start()),
-        Stmt::Try(node) => node.body.first().map(|first| first.range().start()),
-        Stmt::Match(node) => node.cases.first().map(|first| first.range().start()),
-        _ => None,
+/// Resolves the 1-indexed inclusive header line range of the innermost statement enclosing `span`.
+#[must_use]
+pub fn enclosing_statement_header_range(
+    file: &ParsedFile,
+    span: SourceSpan,
+) -> Option<RangeInclusive<usize>> {
+    match file.lang() {
+        Language::Python => python_enclosing_statement_header_range(file, span),
+        Language::Rust => {
+            let statement = find_rust_enclosing_statement(file, span)?;
+            Some(rust_header_line_range(file, &statement))
+        }
     }
 }
 
@@ -96,30 +90,25 @@ fn python_enclosing_statement_header_range(
     Some(start_line..=end_line)
 }
 
-/// Returns true for Rust `SyntaxKind`s that hold statements or items as direct children.
-const fn is_rust_statement_container(kind: ra_ap_syntax::SyntaxKind) -> bool {
-    use ra_ap_syntax::SyntaxKind;
-    matches!(
-        kind,
-        SyntaxKind::SOURCE_FILE
-            | SyntaxKind::STMT_LIST
-            | SyntaxKind::ASSOC_ITEM_LIST
-            | SyntaxKind::ITEM_LIST
-            | SyntaxKind::EXTERN_ITEM_LIST
-    )
-}
+/// Returns the byte offset where the body of a Python compound `statement` begins, or `None`
+/// for simple statements without a suite.
+fn python_statement_body_start(
+    statement: &ruff_python_ast::Stmt,
+) -> Option<ruff_text_size::TextSize> {
+    use ruff_python_ast::Stmt;
+    use ruff_text_size::Ranged as _;
 
-/// Returns true for Rust `SyntaxKind`s that form the braced body of a compound statement or item.
-const fn is_rust_body_container(kind: ra_ap_syntax::SyntaxKind) -> bool {
-    use ra_ap_syntax::SyntaxKind;
-    matches!(
-        kind,
-        SyntaxKind::BLOCK_EXPR
-            | SyntaxKind::STMT_LIST
-            | SyntaxKind::ASSOC_ITEM_LIST
-            | SyntaxKind::ITEM_LIST
-            | SyntaxKind::EXTERN_ITEM_LIST
-    )
+    match statement {
+        Stmt::FunctionDef(node) => node.body.first().map(|first| first.range().start()),
+        Stmt::ClassDef(node) => node.body.first().map(|first| first.range().start()),
+        Stmt::For(node) => node.body.first().map(|first| first.range().start()),
+        Stmt::While(node) => node.body.first().map(|first| first.range().start()),
+        Stmt::If(node) => node.body.first().map(|first| first.range().start()),
+        Stmt::With(node) => node.body.first().map(|first| first.range().start()),
+        Stmt::Try(node) => node.body.first().map(|first| first.range().start()),
+        Stmt::Match(node) => node.cases.first().map(|first| first.range().start()),
+        _ => None,
+    }
 }
 
 /// Resolves the innermost Rust statement node enclosing `span`.
@@ -146,11 +135,17 @@ fn find_rust_enclosing_statement(
     })
 }
 
-/// Returns true if `kind` is a Rust comment (`//`, `/* */`, `///`, `//!`, `/** */`, `/*! */`)
-/// or whitespace token.
-const fn is_rust_trivia(kind: ra_ap_syntax::SyntaxKind) -> bool {
-    matches!(kind, ra_ap_syntax::SyntaxKind::WHITESPACE)
-        || crate::code_lint::ast::is_rust_comment_kind(kind)
+/// Returns true for Rust `SyntaxKind`s that hold statements or items as direct children.
+const fn is_rust_statement_container(kind: ra_ap_syntax::SyntaxKind) -> bool {
+    use ra_ap_syntax::SyntaxKind;
+    matches!(
+        kind,
+        SyntaxKind::SOURCE_FILE
+            | SyntaxKind::STMT_LIST
+            | SyntaxKind::ASSOC_ITEM_LIST
+            | SyntaxKind::ITEM_LIST
+            | SyntaxKind::EXTERN_ITEM_LIST
+    )
 }
 
 /// Computes the 1-indexed inclusive header line range of a Rust `statement` node.
@@ -185,19 +180,24 @@ fn rust_header_line_range(
     start_line..=header_end_line
 }
 
-/// Resolves the 1-indexed inclusive header line range of the innermost statement enclosing `span`.
-#[must_use]
-pub fn enclosing_statement_header_range(
-    file: &ParsedFile,
-    span: SourceSpan,
-) -> Option<RangeInclusive<usize>> {
-    match file.lang() {
-        Language::Python => python_enclosing_statement_header_range(file, span),
-        Language::Rust => {
-            let statement = find_rust_enclosing_statement(file, span)?;
-            Some(rust_header_line_range(file, &statement))
-        }
-    }
+/// Returns true for Rust `SyntaxKind`s that form the braced body of a compound statement or item.
+const fn is_rust_body_container(kind: ra_ap_syntax::SyntaxKind) -> bool {
+    use ra_ap_syntax::SyntaxKind;
+    matches!(
+        kind,
+        SyntaxKind::BLOCK_EXPR
+            | SyntaxKind::STMT_LIST
+            | SyntaxKind::ASSOC_ITEM_LIST
+            | SyntaxKind::ITEM_LIST
+            | SyntaxKind::EXTERN_ITEM_LIST
+    )
+}
+
+/// Returns true if `kind` is a Rust comment (`//`, `/* */`, `///`, `//!`, `/** */`, `/*! */`)
+/// or whitespace token.
+const fn is_rust_trivia(kind: ra_ap_syntax::SyntaxKind) -> bool {
+    matches!(kind, ra_ap_syntax::SyntaxKind::WHITESPACE)
+        || crate::code_lint::ast::is_rust_comment_kind(kind)
 }
 
 #[cfg(test)]

@@ -1,20 +1,25 @@
 //! Python class definitions, base-class classification, and class/instance attribute walkers.
 
+use super::scopes::{collect_local_bound_names, parameters_shadow_name};
 use super::{
     AstNode, DecoratorInfo, ParsedFile, direct_function_definitions, extract_decorators_from_slice,
     in_place_mutated_receiver_expr, is_bare_final_annotation_expr, method_receiver_name_ast,
     resolve_path_and_terminal_expr,
 };
-use crate::code_lint::ast::{MethodVisibility, TypeMethod, TypeMethodScope, span_from_ruff_range};
+use crate::code_lint::ast::{
+    CallableItem, CallableScope, MethodVisibility, TypeMethod, TypeMethodScope,
+    span_from_ruff_range,
+};
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef};
+use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef};
 use ruff_text_size::Ranged as _;
 use std::collections::{HashMap, HashSet};
 
 const PROTOCOL_CLASS: &str = "Protocol";
 const ABC_CLASS: &str = "ABC";
 const SELF_RECEIVER: &str = "self";
+const CLS_RECEIVER: &str = "cls";
 const DATACLASS_DECORATOR: &str = "dataclass";
 const QUALIFIED_DATACLASS_DECORATOR: &str = "dataclasses.dataclass";
 const PYTHON_CONSTRUCTOR_NAMES: &[&str] = &[
@@ -37,14 +42,6 @@ pub struct PythonBaseClass<'a> {
 }
 
 impl PythonBaseClass<'_> {
-    /// Base class name with any generic type argument subscript (`[...]`) stripped.
-    #[must_use]
-    pub fn unsubscripted_name(&self) -> &str {
-        self.name
-            .split_once('[')
-            .map_or(self.name.as_str(), |(base, _)| base.trim())
-    }
-
     /// Returns true if this base class is a structural marker rather than a supertype:
     /// `object`, `Generic`, `Protocol`, or `ABC` itself (optionally subscripted or qualified).
     #[must_use]
@@ -62,6 +59,14 @@ impl PythonBaseClass<'_> {
                 | ABC_CLASS
                 | "abc.ABC"
         )
+    }
+
+    /// Base class name with any generic type argument subscript (`[...]`) stripped.
+    #[must_use]
+    pub fn unsubscripted_name(&self) -> &str {
+        self.name
+            .split_once('[')
+            .map_or(self.name.as_str(), |(base, _)| base.trim())
     }
 }
 
@@ -95,6 +100,14 @@ impl<'a> PythonClassInfo<'a> {
         })
     }
 
+    /// Returns true if the class carries a `@dataclass` or `@dataclasses.dataclass` decorator
+    /// that does not pass the keyword argument `key`.
+    #[must_use]
+    pub fn is_dataclass_missing_arg(&self, key: &str) -> bool {
+        self.dataclass_decorator()
+            .is_some_and(|decorator| !decorator.has_arg(key))
+    }
+
     /// The `@dataclass` or `@dataclasses.dataclass` decorator, matched by name rather than by
     /// import, if the class carries one.
     #[must_use]
@@ -106,81 +119,6 @@ impl<'a> PythonClassInfo<'a> {
             )
         })
     }
-
-    /// Returns true if the class carries a `@dataclass` or `@dataclasses.dataclass` decorator
-    /// that does not pass the keyword argument `key`.
-    #[must_use]
-    pub fn is_dataclass_missing_arg(&self, key: &str) -> bool {
-        self.dataclass_decorator()
-            .is_some_and(|decorator| !decorator.has_arg(key))
-    }
-}
-
-/// Returns the terminal name of each positional base class of a Python `StmtClassDef`,
-/// unwrapping generic subscripts (`Protocol[T]` yields `Protocol`).
-fn base_class_terminals(class_def: &StmtClassDef, source: &str) -> Vec<String> {
-    class_def
-        .bases()
-        .iter()
-        .map(|base| {
-            let base_expr = if let Expr::Subscript(subscript) = base {
-                subscript.value.as_ref()
-            } else {
-                base
-            };
-            resolve_path_and_terminal_expr(base_expr, source).1
-        })
-        .collect()
-}
-
-/// Returns true if a Python `StmtClassDef` inherits from `Protocol` or `ABC` or declares
-/// `metaclass=ABCMeta`.
-pub(super) fn is_protocol_or_abc_class(class_def: &StmtClassDef, source: &str) -> bool {
-    let has_abc_metaclass = class_def.keywords().iter().any(|keyword| {
-        keyword
-            .arg
-            .as_ref()
-            .is_some_and(|arg| arg.id == "metaclass")
-            && resolve_path_and_terminal_expr(&keyword.value, source).1 == "ABCMeta"
-    });
-    has_abc_metaclass
-        || base_class_terminals(class_def, source)
-            .iter()
-            .any(|terminal| matches!(terminal.as_str(), PROTOCOL_CLASS | ABC_CLASS))
-}
-
-/// Returns true if a Python `StmtClassDef` inherits from `TypedDict`.
-pub(super) fn is_typed_dict_class(class_def: &StmtClassDef, source: &str) -> bool {
-    base_class_terminals(class_def, source)
-        .iter()
-        .any(|terminal| terminal == "TypedDict")
-}
-
-/// Returns true if `class_def` synthesizes constructor fields from class-body annotations
-/// (`@dataclass`, `attrs` decorators, or Pydantic `BaseModel` subclasses).
-fn is_field_synthesizing_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
-    let has_field_decorator = extract_decorators_from_slice(&class_def.decorator_list, file)
-        .iter()
-        .any(|decorator| {
-            matches!(
-                decorator.path.as_str(),
-                DATACLASS_DECORATOR
-                    | QUALIFIED_DATACLASS_DECORATOR
-                    | "define"
-                    | "frozen"
-                    | "mutable"
-                    | "attr.s"
-                    | "attr.attrs"
-                    | "attr.dataclass"
-                    | "attrs.define"
-                    | "attrs.frozen"
-                    | "attrs.mutable"
-            )
-        });
-    has_field_decorator
-        || base_class_terminals(class_def, &file.source)
-            .iter()
-            .any(|terminal| terminal == "BaseModel")
 }
 
 /// Discovers and extracts all class definitions from a Python file.
@@ -266,91 +204,6 @@ pub struct PythonAnnotatedAttribute<'a> {
     pub is_typed_dict_key: bool,
 }
 
-/// Checks if `receiver` is `self.<attr>`, `cls.<attr>`, or `<class_name>.<attr>`, and inserts
-/// `<attr>` into `out`.
-fn record_mutated_class_receiver(receiver: &Expr, class_name: &str, out: &mut HashSet<String>) {
-    if let Expr::Attribute(attr) = receiver
-        && let Expr::Name(object) = attr.value.as_ref()
-        && (matches!(object.id.as_str(), SELF_RECEIVER | "cls") || object.id.as_str() == class_name)
-    {
-        out.insert(attr.attr.to_string());
-    }
-}
-
-/// Walks `body` (without entering nested `Stmt::ClassDef`s) and records attribute names
-/// mutated in place on `self`, `cls`, or `class_name`.
-fn collect_mutated_class_attr_names(body: &[Stmt], class_name: &str) -> HashSet<String> {
-    struct MutationVisitor<'a> {
-        class_name: &'a str,
-        out: HashSet<String>,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for MutationVisitor<'a> {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            match statement {
-                Stmt::ClassDef(_) => return,
-                Stmt::AugAssign(aug) => {
-                    let receiver = if let Expr::Subscript(sub) = aug.target.as_ref() {
-                        sub.value.as_ref()
-                    } else {
-                        aug.target.as_ref()
-                    };
-                    record_mutated_class_receiver(receiver, self.class_name, &mut self.out);
-                }
-                _ => {}
-            }
-            walk_stmt(self, statement);
-        }
-
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if let Some(receiver) = in_place_mutated_receiver_expr(expr) {
-                record_mutated_class_receiver(receiver, self.class_name, &mut self.out);
-            }
-            walk_expr(self, expr);
-        }
-    }
-
-    let mut visitor = MutationVisitor {
-        class_name,
-        out: HashSet::new(),
-    };
-    visitor.visit_body(body);
-    visitor.out
-}
-
-/// Walks statements inside a method body (without entering nested functions, classes, or lambdas)
-/// and collects `(ann_assign, attr_name, annotation_expr)` for `self.<attr>: <type>` annotations.
-fn collect_self_annotated_assignments(body: &[Stmt]) -> Vec<(&StmtAnnAssign, String, &Expr)> {
-    struct SelfAnnVisitor<'a> {
-        out: Vec<(&'a StmtAnnAssign, String, &'a Expr)>,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for SelfAnnVisitor<'a> {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            match statement {
-                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,
-                Stmt::AnnAssign(ann) => {
-                    if let Expr::Attribute(left) = ann.target.as_ref()
-                        && let Expr::Name(object) = left.value.as_ref()
-                        && object.id == SELF_RECEIVER
-                    {
-                        self.out
-                            .push((ann, left.attr.to_string(), ann.annotation.as_ref()));
-                    }
-                }
-                _ => {}
-            }
-            walk_stmt(self, statement);
-        }
-
-        fn visit_expr(&mut self, _expr: &'a Expr) {}
-    }
-
-    let mut visitor = SelfAnnVisitor { out: Vec::new() };
-    visitor.visit_body(body);
-    visitor.out
-}
-
 /// Collects annotated class and `__init__` attributes, recording whether each attribute is
 /// mutated in place within its class.
 #[must_use]
@@ -422,6 +275,82 @@ pub fn collect_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotatedAttribu
     };
     visitor.visit_body(&parsed.syntax().body);
     visitor.out
+}
+
+/// Walks `body` (without entering nested `Stmt::ClassDef`s) and records attribute names
+/// mutated in place on `self`, `cls`, or `class_name`.
+fn collect_mutated_class_attr_names(body: &[Stmt], class_name: &str) -> HashSet<String> {
+    struct MutationVisitor<'a> {
+        class_name: &'a str,
+        out: HashSet<String>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for MutationVisitor<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            match statement {
+                Stmt::ClassDef(_) => return,
+                Stmt::AugAssign(aug) => {
+                    let receiver = if let Expr::Subscript(sub) = aug.target.as_ref() {
+                        sub.value.as_ref()
+                    } else {
+                        aug.target.as_ref()
+                    };
+                    record_mutated_class_receiver(receiver, self.class_name, &mut self.out);
+                }
+                _ => {}
+            }
+            walk_stmt(self, statement);
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Some(receiver) = in_place_mutated_receiver_expr(expr) {
+                record_mutated_class_receiver(receiver, self.class_name, &mut self.out);
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut visitor = MutationVisitor {
+        class_name,
+        out: HashSet::new(),
+    };
+    visitor.visit_body(body);
+    visitor.out
+}
+
+/// Checks if `receiver` is `self.<attr>`, `cls.<attr>`, or `<class_name>.<attr>`, and inserts
+/// `<attr>` into `out`.
+fn record_mutated_class_receiver(receiver: &Expr, class_name: &str, out: &mut HashSet<String>) {
+    if let Expr::Attribute(attr) = receiver
+        && let Expr::Name(object) = attr.value.as_ref()
+        && (matches!(object.id.as_str(), SELF_RECEIVER | CLS_RECEIVER)
+            || object.id.as_str() == class_name)
+    {
+        out.insert(attr.attr.to_string());
+    }
+}
+
+/// Returns true if a Python `StmtClassDef` inherits from `Protocol` or `ABC` or declares
+/// `metaclass=ABCMeta`.
+pub(super) fn is_protocol_or_abc_class(class_def: &StmtClassDef, source: &str) -> bool {
+    let has_abc_metaclass = class_def.keywords().iter().any(|keyword| {
+        keyword
+            .arg
+            .as_ref()
+            .is_some_and(|arg| arg.id == "metaclass")
+            && resolve_path_and_terminal_expr(&keyword.value, source).1 == "ABCMeta"
+    });
+    has_abc_metaclass
+        || base_class_terminals(class_def, source)
+            .iter()
+            .any(|terminal| matches!(terminal.as_str(), PROTOCOL_CLASS | ABC_CLASS))
+}
+
+/// Returns true if a Python `StmtClassDef` inherits from `TypedDict`.
+pub(super) fn is_typed_dict_class(class_def: &StmtClassDef, source: &str) -> bool {
+    base_class_terminals(class_def, source)
+        .iter()
+        .any(|terminal| terminal == "TypedDict")
 }
 
 /// A Python instance attribute annotated inline (`self.<name>: <type>`) inside an instance method.
@@ -515,71 +444,40 @@ pub fn collect_instance_attribute_annotations(
     visitor.out
 }
 
-/// Classifies the visibility tier of a Python method identifier: public or `__dunder__` methods
-/// are `Public`; single-underscore (`_name`) and name-mangled (`__name`) methods are `Private`.
-fn python_method_visibility(name: &str) -> MethodVisibility {
-    let is_dunder = name.starts_with("__") && name.ends_with("__") && name.len() > 4;
-    if is_dunder || !name.starts_with('_') {
-        MethodVisibility::Public
-    } else {
-        MethodVisibility::Private
-    }
-}
-
-/// Collects the direct methods of `class_def` in source order, grouping `@overload` signatures
-/// and `@<prop>.setter` / `@<prop>.deleter` accessors with their first definition.
-fn collect_class_methods<'a>(
-    class_def: &StmtClassDef,
-    file: &'a ParsedFile,
-) -> Vec<TypeMethod<'a>> {
-    struct SeenMethod {
-        has_overload: bool,
-        has_non_overload: bool,
-    }
-
-    let mut methods = Vec::new();
-    let mut seen_by_name: HashMap<String, SeenMethod> = HashMap::new();
-
-    for function_def in direct_function_definitions(&class_def.body) {
-        let name = function_def.name.id.to_string();
-        let decorators = extract_decorators_from_slice(&function_def.decorator_list, file);
-        let is_overload = decorators
-            .iter()
-            .any(|decorator| decorator.terminal_name == "overload");
-        let is_property_accessor = decorators.iter().any(|decorator| {
+/// Returns true if `class_def` synthesizes constructor fields from class-body annotations
+/// (`@dataclass`, `attrs` decorators, or Pydantic `BaseModel` subclasses).
+fn is_field_synthesizing_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
+    let has_field_decorator = extract_decorators_from_slice(&class_def.decorator_list, file)
+        .iter()
+        .any(|decorator| {
             matches!(
-                decorator.terminal_name.as_str(),
-                "getter" | "setter" | "deleter"
+                decorator.path.as_str(),
+                DATACLASS_DECORATOR
+                    | QUALIFIED_DATACLASS_DECORATOR
+                    | "define"
+                    | "frozen"
+                    | "mutable"
+                    | "attr.s"
+                    | "attr.attrs"
+                    | "attr.dataclass"
+                    | "attrs.define"
+                    | "attrs.frozen"
+                    | "attrs.mutable"
             )
         });
+    has_field_decorator
+        || base_class_terminals(class_def, &file.source)
+            .iter()
+            .any(|terminal| terminal == "BaseModel")
+}
 
-        if let Some(seen) = seen_by_name.get_mut(&name) {
-            let continues_overload = is_overload || (seen.has_overload && !seen.has_non_overload);
-            if is_property_accessor || continues_overload {
-                seen.has_overload |= is_overload;
-                seen.has_non_overload |= !is_overload;
-                continue;
-            }
-        }
-
-        seen_by_name.insert(
-            name.clone(),
-            SeenMethod {
-                has_overload: is_overload,
-                has_non_overload: !is_overload,
-            },
-        );
-        let visibility = python_method_visibility(&name);
-        let is_constructor = PYTHON_CONSTRUCTOR_NAMES.contains(&name.as_str());
-        methods.push(TypeMethod {
-            name_node: AstNode::from_span(file, span_from_ruff_range(function_def.name.range)),
-            name,
-            visibility,
-            is_constructor,
-        });
-    }
-
-    methods
+/// A grouped Python function or method (merging `@overload` stubs and `@property` accessors).
+struct GroupedPythonCallable<'a, 'ast> {
+    name_node: AstNode<'a>,
+    name: String,
+    visibility: MethodVisibility,
+    is_constructor: bool,
+    defs: Vec<&'ast StmtFunctionDef>,
 }
 
 /// Collects each Python `class` definition in `file` with its direct methods in source order.
@@ -613,6 +511,260 @@ pub(in crate::code_lint::ast) fn collect_type_method_scopes(
     };
     visitor.visit_body(&parsed.syntax().body);
     visitor.scopes
+}
+
+/// Collects the direct methods of `class_def` in source order, grouping `@overload` signatures
+/// and `@<prop>.setter` / `@<prop>.deleter` accessors with their first definition.
+fn collect_class_methods<'a>(
+    class_def: &StmtClassDef,
+    file: &'a ParsedFile,
+) -> Vec<TypeMethod<'a>> {
+    group_python_callables(&class_def.body, true, file)
+        .into_iter()
+        .map(|callable| TypeMethod {
+            name_node: callable.name_node,
+            name: callable.name,
+            visibility: callable.visibility,
+            is_constructor: callable.is_constructor,
+        })
+        .collect()
+}
+
+/// Collects all module and `class` [`CallableScope`]s in a Python `file`.
+#[must_use]
+pub(in crate::code_lint::ast) fn collect_callable_scopes(
+    file: &ParsedFile,
+) -> Vec<CallableScope<'_>> {
+    struct ScopeCollector<'a> {
+        file: &'a ParsedFile,
+        scopes: Vec<CallableScope<'a>>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for ScopeCollector<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if let Stmt::ClassDef(class_def) = statement
+                && let Some(scope) = build_class_callable_scope(class_def, self.file)
+            {
+                self.scopes.push(scope);
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let scopes = build_module_callable_scopes(&parsed.syntax().body, file);
+    let mut collector = ScopeCollector { file, scopes };
+    collector.visit_body(&parsed.syntax().body);
+    collector.scopes
+}
+
+/// Builds [`CallableScope`]s for top-level functions in `module_body`, bridging references
+/// through top-level classes in the same module and starting a new scope segment whenever a
+/// non-overload, non-property function name is redefined.
+fn build_module_callable_scopes<'a>(
+    module_body: &[Stmt],
+    file: &'a ParsedFile,
+) -> Vec<CallableScope<'a>> {
+    let grouped = group_python_callables(module_body, false, file);
+    if grouped.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut segments: Vec<Vec<GroupedPythonCallable<'a, '_>>> = Vec::new();
+    let mut current_segment: Vec<GroupedPythonCallable<'a, '_>> = Vec::new();
+    let mut seen_names: HashSet<String> = HashSet::new();
+    for item in grouped {
+        if !seen_names.insert(item.name.clone()) {
+            segments.push(std::mem::take(&mut current_segment));
+            seen_names.clear();
+            seen_names.insert(item.name.clone());
+        }
+        current_segment.push(item);
+    }
+    if !current_segment.is_empty() {
+        segments.push(current_segment);
+    }
+
+    let empty_classes = HashMap::new();
+    let empty_locals = HashSet::new();
+    let mut scopes = Vec::new();
+
+    for segment in segments {
+        if segment.len() < 2 {
+            continue;
+        }
+        let fn_by_name: HashMap<String, usize> = segment
+            .iter()
+            .enumerate()
+            .map(|(idx, item)| (item.name.clone(), idx))
+            .collect();
+
+        let mut class_callees: HashMap<&str, Vec<usize>> = HashMap::new();
+        for statement in module_body {
+            if let Stmt::ClassDef(class_def) = statement {
+                let mut visitor = ModuleRefVisitor {
+                    fn_by_name: &fn_by_name,
+                    class_callees: &empty_classes,
+                    local_names: &empty_locals,
+                    callees: Vec::new(),
+                };
+                visitor.visit_body(&class_def.body);
+                if !visitor.callees.is_empty() {
+                    class_callees.insert(class_def.name.id.as_str(), visitor.callees);
+                }
+            }
+        }
+
+        let callables = segment
+            .into_iter()
+            .map(|group| {
+                let mut local_names = HashSet::new();
+                for def in &group.defs {
+                    local_names.extend(collect_local_bound_names(def, file));
+                }
+                let mut visitor = ModuleRefVisitor {
+                    fn_by_name: &fn_by_name,
+                    class_callees: &class_callees,
+                    local_names: &local_names,
+                    callees: Vec::new(),
+                };
+                for def in &group.defs {
+                    visitor.visit_body(&def.body);
+                }
+                CallableItem {
+                    name_node: group.name_node,
+                    name: group.name,
+                    visibility: group.visibility,
+                    is_constructor: group.is_constructor,
+                    callees: visitor.callees,
+                }
+            })
+            .collect();
+
+        scopes.push(CallableScope { callables });
+    }
+
+    scopes
+}
+
+struct ModuleRefVisitor<'map, 'local> {
+    fn_by_name: &'map HashMap<String, usize>,
+    class_callees: &'map HashMap<&'map str, Vec<usize>>,
+    local_names: &'local HashSet<String>,
+    callees: Vec<usize>,
+}
+
+impl SourceOrderVisitor<'_> for ModuleRefVisitor<'_, '_> {
+    fn visit_expr(&mut self, expr: &Expr) {
+        if let Expr::Name(name) = expr
+            && name.ctx.is_load()
+        {
+            let ident = name.id.as_str();
+            if !self.local_names.contains(ident) {
+                if let Some(&idx) = self.fn_by_name.get(ident)
+                    && !self.callees.contains(&idx)
+                {
+                    self.callees.push(idx);
+                }
+                if let Some(bridged) = self.class_callees.get(ident) {
+                    for &idx in bridged {
+                        if !self.callees.contains(&idx) {
+                            self.callees.push(idx);
+                        }
+                    }
+                }
+            }
+        }
+        walk_expr(self, expr);
+    }
+}
+
+/// Builds a [`CallableScope`] for direct methods of `class_def`.
+fn build_class_callable_scope<'a>(
+    class_def: &StmtClassDef,
+    file: &'a ParsedFile,
+) -> Option<CallableScope<'a>> {
+    struct ClassMethodCallVisitor<'map, 'local> {
+        class_name: &'map str,
+        method_by_name: &'map HashMap<String, usize>,
+        local_names: &'local HashSet<String>,
+        has_self_param: bool,
+        has_cls_param: bool,
+        callees: &'local mut Vec<usize>,
+    }
+
+    impl SourceOrderVisitor<'_> for ClassMethodCallVisitor<'_, '_> {
+        fn visit_stmt(&mut self, statement: &Stmt) {
+            if matches!(statement, Stmt::ClassDef(_)) {
+                return;
+            }
+            walk_stmt(self, statement);
+        }
+
+        fn visit_expr(&mut self, expr: &Expr) {
+            if let Expr::Attribute(attr) = expr
+                && attr.ctx.is_load()
+                && let Expr::Name(recv) = attr.value.as_ref()
+            {
+                let recv_name = recv.id.as_str();
+                let is_valid_receiver = (recv_name == SELF_RECEIVER
+                    && (self.has_self_param || !self.local_names.contains(SELF_RECEIVER)))
+                    || (recv_name == CLS_RECEIVER
+                        && (self.has_cls_param || !self.local_names.contains(CLS_RECEIVER)))
+                    || (recv_name == self.class_name && !self.local_names.contains(recv_name));
+                if is_valid_receiver
+                    && let Some(&idx) = self.method_by_name.get(attr.attr.id.as_str())
+                    && !self.callees.contains(&idx)
+                {
+                    self.callees.push(idx);
+                }
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let grouped = group_python_callables(&class_def.body, true, file);
+    if grouped.len() < 2 {
+        return None;
+    }
+    let method_by_name: HashMap<String, usize> = grouped
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| (item.name.clone(), idx))
+        .collect();
+    let class_name = class_def.name.id.as_str();
+
+    let callables = grouped
+        .into_iter()
+        .map(|group| {
+            let mut callees = Vec::new();
+            for def in &group.defs {
+                let local_names = collect_local_bound_names(def, file);
+                let has_self_param = parameters_shadow_name(&def.parameters, SELF_RECEIVER);
+                let has_cls_param = parameters_shadow_name(&def.parameters, CLS_RECEIVER);
+                let mut visitor = ClassMethodCallVisitor {
+                    class_name,
+                    method_by_name: &method_by_name,
+                    local_names: &local_names,
+                    has_self_param,
+                    has_cls_param,
+                    callees: &mut callees,
+                };
+                visitor.visit_body(&def.body);
+            }
+            CallableItem {
+                name_node: group.name_node,
+                name: group.name,
+                visibility: group.visibility,
+                is_constructor: group.is_constructor,
+                callees,
+            }
+        })
+        .collect();
+
+    Some(CallableScope { callables })
 }
 
 /// A type-annotated class or instance attribute (`name: Type` or `name: Type = value`) declared
@@ -674,4 +826,128 @@ pub fn collect_fields_after_methods(file: &ParsedFile) -> Vec<PythonFieldAfterMe
     };
     visitor.visit_body(&parsed.syntax().body);
     visitor.out
+}
+
+/// Returns the terminal name of each positional base class of a Python `StmtClassDef`,
+/// unwrapping generic subscripts (`Protocol[T]` yields `Protocol`).
+fn base_class_terminals(class_def: &StmtClassDef, source: &str) -> Vec<String> {
+    class_def
+        .bases()
+        .iter()
+        .map(|base| {
+            let base_expr = if let Expr::Subscript(subscript) = base {
+                subscript.value.as_ref()
+            } else {
+                base
+            };
+            resolve_path_and_terminal_expr(base_expr, source).1
+        })
+        .collect()
+}
+
+/// Walks statements inside a method body (without entering nested functions, classes, or lambdas)
+/// and collects `(ann_assign, attr_name, annotation_expr)` for `self.<attr>: <type>` annotations.
+fn collect_self_annotated_assignments(body: &[Stmt]) -> Vec<(&StmtAnnAssign, String, &Expr)> {
+    struct SelfAnnVisitor<'a> {
+        out: Vec<(&'a StmtAnnAssign, String, &'a Expr)>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for SelfAnnVisitor<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            match statement {
+                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,
+                Stmt::AnnAssign(ann) => {
+                    if let Expr::Attribute(left) = ann.target.as_ref()
+                        && let Expr::Name(object) = left.value.as_ref()
+                        && object.id == SELF_RECEIVER
+                    {
+                        self.out
+                            .push((ann, left.attr.to_string(), ann.annotation.as_ref()));
+                    }
+                }
+                _ => {}
+            }
+            walk_stmt(self, statement);
+        }
+
+        fn visit_expr(&mut self, _expr: &'a Expr) {}
+    }
+
+    let mut visitor = SelfAnnVisitor { out: Vec::new() };
+    visitor.visit_body(body);
+    visitor.out
+}
+
+/// Collects direct functions in `scope_body` in source order, grouping `@overload` signatures
+/// and `@<prop>.setter` / `@<prop>.deleter` accessors with their first definition.
+fn group_python_callables<'a, 'ast>(
+    scope_body: &'ast [Stmt],
+    is_class_scope: bool,
+    file: &'a ParsedFile,
+) -> Vec<GroupedPythonCallable<'a, 'ast>> {
+    struct SeenCallable {
+        index: usize,
+        has_overload: bool,
+        has_non_overload: bool,
+    }
+
+    let mut callables: Vec<GroupedPythonCallable<'a, 'ast>> = Vec::new();
+    let mut seen_by_name: HashMap<String, SeenCallable> = HashMap::new();
+
+    for function_def in direct_function_definitions(scope_body) {
+        let name = function_def.name.id.to_string();
+        let decorators = extract_decorators_from_slice(&function_def.decorator_list, file);
+        let is_overload = decorators
+            .iter()
+            .any(|decorator| decorator.terminal_name == "overload");
+        let is_property_accessor = decorators.iter().any(|decorator| {
+            matches!(
+                decorator.terminal_name.as_str(),
+                "getter" | "setter" | "deleter"
+            )
+        });
+
+        if let Some(seen) = seen_by_name.get_mut(&name) {
+            let continues_overload = is_overload || (seen.has_overload && !seen.has_non_overload);
+            if is_property_accessor || continues_overload {
+                seen.has_overload |= is_overload;
+                seen.has_non_overload |= !is_overload;
+                callables[seen.index].defs.push(function_def);
+                continue;
+            }
+        }
+
+        let index = callables.len();
+        seen_by_name.insert(
+            name.clone(),
+            SeenCallable {
+                index,
+                has_overload: is_overload,
+                has_non_overload: !is_overload,
+            },
+        );
+        let visibility = python_method_visibility(&name);
+        let is_constructor = is_class_scope && PYTHON_CONSTRUCTOR_NAMES.contains(&name.as_str());
+        callables.push(GroupedPythonCallable {
+            name_node: AstNode::from_span(file, span_from_ruff_range(function_def.name.range)),
+            name,
+            visibility,
+            is_constructor,
+            defs: vec![function_def],
+        });
+    }
+
+    callables
+}
+
+/// Classifies the visibility tier of a Python function or method identifier: public or
+/// `__dunder__` names are `Public`; single-underscore (`_name`) and name-mangled (`__name`)
+/// names are `Private`.
+fn python_method_visibility(name: &str) -> MethodVisibility {
+    let is_dunder = name.starts_with("__") && name.ends_with("__") && name.len() > 4;
+    if is_dunder || !name.starts_with('_') {
+        MethodVisibility::Public
+    } else {
+        MethodVisibility::Private
+    }
 }

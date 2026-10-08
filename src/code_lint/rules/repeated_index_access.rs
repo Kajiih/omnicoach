@@ -124,6 +124,35 @@ struct ReceiverReads<'a> {
     positions: BTreeSet<i64>,
 }
 
+fn check_file(
+    rule: &CodeRule<(CountOption, CountOption)>,
+    path: &Path,
+    file: &ParsedFile,
+    (min_positions, max_placeholders): (usize, usize),
+) -> Vec<Diagnostic> {
+    ast::collect_positional_reads(file)
+        .into_iter()
+        .flat_map(group_reads_by_receiver)
+        .filter(|group| {
+            group.positions.len() >= min_positions
+                && placeholder_count(&group.positions) <= max_placeholders
+        })
+        .map(|group| {
+            let positions = group
+                .positions
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            rule.diagnostic_at_node(
+                path,
+                &group.first_read,
+                &[("receiver", &group.receiver), ("positions", &positions)],
+            )
+        })
+        .collect()
+}
+
 /// Groups a scope's reads by receiver in first-seen order, skipping the scope's exempt receivers.
 fn group_reads_by_receiver(scope: ScopePositionalReads<'_>) -> Vec<ReceiverReads<'_>> {
     let mut groups: Vec<ReceiverReads<'_>> = Vec::new();
@@ -162,35 +191,6 @@ fn placeholder_count(positions: &BTreeSet<i64>) -> usize {
         .next()
         .map_or(0, |&first| first.unsigned_abs() - trailing.count() as u64);
     usize::try_from(leading_gaps + trailing_gaps).unwrap_or(usize::MAX)
-}
-
-fn check_file(
-    rule: &CodeRule<(CountOption, CountOption)>,
-    path: &Path,
-    file: &ParsedFile,
-    (min_positions, max_placeholders): (usize, usize),
-) -> Vec<Diagnostic> {
-    ast::collect_positional_reads(file)
-        .into_iter()
-        .flat_map(group_reads_by_receiver)
-        .filter(|group| {
-            group.positions.len() >= min_positions
-                && placeholder_count(&group.positions) <= max_placeholders
-        })
-        .map(|group| {
-            let positions = group
-                .positions
-                .iter()
-                .map(i64::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            rule.diagnostic_at_node(
-                path,
-                &group.first_read,
-                &[("receiver", &group.receiver), ("positions", &positions)],
-            )
-        })
-        .collect()
 }
 
 #[cfg(test)]

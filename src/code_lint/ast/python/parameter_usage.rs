@@ -66,16 +66,23 @@ const OTHER_SAFE_READONLY_BUILTINS: &[&str] = &[
     "next",
 ];
 
-/// Returns true if `name` is a builtin that iterates or sizes its positional arguments
-/// (`len(xs)`, `enumerate(xs)`, `zip(xs, ys)`, `reversed(xs)`, `sorted(xs)`).
-pub(super) fn is_collection_builtin(name: &str) -> bool {
-    matches!(name, BUILTIN_LEN | "reversed") || ITERATING_COLLECTION_BUILTINS.contains(&name)
-}
-
-/// Returns true if `name` is a builtin that consumes an `Iterable` in a single pass.
-fn is_single_pass_iterable_builtin(name: &str) -> bool {
-    ITERATING_COLLECTION_BUILTINS.contains(&name)
-        || OTHER_SINGLE_PASS_ITERABLE_BUILTINS.contains(&name)
+/// Classifies how `signature`'s body uses each of its parameters, keyed by parameter name.
+#[must_use]
+pub fn summarize_parameter_usages<'a>(
+    signature: &PythonFunctionSignature<'a>,
+) -> HashMap<&'a str, ParameterUsage> {
+    let func = signature.definition;
+    let mut visitor = ParameterUseVisitor {
+        usages: func
+            .parameters
+            .iter()
+            .map(|parameter| (parameter.name().as_str(), ParameterUsage::default()))
+            .collect(),
+        shadowed: Vec::new(),
+        loop_or_closure_depth: 0,
+    };
+    visitor.visit_body(&func.body);
+    visitor.usages
 }
 
 /// Returns true if `name` is a builtin that reads or iterates a collection without mutating it
@@ -84,6 +91,18 @@ fn is_safe_readonly_builtin(name: &str) -> bool {
     is_single_pass_iterable_builtin(name)
         || is_collection_builtin(name)
         || OTHER_SAFE_READONLY_BUILTINS.contains(&name)
+}
+
+/// Returns true if `name` is a builtin that consumes an `Iterable` in a single pass.
+fn is_single_pass_iterable_builtin(name: &str) -> bool {
+    ITERATING_COLLECTION_BUILTINS.contains(&name)
+        || OTHER_SINGLE_PASS_ITERABLE_BUILTINS.contains(&name)
+}
+
+/// Returns true if `name` is a builtin that iterates or sizes its positional arguments
+/// (`len(xs)`, `enumerate(xs)`, `zip(xs, ys)`, `reversed(xs)`, `sorted(xs)`).
+pub(super) fn is_collection_builtin(name: &str) -> bool {
+    matches!(name, BUILTIN_LEN | "reversed") || ITERATING_COLLECTION_BUILTINS.contains(&name)
 }
 
 /// How a function body reads a parameter at one use site.
@@ -159,45 +178,6 @@ struct ParameterUseVisitor<'a> {
 }
 
 impl<'a> ParameterUseVisitor<'a> {
-    fn record(&mut self, name: &str, role: UseRole) {
-        if self.shadowed.contains(&name) {
-            return;
-        }
-        let Some(usage) = self.usages.get_mut(name) else {
-            return;
-        };
-        match role {
-            UseRole::Escape => {
-                usage.mutated_or_escaping = true;
-                usage.needs_sequence = true;
-            }
-            UseRole::Read => usage.needs_sequence = true,
-            UseRole::Truthiness | UseRole::Sized => usage.needs_collection = true,
-            UseRole::Iterated => {
-                usage.iteration_count += 1;
-                if self.loop_or_closure_depth > 0 {
-                    usage.needs_collection = true;
-                }
-            }
-            UseRole::Identity => {}
-        }
-    }
-
-    /// Visits `expr`, recording `role` if it is a direct read of a parameter.
-    fn visit_expr_as(&mut self, expr: &'a Expr, role: UseRole) {
-        match expr {
-            Expr::Name(name) if matches!(name.ctx, ruff_python_ast::ExprContext::Load) => {
-                self.record(name.id.as_str(), role);
-            }
-            Expr::BoolOp(bool_op) if role == UseRole::Truthiness => {
-                for value in &bool_op.values {
-                    self.visit_expr_as(value, role);
-                }
-            }
-            _ => self.visit_expr(expr),
-        }
-    }
-
     /// Visits the body of a nested `def` or `lambda`, whose `parameters` shadow ours.
     fn visit_nested_scope(
         &mut self,
@@ -302,6 +282,45 @@ impl<'a> ParameterUseVisitor<'a> {
                 UseRole::Read
             };
             self.visit_expr_as(operand, role);
+        }
+    }
+
+    /// Visits `expr`, recording `role` if it is a direct read of a parameter.
+    fn visit_expr_as(&mut self, expr: &'a Expr, role: UseRole) {
+        match expr {
+            Expr::Name(name) if matches!(name.ctx, ruff_python_ast::ExprContext::Load) => {
+                self.record(name.id.as_str(), role);
+            }
+            Expr::BoolOp(bool_op) if role == UseRole::Truthiness => {
+                for value in &bool_op.values {
+                    self.visit_expr_as(value, role);
+                }
+            }
+            _ => self.visit_expr(expr),
+        }
+    }
+
+    fn record(&mut self, name: &str, role: UseRole) {
+        if self.shadowed.contains(&name) {
+            return;
+        }
+        let Some(usage) = self.usages.get_mut(name) else {
+            return;
+        };
+        match role {
+            UseRole::Escape => {
+                usage.mutated_or_escaping = true;
+                usage.needs_sequence = true;
+            }
+            UseRole::Read => usage.needs_sequence = true,
+            UseRole::Truthiness | UseRole::Sized => usage.needs_collection = true,
+            UseRole::Iterated => {
+                usage.iteration_count += 1;
+                if self.loop_or_closure_depth > 0 {
+                    usage.needs_collection = true;
+                }
+            }
+            UseRole::Identity => {}
         }
     }
 }
@@ -416,25 +435,6 @@ impl<'a> SourceOrderVisitor<'a> for ParameterUseVisitor<'a> {
             _ => walk_expr(self, expr),
         }
     }
-}
-
-/// Classifies how `signature`'s body uses each of its parameters, keyed by parameter name.
-#[must_use]
-pub fn summarize_parameter_usages<'a>(
-    signature: &PythonFunctionSignature<'a>,
-) -> HashMap<&'a str, ParameterUsage> {
-    let func = signature.definition;
-    let mut visitor = ParameterUseVisitor {
-        usages: func
-            .parameters
-            .iter()
-            .map(|parameter| (parameter.name().as_str(), ParameterUsage::default()))
-            .collect(),
-        shadowed: Vec::new(),
-        loop_or_closure_depth: 0,
-    };
-    visitor.visit_body(&func.body);
-    visitor.usages
 }
 
 #[cfg(test)]

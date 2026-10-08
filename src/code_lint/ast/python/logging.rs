@@ -51,14 +51,34 @@ pub struct PythonLoggerCall<'a> {
     pub(super) message_range: TextRange,
 }
 
-/// Returns true if `receiver` is a recognized logger variable, module, or attribute (`logger`,
-/// `_logger`, `logging`, `self.logger`, `app.logger`, etc.).
-fn is_logger_receiver(receiver: &Expr) -> bool {
-    match receiver {
-        Expr::Name(name) => LOGGER_RECEIVERS.contains(&name.id.as_str()),
-        Expr::Attribute(attribute) => LOGGER_ATTRIBUTES.contains(&attribute.attr.as_str()),
-        _ => false,
+/// Collects the logger calls in `file`, in source order.
+#[must_use]
+pub fn collect_logger_calls(file: &ParsedFile) -> Vec<PythonLoggerCall<'_>> {
+    struct LoggerCallVisitor<'a> {
+        file: &'a ParsedFile,
+        out: Vec<PythonLoggerCall<'a>>,
     }
+
+    impl<'a> SourceOrderVisitor<'a> for LoggerCallVisitor<'a> {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Call(call) = expr
+                && let Some(logger_call) = extract_logger_call(call, self.file)
+            {
+                self.out.push(logger_call);
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut visitor = LoggerCallVisitor {
+        file,
+        out: Vec::new(),
+    };
+    visitor.visit_body(&parsed.syntax().body);
+    visitor.out
 }
 
 /// Parses `call` as a logger call if its callee is a recognized logger receiver and method.
@@ -110,32 +130,12 @@ pub(super) fn extract_logger_call<'a>(
     })
 }
 
-/// Collects the logger calls in `file`, in source order.
-#[must_use]
-pub fn collect_logger_calls(file: &ParsedFile) -> Vec<PythonLoggerCall<'_>> {
-    struct LoggerCallVisitor<'a> {
-        file: &'a ParsedFile,
-        out: Vec<PythonLoggerCall<'a>>,
+/// Returns true if `receiver` is a recognized logger variable, module, or attribute (`logger`,
+/// `_logger`, `logging`, `self.logger`, `app.logger`, etc.).
+fn is_logger_receiver(receiver: &Expr) -> bool {
+    match receiver {
+        Expr::Name(name) => LOGGER_RECEIVERS.contains(&name.id.as_str()),
+        Expr::Attribute(attribute) => LOGGER_ATTRIBUTES.contains(&attribute.attr.as_str()),
+        _ => false,
     }
-
-    impl<'a> SourceOrderVisitor<'a> for LoggerCallVisitor<'a> {
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if let Expr::Call(call) = expr
-                && let Some(logger_call) = extract_logger_call(call, self.file)
-            {
-                self.out.push(logger_call);
-            }
-            walk_expr(self, expr);
-        }
-    }
-
-    let Some(parsed) = file.py_module() else {
-        return Vec::new();
-    };
-    let mut visitor = LoggerCallVisitor {
-        file,
-        out: Vec::new(),
-    };
-    visitor.visit_body(&parsed.syntax().body);
-    visitor.out
 }

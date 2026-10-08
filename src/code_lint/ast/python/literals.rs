@@ -24,96 +24,21 @@ const TYPE_NAME_FIRST_ARGUMENT_CALLS: &[&str] = &[
     "cast",
 ];
 
-/// Parses a non-complex Python `Expr::NumberLiteral` into a [`LiteralValue`].
-fn number_literal_value(expr: &Expr, source: &str) -> Option<LiteralValue> {
-    let Expr::NumberLiteral(number) = expr else {
-        return None;
+/// Collects Python literal occurrences (see [`crate::code_lint::ast::collect_literal_occurrences`]).
+#[must_use]
+pub(in crate::code_lint::ast) fn collect_literal_occurrences(
+    file: &ParsedFile,
+) -> Vec<LiteralOccurrence<'_>> {
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
     };
-    let text = &source[number.range().start().to_usize()..number.range().end().to_usize()];
-    match &number.value {
-        ruff_python_ast::Number::Int(_) => parse_integer_literal(text),
-        ruff_python_ast::Number::Float(_) => parse_float_literal(text),
-        ruff_python_ast::Number::Complex { .. } => None,
-    }
-}
-
-/// Returns the `(span, LiteralValue)` of a scalar literal expression suitable as a
-/// [`LiteralRole::ConstantDefinition`] RHS (`None` for composite values like lists or
-/// implicitly concatenated strings `'aa' 'bb'`).
-fn scalar_literal_value(expr: &Expr, source: &str) -> Option<(SourceSpan, LiteralValue)> {
-    match expr {
-        Expr::NumberLiteral(_) => Some((
-            span_from_ruff_range(expr.range()),
-            number_literal_value(expr, source)?,
-        )),
-        Expr::UnaryOp(unary) if unary.op == ruff_python_ast::UnaryOp::USub => {
-            let negated = number_literal_value(&unary.operand, source)?.negated()?;
-            Some((span_from_ruff_range(unary.range()), negated))
-        }
-        Expr::StringLiteral(str_lit) => {
-            let [part] = str_lit.value.as_slice() else {
-                return None;
-            };
-            Some((
-                span_from_ruff_range(part.range()),
-                LiteralValue::Str(part.as_str().to_string()),
-            ))
-        }
-        Expr::BytesLiteral(bytes_lit) => {
-            let [part] = bytes_lit.value.as_slice() else {
-                return None;
-            };
-            Some((
-                span_from_ruff_range(part.range()),
-                LiteralValue::Bytes(String::from_utf8_lossy(part.as_slice()).into_owned()),
-            ))
-        }
-        Expr::FString(fstr) => {
-            let mut parts = fstr.value.iter();
-            let (Some(ruff_python_ast::FStringPartRef::FString(fpart)), None) =
-                (parts.next(), parts.next())
-            else {
-                return None;
-            };
-            if fpart
-                .elements
-                .iter()
-                .any(ruff_python_ast::InterpolatedStringElement::is_interpolation)
-            {
-                return None;
-            }
-            let text: String = fpart
-                .elements
-                .iter()
-                .filter_map(|elt| elt.as_literal().map(|lit| lit.value.as_ref()))
-                .collect();
-            Some((span_from_ruff_range(fpart.range()), LiteralValue::Str(text)))
-        }
-        _ => None,
-    }
-}
-
-/// Returns true if `name` is spelled as a constant (`MAX_RETRIES`, `_TIMEOUT_S`).
-pub(super) fn is_constant_name(name: &str) -> bool {
-    name.chars().any(|character| character.is_ascii_uppercase())
-        && name.chars().all(|character| {
-            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
-        })
-}
-
-/// Returns true if `expr` is a standalone string/bytes literal expression (docstring candidate).
-fn is_standalone_string_expr(expr: &Expr) -> bool {
-    match expr {
-        Expr::StringLiteral(_) | Expr::BytesLiteral(_) => true,
-        Expr::FString(fstr) => !fstr.value.iter().any(|part| match part {
-            ruff_python_ast::FStringPartRef::Literal(_) => false,
-            ruff_python_ast::FStringPartRef::FString(fpart) => fpart
-                .elements
-                .iter()
-                .any(ruff_python_ast::InterpolatedStringElement::is_interpolation),
-        }),
-        _ => false,
-    }
+    let mut collector = LiteralOccurrenceCollector {
+        file,
+        in_constant_scope: true,
+        out: Vec::new(),
+    };
+    collector.visit_body(&parsed.syntax().body);
+    collector.out
 }
 
 struct LiteralOccurrenceCollector<'a> {
@@ -341,21 +266,96 @@ impl<'a> SourceOrderVisitor<'a> for LiteralOccurrenceCollector<'a> {
     }
 }
 
-/// Collects Python literal occurrences (see [`crate::code_lint::ast::collect_literal_occurrences`]).
-#[must_use]
-pub(in crate::code_lint::ast) fn collect_literal_occurrences(
-    file: &ParsedFile,
-) -> Vec<LiteralOccurrence<'_>> {
-    let Some(parsed) = file.py_module() else {
-        return Vec::new();
+/// Returns true if `expr` is a standalone string/bytes literal expression (docstring candidate).
+fn is_standalone_string_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::StringLiteral(_) | Expr::BytesLiteral(_) => true,
+        Expr::FString(fstr) => !fstr.value.iter().any(|part| match part {
+            ruff_python_ast::FStringPartRef::Literal(_) => false,
+            ruff_python_ast::FStringPartRef::FString(fpart) => fpart
+                .elements
+                .iter()
+                .any(ruff_python_ast::InterpolatedStringElement::is_interpolation),
+        }),
+        _ => false,
+    }
+}
+
+/// Returns the `(span, LiteralValue)` of a scalar literal expression suitable as a
+/// [`LiteralRole::ConstantDefinition`] RHS (`None` for composite values like lists or
+/// implicitly concatenated strings `'aa' 'bb'`).
+fn scalar_literal_value(expr: &Expr, source: &str) -> Option<(SourceSpan, LiteralValue)> {
+    match expr {
+        Expr::NumberLiteral(_) => Some((
+            span_from_ruff_range(expr.range()),
+            number_literal_value(expr, source)?,
+        )),
+        Expr::UnaryOp(unary) if unary.op == ruff_python_ast::UnaryOp::USub => {
+            let negated = number_literal_value(&unary.operand, source)?.negated()?;
+            Some((span_from_ruff_range(unary.range()), negated))
+        }
+        Expr::StringLiteral(str_lit) => {
+            let [part] = str_lit.value.as_slice() else {
+                return None;
+            };
+            Some((
+                span_from_ruff_range(part.range()),
+                LiteralValue::Str(part.as_str().to_string()),
+            ))
+        }
+        Expr::BytesLiteral(bytes_lit) => {
+            let [part] = bytes_lit.value.as_slice() else {
+                return None;
+            };
+            Some((
+                span_from_ruff_range(part.range()),
+                LiteralValue::Bytes(String::from_utf8_lossy(part.as_slice()).into_owned()),
+            ))
+        }
+        Expr::FString(fstr) => {
+            let mut parts = fstr.value.iter();
+            let (Some(ruff_python_ast::FStringPartRef::FString(fpart)), None) =
+                (parts.next(), parts.next())
+            else {
+                return None;
+            };
+            if fpart
+                .elements
+                .iter()
+                .any(ruff_python_ast::InterpolatedStringElement::is_interpolation)
+            {
+                return None;
+            }
+            let text: String = fpart
+                .elements
+                .iter()
+                .filter_map(|elt| elt.as_literal().map(|lit| lit.value.as_ref()))
+                .collect();
+            Some((span_from_ruff_range(fpart.range()), LiteralValue::Str(text)))
+        }
+        _ => None,
+    }
+}
+
+/// Parses a non-complex Python `Expr::NumberLiteral` into a [`LiteralValue`].
+fn number_literal_value(expr: &Expr, source: &str) -> Option<LiteralValue> {
+    let Expr::NumberLiteral(number) = expr else {
+        return None;
     };
-    let mut collector = LiteralOccurrenceCollector {
-        file,
-        in_constant_scope: true,
-        out: Vec::new(),
-    };
-    collector.visit_body(&parsed.syntax().body);
-    collector.out
+    let text = &source[number.range().start().to_usize()..number.range().end().to_usize()];
+    match &number.value {
+        ruff_python_ast::Number::Int(_) => parse_integer_literal(text),
+        ruff_python_ast::Number::Float(_) => parse_float_literal(text),
+        ruff_python_ast::Number::Complex { .. } => None,
+    }
+}
+
+/// Returns true if `name` is spelled as a constant (`MAX_RETRIES`, `_TIMEOUT_S`).
+pub(super) fn is_constant_name(name: &str) -> bool {
+    name.chars().any(|character| character.is_ascii_uppercase())
+        && name.chars().all(|character| {
+            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+        })
 }
 
 #[cfg(test)]

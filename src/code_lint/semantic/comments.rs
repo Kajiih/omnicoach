@@ -7,24 +7,6 @@
 use crate::code_lint::ast::{self, AstNode, ParsedFile, statements};
 use std::collections::HashMap;
 
-/// Strips leading and trailing comment delimiters (`//`, `#`, `/* ... */`).
-///
-/// Returns `Some(stripped)` if delimiters were present, or `None` if the text
-/// does not start with standard comment delimiters.
-#[must_use]
-pub fn strip_comment_delimiters(text: &str) -> Option<&str> {
-    let trimmed = text.trim();
-    trimmed
-        .strip_prefix("//")
-        .or_else(|| trimmed.strip_prefix('#'))
-        .map(str::trim_start)
-        .or_else(|| {
-            trimmed
-                .strip_prefix("/*")
-                .map(|body| body.trim_start().trim_end_matches("*/").trim_end())
-        })
-}
-
 const DIRECTIVE_PREFIXES: &[&str] = &[
     "omni:ignore",
     "omni:disable-file",
@@ -38,65 +20,6 @@ const DIRECTIVE_PREFIXES: &[&str] = &[
     "pylint:disable",
     "noqa",
 ];
-
-fn find_directive_prefix(text: &str) -> Option<usize> {
-    for &prefix in DIRECTIVE_PREFIXES {
-        if text
-            .get(..prefix.len())
-            .is_some_and(|sub| sub.eq_ignore_ascii_case(prefix))
-        {
-            let rest = &text[prefix.len()..];
-            if rest.is_empty()
-                || rest.starts_with(|c: char| {
-                    c.is_whitespace() || c == ':' || c == '=' || c == '[' || c == '-'
-                })
-            {
-                return Some(prefix.len());
-            }
-        }
-    }
-    None
-}
-
-/// Checks if a whitespace-delimited word consists of rule codes (e.g. `SIM105`, `F401,`, `SIM105,F401`).
-///
-/// Rule codes must either contain digits (`SIM105`, `E501`), contain hyphens or dots
-/// (`unused-import`, `pylint.errors`), or be all-uppercase category codes (`F`, `W`).
-/// This prevents legitimate lowercase English explanation words (e.g. `safe`, `transient`)
-/// from being erroneously swallowed as rule codes.
-fn is_rule_code_token(word: &str) -> bool {
-    let trimmed = word.trim_matches(|c: char| c == ',' || c == ';');
-    !trimmed.is_empty()
-        && trimmed.split(',').all(|part| {
-            let segment = part.trim();
-            let is_valid = !segment.is_empty()
-                && segment
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-            let is_code = segment.chars().any(|c| c.is_ascii_digit())
-                || segment.contains('-')
-                || segment.contains('.')
-                || segment.chars().all(|c| c.is_ascii_uppercase() || c == '_');
-            is_valid && is_code
-        })
-}
-
-fn strip_rule_codes(mut text: &str) -> &str {
-    text = text.trim_start();
-    while !text.is_empty() {
-        let first_word = text.split_whitespace().next().unwrap_or("");
-        if is_rule_code_token(first_word) {
-            let had_comma = first_word.ends_with(',');
-            text = text[first_word.len()..].trim_start();
-            if !had_comma {
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-    text
-}
 
 /// Strips standard linter/tooling directives (`noqa`, `type: ignore`, `pyright`, `pylint`, `omni:ignore`).
 ///
@@ -137,6 +60,83 @@ pub fn clean_explanation(text: &str) -> &str {
     remainder
         .trim_start_matches(|c: char| c == '-' || c == ':' || c == ';' || c.is_whitespace())
         .trim()
+}
+
+fn find_directive_prefix(text: &str) -> Option<usize> {
+    for &prefix in DIRECTIVE_PREFIXES {
+        if text
+            .get(..prefix.len())
+            .is_some_and(|sub| sub.eq_ignore_ascii_case(prefix))
+        {
+            let rest = &text[prefix.len()..];
+            if rest.is_empty()
+                || rest.starts_with(|c: char| {
+                    c.is_whitespace() || c == ':' || c == '=' || c == '[' || c == '-'
+                })
+            {
+                return Some(prefix.len());
+            }
+        }
+    }
+    None
+}
+
+fn strip_rule_codes(mut text: &str) -> &str {
+    text = text.trim_start();
+    while !text.is_empty() {
+        let first_word = text.split_whitespace().next().unwrap_or("");
+        if is_rule_code_token(first_word) {
+            let had_comma = first_word.ends_with(',');
+            text = text[first_word.len()..].trim_start();
+            if !had_comma {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    text
+}
+
+/// Checks if a whitespace-delimited word consists of rule codes (e.g. `SIM105`, `F401,`, `SIM105,F401`).
+///
+/// Rule codes must either contain digits (`SIM105`, `E501`), contain hyphens or dots
+/// (`unused-import`, `pylint.errors`), or be all-uppercase category codes (`F`, `W`).
+/// This prevents legitimate lowercase English explanation words (e.g. `safe`, `transient`)
+/// from being erroneously swallowed as rule codes.
+fn is_rule_code_token(word: &str) -> bool {
+    let trimmed = word.trim_matches(|c: char| c == ',' || c == ';');
+    !trimmed.is_empty()
+        && trimmed.split(',').all(|part| {
+            let segment = part.trim();
+            let is_valid = !segment.is_empty()
+                && segment
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+            let is_code = segment.chars().any(|c| c.is_ascii_digit())
+                || segment.contains('-')
+                || segment.contains('.')
+                || segment.chars().all(|c| c.is_ascii_uppercase() || c == '_');
+            is_valid && is_code
+        })
+}
+
+/// Strips leading and trailing comment delimiters (`//`, `#`, `/* ... */`).
+///
+/// Returns `Some(stripped)` if delimiters were present, or `None` if the text
+/// does not start with standard comment delimiters.
+#[must_use]
+pub fn strip_comment_delimiters(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    trimmed
+        .strip_prefix("//")
+        .or_else(|| trimmed.strip_prefix('#'))
+        .map(str::trim_start)
+        .or_else(|| {
+            trimmed
+                .strip_prefix("/*")
+                .map(|body| body.trim_start().trim_end_matches("*/").trim_end())
+        })
 }
 
 /// Minimum words in an explanation; a `TODO` / `FIXME` note needs that many after its marker.
@@ -204,21 +204,31 @@ impl<'a> CommentIndex<'a> {
         Self { comments_by_line }
     }
 
-    /// Returns the raw comment text on a specific 1-indexed line, if any.
+    /// Verifies if a diagnostic at `span` (starting at 1-indexed `line`) has a substantive
+    /// explanation comment either directly adjacent to `line` or attached to the header of
+    /// its enclosing statement (such as a multiline `with (...)` header or multiline assignment).
+    ///
+    /// Comments inside the statement's body are deliberately excluded: they document the body,
+    /// not the statement that introduces it.
     #[must_use]
-    pub fn comment_on_line(&self, line: usize) -> Option<std::borrow::Cow<'_, str>> {
-        self.comments_by_line
-            .get(&line)
-            .map(|entry| entry.node.text())
-    }
+    pub fn has_explanation_for_span(
+        &self,
+        file: &ParsedFile,
+        span: crate::diagnostic::SourceSpan,
+        line: usize,
+    ) -> bool {
+        if self.has_adjacent_explanation(line) {
+            return true;
+        }
 
-    /// Checks whether a given 1-indexed line has an inline, substantive explanation.
-    #[must_use]
-    pub fn has_inline_explanation(&self, line: usize) -> bool {
-        self.comment_on_line(line).is_some_and(|text| {
-            let cleaned = clean_explanation(text.as_ref());
-            is_substantive_explanation(cleaned)
-        })
+        let Some(header_lines) = statements::enclosing_statement_header_range(file, span) else {
+            return false;
+        };
+
+        self.has_adjacent_explanation(*header_lines.start())
+            || header_lines
+                .into_iter()
+                .any(|header_line| self.has_inline_explanation(header_line))
     }
 
     /// Verifies if a given line has an adjacent, substantive explanation comment.
@@ -268,31 +278,21 @@ impl<'a> CommentIndex<'a> {
         is_substantive_explanation(&parts.join(" "))
     }
 
-    /// Verifies if a diagnostic at `span` (starting at 1-indexed `line`) has a substantive
-    /// explanation comment either directly adjacent to `line` or attached to the header of
-    /// its enclosing statement (such as a multiline `with (...)` header or multiline assignment).
-    ///
-    /// Comments inside the statement's body are deliberately excluded: they document the body,
-    /// not the statement that introduces it.
+    /// Checks whether a given 1-indexed line has an inline, substantive explanation.
     #[must_use]
-    pub fn has_explanation_for_span(
-        &self,
-        file: &ParsedFile,
-        span: crate::diagnostic::SourceSpan,
-        line: usize,
-    ) -> bool {
-        if self.has_adjacent_explanation(line) {
-            return true;
-        }
+    pub fn has_inline_explanation(&self, line: usize) -> bool {
+        self.comment_on_line(line).is_some_and(|text| {
+            let cleaned = clean_explanation(text.as_ref());
+            is_substantive_explanation(cleaned)
+        })
+    }
 
-        let Some(header_lines) = statements::enclosing_statement_header_range(file, span) else {
-            return false;
-        };
-
-        self.has_adjacent_explanation(*header_lines.start())
-            || header_lines
-                .into_iter()
-                .any(|header_line| self.has_inline_explanation(header_line))
+    /// Returns the raw comment text on a specific 1-indexed line, if any.
+    #[must_use]
+    pub fn comment_on_line(&self, line: usize) -> Option<std::borrow::Cow<'_, str>> {
+        self.comments_by_line
+            .get(&line)
+            .map(|entry| entry.node.text())
     }
 }
 

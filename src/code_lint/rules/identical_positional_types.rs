@@ -83,27 +83,15 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
     check: check_file,
 };
 
-/// Groups typed positional parameters by type annotation and returns groups with `>= 2` parameters.
-fn collect_duplicate_type_groups(
-    params: &[&PythonParameterInfo<'_>],
-) -> Vec<(String, Vec<String>)> {
-    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
-    for param in params {
-        if let Some(ref type_annotation) = param.type_text {
-            if let Some((_, existing)) = groups
-                .iter_mut()
-                .find(|(seen_type, _)| seen_type == type_annotation)
-            {
-                existing.push(param.name.clone());
-            } else {
-                groups.push((type_annotation.clone(), vec![param.name.clone()]));
-            }
-        }
-    }
-
-    groups
-        .into_iter()
-        .filter(|(_, params)| params.len() >= 2)
+fn check_file(
+    rule: &CodeRule<CountOption>,
+    path: &Path,
+    file: &ParsedFile,
+    min_args: usize,
+) -> Vec<Diagnostic> {
+    extract_function_signatures(file)
+        .iter()
+        .filter_map(|signature| check_function_signature(rule, signature, path, min_args))
         .collect()
 }
 
@@ -148,15 +136,27 @@ fn check_function_signature(
     ))
 }
 
-fn check_file(
-    rule: &CodeRule<CountOption>,
-    path: &Path,
-    file: &ParsedFile,
-    min_args: usize,
-) -> Vec<Diagnostic> {
-    extract_function_signatures(file)
-        .iter()
-        .filter_map(|signature| check_function_signature(rule, signature, path, min_args))
+/// Groups typed positional parameters by type annotation and returns groups with `>= 2` parameters.
+fn collect_duplicate_type_groups(
+    params: &[&PythonParameterInfo<'_>],
+) -> Vec<(String, Vec<String>)> {
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for param in params {
+        if let Some(ref type_annotation) = param.type_text {
+            if let Some((_, existing)) = groups
+                .iter_mut()
+                .find(|(seen_type, _)| seen_type == type_annotation)
+            {
+                existing.push(param.name.clone());
+            } else {
+                groups.push((type_annotation.clone(), vec![param.name.clone()]));
+            }
+        }
+    }
+
+    groups
+        .into_iter()
+        .filter(|(_, params)| params.len() >= 2)
         .collect()
 }
 

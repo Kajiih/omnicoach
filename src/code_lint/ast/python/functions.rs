@@ -89,13 +89,11 @@ pub struct PythonFunctionSignature<'a> {
 }
 
 impl PythonFunctionSignature<'_> {
-    /// Returns true if the function's signature is imposed from outside: a data-model dunder
-    /// method other than `__init__`, `__new__`, and `__call__`, or a function decorated with
-    /// `@override`, `@overload`, `@abstractmethod`, `@fixture`, `@<function>.register`, or
-    /// `@<property>.setter`.
+    /// Returns true if the function is exempt from body-usage parameter rules (signature-exempt
+    /// functions or stub bodies consisting only of `...`, `pass`, or `raise NotImplementedError`).
     #[must_use]
-    pub fn has_imposed_signature(&self) -> bool {
-        is_exempt_dunder_method(&self.name) || self.has_exempt_signature_decorator
+    pub fn is_exempt_from_body_usage_rules(&self) -> bool {
+        self.is_exempt_from_signature_rules() || self.has_stub_body
     }
 
     /// Returns true if the function is exempt from signature annotation rules: its signature
@@ -106,131 +104,19 @@ impl PythonFunctionSignature<'_> {
         self.has_imposed_signature() || self.is_in_protocol_or_abc_class
     }
 
-    /// Returns true if the function is exempt from body-usage parameter rules (signature-exempt
-    /// functions or stub bodies consisting only of `...`, `pass`, or `raise NotImplementedError`).
+    /// Returns true if the function's signature is imposed from outside: a data-model dunder
+    /// method other than `__init__`, `__new__`, and `__call__`, or a function decorated with
+    /// `@override`, `@overload`, `@abstractmethod`, `@fixture`, `@<function>.register`, or
+    /// `@<property>.setter`.
     #[must_use]
-    pub fn is_exempt_from_body_usage_rules(&self) -> bool {
-        self.is_exempt_from_signature_rules() || self.has_stub_body
-    }
-}
-
-fn build_parameter_with_default<'a>(
-    param_with_default: &ParameterWithDefault,
-    kind: PythonParameterKind,
-    file: &'a ParsedFile,
-) -> PythonParameterInfo<'a> {
-    let parameter = &param_with_default.parameter;
-    let type_span = parameter
-        .annotation
-        .as_ref()
-        .map(|ann| span_from_ruff_range(ann.range()));
-    let type_text = type_span.map(|span| file.source[span.start..span.end].to_string());
-    let type_node = type_span.map(|span| AstNode::from_span(file, span));
-    let default_value_node = param_with_default
-        .default
-        .as_ref()
-        .map(|def| AstNode::from_span(file, span_from_ruff_range(def.range())));
-
-    PythonParameterInfo {
-        node: AstNode::from_span(file, span_from_ruff_range(param_with_default.range)),
-        name: parameter.name.id.to_string(),
-        name_node: AstNode::from_span(file, span_from_ruff_range(parameter.name.range)),
-        type_node,
-        type_text,
-        default_value_node,
-        kind,
-    }
-}
-
-fn build_variadic_parameter<'a>(
-    parameter: &Parameter,
-    kind: PythonParameterKind,
-    file: &'a ParsedFile,
-) -> PythonParameterInfo<'a> {
-    let type_span = parameter
-        .annotation
-        .as_ref()
-        .map(|ann| span_from_ruff_range(ann.range()));
-    let type_text = type_span.map(|span| file.source[span.start..span.end].to_string());
-    let type_node = type_span.map(|span| AstNode::from_span(file, span));
-
-    PythonParameterInfo {
-        node: AstNode::from_span(file, span_from_ruff_range(parameter.range)),
-        name: parameter.name.id.to_string(),
-        name_node: AstNode::from_span(file, span_from_ruff_range(parameter.name.range)),
-        type_node,
-        type_text,
-        default_value_node: None,
-        kind,
+    pub fn has_imposed_signature(&self) -> bool {
+        is_exempt_dunder_method(&self.name) || self.has_exempt_signature_decorator
     }
 }
 
 const SELF_PARAMETER: &str = "self";
 const NOT_IMPLEMENTED_ERROR: &str = "NotImplementedError";
 const OVERRIDE_DECORATOR: &str = "override";
-
-/// Extracts all parameters in order from a `ruff_python_ast::Parameters` node.
-pub(super) fn extract_parameters_from_ast<'a>(
-    params: &Parameters,
-    file: &'a ParsedFile,
-) -> Vec<PythonParameterInfo<'a>> {
-    let mut result = Vec::new();
-    let mut is_first_param = true;
-
-    for param_with_default in params.posonlyargs.iter().chain(params.args.iter()) {
-        let name = param_with_default.parameter.name.id.as_str();
-        let kind = if is_first_param && matches!(name, SELF_PARAMETER | "cls") {
-            PythonParameterKind::Receiver
-        } else {
-            PythonParameterKind::Positional
-        };
-        is_first_param = false;
-        result.push(build_parameter_with_default(param_with_default, kind, file));
-    }
-
-    if let Some(vararg) = &params.vararg {
-        is_first_param = false;
-        result.push(build_variadic_parameter(
-            vararg,
-            PythonParameterKind::VarPositional,
-            file,
-        ));
-    }
-
-    for param_with_default in &params.kwonlyargs {
-        let _ = is_first_param;
-        result.push(build_parameter_with_default(
-            param_with_default,
-            PythonParameterKind::KeywordOnly,
-            file,
-        ));
-    }
-
-    if let Some(kwarg) = &params.kwarg {
-        result.push(build_variadic_parameter(
-            kwarg,
-            PythonParameterKind::VarKeyword,
-            file,
-        ));
-    }
-
-    result
-}
-
-/// Extracts all parameters in order from a Python `parameters` or `function_definition` node.
-#[cfg(test)]
-#[must_use]
-pub(super) fn extract_parameters<'a>(
-    func_or_params_node: &AstNode<'a>,
-) -> Vec<PythonParameterInfo<'a>> {
-    let Some(parsed) = func_or_params_node.file.py_module() else {
-        return Vec::new();
-    };
-    let Some(params) = find_parameters_at_span(parsed.syntax(), func_or_params_node.span()) else {
-        return Vec::new();
-    };
-    extract_parameters_from_ast(params, func_or_params_node.file)
-}
 
 /// Discovers and extracts all function signatures from a Python file.
 #[must_use]
@@ -292,6 +178,77 @@ pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSigna
     visitor.signatures
 }
 
+/// Returns true if `decorators` include `@override`, `@overload`, `@abstractmethod`,
+/// `@fixture` (`@pytest.fixture`), `@<function>.register` (`functools.singledispatch`
+/// implementations, which dispatch on their annotations), or `@<property>.setter` (whose value
+/// type mirrors the getter's return type).
+fn has_exempt_signature_decorator(decorators: &[DecoratorInfo<'_>]) -> bool {
+    let is_exempt = |name: &str| {
+        matches!(
+            name,
+            OVERRIDE_DECORATOR | "overload" | "abstractmethod" | "fixture" | "register" | "setter"
+        )
+    };
+    decorators
+        .iter()
+        .any(|decorator| is_exempt(&decorator.terminal_name) || is_exempt(&decorator.path))
+}
+
+/// Returns true if the function body `statements` is a stub consisting only of an optional
+/// docstring and `...`, `pass`, or `raise NotImplementedError`.
+fn is_stub_body(statements: &[Stmt], source: &str) -> bool {
+    let remaining = if statements.first().is_some_and(is_docstring_statement) {
+        &statements[1..]
+    } else {
+        statements
+    };
+    remaining.is_empty() || (remaining.len() == 1 && is_stub_statement(&remaining[0], source))
+}
+
+/// Returns true if `statement` is an expression statement wrapping a string literal (docstring).
+fn is_docstring_statement(statement: &Stmt) -> bool {
+    matches!(
+        statement,
+        Stmt::Expr(expr_statement)
+            if matches!(
+                expr_statement.value.as_ref(),
+                Expr::StringLiteral(_) | Expr::BytesLiteral(_) | Expr::FString(_)
+            )
+    )
+}
+
+/// Returns true if `statement` is `pass`, `...`, or `raise NotImplementedError` / `raise NotImplementedError(...)`.
+fn is_stub_statement(statement: &Stmt, source: &str) -> bool {
+    match statement {
+        Stmt::Pass(_) => true,
+        Stmt::Expr(expr_statement) => {
+            matches!(expr_statement.value.as_ref(), Expr::EllipsisLiteral(_))
+        }
+        Stmt::Raise(raise_statement) => {
+            raise_statement.cause.is_none()
+                && raise_statement.exc.as_deref().is_some_and(|exc| match exc {
+                    Expr::Name(name) => name.id == NOT_IMPLEMENTED_ERROR,
+                    Expr::Call(call) => {
+                        resolve_path_and_terminal_expr(&call.func, source).1
+                            == NOT_IMPLEMENTED_ERROR
+                    }
+                    _ => false,
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Returns true if `func_name` is a Python Data Model dunder method with a fixed signature
+/// (all `__*__` methods except constructors `__init__` and `__new__`, and `__call__`, whose
+/// signature is designed by the class author).
+fn is_exempt_dunder_method(func_name: &str) -> bool {
+    func_name.starts_with("__")
+        && func_name.ends_with("__")
+        && func_name.len() > 4
+        && !matches!(func_name, "__init__" | "__new__" | "__call__")
+}
+
 /// Returns each direct `StmtFunctionDef` in `scope_body` (`module` or class `body`).
 pub(super) fn direct_function_definitions(scope_body: &[Stmt]) -> Vec<&StmtFunctionDef> {
     scope_body
@@ -331,75 +288,118 @@ pub(super) fn method_receiver_name_ast(
     Some(first.name)
 }
 
-/// Returns true if `func_name` is a Python Data Model dunder method with a fixed signature
-/// (all `__*__` methods except constructors `__init__` and `__new__`, and `__call__`, whose
-/// signature is designed by the class author).
-fn is_exempt_dunder_method(func_name: &str) -> bool {
-    func_name.starts_with("__")
-        && func_name.ends_with("__")
-        && func_name.len() > 4
-        && !matches!(func_name, "__init__" | "__new__" | "__call__")
-}
-
-/// Returns true if `decorators` include `@override`, `@overload`, `@abstractmethod`,
-/// `@fixture` (`@pytest.fixture`), `@<function>.register` (`functools.singledispatch`
-/// implementations, which dispatch on their annotations), or `@<property>.setter` (whose value
-/// type mirrors the getter's return type).
-fn has_exempt_signature_decorator(decorators: &[DecoratorInfo<'_>]) -> bool {
-    let is_exempt = |name: &str| {
-        matches!(
-            name,
-            OVERRIDE_DECORATOR | "overload" | "abstractmethod" | "fixture" | "register" | "setter"
-        )
+/// Extracts all parameters in order from a Python `parameters` or `function_definition` node.
+#[cfg(test)]
+#[must_use]
+pub(super) fn extract_parameters<'a>(
+    func_or_params_node: &AstNode<'a>,
+) -> Vec<PythonParameterInfo<'a>> {
+    let Some(parsed) = func_or_params_node.file.py_module() else {
+        return Vec::new();
     };
-    decorators
-        .iter()
-        .any(|decorator| is_exempt(&decorator.terminal_name) || is_exempt(&decorator.path))
+    let Some(params) = find_parameters_at_span(parsed.syntax(), func_or_params_node.span()) else {
+        return Vec::new();
+    };
+    extract_parameters_from_ast(params, func_or_params_node.file)
 }
 
-/// Returns true if `statement` is an expression statement wrapping a string literal (docstring).
-fn is_docstring_statement(statement: &Stmt) -> bool {
-    matches!(
-        statement,
-        Stmt::Expr(expr_statement)
-            if matches!(
-                expr_statement.value.as_ref(),
-                Expr::StringLiteral(_) | Expr::BytesLiteral(_) | Expr::FString(_)
-            )
-    )
+/// Extracts all parameters in order from a `ruff_python_ast::Parameters` node.
+pub(super) fn extract_parameters_from_ast<'a>(
+    params: &Parameters,
+    file: &'a ParsedFile,
+) -> Vec<PythonParameterInfo<'a>> {
+    let mut result = Vec::new();
+    let mut is_first_param = true;
+
+    for param_with_default in params.posonlyargs.iter().chain(params.args.iter()) {
+        let name = param_with_default.parameter.name.id.as_str();
+        let kind = if is_first_param && matches!(name, SELF_PARAMETER | "cls") {
+            PythonParameterKind::Receiver
+        } else {
+            PythonParameterKind::Positional
+        };
+        is_first_param = false;
+        result.push(build_parameter_with_default(param_with_default, kind, file));
+    }
+
+    if let Some(vararg) = &params.vararg {
+        is_first_param = false;
+        result.push(build_variadic_parameter(
+            vararg,
+            PythonParameterKind::VarPositional,
+            file,
+        ));
+    }
+
+    for param_with_default in &params.kwonlyargs {
+        let _ = is_first_param;
+        result.push(build_parameter_with_default(
+            param_with_default,
+            PythonParameterKind::KeywordOnly,
+            file,
+        ));
+    }
+
+    if let Some(kwarg) = &params.kwarg {
+        result.push(build_variadic_parameter(
+            kwarg,
+            PythonParameterKind::VarKeyword,
+            file,
+        ));
+    }
+
+    result
 }
 
-/// Returns true if `statement` is `pass`, `...`, or `raise NotImplementedError` / `raise NotImplementedError(...)`.
-fn is_stub_statement(statement: &Stmt, source: &str) -> bool {
-    match statement {
-        Stmt::Pass(_) => true,
-        Stmt::Expr(expr_statement) => {
-            matches!(expr_statement.value.as_ref(), Expr::EllipsisLiteral(_))
-        }
-        Stmt::Raise(raise_statement) => {
-            raise_statement.cause.is_none()
-                && raise_statement.exc.as_deref().is_some_and(|exc| match exc {
-                    Expr::Name(name) => name.id == NOT_IMPLEMENTED_ERROR,
-                    Expr::Call(call) => {
-                        resolve_path_and_terminal_expr(&call.func, source).1
-                            == NOT_IMPLEMENTED_ERROR
-                    }
-                    _ => false,
-                })
-        }
-        _ => false,
+fn build_parameter_with_default<'a>(
+    param_with_default: &ParameterWithDefault,
+    kind: PythonParameterKind,
+    file: &'a ParsedFile,
+) -> PythonParameterInfo<'a> {
+    let parameter = &param_with_default.parameter;
+    let type_span = parameter
+        .annotation
+        .as_ref()
+        .map(|ann| span_from_ruff_range(ann.range()));
+    let type_text = type_span.map(|span| file.source[span.start..span.end].to_string());
+    let type_node = type_span.map(|span| AstNode::from_span(file, span));
+    let default_value_node = param_with_default
+        .default
+        .as_ref()
+        .map(|def| AstNode::from_span(file, span_from_ruff_range(def.range())));
+
+    PythonParameterInfo {
+        node: AstNode::from_span(file, span_from_ruff_range(param_with_default.range)),
+        name: parameter.name.id.to_string(),
+        name_node: AstNode::from_span(file, span_from_ruff_range(parameter.name.range)),
+        type_node,
+        type_text,
+        default_value_node,
+        kind,
     }
 }
 
-/// Returns true if the function body `statements` is a stub consisting only of an optional
-/// docstring and `...`, `pass`, or `raise NotImplementedError`.
-fn is_stub_body(statements: &[Stmt], source: &str) -> bool {
-    let remaining = if statements.first().is_some_and(is_docstring_statement) {
-        &statements[1..]
-    } else {
-        statements
-    };
-    remaining.is_empty() || (remaining.len() == 1 && is_stub_statement(&remaining[0], source))
+fn build_variadic_parameter<'a>(
+    parameter: &Parameter,
+    kind: PythonParameterKind,
+    file: &'a ParsedFile,
+) -> PythonParameterInfo<'a> {
+    let type_span = parameter
+        .annotation
+        .as_ref()
+        .map(|ann| span_from_ruff_range(ann.range()));
+    let type_text = type_span.map(|span| file.source[span.start..span.end].to_string());
+    let type_node = type_span.map(|span| AstNode::from_span(file, span));
+
+    PythonParameterInfo {
+        node: AstNode::from_span(file, span_from_ruff_range(parameter.range)),
+        name: parameter.name.id.to_string(),
+        name_node: AstNode::from_span(file, span_from_ruff_range(parameter.name.range)),
+        type_node,
+        type_text,
+        default_value_node: None,
+        kind,
+    }
 }
 
 /// Returns true if `decorators` include `@override`, which makes the decorated method's name

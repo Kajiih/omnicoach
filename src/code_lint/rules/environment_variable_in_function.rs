@@ -146,46 +146,6 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
     check: check_file,
 };
 
-/// Returns true if a function named `name` is an entrypoint or configuration boundary allowed to
-/// access env vars.
-///
-/// `from_env` / `from_environ` / `load_env` are idiomatic loader constructors and are exempt
-/// anywhere, but `main` is only an entrypoint at file scope (`is_top_level`): a `main` nested in a
-/// class, `impl`, or `mod` is ordinary business logic and stays subject to the rule.
-///
-/// The exemption is *inherited* by nested functions, closures, and lambdas (see
-/// [`non_exempt_function_name`]): they are part of the boundary's implementation
-/// and cannot be called or substituted from the outside, so the testability rationale behind this
-/// rule does not apply to them.
-///
-/// Known limitation: a class declared inside a boundary whose methods escape (returned, registered)
-/// also inherits the exemption.
-// TODO: Should we make those hardcoded values constants/configurable?
-fn is_exempt_boundary_function(name: &str, is_top_level: bool) -> bool {
-    match name {
-        "from_env" | "from_environ" | "load_env" => true,
-        "main" => is_top_level,
-        _ => false,
-    }
-}
-
-/// Returns the innermost of `enclosing_functions` (innermost first) if none of them is an exempt
-/// boundary function.
-///
-/// Every enclosing function is checked, so nested functions inherit a boundary's exemption, but
-/// the innermost one is reported so that diagnostics point at the innermost context.
-fn non_exempt_function_name(enclosing_functions: &[EnclosingFunction]) -> Option<&str> {
-    if enclosing_functions
-        .iter()
-        .any(|function| is_exempt_boundary_function(&function.name, function.is_top_level))
-    {
-        return None;
-    }
-    enclosing_functions
-        .first()
-        .map(|function| function.name.as_str())
-}
-
 /// Template placeholder for the environment read.
 const EXPRESSION: &str = "expression";
 /// Template placeholder for the enclosing function.
@@ -224,6 +184,46 @@ fn check_file(
     }
 
     diagnostics
+}
+
+/// Returns the innermost of `enclosing_functions` (innermost first) if none of them is an exempt
+/// boundary function.
+///
+/// Every enclosing function is checked, so nested functions inherit a boundary's exemption, but
+/// the innermost one is reported so that diagnostics point at the innermost context.
+fn non_exempt_function_name(enclosing_functions: &[EnclosingFunction]) -> Option<&str> {
+    if enclosing_functions
+        .iter()
+        .any(|function| is_exempt_boundary_function(&function.name, function.is_top_level))
+    {
+        return None;
+    }
+    enclosing_functions
+        .first()
+        .map(|function| function.name.as_str())
+}
+
+/// Returns true if a function named `name` is an entrypoint or configuration boundary allowed to
+/// access env vars.
+///
+/// `from_env` / `from_environ` / `load_env` are idiomatic loader constructors and are exempt
+/// anywhere, but `main` is only an entrypoint at file scope (`is_top_level`): a `main` nested in a
+/// class, `impl`, or `mod` is ordinary business logic and stays subject to the rule.
+///
+/// The exemption is *inherited* by nested functions, closures, and lambdas (see
+/// [`non_exempt_function_name`]): they are part of the boundary's implementation
+/// and cannot be called or substituted from the outside, so the testability rationale behind this
+/// rule does not apply to them.
+///
+/// Known limitation: a class declared inside a boundary whose methods escape (returned, registered)
+/// also inherits the exemption.
+// TODO: Should we make those hardcoded values constants/configurable?
+fn is_exempt_boundary_function(name: &str, is_top_level: bool) -> bool {
+    match name {
+        "from_env" | "from_environ" | "load_env" => true,
+        "main" => is_top_level,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
