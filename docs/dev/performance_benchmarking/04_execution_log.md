@@ -188,6 +188,11 @@ Evaluated across all 4 fixtures of each language (88.4 KB Python; 50.5 KB Rust) 
 
 ## 7. One-Time 3-Way Historical Evaluation (`D4`)
 
+> [!NOTE]
+> Superseded by [09_impact_breakdown.md](09_impact_breakdown.md), which re-runs the comparison on
+> the SOTA corpora (CPython, cargo, ripgrep) with interleaved, paired runs. The `scratch/pycorpus`
+> row below is synthetic (150 copies of one file) and kept only as a historical record.
+
 Per Decision `D4`, we recorded a one-time comparison across the three architectural milestones:
 1. **`B1` (`ast-grep` baseline, pre-P3)**: Tree-sitter + `ast-grep` meta-variable pattern matching across 28 bundled C/C++ grammars (`scratch/perf/omni-code-lint.baseline`).
 2. **`B2` (`yvmzyprn`, P3 Dedicated AST Migration)**: Pure-Rust `ruff_python_parser` + `ra_ap_syntax`, `OnceLock` on `call_candidates`/`bindings`/`comment_nodes`/`rust_inline_test_ranges` (`scratch/omni-base`).
