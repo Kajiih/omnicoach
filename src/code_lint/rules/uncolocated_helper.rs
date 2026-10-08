@@ -11,9 +11,9 @@ use crate::rule_declaration::{
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Exclusive helper `{function}` is separated from its owning public entrypoint `{caller}` by an unrelated function.",
-    rationale: "Splitting `{function}` away from `{caller}` fractures the component unit of `{caller}` across the scope and forces readers to jump over unrelated definitions.",
-    suggestion: "Move `{function}` into the contiguous helper cluster immediately below `{caller}`.",
+    summary: "Private helper `{function}` is neither colocated after `{caller}` nor placed at the end of the scope.",
+    rationale: "Placing `{function}` between unrelated public functions instead of immediately after `{caller}` or in the trailing helper section fractures the scope's layout.",
+    suggestion: "Move `{function}` either immediately below `{caller}` (if single-use) or to the trailing private helper section after all public functions.",
 };
 
 /// The rule's declaration.
@@ -30,31 +30,32 @@ pub const RULE: CodeRule = CodeRule {
             impacted_quality: ImpactedQuality::Maintainability,
         },
         doc: RuleDoc {
-            summary: "Flags exclusive private helpers separated from their owning public function or method by unrelated definitions.",
+            summary: "Flags private helpers that are neither colocated right after their single public consumer nor placed in the trailing helper section at the end of the scope.",
             what_it_does: indoc::indoc! {r"
                 Checks module scopes, Python `class` definitions, and Rust inherent `impl` blocks
-                for exclusive private helpers separated from their owning public entrypoint by a
-                function or method from another component unit or the shared helper layer.
+                that every private helper `h` (once placed after its public callers) occupies one of
+                only **two valid places**:
+                1. **Immediately after its consumer** (for a single-user helper, `Roots(h) = {p}`):
+                   inside the contiguous helper cluster `[p, _h1, _h2, ...]` directly below `p`.
+                2. **At the end of the scope** (for a single-user or multi-user helper,
+                   `|Roots(h)| >= 1`): in the trailing private helper section after all public
+                   functions or methods in the scope (`pos(h) > last_pub`), provided a single-user
+                   helper does not split its owner's helpers between both places.
 
-                For each private callable `h`, the call-cluster analyzer computes `Roots(h)`: the
-                set of public entrypoints in the same scope that reach `h` through private call
-                paths (stopping at public boundaries). When `Roots(h)` contains a single public
-                entrypoint `p`, `h` is an **exclusive helper** of `p` and belongs to the
-                contiguous component unit `[p, _h1, _h2, ...]` immediately below `p`.
-
-                Shared private helpers reachable from two or more public entrypoints
-                (`|Roots(h)| >= 2`) belong to a lower abstraction layer at the end of the scope and
-                are exempt. Together with `private-before-public-function` (Priority 2) and
-                `callee-before-caller` (Priority 3), this rule forms a three-tier precedence system
-                where `uncolocated-helper` runs at Priority 1."},
+                This supports both vertical-slice modules (`[pub_a, _a_helpers, pub_b, _b_helpers]`)
+                and public-first scopes (`[pub_a, pub_b, _a_helpers, _b_helpers, _shared_helpers]`),
+                while flagging helpers stranded in the middle of a scope between unrelated public
+                functions."},
             why_is_this_bad: indoc::indoc! {r"
-                A public entrypoint and its exclusive private helpers form an in-file component
-                unit. Scattering an exclusive helper below unrelated public functions or shared
-                utilities breaks locality of behavior and forces readers to scroll across unrelated
-                abstractions to trace a single feature.
+                A private helper belongs either directly underneath the single public entrypoint it
+                implements (vertical slice) or in the trailing private implementation section at the
+                bottom of the scope. Stranding a single-use or shared helper in the middle of a
+                scope between unrelated public functions forces readers to jump over internal
+                helpers while scanning the public API and splits related helpers apart.
 
-                Keep every exclusive private helper contiguous with its owning public entrypoint,
-                and reserve the bottom of the scope for helpers shared by multiple entrypoints."},
+                Place each single-use helper either immediately after its consumer or in the
+                trailing helper section at the end of the scope, and always place multi-use helpers
+                at the end of the scope."},
             references: &[
                 Reference {
                     title: "Robert C. Martin: Clean Code — Chapter 5: Formatting (Vertical Distance & Dependent Functions)",
@@ -72,11 +73,14 @@ pub const RULE: CodeRule = CodeRule {
                         def parse_header(raw: str) -> str:
                             return _strip_prefix(raw)
 
-                        def parse_footer(raw: str) -> str:
+                        def parse_body(raw: str) -> str:
                             return raw.strip()
 
                         def _strip_prefix(raw: str) -> str:
                             return raw.removeprefix('H:')
+
+                        def parse_footer(raw: str) -> str:
+                            return raw.rstrip()
                     "},
                     flagged_span: "_strip_prefix",
                     fixed: indoc::indoc! {r"
@@ -86,8 +90,11 @@ pub const RULE: CodeRule = CodeRule {
                         def _strip_prefix(raw: str) -> str:
                             return raw.removeprefix('H:')
 
-                        def parse_footer(raw: str) -> str:
+                        def parse_body(raw: str) -> str:
                             return raw.strip()
+
+                        def parse_footer(raw: str) -> str:
+                            return raw.rstrip()
                     "},
                 },
                 Example {
@@ -97,33 +104,41 @@ pub const RULE: CodeRule = CodeRule {
 
                         impl PacketDecoder {
                             pub fn decode_header(&self, raw: &str) -> bool {
-                                Self::has_magic_prefix(raw)
+                                Self::is_non_empty(raw)
                             }
 
-                            pub fn decode_payload(&self, raw: &str) -> usize {
+                            pub fn decode_body(&self, raw: &str) -> bool {
+                                Self::is_non_empty(raw)
+                            }
+
+                            fn is_non_empty(raw: &str) -> bool {
+                                !raw.is_empty()
+                            }
+
+                            pub fn decode_footer(&self, raw: &str) -> usize {
                                 raw.len()
-                            }
-
-                            fn has_magic_prefix(raw: &str) -> bool {
-                                raw.starts_with(':')
                             }
                         }
                     "},
-                    flagged_span: "has_magic_prefix",
+                    flagged_span: "is_non_empty",
                     fixed: indoc::indoc! {r"
                         pub struct PacketDecoder;
 
                         impl PacketDecoder {
                             pub fn decode_header(&self, raw: &str) -> bool {
-                                Self::has_magic_prefix(raw)
+                                Self::is_non_empty(raw)
                             }
 
-                            fn has_magic_prefix(raw: &str) -> bool {
-                                raw.starts_with(':')
+                            pub fn decode_body(&self, raw: &str) -> bool {
+                                Self::is_non_empty(raw)
                             }
 
-                            pub fn decode_payload(&self, raw: &str) -> usize {
+                            pub fn decode_footer(&self, raw: &str) -> usize {
                                 raw.len()
+                            }
+
+                            fn is_non_empty(raw: &str) -> bool {
+                                !raw.is_empty()
                             }
                         }
                     "},
@@ -171,13 +186,16 @@ crate::test_utils::rule_test!(
                     def _normalize_token(raw: str) -> str:
                         return raw.strip()
                 "#,
-                public_calling_public_keeps_helper_exclusive => r#"
+                all_private_helpers_at_end_of_scope => r#"
                     class Compiler:
                         def compile_all(self, source: str) -> str:
-                            return self.compile_unit(source)
+                            return self._prepare_batch(source)
 
                         def compile_unit(self, source: str) -> str:
                             return self._emit_bytecode(source)
+
+                        def _prepare_batch(self, source: str) -> str:
+                            return source.lstrip()
 
                         def _emit_bytecode(self, source: str) -> str:
                             return source.strip()
@@ -202,7 +220,7 @@ crate::test_utils::rule_test!(
                 "#,
             ],
             fail: [
-                module_exclusive_helper_separated_by_second_public => r#"
+                single_use_helper_stranded_in_middle_of_module => r#"
                     def render_title(text: str) -> str:
                         return _clean_title(text)
 
@@ -211,19 +229,25 @@ crate::test_utils::rule_test!(
 
                     def _clean_title(text: str) -> str:
                         return text.strip()
+
+                    def render_footer(text: str) -> str:
+                        return text.rstrip()
                 "# => "_clean_title",
-                class_exclusive_helper_separated_by_sibling_method => r#"
+                shared_helper_stranded_before_trailing_public_method => r#"
                     class Tracker:
                         def load(self, text: str) -> str:
                             return self._parse_line(text)
 
-                        def clear(self) -> None:
-                            pass
+                        def reload(self, text: str) -> str:
+                            return self._parse_line(text)
 
                         def _parse_line(self, text: str) -> str:
                             return text.strip()
+
+                        def clear(self) -> None:
+                            pass
                 "# => "_parse_line",
-                transitive_exclusive_helper_separated_by_shared_helper => r#"
+                exclusive_helper_cluster_split_between_both_places => r#"
                     def export_json(raw: str) -> str:
                         return _serialize_json(_trim_input(raw))
 
@@ -260,7 +284,7 @@ crate::test_utils::rule_test!(
                         input.trim()
                     }
                 "#,
-                inherent_impl_colocated_clusters_and_trait_impl_exempt => r#"
+                inherent_impl_both_valid_places_and_trait_impl_exempt => r#"
                     pub trait Decoder {
                         fn decode(&self, raw: &str) -> usize;
                     }
@@ -278,18 +302,18 @@ crate::test_utils::rule_test!(
                             Self::check_first(raw)
                         }
 
-                        fn check_first(raw: &str) -> bool {
-                            !raw.is_empty()
-                        }
-
                         pub fn parse_second(&self, raw: &str) -> usize {
                             raw.len()
+                        }
+
+                        fn check_first(raw: &str) -> bool {
+                            !raw.is_empty()
                         }
                     }
                 "#,
             ],
             fail: [
-                module_exclusive_helper_after_unrelated_pub_fn => r#"
+                single_use_helper_stranded_in_middle_of_module => r#"
                     pub fn encode_key(key: &str) -> usize {
                         hash_key(key)
                     }
@@ -301,24 +325,32 @@ crate::test_utils::rule_test!(
                     fn hash_key(key: &str) -> usize {
                         key.len()
                     }
+
+                    pub fn encode_footer(footer: &str) -> usize {
+                        footer.len()
+                    }
                 "# => "hash_key",
-                impl_exclusive_helper_separated_by_other_pub_method => r#"
+                shared_helper_stranded_before_last_pub_method => r#"
                     pub struct Router;
 
                     impl Router {
                         pub fn route_get(&self, path: &str) -> bool {
-                            self.is_get_path(path)
+                            self.is_valid_path(path)
                         }
 
                         pub fn route_post(&self, path: &str) -> bool {
-                            !path.is_empty()
+                            self.is_valid_path(path)
                         }
 
-                        fn is_get_path(&self, path: &str) -> bool {
+                        fn is_valid_path(&self, path: &str) -> bool {
                             path.starts_with('/')
                         }
+
+                        pub fn route_delete(&self, path: &str) -> bool {
+                            !path.is_empty()
+                        }
                     }
-                "# => "is_get_path",
+                "# => "is_valid_path",
             ],
         },
     }

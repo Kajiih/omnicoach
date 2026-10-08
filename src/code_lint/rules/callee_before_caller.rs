@@ -30,34 +30,26 @@ pub const RULE: CodeRule = CodeRule {
             impacted_quality: ImpactedQuality::Maintainability,
         },
         doc: RuleDoc {
-            summary: "Flags functions and methods defined before their callers within the same visibility tier and component cluster.",
+            summary: "Flags functions and methods defined before their callers within the same visibility tier.",
             what_it_does: indoc::indoc! {r"
                 Checks module scopes, Python `class` definitions, and Rust inherent `impl` blocks
                 for a non-constructor function or method `callee` declared above its caller
-                `caller` when both belong to the same visibility tier and the same call-cluster
-                group:
-                - Two **public** functions or methods (`pub -> pub`),
-                - Two **exclusive private helpers** of the same public entrypoint
-                  (`Roots(caller) == Roots(callee) == {p}`),
-                - Two **shared private helpers** in the trailing shared layer
-                  (`|Roots(caller)| >= 2` and `|Roots(callee)| >= 2`), or
-                - Two **unrooted private functions** (`Roots(caller) = Roots(callee) = empty`,
-                  such as internal helpers in a rule or script module with no exported functions).
+                `caller` when both belong to the same visibility tier (`Public -> Public` or
+                `Private -> Private`).
 
                 Self-recursive and mutually recursive functions (Strongly Connected Components in
-                the scope's call graph), Tier 0 constructors (`__init__`, `pub fn new`), cross-tier
-                calls (`pub -> priv`), and cross-cluster calls (`exclusive priv -> shared priv`)
-                are exempt. Any function already flagged by `uncolocated-helper` (Priority 1) or
-                `private-before-public-function` (Priority 2) is skipped so a misplaced helper is
-                never reported twice."},
+                the scope's call graph), Tier 0 constructors (`__init__`, `pub fn new`), and
+                cross-tier calls (`pub -> priv`) are exempt. Any function already flagged by
+                `private-before-public-function` or `uncolocated-helper` is skipped so a misplaced
+                helper is never reported twice."},
             why_is_this_bad: indoc::indoc! {r"
-                Within a component unit or a shared helper layer, a callee is a lower-abstraction
-                building block than the function that calls it. Defining callees above their
-                callers forces readers to encounter low-level leaf utilities before the higher-level
-                orchestration logic that gives them context.
+                Within the same visibility tier, a callee is a lower-abstraction building block
+                than the function that calls it. Defining callees above their callers forces
+                readers to encounter low-level leaf utilities before the higher-level orchestration
+                logic that gives them context.
 
-                Order functions within each component unit and within the shared helper layer from
-                higher-level callers down to lower-level callees."},
+                Order functions within each visibility tier from higher-level callers down to
+                lower-level callees."},
             references: &[
                 Reference {
                     title: "Robert C. Martin: Clean Code — Chapter 5: Formatting (The Stepdown Rule)",

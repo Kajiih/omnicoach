@@ -7,164 +7,6 @@
 use crate::code_lint::ast::{self, AstNode, ParsedFile, statements};
 use std::collections::HashMap;
 
-const DIRECTIVE_PREFIXES: &[&str] = &[
-    "omni:ignore",
-    "omni:disable-file",
-    "ruff: noqa",
-    "ruff:noqa",
-    "type: ignore",
-    "type:ignore",
-    "pyright: ignore",
-    "pyright:ignore",
-    "pylint: disable",
-    "pylint:disable",
-    "noqa",
-];
-
-/// Strips standard linter/tooling directives (`noqa`, `type: ignore`, `pyright`, `pylint`, `omni:ignore`).
-///
-/// If the comment contains an explanatory reason after a separator (e.g. `-- reason`),
-/// the directive prefix is stripped and the remaining reason text is returned.
-/// If the comment consists solely of directives and rule codes, `""` is returned.
-#[must_use]
-pub fn clean_explanation(text: &str) -> &str {
-    let stripped = strip_comment_delimiters(text).unwrap_or_else(|| text.trim());
-    if stripped.is_empty() {
-        return "";
-    }
-
-    let Some(prefix_len) = find_directive_prefix(stripped) else {
-        return stripped.trim();
-    };
-
-    let after_prefix = stripped[prefix_len..].trim_start();
-
-    // If there is an explicit `--` separator, the explanation is everything after it.
-    if let Some(idx) = after_prefix.find("--") {
-        return after_prefix[idx + 2..].trim();
-    }
-
-    let mut remainder = after_prefix;
-
-    // Strip bracketed code list: `[rule-name, other-rule]`
-    if remainder.starts_with('[') {
-        if let Some(close_idx) = remainder.find(']') {
-            remainder = remainder[close_idx + 1..].trim_start();
-        } else {
-            return "";
-        }
-    } else if remainder.starts_with(':') || remainder.starts_with('=') {
-        remainder = strip_rule_codes(&remainder[1..]);
-    }
-
-    remainder
-        .trim_start_matches(|c: char| c == '-' || c == ':' || c == ';' || c.is_whitespace())
-        .trim()
-}
-
-fn find_directive_prefix(text: &str) -> Option<usize> {
-    for &prefix in DIRECTIVE_PREFIXES {
-        if text
-            .get(..prefix.len())
-            .is_some_and(|sub| sub.eq_ignore_ascii_case(prefix))
-        {
-            let rest = &text[prefix.len()..];
-            if rest.is_empty()
-                || rest.starts_with(|c: char| {
-                    c.is_whitespace() || c == ':' || c == '=' || c == '[' || c == '-'
-                })
-            {
-                return Some(prefix.len());
-            }
-        }
-    }
-    None
-}
-
-fn strip_rule_codes(mut text: &str) -> &str {
-    text = text.trim_start();
-    while !text.is_empty() {
-        let first_word = text.split_whitespace().next().unwrap_or("");
-        if is_rule_code_token(first_word) {
-            let had_comma = first_word.ends_with(',');
-            text = text[first_word.len()..].trim_start();
-            if !had_comma {
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-    text
-}
-
-/// Checks if a whitespace-delimited word consists of rule codes (e.g. `SIM105`, `F401,`, `SIM105,F401`).
-///
-/// Rule codes must either contain digits (`SIM105`, `E501`), contain hyphens or dots
-/// (`unused-import`, `pylint.errors`), or be all-uppercase category codes (`F`, `W`).
-/// This prevents legitimate lowercase English explanation words (e.g. `safe`, `transient`)
-/// from being erroneously swallowed as rule codes.
-fn is_rule_code_token(word: &str) -> bool {
-    let trimmed = word.trim_matches(|c: char| c == ',' || c == ';');
-    !trimmed.is_empty()
-        && trimmed.split(',').all(|part| {
-            let segment = part.trim();
-            let is_valid = !segment.is_empty()
-                && segment
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-            let is_code = segment.chars().any(|c| c.is_ascii_digit())
-                || segment.contains('-')
-                || segment.contains('.')
-                || segment.chars().all(|c| c.is_ascii_uppercase() || c == '_');
-            is_valid && is_code
-        })
-}
-
-/// Strips leading and trailing comment delimiters (`//`, `#`, `/* ... */`).
-///
-/// Returns `Some(stripped)` if delimiters were present, or `None` if the text
-/// does not start with standard comment delimiters.
-#[must_use]
-pub fn strip_comment_delimiters(text: &str) -> Option<&str> {
-    let trimmed = text.trim();
-    trimmed
-        .strip_prefix("//")
-        .or_else(|| trimmed.strip_prefix('#'))
-        .map(str::trim_start)
-        .or_else(|| {
-            trimmed
-                .strip_prefix("/*")
-                .map(|body| body.trim_start().trim_end_matches("*/").trim_end())
-        })
-}
-
-/// Minimum words in an explanation; a `TODO` / `FIXME` note needs that many after its marker.
-const MIN_EXPLANATION_WORDS: usize = 3;
-
-/// Checks if an explanation text is substantive (at least 3 words and 10 non-whitespace chars).
-#[must_use]
-pub fn is_substantive_explanation(text: &str) -> bool {
-    let words = text.split_whitespace().count();
-    let chars = text.chars().filter(|c| !c.is_whitespace()).count();
-    if words < MIN_EXPLANATION_WORDS || chars < 10 {
-        return false;
-    }
-
-    // Disallow bare TODO/FIXME notes without substantive explanation
-    let starts_with_todo = text
-        .get(..4)
-        .is_some_and(|sub| sub.eq_ignore_ascii_case("todo"));
-    let starts_with_fixme = text
-        .get(..5)
-        .is_some_and(|sub| sub.eq_ignore_ascii_case("fixme"));
-    if (starts_with_todo || starts_with_fixme) && words <= MIN_EXPLANATION_WORDS {
-        return false;
-    }
-
-    true
-}
-
 #[derive(Clone)]
 struct IndexedComment<'a> {
     node: AstNode<'a>,
@@ -294,6 +136,164 @@ impl<'a> CommentIndex<'a> {
             .get(&line)
             .map(|entry| entry.node.text())
     }
+}
+
+const DIRECTIVE_PREFIXES: &[&str] = &[
+    "omni:ignore",
+    "omni:disable-file",
+    "ruff: noqa",
+    "ruff:noqa",
+    "type: ignore",
+    "type:ignore",
+    "pyright: ignore",
+    "pyright:ignore",
+    "pylint: disable",
+    "pylint:disable",
+    "noqa",
+];
+
+/// Strips standard linter/tooling directives (`noqa`, `type: ignore`, `pyright`, `pylint`, `omni:ignore`).
+///
+/// If the comment contains an explanatory reason after a separator (e.g. `-- reason`),
+/// the directive prefix is stripped and the remaining reason text is returned.
+/// If the comment consists solely of directives and rule codes, `""` is returned.
+#[must_use]
+pub fn clean_explanation(text: &str) -> &str {
+    let stripped = strip_comment_delimiters(text).unwrap_or_else(|| text.trim());
+    if stripped.is_empty() {
+        return "";
+    }
+
+    let Some(prefix_len) = find_directive_prefix(stripped) else {
+        return stripped.trim();
+    };
+
+    let after_prefix = stripped[prefix_len..].trim_start();
+
+    // If there is an explicit `--` separator, the explanation is everything after it.
+    if let Some(idx) = after_prefix.find("--") {
+        return after_prefix[idx + 2..].trim();
+    }
+
+    let mut remainder = after_prefix;
+
+    // Strip bracketed code list: `[rule-name, other-rule]`
+    if remainder.starts_with('[') {
+        if let Some(close_idx) = remainder.find(']') {
+            remainder = remainder[close_idx + 1..].trim_start();
+        } else {
+            return "";
+        }
+    } else if remainder.starts_with(':') || remainder.starts_with('=') {
+        remainder = strip_rule_codes(&remainder[1..]);
+    }
+
+    remainder
+        .trim_start_matches(|c: char| c == '-' || c == ':' || c == ';' || c.is_whitespace())
+        .trim()
+}
+
+/// Strips leading and trailing comment delimiters (`//`, `#`, `/* ... */`).
+///
+/// Returns `Some(stripped)` if delimiters were present, or `None` if the text
+/// does not start with standard comment delimiters.
+#[must_use]
+pub fn strip_comment_delimiters(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    trimmed
+        .strip_prefix("//")
+        .or_else(|| trimmed.strip_prefix('#'))
+        .map(str::trim_start)
+        .or_else(|| {
+            trimmed
+                .strip_prefix("/*")
+                .map(|body| body.trim_start().trim_end_matches("*/").trim_end())
+        })
+}
+
+/// Minimum words in an explanation; a `TODO` / `FIXME` note needs that many after its marker.
+const MIN_EXPLANATION_WORDS: usize = 3;
+
+/// Checks if an explanation text is substantive (at least 3 words and 10 non-whitespace chars).
+#[must_use]
+pub fn is_substantive_explanation(text: &str) -> bool {
+    let words = text.split_whitespace().count();
+    let chars = text.chars().filter(|c| !c.is_whitespace()).count();
+    if words < MIN_EXPLANATION_WORDS || chars < 10 {
+        return false;
+    }
+
+    // Disallow bare TODO/FIXME notes without substantive explanation
+    let starts_with_todo = text
+        .get(..4)
+        .is_some_and(|sub| sub.eq_ignore_ascii_case("todo"));
+    let starts_with_fixme = text
+        .get(..5)
+        .is_some_and(|sub| sub.eq_ignore_ascii_case("fixme"));
+    if (starts_with_todo || starts_with_fixme) && words <= MIN_EXPLANATION_WORDS {
+        return false;
+    }
+
+    true
+}
+
+fn find_directive_prefix(text: &str) -> Option<usize> {
+    for &prefix in DIRECTIVE_PREFIXES {
+        if text
+            .get(..prefix.len())
+            .is_some_and(|sub| sub.eq_ignore_ascii_case(prefix))
+        {
+            let rest = &text[prefix.len()..];
+            if rest.is_empty()
+                || rest.starts_with(|c: char| {
+                    c.is_whitespace() || c == ':' || c == '=' || c == '[' || c == '-'
+                })
+            {
+                return Some(prefix.len());
+            }
+        }
+    }
+    None
+}
+
+fn strip_rule_codes(mut text: &str) -> &str {
+    text = text.trim_start();
+    while !text.is_empty() {
+        let first_word = text.split_whitespace().next().unwrap_or("");
+        if is_rule_code_token(first_word) {
+            let had_comma = first_word.ends_with(',');
+            text = text[first_word.len()..].trim_start();
+            if !had_comma {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    text
+}
+
+/// Checks if a whitespace-delimited word consists of rule codes (e.g. `SIM105`, `F401,`, `SIM105,F401`).
+///
+/// Rule codes must either contain digits (`SIM105`, `E501`), contain hyphens or dots
+/// (`unused-import`, `pylint.errors`), or be all-uppercase category codes (`F`, `W`).
+/// This prevents legitimate lowercase English explanation words (e.g. `safe`, `transient`)
+/// from being erroneously swallowed as rule codes.
+fn is_rule_code_token(word: &str) -> bool {
+    let trimmed = word.trim_matches(|c: char| c == ',' || c == ';');
+    !trimmed.is_empty()
+        && trimmed.split(',').all(|part| {
+            let segment = part.trim();
+            let is_valid = !segment.is_empty()
+                && segment
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+            let is_code = segment.chars().any(|c| c.is_ascii_digit())
+                || segment.contains('-')
+                || segment.contains('.')
+                || segment.chars().all(|c| c.is_ascii_uppercase() || c == '_');
+            is_valid && is_code
+        })
 }
 
 #[cfg(test)]

@@ -41,6 +41,14 @@ pub(in crate::code_lint::ast) fn collect_literal_occurrences(
     collector.out
 }
 
+/// Returns true if `name` is spelled as a constant (`MAX_RETRIES`, `_TIMEOUT_S`).
+pub(super) fn is_constant_name(name: &str) -> bool {
+    name.chars().any(|character| character.is_ascii_uppercase())
+        && name.chars().all(|character| {
+            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+        })
+}
+
 struct LiteralOccurrenceCollector<'a> {
     file: &'a ParsedFile,
     in_constant_scope: bool,
@@ -348,14 +356,6 @@ fn number_literal_value(expr: &Expr, source: &str) -> Option<LiteralValue> {
         ruff_python_ast::Number::Float(_) => parse_float_literal(text),
         ruff_python_ast::Number::Complex { .. } => None,
     }
-}
-
-/// Returns true if `name` is spelled as a constant (`MAX_RETRIES`, `_TIMEOUT_S`).
-pub(super) fn is_constant_name(name: &str) -> bool {
-    name.chars().any(|character| character.is_ascii_uppercase())
-        && name.chars().all(|character| {
-            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
-        })
 }
 
 #[cfg(test)]

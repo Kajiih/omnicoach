@@ -85,20 +85,6 @@ pub fn summarize_parameter_usages<'a>(
     visitor.usages
 }
 
-/// Returns true if `name` is a builtin that reads or iterates a collection without mutating it
-/// in place or retaining a mutable alias to the outer container.
-fn is_safe_readonly_builtin(name: &str) -> bool {
-    is_single_pass_iterable_builtin(name)
-        || is_collection_builtin(name)
-        || OTHER_SAFE_READONLY_BUILTINS.contains(&name)
-}
-
-/// Returns true if `name` is a builtin that consumes an `Iterable` in a single pass.
-fn is_single_pass_iterable_builtin(name: &str) -> bool {
-    ITERATING_COLLECTION_BUILTINS.contains(&name)
-        || OTHER_SINGLE_PASS_ITERABLE_BUILTINS.contains(&name)
-}
-
 /// Returns true if `name` is a builtin that iterates or sizes its positional arguments
 /// (`len(xs)`, `enumerate(xs)`, `zip(xs, ys)`, `reversed(xs)`, `sorted(xs)`).
 pub(super) fn is_collection_builtin(name: &str) -> bool {
@@ -435,6 +421,20 @@ impl<'a> SourceOrderVisitor<'a> for ParameterUseVisitor<'a> {
             _ => walk_expr(self, expr),
         }
     }
+}
+
+/// Returns true if `name` is a builtin that reads or iterates a collection without mutating it
+/// in place or retaining a mutable alias to the outer container.
+fn is_safe_readonly_builtin(name: &str) -> bool {
+    is_single_pass_iterable_builtin(name)
+        || is_collection_builtin(name)
+        || OTHER_SAFE_READONLY_BUILTINS.contains(&name)
+}
+
+/// Returns true if `name` is a builtin that consumes an `Iterable` in a single pass.
+fn is_single_pass_iterable_builtin(name: &str) -> bool {
+    ITERATING_COLLECTION_BUILTINS.contains(&name)
+        || OTHER_SINGLE_PASS_ITERABLE_BUILTINS.contains(&name)
 }
 
 #[cfg(test)]
