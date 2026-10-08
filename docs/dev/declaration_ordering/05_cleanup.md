@@ -9,9 +9,9 @@
 
 Per [rule_batch_playbook.md](../rule_batch_playbook.md) Phase 5, all AST and call-graph extraction helpers introduced for the 7 `Topic::DECLARATION_ORDER` rules were audited for duplication and consolidated:
 
-1. **Memoized Priority-Partitioned Call-Cluster Analyzer (`collect_call_cluster_findings`)**:
-   - `uncolocated-helper` (Priority 1), `private-before-public-function` (Priority 2), and `callee-before-caller` (Priority 3) all operate on the same scope-local call graph, Tarjan Strongly Connected Components (`compute_tarjan_scc`), and public-entrypoint reachability sets (`compute_public_roots`).
-   - Rather than recomputing the call graph three times per file or duplicating priority-suppression logic across three rule modules, `ParsedFile` caches `OnceLock<CachedCallClusterFindings>` via `ast::collect_call_cluster_findings(file)` in [src/code_lint/ast.rs](../../../src/code_lint/ast.rs). Each of the three rules projects its respective vector (`uncolocated_helpers`, `private_before_public`, `callee_before_caller`) in O(1) after the first rule runs.
+1. **Memoized 3-Stage Call-Cluster Analyzer (`collect_call_cluster_findings`)**:
+   - `private-before-public-function` (Stage 1), `uncolocated-helper` (Stage 2), and `callee-before-caller` (Stage 3) all operate on the same scope-local call graph, Tarjan Strongly Connected Components (`compute_tarjan_scc`), and public-entrypoint reachability sets (`compute_public_roots`).
+   - Rather than recomputing the call graph three times per file or duplicating mutual-exclusion logic across three rule modules, `ParsedFile` caches `OnceLock<CachedCallClusterFindings>` via `ast::collect_call_cluster_findings(file)` in [src/code_lint/ast.rs](../../../src/code_lint/ast.rs). Each of the three rules projects its respective vector (`uncolocated_helpers`, `private_before_public`, `callee_before_caller`) in O(1) after the first rule runs.
 2. **Shared Python Callable Grouping (`group_python_callables`)**:
    - Both `python::classes::collect_type_method_scopes` and `python::classes::collect_callable_scopes` in [src/code_lint/ast/python/classes.rs](../../../src/code_lint/ast/python/classes.rs) share `group_python_callables` and `python_method_visibility` so `@overload` series and `@<prop>.getter` / `.setter` / `.deleter` accessors are collapsed identically across constructor ordering and call-cluster ordering.
 3. **Shared Self-Type Name Extraction in Rust (`impl_self_type_name`)**:

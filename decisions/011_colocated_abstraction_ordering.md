@@ -2,17 +2,18 @@
 
 ## 1. Problem Statement
 
-Traditional declaration-ordering lint rules force a false dichotomy between **visibility grouping** and **call-graph ordering**, breaking **Locality of Behavior (colocation)** and mixing levels of abstraction:
+Traditional declaration-ordering lint rules force a false dichotomy between **public-first visibility grouping** and **vertical-slice colocation**, or invert abstraction levels:
 
-1. **Class-Wide or Module-Wide Visibility Buckets Break Colocation (`StyleCop SA1202`, `@typescript-eslint/member-ordering`, `WPS338`, `CCE001`)**:
-   - Grouping all `public` functions or methods at the top of a scope and all `private` helpers at the bottom forces a helper used exclusively by the first public entrypoint (`from_file` -> `parse_comment_text`) to move below unrelated public methods (`is_suppressed`, `audit_suppressions`).
-   - At the module level, file-wide buckets rip a feature unit's dedicated helpers away from the public function they implement, scattering a single behavior across hundreds of lines.
-2. **Bottom-Up Call Ordering (`no-use-before-define`, `DefineBeforeUseRule`) Inverts Abstraction Levels**:
+1. **Scope-Wide Visibility Buckets Alone Break Vertical-Slice Modules (`StyleCop SA1202`, `@typescript-eslint/member-ordering`, `WPS338`, `CCE001`)**:
+   - Grouping all `public` functions at the top of a scope and all `private` helpers at the bottom works well for cohesive types and small utility modules (`[new, pub_a, pub_b, _helpers]`), but in multi-subsystem modules (`src/code_lint/ast.rs`, `src/config.rs`) it rips a feature unit's dedicated helpers away from the public function they implement.
+2. **Mandatory Inline Colocation Breaks Public-First Types and Utility Modules**:
+   - Conversely, forcing *every* single-use helper immediately below its caller wedges multi-step private implementation details (`parse_single`, `parse_comment_text`, `find_directive_prefix`) between a type's constructor (`from_file`, `parse_all`) and its remaining public API (`is_suppressed`, `program`), burying the public contract of the type.
+3. **Bottom-Up Call Ordering (`no-use-before-define`, `DefineBeforeUseRule`) Inverts Abstraction Levels**:
    - Requiring every callee to be declared before its caller places low-level leaf utilities at the top of a scope and buries high-level entrypoints at the bottom.
    - Even when restricted to private helpers below a public entrypoint (`pub_a` calls `_step_1`, which calls `_step_2`), bottom-up ordering produces `[pub_a, _step_2, _step_1]`—wedging the leaf helper `_step_2` between `pub_a` and its direct callee `_step_1` and flipping the reading direction mid-cluster.
-3. **Naive Connected Components (`LCOM4`) Collapse When Helpers Are Shared**:
+4. **Naive Connected Components (`LCOM4`) Collapse When Helpers Are Shared**:
    - Standard cohesion metrics (`LCOM4`, Hitz & Montazeri 1995) model a scope as an undirected call graph and treat each connected component as a feature cluster.
-   - As soon as two independent public entrypoints (`pub_a` and `pub_b`) both call a single low-level utility (`_shared`), undirected connected components merge `pub_a`'s cluster and `pub_b`'s cluster into one component—failing to detect when `pub_a`'s exclusive helpers are interleaved with `pub_b`'s exclusive helpers.
+   - As soon as two independent public entrypoints (`pub_a` and `pub_b`) both call a single low-level utility (`_shared`), undirected connected components merge `pub_a`'s cluster and `pub_b`'s cluster into one component—failing to distinguish single-owner helpers from shared helpers.
 
 ---
 
@@ -24,18 +25,18 @@ In [ADR 006](006_architectural_dag_and_conformance.md) (`src/architecture.rs`), 
 2. **Sibling Isolation & Shared Lower Layer**: Sibling components never reach into each other's internals; whenever logic is shared by two or more components, it moves down to a lower shared abstraction layer (`code_lint::policy`, `code_lint::semantic`, `code_lint::ast`).
 3. **Monotonic Abstraction Gradient**: Higher-level orchestrators depend downward on lower-level foundations.
 
-Inside a single module, class, or inherent `impl` block, the **exact same three invariants** govern how functions and methods should be ordered—without requiring any annotations or macros, because **visibility modifiers and the intra-scope call graph already define the dependency DAG**:
+Inside a single module, class, or inherent `impl` block, the **same invariants** govern how functions and methods are ordered—without requiring any annotations or macros, because **visibility modifiers and the intra-scope call graph already define the dependency DAG**:
 
 | Architectural Concept | Inter-Module Scale (ADR 006) | Intra-Module / Intra-Class Scale (ADR 011) |
 | :--- | :--- | :--- |
-| **Component Definition Unit** | A declared `ArchitectureComponent` (or leaf rule module) | A **public entrypoint** (`pub fn` / public method) together with the **exclusive private helpers** reachable only from that entrypoint |
-| **Sibling Isolation & Colocation** | Sibling rule files cannot import each other | Exclusive helpers of `pub_a` must stay contiguous with `pub_a`; another unit `pub_b` or a shared helper cannot sit between `pub_a` and its exclusive helpers (**`uncolocated-helper`**) |
-| **Shared Foundation Layer** | Shared helpers move down to `policy` / `semantic` / `ast` | Private helpers called by **2 or more** public entrypoints belong to a lower abstraction layer and move to the **shared helper section at the end** below all their public callers (**`private-before-public-function`**) |
-| **Abstraction Gradient** | Higher layers depend on lower layers (`Runner -> Rules -> Semantic -> Ast`) | Within every unit and within the shared layer, higher-abstraction **callers** precede lower-abstraction **callees** (`pub_a -> _step_1 -> _step_2`, enforced by **`callee-before-caller`**) |
+| **Component Definition Unit** | A declared `ArchitectureComponent` (or leaf rule module) | A **public entrypoint** (`pub fn` / public method) together with the **single-use private helpers** (`Roots(h) = {p}`) reachable only from that entrypoint |
+| **Two Valid Helper Places (`uncolocated-helper`)** | Internal helpers live either inside their owning module or in a lower shared layer—never stranded in an unrelated sibling | Once a private helper `h` is placed below its public callers (`pos(h) > max(Roots(h))`), it may sit in **only two valid places**:<br>1. **Immediately after its consumer** (`Roots(h) = {p}` only): in the contiguous helper cluster directly below `p` (vertical-slice style).<br>2. **At the end of the scope** (`\|Roots(h)\| >= 1`): in the trailing private helper section after all public functions (`pos(h) > last_pub`, public-first style), provided a single-user helper does not split its owner's helpers between Place 1 and Place 2. |
+| **Public Before Private (`private-before-public-function`)** | Public layer precedes internal implementation layers | Every private helper `h` must be declared **after** all public entrypoints that reach it (`pos(h) > max(Roots(h))`), and uncalled private helpers must follow all public entrypoints. |
+| **Abstraction Gradient (`callee-before-caller`)** | Higher layers depend on lower layers (`Runner -> Rules -> Semantic -> Ast`) | Among **private helpers** (`Private -> Private`), higher-abstraction **callers** precede lower-abstraction **callees** (`_step_1 -> _step_2` or `_exclusive -> _shared`), while `Public -> Public` calls are unconstrained so public APIs can order either orchestrator-first or core-primitive-first. |
 
 This aligns with empirical program-comprehension research:
 - **Top-Down Plan Recognition (Brooks 1983; Soloway & Ehrlich 1984; Von Mayrhauser & Vans 1995)**: Readers orient via high-level contracts (fields, constructors, public entrypoints) before descending into implementation helpers.
-- **Eye-Tracking & The Stepdown Rule (Busjahn et al. 2015; Martin 2008, *Clean Code* Ch. 5)**: Readers scan entrypoints and step downward from caller to callee; keeping direct callees immediately below their caller minimizes vertical distance.
+- **Eye-Tracking & The Stepdown Rule (Busjahn et al. 2015; Martin 2008, *Clean Code* Ch. 5)**: Readers scan entrypoints and step downward from caller to callee.
 
 ---
 
@@ -47,65 +48,76 @@ Within a scope (a module's top-level functions, a Python `class` body, or a Rust
 
 - **Public Entrypoints**:
   - In a class or inherent `impl`: constructors and public/exported methods (`pub`, `pub(crate)`, `pub(super)`, `pub(in ...)` in Rust; non-`_` methods and `__dunder__` methods in Python).
-  - In a module: exported functions (`pub` / `pub(...)` in Rust; non-`_` functions in Python), plus any private function directly referenced as an entrypoint from a module-level exported item (`pub const RULE`, `pub static`), a trait `impl` block (`impl Visitor for ...`), a Python class body / decorator, or a `__main__` block. If a module contains only private functions and no such external root, functions with in-degree 0 in the module's DAG act as the scope's roots.
+  - In a module: exported functions (`pub` / `pub(...)` in Rust; non-`_` functions in Python), plus `fn main` in Rust.
 - **Root Set of a Private Helper (`Roots(h)`)**:
   - For each private helper `h`, `Roots(h)` is the set of public entrypoints in the scope that can reach `h` **walking only through private helpers** (stopping at public boundaries so that if `pub_b` calls `pub_a` and `pub_a` calls `_a1`, `_a1` still has `Roots(_a1) = {pub_a}`).
   - Based on the number of public roots reaching `h`:
-    1. **Exclusive Helper (`|Roots(h)| = 1`, `Roots(h) = {p}`)**: Serves a single public entrypoint `p` and belongs to `p`'s **colocated unit** `Cluster(p)`.
-    2. **Shared Helper (`|Roots(h)| >= 2`, `Roots(h) = {p_1, p_2, ...}`)**: Serves multiple public entrypoints and belongs to the **shared helper layer** at a lower level of abstraction than any individual public unit.
+    1. **Single-User (Exclusive) Helper (`|Roots(h)| = 1`, `Roots(h) = {p}`)**: Serves a single public entrypoint `p` and may be placed either in **Place 1** (immediately after `p` in its contiguous cluster `Cluster(p)`) or in **Place 2** (in the trailing private helper section after all public functions, provided none of `p`'s helpers are in Place 1).
+    2. **Multi-User (Shared) Helper (`|Roots(h)| >= 2`, `Roots(h) = {p_1, p_2, ...}`)**: Serves multiple public entrypoints and must be placed in **Place 2** (in the trailing private helper section after all public functions in the scope).
 
-### 3.2 Canonical Scope Layout
+### 3.2 Canonical Scope Layouts
 
-Every scope orders its declarations along a single monotonic abstraction gradient from highest abstraction (top) to lowest abstraction (bottom):
+Both **Vertical-Slice Scopes** (using Place 1 for single-user helpers and Place 2 for shared helpers) and **Public-First Scopes** (using Place 2 for all private helpers) are first-class valid layouts, while stranding a helper in the middle of a scope between unrelated public functions (`[pub_a, pub_b, _a1, pub_c]` or `[pub_a, pub_b, _shared_ab, pub_c]`) is rejected:
 
 ```python
-# 1. State Schema & Lifecycle Initializers
-#    (field-after-method, associated-item-after-method, constructor-after-method)
-
-# 2. Colocated Component Unit A (owner: pub_a)
-def pub_a() -> None:        # Public entrypoint A (highest abstraction in Unit A)
+# Layout A: Vertical-Slice Scope (Place 1 for 1-user helpers, Place 2 for shared helpers)
+def pub_a() -> None:        # Public entrypoint A
     _a_step_1()
 
-def _a_step_1() -> None:    # Exclusive direct helper of pub_a (colocated right below pub_a)
+def _a_step_1() -> None:    # Place 1: 1-user helper immediately after pub_a
     _a_step_2()
 
-def _a_step_2() -> None:    # Exclusive sub-helper of pub_a (lower abstraction -> below caller)
+def _a_step_2() -> None:    # Place 1: sub-helper below caller _a_step_1
     _shared_1()
 
-# 3. Colocated Component Unit B (owner: pub_b)
-def pub_b() -> None:        # Public entrypoint B (allowed after _a_step_1/_a_step_2!)
+def pub_b() -> None:        # Public entrypoint B
     _b_step_1()
 
-def _b_step_1() -> None:    # Exclusive helper of pub_b
+def _b_step_1() -> None:    # Place 1: 1-user helper immediately after pub_b
     _shared_1()
 
-# 4. Shared Helper Layer (used by both Unit A and Unit B)
-def _shared_1() -> None:    # Shared helper (placed below all public units that call it)
+def _shared_1() -> None:    # Place 2: 2-user helper in trailing helper section (pos > last_pub)
     _shared_2()
 
-def _shared_2() -> None:    # Shared leaf helper (lower abstraction -> below _shared_1)
+def _shared_2() -> None:    # Place 2: shared leaf helper below caller _shared_1
     ...
-
-# 5. Execution / Test Footer (statement-after-main-guard)
 ```
 
-### 3.3 The Three Precedence-Linked Call-Cluster Rules
+```python
+# Layout B: Public-First Scope (all public entrypoints first, all private helpers in Place 2)
+def pub_a() -> None:        # Public entrypoint A
+    _a_step_1()
 
-Because colocation, visibility, and caller-callee ordering are projections of one structural order over the call graph, they are computed by **one shared call-cluster analyzer** in `src/code_lint/ast.rs` and exposed as three rules evaluated in strict priority order (suppressing lower-priority findings on any function already flagged by a higher-priority rule):
+def pub_b() -> None:        # Public entrypoint B
+    _b_step_1()
 
-| Priority | Rule Name | Invariant Enforced |
+def _a_step_1() -> None:    # Place 2: 1-user helper in trailing helper section
+    _shared_1()
+
+def _b_step_1() -> None:    # Place 2: 1-user helper in trailing helper section
+    _shared_1()
+
+def _shared_1() -> None:    # Place 2: 2-user helper below its callers _a_step_1 and _b_step_1
+    ...
+```
+
+### 3.3 The Three Disjoint Call-Cluster Rules
+
+Because visibility, helper placement, and caller-callee ordering are projections of one structural order over the call graph, they are computed by **one shared call-cluster analyzer** in [src/code_lint/ast.rs](../src/code_lint/ast.rs) and evaluated in three mutually exclusive stages (so a single misplaced function is never reported twice):
+
+| Stage | Rule Name | Invariant Enforced |
 | :--- | :--- | :--- |
-| **1 (Highest)** | **`uncolocated-helper`** | Every **exclusive private helper** (`Roots(h) = {p}`) must stay contiguous with its owning public entrypoint `p`—no function outside `Cluster(p)` (neither another public entrypoint `pub_b` nor a shared helper) may appear between `p` and `h`. |
-| **2 (Middle)** | **`private-before-public-function`** | • An **exclusive helper** (`Roots(h) = {p}`) must be declared **below** its owning public entrypoint `p` (and is allowed to precede later public entrypoints `pub_b` because it belongs to `Cluster(p)` above it).<br>• A **shared helper** (`|Roots(h)| >= 2`) must be declared **below all** of its public callers (`pos(h) > max(Roots(h))`), placing it in the shared layer after the units that depend on it.<br>• An uncalled private function (`|Roots(h)| = 0`) must be declared below all public functions in the scope. |
-| **3 (Lowest)** | **`callee-before-caller`** | Within the **same visibility and abstraction group**, a lower-abstraction `callee` must not be declared before its higher-abstraction `caller` (unless they belong to the same Strongly Connected Component of mutually recursive functions):<br>• **Public -> Public**: If non-constructor `pub_a` calls non-constructor `pub_b`, `pub_a` (and its unit) precedes `pub_b` (unless `pub_b` is a shared public foundation called by multiple public functions, or in standard top-down order `caller` precedes `callee`).<br>• **Exclusive Private -> Exclusive Private (`Roots = {p}`)**: Within `Cluster(p)`, `caller` precedes `callee` (`_a_step_1` before `_a_step_2`).<br>• **Shared Private -> Shared Private (`|Roots| >= 2`)**: Within the shared layer, `caller` precedes `callee` (`_shared_1` before `_shared_2`).<br>*(Never fires across `public -> private` or `exclusive -> shared`, which are governed by Priorities 1 and 2.)* |
+| **Stage 1 (`pos < max(Roots(h))`)** | **`private-before-public-function`** | • A **single-user helper** (`Roots(h) = {p}`) must be declared **below** its owning public entrypoint `p` (`pos(h) > pos(p)`).<br>• A **multi-user helper** (`\|Roots(h)\| >= 2`) must be declared **below all** of its public callers (`pos(h) > max(Roots(h))`).<br>• An **unrooted private function** (`\|Roots(h)\| = 0`) must be declared below all public functions in the scope (`pos(h) > last_pub`). |
+| **Stage 2 (`pos > max(Roots(h))`)** | **`uncolocated-helper`** | Once a rooted private helper `h` (`\|Roots(h)\| >= 1`) is below all of its public callers, it must sit in **one of two valid places**:<br>• **Place 1 (Immediately after consumer, `Roots(h) = {p}` only)**: every item between `p` and `h` also has `Roots == {p}` (or is a sibling constructor when `p` is a constructor).<br>• **Place 2 (Trailing helper section at the end of the scope, `\|Roots(h)\| >= 1`)**: `pos(h) > last_pub` (and if `Roots(h) = {p}`, none of `p`'s helpers were placed in Place 1 before `last_pub`). |
+| **Stage 3 (`Private -> Private` Order)** | **`callee-before-caller`** | Among all private callables not flagged by Stage 1 or Stage 2 (`Private -> Private`), a `callee` must not be declared before its `caller` (unless they belong to the same Strongly Connected Component of mutually recursive functions, or in a scope where the caller is unrooted and the callee is rooted). |
 
 ---
 
 ## 4. Consequences
 
 1. **Zero Contradictions Across Rules**:
-   - Because Priorities 1, 2, and 3 all point along the same downward abstraction gradient (`Public Entrypoint -> Direct Exclusive Helper -> Leaf Exclusive Helper -> Shared Helper ->Shared Leaf Helper`), fixing any rule's diagnostic moves the function toward its single canonical position and never triggers another rule.
-2. **True Colocation Without Annotation Boilerplate**:
-   - Multi-feature classes, `impl` blocks, and modules can colocate `[pub_a, _a1, pub_b, _b1]` naturally (fixing the `SuppressionTracker::parse_comment_text` and `InterceptedCommand::parse_single` placement in Omni's own codebase) without needing manual region comments or macro markers.
+   - Stage 1 (`pos < max(Roots(h))`), Stage 2 (`pos > max(Roots(h))` outside Place 1 and Place 2), and Stage 3 (`Private -> Private` `callee < caller`) partition the failure modes cleanly without overlapping diagnostics.
+2. **Supports Both Public-First Types and Vertical-Slice Modules**:
+   - Cohesive classes, inherent `impl` blocks, and small utility modules (`InterceptedCommand`, `SuppressionTracker`, `CommentIndex`, `test_utils.rs`, `scopes.rs`) can group all public methods/functions at the top and place all private helpers in the trailing helper section (Place 2), while multi-subsystem modules (`ast.rs`, `config.rs`, `ast/rust.rs`) can colocate 1-user helpers immediately after their public entrypoint (Place 1) and keep 2+-user helpers at the end of the file (Place 2).
 3. **Complete `Topic::DECLARATION_ORDER` Suite**:
    - Together with `field-after-method` (Python), `associated-item-after-method` (Rust), `constructor-after-method` (Python, Rust), and `statement-after-main-guard` (Python), Omni enforces a coherent top-to-bottom declaration order across both types and modules.

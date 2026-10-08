@@ -42,6 +42,14 @@ pub struct PythonBaseClass<'a> {
 }
 
 impl PythonBaseClass<'_> {
+    /// Base class name with any generic type argument subscript (`[...]`) stripped.
+    #[must_use]
+    pub fn unsubscripted_name(&self) -> &str {
+        self.name
+            .split_once('[')
+            .map_or(self.name.as_str(), |(base, _)| base.trim())
+    }
+
     /// Returns true if this base class is a structural marker rather than a supertype:
     /// `object`, `Generic`, `Protocol`, or `ABC` itself (optionally subscripted or qualified).
     #[must_use]
@@ -59,14 +67,6 @@ impl PythonBaseClass<'_> {
                 | ABC_CLASS
                 | "abc.ABC"
         )
-    }
-
-    /// Base class name with any generic type argument subscript (`[...]`) stripped.
-    #[must_use]
-    pub fn unsubscripted_name(&self) -> &str {
-        self.name
-            .split_once('[')
-            .map_or(self.name.as_str(), |(base, _)| base.trim())
     }
 }
 
@@ -100,14 +100,6 @@ impl<'a> PythonClassInfo<'a> {
         })
     }
 
-    /// Returns true if the class carries a `@dataclass` or `@dataclasses.dataclass` decorator
-    /// that does not pass the keyword argument `key`.
-    #[must_use]
-    pub fn is_dataclass_missing_arg(&self, key: &str) -> bool {
-        self.dataclass_decorator()
-            .is_some_and(|decorator| !decorator.has_arg(key))
-    }
-
     /// The `@dataclass` or `@dataclasses.dataclass` decorator, matched by name rather than by
     /// import, if the class carries one.
     #[must_use]
@@ -118,6 +110,14 @@ impl<'a> PythonClassInfo<'a> {
                 DATACLASS_DECORATOR | QUALIFIED_DATACLASS_DECORATOR
             )
         })
+    }
+
+    /// Returns true if the class carries a `@dataclass` or `@dataclasses.dataclass` decorator
+    /// that does not pass the keyword argument `key`.
+    #[must_use]
+    pub fn is_dataclass_missing_arg(&self, key: &str) -> bool {
+        self.dataclass_decorator()
+            .is_some_and(|decorator| !decorator.has_arg(key))
     }
 }
 

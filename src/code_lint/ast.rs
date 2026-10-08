@@ -849,24 +849,29 @@ pub struct CallOrderFinding<'a> {
 }
 
 /// Priority-ordered findings for the three call-cluster ordering rules across a file:
-/// 1. `uncolocated-helper` (Priority 1)
-/// 2. `private-before-public-function` (Priority 2)
-/// 3. `callee-before-caller` (Priority 3)
+/// 1. `private-before-public-function` (private helper above its public caller `pos < max(Roots(h))`,
+///    or unrooted private function above `last_pub`)
+/// 2. `uncolocated-helper` (private helper after its public callers `pos > max(Roots(h))` that is
+///    neither in Place 1 immediately after its single consumer nor in Place 2 in the trailing
+///    private helper section after `last_pub`)
+/// 3. `callee-before-caller` (private callee before private caller among remaining callables)
 ///
-/// Evaluating all three together guarantees strict precedence (`P1 -> P2 -> P3`) so a single
-/// misplaced function or method is never double-reported across rules.
+/// Evaluating all three together guarantees mutual exclusion so a single misplaced function or
+/// method is never double-reported across rules.
 pub struct CallClusterFindings<'a> {
-    /// Priority 1 findings (`uncolocated-helper`).
+    /// Findings for `uncolocated-helper` (private helpers after their public callers that are
+    /// neither in Place 1 nor in Place 2).
     pub uncolocated_helpers: Vec<CallOrderFinding<'a>>,
-    /// Priority 2 findings (`private-before-public-function`).
+    /// Findings for `private-before-public-function` (private helpers declared before their
+    /// public callers).
     pub private_before_public: Vec<CallOrderFinding<'a>>,
-    /// Priority 3 findings (`callee-before-caller`).
+    /// Findings for `callee-before-caller` (private callees declared before their private callers).
     pub callee_before_caller: Vec<CallOrderFinding<'a>>,
 }
 
-/// Computes and memoizes the priority-ordered call-cluster findings (`uncolocated-helper`,
-/// `private-before-public-function`, and `callee-before-caller`) across all module and
-/// class/`impl` scopes in `file`.
+/// Computes and memoizes the call-cluster ordering findings (`private-before-public-function`,
+/// `uncolocated-helper`, and `callee-before-caller`) across all module and class/`impl` scopes
+/// in `file`.
 #[must_use]
 pub fn collect_call_cluster_findings(file: &ParsedFile) -> CallClusterFindings<'_> {
     let cached = file.call_cluster_findings.get_or_init(|| {
@@ -894,9 +899,8 @@ pub fn collect_call_cluster_findings(file: &ParsedFile) -> CallClusterFindings<'
     }
 }
 
-/// Analyzes a single [`CallableScope`] and appends Priority 1 (`uncolocated-helper`),
-/// Priority 2 (`private-before-public-function`), and Priority 3 (`callee-before-caller`)
-/// findings to `out`.
+/// Analyzes a single [`CallableScope`] and appends `private-before-public-function`,
+/// `uncolocated-helper`, and `callee-before-caller` findings to `out`.
 fn analyze_callable_scope(scope: &CallableScope<'_>, out: &mut CachedCallClusterFindings) {
     let callables = &scope.callables;
     let count = callables.len();
@@ -962,7 +966,7 @@ fn analyze_callable_scope(scope: &CallableScope<'_>, out: &mut CachedCallCluster
     }
 
     for callee in 0..count {
-        if flagged_p1_or_p2[callee] || callables[callee].is_constructor {
+        if flagged_p1_or_p2[callee] || callables[callee].visibility == MethodVisibility::Public {
             continue;
         }
         let last_caller = callers_of[callee]
@@ -971,9 +975,9 @@ fn analyze_callable_scope(scope: &CallableScope<'_>, out: &mut CachedCallCluster
             .filter(|&caller| {
                 caller > callee
                     && !flagged_p1_or_p2[caller]
-                    && !callables[caller].is_constructor
+                    && callables[caller].visibility == MethodVisibility::Private
                     && scc_id[caller] != scc_id[callee]
-                    && is_same_visibility_tier(callables, &roots_of, caller, callee)
+                    && (!roots_of[caller].is_empty() || roots_of[callee].is_empty())
             })
             .max();
         if let Some(caller_idx) = last_caller {
@@ -1010,22 +1014,6 @@ fn is_valid_helper_placement(
     let is_at_scope_end =
         pos > last_pub_idx && ((owner + 1)..last_pub_idx).all(|mid| !in_owner_cluster(mid));
     is_just_after_owner || is_at_scope_end
-}
-
-/// Returns true if `first` and `second` belong to the same visibility tier for
-/// `callee-before-caller` comparison.
-fn is_same_visibility_tier(
-    callables: &[CallableItem<'_>],
-    roots_of: &[Vec<usize>],
-    first: usize,
-    second: usize,
-) -> bool {
-    if callables[first].visibility != callables[second].visibility {
-        return false;
-    }
-    !(callables[first].visibility == MethodVisibility::Private
-        && roots_of[first].is_empty()
-        && !roots_of[second].is_empty())
 }
 
 /// Computes `Roots(f)` for each callable in `callables`: the sorted indices of public entrypoints

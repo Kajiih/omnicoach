@@ -9,7 +9,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `associated-item-after-method` (rust): Flags Rust associated `type` and `const` items declared after `fn` items in an `impl` or `trait` block.
 - `bare-multiline-string` (python, rust): Flags multiline string literals that are not wrapped in a dedent helper.
 - `blanket-suppression` (python, rust): Flags suppression directives that name no rule.
-- `callee-before-caller` (python, rust): Flags functions and methods defined before their callers within the same visibility tier.
+- `callee-before-caller` (python, rust): Flags private functions and methods defined before their private callers.
 - `concrete-collection-attribute` (python): Flags public Python class and instance attributes annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
 - `concrete-collection-parameter` (python): Flags Python function parameters annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
 - `concrete-collection-return` (python): Flags Python function return annotations using concrete mutable collection types such as `list`, `dict`, or `set`.

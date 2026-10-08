@@ -91,6 +91,21 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
         diagnostics
     }
 
+    /// Renders this rule's violation template at the given AST node using the node's language.
+    #[must_use]
+    pub fn diagnostic_at_node(
+        &self,
+        path: &Path,
+        node: &AstNode<'_>,
+        params: &[(&str, &str)],
+    ) -> Diagnostic {
+        self.declaration.render_diagnostic_for_lang(
+            node.lang(),
+            params,
+            node.to_source_location(path),
+        )
+    }
+
     /// Emits a diagnostic with `("callee", &matched.callee)` for every call in `file` to one of
     /// the `banned` callees.
     #[must_use]
@@ -145,21 +160,6 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
                 )
             })
             .collect()
-    }
-
-    /// Renders this rule's violation template at the given AST node using the node's language.
-    #[must_use]
-    pub fn diagnostic_at_node(
-        &self,
-        path: &Path,
-        node: &AstNode<'_>,
-        params: &[(&str, &str)],
-    ) -> Diagnostic {
-        self.declaration.render_diagnostic_for_lang(
-            node.lang(),
-            params,
-            node.to_source_location(path),
-        )
     }
 }
 

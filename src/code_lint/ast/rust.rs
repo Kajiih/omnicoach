@@ -1671,41 +1671,10 @@ pub(super) fn collect_type_method_scopes(file: &ParsedFile) -> Vec<TypeMethodSco
         let Some(associated_items) = impl_item.assoc_item_list() else {
             continue;
         };
-        let mut methods = Vec::new();
-        for assoc_item in associated_items.assoc_items() {
-            let ast::AssocItem::Fn(function) = assoc_item else {
-                continue;
-            };
-            if file.is_in_rust_inline_test(function.syntax().text_range().start().into()) {
-                continue;
-            }
-            let Some(name_node) = function.name() else {
-                continue;
-            };
-            let name = name_node.text().trim().to_owned();
-            let is_exported = function.visibility().is_some();
-            let visibility = if is_exported {
-                MethodVisibility::Public
-            } else {
-                MethodVisibility::Private
-            };
-            let has_self = function
-                .param_list()
-                .is_some_and(|params| params.self_param().is_some());
-            let is_constructor = is_exported
-                && !has_self
-                && is_rust_constructor_name(&name)
-                && returns_self_type(&function, &type_name);
-            methods.push(TypeMethod {
-                name_node: AstNode::from_span(
-                    file,
-                    span_from_rowan_range(name_node.syntax().text_range()),
-                ),
-                name,
-                visibility,
-                is_constructor,
-            });
-        }
+        let methods = collect_rust_impl_methods(&associated_items, &type_name, file)
+            .into_iter()
+            .map(|(method, _)| method)
+            .collect();
         scopes.push(TypeMethodScope { type_name, methods });
     }
     scopes
@@ -1990,40 +1959,7 @@ fn build_rust_impl_callable_scope<'a>(
     let type_name = impl_self_type_name(impl_item, &file.source)?;
     let associated_items = impl_item.assoc_item_list()?;
 
-    let mut methods = Vec::new();
-    for assoc_item in associated_items.assoc_items() {
-        let ast::AssocItem::Fn(function) = assoc_item else {
-            continue;
-        };
-        if file.is_in_rust_inline_test(function.syntax().text_range().start().into()) {
-            continue;
-        }
-        let Some(name_node) = function.name() else {
-            continue;
-        };
-        let name = name_node.text().trim().to_owned();
-        let is_exported = function.visibility().is_some();
-        let visibility = if is_exported {
-            MethodVisibility::Public
-        } else {
-            MethodVisibility::Private
-        };
-        let has_self = function
-            .param_list()
-            .is_some_and(|params| params.self_param().is_some());
-        let is_constructor = is_exported
-            && !has_self
-            && is_rust_constructor_name(&name)
-            && returns_self_type(&function, &type_name);
-        methods.push((
-            AstNode::from_span(file, span_from_rowan_range(name_node.syntax().text_range())),
-            name,
-            visibility,
-            is_constructor,
-            function,
-        ));
-    }
-
+    let methods = collect_rust_impl_methods(&associated_items, &type_name, file);
     if methods.len() < 2 {
         return None;
     }
@@ -2031,12 +1967,12 @@ fn build_rust_impl_callable_scope<'a>(
     let method_by_name: HashMap<&str, usize> = methods
         .iter()
         .enumerate()
-        .map(|(idx, (_, name, _, _, _))| (name.as_str(), idx))
+        .map(|(idx, (method, _))| (method.name.as_str(), idx))
         .collect();
 
     let callables = methods
         .iter()
-        .map(|(name_node, name, visibility, is_constructor, function)| {
+        .map(|(method, function)| {
             let mut callees = Vec::new();
             if let Some(body) = function.body() {
                 collect_rust_impl_method_refs(
@@ -2047,10 +1983,10 @@ fn build_rust_impl_callable_scope<'a>(
                 );
             }
             CallableItem {
-                name_node: *name_node,
-                name: name.clone(),
-                visibility: *visibility,
-                is_constructor: *is_constructor,
+                name_node: method.name_node,
+                name: method.name.clone(),
+                visibility: method.visibility,
+                is_constructor: method.is_constructor,
                 callees,
             }
         })
@@ -2357,6 +2293,54 @@ fn impl_self_type_name(impl_item: &ast::Impl, source: &str) -> Option<String> {
     }
     let span = span_from_rowan_range(self_type.syntax().text_range());
     Some(source[span.start..span.end].trim().to_owned())
+}
+
+/// Collects direct non-test `fn` items of a Rust inherent `impl` block along with their
+/// [`TypeMethod`] metadata in source order.
+fn collect_rust_impl_methods<'a>(
+    associated_items: &ast::AssocItemList,
+    type_name: &str,
+    file: &'a ParsedFile,
+) -> Vec<(TypeMethod<'a>, ast::Fn)> {
+    let mut methods = Vec::new();
+    for assoc_item in associated_items.assoc_items() {
+        let ast::AssocItem::Fn(function) = assoc_item else {
+            continue;
+        };
+        if file.is_in_rust_inline_test(function.syntax().text_range().start().into()) {
+            continue;
+        }
+        let Some(name_node) = function.name() else {
+            continue;
+        };
+        let name = name_node.text().trim().to_owned();
+        let is_exported = function.visibility().is_some();
+        let visibility = if is_exported {
+            MethodVisibility::Public
+        } else {
+            MethodVisibility::Private
+        };
+        let has_self = function
+            .param_list()
+            .is_some_and(|params| params.self_param().is_some());
+        let is_constructor = is_exported
+            && !has_self
+            && is_rust_constructor_name(&name)
+            && returns_self_type(&function, type_name);
+        methods.push((
+            TypeMethod {
+                name_node: AstNode::from_span(
+                    file,
+                    span_from_rowan_range(name_node.syntax().text_range()),
+                ),
+                name,
+                visibility,
+                is_constructor,
+            },
+            function,
+        ));
+    }
+    methods
 }
 
 /// Returns true if `name` is a standard Rust constructor identifier (`new`, `try_new`, `new_*`,

@@ -210,16 +210,16 @@ pub struct DecoratorInfo<'a> {
 }
 
 impl<'a> DecoratorInfo<'a> {
-    /// Returns true if a keyword argument with `key` was explicitly passed.
-    #[must_use]
-    pub fn has_arg(&self, key: &str) -> bool {
-        self.get_arg(key).is_some()
-    }
-
     /// Looks up a keyword argument by name.
     #[must_use]
     pub fn get_arg(&self, key: &str) -> Option<&KeywordArg<'a>> {
         self.keyword_args.iter().find(|kw| kw.name == key)
+    }
+
+    /// Returns true if a keyword argument with `key` was explicitly passed.
+    #[must_use]
+    pub fn has_arg(&self, key: &str) -> bool {
+        self.get_arg(key).is_some()
     }
 }
 
@@ -693,6 +693,44 @@ const MUTATING_METHODS: &[&str] = &[
     "symmetric_difference_update",
 ];
 
+/// If `expr` mutates a collection receiver in place (`receiver.append(...)`, `receiver[k] = v`,
+/// `del receiver[k]`), returns that `receiver` expression.
+pub(super) fn in_place_mutated_receiver_expr(expr: &Expr) -> Option<&Expr> {
+    match expr {
+        Expr::Call(call) => {
+            let Expr::Attribute(attr) = call.func.as_ref() else {
+                return None;
+            };
+            if MUTATING_METHODS.contains(&attr.attr.as_str()) {
+                Some(&attr.value)
+            } else {
+                None
+            }
+        }
+        Expr::Subscript(sub)
+            if matches!(
+                sub.ctx,
+                ruff_python_ast::ExprContext::Store | ruff_python_ast::ExprContext::Del
+            ) =>
+        {
+            Some(&sub.value)
+        }
+        _ => None,
+    }
+}
+
+/// Helper to resolve the dotted expression path and terminal identifier from an `Expr`.
+pub(super) fn resolve_path_and_terminal_expr(expr: &Expr, source: &str) -> (String, String) {
+    let span = span_from_ruff_range(expr.range());
+    let path = source[span.start..span.end].to_string();
+    let terminal = if let Expr::Attribute(attr) = expr {
+        attr.attr.to_string()
+    } else {
+        path.rsplit('.').next().unwrap_or("").to_string()
+    };
+    (path, terminal)
+}
+
 /// Collects function or method names whose return values are mutated in place in `file`.
 ///
 /// Matches direct call mutations (`fn().append(...)`, `fn()[0] = 1`) and local bindings
@@ -809,44 +847,6 @@ fn called_terminal_name_expr(expr: &Expr, source: &str) -> Option<String> {
     };
     let (_, terminal) = resolve_path_and_terminal_expr(&call.func, source);
     (!terminal.is_empty()).then_some(terminal)
-}
-
-/// Helper to resolve the dotted expression path and terminal identifier from an `Expr`.
-pub(super) fn resolve_path_and_terminal_expr(expr: &Expr, source: &str) -> (String, String) {
-    let span = span_from_ruff_range(expr.range());
-    let path = source[span.start..span.end].to_string();
-    let terminal = if let Expr::Attribute(attr) = expr {
-        attr.attr.to_string()
-    } else {
-        path.rsplit('.').next().unwrap_or("").to_string()
-    };
-    (path, terminal)
-}
-
-/// If `expr` mutates a collection receiver in place (`receiver.append(...)`, `receiver[k] = v`,
-/// `del receiver[k]`), returns that `receiver` expression.
-pub(super) fn in_place_mutated_receiver_expr(expr: &Expr) -> Option<&Expr> {
-    match expr {
-        Expr::Call(call) => {
-            let Expr::Attribute(attr) = call.func.as_ref() else {
-                return None;
-            };
-            if MUTATING_METHODS.contains(&attr.attr.as_str()) {
-                Some(&attr.value)
-            } else {
-                None
-            }
-        }
-        Expr::Subscript(sub)
-            if matches!(
-                sub.ctx,
-                ruff_python_ast::ExprContext::Store | ruff_python_ast::ExprContext::Del
-            ) =>
-        {
-            Some(&sub.value)
-        }
-        _ => None,
-    }
 }
 
 #[cfg(test)]

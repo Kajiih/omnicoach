@@ -89,11 +89,13 @@ pub struct PythonFunctionSignature<'a> {
 }
 
 impl PythonFunctionSignature<'_> {
-    /// Returns true if the function is exempt from body-usage parameter rules (signature-exempt
-    /// functions or stub bodies consisting only of `...`, `pass`, or `raise NotImplementedError`).
+    /// Returns true if the function's signature is imposed from outside: a data-model dunder
+    /// method other than `__init__`, `__new__`, and `__call__`, or a function decorated with
+    /// `@override`, `@overload`, `@abstractmethod`, `@fixture`, `@<function>.register`, or
+    /// `@<property>.setter`.
     #[must_use]
-    pub fn is_exempt_from_body_usage_rules(&self) -> bool {
-        self.is_exempt_from_signature_rules() || self.has_stub_body
+    pub fn has_imposed_signature(&self) -> bool {
+        is_exempt_dunder_method(&self.name) || self.has_exempt_signature_decorator
     }
 
     /// Returns true if the function is exempt from signature annotation rules: its signature
@@ -104,19 +106,45 @@ impl PythonFunctionSignature<'_> {
         self.has_imposed_signature() || self.is_in_protocol_or_abc_class
     }
 
-    /// Returns true if the function's signature is imposed from outside: a data-model dunder
-    /// method other than `__init__`, `__new__`, and `__call__`, or a function decorated with
-    /// `@override`, `@overload`, `@abstractmethod`, `@fixture`, `@<function>.register`, or
-    /// `@<property>.setter`.
+    /// Returns true if the function is exempt from body-usage parameter rules (signature-exempt
+    /// functions or stub bodies consisting only of `...`, `pass`, or `raise NotImplementedError`).
     #[must_use]
-    pub fn has_imposed_signature(&self) -> bool {
-        is_exempt_dunder_method(&self.name) || self.has_exempt_signature_decorator
+    pub fn is_exempt_from_body_usage_rules(&self) -> bool {
+        self.is_exempt_from_signature_rules() || self.has_stub_body
     }
 }
 
 const SELF_PARAMETER: &str = "self";
 const NOT_IMPLEMENTED_ERROR: &str = "NotImplementedError";
 const OVERRIDE_DECORATOR: &str = "override";
+
+/// Returns the receiver parameter name (`"self"`, or `"cls"` when `allow_classmethod_cls` is true)
+/// for a method `function_def`, or `None` if decorated with `@staticmethod` (or `@classmethod`
+/// when `!allow_classmethod_cls`) or if the first parameter is not a receiver.
+pub(super) fn method_receiver_name_ast(
+    function_def: &StmtFunctionDef,
+    allow_classmethod_cls: bool,
+    file: &ParsedFile,
+) -> Option<String> {
+    let decorators = extract_decorators_from_slice(&function_def.decorator_list, file);
+    let is_excluded_decorator = decorators.iter().any(|decorator| {
+        decorator.terminal_name == "staticmethod"
+            || (!allow_classmethod_cls && decorator.terminal_name == "classmethod")
+    });
+    if is_excluded_decorator {
+        return None;
+    }
+    let first = extract_parameters_from_ast(&function_def.parameters, file)
+        .into_iter()
+        .next()?;
+    if first.kind != PythonParameterKind::Receiver {
+        return None;
+    }
+    if !allow_classmethod_cls && first.name != SELF_PARAMETER {
+        return None;
+    }
+    Some(first.name)
+}
 
 /// Discovers and extracts all function signatures from a Python file.
 #[must_use]
@@ -260,49 +288,6 @@ pub(super) fn direct_function_definitions(scope_body: &[Stmt]) -> Vec<&StmtFunct
         .collect()
 }
 
-/// Returns the receiver parameter name (`"self"`, or `"cls"` when `allow_classmethod_cls` is true)
-/// for a method `function_def`, or `None` if decorated with `@staticmethod` (or `@classmethod`
-/// when `!allow_classmethod_cls`) or if the first parameter is not a receiver.
-pub(super) fn method_receiver_name_ast(
-    function_def: &StmtFunctionDef,
-    allow_classmethod_cls: bool,
-    file: &ParsedFile,
-) -> Option<String> {
-    let decorators = extract_decorators_from_slice(&function_def.decorator_list, file);
-    let is_excluded_decorator = decorators.iter().any(|decorator| {
-        decorator.terminal_name == "staticmethod"
-            || (!allow_classmethod_cls && decorator.terminal_name == "classmethod")
-    });
-    if is_excluded_decorator {
-        return None;
-    }
-    let first = extract_parameters_from_ast(&function_def.parameters, file)
-        .into_iter()
-        .next()?;
-    if first.kind != PythonParameterKind::Receiver {
-        return None;
-    }
-    if !allow_classmethod_cls && first.name != SELF_PARAMETER {
-        return None;
-    }
-    Some(first.name)
-}
-
-/// Extracts all parameters in order from a Python `parameters` or `function_definition` node.
-#[cfg(test)]
-#[must_use]
-pub(super) fn extract_parameters<'a>(
-    func_or_params_node: &AstNode<'a>,
-) -> Vec<PythonParameterInfo<'a>> {
-    let Some(parsed) = func_or_params_node.file.py_module() else {
-        return Vec::new();
-    };
-    let Some(params) = find_parameters_at_span(parsed.syntax(), func_or_params_node.span()) else {
-        return Vec::new();
-    };
-    extract_parameters_from_ast(params, func_or_params_node.file)
-}
-
 /// Extracts all parameters in order from a `ruff_python_ast::Parameters` node.
 pub(super) fn extract_parameters_from_ast<'a>(
     params: &Parameters,
@@ -400,6 +385,21 @@ fn build_variadic_parameter<'a>(
         default_value_node: None,
         kind,
     }
+}
+
+/// Extracts all parameters in order from a Python `parameters` or `function_definition` node.
+#[cfg(test)]
+#[must_use]
+pub(super) fn extract_parameters<'a>(
+    func_or_params_node: &AstNode<'a>,
+) -> Vec<PythonParameterInfo<'a>> {
+    let Some(parsed) = func_or_params_node.file.py_module() else {
+        return Vec::new();
+    };
+    let Some(params) = find_parameters_at_span(parsed.syntax(), func_or_params_node.span()) else {
+        return Vec::new();
+    };
+    extract_parameters_from_ast(params, func_or_params_node.file)
 }
 
 /// Returns true if `decorators` include `@override`, which makes the decorated method's name

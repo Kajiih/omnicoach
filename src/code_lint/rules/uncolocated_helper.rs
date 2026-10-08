@@ -1,5 +1,5 @@
-//! Flags exclusive private helpers separated from their owning public function or method by
-//! unrelated definitions.
+//! Flags private helpers that are neither colocated right after their single public consumer nor
+//! placed in the trailing helper section at the end of the scope.
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
