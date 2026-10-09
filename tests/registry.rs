@@ -268,30 +268,21 @@ fn test_rule_files_use_rule_test() {
 /// Remove an entry when its case is split or renamed. Keep it only if `_and_` names a single
 /// concept (the `logical_and` operator).
 const GRANDFATHERED_AND_PASS_CASES: &[&str] = &[
-    "abstract_and_immutable_attributes",
     "class_and_function_scope_not_flagged",
     "class_and_method_exempt",
-    "class_body_public_and_private_annotations",
-    "dataclass_attrs_and_pydantic_base_model_exempt",
     "explained_rust_function_and_attributed_function",
     "immutable_literals_and_calls",
     "import_and_alias_exempt",
-    "index_and_count_require_sequence",
     "inherits_protocol_and_generic",
     "logical_and_inside_function_call",
     "mixed_collection_and_scalar_union_with_none",
-    "module_and_function_local_variables_ignored",
     "mutating_mapping_and_set_methods",
-    "nested_function_and_lambda_inside_method_not_entered",
     "nullable_parameters_and_attributes_not_flagged",
     "nullable_parameters_and_struct_fields_not_flagged",
-    "pydantic_and_attrs_and_slots_private_class_attributes_exempt",
-    "staticmethod_and_classmethod_exempt",
     "struct_and_fn_exempt",
     "subscript_and_slice_write",
     "trait_declaration_and_trait_impl_exempt",
     "typed_duration_and_unsuffixed",
-    "variadic_args_and_kwargs_exempt",
 ];
 
 /// Names of the `pass` cases in a rule file's `rule_test!` invocation.
