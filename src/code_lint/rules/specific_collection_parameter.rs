@@ -175,24 +175,24 @@ crate::test_utils::rule_test!(
                 collection_parameter_with_len => r"
                     from collections.abc import Collection
 
-                    def size(items: Collection[int]) -> int:
-                        return len(items)
+                    def average(items: Collection[float]) -> float:
+                        return sum(items) / len(items)
                 ",
 
                 collection_parameter_with_membership => r"
                     from collections.abc import Collection
 
-                    def has_one(items: Collection[int]) -> bool:
-                        return 1 in items
+                    def check_and_sum(items: Collection[int]) -> tuple[bool, int]:
+                        return (1 in items, sum(items))
                 ",
 
                 collection_parameter_with_truthiness_check => r"
                     from collections.abc import Collection
 
                     def total_or_zero(items: Collection[int]) -> int:
-                        if not items:
-                            return 0
-                        return sum(items)
+                        if items:
+                            return sum(items)
+                        return 0
                 ",
 
                 collection_parameter_with_multiple_passes => r"
@@ -210,11 +210,18 @@ crate::test_utils::rule_test!(
                         return list(reversed(items))
                 ",
 
-                index_and_count_require_sequence => r"
+                count_method_requires_sequence => r"
                     from collections.abc import Sequence
 
                     def occurrences(items: Sequence[int]) -> int:
-                        return items.count(0) + items.index(1)
+                        return items.count(0)
+                ",
+
+                index_method_requires_sequence => r"
+                    from collections.abc import Sequence
+
+                    def first_index(items: Sequence[int]) -> int:
+                        return items.index(1)
                 ",
 
                 indexing_requires_sequence => r"

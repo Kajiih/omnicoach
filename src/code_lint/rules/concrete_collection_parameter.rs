@@ -50,8 +50,7 @@ pub const RULE: CodeRule = CodeRule {
                 Dunder methods other than `__init__`, `__new__`, and `__call__`, methods on
                 `Protocol` or `ABC` classes, and functions decorated with `@override`, `@overload`,
                 `@abstractmethod`, `@fixture`, `@<function>.register`, or `@<property>.setter` are
-                exempt. String annotations and module aliases (`import typing as t`) are not
-                resolved."},
+                exempt. String annotations are not resolved."},
             why_is_this_bad: indoc::indoc! {r"
                 In Python's type system, `list`, `dict`, and `set` are invariant in their type
                 parameters and require a mutable concrete container at call sites. A function
@@ -157,6 +156,11 @@ crate::test_utils::rule_test!(
                     def process(
                         coords: tuple[int, ...],
                         flags: frozenset[str],
+                    ) -> None:
+                        pass
+                "#,
+                non_collection_builtin_types => r#"
+                    def process(
                         payload: bytes,
                         name: str,
                     ) -> None:
@@ -188,9 +192,18 @@ crate::test_utils::rule_test!(
                     def process(box: CustomBox[list[int]]) -> None:
                         pass
                 "#,
-                variadic_args_and_kwargs_exempt => r#"
-                    def process(*args: list[int], **kwargs: dict[str, int]) -> None:
+                variadic_args_exempt => r#"
+                    def process(*args: list[int]) -> None:
                         pass
+                "#,
+                variadic_kwargs_exempt => r#"
+                    def process(**kwargs: dict[str, int]) -> None:
+                        pass
+                "#,
+                receiver_parameter_exempt => r#"
+                    class CustomList:
+                        def clear_all(self: list[int]) -> None:
+                            pass
                 "#,
                 override_exempt => r#"
                     from typing import override

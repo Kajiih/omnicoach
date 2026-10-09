@@ -5,16 +5,25 @@ from __future__ import annotations
 from typing import NamedTuple
 
 AST = "src/code_lint/ast.rs"
+CONTRACT = "src/code_lint/contract.rs"
 POLICY = "src/code_lint/policy.rs"
 RUST = "src/code_lint/ast/rust.rs"
 PYTHON = "src/code_lint/ast/python.rs"
+ANNOTATIONS = "src/code_lint/ast/python/annotations.rs"
 CLASSES = "src/code_lint/ast/python/classes.rs"
 FORMAT_STRINGS = "src/code_lint/ast/python/format_strings.rs"
+FUNCTIONS = "src/code_lint/ast/python/functions.rs"
 PY_LITERALS = "src/code_lint/ast/python/literals.rs"
 LOGGING = "src/code_lint/ast/python/logging.rs"
+PARAMETER_USAGE = "src/code_lint/ast/python/parameter_usage.rs"
 STRINGS = "src/code_lint/ast/python/strings.rs"
+COMMENTS = "src/code_lint/semantic/comments.rs"
+CONCRETE_COLLECTION_ATTRIBUTE = "src/code_lint/rules/concrete_collection_attribute.rs"
+CONCRETE_COLLECTION_PARAMETER = "src/code_lint/rules/concrete_collection_parameter.rs"
+INLINE_PUBLIC_ATTRIBUTE_ANNOTATION = "src/code_lint/rules/inline_public_attribute_annotation.rs"
 QUOTE_WRAPPED = "src/code_lint/rules/quote_wrapped_placeholder.rs"
 REPEATED_LITERAL = "src/code_lint/rules/repeated_literal.rs"
+SPECIFIC_COLLECTION_PARAMETER = "src/code_lint/rules/specific_collection_parameter.rs"
 UNMATCHED_LOGGER = "src/code_lint/rules/unmatched_logger_placeholder.rs"
 
 INLINE_TEST_ALWAYS_FALSE = (

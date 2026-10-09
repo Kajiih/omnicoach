@@ -133,8 +133,8 @@ crate::test_utils::rule_test!(
     {
         Python => {
             pass: [
-                abstract_and_immutable_attributes => r#"
-                    from collections.abc import Mapping, MutableSequence, Sequence, Set as AbstractSet
+                abstract_read_only_attributes => r#"
+                    from collections.abc import Mapping, Sequence, Set as AbstractSet
                     from dataclasses import dataclass
 
                     @dataclass(frozen=True)
@@ -142,7 +142,15 @@ crate::test_utils::rule_test!(
                         hosts: Sequence[str]
                         limits: Mapping[str, int]
                         tags: AbstractSet[str]
-                        buffer: MutableSequence[int]
+                "#,
+                abstract_mutable_attributes => r#"
+                    from collections.abc import MutableSequence
+
+                    class Buffer:
+                        items: MutableSequence[int]
+                "#,
+                immutable_concrete_attributes => r#"
+                    class Point:
                         coords: tuple[int, ...]
                 "#,
                 unaliased_collections_abc_set_detected => r#"
@@ -163,9 +171,10 @@ crate::test_utils::rule_test!(
                         # Callers append pending job identifiers directly to this concrete list.
                         pending_jobs: list[str]
                 "#,
-                module_and_function_local_variables_ignored => r#"
+                module_variable_ignored => r#"
                     MODULE_ITEMS: list[int] = []
-
+                "#,
+                function_local_variable_ignored => r#"
                     def compute() -> None:
                         local_items: list[int] = [1, 2]
                 "#,

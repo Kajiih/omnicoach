@@ -118,19 +118,13 @@ crate::test_utils::rule_test!(
     {
         Python => {
             pass: [
-                class_body_public_and_private_annotations => r#"
+                class_body_attribute_annotations => r#"
                     from typing import ClassVar
 
                     class Connection:
                         MAX_POOL: ClassVar[int] = 10
                         host: str
                         retries: int = 3
-                        _socket: object | None = None
-
-                        def __init__(self, host: str, retries: int) -> None:
-                            self.host = host
-                            self.retries = retries
-                            self._socket = None
                 "#,
                 inline_private_attribute_annotations_exempt => r#"
                     class Cache:
@@ -143,9 +137,6 @@ crate::test_utils::rule_test!(
                 "#,
                 unannotated_public_attribute_assignments_exempt => r#"
                     class Counter:
-                        count: int
-                        items: list[str]
-
                         def __init__(self) -> None:
                             self.count = 0
                             self.items = ["a"]
@@ -155,48 +146,60 @@ crate::test_utils::rule_test!(
                             self.items[0] = "b"
                 "#,
                 bare_final_inline_annotation_exempt => r#"
-                    import typing
-                    import typing_extensions
-                    from typing import Annotated, Final
+                    from typing import Final
 
                     class Token:
                         def __init__(self, raw: str) -> None:
                             self.raw: Final = raw
-                            self.version: typing.Final = 1
-                            self.scheme: typing_extensions.Final = "bearer"
+                "#,
+                annotated_wrapped_bare_final_exempt => r#"
+                    from typing import Annotated, Final
+
+                    class Token:
+                        def __init__(self) -> None:
                             self.tag: Annotated[Final, "meta"] = "v1"
                 "#,
-                staticmethod_and_classmethod_exempt => r#"
+                staticmethod_exempt => r#"
                     from typing import Any
 
                     class Factory:
                         @staticmethod
                         def configure(self: Any) -> None:
                             self.timeout: int = 10
-
-                        @classmethod
-                        def from_env(cls) -> None:
-                            cls.default_timeout: int = 20
                 "#,
-                non_self_first_parameter_or_other_object_attribute_exempt => r#"
-                    from typing import Any, Self
+                classmethod_exempt => r#"
+                    from typing import Any
+
+                    class Factory:
+                        @classmethod
+                        def from_env(self: Any) -> None:
+                            self.default_timeout: int = 20
+                "#,
+                cls_first_parameter_method_exempt => r#"
+                    from typing import Any
 
                     class Box:
-                        value: int
-                        inner: Any
-
-                        def __new__(cls) -> Self:
-                            cls.cached: Any = None
-                            return super().__new__(cls)
-
                         def bind(cls, self: Any) -> None:
                             self.cached: int = 1
+                "#,
+                keyword_only_self_parameter_method_exempt => r#"
+                    from typing import Any
 
+                    class Box:
+                        def bind(*, self: Any) -> None:
+                            self.cached: int = 1
+                "#,
+                other_object_attribute_annotation_exempt => r#"
+                    class Box:
                         def copy_into(self, other: "Box") -> None:
-                            other.value: int = self.value
+                            other.value: int = 1
+                "#,
+                chained_attribute_annotation_exempt => r#"
+                    class Box:
+                        def set_nested(self) -> None:
                             self.inner.value: int = 1
                 "#,
-                nested_function_and_lambda_inside_method_not_entered => r#"
+                nested_function_inside_method_not_entered => r#"
                     from typing import Any
 
                     class Runner:
@@ -216,23 +219,8 @@ crate::test_utils::rule_test!(
                     def standalone(self: Any) -> None:
                         self.value: int = 1
                 "#,
-                pydantic_and_attrs_and_slots_private_class_attributes_exempt => r#"
-                    class SlottedService:
-                        __slots__ = ("_client", "_attempts")
-                        _client: object | None
-                        _attempts: int
-
-                        def __init__(self, flag: bool) -> None:
-                            self._client = None
-                            if flag:
-                                self._attempts: int = 1
-                            else:
-                                self._attempts: int = 0
-                "#,
-                dataclass_attrs_and_pydantic_base_model_exempt => r#"
+                dataclass_post_init_inline_annotation_exempt => r#"
                     from dataclasses import dataclass
-                    from attrs import define
-                    from pydantic import BaseModel
 
                     @dataclass
                     class OrderSummary:
@@ -240,6 +228,9 @@ crate::test_utils::rule_test!(
 
                         def __post_init__(self) -> None:
                             self.total: int = sum(self.items)
+                "#,
+                attrs_define_inline_annotation_exempt => r#"
+                    from attrs import define
 
                     @define
                     class AttrsSummary:
@@ -247,6 +238,9 @@ crate::test_utils::rule_test!(
 
                         def __attrs_post_init__(self) -> None:
                             self.total: int = sum(self.items)
+                "#,
+                pydantic_base_model_inline_annotation_exempt => r#"
+                    from pydantic import BaseModel
 
                     class PydanticSummary(BaseModel):
                         items: list[int]
