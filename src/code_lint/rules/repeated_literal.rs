@@ -239,15 +239,15 @@ crate::test_utils::rule_test!(
                     HOSTS = ["primary-db", "replica-db"]
                     connect("primary-db")
                 "#,
-                str_and_bytes_are_distinct => r#"
+                str_distinct_from_bytes => r#"
                     send("ping")
                     send(b"ping")
                 "#,
-                number_and_negation_are_distinct => r#"
+                number_distinct_from_negation => r#"
                     shift(42)
                     shift(-42)
                 "#,
-                raw_and_plain_strings_with_backslashes_are_distinct => r#"
+                raw_string_with_backslash_distinct_from_plain => r#"
                     re.split(r"a\nb", text)
                     text.split("a\nb")
                 "#,
@@ -380,19 +380,19 @@ crate::test_utils::rule_test!(
                     const HOSTS: &[&str] = &["primary-db", "replica-db"];
                     fn f() { connect("primary-db"); }
                 "#,
-                str_and_bytes_are_distinct => r#"
+                str_distinct_from_bytes => r#"
                     fn f() {
                         send("ping");
                         send(b"ping");
                     }
                 "#,
-                number_and_negation_are_distinct => r#"
+                number_distinct_from_negation => r#"
                     fn f() {
                         shift(42);
                         shift(-42);
                     }
                 "#,
-                raw_and_plain_strings_with_backslashes_are_distinct => r#"
+                raw_string_with_backslash_distinct_from_plain => r#"
                     fn f() {
                         split(r"a\tb");
                         split("a\tb");
@@ -407,10 +407,10 @@ crate::test_utils::rule_test!(
                     fn f() { connect("primary-db"); }
                 "#,
                 repeated_attribute_arguments => r#"
-                    #[cfg(feature = "cli")]
+                    #[deprecated(note = "use new_api")]
                     fn first() {}
 
-                    #[cfg(feature = "cli")]
+                    #[deprecated(note = "use new_api")]
                     fn second() {}
                 "#,
                 repeated_format_macro_arguments => r#"
@@ -430,9 +430,14 @@ crate::test_utils::rule_test!(
                         t.3 + t.3
                     }
                 "#,
+                tuple_field_positions_in_macros_are_not_literals => r#"
+                    fn f(t: (u32, u32, u32, u32)) -> Vec<u32> {
+                        vec![t.3, t.3]
+                    }
+                "#,
                 repeated_extern_abi => r#"
-                    extern "C" { fn first(); }
-                    extern "C" { fn second(); }
+                    extern "system" { fn first(); }
+                    extern "system" { fn second(); }
                 "#,
                 known_gap_values_inside_exempt_macros => r#"
                     fn f(status: &str) {

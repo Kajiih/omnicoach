@@ -442,65 +442,91 @@ crate::test_utils::rule_test!(
                 fstring_with_debug_equals => r#"
                     debug_text = f"Observed result '{value=}' during run"
                 "#,
-                plain_unformatted_string_and_docstring => r#"
+                docstring_with_placeholder_syntax => r#"
                     """Use '{name}' or '%s' as a template placeholder."""
+                "#,
+                plain_unformatted_string => r#"
                     template = "Invalid value '{name}' or '%s' in config"
                 "#,
-                awk_and_shell_strings => r#"
-                    command = "awk '{print $1}' input.txt"
+                non_identifier_braces_in_str_format => r#"
                     formatted_awk = "awk '{print $1}'".format()
                 "#,
                 zero_arg_logger_call => r#"
                     logger.info("Found literal '%s' token in input")
                 "#,
-                raw_and_byte_strings => r#"
+                raw_fstring => r#"
                     raw_fstring = rf"Invalid pattern '{pattern}' in regex"
+                "#,
+                raw_str_format => r#"
                     raw_format = r"Invalid pattern '{pattern}'".format(pattern=value)
+                "#,
+                byte_printf_string => r#"
                     byte_printf = b"Invalid token '%s' in stream" % raw_bytes
                 "#,
-                printf_already_percent_r_or_numeric => r#"
+                printf_non_s_conversion => r#"
                     repr_msg = "Invalid value '%r' in input" % value
                     int_msg = "Processed '%d' items in batch" % count
                     float_msg = "Observed ratio '%.2f' in run" % ratio
+                "#,
+                printf_s_with_format_specifier => r#"
+                    truncated_msg = "Invalid value '%.8s' in input" % value
+                "#,
+                printf_escaped_percent => r#"
                     escaped_pct = "Literal '%%s' in %s output" % name
                 "#,
-                str_format_escaped_braces_or_conversion => r#"
-                    escaped = "Literal '{{name}}' and '{other!r}' in output".format(other=value)
+                str_format_escaped_braces => r#"
+                    escaped = "Literal '{{name}}' in {other} output".format(other=value)
+                "#,
+                str_format_with_conversion => r#"
+                    converted = "Invalid '{other!r}' in output".format(other=value)
+                "#,
+                str_format_with_format_specifier => r#"
                     formatted = "Measured '{score:.2f}' points".format(score=1.5)
                 "#,
-                html_and_xml_attributes => r#"
+                html_attribute_quotes => r#"
                     link = f'<a href="{url}" title=\'{title}\'>Click here</a>'
                 "#,
-                json_toml_and_key_value_syntax => r#"
-                    json_text = f'{{"username": "{username}"}}'
+                key_equals_quoted_placeholder => r#"
                     toml_text = f'mode = "{mode}"'
+                "#,
+                cli_flag_attached_equals => r#"
                     cli_flag = f'--output="{output_path}"'
                 "#,
-                placeholder_inside_markdown_backticks => r#"
-                    hint = f"Set `mode = '{mode}'` in the configuration file"
-                    token_hint = f"Expected `'{token}'` in the input stream"
+                attached_colon_before_quote => r#"
+                    entry = f"Invalid key:'{value}' in input"
                 "#,
-                file_extension_and_host_port => r#"
+                placeholder_inside_markdown_backticks => r#"
+                    hint = f"Run `grep '{pattern}' file.txt` in the shell"
+                "#,
+                file_extension_after_closing_quote => r#"
                     filename = f"Loading module '{stem}'.py from disk"
+                "#,
+                colon_before_placeholder_after_closing_quote => r#"
                     endpoint = f"Connecting to '{host}':{port} now"
                 "#,
                 mismatched_quotes => r#"
                     mismatched = f"Invalid value '{value}\" in input"
                 "#,
-                escaped_braces_json_in_fstring_and_str_format => r#"
+                escaped_braces_json_in_fstring => r#"
                     fstring_json = f'{{"key": "{value}", "mode": 1}}'
-                    format_json = '{{"key": "{}"}}'.format(value)
                 "#,
-                concatenated_structured_prefix_in_str_format_and_logger => r#"
+                escaped_braces_json_in_str_format => r#"
+                    format_json = '{{"key": "{}", "mode": 1}}'.format(value)
+                "#,
+                concatenated_flag_prefix_in_str_format => r#"
                     format_flag = ("Pass --output=" "'{path}'").format(path=output_path)
-                    logger.info("Set `mode = " "'%s'` in config", mode)
+                "#,
+                concatenated_backtick_prefix_in_logger => r#"
+                    logger.info("Run `grep " "'%s' file.txt` in shell", pattern)
                 "#,
                 spaced_non_identifier_braces_in_str_format => r#"
                     spaced = "Invalid '{ name }' in input".format()
                 "#,
-                concatenated_flag_and_backtick_prefix_in_fstring => r#"
+                concatenated_flag_prefix_in_fstring => r#"
                     flag = "Pass --output=" f"'{output_path}'"
-                    code = "Run `mode = " f"'{mode}'` in config"
+                "#,
+                concatenated_backtick_prefix_in_fstring => r#"
+                    code = "Run `grep " f"'{pattern}' file.txt` in shell"
                 "#,
             ],
             fail: [
