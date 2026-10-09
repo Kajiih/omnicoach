@@ -90,7 +90,7 @@ Templates use a fixed vocabulary so the same thing has the same name in every me
 | Placeholder | Meaning | Rendered as |
 | :--- | :--- | :--- |
 | `{callee}` | The function, method or macro that was called | `` `{callee}()` `` or `` `{callee}!` `` |
-| `{caller}` | A function or method that calls or precedes `{function}` in the same scope | `` `{caller}` `` |
+| `{caller}` | A function or method that calls (or is expected to precede) `{function}` in the same scope | `` `{caller}` `` |
 | `{function}` | A function that is *defined* at the flagged site | `` `{function}` `` |
 | `{class}` | The class, struct, enum, trait, or implemented type at the flagged site | `` `{class}` `` |
 | `{name}` | An identifier being named (variable, parameter, field) | `` `{name}` `` |

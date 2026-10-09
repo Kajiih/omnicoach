@@ -32,7 +32,7 @@ In [ADR 006](../../../decisions/006_architectural_dag_and_conformance.md), Omni 
 Inside a single module, class, or inherent `impl` block, the **exact same three invariants** apply automatically without annotations, because **visibility modifiers and the intra-scope call graph already define the dependency DAG**:
 
 1. **Private-Subgraph Root Ownership (`Roots(h)`)**:
-   - Let `P` be the public entrypoints of a scope (exported functions/methods, constructors, or private functions directly referenced by exported constants `pub const RULE`, trait `impl`s, or `__main__` guards; if a scope has no public entrypoints, functions with in-degree 0 in the scope's DAG act as roots).
+   - Let `P` be the public entrypoints of a scope (exported functions/methods and `fn main` in Rust; non-`_` functions/methods and `__dunder__` methods in Python).
    - For each private helper `h`, define `Roots(h)` as the set of public entrypoints in `P` that can reach `h` **walking only through private helpers** (stopping at public boundaries so `pub_b -> pub_a -> _a1` keeps `_a1` exclusive to `pub_a`).
 2. **Why `Roots(h)` Beats Naive `LCOM4` Connected Components**:
    - In naive `LCOM4` (Hitz & Montazeri 1995), if `pub_a` calls exclusive helper `_a1`, `pub_b` calls exclusive helper `_b1`, and both call a low-level utility `_shared`, the undirected graph merges `pub_a` and `pub_b` into a single connected component—failing to detect `[pub_a, pub_b, _a1, _b1]`.
@@ -82,7 +82,7 @@ Inside a single module, class, or inherent `impl` block, the **exact same three 
 | **C5** | **`private-before-public-function`** *(cluster-aware)* | Python, Rust | **ADOPT (`Precision::Exact`, `Consensus::Opinionated`)**: Enforces that single-user helpers appear below their owning public entrypoint (`[pub_a, _a1, pub_b]` allowed) and shared helpers (`\|Roots(h)\| >= 2`) appear below all of their public callers (`pos(h) > max(Roots(h))`). |
 | **C6** | **`callee-before-caller`** *(`Private -> Private`)* | Python, Rust | **ADOPT (`Precision::Exact`, `Consensus::Opinionated`)**: Enforces top-down abstraction order (`caller` before `callee`) among private helpers (`Private -> Private`), exempting mutual recursion (SCCs) and `Public -> Public` peer entrypoints. Replaces bottom-up `call-before-definition`. |
 | **C7** | **`statement-after-main-guard`** | Python | **ADOPT (`Precision::Exact`, `Consensus::Unopinionated`, `ImpactedQuality::Reliability`)**: **99.1% compliant** in CPython (`217/219`). Catches runtime `NameError`s when a `def`/`class` declared below `if __name__ == "__main__":` is called from `main()` (which Ruff `F821` misses). |
-| **C8** | **File-wide `constant-after-function` / `use-after-item`** | Python, Rust | **REJECT**: Tested on Omni `src/`, file-wide `constant-after-function` would force feature-local constants (`LITERAL_EXEMPT_MACROS` in `ast/rust.rs:1254`, `MUTATING_METHODS` in `ast/python.rs:689`) 680–1,250 lines away from the only function cluster that uses them, actively hurting colocation. |
+| **C8** | **File-wide `constant-after-function` / `use-after-item`** | Python, Rust | **REJECT**: Tested on Omni `src/`, file-wide `constant-after-function` would force feature-local constants (`LITERAL_EXEMPT_MACROS` in `ast/rust.rs:1123`, `MUTATING_METHODS` in `ast/python.rs:653`) 650–1,120 lines away from the only function cluster that uses them, actively hurting colocation. |
 
 ---
 

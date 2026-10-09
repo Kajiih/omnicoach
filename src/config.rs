@@ -21,6 +21,72 @@ const DEFAULT_TEST_PATTERNS: &[&str] = &[
     "**/tests.rs",
 ];
 
+/// Configuration settings for path context detection (e.g. test paths).
+#[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct ContextConfig {
+    /// Glob patterns used to identify test files, compiled at load.
+    #[serde(
+        default = "default_test_patterns",
+        deserialize_with = "deserialize_test_patterns"
+    )]
+    pub test_patterns: globset::GlobSet,
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            test_patterns: default_test_patterns(),
+        }
+    }
+}
+
+/// Configuration settings resolved from `.omnilint.toml` by `rule_selection::parse_config`.
+#[derive(Debug, Default, Clone)]
+pub struct Config {
+    /// Rules disabled by `select` and `ignore`.
+    pub disabled_rules: HashSet<RuleName>,
+    /// Validated `[rules.<name>]` options, keyed by rule.
+    pub rule_overrides: HashMap<RuleName, RuleOverrides>,
+    /// Path context classifier settings.
+    pub context: ContextConfig,
+    /// Per-file rule ignores: glob patterns paired with the rules they disable.
+    pub per_file_ignores: Vec<(globset::GlobMatcher, HashSet<RuleName>)>,
+}
+
+impl Config {
+    /// Returns true if the given path matches any configured test pattern.
+    #[must_use]
+    pub fn is_test_path(&self, path: &Path) -> bool {
+        self.context
+            .test_patterns
+            .is_match(normalize_path_for_glob(path))
+    }
+
+    /// Returns true if the given rule is enabled in this configuration.
+    #[must_use]
+    pub fn is_rule_enabled(&self, rule: RuleName) -> bool {
+        !self.disabled_rules.contains(&rule)
+    }
+
+    /// Returns true if the given rule is enabled for a specific file path.
+    #[must_use]
+    pub fn is_rule_enabled_for_path(&self, rule: RuleName, path: &Path) -> bool {
+        if !self.is_rule_enabled(rule) {
+            return false;
+        }
+        if self.per_file_ignores.is_empty() {
+            return true;
+        }
+
+        let normalized = normalize_path_for_glob(path);
+        !self
+            .per_file_ignores
+            .iter()
+            .any(|(matcher, rules)| matcher.is_match(&normalized) && rules.contains(&rule))
+    }
+}
+
 /// Compiles `pattern` with `*` matching across `/`, as all config globs do.
 ///
 /// # Errors
@@ -55,39 +121,6 @@ fn compile_glob_set<'a>(
     builder.build()
 }
 
-/// Configuration settings for path context detection (e.g. test paths).
-#[derive(Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct ContextConfig {
-    /// Glob patterns used to identify test files, compiled at load.
-    #[serde(
-        default = "default_test_patterns",
-        deserialize_with = "deserialize_test_patterns"
-    )]
-    pub test_patterns: globset::GlobSet,
-}
-
-impl Default for ContextConfig {
-    fn default() -> Self {
-        Self {
-            test_patterns: default_test_patterns(),
-        }
-    }
-}
-
-/// Configuration settings resolved from `.omnilint.toml` by `rule_selection::parse_config`.
-#[derive(Debug, Default, Clone)]
-pub struct Config {
-    /// Rules disabled by `select` and `ignore`.
-    pub disabled_rules: HashSet<RuleName>,
-    /// Validated `[rules.<name>]` options, keyed by rule.
-    pub rule_overrides: HashMap<RuleName, RuleOverrides>,
-    /// Path context classifier settings.
-    pub context: ContextConfig,
-    /// Per-file rule ignores: glob patterns paired with the rules they disable.
-    pub per_file_ignores: Vec<(globset::GlobMatcher, HashSet<RuleName>)>,
-}
-
 fn normalize_path_for_glob(path: &Path) -> String {
     let relative = if path.is_absolute() {
         std::env::current_dir()
@@ -100,39 +133,6 @@ fn normalize_path_for_glob(path: &Path) -> String {
 
     let stripped = relative.strip_prefix("./").unwrap_or(relative);
     stripped.to_string_lossy().replace('\\', "/")
-}
-
-impl Config {
-    /// Returns true if the given path matches any configured test pattern.
-    #[must_use]
-    pub fn is_test_path(&self, path: &Path) -> bool {
-        self.context
-            .test_patterns
-            .is_match(normalize_path_for_glob(path))
-    }
-
-    /// Returns true if the given rule is enabled in this configuration.
-    #[must_use]
-    pub fn is_rule_enabled(&self, rule: RuleName) -> bool {
-        !self.disabled_rules.contains(&rule)
-    }
-
-    /// Returns true if the given rule is enabled for a specific file path.
-    #[must_use]
-    pub fn is_rule_enabled_for_path(&self, rule: RuleName, path: &Path) -> bool {
-        if !self.is_rule_enabled(rule) {
-            return false;
-        }
-        if self.per_file_ignores.is_empty() {
-            return true;
-        }
-
-        let normalized = normalize_path_for_glob(path);
-        !self
-            .per_file_ignores
-            .iter()
-            .any(|(matcher, rules)| matcher.is_match(&normalized) && rules.contains(&rule))
-    }
 }
 
 #[cfg(test)]

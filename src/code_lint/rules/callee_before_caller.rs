@@ -39,9 +39,11 @@ pub const RULE: CodeRule = CodeRule {
                 public APIs legitimately order either top-down (orchestrator before step) or
                 core-primitive-first (fundamental accessor before convenience wrapper).
                 Self-recursive and mutually recursive functions (Strongly Connected Components in
-                the scope's call graph) and cross-tier calls (`Public -> Private`, governed by
-                `private-before-public-function` and `uncolocated-helper`) are also exempt. Any
-                function already flagged by `private-before-public-function` or
+                the scope's call graph), cross-tier calls (`Public -> Private`, governed by
+                `private-before-public-function` and `uncolocated-helper`), calls from unrooted
+                private functions into rooted helpers, local variable or parameter shadowing, Rust
+                trait `impl` blocks, test files, and `#[cfg(test)]` / `#[test]` items are also
+                exempt. Any function already flagged by `private-before-public-function` or
                 `uncolocated-helper` is skipped so a misplaced helper is never reported twice."},
             why_is_this_bad: indoc::indoc! {r"
                 Unlike public entrypoints, a private helper exists solely as an internal
@@ -162,19 +164,22 @@ crate::test_utils::rule_test!(
                     def parse_batch(items: list[str]) -> list[str]:
                         return [parse_item(item) for item in items]
                 "#,
-                mutual_recursion_and_constructors_exempt => r#"
+                mutual_recursion_and_precedence_suppression_exempt => r#"
                     def _even(number: int) -> bool:
                         return True if number == 0 else _odd(number - 1)
 
                     def _odd(number: int) -> bool:
                         return False if number == 0 else _even(number - 1)
 
-                    class Buffer:
-                        def __init__(self, size: int) -> None:
-                            self.size = size
+                    class Pipeline:
+                        def _flagged_by_stage_one(self, raw: str) -> str:
+                            return raw.strip()
 
-                        def reset(self) -> None:
-                            self.__init__(0)
+                        def run(self, raw: str) -> str:
+                            return self._caller_below(raw)
+
+                        def _caller_below(self, raw: str) -> str:
+                            return self._flagged_by_stage_one(raw)
                 "#,
                 local_shadowing_and_exclusive_to_shared_calls_exempt => r#"
                     def action_one(raw: str) -> str:

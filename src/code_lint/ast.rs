@@ -977,6 +977,8 @@ fn analyze_callable_scope(scope: &CallableScope<'_>, out: &mut CachedCallCluster
                     && !flagged_p1_or_p2[caller]
                     && callables[caller].visibility == MethodVisibility::Private
                     && scc_id[caller] != scc_id[callee]
+                    // Do not let an unrooted private caller pull a rooted helper below its
+                    // public root's cluster.
                     && (!roots_of[caller].is_empty() || roots_of[callee].is_empty())
             })
             .max();
@@ -1012,7 +1014,7 @@ fn is_valid_helper_placement(
     };
     let is_just_after_owner = ((owner + 1)..pos).all(in_owner_cluster);
     let is_at_scope_end =
-        pos > last_pub_idx && ((owner + 1)..last_pub_idx).all(|mid| !in_owner_cluster(mid));
+        pos > last_pub_idx && ((owner + 1)..last_pub_idx).all(|mid| roots_of[mid] != *roots);
     is_just_after_owner || is_at_scope_end
 }
 

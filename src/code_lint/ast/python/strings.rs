@@ -60,6 +60,27 @@ pub(super) fn static_string_text(expr: &Expr) -> Option<String> {
     (!text.is_empty()).then(|| text.to_owned())
 }
 
+/// Finds all multiline string literals in a Python file that are not docstrings
+/// and not wrapped in an allowed call.
+#[must_use]
+pub(in crate::code_lint::ast) fn find_unwrapped_multiline_strings(
+    file: &ParsedFile,
+    is_allowed_wrapper: impl Fn(&str, &str) -> bool,
+) -> Vec<AstNode<'_>> {
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut finder = UnwrappedMultilineFinder {
+        file,
+        is_allowed_wrapper,
+        docstring_expr_span: None,
+        allowed_call_depth: 0,
+        out: Vec::new(),
+    };
+    finder.visit_body(&parsed.syntax().body);
+    finder.out
+}
+
 struct UnwrappedMultilineFinder<'a, F> {
     file: &'a ParsedFile,
     is_allowed_wrapper: F,
@@ -180,25 +201,4 @@ impl<'a, F: Fn(&str, &str) -> bool> SourceOrderVisitor<'a> for UnwrappedMultilin
             _ => walk_expr(self, expr),
         }
     }
-}
-
-/// Finds all multiline string literals in a Python file that are not docstrings
-/// and not wrapped in an allowed call.
-#[must_use]
-pub(in crate::code_lint::ast) fn find_unwrapped_multiline_strings(
-    file: &ParsedFile,
-    is_allowed_wrapper: impl Fn(&str, &str) -> bool,
-) -> Vec<AstNode<'_>> {
-    let Some(parsed) = file.py_module() else {
-        return Vec::new();
-    };
-    let mut finder = UnwrappedMultilineFinder {
-        file,
-        is_allowed_wrapper,
-        docstring_expr_span: None,
-        allowed_call_depth: 0,
-        out: Vec::new(),
-    };
-    finder.visit_body(&parsed.syntax().body);
-    finder.out
 }
