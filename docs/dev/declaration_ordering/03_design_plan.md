@@ -73,41 +73,43 @@ For every module scope (Python `ModModule`, Rust `SourceFile` / inline `ast::Mod
 
 - **Python (`src/code_lint/ast/python/classes.rs`)**:
   - Extracts scopes for:
-    1. `ModModule.body` (module-level functions),
+    1. `ModModule.body` (module-level functions, segmented whenever a non-overload, non-property function name is redefined),
     2. Each `StmtClassDef.body` (class methods, recursively visiting nested classes as independent scopes).
   - Groups `@overload` stubs and `@<prop>.getter` / `@<prop>.setter` / `@<prop>.deleter` accessors into a single `CallableItem` at the primary definition's position, merging calls made across all grouped bodies.
-  - Collects intra-scope calls inside each callable body (without descending into nested `def`, `class`, or `lambda` scopes for local assignments, while walking expressions inside the callable):
-    - In a **module scope**: bare `Expr::Call` with `func = Expr::Name(id)` where `id` is a sibling module-level function name and `id` is **not** bound as a parameter or local variable (`Assign`, `AnnAssign`, `AugAssign`, `For`, `With`, `NamedExpr`, `Import`, `ImportFrom`, `ExceptHandler`) in that function.
-    - In a **class scope**: `Expr::Call` with `func = Expr::Attribute { value: Expr::Name("self" | "cls" | <ClassName>), attr }` where `attr` is a sibling method name on the class (filtering out `self` if shadowed).
+  - Collects intra-scope calls inside each callable body (`ModuleRefVisitor` and `ClassMethodCallVisitor`):
+    - In a **module scope**: any load-context `Expr::Name(id)` referencing a sibling module-level function or bridging through a module-level `StmtClassDef` (`class_callees`, with per-method local bindings excluded), provided `id` is **not** bound locally (`collect_local_bound_names`: parameters, `Assign`, `AnnAssign`, `For`, `Named`, `Comprehension`, `WithItem`, `ExceptHandler`, `MatchCase`, `Import`, `ImportFrom`, or nested `FunctionDef`/`ClassDef`).
+    - In a **class scope**: any load-context `Expr::Attribute { value: Expr::Name("self" | "cls" | <ClassName>), attr }` where `attr` is a sibling method name on the class (filtering out shadowed receivers).
 
 - **Rust (`src/code_lint/ast/rust.rs`)**:
   - Extracts scopes for:
-    1. `ast::SourceFile` top-level `ast::Item::Fn` items and non-test inline `ast::Module` item lists, excluding any item inside `collect_inline_test_ranges` (`#[cfg(test)]` / `#[test]`).
+    1. `ast::SourceFile` top-level `ast::Item::Fn` items and non-test inline `ast::Module` item lists (segmented whenever a function name is redefined), excluding any item inside `collect_inline_test_ranges` (`#[cfg(test)]` / `#[test]`).
     2. Each inherent `ast::Impl` block (`impl_item.trait_().is_none()`), excluding `#[cfg(test)]` / `#[test]` items.
-  - Collects intra-scope calls inside each `ast::Fn` body (without descending into nested `ast::Item` definitions such as inner `fn` or `impl` blocks, while descending into closures and blocks):
+  - Collects intra-scope calls inside each `ast::Fn` body (without descending into nested `ast::Item` definitions such as inner `fn` or `impl` blocks, while descending into closures, blocks, and macro `token_tree`s):
     - In a **module scope**:
-      - `ast::CallExpr` whose callee is a single-segment `ast::PathExpr` (`foo(...)`) matching a sibling `fn` in the same module (not shadowed by a parameter or `let` binding in that `fn`), AND
-      - Single-segment `ast::PathExpr` references passed as function pointers (`check_file` in `CodeRule { check_file }` or `.map(helper)`) matching a sibling `fn` in the same module!
+      - `ast::PathExpr` references (`foo` or `self::foo`, both direct calls and function values) and macro `token_tree` identifiers matching a sibling `fn` in the same module (not shadowed by a parameter or local binding in that `fn`), AND
+      - Bridged references through module-local `ast::Impl` blocks (`collect_rust_impl_callees`, with per-method local bindings excluded).
     - In an **inherent `impl` scope**:
       - `ast::MethodCallExpr` where receiver is `self` (`self.helper(...)`) matching a sibling method in the `impl` block,
-      - `ast::CallExpr` where callee path is `Self::helper(...)` or `<TypeName>::helper(...)` matching a sibling method in the `impl` block, and
-      - `Self::helper` / `<TypeName>::helper` path references passed as function values (`Option::map(Self::helper)`).
+      - `Self::helper` / `<TypeName>::helper` path references (calls and function values) and macro `token_tree` tokens matching a sibling method in the `impl` block.
 
 ---
 
 ## 3. Per-Rule Specifications (The 7-Rule Suite)
 
-### 3.1 `field-after-method` (Python) — Already Implemented
+### 3.1 `field-after-method` (Python)
 - **File**: [src/code_lint/rules/field_after_method.rs](../../../src/code_lint/rules/field_after_method.rs)
 - **Summary**: `"Attribute `{name}` of `{class}` is declared after a method definition."`
+- **Named Exemptions**: `E1` (unannotated `Stmt::Assign` method aliases after `def`), `E2` (non-`Expr::Name` targets such as `cls.attr: int = 0`), `E3` (nested classes and method-local variable annotations).
 
-### 3.2 `associated-item-after-method` (Rust) — Already Implemented
+### 3.2 `associated-item-after-method` (Rust)
 - **File**: [src/code_lint/rules/associated_item_after_method.rs](../../../src/code_lint/rules/associated_item_after_method.rs)
 - **Summary**: `"Associated item `{name}` of `{class}` is declared after a `fn` item."`
+- **Named Exemptions**: `E1` (`AssocItem::MacroCall` invocations), `E2` (local `type`/`const` items inside `fn` bodies), `E3` (separate `impl` blocks and `#[cfg(test)]` / `#[test]` `fn` items).
 
-### 3.3 `constructor-after-method` (Python, Rust) — Already Implemented
+### 3.3 `constructor-after-method` (Python, Rust)
 - **File**: [src/code_lint/rules/constructor_after_method.rs](../../../src/code_lint/rules/constructor_after_method.rs)
 - **Summary**: `"Constructor `{function}` of `{class}` is defined after a non-constructor method."`
+- **Named Exemptions**: `E1` (multiple constructors at top of scope), `E2` (Python `@overload` constructor grouping), `E3` (nested classes), `E4` & `E5` (Rust private `fn new*`, `&self` methods, and `new_*` functions not returning `Self`), `E6` (`#[cfg(test)]` / `#[test]` methods), `E7` (Rust trait `impl`s and separate `impl` blocks).
 
 ### 3.4 `uncolocated-helper` (Python, Rust)
 - **File**: [src/code_lint/rules/uncolocated_helper.rs](../../../src/code_lint/rules/uncolocated_helper.rs)
@@ -120,9 +122,9 @@ For every module scope (Python `ModModule`, Rust `SourceFile` / inline `ast::Mod
   - `consensus`: `Consensus::Opinionated`
   - `impacted_quality`: `ImpactedQuality::Maintainability`
 - **`ViolationTemplate`**:
-  - `summary`: `"Private helper `{function}` is neither colocated after `{caller}` nor placed at the end of the scope."`
-  - `rationale`: `"Placing `{function}` between unrelated public functions instead of immediately after `{caller}` or in the trailing helper section fractures the scope's layout."`
-  - `suggestion`: `"Move `{function}` either immediately below `{caller}` (if single-use) or to the trailing private helper section after all public functions."`
+  - `summary`: `"Private helper `{function}` is separated from the helper cluster of `{caller}`."`
+  - `rationale`: `"Stranding `{function}` between unrelated public functions or splitting the helpers of `{caller}` between the inline cluster and the trailing helper section fractures the layout of the scope."`
+  - `suggestion`: `"Move `{function}` either immediately below `{caller}` (if single-use) or together with the helpers of `{caller}` into the trailing private helper section after all public functions."`
 - **`RuleDoc`**:
   - `summary`: `"Flags private helpers that are neither colocated right after their single public consumer nor placed in the trailing helper section at the end of the scope."`
 - **Diagnostic Anchor**: `&finding.name_node` with placeholders `[("function", &finding.function), ("caller", &finding.caller)]`.
@@ -183,6 +185,7 @@ For every module scope (Python `ModModule`, Rust `SourceFile` / inline `ast::Mod
   - `E4` (**Local variable / parameter shadowing**): Calls to a local variable or parameter that shadows a sibling function name (`check = ...; check()`) do not create a call edge to the sibling function.
   - `E5` (**Rust trait `impl` blocks and `#[cfg(test)]` / `#[test]` items**): Excluded.
 
-### 3.7 `statement-after-main-guard` (Python) — Already Implemented
+### 3.7 `statement-after-main-guard` (Python)
 - **File**: [src/code_lint/rules/statement_after_main_guard.rs](../../../src/code_lint/rules/statement_after_main_guard.rs)
 - **Summary**: `"Top-level statement appears after the `if __name__ == \"__main__\":` guard."`
+- **Named Exemptions**: `E1` (matches both `__name__ == "__main__"` and `"__main__" == __name__`), `E2` (`else` branch of the guard and subsequent `if __name__ == "__main__":` guards are not flagged), `E3` (non-`"__main__"` or `!=` comparisons on `__name__`), `E4` (nested `if __name__ == "__main__":` checks inside function or class bodies).

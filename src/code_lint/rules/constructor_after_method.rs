@@ -15,7 +15,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     suggestion: {
         base: "Move `{function}` above all non-constructor methods in `{class}`.",
         Python => "Move `{function}` to the top of `{class}`, before any regular methods.",
-        Rust => "Move `{function}` to the top of the `impl {class}` block, before any methods.",
+        Rust => "Move `{function}` to the top of the `impl {class}` block, before any non-constructor methods.",
     },
 };
 

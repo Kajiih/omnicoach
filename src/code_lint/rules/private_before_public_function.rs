@@ -46,10 +46,13 @@ pub const RULE: CodeRule = CodeRule {
                   above the last public entrypoint in the scope.
 
                 In Python, public functions and dunder methods (`__name__`) are public;
-                single-underscore (`_name`) and name-mangled (`__name`) names are private. In Rust,
-                items with a visibility qualifier (`pub`, `pub(crate)`, `pub(super)`, `pub(in ...)`)
-                or `fn main` are public; bare `fn` items are private. Together with
-                `uncolocated-helper` and `callee-before-caller`, this rule forms a disjoint
+                single-underscore (`_name`) and name-mangled (`__name`) names are private, and
+                `@overload` signatures and `@property` accessors (`getter`, `setter`, `deleter`)
+                are grouped at their first definition. In Rust, items with a visibility qualifier
+                (`pub`, `pub(crate)`, `pub(super)`, `pub(in ...)`) or `fn main` are public; bare
+                `fn` items are private. Scopes with only private functions, Rust trait `impl`
+                blocks, test files, and `#[cfg(test)]` / `#[test]` items are not checked. Together
+                with `uncolocated-helper` and `callee-before-caller`, this rule forms a disjoint
                 three-stage call-cluster check."},
             why_is_this_bad: indoc::indoc! {r"
                 A private helper is a lower-abstraction building block than the public entrypoint

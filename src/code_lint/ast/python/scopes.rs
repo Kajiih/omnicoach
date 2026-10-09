@@ -36,141 +36,6 @@ pub(in crate::code_lint::ast) fn collect_bindings(file: &ParsedFile) -> Vec<Bind
     visitor.bindings
 }
 
-struct BindingVisitor<'a> {
-    file: &'a ParsedFile,
-    bindings: Vec<Binding<'a>>,
-}
-
-impl<'a> SourceOrderVisitor<'a> for BindingVisitor<'a> {
-    fn visit_stmt(&mut self, statement: &'a Stmt) {
-        let file = self.file;
-        match statement {
-            Stmt::Assign(assign) => {
-                for target in &assign.targets {
-                    push_bindings(&mut self.bindings, BindingKind::Value, |out| {
-                        extract_from_expr_target(target, file, out);
-                    });
-                }
-                self.visit_expr(&assign.value);
-                return;
-            }
-            Stmt::AnnAssign(ann) => {
-                push_bindings(&mut self.bindings, BindingKind::Value, |out| {
-                    extract_from_expr_target(&ann.target, file, out);
-                });
-                self.visit_annotation(&ann.annotation);
-                if let Some(value) = &ann.value {
-                    self.visit_expr(value);
-                }
-                return;
-            }
-            Stmt::For(for_statement) => {
-                push_bindings(&mut self.bindings, BindingKind::Value, |out| {
-                    extract_from_expr_target(&for_statement.target, file, out);
-                });
-                self.visit_expr(&for_statement.iter);
-                self.visit_body(&for_statement.body);
-                self.visit_body(&for_statement.orelse);
-                return;
-            }
-            Stmt::FunctionDef(func_def) => {
-                let kind = if has_override_decorator(&func_def.decorator_list, file) {
-                    BindingKind::ContractMember
-                } else {
-                    BindingKind::StructuralDefinition
-                };
-                self.bindings.push(Binding {
-                    node: AstNode::from_span(file, span_from_ruff_range(func_def.name.range)),
-                    kind,
-                });
-            }
-            Stmt::ClassDef(class_def) => {
-                self.bindings.push(Binding {
-                    node: AstNode::from_span(file, span_from_ruff_range(class_def.name.range)),
-                    kind: BindingKind::StructuralDefinition,
-                });
-                push_bindings(&mut self.bindings, BindingKind::Value, |out| {
-                    extract_instance_attribute_declarations(class_def, file, out);
-                });
-            }
-            Stmt::Import(import_statement) => {
-                push_bindings(&mut self.bindings, BindingKind::Import, |out| {
-                    extract_from_import_aliases(&import_statement.names, file, out);
-                });
-                return;
-            }
-            Stmt::ImportFrom(import_from) => {
-                push_bindings(&mut self.bindings, BindingKind::Import, |out| {
-                    extract_from_import_aliases(&import_from.names, file, out);
-                });
-                return;
-            }
-            _ => {}
-        }
-        walk_stmt(self, statement);
-    }
-
-    fn visit_expr(&mut self, expr: &'a Expr) {
-        if let Expr::Named(named) = expr {
-            push_bindings(&mut self.bindings, BindingKind::Value, |out| {
-                extract_from_expr_target(&named.target, self.file, out);
-            });
-            self.visit_expr(&named.value);
-            return;
-        }
-        walk_expr(self, expr);
-    }
-
-    fn visit_parameters(&mut self, parameters: &'a Parameters) {
-        push_bindings(&mut self.bindings, BindingKind::Value, |out| {
-            extract_from_parameters(parameters, self.file, out);
-        });
-        walk_parameters(self, parameters);
-    }
-
-    fn visit_comprehension(&mut self, comprehension: &'a Comprehension) {
-        push_bindings(&mut self.bindings, BindingKind::Value, |out| {
-            extract_from_expr_target(&comprehension.target, self.file, out);
-        });
-        walk_comprehension(self, comprehension);
-    }
-
-    fn visit_with_item(&mut self, with_item: &'a WithItem) {
-        self.visit_expr(&with_item.context_expr);
-        if let Some(optional_vars) = &with_item.optional_vars {
-            push_bindings(&mut self.bindings, BindingKind::Value, |out| {
-                extract_from_expr_target(optional_vars, self.file, out);
-            });
-        }
-    }
-
-    fn visit_except_handler(&mut self, except_handler: &'a ExceptHandler) {
-        let ExceptHandler::ExceptHandler(handler) = except_handler;
-        if let Some(type_) = &handler.type_ {
-            self.visit_expr(type_);
-        }
-        if let Some(name) = &handler.name
-            && name.id.as_str() != "_"
-        {
-            self.bindings.push(Binding {
-                node: AstNode::from_span(self.file, span_from_ruff_range(name.range)),
-                kind: BindingKind::Value,
-            });
-        }
-        self.visit_body(&handler.body);
-    }
-
-    fn visit_match_case(&mut self, match_case: &'a MatchCase) {
-        push_bindings(&mut self.bindings, BindingKind::Value, |out| {
-            extract_from_match_pattern(&match_case.pattern, self.file, out);
-        });
-        if let Some(guard) = &match_case.guard {
-            self.visit_expr(guard);
-        }
-        self.visit_body(&match_case.body);
-    }
-}
-
 /// Collects all local variable, parameter, import, and nested-definition names bound directly
 /// inside `function_def` (without descending into nested `def` or `class` bodies).
 pub(super) fn collect_local_bound_names(
@@ -325,6 +190,141 @@ pub(super) fn parameters_shadow_name(parameters: &Parameters, parameter_name: &s
             .kwarg
             .as_ref()
             .is_some_and(|kwarg| kwarg.name.id.as_str() == parameter_name)
+}
+
+struct BindingVisitor<'a> {
+    file: &'a ParsedFile,
+    bindings: Vec<Binding<'a>>,
+}
+
+impl<'a> SourceOrderVisitor<'a> for BindingVisitor<'a> {
+    fn visit_stmt(&mut self, statement: &'a Stmt) {
+        let file = self.file;
+        match statement {
+            Stmt::Assign(assign) => {
+                for target in &assign.targets {
+                    push_bindings(&mut self.bindings, BindingKind::Value, |out| {
+                        extract_from_expr_target(target, file, out);
+                    });
+                }
+                self.visit_expr(&assign.value);
+                return;
+            }
+            Stmt::AnnAssign(ann) => {
+                push_bindings(&mut self.bindings, BindingKind::Value, |out| {
+                    extract_from_expr_target(&ann.target, file, out);
+                });
+                self.visit_annotation(&ann.annotation);
+                if let Some(value) = &ann.value {
+                    self.visit_expr(value);
+                }
+                return;
+            }
+            Stmt::For(for_statement) => {
+                push_bindings(&mut self.bindings, BindingKind::Value, |out| {
+                    extract_from_expr_target(&for_statement.target, file, out);
+                });
+                self.visit_expr(&for_statement.iter);
+                self.visit_body(&for_statement.body);
+                self.visit_body(&for_statement.orelse);
+                return;
+            }
+            Stmt::FunctionDef(func_def) => {
+                let kind = if has_override_decorator(&func_def.decorator_list, file) {
+                    BindingKind::ContractMember
+                } else {
+                    BindingKind::StructuralDefinition
+                };
+                self.bindings.push(Binding {
+                    node: AstNode::from_span(file, span_from_ruff_range(func_def.name.range)),
+                    kind,
+                });
+            }
+            Stmt::ClassDef(class_def) => {
+                self.bindings.push(Binding {
+                    node: AstNode::from_span(file, span_from_ruff_range(class_def.name.range)),
+                    kind: BindingKind::StructuralDefinition,
+                });
+                push_bindings(&mut self.bindings, BindingKind::Value, |out| {
+                    extract_instance_attribute_declarations(class_def, file, out);
+                });
+            }
+            Stmt::Import(import_statement) => {
+                push_bindings(&mut self.bindings, BindingKind::Import, |out| {
+                    extract_from_import_aliases(&import_statement.names, file, out);
+                });
+                return;
+            }
+            Stmt::ImportFrom(import_from) => {
+                push_bindings(&mut self.bindings, BindingKind::Import, |out| {
+                    extract_from_import_aliases(&import_from.names, file, out);
+                });
+                return;
+            }
+            _ => {}
+        }
+        walk_stmt(self, statement);
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if let Expr::Named(named) = expr {
+            push_bindings(&mut self.bindings, BindingKind::Value, |out| {
+                extract_from_expr_target(&named.target, self.file, out);
+            });
+            self.visit_expr(&named.value);
+            return;
+        }
+        walk_expr(self, expr);
+    }
+
+    fn visit_parameters(&mut self, parameters: &'a Parameters) {
+        push_bindings(&mut self.bindings, BindingKind::Value, |out| {
+            extract_from_parameters(parameters, self.file, out);
+        });
+        walk_parameters(self, parameters);
+    }
+
+    fn visit_comprehension(&mut self, comprehension: &'a Comprehension) {
+        push_bindings(&mut self.bindings, BindingKind::Value, |out| {
+            extract_from_expr_target(&comprehension.target, self.file, out);
+        });
+        walk_comprehension(self, comprehension);
+    }
+
+    fn visit_with_item(&mut self, with_item: &'a WithItem) {
+        self.visit_expr(&with_item.context_expr);
+        if let Some(optional_vars) = &with_item.optional_vars {
+            push_bindings(&mut self.bindings, BindingKind::Value, |out| {
+                extract_from_expr_target(optional_vars, self.file, out);
+            });
+        }
+    }
+
+    fn visit_except_handler(&mut self, except_handler: &'a ExceptHandler) {
+        let ExceptHandler::ExceptHandler(handler) = except_handler;
+        if let Some(type_) = &handler.type_ {
+            self.visit_expr(type_);
+        }
+        if let Some(name) = &handler.name
+            && name.id.as_str() != "_"
+        {
+            self.bindings.push(Binding {
+                node: AstNode::from_span(self.file, span_from_ruff_range(name.range)),
+                kind: BindingKind::Value,
+            });
+        }
+        self.visit_body(&handler.body);
+    }
+
+    fn visit_match_case(&mut self, match_case: &'a MatchCase) {
+        push_bindings(&mut self.bindings, BindingKind::Value, |out| {
+            extract_from_match_pattern(&match_case.pattern, self.file, out);
+        });
+        if let Some(guard) = &match_case.guard {
+            self.visit_expr(guard);
+        }
+        self.visit_body(&match_case.body);
+    }
 }
 
 /// Extracts the attribute names that `__init__` declares on its receiver: the first

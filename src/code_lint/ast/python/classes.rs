@@ -604,15 +604,25 @@ fn build_module_callable_scopes<'a>(
         let mut class_callees: HashMap<&str, Vec<usize>> = HashMap::new();
         for statement in module_body {
             if let Stmt::ClassDef(class_def) = statement {
-                let mut visitor = ModuleRefVisitor {
-                    fn_by_name: &fn_by_name,
-                    class_callees: &empty_classes,
-                    local_names: &empty_locals,
-                    callees: Vec::new(),
-                };
-                visitor.visit_body(&class_def.body);
-                if !visitor.callees.is_empty() {
-                    class_callees.insert(class_def.name.id.as_str(), visitor.callees);
+                let mut callees = Vec::new();
+                for class_statement in &class_def.body {
+                    let method_locals;
+                    let local_names = if let Stmt::FunctionDef(method_def) = class_statement {
+                        method_locals = collect_local_bound_names(method_def, file);
+                        &method_locals
+                    } else {
+                        &empty_locals
+                    };
+                    let mut visitor = ModuleRefVisitor {
+                        fn_by_name: &fn_by_name,
+                        class_callees: &empty_classes,
+                        local_names,
+                        callees: &mut callees,
+                    };
+                    visitor.visit_stmt(class_statement);
+                }
+                if !callees.is_empty() {
+                    class_callees.insert(class_def.name.id.as_str(), callees);
                 }
             }
         }
@@ -624,11 +634,12 @@ fn build_module_callable_scopes<'a>(
                 for def in &group.defs {
                     local_names.extend(collect_local_bound_names(def, file));
                 }
+                let mut callees = Vec::new();
                 let mut visitor = ModuleRefVisitor {
                     fn_by_name: &fn_by_name,
                     class_callees: &class_callees,
                     local_names: &local_names,
-                    callees: Vec::new(),
+                    callees: &mut callees,
                 };
                 for def in &group.defs {
                     visitor.visit_body(&def.body);
@@ -638,7 +649,7 @@ fn build_module_callable_scopes<'a>(
                     name: group.name,
                     visibility: group.visibility,
                     is_constructor: group.is_constructor,
-                    callees: visitor.callees,
+                    callees,
                 }
             })
             .collect();
@@ -653,7 +664,7 @@ struct ModuleRefVisitor<'map, 'local> {
     fn_by_name: &'map HashMap<String, usize>,
     class_callees: &'map HashMap<&'map str, Vec<usize>>,
     local_names: &'local HashSet<String>,
-    callees: Vec<usize>,
+    callees: &'local mut Vec<usize>,
 }
 
 impl SourceOrderVisitor<'_> for ModuleRefVisitor<'_, '_> {

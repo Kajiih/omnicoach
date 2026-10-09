@@ -11,9 +11,9 @@ use crate::rule_declaration::{
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Private helper `{function}` is neither colocated after `{caller}` nor placed at the end of the scope.",
-    rationale: "Placing `{function}` between unrelated public functions instead of immediately after `{caller}` or in the trailing helper section fractures the scope's layout.",
-    suggestion: "Move `{function}` either immediately below `{caller}` (if single-use) or to the trailing private helper section after all public functions.",
+    summary: "Private helper `{function}` is separated from the helper cluster of `{caller}`.",
+    rationale: "Stranding `{function}` between unrelated public functions or splitting the helpers of `{caller}` between the inline cluster and the trailing helper section fractures the layout of the scope.",
+    suggestion: "Move `{function}` either immediately below `{caller}` (if single-use) or together with the helpers of `{caller}` into the trailing private helper section after all public functions.",
 };
 
 /// The rule's declaration.
@@ -45,7 +45,11 @@ pub const RULE: CodeRule = CodeRule {
                 This supports both vertical-slice modules (`[pub_a, _a_helpers, pub_b, _b_helpers]`)
                 and public-first scopes (`[pub_a, pub_b, _a_helpers, _b_helpers, _shared_helpers]`),
                 while flagging helpers stranded in the middle of a scope between unrelated public
-                functions."},
+                functions. Uncalled private functions (`Roots(h) = empty`) and helpers declared
+                above a public caller are handled by `private-before-public-function`. Python
+                `@overload` signatures and `@property` accessors (`getter`, `setter`, `deleter`)
+                are grouped at their first definition; Rust trait `impl` blocks, test files, and
+                `#[cfg(test)]` / `#[test]` items are not checked."},
             why_is_this_bad: indoc::indoc! {r"
                 A private helper belongs either directly underneath the single public entrypoint it
                 implements (vertical slice) or in the trailing private implementation section at the
@@ -181,7 +185,7 @@ crate::test_utils::rule_test!(
                         return f"[{token}]"
 
                     def build_footer(raw: str) -> str:
-                        return _normalize_token(raw)
+                        return build_header(_normalize_token(raw))
 
                     def _normalize_token(raw: str) -> str:
                         return raw.strip()
@@ -217,6 +221,35 @@ crate::test_utils::rule_test!(
 
                         def _unused_hook(self) -> None:
                             pass
+
+                    class Pool:
+                        def __new__(cls, limit: int) -> "Pool":
+                            cls._check_limit(limit)
+                            return super().__new__(cls)
+
+                        def __init__(self, limit: int) -> None:
+                            self.limit = limit
+
+                        def acquire(self) -> int:
+                            return self.limit
+
+                        @staticmethod
+                        def _check_limit(limit: int) -> bool:
+                            return limit > 0
+                "#,
+                class_method_local_binding_does_not_bridge_module_helper => r#"
+                    class Formatter:
+                        def render(self, _strip_header: str) -> str:
+                            return _strip_header
+
+                    def format_header(raw: str) -> str:
+                        return _strip_header(raw)
+
+                    def _strip_header(raw: str) -> str:
+                        return raw.strip()
+
+                    def format_with_formatter(raw: str) -> str:
+                        return Formatter().render(raw)
                 "#,
             ],
             fail: [
@@ -298,13 +331,27 @@ crate::test_utils::rule_test!(
                     }
 
                     impl FrameParser {
+                        pub fn new() -> Self {
+                            Self::validate_seed();
+                            Self
+                        }
+
+                        pub fn with_capacity() -> Self {
+                            Self
+                        }
+
                         pub fn parse_first(&self, raw: &str) -> bool {
                             Self::check_first(raw)
                         }
 
+                        #[cfg(test)]
+                        fn test_only_helper() {}
+
                         pub fn parse_second(&self, raw: &str) -> usize {
                             raw.len()
                         }
+
+                        fn validate_seed() {}
 
                         fn check_first(raw: &str) -> bool {
                             !raw.is_empty()
