@@ -88,15 +88,15 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 source files; test files are not checked. In Python this covers `os.getenv`,
                 `os.putenv`, `os.unsetenv`, the `os.environ` methods `get`, `pop`, `setdefault`,
                 `update` and `clear`, and `os.environ[...]` subscripts, also when written as
-                `getenv` or `environ` after a `from os import`. In Rust it covers `std::env::var`,
-                `var_os`, `vars`, `vars_os`, `set_var` and `remove_var`, written with an
-                `std::env::` or `env::` prefix. The deny list configures the calls; Python
-                `environ[...]` subscripts are always checked. Access at module, class or `static`
-                scope is allowed, and so is the compile-time `env!` macro. Functions named
-                `from_env`, `from_environ` or `load_env`, and a `main` at the top level of the file,
-                are configuration boundaries: access inside them, including inside functions,
-                closures and lambdas nested in them, is not flagged. A method or `mod`-level
-                function named `main` is not a boundary."},
+                `getenv` or `environ` after a `from os import`. In Rust it covers  `std::env::var`,
+                `var_os`, `vars`, `vars_os`, `set_var` and `remove_var`, whether written with an
+                `std::env::` or `env::` prefix or imported directly. The deny list configures the
+                calls; Python `environ[...]` subscripts are always checked. Access at module, class
+                or `static` scope is allowed, and so is the compile-time `env!` macro. Functions
+                named `from_env`, `from_environ` or `load_env`, and a `main` at the top level of
+                the file, are configuration boundaries: access inside them, including inside
+                functions, closures and lambdas nested in them, is not flagged. A method or
+                `mod`-level function named `main` is not a boundary."},
             why_is_this_bad: indoc::indoc! {r"
                 A function that reads the environment depends on hidden global state: its signature
                 does not say what configuration it needs, and its behaviour changes with the process
@@ -217,7 +217,6 @@ fn non_exempt_function_name(enclosing_functions: &[EnclosingFunction]) -> Option
 ///
 /// Known limitation: a class declared inside a boundary whose methods escape (returned, registered)
 /// also inherits the exemption.
-// TODO: Should we make those hardcoded values constants/configurable?
 fn is_exempt_boundary_function(name: &str, is_top_level: bool) -> bool {
     match name {
         "from_env" | "from_environ" | "load_env" => true,

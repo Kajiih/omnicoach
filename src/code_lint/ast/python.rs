@@ -41,8 +41,6 @@ pub(super) use self::strings::find_unwrapped_multiline_strings;
 
 use self::annotations::{has_final_annotation_expr, is_bare_final_annotation_expr};
 use self::classes::is_protocol_or_abc_class;
-#[cfg(test)]
-use self::functions::extract_parameters;
 use self::functions::{
     direct_function_definitions, has_override_decorator, method_receiver_name_ast,
 };
@@ -53,8 +51,6 @@ use crate::code_lint::ast::{
     AstNode, EnclosingFunction, ParsedFile, span_from_ruff_range, with_innermost_function,
 };
 use crate::diagnostic::SourceSpan;
-#[cfg(test)]
-use ruff_python_ast::Parameters;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Decorator, ExceptHandler, Expr, ModModule, Stmt, StmtFunctionDef};
 use ruff_text_size::Ranged as _;
@@ -119,52 +115,6 @@ pub(super) fn find_expr_at_span(module: &ModModule, target_span: SourceSpan) -> 
 
     let mut finder = ExprFinder {
         target_span,
-        found: None,
-    };
-    finder.visit_body(&module.body);
-    finder.found
-}
-
-/// Finds the `Parameters` node in `module` matching `target_span` (either the `Parameters` span,
-/// the enclosing `StmtFunctionDef` span, or the first function's parameters when `target_span`
-/// spans the module).
-#[cfg(test)]
-pub(super) fn find_parameters_at_span(
-    module: &ModModule,
-    target_span: SourceSpan,
-) -> Option<&Parameters> {
-    struct ParamsFinder<'a> {
-        target_span: SourceSpan,
-        module_span: SourceSpan,
-        found: Option<&'a Parameters>,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for ParamsFinder<'a> {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if self.found.is_some() {
-                return;
-            }
-            if let Stmt::FunctionDef(func_def) = statement
-                && (span_from_ruff_range(func_def.range) == self.target_span
-                    || span_from_ruff_range(func_def.parameters.range) == self.target_span
-                    || self.target_span == self.module_span)
-            {
-                self.found = Some(&func_def.parameters);
-                return;
-            }
-            walk_stmt(self, statement);
-        }
-
-        fn visit_parameters(&mut self, parameters: &'a Parameters) {
-            if self.found.is_none() && span_from_ruff_range(parameters.range) == self.target_span {
-                self.found = Some(parameters);
-            }
-        }
-    }
-
-    let mut finder = ParamsFinder {
-        target_span,
-        module_span: span_from_ruff_range(module.range),
         found: None,
     };
     finder.visit_body(&module.body);
@@ -1080,8 +1030,7 @@ mod tests {
                 pass
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let func = &extract_function_signatures(&file)[0].node;
-        let params = extract_parameters(func);
+        let params = &extract_function_signatures(&file)[0].parameters;
 
         assert_eq!(params[0].kind, PythonParameterKind::Receiver);
         assert_eq!(params[1].kind, PythonParameterKind::Positional);
@@ -1096,8 +1045,7 @@ mod tests {
                 pass
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let func = &extract_function_signatures(&file)[0].node;
-        let params = extract_parameters(func);
+        let params = &extract_function_signatures(&file)[0].parameters;
 
         assert_eq!(params[1].name, "a");
         assert_eq!(params[1].type_text.as_deref(), Some("int"));
