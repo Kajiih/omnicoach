@@ -222,7 +222,7 @@ crate::test_utils::rule_test!(
         },
         Rust => {
             pass: [
-                top_down_module_and_impl_order => r#"
+                top_down_impl_order => r#"
                     pub struct Compiler;
 
                     impl Compiler {

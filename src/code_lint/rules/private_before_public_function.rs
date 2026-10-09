@@ -183,13 +183,16 @@ crate::test_utils::rule_test!(
                     def _second_internal(value: int) -> int:
                         return value + 1
                 "#,
-                property_accessors_and_overloads_grouped_at_first_definition => r#"
+                property_accessors_grouped_at_first_definition => r#"
                     from typing import overload
 
                     class Session:
                         @property
                         def token(self) -> str:
-                            return self._sanitize()
+                            return "ok"
+
+                        def _reset(self) -> None:
+                            pass
 
                         @overload
                         def token(self, value: str) -> None: ...
@@ -200,9 +203,6 @@ crate::test_utils::rule_test!(
                         @token.setter
                         def token(self, value: str | bytes) -> None:
                             pass
-
-                        def _sanitize(self) -> str:
-                            return "ok"
                 "#,
             ],
             fail: [

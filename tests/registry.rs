@@ -264,6 +264,98 @@ fn test_rule_files_use_rule_test() {
     }
 }
 
+/// `pass` case names containing `_and_` that predate [`test_pass_cases_test_one_behaviour`].
+/// Remove an entry when its case is split or renamed. Keep it only if `_and_` names a single
+/// concept (`str_and_bytes_are_distinct`, the `logical_and` operator).
+const GRANDFATHERED_AND_PASS_CASES: &[&str] = &[
+    "abstract_and_immutable_attributes",
+    "awk_and_shell_strings",
+    "class_and_function_scope_not_flagged",
+    "class_and_method_exempt",
+    "class_body_public_and_private_annotations",
+    "concatenated_flag_and_backtick_prefix_in_fstring",
+    "concatenated_structured_prefix_in_str_format_and_logger",
+    "dataclass_attrs_and_pydantic_base_model_exempt",
+    "escaped_braces_json_in_fstring_and_str_format",
+    "explained_rust_function_and_attributed_function",
+    "file_extension_and_host_port",
+    "html_and_xml_attributes",
+    "immutable_literals_and_calls",
+    "import_and_alias_exempt",
+    "index_and_count_require_sequence",
+    "inherits_protocol_and_generic",
+    "json_toml_and_key_value_syntax",
+    "logical_and_inside_function_call",
+    "mixed_collection_and_scalar_union_with_none",
+    "mixed_positional_and_matched_named_placeholder",
+    "module_and_function_local_variables_ignored",
+    "mutating_mapping_and_set_methods",
+    "nested_function_and_lambda_inside_method_not_entered",
+    "nullable_parameters_and_attributes_not_flagged",
+    "nullable_parameters_and_struct_fields_not_flagged",
+    "number_and_negation_are_distinct",
+    "plain_unformatted_string_and_docstring",
+    "positional_compound_attribute_and_subscript",
+    "positional_with_conversion_and_format_spec",
+    "pydantic_and_attrs_and_slots_private_class_attributes_exempt",
+    "raw_and_byte_strings",
+    "raw_and_plain_strings_with_backslashes_are_distinct",
+    "staticmethod_and_classmethod_exempt",
+    "str_and_bytes_are_distinct",
+    "struct_and_fn_exempt",
+    "subscript_and_slice_write",
+    "trait_declaration_and_trait_impl_exempt",
+    "typed_duration_and_unsuffixed",
+    "variadic_args_and_kwargs_exempt",
+];
+
+/// Names of the `pass` cases in a rule file's `rule_test!` invocation.
+fn pass_case_names(source: &str) -> Vec<&str> {
+    let mut in_pass_block = false;
+    let mut names = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed == "pass: [" {
+            in_pass_block = true;
+        } else if trimmed == "fail: [" {
+            in_pass_block = false;
+        } else if in_pass_block
+            && let Some((name, _)) = trimmed.split_once(" => ")
+            && !name.is_empty()
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// A `pass` case checks one behaviour, so a failing case name pinpoints the broken exemption
+/// (`rule_test!` "Writing cases"). `_and_` in a name usually means several exemptions in one case.
+#[test]
+fn test_pass_cases_test_one_behaviour() {
+    let mut seen = HashSet::new();
+    for (path, source) in &*RULE_SOURCES {
+        for name in pass_case_names(source) {
+            seen.insert(name);
+            assert!(
+                !name.contains("_and_") || GRANDFATHERED_AND_PASS_CASES.contains(&name),
+                "{} pass case `{name}` looks like several behaviours in one case; split it into \
+                 one case per exemption (see `rule_test!` \"Writing cases\")",
+                path.display()
+            );
+        }
+    }
+    for name in GRANDFATHERED_AND_PASS_CASES {
+        assert!(
+            seen.contains(name),
+            "`{name}` is no longer a pass case; remove it from GRANDFATHERED_AND_PASS_CASES"
+        );
+    }
+}
+
 /// The file name and the registry already carry a rule's name, so its module doc only describes it.
 #[test]
 fn test_rule_module_docs_do_not_repeat_the_rule_name() {

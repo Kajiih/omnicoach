@@ -14,7 +14,7 @@ The Rust items below are documented in Rustdoc: hover them in your IDE, or run `
 5. **Classify it.** Fill `Classification` using the yes/no tests of [tag_guide.md](tag_guide.md) §2. A new topic follows §4 and gets a row in the §5 table.
 6. **Document it.** Fill `RuleDoc`, with one executed `Example` per language. Contract: `RuleDoc` and `Example` in [documentation.rs](../../src/rule_declaration/documentation.rs). Doc summary wording: [naming_and_message_style_guide.md](naming_and_message_style_guide.md) §2.5.
 7. **Implement the check** through `code_lint::ast` / `code_lint::semantic` helpers; add a named helper there for any new structural fact. Contract: `CodeRule`.
-8. **Test it** with one `rule_test!` invocation at the end of the file. Contract and case-writing standards: `rule_test!` in [test_utils.rs](../../src/test_utils.rs).
+8. **Test it** with one `rule_test!` invocation at the end of the file. Contract and case-writing standards: `rule_test!` in [test_utils.rs](../../src/test_utils.rs). Map each named exemption to its dedicated `pass` case in [scripts/exemption_mutations.py](../../scripts/exemption_mutations.py) and run it; re-run it whenever the rule or its `ast` helpers change.
 9. **Verify.** The repository has no CI, so run all four; rustdoc lints (broken links) only run under `cargo doc`:
 
    ```bash

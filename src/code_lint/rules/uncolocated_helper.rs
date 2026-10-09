@@ -275,14 +275,17 @@ crate::test_utils::rule_test!(
                         def render(self, _strip_header: str) -> str:
                             return _strip_header
 
+                    def format_with_formatter(raw: str) -> str:
+                        return Formatter().render(raw)
+
                     def format_header(raw: str) -> str:
                         return _strip_header(raw)
 
                     def _strip_header(raw: str) -> str:
                         return raw.strip()
 
-                    def format_with_formatter(raw: str) -> str:
-                        return Formatter().render(raw)
+                    def format_footer(raw: str) -> str:
+                        return raw.rstrip()
                 "#,
             ],
             fail: [
