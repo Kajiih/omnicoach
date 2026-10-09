@@ -283,7 +283,22 @@ crate::test_utils::rule_test!(
                         }
                     }
                 "#,
-                private_new_helper_and_self_receiver_new_method_exempt => r#"
+                private_new_fn_exempt => r#"
+                    pub struct Builder {
+                        limit: usize,
+                    }
+
+                    impl Builder {
+                        pub fn limit(&self) -> usize {
+                            self.limit
+                        }
+
+                        fn new_internal() -> Self {
+                            Self { limit: 0 }
+                        }
+                    }
+                "#,
+                self_receiver_new_method_exempt => r#"
                     pub struct Builder {
                         limit: usize,
                     }
@@ -296,31 +311,25 @@ crate::test_utils::rule_test!(
                         pub fn new_child(&self) -> Self {
                             Self { limit: self.limit }
                         }
+                    }
+                "#,
+                new_fn_not_returning_self_exempt => r#"
+                    pub struct Builder {
+                        limit: usize,
+                    }
+
+                    impl Builder {
+                        pub fn limit(&self) -> usize {
+                            self.limit
+                        }
 
                         pub fn new_request_id() -> u64 {
                             1
                         }
-
-                        fn new_internal() -> Self {
-                            Self { limit: 0 }
-                        }
                     }
                 "#,
-                trait_impl_and_separate_impl_blocks_exempt => r#"
-                    pub trait Factory {
-                        fn run(&self);
-                        fn new() -> Self;
-                    }
-
+                separate_impl_blocks_checked_independently => r#"
                     pub struct Service;
-
-                    impl Factory for Service {
-                        fn run(&self) {}
-
-                        fn new() -> Self {
-                            Self
-                        }
-                    }
 
                     impl Service {
                         pub fn execute(&self) {}

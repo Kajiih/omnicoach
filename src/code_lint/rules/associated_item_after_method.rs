@@ -124,11 +124,20 @@ crate::test_utils::rule_test!(
                         }
                     }
                 "#,
-                macro_call_and_local_items_inside_fn_exempt => r#"
+                macro_call_after_fn_exempt => r#"
                     macro_rules! declare_marker {
                         () => {};
                     }
 
+                    pub struct Service;
+
+                    impl Service {
+                        pub fn run(&self) {}
+
+                        declare_marker!();
+                    }
+                "#,
+                local_items_inside_fn_exempt => r#"
                     pub struct Service;
 
                     impl Service {
@@ -137,11 +146,9 @@ crate::test_utils::rule_test!(
                             const STEP: LocalCount = 1;
                             STEP
                         }
-
-                        declare_marker!();
                     }
                 "#,
-                separate_impl_blocks_and_inline_test_fn_exempt => r#"
+                separate_impl_blocks_checked_independently => r#"
                     pub struct Buffer;
 
                     impl Buffer {
@@ -151,7 +158,8 @@ crate::test_utils::rule_test!(
                     impl Buffer {
                         pub const CAPACITY: usize = 64;
                     }
-
+                "#,
+                inline_test_fn_exempt => r#"
                     pub struct Reader;
 
                     impl Reader {

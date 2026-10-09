@@ -102,8 +102,19 @@ crate::test_utils::rule_test!(
 
                     if __name__ == "__main__":
                         run_server()
+                "#,
+                guard_else_branch_exempt => r#"
+                    if __name__ == "__main__":
+                        print("main")
                     else:
                         FALLBACK_PORT = 1
+                "#,
+                subsequent_main_guard_exempt => r#"
+                    if __name__ == "__main__":
+                        print("first")
+
+                    if __name__ == "__main__":
+                        print("second")
                 "#,
                 non_main_name_comparisons_exempt => r#"
                     if __name__ != "__main__":

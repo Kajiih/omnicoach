@@ -34,15 +34,14 @@ pub const RULE: CodeRule = CodeRule {
                 Checks module scopes, Python `class` definitions, and Rust inherent `impl` blocks
                 for private functions or methods declared before the public entrypoints they serve.
 
-                Using the scope's private-subgraph root ownership `Roots(h)`:
-                - A **single-user private helper** (`Roots(h) = {p}`) is flagged when declared
-                  above its owning public entrypoint `p`, and is allowed below `p` (either
-                  immediately after `p` or in the trailing private helper section after all public
-                  functions, as checked by `uncolocated-helper`).
-                - A **shared private helper** (`|Roots(h)| >= 2`) belongs to a lower abstraction
-                  layer than any single public entrypoint and is flagged when declared above any of
-                  its public callers (`pos(h) < max(Roots(h))`).
-                - An **unrooted private function** (`Roots(h) = empty`) is flagged when declared
+                A private helper's public callers are the public entrypoints that reach it,
+                directly or through other private helpers (the walk stops at public functions):
+                - A helper used by **one** public entrypoint is flagged when declared above it, and
+                  is allowed below it (either immediately after it or in the trailing private
+                  helper section after all public functions, as checked by `uncolocated-helper`).
+                - A helper **shared** by several public entrypoints belongs to a lower abstraction
+                  layer than any of them and is flagged when declared above any of them.
+                - A private function **no public entrypoint reaches** is flagged when declared
                   above the last public entrypoint in the scope.
 
                 In Python, public functions and dunder methods (`__name__`) are public;
@@ -53,7 +52,8 @@ pub const RULE: CodeRule = CodeRule {
                 `fn` items are private. Scopes with only private functions, Rust trait `impl`
                 blocks, test files, and `#[cfg(test)]` / `#[test]` items are not checked. Together
                 with `uncolocated-helper` and `callee-before-caller`, this rule forms a disjoint
-                three-stage call-cluster check."},
+                three-stage call-cluster check. Calls are resolved by name within the file,
+                assuming the code compiles (Rust) or type-checks (Python)."},
             why_is_this_bad: indoc::indoc! {r"
                 A private helper is a lower-abstraction building block than the public entrypoint
                 that calls it, and a helper shared across multiple public entrypoints is at a lower
@@ -159,29 +159,32 @@ crate::test_utils::rule_test!(
                 "#,
                 shared_helper_below_all_its_public_callers_allowed => r#"
                     class Formatter:
-                        def __init__(self, prefix: str) -> None:
-                            self.prefix = prefix
-
                         def format_title(self, text: str) -> str:
                             return self._normalize(text)
 
                         def format_summary(self, text: str) -> str:
                             return self._normalize(text)
 
-                        def __repr__(self) -> str:
-                            return self.prefix
-
                         def _normalize(self, text: str) -> str:
                             return text.strip()
                 "#,
-                property_accessors_and_private_only_scope_exempt => r#"
-                    from typing import overload
+                dunder_method_is_public => r#"
+                    class Formatter:
+                        def __repr__(self) -> str:
+                            return "Formatter"
 
+                        def format_title(self, text: str) -> str:
+                            return text
+                "#,
+                private_only_scope_exempt => r#"
                     def _first_internal(value: int) -> int:
                         return _second_internal(value)
 
                     def _second_internal(value: int) -> int:
                         return value + 1
+                "#,
+                property_accessors_and_overloads_grouped_at_first_definition => r#"
+                    from typing import overload
 
                     class Session:
                         @property
@@ -233,7 +236,26 @@ crate::test_utils::rule_test!(
         },
         Rust => {
             pass: [
-                colocated_units_and_restricted_visibility_allowed => r#"
+                colocated_exclusive_helper_between_public_methods_allowed => r#"
+                    pub struct SpanNode {
+                        offset: usize,
+                    }
+
+                    impl SpanNode {
+                        pub fn shifted(&self) -> usize {
+                            self.compute_shift()
+                        }
+
+                        fn compute_shift(&self) -> usize {
+                            self.offset + 1
+                        }
+
+                        pub fn raw_offset(&self) -> usize {
+                            self.offset
+                        }
+                    }
+                "#,
+                restricted_visibility_is_public => r#"
                     pub struct SpanNode {
                         offset: usize,
                     }
@@ -243,29 +265,17 @@ crate::test_utils::rule_test!(
                             Self { offset }
                         }
 
-                        pub fn shifted(&self) -> usize {
-                            self.compute_shift()
-                        }
-
-                        fn compute_shift(&self) -> usize {
-                            self.offset + 1
-                        }
-
                         pub(super) fn raw_offset(&self) -> usize {
                             self.offset
                         }
+
+                        pub fn shifted(&self) -> usize {
+                            self.offset + 1
+                        }
                     }
                 "#,
-                trait_impl_and_inline_test_exempt => r#"
-                    pub trait Handler {
-                        fn handle(&self);
-                    }
-
+                inline_test_fn_exempt => r#"
                     pub struct Worker;
-
-                    impl Handler for Worker {
-                        fn handle(&self) {}
-                    }
 
                     impl Worker {
                         /// Test-only helper method.

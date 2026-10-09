@@ -44,7 +44,9 @@ pub const RULE: CodeRule = CodeRule {
                 private functions into rooted helpers, local variable or parameter shadowing, Rust
                 trait `impl` blocks, test files, and `#[cfg(test)]` / `#[test]` items are also
                 exempt. Any function already flagged by `private-before-public-function` or
-                `uncolocated-helper` is skipped so a misplaced helper is never reported twice."},
+                `uncolocated-helper` is skipped so a misplaced helper is never reported twice.
+                Calls are resolved by name within the file, assuming the code compiles (Rust) or
+                type-checks (Python)."},
             why_is_this_bad: indoc::indoc! {r"
                 Unlike public entrypoints, a private helper exists solely as an internal
                 decomposition step of its callers. Defining private callees above their private
@@ -164,13 +166,14 @@ crate::test_utils::rule_test!(
                     def parse_batch(items: list[str]) -> list[str]:
                         return [parse_item(item) for item in items]
                 "#,
-                mutual_recursion_and_precedence_suppression_exempt => r#"
+                mutual_recursion_exempt => r#"
                     def _even(number: int) -> bool:
                         return True if number == 0 else _odd(number - 1)
 
                     def _odd(number: int) -> bool:
                         return False if number == 0 else _even(number - 1)
-
+                "#,
+                function_flagged_by_earlier_stage_not_reported_again => r#"
                     class Pipeline:
                         def _flagged_by_stage_one(self, raw: str) -> str:
                             return raw.strip()
@@ -181,22 +184,16 @@ crate::test_utils::rule_test!(
                         def _caller_below(self, raw: str) -> str:
                             return self._flagged_by_stage_one(raw)
                 "#,
-                local_shadowing_and_exclusive_to_shared_calls_exempt => r#"
-                    def action_one(raw: str) -> str:
-                        return _exclusive_one(raw)
+                local_binding_shadowing_exempt => r#"
+                    def evaluate(number: int) -> bool:
+                        return _check(number) and _validate(number)
 
-                    def _exclusive_one(raw: str) -> str:
-                        return _shared_leaf(raw)
+                    def _check(number: int) -> bool:
+                        return number > 0
 
-                    def action_two(raw: str) -> str:
-                        _exclusive_one = str.strip
-                        return _shared_caller(raw) if False else _exclusive_one(raw)
-
-                    def _shared_caller(raw: str) -> str:
-                        return _shared_leaf(raw)
-
-                    def _shared_leaf(raw: str) -> str:
-                        return raw.strip()
+                    def _validate(number: int) -> bool:
+                        _check = lambda value: value < 10
+                        return _check(number)
                 "#,
             ],
             fail: [
@@ -250,7 +247,11 @@ crate::test_utils::rule_test!(
                         }
                     }
                 "#,
-                mutual_recursion_and_local_binding_shadowing_exempt => r#"
+                mutual_recursion_exempt => r#"
+                    pub fn evaluate(n: usize) -> bool {
+                        is_even(n)
+                    }
+
                     fn is_even(n: usize) -> bool {
                         if n == 0 { true } else { is_odd(n - 1) }
                     }
@@ -258,10 +259,56 @@ crate::test_utils::rule_test!(
                     fn is_odd(n: usize) -> bool {
                         if n == 0 { false } else { is_even(n - 1) }
                     }
-
+                "#,
+                local_binding_shadowing_exempt => r#"
                     pub fn evaluate(n: usize) -> bool {
-                        let evaluate_shadow = |x: usize| x > 0;
-                        evaluate_shadow(n) && is_even(n)
+                        check(n) && validate(n)
+                    }
+
+                    fn check(n: usize) -> bool {
+                        n > 0
+                    }
+
+                    fn validate(n: usize) -> bool {
+                        let check = |value: usize| value < 10;
+                        check(n)
+                    }
+                "#,
+                trait_impl_exempt => r#"
+                    pub trait Codec {
+                        fn finish(&self) -> usize;
+                        fn encode(&self) -> usize;
+                    }
+
+                    pub struct Frame;
+
+                    impl Codec for Frame {
+                        fn finish(&self) -> usize {
+                            0
+                        }
+
+                        fn encode(&self) -> usize {
+                            self.finish()
+                        }
+                    }
+                "#,
+                macro_field_access_is_not_a_method_call => r#"
+                    pub struct Buffer {
+                        len: usize,
+                    }
+
+                    impl Buffer {
+                        pub fn describe(&self) -> String {
+                            self.render() + &self.len().to_string()
+                        }
+
+                        fn len(&self) -> usize {
+                            self.len
+                        }
+
+                        fn render(&self) -> String {
+                            format!("{}", self.len)
+                        }
                     }
                 "#,
             ],
@@ -275,6 +322,15 @@ crate::test_utils::rule_test!(
                         leaf_helper(input).len()
                     }
                 "# => "leaf_helper",
+                call_inside_macro_counts => r#"
+                    fn is_blank(input: &str) -> bool {
+                        input.trim().is_empty()
+                    }
+
+                    fn validate(input: &str) {
+                        assert!(!is_blank(input));
+                    }
+                "# => "is_blank",
                 impl_private_callee_before_private_caller => r#"
                     pub struct Lexer;
 
