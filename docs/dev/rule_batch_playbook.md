@@ -27,7 +27,7 @@
 
 - Workers may write their rule file in parallel, but **shared files are integrated one rule at a time by the lead**: `ast/python.rs`, `rules.rs`, `taxonomy.rs`, `tag_guide.md`, `tests/snapshots/cli__list_rules.snap`, [ROADMAP.md](../../ROADMAP.md).
 - After each integration run the full verification from [adding_a_rule.md](adding_a_rule.md) step 9, including self-dogfooding (`omni-code-lint .`), which caught naming violations in the new helpers.
-- **Mutation check per exemption.** Disable each named exemption in turn and confirm a test fails. Keep the harness in the lead's scratch space; the legacy batch killed 23/23.
+- **Mutation check per exemption.** Give each named exemption one dedicated `pass` case, add an entry for it to [scripts/exemption_mutations.py](../../scripts/exemption_mutations.py) (a source edit that disables the exemption, plus the case), and run the script. It also fails when a listed case no longer exists or a `pass` case of a covered rule is unlisted. Do not keep the harness in scratch space: the legacy harness was lost, and the declaration-order batch later found 7 cases that still passed with their exemption removed.
 - Know the harness: `rule_test!` also runs every `fail` case as `{code}\n{code}` in one module and expects exactly the two copies' spans. The second copy redefines every top-level name, so a rule that reasons about the other definitions in a scope (declaration order, redefinitions, same-name grouping) must plan for it in Phase 3. `call-before-definition` bent its semantics to pass (epochs), and a simpler same-name merge had to be reverted. Open design problem: "Rule test harness" in [ROADMAP.md](../../ROADMAP.md).
 
 ### 5. Consolidate (lead, new phase)
@@ -37,7 +37,7 @@ Parallel workers cannot see each other's helpers, so a consolidation pass is man
 1. Diff all new helpers and group them by structural fact.
 2. Merge duplicates into one helper per fact, reusing pre-existing helpers where they exist.
 3. Split modules that grew past readability (the legacy linter added ~2.4k lines to `ast/python.rs`).
-4. Re-run the mutation check: refactors can silently drop an exemption.
+4. Re-run `scripts/exemption_mutations.py`: refactors can silently drop an exemption or leave a case testing nothing.
 
 ### 6. Review (two reviewers, whole batch)
 
@@ -48,7 +48,7 @@ Parallel workers cannot see each other's helpers, so a consolidation pass is man
 
 ### 7. Learn (workers draft, lead edits)
 
-Each `07_learn.md` keeps only reusable lessons. Batch-level lessons go into this playbook. Before closing `06`/`07`, grep every backticked identifier against `src/` and recount the cases: docs drafted from worker reports named about 25 helpers and tests that did not exist.
+Each `07_learn.md` keeps only reusable lessons. Batch-level lessons go into this playbook. Before closing `06`/`07`, grep every backticked identifier against `src/` and recount the cases: docs drafted from worker reports named about 25 helpers and tests that did not exist, and the declaration-order batch repeated it. Cite test cases by name without the generated `case_N_` prefix, which shifts when cases are added, and do not copy the exemption-to-case table into docs: `scripts/exemption_mutations.py` is that table and checks it.
 
 ## Tooling constraints
 

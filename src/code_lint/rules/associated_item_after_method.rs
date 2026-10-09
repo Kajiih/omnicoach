@@ -95,7 +95,7 @@ crate::test_utils::rule_test!(
     {
         Rust => {
             pass: [
-                assoc_types_and_consts_before_methods => r#"
+                associated_items_before_methods => r#"
                     pub trait Codec {
                         type Input;
                         type Output;

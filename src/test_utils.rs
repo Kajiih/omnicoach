@@ -456,8 +456,9 @@ fn dummy_filename(lang: Language) -> &'static str {
 ///   suggestion (`pass`).
 /// - One behaviour per case (one banned pattern, one exemption, one construct), named after
 ///   it, so a failing case name pinpoints the regression.
-/// - An exemption `pass` case must be flagged if the exemption were removed; confirm once by
-///   disabling the exemption and watching the case fail.
+/// - An exemption `pass` case must be flagged if the exemption were removed. List it in
+///   `scripts/exemption_mutations.py` with the edit that disables the exemption, and re-run the
+///   script after changing the rule or its helpers: a one-off check goes stale.
 /// - An accepted false negative is a `pass` case named `known_gap_*` with a `ROADMAP.md`
 ///   entry, so fixing it forces the case to be updated.
 /// - Do not re-test option parsing or per-language resolution: `rule_declaration` tests it
