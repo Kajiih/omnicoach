@@ -1,7 +1,5 @@
 //! Python function signatures, parameter extraction, method receivers, and direct scope definitions.
 
-#[cfg(test)]
-use super::find_parameters_at_span;
 use super::{
     AstNode, DecoratorInfo, ParsedFile, extract_decorators_from_slice, is_protocol_or_abc_class,
     resolve_path_and_terminal_expr,
@@ -31,8 +29,6 @@ pub enum PythonParameterKind {
 /// Structured metadata for a Python parameter.
 #[derive(Clone)]
 pub struct PythonParameterInfo<'a> {
-    /// Full parameter AST node (`typed_parameter`, `default_parameter`, or `identifier`).
-    pub node: AstNode<'a>,
     /// Parameter identifier name.
     pub name: String,
     /// Parameter identifier AST node.
@@ -41,8 +37,6 @@ pub struct PythonParameterInfo<'a> {
     pub type_node: Option<AstNode<'a>>,
     /// Formatted type annotation text.
     pub type_text: Option<String>,
-    /// Default value expression AST node if present.
-    pub default_value_node: Option<AstNode<'a>>,
     /// Parameter classification kind.
     pub kind: PythonParameterKind,
 }
@@ -67,8 +61,6 @@ impl PythonParameterInfo<'_> {
 /// Structured representation of a Python function signature.
 #[derive(Clone)]
 pub struct PythonFunctionSignature<'a> {
-    /// The `function_definition` AST node.
-    pub node: AstNode<'a>,
     /// Function identifier AST node.
     pub name_node: AstNode<'a>,
     /// Function identifier name.
@@ -168,7 +160,6 @@ pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSigna
                     let decorators =
                         extract_decorators_from_slice(&func_def.decorator_list, self.file);
                     self.signatures.push(PythonFunctionSignature {
-                        node: AstNode::from_span(self.file, span_from_ruff_range(func_def.range)),
                         name_node: AstNode::from_span(
                             self.file,
                             span_from_ruff_range(func_def.name.range),
@@ -308,7 +299,6 @@ pub(super) fn extract_parameters_from_ast<'a>(
     }
 
     if let Some(vararg) = &params.vararg {
-        is_first_param = false;
         result.push(build_variadic_parameter(
             vararg,
             PythonParameterKind::VarPositional,
@@ -317,7 +307,6 @@ pub(super) fn extract_parameters_from_ast<'a>(
     }
 
     for param_with_default in &params.kwonlyargs {
-        let _ = is_first_param;
         result.push(build_parameter_with_default(
             param_with_default,
             PythonParameterKind::KeywordOnly,
@@ -348,18 +337,12 @@ fn build_parameter_with_default<'a>(
         .map(|ann| span_from_ruff_range(ann.range()));
     let type_text = type_span.map(|span| file.source[span.start..span.end].to_string());
     let type_node = type_span.map(|span| AstNode::from_span(file, span));
-    let default_value_node = param_with_default
-        .default
-        .as_ref()
-        .map(|def| AstNode::from_span(file, span_from_ruff_range(def.range())));
 
     PythonParameterInfo {
-        node: AstNode::from_span(file, span_from_ruff_range(param_with_default.range)),
         name: parameter.name.id.to_string(),
         name_node: AstNode::from_span(file, span_from_ruff_range(parameter.name.range)),
         type_node,
         type_text,
-        default_value_node,
         kind,
     }
 }
@@ -377,29 +360,12 @@ fn build_variadic_parameter<'a>(
     let type_node = type_span.map(|span| AstNode::from_span(file, span));
 
     PythonParameterInfo {
-        node: AstNode::from_span(file, span_from_ruff_range(parameter.range)),
         name: parameter.name.id.to_string(),
         name_node: AstNode::from_span(file, span_from_ruff_range(parameter.name.range)),
         type_node,
         type_text,
-        default_value_node: None,
         kind,
     }
-}
-
-/// Extracts all parameters in order from a Python `parameters` or `function_definition` node.
-#[cfg(test)]
-#[must_use]
-pub(super) fn extract_parameters<'a>(
-    func_or_params_node: &AstNode<'a>,
-) -> Vec<PythonParameterInfo<'a>> {
-    let Some(parsed) = func_or_params_node.file.py_module() else {
-        return Vec::new();
-    };
-    let Some(params) = find_parameters_at_span(parsed.syntax(), func_or_params_node.span()) else {
-        return Vec::new();
-    };
-    extract_parameters_from_ast(params, func_or_params_node.file)
 }
 
 /// Returns true if `decorators` include `@override`, which makes the decorated method's name

@@ -8,6 +8,7 @@ from . import (
     declaration_order,
     literals_and_placeholders,
     names,
+    positional_and_scopes,
     tests_cluster,
 )
 
@@ -18,4 +19,5 @@ CLUSTERS = (
     collection_types_2.CLUSTER,
     names.CLUSTER,
     tests_cluster.CLUSTER,
+    positional_and_scopes.CLUSTER,
 )
