@@ -15,14 +15,11 @@ const BANNED: ListOption = ListOption {
     doc: "Abbreviations flagged as a word of an identifier.",
     default: FilterListDefaults {
         base: &[
-            "err", "ctx", "cfg", "res", "msg", "str", "num", "btn", "cb", "ch", "diag", "ty",
-            "cat", "stmt", "ext", "fmt", "arch", "vis",
+            "err", "ctx", "cfg", "res", "msg", "num", "btn", "cb", "ch", "diag", "ty", "cat",
+            "stmt", "ext", "fmt", "arch", "vis",
         ],
         extend: &[],
-        // In Rust, `str` is a primitive type keyword rather than an abbreviation, and it is
-        // load-bearing in conventional conversion names (`as_str`, `to_str`, `from_str`).
-        // Hungarian `_str` type suffixes remain covered by type-suffixed-name.
-        remove: &[(Language::Rust, &["str"])],
+        remove: &[],
     },
 };
 
@@ -184,10 +181,10 @@ crate::test_utils::rule_test!(
                         pass
                 "#,
                 unaliased_import_statement_exempt => r#"
-                    import os
+                    import cfg
                 "#,
                 unaliased_from_import_exempt => r#"
-                    from os import path
+                    from os import error_msg
                 "#,
                 aliased_import_exempt => r#"
                     import os as os_cfg
@@ -231,10 +228,6 @@ crate::test_utils::rule_test!(
                 single_diagnostic_when_multiple_tokens_banned => r#"
                     err_msg = "failed"
                 "# => "err_msg",
-                str_banned_in_python => r#"
-                    def to_str():
-                        pass
-                "# => "to_str",
                 unannotated_method_flagged => r#"
                     class CustomDecoder:
                         def from_ctx(self, data: bytes) -> None:
@@ -263,21 +256,10 @@ crate::test_utils::rule_test!(
                     }
                 "#,
                 substring_containing_banned_token_allowed => r#"
-                    fn process(strategy: usize) {}
-                "#,
-                str_conversion_functions_exempt => r#"
-                    fn as_str() {}
-                    fn to_str() {}
-                    fn from_str() {}
-                "#,
-                str_prefix_binding_exempt => r#"
-                    fn run() {
-                        let str_buffer = 1;
-                    }
+                    fn process(strategy: usize, category: usize) {}
                 "#,
                 unaliased_imports_exempt => r#"
-                    use std::fmt::Result;
-                    use std::error::Error;
+                    use std::fmt;
                 "#,
                 aliased_import_exempt => r#"
                     use std::collections::HashMap as my_cfg;

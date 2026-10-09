@@ -138,7 +138,8 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
     }
 
     /// Emits a diagnostic with `("name", ...), ("suffix", ...), ("stem", ...)` for every
-    /// variable, constant, or parameter binding ending in one of the `banned` suffixes.
+    /// value binding (variable, constant, parameter, declared attribute, or struct field) ending
+    /// in one of the `banned` suffixes.
     #[must_use]
     pub fn check_banned_suffixes(
         &self,
@@ -146,8 +147,22 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
         file: &ParsedFile,
         banned: &HashSet<String>,
     ) -> Vec<Diagnostic> {
+        self.check_banned_suffixes_where(path, file, banned, |_| true)
+    }
+
+    /// Emits a diagnostic with `("name", ...), ("suffix", ...), ("stem", ...)` for every
+    /// value binding ending in one of the `banned` suffixes that satisfies `predicate`.
+    #[must_use]
+    pub fn check_banned_suffixes_where(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        banned: &HashSet<String>,
+        predicate: impl FnMut(&bindings::SuffixedBindingMatch<'_>) -> bool,
+    ) -> Vec<Diagnostic> {
         bindings::find_suffixed_bindings(file, banned)
             .into_iter()
+            .filter(predicate)
             .map(|matched| {
                 self.diagnostic_at_node(
                     path,

@@ -21,7 +21,8 @@ pub fn collect_renameable_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
         .collect()
 }
 
-/// A variable, constant, or parameter binding whose identifier ends with a matched suffix.
+/// A variable, constant, parameter, or attribute/field binding whose identifier ends with a
+/// matched suffix.
 pub struct SuffixedBindingMatch<'a> {
     /// The matched identifier AST node.
     pub node: AstNode<'a>,
@@ -33,12 +34,13 @@ pub struct SuffixedBindingMatch<'a> {
     pub base_name: String,
 }
 
-/// Finds all variable, constant, and parameter bindings in `file` whose name ends
-/// (case-insensitively) with any suffix in `banned_suffixes`.
+/// Finds all value bindings (variables, constants, parameters, declared Python attributes, and
+/// Rust struct fields) in `file` whose name ends (case-insensitively) with any suffix in
+/// `banned_suffixes`.
 ///
 /// Only [`BindingKind::Value`] bindings are considered: imports, structural definitions
-/// (functions, classes, structs, enums, traits), and trait/override contract names are skipped.
-/// Suffixes are evaluated longest-first for deterministic matching.
+/// (functions, classes, structs, enums, traits, type aliases), and trait/override contract names
+/// are skipped. Suffixes are evaluated longest-first for deterministic matching.
 #[must_use]
 pub fn find_suffixed_bindings<'a, S: std::hash::BuildHasher>(
     file: &'a ParsedFile,
