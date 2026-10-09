@@ -187,6 +187,7 @@ CLUSTER = Cluster(
                 (
                     "            if depth == AnnotationTraversalDepth::CovariantPositions\n"
                     "                && is_std_type_constructor_prefix(&base_path, &base_terminal)\n"
+                    "                && !is_concrete_collection_constructor(&base_path, &base_terminal)\n"
                     "            {",
                     "            if depth == AnnotationTraversalDepth::CovariantPositions {",
                 ),

@@ -25,7 +25,7 @@ pub const RULE: CodeRule = CodeRule {
         options: RuleOptions::code_rule(()),
         classification: Classification {
             topics: &[Topic::STATIC_TYPING],
-            precision: Precision::Exact,
+            precision: Precision::Heuristic,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Maintainability,
         },

@@ -35,7 +35,7 @@ pub const RULE: CodeRule = CodeRule {
         },
         classification: Classification {
             topics: &[Topic::STATIC_TYPING],
-            precision: Precision::Heuristic,
+            precision: Precision::Exact,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Maintainability,
         },
@@ -49,9 +49,9 @@ pub const RULE: CodeRule = CodeRule {
                 `typing.Set`, and the `collections` containers `defaultdict`, `deque`, `Counter`,
                 and `OrderedDict` with their `typing` aliases), including inside `ClassVar`,
                 `Final`, `Optional`, `Union`, `|`, and covariant containers. Unqualified `Set` is
-                exempt only when `from collections.abc import Set` is present in the file. Private
-                attributes starting with `_` and attributes on `Protocol` or `ABC` classes are not
-                flagged."},
+                resolved from the file's imports (`from typing import Set` is flagged;
+                `from collections.abc import Set` is exempt). Private attributes starting with `_`
+                and attributes on `Protocol` or `ABC` classes are not flagged."},
             why_is_this_bad: indoc::indoc! {r"
                 On a `@dataclass` or public class interface, annotating a field as
                 `items: list[str]` forces callers constructing the class to pass a concrete `list`

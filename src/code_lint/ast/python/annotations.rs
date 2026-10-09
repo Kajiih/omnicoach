@@ -200,8 +200,7 @@ pub(super) fn has_final_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> 
     let unwrapped = unwrap_annotated_expr(type_expr, file);
     let candidate =
         extract_generic_base_and_args(unwrapped).map_or(unwrapped, |(base_node, _)| base_node);
-    resolved_path_and_terminal_expr(candidate, file)
-        .is_some_and(|(_, terminal)| terminal == TYPE_FINAL)
+    resolve_path_and_terminal_expr(candidate, &file.source).1 == TYPE_FINAL
 }
 
 /// Returns true if `type_expr` is an unparameterized `Final` qualifier (`Final`, `typing.Final`,
@@ -279,6 +278,7 @@ fn collect_collection_types_expr(
 
             if depth == AnnotationTraversalDepth::CovariantPositions
                 && is_std_type_constructor_prefix(&base_path, &base_terminal)
+                && !is_concrete_collection_constructor(&base_path, &base_terminal)
             {
                 match base_terminal.as_str() {
                     terminal_name if SINGLE_ARG_COVARIANT_CONTAINERS.contains(&terminal_name) => {
