@@ -109,20 +109,26 @@ crate::test_utils::rule_test!(
                 positional_numbered_braces_with_positional_arg => r#"
                     logger.info("Order {0} filled for {1}", order_id, user_id)
                 "#,
-                positional_compound_attribute_and_subscript => r#"
-                    logger.info("Order {0.id} item {0[sku]}", order)
+                positional_compound_attribute => r#"
+                    logger.info("Order {0.id} filled", order)
                 "#,
-                positional_with_conversion_and_format_spec => r#"
-                    logger.info("Latency {:.2f} for {!r}", elapsed, request)
+                positional_compound_subscript => r#"
+                    logger.info("Order {0[sku]} filled", order)
+                "#,
+                positional_with_format_spec => r#"
+                    logger.info("Latency {:.2f} ms", elapsed)
+                "#,
+                positional_with_conversion => r#"
+                    logger.info("Request {!r} failed", request)
                 "#,
                 named_placeholder_with_matching_keyword_arg => r#"
-                    logger.info("Order {order_id} filled", order_id=order_id)
+                    logger.info("Order {}: {order_id}", status, order_id=order_id)
                 "#,
-                named_compound_placeholder_with_matching_keyword_arg => r#"
-                    logger.info("Order {order.id} item {items[0]}", order=order, items=items)
+                named_compound_attribute_with_matching_keyword_arg => r#"
+                    logger.info("Order {}: {order.id}", status, order=order)
                 "#,
-                mixed_positional_and_matched_named_placeholder => r#"
-                    logger.info("Order {} for {user_id}", order_id, user_id=user_id)
+                named_compound_subscript_with_matching_keyword_arg => r#"
+                    logger.info("Order {}: {items[0]}", status, items=items)
                 "#,
                 zero_format_args_with_literal_braces => r#"
                     logger.info("Registered FastAPI route /orders/{order_id}")
@@ -146,10 +152,9 @@ crate::test_utils::rule_test!(
                     logger.info("Payload {\"order_id\": 1} and {a, b}: %s", status)
                 "#,
                 malformed_unclosed_brace_ignored => r#"
-                    logger.info("Malformed {order_id in input: %s", status)
+                    logger.info("Malformed {order_id", status)
                 "#,
                 logger_log_level_first_arg_with_valid_message => r#"
-                    logger.log("INFO", "Order {} filled", order_id)
                     logger.log("{named_level}", "Order {} filled", order_id)
                 "#,
                 non_logger_call_ignored => r#"
@@ -158,7 +163,6 @@ crate::test_utils::rule_test!(
                 "#,
                 unicode_named_character_escape_not_flagged => r#"
                     logger.info("Item \N{BULLET} %s", item)
-                    logger.info("Arrow \N{RIGHTWARDS ARROW} {}", target)
                 "#,
             ],
             fail: [

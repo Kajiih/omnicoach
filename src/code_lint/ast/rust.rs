@@ -1172,7 +1172,7 @@ fn collect_literal_occurrences_rec<'a>(
     out: &mut Vec<LiteralOccurrence<'a>>,
 ) {
     let kind = node.kind();
-    if ast::Attr::can_cast(kind) || ast::Abi::can_cast(kind) {
+    if ast::Attr::can_cast(kind) {
         return;
     }
     if let Some(macro_call) = ast::MacroCall::cast(node.clone())
@@ -1187,23 +1187,30 @@ fn collect_literal_occurrences_rec<'a>(
             return;
         }
         let mut follows_minus = false;
+        let mut follows_dot = false;
         for element in node.children_with_tokens() {
             match element {
                 SyntaxElement::Node(child_node) => {
                     follows_minus = false;
+                    follows_dot = false;
                     collect_literal_occurrences_rec(&child_node, file, out);
                 }
                 SyntaxElement::Token(token) => {
                     if token.kind().is_trivia() {
                         continue;
                     }
-                    let is_signed_number = follows_minus
-                        && matches!(
-                            token.kind(),
-                            SyntaxKind::INT_NUMBER | SyntaxKind::FLOAT_NUMBER
-                        );
+                    let is_number = matches!(
+                        token.kind(),
+                        SyntaxKind::INT_NUMBER | SyntaxKind::FLOAT_NUMBER
+                    );
+                    let is_signed_number = follows_minus && is_number;
+                    let is_tuple_field = follows_dot && is_number;
                     follows_minus = token.kind() == SyntaxKind::MINUS;
-                    if !is_signed_number && let Some(value) = token_literal_value(&token) {
+                    follows_dot = token.kind() == SyntaxKind::DOT;
+                    if !is_signed_number
+                        && !is_tuple_field
+                        && let Some(value) = token_literal_value(&token)
+                    {
                         out.push(LiteralOccurrence {
                             node: AstNode::from_span(
                                 file,
@@ -1215,12 +1222,6 @@ fn collect_literal_occurrences_rec<'a>(
                     }
                 }
             }
-        }
-        return;
-    }
-    if let Some(field_expr) = ast::FieldExpr::cast(node.clone()) {
-        if let Some(receiver) = field_expr.expr() {
-            collect_literal_occurrences_rec(receiver.syntax(), file, out);
         }
         return;
     }
