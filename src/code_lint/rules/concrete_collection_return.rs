@@ -49,10 +49,11 @@ pub const RULE: CodeRule = CodeRule {
                 `OrderedDict` with their `typing` aliases), either at the top level or inside
                 transparent wrappers (`|`, `Optional`, `Union`, `Annotated`) and covariant container
                 positions (`Sequence[list[T]]`, `Mapping[K, list[V]]`, `Awaitable[list[T]]`).
-                Unqualified `Set` is exempt only when `from collections.abc import Set` is present
-                in the file. Dunder methods other than `__init__`, `__new__`, and `__call__`,
-                methods on `Protocol` or `ABC` classes, and functions decorated with `@override`,
-                `@overload`, `@abstractmethod`, `@fixture`, or `@<function>.register` are exempt."},
+                Unqualified `Set` is resolved from the file's imports (`from typing import Set` is
+                flagged; `from collections.abc import Set` is exempt). Dunder methods other than
+                `__init__`, `__new__`, and `__call__`, methods on `Protocol` or `ABC` classes, and
+                functions decorated with `@override`, `@overload`, `@abstractmethod`, `@fixture`,
+                or `@<function>.register` are exempt."},
             why_is_this_bad: indoc::indoc! {r"
                 Returning a concrete `list`, `dict`, or `set` exposes internal state to in-place
                 caller mutation and locks the implementation into returning an invariant mutable

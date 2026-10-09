@@ -242,7 +242,9 @@ pub fn collect_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotatedAttribu
                 }
 
                 for function_def in direct_function_definitions(&class_def.body) {
-                    if function_def.name.id == "__init__" {
+                    if function_def.name.id == "__init__"
+                        && method_receiver_name_ast(function_def, false, self.file).is_some()
+                    {
                         for (_, attr_name, type_expr) in
                             collect_self_annotated_assignments(&function_def.body)
                         {
@@ -290,12 +292,7 @@ fn collect_mutated_class_attr_names(body: &[Stmt], class_name: &str) -> HashSet<
             match statement {
                 Stmt::ClassDef(_) => return,
                 Stmt::AugAssign(aug) => {
-                    let receiver = if let Expr::Subscript(sub) = aug.target.as_ref() {
-                        sub.value.as_ref()
-                    } else {
-                        aug.target.as_ref()
-                    };
-                    record_mutated_class_receiver(receiver, self.class_name, &mut self.out);
+                    record_mutated_class_receiver(&aug.target, self.class_name, &mut self.out);
                 }
                 _ => {}
             }
@@ -457,12 +454,17 @@ fn is_field_synthesizing_class(class_def: &StmtClassDef, file: &ParsedFile) -> b
                     | "define"
                     | "frozen"
                     | "mutable"
+                    | "s"
+                    | "attrs"
                     | "attr.s"
                     | "attr.attrs"
                     | "attr.dataclass"
                     | "attrs.define"
                     | "attrs.frozen"
                     | "attrs.mutable"
+                    | "attrs.s"
+                    | "attrs.attrs"
+                    | "attrs.dataclass"
             )
         });
     has_field_decorator

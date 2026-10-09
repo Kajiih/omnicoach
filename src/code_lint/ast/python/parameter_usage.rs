@@ -219,6 +219,7 @@ impl<'a> ParameterUseVisitor<'a> {
             Expr::Name(func_name) => match func_name.id.as_str() {
                 BUILTIN_LEN => Some(UseRole::Sized),
                 BOOL_CONSTRUCTOR => Some(UseRole::Truthiness),
+                "min" | "max" if call.arguments.args.len() > 1 => None,
                 name if is_single_pass_iterable_builtin(name) => Some(UseRole::Iterated),
                 name if is_safe_readonly_builtin(name) => Some(UseRole::Read),
                 _ => None,
@@ -365,6 +366,9 @@ impl<'a> SourceOrderVisitor<'a> for ParameterUseVisitor<'a> {
     fn visit_expr(&mut self, expr: &'a Expr) {
         match expr {
             Expr::Name(name) => self.record(name.id.as_str(), UseRole::Escape),
+            Expr::YieldFrom(yield_from) => {
+                self.visit_expr_as(&yield_from.value, UseRole::Iterated);
+            }
             Expr::Lambda(lambda) => {
                 if let Some(parameters) = &lambda.parameters {
                     self.visit_parameters(parameters);
@@ -457,6 +461,11 @@ mod tests {
     #[case::single_consuming_builtin(
         "def f(x):\n    return sum(x)",
         ParameterCollectionCapability::Iterable
+    )]
+    #[case::yield_from("def f(x):\n    yield from x", ParameterCollectionCapability::Iterable)]
+    #[case::multi_arg_min_escapes(
+        "def f(x, y):\n    return min(x, y, key=len)",
+        ParameterCollectionCapability::Sequence
     )]
     #[case::len(
         "def f(x):\n    return len(x)",

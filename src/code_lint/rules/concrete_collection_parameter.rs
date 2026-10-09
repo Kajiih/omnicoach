@@ -44,13 +44,14 @@ pub const RULE: CodeRule = CodeRule {
                 top level or inside transparent wrappers (`|`, `Optional`, `Union`, `Annotated`) and
                 covariant container positions (`Sequence[list[T]]`, `Mapping[K, list[V]]`,
                 `tuple[...]`, `Awaitable[...]`, and `Callable` return types). Unqualified `Set` is
-                exempt only when `from collections.abc import Set` is present in the file.
-                Contravariant `Callable` parameter lists and the type arguments of invariant
-                containers (`list`, `dict`, `MutableSequence`, `MutableMapping`) are not inspected.
-                Dunder methods other than `__init__`, `__new__`, and `__call__`, methods on
-                `Protocol` or `ABC` classes, and functions decorated with `@override`, `@overload`,
-                `@abstractmethod`, `@fixture`, `@<function>.register`, or `@<property>.setter` are
-                exempt. String annotations are not resolved."},
+                resolved from the file's imports (`from typing import Set` is flagged;
+                `from collections.abc import Set` is exempt). Contravariant `Callable` parameter
+                lists and the type arguments of invariant containers (`list`, `dict`,
+                `MutableSequence`, `MutableMapping`) are not inspected. Dunder methods other than
+                `__init__`, `__new__`, and `__call__`, methods on `Protocol` or `ABC` classes, and
+                functions decorated with `@override`, `@overload`, `@abstractmethod`, `@fixture`,
+                `@<function>.register`, or `@<property>.setter` are exempt. String annotations are
+                not resolved."},
             why_is_this_bad: indoc::indoc! {r"
                 In Python's type system, `list`, `dict`, and `set` are invariant in their type
                 parameters and require a mutable concrete container at call sites. A function
@@ -71,15 +72,15 @@ pub const RULE: CodeRule = CodeRule {
             examples: &[Example {
                 language: Language::Python,
                 flagged: indoc::indoc! {r"
-                    def total_cents(prices: list[int]) -> int:
-                        return sum(prices)
+                    def first_price_cents(prices: list[int]) -> int:
+                        return prices[0]
                 "},
                 flagged_span: "list[int]",
                 fixed: indoc::indoc! {r"
                     from collections.abc import Sequence
 
-                    def total_cents(prices: Sequence[int]) -> int:
-                        return sum(prices)
+                    def first_price_cents(prices: Sequence[int]) -> int:
+                        return prices[0]
                 "},
             }],
         },
