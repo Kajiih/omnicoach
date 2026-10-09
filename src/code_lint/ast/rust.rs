@@ -421,20 +421,13 @@ pub fn has_top_level_logical_and(macro_node: &AstNode<'_>) -> bool {
 /// Returns true if `token_tree` has a direct `&&` operator among its children.
 fn token_tree_has_direct_logical_and(token_tree: &ast::TokenTree) -> bool {
     let elements: Vec<_> = token_tree.syntax().children_with_tokens().collect();
-    for (index, element) in elements.iter().enumerate() {
-        if let SyntaxElement::Token(token) = element {
-            if token.kind() == SyntaxKind::AMP2 {
-                return true;
-            }
-            if token.kind() == SyntaxKind::AMP
-                && let Some(SyntaxElement::Token(next)) = elements.get(index + 1)
-                && next.kind() == SyntaxKind::AMP
-            {
-                return true;
-            }
-        }
-    }
-    false
+    elements.windows(2).any(|pair| {
+        matches!(
+            pair,
+            [SyntaxElement::Token(first), SyntaxElement::Token(second)]
+                if first.kind() == SyntaxKind::AMP && second.kind() == SyntaxKind::AMP
+        )
+    })
 }
 
 /// Extracts the argument nodes inside a Rust `macro_invocation`'s `token_tree`.
@@ -454,39 +447,22 @@ pub fn extract_macro_arguments<'a>(macro_node: &AstNode<'a>) -> Vec<AstNode<'a>>
         .collect()
 }
 
-/// Returns true if `node` is a Rust tuple, array, or parenthesized macro `token_tree` consisting
-/// solely of `>= 2` boolean literals (`true` / `false`).
+/// Returns true if `node` is a Rust macro argument `token_tree` (tuple, array, or parenthesized
+/// group) consisting solely of `>= 2` boolean literals (`true` / `false`).
 #[must_use]
 pub fn is_boolean_literal_collection(node: &AstNode<'_>) -> bool {
-    if let Some(token_tree) = cast_at_span::<ast::TokenTree>(node) {
-        let items = meaningful_token_tree_elements(&token_tree);
-        return items.len() >= 2
-            && items.iter().all(|item| {
-                matches!(
-                    item,
-                    SyntaxElement::Token(token)
-                        if matches!(token.kind(), SyntaxKind::TRUE_KW | SyntaxKind::FALSE_KW)
-                )
-            });
-    }
-    if let Some(array_expr) = cast_at_span::<ast::ArrayExpr>(node) {
-        let elements: Vec<_> = array_expr.exprs().collect();
-        return elements.len() >= 2 && elements.iter().all(is_boolean_literal_expr);
-    }
-    if let Some(tuple_expr) = cast_at_span::<ast::TupleExpr>(node) {
-        let elements: Vec<_> = tuple_expr.fields().collect();
-        return elements.len() >= 2 && elements.iter().all(is_boolean_literal_expr);
-    }
-    false
-}
-
-/// Returns true if `expression` is a boolean literal (`true` or `false`).
-fn is_boolean_literal_expr(expression: &ast::Expr) -> bool {
-    matches!(
-        expression,
-        ast::Expr::Literal(literal)
-            if matches!(literal.kind(), ast::LiteralKind::Bool(_))
-    )
+    let Some(token_tree) = cast_at_span::<ast::TokenTree>(node) else {
+        return false;
+    };
+    let items = meaningful_token_tree_elements(&token_tree);
+    items.len() >= 2
+        && items.iter().all(|item| {
+            matches!(
+                item,
+                SyntaxElement::Token(token)
+                    if matches!(token.kind(), SyntaxKind::TRUE_KW | SyntaxKind::FALSE_KW)
+            )
+        })
 }
 
 /// Collects all Rust multiline string literal nodes in `file` that are not doc attributes,

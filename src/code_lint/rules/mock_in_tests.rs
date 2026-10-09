@@ -103,10 +103,12 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 `patch.multiple`), whether called bare or through `mock.` or `unittest.mock.`. It
                 also flags pytest-mock's `mocker.*` equivalents plus `mocker.spy`, `mocker.stub` and
                 `mocker.async_stub`, and pytest's `MonkeyPatch` and `monkeypatch.setattr`,
-                `delattr`, `setitem` and `delitem`. Calls are matched by name, not by import: a bare
-                `patch(...)` is flagged even when imported from another library, while a method such
-                as `http_client.patch(...)` is not, and the `mocker` and `monkeypatch` calls are
-                only matched under those exact names."},
+                `delattr`, `setitem` and `delitem`. Callees are resolved against module-level
+                imports and definitions: `patch` imported from an unrelated library or defined
+                locally is not flagged, import aliases such as `from unittest.mock import patch as p`
+                are resolved to their canonical path, a method on another receiver such as
+                `http_client.patch(...)` is not flagged, and the `mocker` and `monkeypatch` fixture
+                calls are matched under those exact names."},
             why_is_this_bad: indoc::indoc! {r"
                 A mock replaces a real collaborator with an object that accepts any call and returns
                 whatever the test told it to. Patching swaps code by its import path. Both tie the
@@ -182,6 +184,21 @@ crate::test_utils::rule_test!(
                         response = http_client.patch("/users/1", json={"active": True})
                         assert response.status_code == 200
                 "#,
+                unrelated_imported_patch_exempt => r#"
+                    from jsonpatch import patch
+
+                    def test_json_patch():
+                        result = patch({"a": 1}, [])
+                        assert result == {"a": 1}
+                "#,
+                locally_defined_patch_helper_exempt => r#"
+                    def patch(document, operations):
+                        return document
+
+                    def test_local_patch():
+                        result = patch({"a": 1}, [])
+                        assert result == {"a": 1}
+                "#,
             ],
             fail: [
                 magic_mock_instantiation => r#"
@@ -190,6 +207,13 @@ crate::test_utils::rule_test!(
                     def test_service():
                         client = MagicMock()
                 "# => "MagicMock()",
+                aliased_unittest_mock_patch => r#"
+                    from unittest.mock import patch as mock_patch
+
+                    def test_fetch():
+                        with mock_patch("app.service.fetch_data"):
+                            pass
+                "# => r#"mock_patch("app.service.fetch_data")"#,
                 unittest_mock_patch_decorator => r#"
                     from unittest.mock import patch
 

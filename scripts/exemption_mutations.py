@@ -105,7 +105,7 @@ def check_coverage(test_names: Sequence[str]) -> tuple[str, ...]:
                     problems.append(f"{entry.label}: no test case `{case}`")
                 listed.update(matches)
     for test_name in test_names:
-        rule = re.search(r"rules::(\w+)::tests::pass::", test_name)
+        rule = re.search(r"rules::(?:\w+::tests_)?(\w+)(?:::tests)?::pass::", test_name)
         if rule and rule.group(1) in covered_rules and test_name not in listed:
             problems.append(f"unlisted pass case `{test_name}`: map it to an exemption in scripts/exemptions/")
     return tuple(problems)
@@ -115,7 +115,7 @@ def resolve(case: str, test_names: Iterable[str]) -> tuple[str, ...]:
     """Returns the generated test names of `case`, whose `case_N_` prefix shifts as cases are added."""
     case, _, language = case.partition("@")
     rule, kind, name = case.split("::")
-    pattern = re.compile(rf"rules::{rule}::tests::{kind}::case_\d+_{name}$")
+    pattern = re.compile(rf"rules::(?:\w+::tests_)?{rule}(?:::tests)?::{kind}::case_\d+_{name}$")
     matches = tuple(sorted(test_name for test_name in test_names if pattern.search(test_name)))
     # `rule_test!` numbers Python cases before Rust cases.
     if language == "python":

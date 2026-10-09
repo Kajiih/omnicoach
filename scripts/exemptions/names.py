@@ -17,10 +17,10 @@ from .model import (
 
 CLUSTER = Cluster(
     rules=(
-        "abbreviated-name",
-        "single-letter-name",
-        "type-suffixed-name",
-        "primitive-duration",
+        "abbreviated_name",
+        "single_letter_name",
+        "type_suffixed_name",
+        "primitive_duration",
     ),
     mutations=(
         Mutation(

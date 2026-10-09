@@ -8,6 +8,7 @@ from . import (
     declaration_order,
     literals_and_placeholders,
     names,
+    tests_cluster,
 )
 
 CLUSTERS = (
@@ -16,4 +17,5 @@ CLUSTERS = (
     collection_types_1.CLUSTER,
     collection_types_2.CLUSTER,
     names.CLUSTER,
+    tests_cluster.CLUSTER,
 )
