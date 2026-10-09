@@ -119,25 +119,32 @@ crate::test_utils::rule_test!(
                         def is_secure(self) -> bool:
                             return self.port == 443
                 "#,
-                unannotated_method_alias_and_property_after_def_exempt => r#"
+                unannotated_assignment_after_method_exempt => r#"
                     class Printer:
                         label: str
-
-                        def __init__(self, label: str) -> None:
-                            self.label = label
 
                         def __str__(self) -> str:
                             return self.label
 
                         __repr__ = __str__
                 "#,
-                non_name_target_and_nested_class_exempt => r#"
-                    class Outer:
+                method_local_annotation_exempt => r#"
+                    class Counter:
                         def execute(self) -> None:
                             local_count: int = 1
                             self._cached: int = local_count
+                "#,
+                attribute_target_annotation_exempt => r#"
+                    class Defaults:
+                        def reset(self) -> None:
+                            pass
 
                         cls.fallback: int = 0
+                "#,
+                nested_class_checked_independently => r#"
+                    class Outer:
+                        def execute(self) -> None:
+                            pass
 
                         class Inner:
                             port: int = 1

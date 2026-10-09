@@ -14,7 +14,7 @@ A rule is described by **facets**. Each facet answers one question. Its **values
 | Facet (display label) | Question | Values | How it is set |
 |---|---|---|---|
 | **Topic** | What construct, API or domain does the rule inspect? | the topic tree (§5) | Declared, **one or more**, most specific only |
-| **Precision** | Can it flag correct code? | `exact`, `heuristic` | Declared, **exactly one** |
+| **Precision** | Can it flag correct code? (False positives only; an `exact` rule may still miss violations.) | `exact`, `heuristic` | Declared, **exactly one** |
 | **Consensus** | Would reasonable people disagree with it? | `opinionated`, `unopinionated` | Declared, **exactly one** |
 | **Impacted quality** | What software quality suffers when it is violated? | `reliability`, `maintainability` (from ISO/IEC 25010; §2.4) | Declared, **exactly one** |
 | **Languages** | Which languages does it check? | `python`, `rust` | Derived from `Declaration::languages` (**1+ for code rules, 0 for command rules**) |
@@ -68,6 +68,7 @@ Every registry (`CODE_RULES`, `SUPPRESSION_AUDITS` or `COMMAND_RULES`) holds rul
 
 - A threshold that can only cause **missed** findings does not make a rule heuristic. Only a proxy that **adds** findings does.
 - **Design proxy vs. rule bug:** an incidental implementation defect or single-file AST lack of import resolution (tracked under *Rule Defects* in `ROADMAP.md`) is a bug to fix, not a reason to classify the rule as `heuristic`.
+- **Precision assumes valid code:** judge it on code that compiles (Rust) or type-checks (Python). A rule that resolves names syntactically is `exact` if, in such code, it resolves each name as the compiler would. Watch both directions: a spurious match and a missed match can each add findings (for example, the call-graph rules `private-before-public-function`, `uncolocated-helper` and `callee-before-caller` flag a helper whose only use they miss as unreachable). Where the parser cannot resolve names, as with identifiers inside Rust macros, the gap is a rule defect tracked in `ROADMAP.md`.
 - `exact`: `type-cast` (it flags `cast` calls, which is what it claims), `single-letter-name` (the claim *is* "the name is one character").
 - `heuristic`: `abbreviated-name` (segment matching flags real words like `cat`), `too-many-assertions` (a count stands in for "several behaviours"), `unstructured-task` (it also flags tasks that are stored and awaited), `environment-variable-in-function` (guesses entrypoint boundaries from a function-name allowlist), `repeated-index-access` (integer subscripting `x[0]` is a proxy for indexing a tuple).
 

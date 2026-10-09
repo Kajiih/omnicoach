@@ -256,6 +256,8 @@ impl Topic {
 
 /// Precision facet: can the rule flag correct code?
 ///
+/// Precision concerns false positives only: an `exact` rule may still miss violations.
+///
 /// **Test:** does the rule's *design* use a syntactic proxy for the target construct or its
 /// exemption boundary, so that it can flag code that is correct? If yes → [`Self::Heuristic`].
 /// Worked examples and edge cases: `docs/dev/tag_guide.md` §2.2.
@@ -264,7 +266,7 @@ impl Topic {
 )]
 #[strum(serialize_all = "kebab-case")]
 pub enum Precision {
-    /// Flags only code that breaks the rule.
+    /// Flags only code that breaks the rule; may still miss violations.
     Exact,
     /// Uses a proxy that can flag correct code.
     Heuristic,

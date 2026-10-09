@@ -33,23 +33,27 @@ pub const RULE: CodeRule = CodeRule {
             summary: "Flags private helpers that are neither colocated right after their single public consumer nor placed in the trailing helper section at the end of the scope.",
             what_it_does: indoc::indoc! {r"
                 Checks module scopes, Python `class` definitions, and Rust inherent `impl` blocks
-                that every private helper `h` (once placed after its public callers) occupies one of
-                only **two valid places**:
-                1. **Immediately after its consumer** (for a single-user helper, `Roots(h) = {p}`):
-                   inside the contiguous helper cluster `[p, _h1, _h2, ...]` directly below `p`.
-                2. **At the end of the scope** (for a single-user or multi-user helper,
-                   `|Roots(h)| >= 1`): in the trailing private helper section after all public
-                   functions or methods in the scope (`pos(h) > last_pub`), provided a single-user
-                   helper does not split its owner's helpers between both places.
+                that every private helper declared below its public callers sits in one of two
+                places:
+                1. **Right after its only public caller**: directly below that function, among
+                   that function's other helpers.
+                2. **In the trailing helper section**: after the last public function or method of
+                   the scope. Shared helpers must go here. A helper with a single public caller
+                   may go here too, as long as that caller's helpers are not split between both
+                   places.
+
+                A helper's public callers are the public entrypoints that reach it, directly or
+                through other private helpers (the walk stops at public functions).
 
                 This supports both vertical-slice modules (`[pub_a, _a_helpers, pub_b, _b_helpers]`)
                 and public-first scopes (`[pub_a, pub_b, _a_helpers, _b_helpers, _shared_helpers]`),
                 while flagging helpers stranded in the middle of a scope between unrelated public
-                functions. Uncalled private functions (`Roots(h) = empty`) and helpers declared
-                above a public caller are handled by `private-before-public-function`. Python
-                `@overload` signatures and `@property` accessors (`getter`, `setter`, `deleter`)
-                are grouped at their first definition; Rust trait `impl` blocks, test files, and
-                `#[cfg(test)]` / `#[test]` items are not checked."},
+                functions. Private functions that no public entrypoint reaches, and helpers
+                declared above a public caller, are handled by `private-before-public-function`.
+                Python `@overload` signatures and `@property` accessors (`getter`, `setter`,
+                `deleter`) are grouped at their first definition; Rust trait `impl` blocks, test
+                files, and `#[cfg(test)]` / `#[test]` items are not checked. Calls are resolved by
+                name within the file, assuming the code compiles (Rust) or type-checks (Python)."},
             why_is_this_bad: indoc::indoc! {r"
                 A private helper belongs either directly underneath the single public entrypoint it
                 implements (vertical slice) or in the trailing private implementation section at the
@@ -174,9 +178,9 @@ crate::test_utils::rule_test!(
     {
         Python => {
             pass: [
-                colocated_exclusive_clusters_and_shared_footer => r#"
+                helper_right_after_its_only_caller_allowed => r#"
                     def build_header(raw: str) -> str:
-                        return _format_header(_normalize_token(raw))
+                        return _format_header(raw)
 
                     def _format_header(token: str) -> str:
                         return _wrap_brackets(token)
@@ -185,10 +189,30 @@ crate::test_utils::rule_test!(
                         return f"[{token}]"
 
                     def build_footer(raw: str) -> str:
-                        return build_header(_normalize_token(raw))
+                        return raw.strip()
+                "#,
+                shared_helper_in_trailing_section_allowed => r#"
+                    def build_header(raw: str) -> str:
+                        return _normalize_token(raw)
+
+                    def build_footer(raw: str) -> str:
+                        return _normalize_token(raw)
 
                     def _normalize_token(raw: str) -> str:
                         return raw.strip()
+                "#,
+                public_caller_of_public_function_does_not_share_its_helpers => r#"
+                    def build_footer(raw: str) -> str:
+                        return build_header(raw)
+
+                    def build_header(raw: str) -> str:
+                        return _format_header(raw)
+
+                    def _format_header(token: str) -> str:
+                        return f"[{token}]"
+
+                    def build_title(raw: str) -> str:
+                        return raw.title()
                 "#,
                 all_private_helpers_at_end_of_scope => r#"
                     class Compiler:
@@ -204,7 +228,18 @@ crate::test_utils::rule_test!(
                         def _emit_bytecode(self, source: str) -> str:
                             return source.strip()
                 "#,
-                uncalled_private_and_constructor_clusters_exempt => r#"
+                uncalled_private_function_exempt => r#"
+                    class Session:
+                        def connect(self) -> str:
+                            return "connected"
+
+                        def _unused_hook(self) -> None:
+                            pass
+
+                        def close(self) -> None:
+                            pass
+                "#,
+                constructor_helper_after_constructor_cluster_allowed => r#"
                     class Session:
                         def __new__(cls, host: str) -> "Session":
                             return cls._allocate()
@@ -218,10 +253,8 @@ crate::test_utils::rule_test!(
 
                         def connect(self) -> str:
                             return self.host
-
-                        def _unused_hook(self) -> None:
-                            pass
-
+                "#,
+                second_constructor_keeps_trailing_section_valid => r#"
                     class Pool:
                         def __new__(cls, limit: int) -> "Pool":
                             cls._check_limit(limit)
@@ -300,13 +333,22 @@ crate::test_utils::rule_test!(
         },
         Rust => {
             pass: [
-                colocated_units_and_shared_helper_at_end => r#"
+                helper_right_after_its_only_caller_allowed => r#"
                     pub fn parse_header(input: &str) -> &str {
-                        strip_header_prefix(trim_ascii(input))
+                        strip_header_prefix(input)
                     }
 
                     fn strip_header_prefix(input: &str) -> &str {
                         input.trim_start_matches("H:")
+                    }
+
+                    pub fn parse_footer(input: &str) -> &str {
+                        input.trim()
+                    }
+                "#,
+                shared_helper_in_trailing_section_allowed => r#"
+                    pub fn parse_header(input: &str) -> &str {
+                        trim_ascii(input)
                     }
 
                     pub fn parse_footer(input: &str) -> &str {
@@ -317,18 +359,8 @@ crate::test_utils::rule_test!(
                         input.trim()
                     }
                 "#,
-                inherent_impl_both_valid_places_and_trait_impl_exempt => r#"
-                    pub trait Decoder {
-                        fn decode(&self, raw: &str) -> usize;
-                    }
-
+                second_constructor_keeps_trailing_section_valid => r#"
                     pub struct FrameParser;
-
-                    impl Decoder for FrameParser {
-                        fn decode(&self, raw: &str) -> usize {
-                            raw.len()
-                        }
-                    }
 
                     impl FrameParser {
                         pub fn new() -> Self {
@@ -336,25 +368,36 @@ crate::test_utils::rule_test!(
                             Self
                         }
 
-                        pub fn with_capacity() -> Self {
-                            Self
+                        pub fn try_new() -> Option<Self> {
+                            Some(Self)
                         }
 
-                        pub fn parse_first(&self, raw: &str) -> bool {
-                            Self::check_first(raw)
-                        }
-
-                        #[cfg(test)]
-                        fn test_only_helper() {}
-
-                        pub fn parse_second(&self, raw: &str) -> usize {
+                        pub fn parse(&self, raw: &str) -> usize {
                             raw.len()
                         }
 
                         fn validate_seed() {}
+                    }
+                "#,
+                inline_test_fn_exempt => r#"
+                    pub struct FrameParser;
 
-                        fn check_first(raw: &str) -> bool {
+                    impl FrameParser {
+                        #[cfg(test)]
+                        pub fn parse_for_test(raw: &str) -> bool {
+                            Self::check(raw)
+                        }
+
+                        pub fn parse(&self, raw: &str) -> bool {
+                            Self::check(raw)
+                        }
+
+                        fn check(raw: &str) -> bool {
                             !raw.is_empty()
+                        }
+
+                        pub fn len(&self) -> usize {
+                            0
                         }
                     }
                 "#,

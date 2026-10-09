@@ -1997,6 +1997,8 @@ fn build_rust_impl_callable_scope<'a>(
 
 /// Collects indices of sibling `impl` methods in `method_by_name` called via `self.method()`,
 /// `Self::method`, or `<type_name>::method` inside `root` (stopping at nested `impl` blocks).
+/// Inside macro token trees, `self.method` counts only when called (`self.method(...)`), since
+/// without parentheses it names a field.
 fn collect_rust_impl_method_refs(
     root: &SyntaxNode,
     type_name: &str,
@@ -2048,7 +2050,8 @@ fn collect_rust_impl_method_refs(
                     && let Some(recv) = previous_non_trivia_token(&sep)
                 {
                     let is_self_call = (sep.kind() == SyntaxKind::DOT
-                        && recv.text() == SELF_KEYWORD)
+                        && recv.text() == SELF_KEYWORD
+                        && is_followed_by_open_paren(&token))
                         || (sep.kind() == SyntaxKind::COLON2
                             && (recv.text() == SELF_TYPE_KEYWORD || recv.text() == type_name));
                     if is_self_call && !out.contains(&idx) {
@@ -2062,6 +2065,14 @@ fn collect_rust_impl_method_refs(
             stack.push(child);
         }
     }
+}
+
+/// Returns true if the next non-trivia token after `token` is `(`. Inside a macro token tree,
+/// `self.name` followed by `(` is a method call; without it, `name` is a field.
+fn is_followed_by_open_paren(token: &SyntaxToken) -> bool {
+    std::iter::successors(token.next_token(), SyntaxToken::next_token)
+        .find(|candidate| !candidate.kind().is_trivia())
+        .is_some_and(|next| next.kind() == SyntaxKind::L_PAREN)
 }
 
 /// An associated `type` or `const` item declared after a `fn` item inside a Rust `impl` or
