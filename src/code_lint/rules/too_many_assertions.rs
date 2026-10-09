@@ -15,7 +15,6 @@ const MAX_ASSERTIONS: CountOption = CountOption {
     default: LanguageDefaults::new(4, &[]),
 };
 
-// TODO: In cases like this where the python and rust versions are almost the same, could we factorize this?
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Test `{function}` contains {count} assertions; the limit is {max_assertions}.",
     rationale: "A test with many assertions checks several unrelated behaviors at once and stops at the first failure, hiding the others and blurring what the test is about.",
@@ -43,9 +42,11 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
             summary: "Flags test functions with more assertions than the limit.",
             what_it_does: indoc::indoc! {r"
                 Counts the assertions in each test function and flags a test with more than
-                `max-assertions` of them. A `pytest.raises` block counts as one assertion.
-                Assertions inside nested functions or classes, and in helpers that are not tests,
-                are not counted."},
+                `max-assertions` of them. In Python, `assert` statements, `.assert*(...)` and
+                `self.fail(...)` calls, `pytest.raises` (or bare `raises`), and `pytest.warns` each
+                count as one assertion; in Rust, `assert*!` and `debug_assert*!` macro calls are
+                counted. Assertions inside nested functions or classes, and in helpers that are not
+                tests, are not counted."},
             why_is_this_bad: indoc::indoc! {r"
                 A test with many assertions usually checks several behaviours at once. It stops at
                 the first failing assertion, so the later ones are never reported, and its name

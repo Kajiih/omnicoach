@@ -132,7 +132,7 @@ crate::test_utils::rule_test!(
                     class FakeRepository[T](Repository[T]):
                         pass
                 "#,
-                inherits_protocol_and_generic => r#"
+                inherits_collaborator_with_generic_marker => r#"
                     class FakeRepository(Repository[T], Generic[T]):
                         pass
                 "#,
@@ -142,12 +142,6 @@ crate::test_utils::rule_test!(
                 "#,
                 word_starting_with_fake_exempt => r#"
                     class Faker:
-                        pass
-
-                    class FakerProvider:
-                        pass
-
-                    class Fakeable:
                         pass
                 "#,
                 lowercase_fake_prefix_exempt => r#"

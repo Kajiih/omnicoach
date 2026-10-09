@@ -267,10 +267,7 @@ fn test_rule_files_use_rule_test() {
 /// `pass` case names containing `_and_` that predate [`test_pass_cases_test_one_behaviour`].
 /// Remove an entry when its case is split or renamed. Keep it only if `_and_` names a single
 /// concept (the `logical_and` operator).
-const GRANDFATHERED_AND_PASS_CASES: &[&str] = &[
-    "inherits_protocol_and_generic",
-    "logical_and_inside_function_call",
-];
+const GRANDFATHERED_AND_PASS_CASES: &[&str] = &["logical_and_inside_function_call"];
 
 /// Names of the `pass` cases in a rule file's `rule_test!` invocation.
 fn pass_case_names(source: &str) -> Vec<&str> {
