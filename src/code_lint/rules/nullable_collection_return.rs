@@ -40,7 +40,7 @@ pub const RULE: CodeRule = CodeRule {
         },
         classification: Classification {
             topics: &[Topic::STATIC_TYPING],
-            precision: Precision::Heuristic,
+            precision: Precision::Exact,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Maintainability,
         },
@@ -336,7 +336,7 @@ crate::test_utils::rule_test!(
                     def parse_single(raw: str) -> Optional[tuple[int]]:
                         return None
                 "#,
-                mixed_collection_and_scalar_union_with_none => r#"
+                mixed_collection_with_non_collection_union_exempt => r#"
                     from collections.abc import Sequence
                     from typing import Optional
 
@@ -346,19 +346,23 @@ crate::test_utils::rule_test!(
                     def parse_value(raw: str) -> Optional[int | list[int]]:
                         return None
                 "#,
-                nullable_parameters_and_attributes_not_flagged => r#"
+                nullable_parameter_not_flagged => r#"
                     from collections.abc import Mapping, Sequence
+
+                    def configure(
+                        items: Sequence[str] | None = None,
+                        mapping: Mapping[str, int] | None = None,
+                    ) -> None:
+                        pass
+                "#,
+                nullable_attribute_not_flagged => r#"
+                    from collections.abc import Sequence
 
                     class Config:
                         tags: Sequence[str] | None = None
 
-                        def __init__(
-                            self,
-                            items: Sequence[str] | None = None,
-                            mapping: Mapping[str, int] | None = None,
-                        ) -> None:
+                        def __init__(self, items: Sequence[str] | None = None) -> None:
                             self.items: Sequence[str] | None = items
-                            self.mapping = mapping
                 "#,
                 callable_with_nullable_collection_parameter_or_return_not_flagged => r#"
                     from collections.abc import Callable, Sequence
@@ -594,16 +598,17 @@ crate::test_utils::rule_test!(
                         &[]
                     }
                 "#,
-                nullable_parameters_and_struct_fields_not_flagged => r#"
-                    struct Config {
-                        tags: Option<Vec<String>>,
-                    }
-
+                nullable_parameter_not_flagged => r#"
                     fn configure(items: Option<&[String]>, tags: Option<Vec<String>>) {
                         let _ = (items, tags);
                     }
                 "#,
-                trait_declaration_and_trait_impl_exempt => r#"
+                nullable_struct_field_not_flagged => r#"
+                    struct Config {
+                        tags: Option<Vec<String>>,
+                    }
+                "#,
+                trait_declaration_exempt => r#"
                     trait TagStore {
                         fn required_tags(&self, user_id: &str) -> Option<Vec<String>>;
 
@@ -612,7 +617,8 @@ crate::test_utils::rule_test!(
                             None
                         }
                     }
-
+                "#,
+                trait_impl_exempt => r#"
                     struct MemoryStore;
 
                     impl TagStore for MemoryStore {
@@ -622,7 +628,7 @@ crate::test_utils::rule_test!(
                         }
                     }
                 "#,
-                explained_rust_function_and_attributed_function => r#"
+                explained_attributed_rust_function_exempt => r#"
                     // Returns None on cache miss; an empty slice means the user has no tags.
                     #[must_use]
                     fn cached_tags(&self, user_id: &str) -> Option<&[String]> {

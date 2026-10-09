@@ -46,7 +46,7 @@ pub const RULE: CodeRule = CodeRule {
                 `__init__` instance attributes (`self.items: MutableSequence[str]`) in Python source
                 files (test files are not checked) whose type annotation uses `MutableSequence`,
                 `MutableMapping`, or `MutableSet` (at the top level or inside `ClassVar`, `Final`,
-                `Optional`, `Union`, or `|`) when no method of the class mutates `self.<name>` or
+                `Optional`, `Union`, `|`, or `Annotated`) when no method of the class mutates `self.<name>` or
                 `cls.<name>` in place. Nested types such as `Sequence[MutableMapping[K, V]]` are not
                 checked, because mutation of the elements is not tracked. Private attributes
                 starting with `_`, attributes mutated in any method of the class, attributes on

@@ -152,20 +152,32 @@ crate::test_utils::rule_test!(
                         items.sort()
                 "#,
 
-                mutating_mapping_and_set_methods => r#"
-                    from collections.abc import MutableMapping, MutableSet
+                mutating_mapping_methods => r#"
+                    from collections.abc import MutableMapping
 
-                    def update_map(counts: MutableMapping[str, int], tags: MutableSet[str]) -> None:
+                    def update_map(counts: MutableMapping[str, int]) -> None:
                         counts.setdefault("total", 0)
+                "#,
+
+                mutating_set_methods => r#"
+                    from collections.abc import MutableSet
+
+                    def update_tags(tags: MutableSet[str]) -> None:
                         tags.discard("draft")
                 "#,
 
-                subscript_and_slice_write => r"
+                subscript_write => r"
                     from collections.abc import MutableSequence
 
-                    def overwrite(items: MutableSequence[int], other: MutableSequence[int]) -> None:
+                    def overwrite(items: MutableSequence[int]) -> None:
                         items[0] = 1
-                        other[1:3] = [2, 3]
+                ",
+
+                slice_write => r"
+                    from collections.abc import MutableSequence
+
+                    def overwrite_slice(items: MutableSequence[int]) -> None:
+                        items[1:3] = [2, 3]
                 ",
 
                 subscript_augmented_write => r"
@@ -183,11 +195,10 @@ crate::test_utils::rule_test!(
                 ",
 
                 augmented_assignment_on_parameter => r"
-                    from collections.abc import MutableSequence, MutableSet
+                    from collections.abc import MutableSequence
 
-                    def extend_in_place(items: MutableSequence[int], tags: MutableSet[str]) -> None:
+                    def extend_in_place(items: MutableSequence[int]) -> None:
                         items += [1]
-                        tags |= {'ready'}
                 ",
 
                 passed_to_unknown_function => r"
@@ -260,14 +271,22 @@ crate::test_utils::rule_test!(
                         return inner
                 ",
 
-                stub_bodies_exempt => r#"
+                ellipsis_stub_body_exempt => r#"
                     from collections.abc import MutableSequence
 
                     def stub_ellipsis(items: MutableSequence[int]) -> None: ...
+                "#,
+
+                pass_stub_body_exempt => r#"
+                    from collections.abc import MutableSequence
 
                     def stub_pass(items: MutableSequence[int]) -> None:
                         """Docstring."""
                         pass
+                "#,
+
+                raise_not_implemented_stub_body_exempt => r#"
+                    from collections.abc import MutableSequence
 
                     def stub_not_implemented(items: MutableSequence[int]) -> None:
                         raise NotImplementedError("subclass must implement")

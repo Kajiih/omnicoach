@@ -56,12 +56,13 @@ pub const RULE: CodeRule = CodeRule {
                 `set(...)`, `deque(...)`), or if its value is a `dict` literal (`{k: v}`, `{}`),
                 comprehension (`{k: v for ...}`), or `dict(...)` call without a `Mapping` annotation
                 (such as `Mapping[K, V]` or `Final[Mapping[K, V]]`). Calls to `defaultdict`,
-                `Counter`, and `OrderedDict` are always flagged. Unqualified `Set` is exempt when
-                `from collections.abc import Set` is present in the file. Dunder names (such as
-                `__all__`), lowercase module variables without `Final`, attribute or unpacking
-                targets (`config.ALLOWED = ...`, `A, B = ...`), class attributes, function-local
-                variables, and type aliases (`TypeAlias`, `type X = ...`) are not flagged. String
-                annotations and module aliases (`import typing as t`) are not resolved."},
+                `Counter`, and `OrderedDict` are always flagged. Unqualified `Set` is resolved from
+                the file's imports (`from typing import Set` is flagged;
+                `from collections.abc import Set` is exempt). Dunder names (such as `__all__`),
+                lowercase module variables without `Final`, attribute or unpacking targets
+                (`config.ALLOWED = ...`, `A, B = ...`), class attributes, function-local variables,
+                and type aliases (`TypeAlias`, `type X = ...`) are not flagged. String annotations
+                are not resolved."},
             why_is_this_bad: indoc::indoc! {r#"
                 In Python, `UPPER_SNAKE_CASE` naming and `typing.Final` signal that a module
                 attribute is a constant, yet `Final` only prevents rebinding the variable name. When
@@ -178,16 +179,12 @@ fn mutable_collections<'tree, 'assignment>(
 }
 
 /// Returns true if `constructed` is called at runtime to build a mutable collection: `list`,
-/// `dict`, `set` (optionally `builtins.`-qualified) or the `collections` containers `defaultdict`,
-/// `deque`, `Counter`, `OrderedDict` (optionally `collections.`-qualified).
+/// `dict`, `set`, `defaultdict`, `deque`, `Counter`, or `OrderedDict`.
 fn is_runtime_mutable_collection_constructor(constructed: &PythonCollectionType) -> bool {
-    let (path, name) = (constructed.path.as_str(), constructed.name.as_str());
-    let qualifier = match name {
-        "list" | DICT | "set" => "builtins.",
-        "defaultdict" | "deque" | "Counter" | "OrderedDict" => "collections.",
-        _ => return false,
-    };
-    path == name || path.strip_suffix(name) == Some(qualifier)
+    matches!(
+        constructed.name.as_str(),
+        "list" | DICT | "set" | "defaultdict" | "deque" | "Counter" | "OrderedDict"
+    )
 }
 
 #[cfg(test)]
@@ -196,16 +193,20 @@ crate::test_utils::rule_test!(
     {
         Python => {
             pass: [
-                immutable_literals_and_calls => r#"
-                    from types import MappingProxyType
+                immutable_collection_literals => r#"
                     from typing import Final
 
                     ALLOWED_ROLES: Final = ("admin", "viewer")
                     EMPTY_TUPLE = ()
+                    MAX_RETRIES: Final = 3
+                "#,
+                immutable_collection_constructors => r#"
+                    from types import MappingProxyType
+                    from typing import Final
+
                     ALLOWED_TAGS: Final = frozenset({"alpha", "beta"})
                     PORTS_PROXY: Final = MappingProxyType({"http": 80, "https": 443})
                     PORTS_FROZEN: Final = frozendict({"http": 80, "https": 443})
-                    MAX_RETRIES: Final = 3
                 "#,
                 mapping_annotated_dict_literal_exempt => r#"
                     from collections.abc import Mapping
@@ -236,28 +237,33 @@ crate::test_utils::rule_test!(
                     _handlers = []
                     active_sessions: set[str] = set()
                 "#,
-                class_and_function_scope_not_flagged => r#"
+                class_scope_not_flagged => r#"
                     from typing import Final
 
                     class Config:
                         ALLOWED = ["a", "b"]
                         FINAL_ROLES: Final = ["a", "b"]
                         PORTS: dict[str, int] = {"http": 80}
-
+                "#,
+                function_scope_not_flagged => r#"
                     def load() -> None:
                         LOCAL_LIST = ["a", "b"]
                         LOCAL_DICT: dict[str, int] = {}
                 "#,
-                non_identifier_target_not_flagged => r#"
+                attribute_target_not_flagged => r#"
                     from typing import Final
 
                     config.ALLOWED: Final = ["a", "b"]
+                "#,
+                unpacking_target_not_flagged => r#"
                     FIRST_GROUP, SECOND_GROUP = ["a"], ["b"]
                 "#,
-                type_alias_not_flagged => r#"
+                typing_type_alias_not_flagged => r#"
                     from typing import TypeAlias
 
                     JSON_ARRAY: TypeAlias = list[str]
+                "#,
+                pep695_type_alias_not_flagged => r#"
                     type MODERN_ARRAY = list[str]
                 "#,
                 collections_abc_set_import_exempts_set_annotation => r#"

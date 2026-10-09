@@ -268,20 +268,11 @@ fn test_rule_files_use_rule_test() {
 /// Remove an entry when its case is split or renamed. Keep it only if `_and_` names a single
 /// concept (the `logical_and` operator).
 const GRANDFATHERED_AND_PASS_CASES: &[&str] = &[
-    "class_and_function_scope_not_flagged",
     "class_and_method_exempt",
-    "explained_rust_function_and_attributed_function",
-    "immutable_literals_and_calls",
     "import_and_alias_exempt",
     "inherits_protocol_and_generic",
     "logical_and_inside_function_call",
-    "mixed_collection_and_scalar_union_with_none",
-    "mutating_mapping_and_set_methods",
-    "nullable_parameters_and_attributes_not_flagged",
-    "nullable_parameters_and_struct_fields_not_flagged",
     "struct_and_fn_exempt",
-    "subscript_and_slice_write",
-    "trait_declaration_and_trait_impl_exempt",
     "typed_duration_and_unsuffixed",
 ];
 
