@@ -2,7 +2,6 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::code_lint::semantic::bindings;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
@@ -17,7 +16,7 @@ const BANNED: ListOption = ListOption {
     default: FilterListDefaults {
         base: &[
             "_list", "_arr", "_dict", "_map", "_vec", "_str", "_int", "_bool", "_set", "_ptr",
-            "_num", "_float", "_byte",
+            "_float", "_byte",
         ],
         extend: &[],
         remove: &[],
@@ -46,15 +45,17 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags names that end with a type suffix such as `_list` or `_str`.",
             what_it_does: indoc::indoc! {r"
-                Flags variables, parameters, loop and pattern bindings, and constants whose name
-                ends, ignoring case, with a type suffix: `_list`, `_arr`, `_dict`, `_map`, `_vec`,
-                `_str`, `_int`, `_bool`, `_set`, `_ptr`, `_num`, `_float` or `_byte` by default
+                Flags variables, parameters, loop and pattern bindings, constants, and attributes
+                where they are declared (Python class-body declarations, the first
+                `self.name = ...` in `__init__`, Rust named struct fields) whose name ends,
+                ignoring case, with a type suffix: `_list`, `_arr`, `_dict`, `_map`, `_vec`,
+                `_str`, `_int`, `_bool`, `_set`, `_ptr`, `_float` or `_byte` by default
                 (`users_dict`, `MY_INT`). A name that is only the suffix, such as `_list`, is not
                 flagged, nor is a boolean predicate name starting with `is_` or `has_` (`is_dict`),
                 whose type word names what is tested. Functions, classes, structs, enums, traits,
-                type aliases, imports (aliased or not) and members of a Rust `impl Trait for Type`
-                block are not checked; neither are attributes (`self.users_dict = ...`) or struct
-                fields."},
+                type aliases, imports (aliased or not), later attribute writes
+                (`self.users_dict = ...` outside `__init__`), and members of a Rust
+                `impl Trait for Type` block are not checked."},
             why_is_this_bad: indoc::indoc! {r"
                 The suffix repeats what the type annotation or the compiler already knows, and it
                 lies as soon as the type changes: a `user_list` that becomes a set or a generator
@@ -115,26 +116,12 @@ fn check_file(
     file: &ParsedFile,
     banned: &HashSet<String>,
 ) -> Vec<Diagnostic> {
-    bindings::find_suffixed_bindings(file, banned)
-        .into_iter()
-        .filter(|matched| {
-            let name = matched.name.to_ascii_lowercase();
-            !PREDICATE_PREFIXES
-                .iter()
-                .any(|prefix| name.starts_with(prefix))
-        })
-        .map(|matched| {
-            rule.diagnostic_at_node(
-                path,
-                &matched.node,
-                &[
-                    ("name", &matched.name),
-                    ("suffix", &matched.actual_suffix),
-                    ("stem", &matched.base_name),
-                ],
-            )
-        })
-        .collect()
+    rule.check_banned_suffixes_where(path, file, banned, |matched| {
+        let name = matched.name.to_ascii_lowercase();
+        !PREDICATE_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+    })
 }
 
 #[cfg(test)]
@@ -144,13 +131,13 @@ crate::test_utils::rule_test!(
         Python => {
             pass: [
                 unaliased_import_exempt => r#"
-                    import os_path
+                    import user_list
                 "#,
                 aliased_import_exempt => r#"
-                    from sys import stderr as err_file
+                    from sys import stderr as err_str
                 "#,
                 class_exempt => r#"
-                    class ItemsArr:
+                    class Items_Arr:
                         pass
                 "#,
                 method_exempt => r#"
@@ -164,11 +151,20 @@ crate::test_utils::rule_test!(
                 exact_suffix_exempt => r#"
                     _list = []
                 "#,
-                predicate_name_exempt => r#"
+                is_predicate_name_exempt => r#"
                     def summarize(base):
                         is_typed_dict = base.name == "TypedDict"
+                        return is_typed_dict
+                "#,
+                has_predicate_name_exempt => r#"
+                    def summarize(base):
                         has_str = any(isinstance(arg, str) for arg in base.args)
-                        return is_typed_dict, has_str
+                        return has_str
+                "#,
+                attribute_writes_outside_declarations_not_checked => r#"
+                    class Worker:
+                        def update(self) -> None:
+                            self.users_dict = {}
                 "#,
             ],
             fail: [
@@ -183,18 +179,23 @@ crate::test_utils::rule_test!(
                     for item_str in user_list:
                         pass
                 "# => "item_str",
+                init_attribute_declaration => r#"
+                    class Worker:
+                        def __init__(self) -> None:
+                            self.users_dict = {}
+                "# => "users_dict",
             ],
         },
         Rust => {
             pass: [
                 unaliased_import_exempt => r#"
-                    use std::collections::VecDeque;
+                    use my_crate::user_vec;
                 "#,
                 aliased_import_exempt => r#"
                     use std::collections::HashMap as my_map;
                 "#,
                 struct_exempt => r#"
-                    struct UserList;
+                    struct User_List;
                 "#,
                 fn_exempt => r#"
                     fn process_arr() {}
@@ -215,10 +216,16 @@ crate::test_utils::rule_test!(
                         const DEFAULT_INT: i32 = 42;
                     }
                 "#,
-                predicate_name_exempt => r#"
-                    fn run(node: &Node) {
+                is_predicate_name_exempt => r#"
+                    fn run(node: &Node) -> bool {
                         let is_vec = node.kind() == "vec";
+                        is_vec
+                    }
+                "#,
+                has_predicate_name_exempt => r#"
+                    fn run(node: &Node) -> bool {
                         let has_map = node.children().any(|child| child.kind() == "map");
+                        has_map
                     }
                 "#,
             ],
@@ -239,6 +246,11 @@ crate::test_utils::rule_test!(
                         for item_str in items {}
                     }
                 "# => "item_str",
+                struct_field => r#"
+                    struct Directory {
+                        users_map: std::collections::HashMap<String, i32>,
+                    }
+                "# => "users_map",
             ],
         },
     }

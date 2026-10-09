@@ -49,14 +49,17 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags durations held as plain numbers, detected by a time-unit suffix such as `timeout_secs` or `delay_ms`.",
             what_it_does: indoc::indoc! {r"
-                Flags variables, parameters, loop and pattern bindings, and constants whose name
-                ends, ignoring case, with a time-unit suffix: `_seconds`, `_secs`, `_sec`,
-                `_minutes`, `_mins`, `_min`, `_hours`, `_hrs`, `_hr`, `_days`, `_millis`, `_ms`,
-                `_micros`, `_us`, `_nanos` or `_ns` by default. The check reads the name only, not
-                the type, so a suffixed name is flagged even when it already holds a `timedelta` or
+                Flags variables, parameters, loop and pattern bindings, constants, and attributes
+                where they are declared (Python class-body declarations, the first
+                `self.name = ...` in `__init__`, Rust named struct fields) whose name ends,
+                ignoring case, with a time-unit suffix: `_seconds`, `_secs`, `_sec`, `_minutes`,
+                `_mins`, `_min`, `_hours`, `_hrs`, `_hr`, `_days`, `_millis`, `_ms`, `_micros`,
+                `_us`, `_nanos` or `_ns` by default. The check reads the name only, not the type,
+                so a suffixed name is flagged even when it already holds a `timedelta` or
                 `Duration`. A name that is only the suffix, such as `_ms`, is not flagged.
-                Functions, classes, structs, imports (aliased or not), attributes and struct fields
-                are not checked."},
+                Functions, classes, structs, enums, traits, type aliases, imports (aliased or not),
+                later attribute writes (`self.timeout_secs = ...` outside `__init__`), and members
+                of a Rust `impl Trait for Type` block are not checked."},
             why_is_this_bad: indoc::indoc! {r"
                 A plain number with a unit in its name relies on every caller reading the name:
                 nothing stops passing milliseconds to a `timeout_secs` parameter, and each boundary
@@ -129,22 +132,32 @@ crate::test_utils::rule_test!(
     {
         Python => {
             pass: [
-                import_and_alias_exempt => r#"
+                unaliased_import_exempt => r#"
                     import os_seconds
+                "#,
+                aliased_import_exempt => r#"
                     from datetime import timedelta as delta_secs
                 "#,
-                class_and_method_exempt => r#"
-                    class DurationMinutes:
-                        def parse_seconds(self):
-                            pass
+                class_exempt => r#"
+                    class Duration_Minutes:
+                        pass
                 "#,
-                typed_duration_and_unsuffixed => r#"
+                method_exempt => r#"
+                    def parse_seconds(self):
+                        pass
+                "#,
+                unsuffixed_duration_variables => r#"
                     from datetime import timedelta
                     timeout = timedelta(seconds=10)
                     delay = 500
                 "#,
                 exact_suffix_without_prefix_exempt => r#"
                     _ms = 10
+                "#,
+                attribute_writes_outside_declarations_not_checked => r#"
+                    class Worker:
+                        def update(self) -> None:
+                            self.timeout_secs = 10
                 "#,
             ],
             fail: [
@@ -158,6 +171,11 @@ crate::test_utils::rule_test!(
                     def wait(timeout_secs):
                         pass
                 "# => "timeout_secs",
+                init_attribute_declaration => r#"
+                    class Worker:
+                        def __init__(self) -> None:
+                            self.timeout_secs = 10
+                "# => "timeout_secs",
             ],
         },
         Rust => {
@@ -165,11 +183,13 @@ crate::test_utils::rule_test!(
                 import_alias_exempt => r#"
                     use std::time::Duration as timeout_seconds;
                 "#,
-                struct_and_fn_exempt => r#"
-                    struct TimeoutSeconds;
+                struct_exempt => r#"
+                    struct Timeout_Seconds;
+                "#,
+                fn_exempt => r#"
                     fn calculate_seconds() {}
                 "#,
-                typed_duration_and_unsuffixed => r#"
+                unsuffixed_duration_variables => r#"
                     fn run() {
                         let timeout = std::time::Duration::from_secs(30);
                         let retry_delay = 500;
@@ -197,6 +217,11 @@ crate::test_utils::rule_test!(
                 "# => "MAX_WAIT_MINS",
                 function_parameter_suffix => r#"
                     fn wait(timeout_seconds: u64) {}
+                "# => "timeout_seconds",
+                struct_field => r#"
+                    struct ClientConfig {
+                        timeout_seconds: u64,
+                    }
                 "# => "timeout_seconds",
             ],
         },
