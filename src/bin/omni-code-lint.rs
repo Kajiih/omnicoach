@@ -83,5 +83,8 @@ fn run() -> anyhow::Result<()> {
     if !report.diagnostics.is_empty() {
         std::process::exit(1);
     }
+    if cli.format == OutputFormat::Plain {
+        println!("All checks passed!");
+    }
     Ok(())
 }
