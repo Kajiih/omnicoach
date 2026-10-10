@@ -14,7 +14,7 @@ expression: output
       "suggestion": "Extract `inner` to a module-level private function (`_inner`), or use an inline `lambda` for a trivial callback."
     },
     "location": {
-      "context": "[TEMP_PATH]",
+      "context": "test.py",
       "span": {
         "start": 17,
         "end": 42

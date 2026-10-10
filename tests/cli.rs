@@ -6,16 +6,11 @@
 use assert_cmd::Command;
 use indoc::indoc;
 use std::fs;
-use std::io::Write;
 
-fn create_temp_file(suffix: &str, content: &str) -> tempfile::NamedTempFile {
-    let mut file = tempfile::Builder::new()
-        .prefix("omni_test_")
-        .suffix(suffix)
-        .tempfile()
-        .unwrap();
-    write!(file, "{content}").unwrap();
-    file
+fn create_temp_file(file_name: &str, content: &str) -> tempfile::TempDir {
+    let temp_dir = tempfile::tempdir().unwrap();
+    fs::write(temp_dir.path().join(file_name), content).unwrap();
+    temp_dir
 }
 
 fn setup_temp_jj_repo() -> tempfile::TempDir {
@@ -69,12 +64,7 @@ fn setup_temp_jj_repo() -> tempfile::TempDir {
     temp
 }
 
-fn run_and_sanitize_cli(
-    bin_name: &str,
-    args: &[&str],
-    current_dir: Option<&std::path::Path>,
-    temp_paths: &[&std::path::Path],
-) -> String {
+fn run_cli(bin_name: &str, args: &[&str], current_dir: Option<&std::path::Path>) -> String {
     let mut cmd = Command::cargo_bin(bin_name).unwrap();
     cmd.args(args);
     if let Some(dir) = current_dir {
@@ -85,33 +75,23 @@ fn run_and_sanitize_cli(
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
 
-    let mut combined = format!(
+    let combined = format!(
         "--- exit code ---\n{}\n--- stdout ---\n{}\n--- stderr ---\n{}",
         status.code().unwrap_or(-1),
         stdout,
         stderr
     );
 
-    // Sanitize any dynamic temporary paths, raw and JSON-escaped (identical off Windows)
-    for path in temp_paths {
-        let raw = path.to_string_lossy();
-        combined = combined
-            .replace(&raw.replace('\\', "\\\\"), "[TEMP_PATH]")
-            .replace(&*raw, "[TEMP_PATH]");
-    }
-
-    // Normalize Windows specifics: path separators after the placeholder, clap's `.exe`
-    // usage name, and CRLF line endings
-    combined
-        .replace("[TEMP_PATH]\\\\", "[TEMP_PATH]/")
-        .replace("[TEMP_PATH]\\", "[TEMP_PATH]/")
-        .replace(&format!("{bin_name}.exe"), bin_name)
-        .replace("\r\n", "\n")
+    // Normalize Windows CRLF line endings and .exe binary suffix in Usage output
+    combined.replace("\r\n", "\n").replace(
+        &format!("{bin_name}{}", std::env::consts::EXE_SUFFIX),
+        bin_name,
+    )
 }
 
 #[test]
 fn test_code_lint_help_flag() {
-    let output = run_and_sanitize_cli("omni-code-lint", &["--help"], None, &[]);
+    let output = run_cli("omni-code-lint", &["--help"], None);
     insta::assert_snapshot!(output);
 }
 
@@ -121,13 +101,8 @@ fn test_code_lint_no_violations() {
         def calculate_sum(num1, num2):
             return num1 + num2
     "};
-    let temp_file = create_temp_file(".py", clean_code);
-    let output = run_and_sanitize_cli(
-        "omni-code-lint",
-        &[temp_file.path().to_str().unwrap()],
-        None,
-        &[temp_file.path()],
-    );
+    let temp_dir = create_temp_file("test.py", clean_code);
+    let output = run_cli("omni-code-lint", &["test.py"], Some(temp_dir.path()));
     insta::assert_snapshot!(output);
 }
 
@@ -138,13 +113,8 @@ fn test_code_lint_with_violations() {
             def inner():
                 pass
     "};
-    let temp_file = create_temp_file(".py", violating_code);
-    let output = run_and_sanitize_cli(
-        "omni-code-lint",
-        &[temp_file.path().to_str().unwrap()],
-        None,
-        &[temp_file.path()],
-    );
+    let temp_dir = create_temp_file("test.py", violating_code);
+    let output = run_cli("omni-code-lint", &["test.py"], Some(temp_dir.path()));
     insta::assert_snapshot!(output);
 }
 
@@ -156,12 +126,7 @@ fn test_code_lint_invalid_config() {
         "select = [invalid syntax]",
     )
     .unwrap();
-    let output = run_and_sanitize_cli(
-        "omni-code-lint",
-        &[],
-        Some(temp_dir.path()),
-        &[temp_dir.path()],
-    );
+    let output = run_cli("omni-code-lint", &[], Some(temp_dir.path()));
     insta::assert_snapshot!(output);
 }
 
@@ -179,7 +144,7 @@ fn test_discovery_and_cli_errors(
     #[case] args: &[&str],
     #[case] snapshot: &str,
 ) {
-    let output = run_and_sanitize_cli(binary, args, None, &[]);
+    let output = run_cli(binary, args, None);
     insta::assert_snapshot!(snapshot, output.replace(binary, "<binary>"));
 }
 
@@ -189,8 +154,8 @@ fn test_discovery_and_cli_errors(
 #[case::list_tags(&["--list-tags"])]
 #[case::explain(&["--explain", "edit-of-described-commit"])]
 fn test_discovery_is_identical_across_binaries(#[case] args: &[&str]) {
-    let code_lint = run_and_sanitize_cli("omni-code-lint", args, None, &[]);
-    let command_lint = run_and_sanitize_cli("omni-command-lint", args, None, &[]);
+    let code_lint = run_cli("omni-code-lint", args, None);
+    let command_lint = run_cli("omni-command-lint", args, None);
     assert!(code_lint.contains("--- exit code ---\n0\n"), "{code_lint}");
     assert_eq!(
         code_lint.replace("omni-code-lint", "<binary>"),
@@ -211,11 +176,10 @@ fn test_command_lint_described_commit_blocked() {
         .expect("failed to describe commit");
     assert!(status.success());
 
-    let output = run_and_sanitize_cli(
+    let output = run_cli(
         "omni-command-lint",
         &["--cmd", "jj edit @"],
         Some(temp_repo.path()),
-        &[temp_repo.path()],
     );
     insta::assert_snapshot!(output);
 }
@@ -223,11 +187,10 @@ fn test_command_lint_described_commit_blocked() {
 #[test]
 fn test_command_lint_empty_commit_allowed() {
     let temp_repo = setup_temp_jj_repo();
-    let output = run_and_sanitize_cli(
+    let output = run_cli(
         "omni-command-lint",
         &["--cmd", "jj edit @"],
         Some(temp_repo.path()),
-        &[temp_repo.path()],
     );
     insta::assert_snapshot!(output);
 }
@@ -267,28 +230,22 @@ fn test_code_lint_diff_flag_jj() {
     fs::write(&file_path, violating_code_2).unwrap();
 
     // 4. Run full linter (should report BOTH violations: `inner` and `world`)
-    let output_full = run_and_sanitize_cli(
-        "omni-code-lint",
-        &["test.py"],
-        Some(repo_path),
-        &[repo_path],
-    );
+    let output_full = run_cli("omni-code-lint", &["test.py"], Some(repo_path));
     insta::assert_snapshot!("full_baseline", output_full);
 
     // 5. Run with --diff-rev @- (compares @ relative to parent @-)
     // It should ONLY report `world` because `inner` was already in the parent commit!
-    let output_diff = run_and_sanitize_cli(
+    let output_diff = run_cli(
         "omni-code-lint",
         &["--diff-rev", "@-", "test.py"],
         Some(repo_path),
-        &[repo_path],
     );
     insta::assert_snapshot!("diff_only", output_diff);
 }
 
 #[test]
 fn test_code_lint_non_existent_file_fails() {
-    let output = run_and_sanitize_cli("omni-code-lint", &["non_existent_file.rs"], None, &[]);
+    let output = run_cli("omni-code-lint", &["non_existent_file.rs"], None);
     assert!(output.contains("Path does not exist: non_existent_file.rs"));
     assert!(output.contains("exit code ---\n2"));
 }
@@ -303,17 +260,16 @@ fn test_code_lint_unreadable_file_reports_error_and_lints_the_rest() {
     )
     .unwrap();
 
-    let output = run_and_sanitize_cli(
+    let output = run_cli(
         "omni-code-lint",
-        &[temp_dir.path().to_str().unwrap()],
-        None,
-        &[temp_dir.path()],
+        &["latin1.py", "nested.py"],
+        Some(temp_dir.path()),
     );
 
     assert!(output.contains("exit code ---\n2"), "{output}");
-    assert!(output.contains("[TEMP_PATH]/nested.py:2:"), "{output}");
+    assert!(output.contains("nested.py:2:"), "{output}");
     assert!(
-        output.contains("Error: Failed to read file '[TEMP_PATH]/latin1.py'"),
+        output.contains("Error: Failed to read file 'latin1.py'"),
         "{output}"
     );
 }
@@ -331,11 +287,10 @@ fn test_code_lint_diff_complex_revset_jj() {
     let file_path = repo_path.join("test.py");
     fs::write(&file_path, violating_code).unwrap();
 
-    let output = run_and_sanitize_cli(
+    let output = run_cli(
         "omni-code-lint",
         &["--diff-rev", "immutable()..", "test.py"],
         Some(repo_path),
-        &[repo_path],
     );
     assert!(output.contains("Function `inner` is defined inside another function."));
 }
@@ -353,11 +308,10 @@ fn test_code_lint_diff_range_revset_jj() {
     let file_path = repo_path.join("test.py");
     fs::write(&file_path, violating_code).unwrap();
 
-    let output = run_and_sanitize_cli(
+    let output = run_cli(
         "omni-code-lint",
         &["--diff-rev", "@-..@", "test.py"],
         Some(repo_path),
-        &[repo_path],
     );
     assert!(output.contains("Function `inner` is defined inside another function."));
 }
@@ -387,12 +341,11 @@ fn test_code_lint_json_format_deterministic() {
             def inner():
                 pass
     "};
-    let temp_file = create_temp_file(".py", violating_code);
-    let output = run_and_sanitize_cli(
+    let temp_dir = create_temp_file("test.py", violating_code);
+    let output = run_cli(
         "omni-code-lint",
-        &["--format", "json", temp_file.path().to_str().unwrap()],
-        None,
-        &[temp_file.path()],
+        &["--format", "json", "test.py"],
+        Some(temp_dir.path()),
     );
     insta::assert_snapshot!(output);
 }
@@ -413,12 +366,11 @@ const EXPLANATION_HINT_CODE: &str = indoc! {r"
 #[case::plain("plain")]
 #[case::json("json")]
 fn test_code_lint_explanation_hint(#[case] format: &str) {
-    let temp_file = create_temp_file(".py", EXPLANATION_HINT_CODE);
-    let output = run_and_sanitize_cli(
+    let temp_dir = create_temp_file("test.py", EXPLANATION_HINT_CODE);
+    let output = run_cli(
         "omni-code-lint",
-        &["--format", format, temp_file.path().to_str().unwrap()],
-        None,
-        &[temp_file.path()],
+        &["--format", format, "test.py"],
+        Some(temp_dir.path()),
     );
     insta::assert_snapshot!(format!("explanation_hint_{format}"), output);
 }
