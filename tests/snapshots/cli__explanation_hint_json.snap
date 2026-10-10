@@ -14,7 +14,7 @@ expression: output
       "suggestion": "Extract `inner` to a module-level private function (`_inner`), or use an inline `lambda` for a trivial callback."
     },
     "location": {
-      "context": "[TEMP_PATH]",
+      "context": "test.py",
       "span": {
         "start": 36,
         "end": 61
@@ -32,7 +32,7 @@ expression: output
       "explanation_hint": "Explain why in a comment at the end of the flagged line or directly above it."
     },
     "location": {
-      "context": "[TEMP_PATH]",
+      "context": "test.py",
       "span": {
         "start": 71,
         "end": 99

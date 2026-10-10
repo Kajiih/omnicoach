@@ -13,16 +13,6 @@ pub enum DiffError {
     #[error("--diff requires a Git or Jujutsu repository, but none was found")]
     RepoNotFound,
 
-    /// Failed to canonicalize the repository root path.
-    #[error("failed to canonicalize repository root '{path}': {source}")]
-    Canonicalize {
-        /// The repository path that failed to canonicalize.
-        path: PathBuf,
-        /// The underlying IO error.
-        #[source]
-        source: std::io::Error,
-    },
-
     /// Required VCS command-line binary was not found in PATH.
     #[error(
         "{name} CLI ('{binary}') was not found in PATH. Please install it or ensure it is accessible."
@@ -78,12 +68,6 @@ pub type DetectedDiff = (VcsType, String, ChangedLines);
 /// or if command stderr is non-empty.
 pub fn detect_vcs_diff(custom_rev: Option<&str>) -> Result<DetectedDiff, DiffError> {
     let (repo_root, vcs_type) = find_repo_root().ok_or(DiffError::RepoNotFound)?;
-    let canonical_root = repo_root
-        .canonicalize()
-        .map_err(|source| DiffError::Canonicalize {
-            path: repo_root,
-            source,
-        })?;
 
     let resolved_rev = match vcs_type {
         VcsType::Jujutsu => custom_rev.unwrap_or("immutable().."),
@@ -91,8 +75,8 @@ pub fn detect_vcs_diff(custom_rev: Option<&str>) -> Result<DetectedDiff, DiffErr
     };
 
     let diff_content = match vcs_type {
-        VcsType::Jujutsu => get_jj_diff(&canonical_root, resolved_rev)?,
-        VcsType::Git => get_git_diff(&canonical_root, resolved_rev)?,
+        VcsType::Jujutsu => get_jj_diff(&repo_root, resolved_rev)?,
+        VcsType::Git => get_git_diff(&repo_root, resolved_rev)?,
     };
 
     let parsed_diff = parse_git_diff(&diff_content);
@@ -100,7 +84,7 @@ pub fn detect_vcs_diff(custom_rev: Option<&str>) -> Result<DetectedDiff, DiffErr
     // Convert relative repository paths to absolute paths
     let mut absolute_diff = HashMap::new();
     for (rel_path, lines) in parsed_diff {
-        let abs_path = canonical_root.join(rel_path);
+        let abs_path = repo_root.join(rel_path);
         absolute_diff.insert(abs_path, lines);
     }
 
