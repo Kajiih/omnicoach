@@ -93,7 +93,7 @@ def list_tests(worker: pathlib.Path) -> tuple[str, ...]:
 
 
 def check_coverage(test_names: Sequence[str]) -> tuple[str, ...]:
-    """Reports listed cases that do not exist and `pass` cases of covered rules that are not listed."""
+    """Reports listed cases that do not exist and `pass` cases of any code rule that are not listed."""
     problems = []
     listed = set()
     covered_rules = {rule for cluster in CLUSTERS for rule in cluster.rules}
@@ -106,7 +106,9 @@ def check_coverage(test_names: Sequence[str]) -> tuple[str, ...]:
                 listed.update(matches)
     for test_name in test_names:
         rule = re.search(r"rules::(?:\w+::tests_)?(\w+)(?:::tests)?::pass::", test_name)
-        if rule and rule.group(1) in covered_rules and test_name not in listed:
+        if rule and rule.group(1) not in covered_rules:
+            problems.append(f"uncovered rule `{rule.group(1)}`: register it in scripts/exemptions/")
+        elif rule and test_name not in listed:
             problems.append(f"unlisted pass case `{test_name}`: map it to an exemption in scripts/exemptions/")
     return tuple(problems)
 

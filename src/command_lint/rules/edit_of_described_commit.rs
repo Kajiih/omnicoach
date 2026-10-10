@@ -1,7 +1,5 @@
 //! Validation checks for the `jj edit` command.
 
-// TODO: Consider if we should replace this rule with a no edit on bookmarked commit?
-
 use crate::command_lint::command::{InterceptedCommand, ProgramCliSchema};
 use crate::command_lint::contract::CommandRule;
 use crate::command_lint::vcs::JjClient;
@@ -17,9 +15,12 @@ use crate::rule_declaration::{
 const JJ_CLI_SCHEMA: ProgramCliSchema = ProgramCliSchema {
     program_name: "jj",
     options_with_values: &[
+        "-r",
+        "--revision",
         "-R",
         "--repository",
         "--config",
+        "--config-toml",
         "--config-file",
         "--at-operation",
         "--at-op",
@@ -76,7 +77,7 @@ fn check_command(
     cmd: &InterceptedCommand,
     jj_client: &dyn JjClient,
 ) -> Vec<Diagnostic> {
-    if cmd.program_base_name() != "jj" {
+    if cmd.program_base_name() != JJ_CLI_SCHEMA.program_name {
         return Vec::new();
     }
 
@@ -104,21 +105,21 @@ fn check_command(
     )]
 }
 
-/// Helper to extract revision from a `jj edit` command.
+/// Extracts the target revision from a `jj edit` command, defaulting to `"@"` when omitted.
 ///
-/// It ignores global options (e.g. `jj -R . edit`) and options passed to the `edit` subcommand
-/// (e.g. `jj edit --ignore-working-copy revision`).
+/// Understands global options (such as `-R .` or `--ignore-working-copy`) and the `-r` /
+/// `--revision` option accepted by `jj edit`.
 #[must_use]
 fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
     let args = cmd.parse_args(&JJ_CLI_SCHEMA);
     if !args.has_subcommand_sequence(&["edit"]) {
         return None;
     }
-    if args.positionals.len() > 1 {
-        Some(args.positionals[1].clone())
-    } else {
-        Some("@".to_string())
-    }
+    args.get_option("-r")
+        .or_else(|| args.get_option("--revision"))
+        .or_else(|| args.positionals.get(1).map(String::as_str))
+        .or(Some("@"))
+        .map(ToString::to_string)
 }
 
 #[cfg(test)]
@@ -126,43 +127,56 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    struct MockJjClient {
+    struct FakeJjClient {
         descriptions: HashMap<String, String>,
     }
 
-    impl JjClient for MockJjClient {
+    impl JjClient for FakeJjClient {
         fn get_commit_description(&self, revision: &str) -> Result<String, String> {
-            Ok(self.descriptions.get(revision).cloned().unwrap_or_default())
+            self.descriptions
+                .get(revision)
+                .cloned()
+                .ok_or_else(|| format!("unknown revision: {revision}"))
         }
     }
 
-    #[test]
-    fn test_jj_edit_described_commit_blocked() {
-        let mut descriptions = HashMap::new();
-        descriptions.insert("d123".to_string(), "Implement feature X".to_string());
-        descriptions.insert("a456".to_string(), String::new());
+    #[rstest::rstest]
+    #[case::described_commit(
+        "jj edit d123",
+        "[edit-of-described-commit] Line 1, Col 1: `jj edit d123` targets a described commit."
+    )]
+    #[case::path_qualified_binary(
+        "/usr/bin/jj edit d123",
+        "[edit-of-described-commit] Line 1, Col 1: `jj edit d123` targets a described commit."
+    )]
+    #[case::bare_edit_when_working_copy_described(
+        "jj edit",
+        "[edit-of-described-commit] Line 1, Col 1: `jj edit @` targets a described commit."
+    )]
+    #[case::empty_commit_allowed("jj edit a456", "")]
+    #[case::unknown_revision_error_ignored("jj edit unknown_rev", "")]
+    #[case::unrelated_jj_subcommand_allowed("jj log -r d123", "")]
+    #[case::non_jj_command_allowed("git commit -m msg", "")]
+    fn test_check_command(#[case] command_line: &str, #[case] expected: &str) {
+        let descriptions = HashMap::from([
+            ("@".to_string(), "Described working copy".to_string()),
+            ("d123".to_string(), "Implement feature X".to_string()),
+            ("a456".to_string(), String::new()),
+        ]);
+        let jj_client = FakeJjClient { descriptions };
 
-        let jj_client = MockJjClient { descriptions };
-
-        // Block described commit edit
         let output =
-            crate::test_utils::assert_command_rule_snapshot(&RULE, "jj edit d123", &jj_client);
-        insta::assert_snapshot!(output, @"[edit-of-described-commit] Line 1, Col 1: `jj edit d123` targets a described commit.");
-
-        // Allow empty/anonymous commit edit
-        let output_allowed =
-            crate::test_utils::assert_command_rule_snapshot(&RULE, "jj edit a456", &jj_client);
-        assert_eq!(output_allowed, "");
-
-        // Allow unrelated commands
-        let output_log =
-            crate::test_utils::assert_command_rule_snapshot(&RULE, "jj log -r d123", &jj_client);
-        assert_eq!(output_log, "");
+            crate::test_utils::assert_command_rule_snapshot(&RULE, command_line, &jj_client);
+        assert_eq!(output.trim(), expected);
     }
 
     #[rstest::rstest]
     #[case("jj edit", Some("@"))]
     #[case("jj edit rev", Some("rev"))]
+    #[case("jj edit -r rev", Some("rev"))]
+    #[case("jj edit -rrev", Some("rev"))]
+    #[case("jj edit --revision rev", Some("rev"))]
+    #[case("jj edit --revision=rev", Some("rev"))]
     #[case("jj -R . edit rev", Some("rev"))]
     #[case("jj edit --ignore-working-copy rev", Some("rev"))]
     #[case("jj log", None)]

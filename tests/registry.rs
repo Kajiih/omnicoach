@@ -264,11 +264,6 @@ fn test_rule_files_use_rule_test() {
     }
 }
 
-/// `pass` case names containing `_and_` that predate [`test_pass_cases_test_one_behaviour`].
-/// Remove an entry when its case is split or renamed. Keep it only if `_and_` names a single
-/// concept (the `logical_and` operator).
-const GRANDFATHERED_AND_PASS_CASES: &[&str] = &["logical_and_inside_function_call"];
-
 /// Names of the `pass` cases in a rule file's `rule_test!` invocation.
 fn pass_case_names(source: &str) -> Vec<&str> {
     let mut in_pass_block = false;
@@ -294,25 +289,18 @@ fn pass_case_names(source: &str) -> Vec<&str> {
 
 /// A `pass` case checks one behaviour, so a failing case name pinpoints the broken exemption
 /// (`rule_test!` "Writing cases"). `_and_` in a name usually means several exemptions in one case.
+/// The single concept `"logical_and"` (the logical conjunction operator) is allowed.
 #[test]
 fn test_pass_cases_test_one_behaviour() {
-    let mut seen = HashSet::new();
     for (path, source) in &*RULE_SOURCES {
         for name in pass_case_names(source) {
-            seen.insert(name);
             assert!(
-                !name.contains("_and_") || GRANDFATHERED_AND_PASS_CASES.contains(&name),
+                !name.replace("logical_and", "").contains("_and_"),
                 "{} pass case `{name}` looks like several behaviours in one case; split it into \
                  one case per exemption (see `rule_test!` \"Writing cases\")",
                 path.display()
             );
         }
-    }
-    for name in GRANDFATHERED_AND_PASS_CASES {
-        assert!(
-            seen.contains(name),
-            "`{name}` is no longer a pass case; remove it from GRANDFATHERED_AND_PASS_CASES"
-        );
     }
 }
 

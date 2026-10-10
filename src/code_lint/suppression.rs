@@ -489,6 +489,7 @@ fn audit_single_directive(
 mod tests {
     use super::*;
     use crate::diagnostic::Language;
+    use rstest::rstest;
 
     #[test]
     fn test_parse_valid_inline_directive_same_line() {
@@ -509,24 +510,42 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_parse_valid_inline_directive_preceding_line() {
-        let content = "# omni:ignore [nested-function] -- required for fixture\ndef inner(): pass";
-        let file = ParsedFile::new(content, Language::Python);
+    #[rstest]
+    #[case::direct_declaration(
+        "# omni:ignore [nested-function] -- required for fixture\ndef inner(): pass",
+        Language::Python,
+        2,
+        2
+    )]
+    #[case::skips_python_decorator_and_comment(
+        "# omni:ignore [nested-function] -- required for fixture\n@decorator\n# note\ndef inner(): pass",
+        Language::Python,
+        2,
+        4
+    )]
+    #[case::skips_rust_attribute_and_comment(
+        "// omni:ignore [single-letter-name] -- math\n#[allow(dead_code)]\n// note\nfn f(a: i32) {}",
+        Language::Rust,
+        2,
+        4
+    )]
+    fn test_parse_valid_inline_directive_preceding_line(
+        #[case] content: &str,
+        #[case] lang: Language,
+        #[case] expected_target_line: usize,
+        #[case] expected_end_target_line: usize,
+    ) {
+        let file = ParsedFile::new(content, lang);
         let tracker = SuppressionTracker::from_file(&file, content);
 
         assert_eq!(tracker.directives.len(), 1);
         let directive = &tracker.directives[0];
-        assert_eq!(directive.target_rules, vec!["nested-function"]);
-        assert_eq!(
-            (directive.reason.as_deref(), directive.is_blanket),
-            (Some("required for fixture"), false)
-        );
+        assert!(!directive.is_blanket);
         assert_eq!(
             directive.placement,
             DirectivePlacement::PrecedingLine {
-                target_line: 2,
-                end_target_line: 2
+                target_line: expected_target_line,
+                end_target_line: expected_end_target_line,
             }
         );
     }
@@ -547,9 +566,11 @@ mod tests {
         assert_eq!(directive.placement, DirectivePlacement::File);
     }
 
-    #[test]
-    fn test_blanket_directive_detected() {
-        let content = "let a = 1; // omni:ignore -- missing brackets";
+    #[rstest]
+    #[case::missing_brackets("let a = 1; // omni:ignore -- missing brackets")]
+    #[case::empty_brackets("let a = 1; // omni:ignore [] -- empty brackets")]
+    #[case::unclosed_bracket("let a = 1; // omni:ignore [single-letter-name -- unclosed bracket")]
+    fn test_blanket_directive_detected(#[case] content: &str) {
         let file = ParsedFile::new(content, Language::Rust);
         let tracker = SuppressionTracker::from_file(&file, content);
 

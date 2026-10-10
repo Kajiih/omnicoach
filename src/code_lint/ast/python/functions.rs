@@ -201,7 +201,7 @@ pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSigna
 /// `@fixture` (`@pytest.fixture`), `@<function>.register` (`functools.singledispatch`
 /// implementations, which dispatch on their annotations), or `@<property>.setter` (whose value
 /// type mirrors the getter's return type).
-fn has_exempt_signature_decorator(decorators: &[DecoratorInfo<'_>]) -> bool {
+fn has_exempt_signature_decorator(decorators: &[DecoratorInfo]) -> bool {
     let is_exempt = |name: &str| {
         matches!(
             name,

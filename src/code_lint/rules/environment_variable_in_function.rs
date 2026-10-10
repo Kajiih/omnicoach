@@ -87,16 +87,14 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Flags reads and writes of environment variables inside a function or method in
                 source files; test files are not checked. In Python this covers `os.getenv`,
                 `os.putenv`, `os.unsetenv`, the `os.environ` methods `get`, `pop`, `setdefault`,
-                `update` and `clear`, and `os.environ[...]` subscripts, also when written as
-                `getenv` or `environ` after a `from os import`. In Rust it covers  `std::env::var`,
-                `var_os`, `vars`, `vars_os`, `set_var` and `remove_var`, whether written with an
-                `std::env::` or `env::` prefix or imported directly. The deny list configures the
-                calls; Python `environ[...]` subscripts are always checked. Access at module, class
-                or `static` scope is allowed, and so is the compile-time `env!` macro. Functions
-                named `from_env`, `from_environ` or `load_env`, and a `main` at the top level of
-                the file, are configuration boundaries: access inside them, including inside
-                functions, closures and lambdas nested in them, is not flagged. A method or
-                `mod`-level function named `main` is not a boundary."},
+                `update` and `clear`, and `os.environ[...]` subscripts. In Rust it covers
+                `std::env::var`, `var_os`, `vars`, `vars_os`, `set_var` and `remove_var`. The deny
+                list configures the calls; Python `environ[...]` subscripts are always checked.
+                Access at module, class or `static` scope is allowed, and so is the compile-time
+                `env!` macro. Functions named `from_env`, `from_environ` or `load_env`, and a
+                `main` at the top level of the file, are configuration boundaries: access inside
+                them, including inside functions, closures and lambdas nested in them, is not
+                flagged. A method or `mod`-level function named `main` is not a boundary."},
             why_is_this_bad: indoc::indoc! {r"
                 A function that reads the environment depends on hidden global state: its signature
                 does not say what configuration it needs, and its behaviour changes with the process
@@ -443,6 +441,13 @@ crate::test_utils::rule_test!(
                         env::var("SERVICE_HOST").unwrap_or_default()
                     }
                 "# => r#"env::var("SERVICE_HOST")"#,
+                directly_imported_var_flagged => r#"
+                    use std::env::var;
+
+                    fn fetch_host() -> String {
+                        var("SERVICE_HOST").unwrap_or_default()
+                    }
+                "# => r#"var("SERVICE_HOST")"#,
                 method_env_call_flagged => r#"
                     pub struct Config {
                         pub host: String,

@@ -209,12 +209,6 @@ impl ParsedArgs {
             .map(String::as_str)
     }
 
-    /// Gets all values associated with an option flag.
-    #[must_use]
-    pub fn get_all_options(&self, option: &str) -> &[String] {
-        self.options.get(option).map_or(&[], Vec::as_slice)
-    }
-
     /// Verifies if the sequence of positional arguments starts with the given subcommands.
     #[must_use]
     pub fn has_subcommand_sequence(&self, sequence: &[&str]) -> bool {

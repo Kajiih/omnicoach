@@ -79,7 +79,7 @@ impl<'a> CommentIndex<'a> {
     /// 1. An inline trailing comment on `line`.
     /// 2. Contiguous preceding comment lines walking upward from `line - 1`.
     #[must_use]
-    pub fn has_adjacent_explanation(&self, line: usize) -> bool {
+    fn has_adjacent_explanation(&self, line: usize) -> bool {
         // 1. Inline comment on the same line
         if self.has_inline_explanation(line) {
             return true;
@@ -122,7 +122,7 @@ impl<'a> CommentIndex<'a> {
 
     /// Checks whether a given 1-indexed line has an inline, substantive explanation.
     #[must_use]
-    pub fn has_inline_explanation(&self, line: usize) -> bool {
+    fn has_inline_explanation(&self, line: usize) -> bool {
         self.comment_on_line(line).is_some_and(|text| {
             let cleaned = clean_explanation(text.as_ref());
             is_substantive_explanation(cleaned)
@@ -131,7 +131,7 @@ impl<'a> CommentIndex<'a> {
 
     /// Returns the raw comment text on a specific 1-indexed line, if any.
     #[must_use]
-    pub fn comment_on_line(&self, line: usize) -> Option<std::borrow::Cow<'_, str>> {
+    fn comment_on_line(&self, line: usize) -> Option<std::borrow::Cow<'_, str>> {
         self.comments_by_line
             .get(&line)
             .map(|entry| entry.node.text())
@@ -152,13 +152,31 @@ const DIRECTIVE_PREFIXES: &[&str] = &[
     "noqa",
 ];
 
+/// Strips leading and trailing comment delimiters (`//`, `#`, `/* ... */`).
+///
+/// Returns `Some(stripped)` if delimiters were present, or `None` if the text
+/// does not start with standard comment delimiters.
+#[must_use]
+pub fn strip_comment_delimiters(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    trimmed
+        .strip_prefix("//")
+        .or_else(|| trimmed.strip_prefix('#'))
+        .map(str::trim_start)
+        .or_else(|| {
+            trimmed
+                .strip_prefix("/*")
+                .map(|body| body.trim_start().trim_end_matches("*/").trim_end())
+        })
+}
+
 /// Strips standard linter/tooling directives (`noqa`, `type: ignore`, `pyright`, `pylint`, `omni:ignore`).
 ///
 /// If the comment contains an explanatory reason after a separator (e.g. `-- reason`),
 /// the directive prefix is stripped and the remaining reason text is returned.
 /// If the comment consists solely of directives and rule codes, `""` is returned.
 #[must_use]
-pub fn clean_explanation(text: &str) -> &str {
+fn clean_explanation(text: &str) -> &str {
     let stripped = strip_comment_delimiters(text).unwrap_or_else(|| text.trim());
     if stripped.is_empty() {
         return "";
@@ -193,30 +211,12 @@ pub fn clean_explanation(text: &str) -> &str {
         .trim()
 }
 
-/// Strips leading and trailing comment delimiters (`//`, `#`, `/* ... */`).
-///
-/// Returns `Some(stripped)` if delimiters were present, or `None` if the text
-/// does not start with standard comment delimiters.
-#[must_use]
-pub fn strip_comment_delimiters(text: &str) -> Option<&str> {
-    let trimmed = text.trim();
-    trimmed
-        .strip_prefix("//")
-        .or_else(|| trimmed.strip_prefix('#'))
-        .map(str::trim_start)
-        .or_else(|| {
-            trimmed
-                .strip_prefix("/*")
-                .map(|body| body.trim_start().trim_end_matches("*/").trim_end())
-        })
-}
-
 /// Minimum words in an explanation; a `TODO` / `FIXME` note needs that many after its marker.
 const MIN_EXPLANATION_WORDS: usize = 3;
 
 /// Checks if an explanation text is substantive (at least 3 words and 10 non-whitespace chars).
 #[must_use]
-pub fn is_substantive_explanation(text: &str) -> bool {
+fn is_substantive_explanation(text: &str) -> bool {
     let words = text.split_whitespace().count();
     let chars = text.chars().filter(|c| !c.is_whitespace()).count();
     if words < MIN_EXPLANATION_WORDS || chars < 10 {

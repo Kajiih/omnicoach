@@ -43,9 +43,9 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             summary: "Flags `typing.cast` calls in Python source files.",
             what_it_does: indoc::indoc! {r#"
                 Flags calls to `typing.cast`, `typing_extensions.cast` and a bare `cast` in Python
-                source files; test files are not checked. Calls are matched by how they are written,
-                not by where the name was imported from: a bare `cast(...)` is flagged even if
-                `cast` comes from another library, while a method call such as
+                source files; test files are not checked. Imports and aliases are resolved:
+                `t.cast(...)` after `import typing as t` is flagged, while a `cast` imported from
+                another library, a locally defined `def cast(...)`, or a method call such as
                 `pl.col("a").cast(pl.Int64)` is not."#},
             why_is_this_bad: indoc::indoc! {r"
                 `cast` tells the type checker to trust a type without checking it, at analysis time

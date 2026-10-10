@@ -10,6 +10,7 @@ from . import (
     names,
     positional_and_scopes,
     tests_cluster,
+    types_errors_concurrency,
 )
 
 CLUSTERS = (
@@ -20,4 +21,5 @@ CLUSTERS = (
     names.CLUSTER,
     tests_cluster.CLUSTER,
     positional_and_scopes.CLUSTER,
+    types_errors_concurrency.CLUSTER,
 )
