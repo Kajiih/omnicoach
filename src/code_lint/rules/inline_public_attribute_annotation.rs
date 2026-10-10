@@ -32,15 +32,10 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags public Python instance attributes annotated inline inside methods instead of in the class body.",
             what_it_does: indoc::indoc! {r"
-                Flags annotated assignments to public instance attributes (`self.attr: Type = value`
-                or `self.attr: Type`) inside instance methods in Python source files (test files are
-                not checked). Only direct instance methods whose first parameter is `self` and that
-                are not decorated with `@staticmethod` or `@classmethod` are inspected. Private
-                attributes starting with `_`, unannotated assignments (`self.attr = value`),
-                unparameterized `Final` annotations (`self.attr: Final = value`), and
-                field-synthesizing classes (`@dataclass`, `attrs`
-                `@define`/`@frozen`/`@mutable`/`@s`, and Pydantic `BaseModel`, where a class-body
-                annotation alters `__init__` or field validation) are not flagged."},
+                Flags annotated assignments to public instance attributes inside methods, such as
+                `self.retries: int = 3`. Classes that build fields from class-body annotations
+                (dataclasses, `attrs` classes and Pydantic models) are skipped, as are bare `Final`
+                annotations, which a class body cannot hold without a value."},
             why_is_this_bad: indoc::indoc! {r"
                 A public attribute is part of a class's external interface. When its type annotation
                 is written inline on `self.attr: Type` inside `__init__` or another method, Python's
@@ -53,6 +48,10 @@ pub const RULE: CodeRule = CodeRule {
                 inline type annotation inside methods. Internal state that does not belong to the
                 class's public contract can be prefixed with `_` and annotated either in the class
                 body or inline."},
+            known_problems: Some(indoc::indoc! {r"
+                Field-building classes are recognized by their decorator as written or a direct
+                `BaseModel` base, so a Pydantic model that inherits `BaseModel` through another base
+                class is flagged."}),
             references: &[
                 Reference {
                     title: "PEP 526: Syntax for Variable Annotations — Class and instance variable annotations",

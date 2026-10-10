@@ -40,16 +40,12 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags Python functions whose positional parameters share a type annotation.",
             what_it_does: indoc::indoc! {r"
-                Flags a function in Python source files (test files are not checked) that has at
-                least `min-positional-parameters` positional parameters of which two or more have
-                the same type annotation. A leading `self` or `cls`, keyword-only parameters (after
-                `*` or `*args`), `*args` and `**kwargs` are not counted. Annotations are compared as
-                written, so `dict[str, int]` and `dict[str, float]` differ, and unannotated
-                parameters count toward the minimum but never match each other. Dunder methods other
-                than `__init__`, `__new__` and `__call__`, and functions decorated with `@override`,
-                `@overload`, `@abstractmethod`, `@fixture` or `@<function>.register`
-                (`functools.singledispatch`), are exempt because their signature is imposed from
-                outside."},
+                Flags a Python function with at least `min-positional-parameters` positional
+                parameters of which two or more share a type annotation, such as
+                `def transfer(source_id: str, target_id: str, amount: int)`. `self`, `cls`,
+                keyword-only parameters, `*args` and `**kwargs` are not counted. Functions whose
+                signature is imposed from outside, such as `@override` and `@overload` functions
+                and dunder methods other than `__init__`, `__new__` and `__call__`, are exempt."},
             why_is_this_bad: indoc::indoc! {r"
                 When two positional parameters have the same type, a call that swaps them, such as
                 `transfer(target_id, source_id, amount)`, still type-checks and reads plausibly in
@@ -59,6 +55,10 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                 `def transfer(*, source_id: str, target_id: str, amount: int)`, so every call names
                 its arguments. Distinct types (such as `NewType` wrappers) also let the type checker
                 catch the swap."},
+            known_problems: Some(indoc::indoc! {r"
+                - Annotations are compared as written, so `dict[str, int]` and `dict[str, float]`
+                  count as different types, and so do `Optional[str]` and `str | None`.
+                - Unannotated parameters never match each other."}),
             references: &[Reference {
                 title: "PEP 3102: Keyword-Only Arguments",
                 url: "https://peps.python.org/pep-3102/",

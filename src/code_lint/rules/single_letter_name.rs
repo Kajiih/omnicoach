@@ -42,15 +42,11 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags names made of a single letter.",
             what_it_does: indoc::indoc! {r"
-                Flags single-letter names the code defines: variables, parameters (including lambda
-                and closure parameters), loop, comprehension, `except ... as`, walrus and pattern
-                bindings, functions, classes, structs, enums, traits, type aliases, constants, and
-                attributes where they are declared (Python class-body declarations, the first
-                `self.name = ...` in `__init__`, Rust named struct fields), except the allowed ones;
-                `_` is never flagged. Imports (including aliased imports), members of a Rust
-                `impl Trait for Type` block, Python methods marked `@override`, type parameters such
-                as `T`, later attribute writes (`self.b = ...` outside `__init__`), and references
-                to existing names are not checked."},
+                Flags single-letter names the code defines, such as a loop variable `u` or a
+                parameter `d`, unless the letter is allowed. `_`, type parameters such as `T`,
+                import aliases and names imposed by a contract (Python `@override` methods, members
+                of a Rust `impl Trait for Type` block) are skipped, but the parameters of those
+                methods are still checked."},
             why_is_this_bad: indoc::indoc! {r"
                 A single letter says nothing about what the value is, so the reader has to trace
                 where it comes from, and the meaning gets lost as the scope grows. Single letters
@@ -58,6 +54,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
 
                 Use a noun that says what the value is (`index`, `user`, `error`). Keep the allowed
                 letters for conventional cases such as loop counters or coordinates."},
+            known_problems: None,
             references: &[Reference {
                 title: "Google Python Style Guide: Naming",
                 url: "https://google.github.io/styleguide/pyguide.html#316-naming",

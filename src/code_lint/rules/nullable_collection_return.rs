@@ -45,28 +45,13 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags function return annotations that wrap a collection type in `| None`, `Optional`, or `Option`.",
             what_it_does: indoc::indoc! {r"
-                Flags functions and methods in source files (test files are not checked) whose
-                return annotation makes a collection type nullable. In Python, this matches return
-                annotations (or awaited return types inside `Awaitable[...]` or
-                `Coroutine[Any, Any, ...]`, or underlying types inside `Annotated[..., ...]`) that
-                form a union containing `None` (`| None`, `Optional[...]`, or `Union[..., None]`) in
-                which every non-`None` branch is a collection type (`Sequence`, `MutableSequence`,
-                `Mapping`, `MutableMapping`, `Set`, `AbstractSet`, `MutableSet`, `Collection`,
-                `Iterable`, `Iterator`, `Reversible`, `list`, `List`, `dict`, `Dict`, `set`,
-                `frozenset`, `FrozenSet`, `deque`, `Deque`, `defaultdict`, `DefaultDict`, `Counter`,
-                `OrderedDict`, bare `tuple` / `Tuple`, or variadic `tuple[T, ...]` /
-                `Tuple[T, ...]`); fixed-length record tuples (`tuple[int, str] | None`), unions
-                mixing a collection with a non-collection type, dunder methods other than
-                `__init__`, `__new__`, and `__call__`, methods on `Protocol` or `ABC` classes, and
-                functions decorated with `@override`, `@overload`, `@abstractmethod`, `@fixture`, or
-                `@<function>.register` are exempt. In Rust, this matches functions and inherent
-                methods whose return type (or payload inside `Result<..., E>` or `Poll<...>`) is
-                `Option<...>` wrapping a standard collection (`Vec`, `VecDeque`, `LinkedList`,
-                `HashMap`, `BTreeMap`, `HashSet`, `BTreeSet`, `BinaryHeap`) or slice (`&[T]`,
-                `&mut [T]`, `Box<[T]>`, `Rc<[T]>`, `Arc<[T]>`, `Cow<'_, [T]>`); fixed-size arrays
-                (`Option<[T; N]>`), tuples (`Option<(A, B)>`), strings (`Option<String>`,
-                `Option<&str>`), and methods inside `trait` or `impl Trait for Type` blocks are
-                exempt."},
+                Flags functions and methods whose return annotation makes a collection type
+                nullable, such as `-> Sequence[str] | None` in Python or `-> Option<Vec<String>>` in
+                Rust. A union that also admits a non-collection type is not flagged, and
+                fixed-length tuples and strings do not count as collections. Methods that cannot
+                freely change their signature, such as `@override` methods, `Protocol` and `ABC`
+                members, most dunder methods and Rust trait items and trait implementations, are
+                skipped."},
             why_is_this_bad: indoc::indoc! {r"
                 A collection type (`Sequence`, `Mapping`, `Set`, `list`, `dict`, `Vec<T>`, `&[T]`,
                 `BTreeMap<K, V>`, `HashSet<T>`) already has an empty value (`()`, `[]`, `{}`,
@@ -79,6 +64,11 @@ pub const RULE: CodeRule = CodeRule {
                 length unconditionally. A nullable collection return is only needed for a
                 three-state contract where `None` means something distinct from zero elements, such
                 as a cache miss, an unparsed field, or an omitted filter."},
+            known_problems: Some(indoc::indoc! {r"
+                - Type aliases such as `Names: TypeAlias = list[str]` or `type Names = Vec<String>;`
+                  are not expanded, so return types that use them are not checked.
+                - In Rust, collection type paths are matched as written, without resolving `use`
+                  aliases or re-exports."}),
             references: &[
                 Reference {
                     title: "SonarSource RSPEC-1168: Empty arrays and collections should be returned instead of null",
@@ -88,6 +78,7 @@ pub const RULE: CodeRule = CodeRule {
                     title: "PMD: ReturnEmptyCollectionRatherThanNull",
                     url: "https://pmd.github.io/pmd/pmd_rules_java_design.html#returnemptycollectionratherthannull",
                 },
+                Reference::NAME_RESOLUTION,
             ],
             examples: &[
                 Example {

@@ -33,10 +33,8 @@ pub const RULE: CodeRule = CodeRule {
             summary: "Requires Python dataclasses to declare `frozen=True`.",
             what_it_does: indoc::indoc! {r"
                 Flags a class decorated with `@dataclass` or `@dataclasses.dataclass` that does not
-                pass `frozen`, in all Python files, tests included. An explicit `frozen=False`
-                counts as a deliberate choice and is not reported. The decorator is matched by name,
-                not by import: a bare `@dataclass` is checked whatever module it comes from, while
-                other decorators, such as `@attrs.define`, are not."},
+                pass `frozen`. An explicit `frozen=False` counts as a deliberate choice and is not
+                reported."},
             why_is_this_bad: indoc::indoc! {r"
                 A default dataclass is mutable: any code holding an instance can change its fields,
                 so a value passed to a function or stored in a cache can change behind the owner's
@@ -45,6 +43,10 @@ pub const RULE: CodeRule = CodeRule {
                 Write `@dataclass(frozen=True)` and derive modified copies with
                 `dataclasses.replace`. When in-place mutation is really needed, say so with
                 `frozen=False`."},
+            known_problems: Some(indoc::indoc! {r"
+                The decorator is matched as written, not through imports: a `@dataclass` imported
+                from another library is checked, and one imported under another name, such as
+                `from dataclasses import dataclass as dc`, is not."}),
             references: &[Reference {
                 title: "Python docs: dataclasses",
                 url: "https://docs.python.org/3/library/dataclasses.html",

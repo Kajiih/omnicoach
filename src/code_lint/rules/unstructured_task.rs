@@ -50,13 +50,10 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags asyncio tasks spawned outside a task group.",
             what_it_does: indoc::indoc! {r"
-                Flags Python calls that start a background task with no enclosing task group:
-                `asyncio.create_task`, `asyncio.ensure_future`, a bare `create_task` or
-                `ensure_future`, `loop.create_task`, `event_loop.create_task`, and `.create_task` on
-                the result of a call, such as `asyncio.get_running_loop().create_task(...)`. Calls
-                on a task group, such as `tg.create_task(...)` or `tg.start_soon(...)`, are not
-                flagged. The rule matches the call alone: a task that is stored in a variable and
-                awaited later is flagged too. It runs on source and test files."},
+                Flags calls that start an asyncio task outside a task group, such as
+                `asyncio.create_task(...)` or `loop.create_task(...)`. Calls on a task group, like
+                `tg.create_task(...)`, are not flagged. The call alone is matched: a task stored in
+                a variable and awaited later is flagged too."},
             why_is_this_bad: indoc::indoc! {r"
                 A task started with `create_task` or `ensure_future` is not bound to a lexical
                 scope. Even when assigned to a variable and awaited later, if an earlier statement
@@ -68,6 +65,9 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Start concurrent work inside `async with asyncio.TaskGroup() as tg:` or
                 `anyio.create_task_group()`: the block waits for every task on exit, cancels sibling
                 tasks immediately when one fails, and propagates their errors."},
+            known_problems: Some(indoc::indoc! {r"
+                An event loop held under another name, such as `self._loop.create_task(...)`, is not
+                flagged."}),
             references: &[
                 Reference {
                     title: "Python docs: asyncio.create_task",
@@ -77,6 +77,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                     title: "Python docs: asyncio Task Groups",
                     url: "https://docs.python.org/3/library/asyncio-task.html#task-groups",
                 },
+                Reference::NAME_RESOLUTION,
             ],
             examples: &[Example {
                 language: Language::Python,

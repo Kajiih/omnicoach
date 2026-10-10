@@ -42,16 +42,11 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags public Python class and instance attributes annotated with concrete mutable collection types such as `list`, `dict`, or `set`.",
             what_it_does: indoc::indoc! {r"
-                Flags public (non-`_`-prefixed) class attributes (`items: list[str]`) and `__init__`
-                instance attributes (`self.items: list[str]`) in Python source files (test files are
-                not checked) whose type annotation uses a concrete mutable collection constructor
-                (`list`, `dict`, `set`, `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, or
-                `typing.Set`, and the `collections` containers `defaultdict`, `deque`, `Counter`,
-                and `OrderedDict` with their `typing` aliases), including inside `ClassVar`,
-                `Final`, `Optional`, `Union`, `|`, and covariant containers. Unqualified `Set` is
-                resolved from the file's imports (`from typing import Set` is flagged;
-                `from collections.abc import Set` is exempt). Private attributes starting with `_`
-                and attributes on `Protocol` or `ABC` classes are not flagged."},
+                Flags public class and instance attributes whose annotation uses a concrete mutable
+                collection type, such as `items: list[str]` in a class body or
+                `self.counts: dict[str, int]` in `__init__`, including inside covariant wrappers
+                such as `Sequence[list[str]]`. Attributes of `Protocol` and `ABC` classes are
+                skipped."},
             why_is_this_bad: indoc::indoc! {r"
                 On a `@dataclass` or public class interface, annotating a field as
                 `items: list[str]` forces callers constructing the class to pass a concrete `list`
@@ -64,10 +59,16 @@ pub const RULE: CodeRule = CodeRule {
                 public concrete collection is a deliberate exception. The message names the
                 read-only counterpart of the flagged type; it does not check how the attribute is
                 used."},
-            references: &[Reference {
-                title: "PEP 585: Type Hinting Generics In Standard Collections",
-                url: "https://peps.python.org/pep-0585/",
-            }],
+            known_problems: Some(indoc::indoc! {r"
+                Type aliases such as `Names: TypeAlias = list[str]` are not expanded, so annotations
+                that use them are not checked."}),
+            references: &[
+                Reference {
+                    title: "PEP 585: Type Hinting Generics In Standard Collections",
+                    url: "https://peps.python.org/pep-0585/",
+                },
+                Reference::NAME_RESOLUTION,
+            ],
             examples: &[Example {
                 language: Language::Python,
                 flagged: indoc::indoc! {r"

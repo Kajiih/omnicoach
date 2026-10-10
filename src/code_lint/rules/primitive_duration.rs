@@ -48,17 +48,9 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags durations held as plain numbers, detected by a time-unit suffix such as `timeout_secs` or `delay_ms`.",
             what_it_does: indoc::indoc! {r"
-                Flags variables, parameters, loop and pattern bindings, constants, and attributes
-                where they are declared (Python class-body declarations, the first
-                `self.name = ...` in `__init__`, Rust named struct fields) whose name ends,
-                ignoring case, with a time-unit suffix: `_seconds`, `_secs`, `_sec`, `_minutes`,
-                `_mins`, `_min`, `_hours`, `_hrs`, `_hr`, `_days`, `_millis`, `_ms`, `_micros`,
-                `_us`, `_nanos` or `_ns` by default. The check reads the name only, not the type,
-                so a suffixed name is flagged even when it already holds a `timedelta` or
-                `Duration`. A name that is only the suffix, such as `_ms`, is not flagged.
-                Functions, classes, structs, enums, traits, type aliases, imports (aliased or not),
-                later attribute writes (`self.timeout_secs = ...` outside `__init__`), and members
-                of a Rust `impl Trait for Type` block are not checked."},
+                Flags variables, parameters, constants and attributes whose name ends with a
+                time unit, such as `timeout_secs` or `delay_ms`. Function and type names are not
+                checked."},
             why_is_this_bad: indoc::indoc! {r"
                 A plain number with a unit in its name relies on every caller reading the name:
                 nothing stops passing milliseconds to a `timeout_secs` parameter, and each boundary
@@ -67,6 +59,9 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Use a duration type, `datetime.timedelta` in Python or `std::time::Duration` in
                 Rust, and drop the suffix (`timeout: timedelta`). The unit is then chosen once,
                 where the value is created (`timedelta(seconds=10)`, `Duration::from_millis(250)`)."},
+            known_problems: Some(indoc::indoc! {r"
+                Only the name is read, not the type, so a suffixed name is flagged even when it
+                already holds a `timedelta` or `Duration`."}),
             references: &[
                 Reference {
                     title: "Python docs: datetime.timedelta",

@@ -32,14 +32,9 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags type-annotated class and instance attributes declared after methods in a Python class body.",
             what_it_does: indoc::indoc! {r"
-                Checks Python `class` definitions for type-annotated attribute declarations
-                (`name: Type` or `name: Type = value`) placed after a method definition (`def` or
-                `async def`) in the same class body.
-
-                Unannotated class-body assignments after methods (such as method aliases
-                `__repr__ = __str__` or `property(get_value)` descriptors, which reference an
-                earlier `def`), subscript or attribute assignment targets (`cls.value: int = 1`),
-                annotations inside method bodies, and test files are not flagged."},
+                Flags a type-annotated attribute (`name: Type` or `name: Type = value`) declared
+                after a method in a Python class body. Unannotated assignments, such as the method
+                alias `__repr__ = __str__`, are not flagged."},
             why_is_this_bad: indoc::indoc! {r"
                 Class-level type annotations define the data layout of a class and determine the
                 synthesized `__init__` parameter order in `@dataclass`, `attrs`, `NamedTuple`, and
@@ -48,6 +43,7 @@ pub const RULE: CodeRule = CodeRule {
 
                 Declare all type-annotated class and instance attributes at the top of the class
                 body, before any method definitions."},
+            known_problems: None,
             references: &[
                 Reference {
                     title: "PEP 526: Syntax for Variable Annotations — Class and instance variable annotations",

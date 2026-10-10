@@ -40,12 +40,9 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags test functions with more assertions than the limit.",
             what_it_does: indoc::indoc! {r"
-                Counts the assertions in each test function and flags a test with more than
-                `max-assertions` of them. In Python, `assert` statements, `.assert*(...)` and
-                `self.fail(...)` calls, `pytest.raises` (or bare `raises`), and `pytest.warns` each
-                count as one assertion; in Rust, `assert*!` and `debug_assert*!` macro calls are
-                counted. Assertions inside nested functions or classes, and in helpers that are not
-                tests, are not counted."},
+                Flags a test function with more assertions than `max-assertions`. Each `assert`
+                statement, `assert*` method call or `pytest.raises` call counts as one in Python,
+                and each `assert*!` or `debug_assert*!` macro call in Rust."},
             why_is_this_bad: indoc::indoc! {r"
                 A test with many assertions usually checks several behaviours at once. It stops at
                 the first failing assertion, so the later ones are never reported, and its name
@@ -54,6 +51,10 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                 Split independent scenarios into separate tests, parameterize variations
                 (`@pytest.mark.parametrize`, `#[rstest]`), or compare the result against one
                 expected value."},
+            known_problems: Some(indoc::indoc! {r"
+                - Assertions in a helper or nested function the test calls are not counted, so
+                  moving checks into one hides them.
+                - An assertion inside a loop counts once, however many times it runs."}),
             references: &[Reference {
                 title: "Software Engineering at Google, ch. 12: Test behaviors, not methods",
                 url: "https://abseil.io/resources/swe-book/html/ch12.html",

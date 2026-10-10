@@ -31,29 +31,12 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags private functions and methods defined above their owning or calling public entrypoints.",
             what_it_does: indoc::indoc! {r"
-                Checks module scopes, Python `class` definitions, and Rust inherent `impl` blocks
-                for private functions or methods declared before the public entrypoints they serve.
-
-                A private helper's public callers are the public entrypoints that reach it,
-                directly or through other private helpers (the walk stops at public functions):
-                - A helper used by **one** public entrypoint is flagged when declared above it, and
-                  is allowed below it (either immediately after it or in the trailing private
-                  helper section after all public functions, as checked by `uncolocated-helper`).
-                - A helper **shared** by several public entrypoints belongs to a lower abstraction
-                  layer than any of them and is flagged when declared above any of them.
-                - A private function **no public entrypoint reaches** is flagged when declared
-                  above the last public entrypoint in the scope.
-
-                In Python, public functions and dunder methods (`__name__`) are public;
-                single-underscore (`_name`) and name-mangled (`__name`) names are private, and
-                `@overload` signatures and `@property` accessors (`getter`, `setter`, `deleter`)
-                are grouped at their first definition. In Rust, items with a visibility qualifier
-                (`pub`, `pub(crate)`, `pub(super)`, `pub(in ...)`) or `fn main` are public; bare
-                `fn` items are private. Scopes with only private functions, Rust trait `impl`
-                blocks, test files, and `#[cfg(test)]` / `#[test]` items are not checked. Together
-                with `uncolocated-helper` and `callee-before-caller`, this rule forms a disjoint
-                three-stage call-cluster check. Calls are resolved by name within the file,
-                assuming the code compiles (Rust) or type-checks (Python)."},
+                Flags a private function or method (`_name` in Python, a bare `fn` in Rust) in a
+                module, Python `class` or Rust inherent `impl` block declared above a public
+                function that calls it, or, when no public function reaches it, above the last
+                public one. Helpers below their callers are checked by `uncolocated-helper` and
+                private-only call order by `callee-before-caller`, so each misplaced function is
+                reported once."},
             why_is_this_bad: indoc::indoc! {r"
                 A private helper is a lower-abstraction building block than the public entrypoint
                 that calls it, and a helper shared across multiple public entrypoints is at a lower
@@ -64,6 +47,16 @@ pub const RULE: CodeRule = CodeRule {
                 Place single-use helpers either immediately below their owning public entrypoint or
                 in the trailing private helper section, and place shared helpers in the trailing
                 private helper section below all public functions."},
+            known_problems: Some(indoc::indoc! {r"
+                - A Python helper run at import time (`TABLE = _build_table()`, a decorator, a
+                  parameter default) has to be defined above that statement, and is still flagged
+                  when this places it above its public caller.
+                - A module-level helper used only by a `class` or `impl` block is checked against it
+                  only when the module also defines a public top-level function.
+                - Only functions are ordered: a private `struct`, `class` or constant can sit above
+                  the public function that uses it.
+                - In Rust macro arguments, a pattern binding or named argument that shares a sibling
+                  function's name counts as a call."}),
             references: &[
                 Reference {
                     title: "Robert C. Martin: Clean Code — Chapter 5 & Chapter 10 (The Newspaper Metaphor, The Stepdown Rule, Class Organization)",

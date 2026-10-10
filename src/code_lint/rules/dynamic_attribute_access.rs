@@ -51,10 +51,8 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags `getattr`, `hasattr`, `setattr` and `delattr` calls in Python.",
             what_it_does: indoc::indoc! {r#"
-                Flags calls to the built-in functions `getattr`, `hasattr`, `setattr` and `delattr`,
-                written bare or as `builtins.getattr` and so on, in all Python files, tests
-                included. Methods of the same name on another object, such as
-                `registry.getattr("key")`, are not flagged."#},
+                Flags calls to the built-in reflection functions, such as
+                `getattr(service, "timeout")` or `hasattr(record, field_name)`."#},
             why_is_this_bad: indoc::indoc! {r#"
                 These functions take the attribute name as a runtime string. The type checker cannot
                 verify that the attribute exists and usually types the result as `Any`; renaming
@@ -65,10 +63,14 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Access attributes directly on a typed object. For data keyed by runtime strings, use
                 a `dict` or `Mapping`; to accept several types that share attributes, declare a
                 `Protocol`."#},
-            references: &[Reference {
-                title: "Python docs: built-in getattr",
-                url: "https://docs.python.org/3/library/functions.html#getattr",
-            }],
+            known_problems: None,
+            references: &[
+                Reference {
+                    title: "Python docs: built-in getattr",
+                    url: "https://docs.python.org/3/library/functions.html#getattr",
+                },
+                Reference::NAME_RESOLUTION,
+            ],
             examples: &[Example {
                 language: Language::Python,
                 flagged: indoc::indoc! {r"

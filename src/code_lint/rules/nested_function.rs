@@ -31,10 +31,9 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags Python functions defined inside other functions.",
             what_it_does: indoc::indoc! {r"
-                Flags every `def` that appears inside the body of another function or method in
-                Python source files; test files are not checked. Top-level functions, methods of any
-                class (including a class declared inside a function) and `lambda` expressions are
-                not flagged."},
+                Flags a `def` inside the body of another Python function or method. `lambda`
+                expressions and the methods of a class declared inside a function are not
+                flagged."},
             why_is_this_bad: indoc::indoc! {r"
                 A nested function captures the enclosing function's local variables implicitly, so
                 its real inputs are not visible in its signature. It cannot be imported, tested or
@@ -43,6 +42,7 @@ pub const RULE: CodeRule = CodeRule {
                 Move the function to module level, conventionally with a leading underscore, and
                 pass what it needs as parameters. A `lambda` remains fine for a trivial callback
                 such as a sort key."},
+            known_problems: None,
             references: &[],
             examples: &[Example {
                 language: Language::Python,

@@ -51,10 +51,8 @@ pub const RULE: CommandRule = CommandRule {
         doc: RuleDoc {
             summary: "Flags `jj edit` on a commit that already has a description.",
             what_it_does: indoc::indoc! {r"
-                Checks shell commands before they run and flags `jj edit <revision>` (or a bare
-                `jj edit`, which targets `@`) when the target revision has a non-empty description.
-                Global options such as `-R` are understood. Commits without a description can still
-                be edited."},
+                Checks shell commands before they run and flags `jj edit <revision>` when the
+                target revision already has a description."},
             why_is_this_bad: indoc::indoc! {r"
                 In Jujutsu, a described commit is usually finished work, often already reviewed.
                 Editing it makes every later file change part of that commit, silently: unrelated
@@ -62,6 +60,9 @@ pub const RULE: CommandRule = CommandRule {
 
                 Create a child change with `jj new <revision>`, then move only the intended fixes
                 into the commit with `jj squash`."},
+            known_problems: Some(indoc::indoc! {r"
+                When `jj` cannot read the target's description, such as for a mistyped revision,
+                the command is not flagged."}),
             references: &[Reference {
                 title: "Jujutsu: Working copy",
                 url: "https://jj-vcs.github.io/jj/latest/working-copy/",

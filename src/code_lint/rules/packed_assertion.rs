@@ -37,14 +37,10 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags assertions that pack several checks into one condition.",
             what_it_does: indoc::indoc! {r"
-                Flags two shapes of assertion in test files. A compound condition joined by a
-                top-level `and` in a Python `assert` statement, or by a top-level `&&` in a Rust
-                `assert!` or `debug_assert!`. And a comparison against a tuple, list or array of two
-                or more boolean literals, such as `assert (valid, active) == (True, False)` or
-                `assert_eq!((a, b), (true, true))` in any `assert_*` or `debug_assert_*` macro.
-                Conditions joined by `or`, an `and` nested inside a function call, and collections
-                holding anything other than boolean literals are not flagged. In Python only bare
-                `assert` statements are checked, not `unittest` methods such as `self.assertTrue`."},
+                Flags a test assertion that joins checks with a top-level `and` (Python
+                `assert`) or `&&` (Rust `assert!`), or that compares against a tuple, list or
+                array of boolean literals, such as `assert_eq!((valid, active), (true, false))`.
+                Conditions joined by `or` are not flagged."},
             why_is_this_bad: indoc::indoc! {r"
                 When a packed assertion fails, the report only says the whole condition was false:
                 it does not say which part failed, and a tuple of booleans shows `True`/`False`
@@ -53,6 +49,9 @@ pub const RULE: CodeRule = CodeRule {
 
                 Write one assertion per check, so each failure names its condition and shows its
                 values, or compare the result against one expected object or struct."},
+            known_problems: Some(indoc::indoc! {r"
+                In Python, only `assert` statements are checked, not `unittest` methods such as
+                `self.assertTrue(a and b)`."}),
             references: &[Reference {
                 title: "pytest: How to write and report assertions in tests",
                 url: "https://docs.pytest.org/en/stable/how-to/assert.html",

@@ -42,11 +42,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags `typing.cast` calls in Python source files.",
             what_it_does: indoc::indoc! {r#"
-                Flags calls to `typing.cast`, `typing_extensions.cast` and a bare `cast` in Python
-                source files; test files are not checked. Imports and aliases are resolved:
-                `t.cast(...)` after `import typing as t` is flagged, while a `cast` imported from
-                another library, a locally defined `def cast(...)`, or a method call such as
-                `pl.col("a").cast(pl.Int64)` is not."#},
+            Flags calls to `typing.cast`, such as `cast(int, config["port"])`."#},
             why_is_this_bad: indoc::indoc! {r"
                 `cast` tells the type checker to trust a type without checking it, at analysis time
                 or at runtime. If the value is not what the cast claims, the error surfaces later
@@ -55,10 +51,14 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
 
                 Narrow the type with a check the type checker understands: `isinstance()`, a
                 `TypeGuard` or `TypeIs` function, or a `Protocol` that describes the contract."},
-            references: &[Reference {
-                title: "Python docs: typing.cast",
-                url: "https://docs.python.org/3/library/typing.html#typing.cast",
-            }],
+            known_problems: None,
+            references: &[
+                Reference {
+                    title: "Python docs: typing.cast",
+                    url: "https://docs.python.org/3/library/typing.html#typing.cast",
+                },
+                Reference::NAME_RESOLUTION,
+            ],
             examples: &[Example {
                 language: Language::Python,
                 flagged: indoc::indoc! {r#"

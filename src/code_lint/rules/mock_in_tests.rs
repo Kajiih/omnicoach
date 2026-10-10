@@ -97,18 +97,8 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags dynamic mocks and monkeypatching in Python tests.",
             what_it_does: indoc::indoc! {r"
-                Flags calls that create mocks or patch code at run time in Python test files:
-                `Mock`, `MagicMock`, `AsyncMock`, `NonCallableMock`, `PropertyMock`,
-                `create_autospec` and `patch` (with `patch.object`, `patch.dict` and
-                `patch.multiple`), whether called bare or through `mock.` or `unittest.mock.`. It
-                also flags pytest-mock's `mocker.*` equivalents plus `mocker.spy`, `mocker.stub` and
-                `mocker.async_stub`, and pytest's `MonkeyPatch` and `monkeypatch.setattr`,
-                `delattr`, `setitem` and `delitem`. Callees are resolved against module-level
-                imports and definitions: `patch` imported from an unrelated library or defined
-                locally is not flagged, import aliases such as `from unittest.mock import patch as p`
-                are resolved to their canonical path, a method on another receiver such as
-                `http_client.patch(...)` is not flagged, and the `mocker` and `monkeypatch` fixture
-                calls are matched under those exact names."},
+                Flags calls that create mocks or patch code at run time, such as `MagicMock()`,
+                `patch(...)`, `mocker.patch(...)` and `monkeypatch.setattr(...)`."},
             why_is_this_bad: indoc::indoc! {r"
                 A mock replaces a real collaborator with an object that accepts any call and returns
                 whatever the test told it to. Patching swaps code by its import path. Both tie the
@@ -119,6 +109,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Pass dependencies in explicitly and use a fake in tests: a small working in-memory
                 implementation of the same interface (for example a `FakeRepository` backed by a
                 dict), then assert on its state."},
+            known_problems: None,
             references: &[
                 Reference {
                     title: "Software Engineering at Google, ch. 13: Test Doubles",
@@ -128,6 +119,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                     title: "Mocks Aren't Stubs (Martin Fowler)",
                     url: "https://martinfowler.com/articles/mocksArentStubs.html",
                 },
+                Reference::NAME_RESOLUTION,
             ],
             examples: &[Example {
                 language: Language::Python,
