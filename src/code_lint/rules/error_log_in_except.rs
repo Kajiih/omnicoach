@@ -147,6 +147,13 @@ crate::test_utils::rule_test!(
                     except RuntimeError:
                         def on_retry_failure():
                             logging.error("retry failed")
+                "#,
+                logging_error_in_lambda_inside_except => r#"
+                    import logging
+
+                    try:
+                        run_job()
+                    except RuntimeError:
                         callback = lambda: logging.error("callback failed")
                 "#,
             ],

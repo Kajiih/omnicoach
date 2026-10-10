@@ -132,7 +132,6 @@ crate::test_utils::rule_test!(
                         pass
                 "#,
                 suppress_call_outside_with_ignored => r#"
-                    # Suppress object passed as an argument or assigned
                     mgr = suppress(FileNotFoundError)
                 "#,
             ],

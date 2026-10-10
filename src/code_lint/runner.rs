@@ -597,9 +597,12 @@ mod tests {
         assert!(diags.is_empty(), "Expected 0 diagnostics, got: {diags:?}");
     }
 
-    #[test]
-    fn test_valid_preceding_line_suppression_silences_violation() {
-        let content = "# omni:ignore [single-letter-name] -- math variable\na = 1";
+    #[rstest]
+    #[case::direct("# omni:ignore [single-letter-name] -- math variable\na = 1")]
+    #[case::across_decorator(
+        "# omni:ignore [single-letter-name] -- math function\n@decorator\ndef func(a): pass"
+    )]
+    fn test_valid_preceding_line_suppression_silences_violation(#[case] content: &str) {
         let config = config_enabling(&["single-letter-name"]);
         let diags = lint_file(Path::new("math.py"), content, &config);
         assert!(diags.is_empty(), "Expected 0 diagnostics, got: {diags:?}");
@@ -725,10 +728,10 @@ mod tests {
         assert_eq!(diags[0].rule_name.0, "single-letter-name");
     }
 
-    #[test]
-    fn test_command_rule_in_code_flagged_as_unknown() {
-        // edit-of-described-commit is a command rule and cannot be suppressed in code files
-        let content = "a = 1  # omni:ignore [edit-of-described-commit] -- invalid code rule";
+    #[rstest]
+    #[case::command_rule("a = 1  # omni:ignore [edit-of-described-commit] -- invalid code rule")]
+    #[case::suppression_audit("a = 1  # omni:ignore [unused-suppression] -- unsuppressible audit")]
+    fn test_unsuppressible_rule_in_code_flagged_as_unknown(#[case] content: &str) {
         let config = Config::default();
         let diags = lint_file(Path::new("src/test.py"), content, &config);
 
@@ -736,7 +739,7 @@ mod tests {
             diags
                 .iter()
                 .any(|diag| diag.rule_name.0 == "unknown-suppression-rule"),
-            "Expected unknown-suppression-rule for non-code rule in code directive, got: {diags:?}"
+            "Expected unknown-suppression-rule for non-suppressible rule in code directive, got: {diags:?}"
         );
     }
 

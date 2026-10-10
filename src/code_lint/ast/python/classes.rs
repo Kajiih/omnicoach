@@ -10,7 +10,6 @@ use crate::code_lint::ast::{
     CallableItem, CallableScope, MethodVisibility, TypeMethod, TypeMethodScope,
     span_from_ruff_range,
 };
-use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef};
 use ruff_text_size::Ranged as _;
@@ -34,14 +33,12 @@ const PYTHON_CONSTRUCTOR_NAMES: &[&str] = &[
 
 /// Represents a base class expression in a Python class definition.
 #[derive(Clone)]
-pub struct PythonBaseClass<'a> {
-    /// AST node for the base class expression.
-    pub node: AstNode<'a>,
+pub struct PythonBaseClass {
     /// Base class identifier or dotted path text (e.g. `"Protocol"`, `"abc.ABC"`).
     pub name: String,
 }
 
-impl PythonBaseClass<'_> {
+impl PythonBaseClass {
     /// Base class name with any generic type argument subscript (`[...]`) stripped.
     #[must_use]
     pub fn unsubscripted_name(&self) -> &str {
@@ -73,51 +70,34 @@ impl PythonBaseClass<'_> {
 /// Structured representation of a Python class definition.
 #[derive(Clone)]
 pub struct PythonClassInfo<'a> {
-    /// The `class_definition` AST node (including any decorators).
-    pub node: AstNode<'a>,
     /// Class name identifier text.
     pub name: String,
     /// Class name AST node.
     pub name_node: AstNode<'a>,
     /// Base classes from `class Foo(Base1, Base2):`.
-    pub bases: Vec<PythonBaseClass<'a>>,
+    pub bases: Vec<PythonBaseClass>,
     /// Parsed decorators on this class definition.
-    pub decorators: Vec<DecoratorInfo<'a>>,
-    /// The class body `block` node.
-    pub body_node: Option<AstNode<'a>>,
+    pub(super) decorators: Vec<DecoratorInfo>,
 }
 
-impl<'a> PythonClassInfo<'a> {
-    /// Returns true if the class inherits from any base whose terminal name matches `target`.
-    #[must_use]
-    pub fn inherits_from(&self, target: &str) -> bool {
-        self.bases.iter().any(|base| {
-            let unsubscripted = base.unsubscripted_name();
-            unsubscripted == target
-                || unsubscripted
-                    .strip_suffix(target)
-                    .is_some_and(|prefix| prefix.ends_with('.'))
-        })
-    }
-
-    /// The `@dataclass` or `@dataclasses.dataclass` decorator, matched by name rather than by
-    /// import, if the class carries one.
-    #[must_use]
-    pub fn dataclass_decorator(&self) -> Option<&DecoratorInfo<'a>> {
-        self.decorators.iter().find(|decorator| {
-            matches!(
-                decorator.path.as_str(),
-                DATACLASS_DECORATOR | QUALIFIED_DATACLASS_DECORATOR
-            )
-        })
-    }
-
+impl PythonClassInfo<'_> {
     /// Returns true if the class carries a `@dataclass` or `@dataclasses.dataclass` decorator
     /// that does not pass the keyword argument `key`.
     #[must_use]
     pub fn is_dataclass_missing_arg(&self, key: &str) -> bool {
         self.dataclass_decorator()
             .is_some_and(|decorator| !decorator.has_arg(key))
+    }
+
+    /// The `@dataclass` or `@dataclasses.dataclass` decorator, matched by name rather than by
+    /// import, if the class carries one.
+    fn dataclass_decorator(&self) -> Option<&DecoratorInfo> {
+        self.decorators.iter().find(|decorator| {
+            matches!(
+                decorator.path.as_str(),
+                DATACLASS_DECORATOR | QUALIFIED_DATACLASS_DECORATOR
+            )
+        })
     }
 }
 
@@ -139,28 +119,12 @@ pub fn extract_classes(file: &ParsedFile) -> Vec<PythonClassInfo<'_>> {
                         let base_span = span_from_ruff_range(base.range());
                         PythonBaseClass {
                             name: self.file.source[base_span.start..base_span.end].to_string(),
-                            node: AstNode::from_span(self.file, base_span),
                         }
                     })
                     .collect();
                 let decorators =
                     extract_decorators_from_slice(&class_def.decorator_list, self.file);
-                let body_node =
-                    class_def
-                        .body
-                        .first()
-                        .zip(class_def.body.last())
-                        .map(|(first, last)| {
-                            AstNode::from_span(
-                                self.file,
-                                SourceSpan {
-                                    start: usize::from(first.range().start()),
-                                    end: usize::from(last.range().end()),
-                                },
-                            )
-                        });
                 self.classes.push(PythonClassInfo {
-                    node: AstNode::from_span(self.file, span_from_ruff_range(class_def.range)),
                     name: class_def.name.id.to_string(),
                     name_node: AstNode::from_span(
                         self.file,
@@ -168,7 +132,6 @@ pub fn extract_classes(file: &ParsedFile) -> Vec<PythonClassInfo<'_>> {
                     ),
                     bases,
                     decorators,
-                    body_node,
                 });
             }
             walk_stmt(self, statement);

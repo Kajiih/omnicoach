@@ -121,98 +121,48 @@ pub(super) fn find_expr_at_span(module: &ModModule, target_span: SourceSpan) -> 
     finder.found
 }
 
-/// Represents a keyword argument (`key=value`) in a Python call or argument list.
-#[derive(Clone)]
-pub struct KeywordArg<'a> {
-    /// The keyword parameter name.
-    pub name: String,
-    /// AST node for the argument identifier name.
-    pub name_node: AstNode<'a>,
-    /// AST node for the argument value expression.
-    pub value_node: AstNode<'a>,
-}
-
-impl KeywordArg<'_> {
-    /// Evaluates literal boolean arguments (`True` / `False`).
-    #[must_use]
-    pub fn as_bool(&self) -> Option<bool> {
-        match self.value_node.text().as_ref() {
-            "True" => Some(true),
-            "False" => Some(false),
-            _ => None,
-        }
-    }
-}
-
 /// Structured metadata for a Python decorator.
 #[derive(Clone)]
-pub struct DecoratorInfo<'a> {
-    /// Full decorator AST node (including `@`).
-    pub node: AstNode<'a>,
+pub(super) struct DecoratorInfo {
     /// Full path string (e.g. `"dataclasses.dataclass"`, `"pytest.mark.parametrize"`).
-    pub path: String,
+    pub(super) path: String,
     /// Terminal identifier (e.g. `"dataclass"`, `"parametrize"`).
-    pub terminal_name: String,
-    /// Call node if the decorator was invoked with parentheses `@dec(...)`.
-    pub call_node: Option<AstNode<'a>>,
-    /// Parsed keyword arguments if invoked as a call.
-    pub keyword_args: Vec<KeywordArg<'a>>,
+    pub(super) terminal_name: String,
+    /// Keyword argument names if invoked as a call.
+    keyword_args: Vec<String>,
 }
 
-impl<'a> DecoratorInfo<'a> {
-    /// Looks up a keyword argument by name.
-    #[must_use]
-    pub fn get_arg(&self, key: &str) -> Option<&KeywordArg<'a>> {
-        self.keyword_args.iter().find(|kw| kw.name == key)
-    }
-
+impl DecoratorInfo {
     /// Returns true if a keyword argument with `key` was explicitly passed.
     #[must_use]
-    pub fn has_arg(&self, key: &str) -> bool {
-        self.get_arg(key).is_some()
+    pub(super) fn has_arg(&self, key: &str) -> bool {
+        self.keyword_args.iter().any(|arg| arg == key)
     }
 }
 
 /// Converts a slice of `ruff_python_ast::Decorator` nodes into `DecoratorInfo` values.
-pub(super) fn extract_decorators_from_slice<'a>(
+pub(super) fn extract_decorators_from_slice(
     decorators: &[Decorator],
-    file: &'a ParsedFile,
-) -> Vec<DecoratorInfo<'a>> {
+    file: &ParsedFile,
+) -> Vec<DecoratorInfo> {
     let mut out = Vec::with_capacity(decorators.len());
     for decorator in decorators {
-        let (call_node, target_expr, keyword_args) = if let Expr::Call(call) = &decorator.expression
-        {
+        let (target_expr, keyword_args) = if let Expr::Call(call) = &decorator.expression {
             let kwargs = call
                 .arguments
                 .keywords
                 .iter()
-                .filter_map(|kw| {
-                    let arg_ident = kw.arg.as_ref()?;
-                    Some(KeywordArg {
-                        name: arg_ident.id.to_string(),
-                        name_node: AstNode::from_span(file, span_from_ruff_range(arg_ident.range)),
-                        value_node: AstNode::from_span(
-                            file,
-                            span_from_ruff_range(kw.value.range()),
-                        ),
-                    })
-                })
+                .filter_map(|kw| Some(kw.arg.as_ref()?.id.to_string()))
                 .collect();
-            (
-                Some(AstNode::from_span(file, span_from_ruff_range(call.range()))),
-                call.func.as_ref(),
-                kwargs,
-            )
+            (call.func.as_ref(), kwargs)
         } else {
-            (None, &decorator.expression, Vec::new())
+            (&decorator.expression, Vec::new())
         };
 
         let (path, terminal_name) = resolve_path_and_terminal_expr(target_expr, &file.source);
         out.push(DecoratorInfo {
-            node: AstNode::from_span(file, span_from_ruff_range(decorator.range)),
             path,
             terminal_name,
-            call_node,
             keyword_args,
         });
     }
@@ -904,7 +854,7 @@ mod tests {
     }
 
     /// Extracts the decorators of the first top-level function definition in `file`.
-    fn first_function_decorators(file: &ParsedFile) -> Vec<DecoratorInfo<'_>> {
+    fn first_function_decorators(file: &ParsedFile) -> Vec<DecoratorInfo> {
         extract_decorators_from_slice(&first_function_def(file).decorator_list, file)
     }
 
@@ -934,15 +884,9 @@ mod tests {
 
         let dec0 = &decorators[0];
         assert_eq!(dec0.terminal_name, "dataclass");
-        assert_eq!(
-            dec0.get_arg("frozen").and_then(KeywordArg::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            dec0.get_arg("slots").and_then(KeywordArg::as_bool),
-            Some(false)
-        );
-        assert!(dec0.get_arg("unknown").is_none());
+        assert!(dec0.has_arg("frozen"));
+        assert!(dec0.has_arg("slots"));
+        assert!(!dec0.has_arg("unknown"));
     }
 
     #[test]
@@ -962,7 +906,7 @@ mod tests {
 
         let dec1 = &decorators[1];
         assert_eq!(dec1.terminal_name, "custom");
-        assert!(dec1.call_node.is_none());
+        assert_eq!(dec1.path, "custom");
     }
 
     #[rstest::rstest]
@@ -977,22 +921,6 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_classes_and_inheritance() {
-        let source = indoc::indoc! {r"
-            class FakeService(abc.ABC, Protocol):
-                pass
-        "};
-        let file = ParsedFile::new(source, Language::Python);
-        let classes = extract_classes(&file);
-        assert_eq!(classes.len(), 1);
-
-        let cls = &classes[0];
-        assert_eq!(cls.name, "FakeService");
-        assert!(cls.inherits_from("Protocol"));
-        assert!(cls.inherits_from("ABC"));
-    }
-
-    #[test]
     fn test_extract_classes_bases_metadata() {
         let source = indoc::indoc! {r"
             class FakeService(abc.ABC, Protocol):
@@ -1000,10 +928,11 @@ mod tests {
         "};
         let file = ParsedFile::new(source, Language::Python);
         let classes = extract_classes(&file);
+        assert_eq!(classes.len(), 1);
         let cls = &classes[0];
-        assert_eq!(cls.bases.len(), 2);
-        assert_eq!(cls.bases[0].name, "abc.ABC");
-        assert_eq!(cls.bases[1].name, "Protocol");
+        assert_eq!(cls.name, "FakeService");
+        let base_names: Vec<&str> = cls.bases.iter().map(|base| base.name.as_str()).collect();
+        assert_eq!(base_names, vec!["abc.ABC", "Protocol"]);
     }
 
     #[test]
@@ -1018,9 +947,12 @@ mod tests {
         assert_eq!(classes.len(), 1);
 
         let cls = &classes[0];
-        assert_eq!(cls.name, "Config");
-        assert_eq!(cls.decorators[0].terminal_name, "dataclass");
-        assert!(!cls.inherits_from("Protocol"));
+        assert_eq!(
+            (cls.name.as_str(), cls.decorators[0].terminal_name.as_str()),
+            ("Config", "dataclass")
+        );
+        assert!(!cls.is_dataclass_missing_arg("frozen"));
+        assert!(cls.is_dataclass_missing_arg("slots"));
     }
 
     #[test]
