@@ -27,8 +27,8 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "`{receiver}` is read by index at positions {positions}.",
     rationale: "A positional index hides what the element means, and every index site misreads or breaks when the layout changes.",
     suggestion: {
-        Python => "Unpack once into named variables (`x, y = point`, or `x, y, *_ = point` when the sequence can be longer); return a `NamedTuple` or dataclass when the tuple crosses a function boundary.",
-        Rust => "Destructure once into named bindings (`let (start, end) = span;`, `let Point(x, y) = point;` for tuple structs, or `let (start, end) = &span;` when fields are not `Copy`); use a struct with named fields when the tuple crosses a function boundary.",
+        Python => "Unpack once into named variables (`start, end = span`, or `start, end, *_ = span` when the sequence can be longer); return a `NamedTuple` or dataclass when the tuple crosses a function boundary.",
+        Rust => "Destructure once into named bindings (`let (start, end) = span;`, `let Span(start, end) = span;` for tuple structs, or `let (start, end) = &span;` when fields are not `Copy`); use a struct with named fields when the tuple crosses a function boundary.",
     },
 };
 
@@ -49,15 +49,15 @@ pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
             summary: "Flags a value read at several literal positions instead of being unpacked once.",
             what_it_does: indoc::indoc! {r"
                 Flags a value read at several literal positions in one function, such as
-                `point[0]` and `point[1]` in Python or `span.0` and `span.1` in Rust, when
+                `span[0]` and `span[1]` in Python or `span.0` and `span.1` in Rust, when
                 unpacking it once would need few `_` placeholders. A value also used as a whole
                 (iterated, sliced, passed to `len`) or mutated is not flagged."},
             why_is_this_bad: indoc::indoc! {r"
-                An index says where an element sits, not what it means: `point[0]` and `span.1`
+                An index says where an element sits, not what it means: `span[0]` and `span.1`
                 force the reader to remember the layout, and every index site silently reads the
                 wrong element when the layout changes.
 
-                Unpack once into named variables: `x, y = point` (or `first, *_, last = xs`) in
+                Unpack once into named variables: `start, end = span` (or `first, *_, last = xs`) in
                 Python, `let (start, end) = span;` in Rust. When the tuple crosses a function
                 boundary, return a `NamedTuple`, a dataclass or a struct with named fields instead."},
             known_problems: Some(indoc::indoc! {r"

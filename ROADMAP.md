@@ -75,7 +75,6 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
 - **Rule dependencies and soundness**:
   - *Status*: Understood and explored: [01_understand.md](docs/dev/rule_dependencies/01_understand.md), [02_references.md](docs/dev/rule_dependencies/02_references.md), [03_design.md](docs/dev/rule_dependencies/03_design.md). Both committing to a design and implementing it are deferred until a larger rule corpus lands, so we do not overfit the abstractions to today's 8 Omni ↔ Omni edges (D13).
   - *Context*: Rules relate through detection (`Partitions`, `Equivalent` / `Subsumes` / `Overlaps`), fixes (`Chain`, `Cycle`, `Contradiction`, `DivergentAdvice`) and soundness (`ReliesOn`, `Delegates`). These relations live only in prose, and nothing checks that one rule's fix does not trigger another rule.
-  - *Can land now*: D11 (`repeated-index-access` examples use `start, end = span` in both languages) in `01_understand.md` §7.
   - *When resumed*: Do not blindly implement `03_design.md`. Re-inventory the expanded rule corpus, challenge the prototype findings (`Partition` constants, active-voice edges, `Concept` intermediates, compile-time rule names, executable witnesses, and the Option D fix-conflict harness), and look for simpler or stronger abstractions before committing (`03_design.md` §4).
   - Related: "Typed overlap / sources field" (§5).
 
