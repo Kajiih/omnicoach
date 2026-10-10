@@ -14,6 +14,15 @@ pub struct Reference {
     pub url: &'static str,
 }
 
+impl Reference {
+    /// How imported and locally defined names are matched; referenced by every rule whose
+    /// matches depend on it, instead of restating it in `what_it_does`.
+    pub const NAME_RESOLUTION: Self = Self {
+        title: "How Omni resolves names",
+        url: "https://github.com/Kajiih/omni-lint/blob/main/docs/name_resolution.md",
+    };
+}
+
 /// A flagged snippet and its fix in one language.
 ///
 /// The rule's tests check both as strictly as `rule_test!` cases: the flagged snippet yields
@@ -43,23 +52,33 @@ pub struct Example {
 /// A rule's user-facing documentation, rendered by `--explain`. A missing section does not
 /// compile (`E0063`).
 ///
-/// Option defaults are rendered from the rule's options declaration, so the prose never
-/// repeats them. Wording rules for `summary` are in
-/// `docs/dev/naming_and_message_style_guide.md` §2.5, checked by `tests/registry.rs`.
+/// Its objective is predictability: a reader can tell whether the rule flags their code without
+/// reading the implementation (`docs/dev/rule_design_guide.md` §6).
 ///
-/// Write `what_it_does` and `why_is_this_bad` as `indoc::indoc!` raw strings wrapped at the
-/// source line width, closed on their last line. They are Markdown: a single line break is a
-/// space, and a blank line separates paragraphs.
+/// The prose never repeats what `--explain` already renders or documents elsewhere: option
+/// defaults such as the flagged callees or a threshold (`## Configuration`), the file scope
+/// (`## Tags`), and how imported names resolve ([`Reference::NAME_RESOLUTION`], listed in
+/// `references` by the rules that resolve names). Edge cases belong in the `rule_test!` cases.
+/// Wording rules for `summary` are in `docs/dev/naming_and_message_style_guide.md` §2.5,
+/// checked by `tests/registry.rs`.
+///
+/// Write `what_it_does`, `why_is_this_bad` and `known_problems` as `indoc::indoc!` raw strings
+/// wrapped at the source line width, closed on their last line. They are Markdown: a single
+/// line break is a space, and a blank line separates paragraphs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuleDoc {
     /// One sentence for rule lists, opening with `Flags` (pattern rules) or `Requires`
     /// (rules whose fix adds something) and ending with a period.
     pub summary: &'static str,
-    /// What the rule flags, in a few sentences: the covered constructs and the explicit
-    /// exemptions.
+    /// What the rule flags, in one to three sentences. Name an exemption only when a reader
+    /// would otherwise mispredict whether common code is flagged; never list every covered or
+    /// exempt construct.
     pub what_it_does: &'static str,
     /// Why the flagged code is a problem: the authoritative, longer rationale.
     pub why_is_this_bad: &'static str,
+    /// Limitations a user may hit: false positives or false negatives the rule accepts by
+    /// design or has not solved yet. `None` when there are none worth telling.
+    pub known_problems: Option<&'static str>,
     /// Links to backing or related documents.
     pub references: &'static [Reference],
     /// Exactly one [`Example`] per analyzed language (checked by `tests/registry.rs`);
@@ -73,6 +92,7 @@ impl RuleDoc {
         summary: "Documentation pending.",
         what_it_does: "Documentation pending.",
         why_is_this_bad: "Documentation pending.",
+        known_problems: None,
         references: &[],
         examples: &[],
     };
@@ -81,5 +101,24 @@ impl RuleDoc {
     #[must_use]
     pub fn is_placeholder(&self) -> bool {
         *self == Self::TODO
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn name_resolution_reference_points_at_a_repository_file() {
+        let (_, path) = Reference::NAME_RESOLUTION
+            .url
+            .split_once("/blob/main/")
+            .expect("the URL must point into the repository's `main` branch");
+        assert!(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(path)
+                .is_file(),
+            "`{path}` does not exist"
+        );
     }
 }

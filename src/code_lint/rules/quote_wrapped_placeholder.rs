@@ -35,18 +35,11 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags Python format placeholders wrapped in literal single or double quotes.",
             what_it_does: indoc::indoc! {r#"
-                Flags bare string-formatted placeholders wrapped in matching single or double quotes
-                (`'{x}'`, `"{x}"`, `'{}'`, `'{0}'`, `'%s'`, `'%(name)s'`) inside Python format
-                strings across all files, tests included. Three formatting contexts are inspected:
-                f-strings (`f"..."`), strings formatted via `.format(...)` or `.format_map(...)` (or
-                `str.format(...)`), and strings formatted via the `%` operator or passed with format
-                arguments to a logger call (`debug`, `info`, `warning`, `warn`, `error`,
-                `exception`, `critical`, `fatal`, `log`). Plain unformatted strings, docstrings, raw
-                strings (`r"..."`), byte strings (`b"..."`), placeholders that already carry a
-                conversion flag (`!r`, `!s`, `!a`), format specifier (`:...`), or debug `=`,
-                non-`%s` printf specifiers (`%r`, `%d`, `%.2f`), and structured syntax (HTML
-                attributes, JSON or TOML fragments, `key="value"` flags, and backtick code spans)
-                are not flagged."#},
+                Flags a format placeholder wrapped in quotes within prose, such as
+                `f"Invalid port '{port}'"`, `"Unknown key '{}'".format(key)` or
+                `logger.warning("User '%s' not found", name)`. Placeholders that already set a
+                conversion or format spec are not flagged, and neither are quotes that look like
+                structured text, such as HTML attributes, JSON or `key="value"` pairs."#},
             why_is_this_bad: indoc::indoc! {r"
                 Wrapping a default string placeholder in manual quotes fails when the runtime value
                 contains the same quote character (`Invalid value 'can't'`) or control characters
@@ -58,6 +51,9 @@ pub const RULE: CodeRule = CodeRule {
                 printf and logger format strings) so strings are quoted and escaped automatically
                 via `repr()` while preserving the representation of non-string types, or wrap the
                 placeholder in backticks (`` `{x}` ``) when formatting a code identifier."},
+            known_problems: Some(indoc::indoc! {r"
+                Prose is told apart from structured text by the characters around the quotes, so a
+                quoted placeholder in a SQL query, such as `LIKE '{pattern}'`, is flagged too."}),
             references: &[
                 Reference {
                     title: "PEP 3101: Advanced String Formatting (conversion flags)",

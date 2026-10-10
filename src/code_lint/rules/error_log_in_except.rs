@@ -42,12 +42,8 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags error-level logging calls inside Python `except` blocks.",
             what_it_does: indoc::indoc! {r"
-                Flags calls to `logging.error(...)` anywhere inside an `except` block, including
-                bare `except:` and nested blocks such as an `if` within the handler. Calls in the
-                `try`, `else` and `finally` blocks, inside a function, `lambda` or class defined
-                within the handler, or outside any `try`, are not flagged. By default only the
-                module-level `logging.error` is matched: a logger instance call such as
-                `logger.error(...)` is not flagged. A call passing `exc_info=True` is flagged too."},
+                Flags `logging.error(...)` calls inside an `except` block, including those that
+                pass `exc_info=True`."},
             why_is_this_bad: indoc::indoc! {r"
                 Inside an `except` block, the exception being handled is the most useful thing to
                 log. By default `logging.error` records only the message and drops the traceback,
@@ -56,10 +52,16 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
 
                 Use `logging.exception(...)`, which logs at error level and attaches the active
                 traceback by default."},
-            references: &[Reference {
-                title: "Python docs: logging.exception",
-                url: "https://docs.python.org/3/library/logging.html#logging.exception",
-            }],
+            known_problems: Some(indoc::indoc! {r"
+                Calls on a logger object, such as `logger.error(...)`, are not flagged unless the
+                deny list includes them."}),
+            references: &[
+                Reference {
+                    title: "Python docs: logging.exception",
+                    url: "https://docs.python.org/3/library/logging.html#logging.exception",
+                },
+                Reference::NAME_RESOLUTION,
+            ],
             examples: &[Example {
                 language: Language::Python,
                 flagged: indoc::indoc! {r#"

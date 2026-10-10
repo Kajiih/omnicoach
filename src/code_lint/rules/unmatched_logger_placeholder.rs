@@ -32,17 +32,12 @@ pub const RULE: CodeRule = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags logger calls that pass positional arguments to a message with an unmatched named placeholder.",
-            what_it_does: indoc::indoc! {r"
-                Flags calls to `logger.<level>(...)`, `log.<level>(...)`, `_logger.<level>(...)`,
-                `_log.<level>(...)`, `logging.<level>(...)`, `<expr>.logger.<level>(...)`,
-                `<expr>.log.<level>(...)`, `<expr>._logger.<level>(...)` and
-                `<expr>._log.<level>(...)` (across `trace`, `debug`, `info`, `success`, `warning`,
-                `warn`, `error`, `critical`, `fatal`, `exception` and `log`) when the message string
-                literal contains a named replacement field such as `{order_id}`, at least one
-                positional format argument (or `*args` unpacking) is passed after the message, no
-                `**kwargs` unpacking is present, and no matching `order_id=...` keyword argument is
-                provided. For `.log(level, message, ...)`, the second positional argument is
-                inspected as the message."},
+            what_it_does: indoc::indoc! {r#"
+                Flags logger calls such as `logger.info("Order {order_id} filled", order_id)`,
+                whose message has a named placeholder while the call passes positional format
+                arguments and no matching keyword argument. Loggers are recognized by name:
+                `logging`, `logger`, `log`, `_logger` or `_log`, the last four also as an attribute
+                such as `self.logger`."#},
             why_is_this_bad: indoc::indoc! {r#"
                 When refactoring an f-string log call such as
                 `logger.info(f"Order {order_id} filled")` to use lazy logger formatting, stripping
@@ -54,6 +49,9 @@ pub const RULE: CodeRule = CodeRule {
                 Either pass `order_id=order_id` as a keyword argument (which `loguru` formats and
                 captures into `record["extra"]`), or replace `{order_id}` with positional `{}` (for
                 `loguru`) or `%s` (for standard library `logging`)."#},
+            known_problems: Some(indoc::indoc! {r"
+                - A logger under another name, such as `audit.info(...)`, is not checked.
+                - A call that unpacks `**kwargs` is not flagged: the keyword may come from it."}),
             references: &[
                 Reference {
                     title: "Loguru documentation: formatting and extra context",

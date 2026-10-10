@@ -57,13 +57,8 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags assertions on how a mock was called in Python tests.",
             what_it_does: indoc::indoc! {r"
-                Flags calls to the `unittest.mock` interaction assertions in Python test files:
-                `assert_called`, `assert_called_once`, `assert_called_with`,
-                `assert_called_once_with`, `assert_any_call`, `assert_has_calls` and
-                `assert_not_called`, and their `assert_awaited*` / `assert_any_await` /
-                `assert_has_awaits` / `assert_not_awaited` counterparts. They are flagged on any
-                object, whether or not it is a mock. Other methods whose names start with `assert_`,
-                such as `verifier.assert_valid_state()`, are not flagged."},
+                Flags calls to the `unittest.mock` interaction assertions, such as
+                `gateway.charge.assert_called_once_with(100)` or `mock.assert_not_awaited()`."},
             why_is_this_bad: indoc::indoc! {r"
                 These assertions check that the code under test made particular calls, in a
                 particular way, rather than that it produced the right result. The test then encodes
@@ -72,10 +67,16 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
 
                 Assert on what callers can observe: the returned value, or the resulting state of an
                 in-memory fake standing in for the dependency."},
-            references: &[Reference {
-                title: "Software Engineering at Google, ch. 13: Test Doubles",
-                url: "https://abseil.io/resources/swe-book/html/ch13.html",
-            }],
+            known_problems: Some(indoc::indoc! {r"
+                A method with one of these names is flagged on any object, whether or not it is a
+                mock."}),
+            references: &[
+                Reference {
+                    title: "Software Engineering at Google, ch. 13: Test Doubles",
+                    url: "https://abseil.io/resources/swe-book/html/ch13.html",
+                },
+                Reference::NAME_RESOLUTION,
+            ],
             examples: &[Example {
                 language: Language::Python,
                 flagged: indoc::indoc! {r"

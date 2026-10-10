@@ -42,16 +42,10 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags public Python class and instance attributes annotated with `MutableSequence`, `MutableMapping`, or `MutableSet` when never mutated in the class.",
             what_it_does: indoc::indoc! {r"
-                Flags public (non-`_`-prefixed) class attributes (`items: MutableSequence[str]`) and
-                `__init__` instance attributes (`self.items: MutableSequence[str]`) in Python source
-                files (test files are not checked) whose type annotation uses `MutableSequence`,
-                `MutableMapping`, or `MutableSet` (at the top level or inside `ClassVar`, `Final`,
-                `Optional`, `Union`, `|`, or `Annotated`) when no method of the class mutates `self.<name>` or
-                `cls.<name>` in place. Nested types such as `Sequence[MutableMapping[K, V]]` are not
-                checked, because mutation of the elements is not tracked. Private attributes
-                starting with `_`, attributes mutated in any method of the class, attributes on
-                `Protocol` or `ABC` classes, and `TypedDict` keys (a `TypedDict` has no methods to
-                mutate them) are not flagged."},
+                Flags public class and instance attributes annotated with an abstract mutable
+                collection type (`MutableSequence`, `MutableMapping` or `MutableSet`) that no method
+                of the class mutates in place, such as `self.tags: MutableSet[str]` that is only
+                read. Attributes of `Protocol` and `ABC` classes are skipped."},
             why_is_this_bad: indoc::indoc! {r"
                 On a `@dataclass` or public class interface, annotating a read-only field as
                 `MutableSequence`, `MutableMapping`, or `MutableSet` makes its type invariant,
@@ -61,12 +55,21 @@ pub const RULE: CodeRule = CodeRule {
                 A mutable public attribute is a contract that outside code may mutate it, so it is a
                 deliberate choice. Otherwise, `Sequence`, `Mapping`, or `Set` (imported as
                 `AbstractSet`) state a read-only field, and internal mutable state belongs in a
-                `_`-prefixed attribute. Only methods of the class are checked for mutation; code
-                outside the class is not."},
-            references: &[Reference {
-                title: "Python collections.abc — Collections Abstract Base Classes",
-                url: "https://docs.python.org/3/library/collections.abc.html",
-            }],
+                `_`-prefixed attribute."},
+            known_problems: Some(indoc::indoc! {r"
+                - Only the class's own methods count as mutations, so an attribute mutated only by a
+                  subclass or by outside code is flagged.
+                - A mutable type nested in another, such as `Sequence[MutableMapping[K, V]]`, is not
+                  checked, because mutation of the elements is not tracked.
+                - Type aliases such as `Tags: TypeAlias = MutableSet[str]` are not expanded, so
+                  annotations that use them are not checked."}),
+            references: &[
+                Reference {
+                    title: "Python collections.abc — Collections Abstract Base Classes",
+                    url: "https://docs.python.org/3/library/collections.abc.html",
+                },
+                Reference::NAME_RESOLUTION,
+            ],
             examples: &[Example {
                 language: Language::Python,
                 flagged: indoc::indoc! {r"

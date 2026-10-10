@@ -23,6 +23,7 @@ pub struct RuleDoc {
     pub summary: &'static str,
     pub what_it_does: &'static str,
     pub why_is_this_bad: &'static str,
+    pub known_problems: Option<&'static str>,
     pub references: &'static [Reference],
     pub examples: &'static [Example],
 }
@@ -33,14 +34,15 @@ pub struct Reference {
 }
 
 pub struct Example {
-    pub language: SupportLang,
+    pub language: Language,
     pub flagged: &'static str,
     pub flagged_span: &'static str,
     pub fixed: &'static str,
 }
 ```
 
-- **Two-Tier Summaries (`DI10`)**: `summary` is strictly one sentence on one line, ending with a period. It is used in `--list-rules` outputs. `what_it_does` is a comprehensive multi-sentence description detailing covered constructs and explicit exemptions, displayed under `## What it does` in `--explain`.
+- **Two-Tier Summaries (`DI10`)**: `summary` is strictly one sentence on one line, ending with a period. It is used in `--list-rules` outputs. `what_it_does` describes the flagged construct in one to three sentences, displayed under `## What it does` in `--explain`.
+- **Ruff-Style Concise Docs (revised after the initial decision)**: The objective of a rule doc is predictability: a reader can tell whether the rule flags their code ([rule_design_guide.md](../docs/dev/rule_design_guide.md) §6). `what_it_does` first listed every covered construct and exemption, which buried the rule's idea under details. It now names an exemption only when a reader would otherwise mispredict whether common code is flagged, and leaves out what is rendered or documented elsewhere: option defaults (`## Configuration`), the file scope (`## Tags`), import-aware name matching (`docs/name_resolution.md`, linked by `Reference::NAME_RESOLUTION`) and edge cases (`rule_test!` cases). Limitations a user may hit go in the optional `known_problems`, rendered under `## Known problems` after the rationale, as in Ruff.
 - **Compile-Time Completeness**: Omitting a field from `RuleDoc` is a compile error (`E0063`).
 - **Incremental Content Rollout (`DI12`)**: A `RuleDoc::TODO` placeholder allows progressive rollout across existing rules while maintaining compile-time completeness. Automated style linter tests enforce formatting on all non-placeholder docs.
 - **Executed Examples (`D42`, added after the initial decision)**: Each code rule documents exactly one flagged/fixed pair per declared language, rendered by `--explain` under `## Example` with a "Use instead:" fix (the Ruff layout). The pairs live in `RuleDoc` rather than in marked `rule_test!` cases, so the doc reads as prose next to the rule; `rule_test!` generates a `documented_examples` test that checks each pair with the same assertions as its `fail` / `pass` cases (exactly one finding spanning `flagged_span`, also when the snippet is repeated, and none on the fix), so a rendered example cannot drift from the rule. Examples deliberately overlap the `rule_test!` cases rather than replace them: docs get edited for readability, and that must never drop coverage. Suppression audits and command rules have no harness to run examples and declare none.

@@ -36,22 +36,12 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags Python function parameters annotated with concrete mutable collection types such as `list`, `dict`, or `set`.",
             what_it_does: indoc::indoc! {r"
-                Flags non-variadic parameters of functions and methods in Python source files (test
-                files are not checked) whose type annotation uses a concrete mutable collection
-                constructor (`list`, `dict`, `set`, `List`, `Dict`, `Set`, `typing.List`,
-                `typing.Dict`, or `typing.Set`, and the `collections` containers `defaultdict`,
-                `deque`, `Counter`, and `OrderedDict` with their `typing` aliases), either at the
-                top level or inside transparent wrappers (`|`, `Optional`, `Union`, `Annotated`) and
-                covariant container positions (`Sequence[list[T]]`, `Mapping[K, list[V]]`,
-                `tuple[...]`, `Awaitable[...]`, and `Callable` return types). Unqualified `Set` is
-                resolved from the file's imports (`from typing import Set` is flagged;
-                `from collections.abc import Set` is exempt). Contravariant `Callable` parameter
-                lists and the type arguments of invariant containers (`list`, `dict`,
-                `MutableSequence`, `MutableMapping`) are not inspected. Dunder methods other than
-                `__init__`, `__new__`, and `__call__`, methods on `Protocol` or `ABC` classes, and
-                functions decorated with `@override`, `@overload`, `@abstractmethod`, `@fixture`,
-                `@<function>.register`, or `@<property>.setter` are exempt. String annotations are
-                not resolved."},
+                Flags function and method parameters whose annotation uses a concrete mutable
+                collection type, such as `items: list[str]`, including inside covariant wrappers
+                such as `Sequence[list[str]]` (but not `Callable` argument types or invariant outer
+                containers such as `MutableSequence[list[str]]`). Methods that cannot freely change
+                their signature, such as `@override` methods, `Protocol` and `ABC` members and most
+                dunder methods, are skipped."},
             why_is_this_bad: indoc::indoc! {r"
                 In Python's type system, `list`, `dict`, and `set` are invariant in their type
                 parameters and require a mutable concrete container at call sites. A function
@@ -65,10 +55,16 @@ pub const RULE: CodeRule = CodeRule {
                 their `Mutable` counterparts for in-place mutation. The message names the read-only
                 counterpart of the flagged type as a starting point; it does not inspect how the
                 parameter is used."},
-            references: &[Reference {
-                title: "PEP 585: Type Hinting Generics In Standard Collections",
-                url: "https://peps.python.org/pep-0585/",
-            }],
+            known_problems: Some(indoc::indoc! {r"
+                Type aliases such as `Names: TypeAlias = list[str]` are not expanded, so annotations
+                that use them are not checked."}),
+            references: &[
+                Reference {
+                    title: "PEP 585: Type Hinting Generics In Standard Collections",
+                    url: "https://peps.python.org/pep-0585/",
+                },
+                Reference::NAME_RESOLUTION,
+            ],
             examples: &[Example {
                 language: Language::Python,
                 flagged: indoc::indoc! {r"

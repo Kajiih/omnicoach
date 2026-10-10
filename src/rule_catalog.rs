@@ -110,6 +110,14 @@ fn render_rule(rule: &RegisteredRule) -> String {
         doc.why_is_this_bad.trim_end().to_owned(),
         String::new(),
     ];
+    if let Some(known_problems) = doc.known_problems {
+        lines.extend([
+            "## Known problems".to_owned(),
+            String::new(),
+            known_problems.to_owned(),
+            String::new(),
+        ]);
+    }
     if !doc.examples.is_empty() {
         lines.extend(["## Example".to_owned(), String::new()]);
         for example in doc.examples {
@@ -305,6 +313,7 @@ mod tests {
             ("why_is_this_bad", doc.why_is_this_bad),
         ]
         .into_iter()
+        .chain(doc.known_problems.map(|text| ("known_problems", text)))
         .chain(doc.references.iter().flat_map(|reference| {
             [
                 ("reference title", reference.title),
@@ -347,6 +356,7 @@ mod tests {
         summary: "Flags things.",
         what_it_does: "Flags things when they happen.",
         why_is_this_bad: "Things are bad.",
+        known_problems: None,
         references: &[Reference {
             title: "Title",
             url: "https://example.com",
@@ -371,6 +381,10 @@ mod tests {
     #[case::heading(
         RuleDoc { why_is_this_bad: "Bad.\n\n## Example", ..GOOD },
         &["`why_is_this_bad` has a `#` heading; the renderer owns headings"]
+    )]
+    #[case::empty_known_problems(
+        RuleDoc { known_problems: Some(" "), ..GOOD },
+        &["`known_problems` is empty"]
     )]
     #[case::trailing_newline(
         RuleDoc { what_it_does: "Flags things.\n", ..GOOD },

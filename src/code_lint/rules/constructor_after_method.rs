@@ -34,22 +34,11 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags class and inherent `impl` constructors defined after regular methods.",
             what_it_does: indoc::indoc! {r"
-                Checks Python `class` definitions and Rust inherent `impl` blocks for constructors
-                defined after a non-constructor method in the same scope.
-
-                In Python, lifecycle constructors are `__prepare__`, `__init_subclass__`,
-                `__new__`, `__init__`, `__post_init__`, `__attrs_pre_init__`, and
-                `__attrs_post_init__`. `@overload` signatures for a constructor are grouped with
-                their implementation at the first declaration position.
-
-                In Rust, constructors are exported (`pub`, `pub(crate)`, `pub(super)`, `pub(in ...)`)
-                associated functions without a `self` receiver named `new`, `try_new`, `new_*`, or
-                `try_new_*` whose return type references `Self` or the enclosing type inside an
-                inherent `impl` block. Trait implementations (`impl Trait for Type`), private
-                helper functions (`fn new_helper() -> Self`), associated functions returning an
-                unrelated type (`pub fn new_request_id() -> u64`), and instance methods taking a
-                `self` receiver (`pub fn new_session(&self) -> Self`) are not flagged. Test files
-                and `#[cfg(test)]` / `#[test]` items are not checked."},
+                Flags a constructor declared after a regular method in a Python `class` or Rust
+                inherent `impl` block, such as `__init__` below `def close(self)`. In Python,
+                constructors are lifecycle methods such as `__new__`, `__init__` and
+                `__post_init__`; in Rust, they are public associated functions without `self` named
+                `new`, `try_new`, `new_*` or `try_new_*` that return `Self` or the enclosing type."},
             why_is_this_bad: indoc::indoc! {r"
                 When reading a class or type implementation from top to bottom, developers look for
                 constructors first to understand what state the type holds and how an instance is
@@ -58,6 +47,7 @@ pub const RULE: CodeRule = CodeRule {
 
                 Move all constructors to the top of the `class` or inherent `impl` block, before
                 any non-constructor methods."},
+            known_problems: None,
             references: &[
                 Reference {
                     title: "Checkstyle: DeclarationOrder",

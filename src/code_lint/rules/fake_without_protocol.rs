@@ -32,15 +32,10 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Requires Python `Fake*` classes to inherit from a `Protocol` or base class.",
             what_it_does: indoc::indoc! {r"
-                Flags any Python class whose name starts with the word `Fake` (after any leading
-                underscores, such as `FakeRepository`, `_FakeHttpClient`, `Fake_Client`, `Fake2FA`
-                or `Fake`) when its class header does not list a collaborator base class, in all
-                Python files. Names where `Fake` is only part of a longer word, such as `Faker` or
-                `Fakeable`, are not flagged. Base classes that do not supply a collaborator contract
-                — `object`, `Generic`, `Protocol` and `ABC` (bare or qualified through `builtins`,
-                `typing`, `typing_extensions` or `abc`) — do not count on their own, so
-                `class FakeClient(object):`, `class FakeRepo(Generic[T]):`,
-                `class FakeClient(Protocol):` and `class FakeBaseStorage(ABC):` are still flagged."},
+                Flags a class whose name starts with the word `Fake`, such as `FakeRepository` or
+                `_FakeHttpClient`, when it has no base class supplying a collaborator contract.
+                `object`, `Generic`, `Protocol` and `ABC` do not count as such a base, so
+                `class FakeClient(Protocol):` is still flagged."},
             why_is_this_bad: indoc::indoc! {r"
                 Under PEP 544, a class that does not subclass a `Protocol` is only checked against
                 that `Protocol` at typed call sites. When a test function or fixture is unannotated,
@@ -52,6 +47,11 @@ pub const RULE: CodeRule = CodeRule {
                 (`class FakeUserRepository(UserRepository):`) so the type checker verifies every
                 method signature at the class definition and rejects instantiating a fake with
                 missing methods."},
+            known_problems: Some(indoc::indoc! {r"
+                - Any other base counts as a collaborator, even an unrelated one such as
+                  `class FakeClient(Exception):`.
+                - Bases are matched by spelling, so an alias such as `Protocol as P` makes
+                  `class FakeClient(P):` pass."}),
             references: &[
                 Reference {
                     title: "PEP 544: Explicitly Declaring Implementation",

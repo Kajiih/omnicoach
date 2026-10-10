@@ -39,30 +39,11 @@ pub const RULE: CodeRule = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags Python module-level constants whose type annotation or value is a mutable collection.",
-            what_it_does: indoc::indoc! {r"
-                Flags module-level assignments (including inside top-level `if`, `elif`, `else`,
-                `try`, `except`, `finally`, and `with` blocks) in Python source files (test files
-                are not checked) whose target is a single identifier in `UPPER_SNAKE_CASE` (with an
-                optional leading `_`) or annotated with `Final`. A constant is flagged when its type
-                annotation uses a concrete mutable collection (`list`, `dict`, `set`, `List`,
-                `Dict`, `Set`, `typing.List`, `typing.Dict`, `typing.Set`, or the `collections`
-                containers `defaultdict`, `deque`, `Counter`, and `OrderedDict` with their `typing`
-                aliases) or an abstract mutable collection (`MutableSequence`, `MutableMapping`,
-                `MutableSet`), including inside `Final`, `Optional`, `Union`, `|`, `Annotated`, and
-                covariant container positions (`tuple[list[T], ...]`, `Mapping[K, list[V]]`). When
-                the annotation does not itself use a mutable collection, a constant is flagged if
-                its value is a `list` or `set` literal (`[...]`, `{a, b}`), comprehension
-                (`[x for ...]`, `{x for ...}`), or mutable constructor call (`list(...)`,
-                `set(...)`, `deque(...)`), or if its value is a `dict` literal (`{k: v}`, `{}`),
-                comprehension (`{k: v for ...}`), or `dict(...)` call without a `Mapping` annotation
-                (such as `Mapping[K, V]` or `Final[Mapping[K, V]]`). Calls to `defaultdict`,
-                `Counter`, and `OrderedDict` are always flagged. Unqualified `Set` is resolved from
-                the file's imports (`from typing import Set` is flagged;
-                `from collections.abc import Set` is exempt). Dunder names (such as `__all__`),
-                lowercase module variables without `Final`, attribute or unpacking targets
-                (`config.ALLOWED = ...`, `A, B = ...`), class attributes, function-local variables,
-                and type aliases (`TypeAlias`, `type X = ...`) are not flagged. String annotations
-                are not resolved."},
+            what_it_does: indoc::indoc! {r#"
+                Flags module-level constants, named in `UPPER_SNAKE_CASE` or annotated with `Final`,
+                whose annotation or value is a mutable collection, such as `ROLES = ["admin"]` or
+                `ROLES: list[str] = ...`. A `dict` value annotated as a `Mapping` is not flagged,
+                unless it is built by `defaultdict`, `Counter` or `OrderedDict`."#},
             why_is_this_bad: indoc::indoc! {r#"
                 In Python, `UPPER_SNAKE_CASE` naming and `typing.Final` signal that a module
                 attribute is a constant, yet `Final` only prevents rebinding the variable name. When
@@ -77,6 +58,10 @@ pub const RULE: CodeRule = CodeRule {
                 the collection is intentionally mutated at runtime, name it in `_`-prefixed
                 `lower_snake_case` without `Final` to show that it is module state rather than a
                 constant."#},
+            known_problems: Some(indoc::indoc! {r"
+                - Only literals, comprehensions and collection constructor calls are recognized as
+                  values, so `ROLES: Final = load_roles()` is not flagged.
+                - Unpacking targets such as `A, B = [1], [2]` are not checked."}),
             references: &[
                 Reference {
                     title: "PEP 591: Adding a final qualifier to typing",
@@ -90,6 +75,7 @@ pub const RULE: CodeRule = CodeRule {
                     title: "Google Python Style Guide: Global variables",
                     url: "https://google.github.io/styleguide/pyguide.html#25-global-variables",
                 },
+                Reference::NAME_RESOLUTION,
             ],
             examples: &[Example {
                 language: Language::Python,

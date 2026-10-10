@@ -48,20 +48,10 @@ pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
         doc: RuleDoc {
             summary: "Flags a value read at several literal positions instead of being unpacked once.",
             what_it_does: indoc::indoc! {r"
-                Groups positional reads by value within one function and flags the value when at
-                least `min-positions` distinct positions are read and unpacking them would need at
-                most `max-placeholders` `_` placeholders (`row[0], row[7]` is left alone by
-                default). In Python, a read is an index by a decimal integer literal, negative
-                allowed (`point[0]`, `xs[-1]`), on a name, attribute or index chain without calls
-                (`self.pair[1]`, `rows[i][0]`); the type is not known, so lists and dicts with
-                integer keys count too. Module-level code counts as one scope, comprehensions belong
-                to their function, and lambdas and class bodies are ignored. A value is not flagged
-                in a scope where it is also written through an index, deleted from, sliced, indexed
-                by a variable or a non-decimal literal, iterated, passed to `len`, `enumerate`,
-                `zip`, `reversed` or `sorted`, or mutated by a method such as `append` or `update`.
-                In Rust, a read is a tuple field access (`span.0`, `self.1`, `cmd.span.0`) inside a
-                function, closures included; a value whose field is assigned or mutably borrowed is
-                not flagged, and macro arguments (`assert_eq!(t.0, t.1)`) are not inspected."},
+                Flags a value read at several literal positions in one function, such as
+                `point[0]` and `point[1]` in Python or `span.0` and `span.1` in Rust, when
+                unpacking it once would need few `_` placeholders. A value also used as a whole
+                (iterated, sliced, passed to `len`) or mutated is not flagged."},
             why_is_this_bad: indoc::indoc! {r"
                 An index says where an element sits, not what it means: `point[0]` and `span.1`
                 force the reader to remember the layout, and every index site silently reads the
@@ -70,6 +60,12 @@ pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
                 Unpack once into named variables: `x, y = point` (or `first, *_, last = xs`) in
                 Python, `let (start, end) = span;` in Rust. When the tuple crosses a function
                 boundary, return a `NamedTuple`, a dataclass or a struct with named fields instead."},
+            known_problems: Some(indoc::indoc! {r"
+                - Python reads are matched without knowing the type, so a list, or a dict with
+                  integer keys, read at fixed positions is flagged too.
+                - Reads are grouped by the receiver's source text, so a name rebound or shadowed
+                  between two reads still counts as one value.
+                - Rust macro arguments, such as `assert_eq!(t.0, t.1)`, are not inspected."}),
             references: &[
                 Reference {
                     title: "PEP 3132: Extended Iterable Unpacking",

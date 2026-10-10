@@ -33,10 +33,8 @@ pub const RULE: CodeRule = CodeRule {
             summary: "Requires Python dataclasses to declare `slots=True`.",
             what_it_does: indoc::indoc! {r"
                 Flags a class decorated with `@dataclass` or `@dataclasses.dataclass` that does not
-                pass `slots`, in all Python files, tests included. An explicit `slots=False` counts
-                as a deliberate choice and is not reported. The decorator is matched by name, not by
-                import: a bare `@dataclass` is checked whatever module it comes from, while other
-                decorators, such as `@attrs.define`, are not."},
+                pass `slots`. An explicit `slots=False` counts as a deliberate choice and is not
+                reported."},
             why_is_this_bad: indoc::indoc! {r"
                 Without slots, each instance carries a `__dict__` that costs memory and silently
                 accepts misspelled attribute assignments, so a typo in `instance.nmae = ...` creates
@@ -45,6 +43,10 @@ pub const RULE: CodeRule = CodeRule {
                 Write `@dataclass(slots=True)` (`slots` needs Python 3.10 or later). When dynamic
                 attributes or multiple inheritance with other slotted bases are really needed, say
                 so with `slots=False`."},
+            known_problems: Some(indoc::indoc! {r"
+                The decorator is matched as written, not through imports: a `@dataclass` imported
+                from another library is checked, and one imported under another name, such as
+                `from dataclasses import dataclass as dc`, is not."}),
             references: &[Reference {
                 title: "Python docs: dataclasses",
                 url: "https://docs.python.org/3/library/dataclasses.html",

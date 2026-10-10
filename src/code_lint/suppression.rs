@@ -45,6 +45,7 @@ const MISSING_SUPPRESSION_REASON: Declaration = Declaration {
             reviewer cannot tell a deliberate exception from a shortcut, and a later reader cannot
             tell whether the suppression is still needed. The reason keeps the decision reviewable,
             and makes stale suppressions easy to spot and remove."},
+        known_problems: None,
         references: &[Reference {
             title: "Ruff: Error suppression",
             url: "https://docs.astral.sh/ruff/linter/#error-suppression",
@@ -74,13 +75,11 @@ const UNUSED_SUPPRESSION: Declaration = Declaration {
     doc: RuleDoc {
         summary: "Flags suppression directives that suppress no finding.",
         what_it_does: indoc::indoc! {r"
-            Flags each rule named in an `omni:ignore` or `omni:disable-file` directive that produced
-            no finding in the directive's scope: its own line for a trailing directive, the next
-            line for a directive on its own line (extended over any decorators, attributes or
-            comments to the first line of the declaration they belong to), or the whole file. A rule
-            that is disabled in the configuration, or does not run on that file, is not checked.
-            Unknown rule names and directives without rule names are left to
-            `unknown-suppression-rule` and `blanket-suppression`."},
+            Flags each rule named in an `omni:ignore` or `omni:disable-file` directive that reports
+            no finding in the directive's scope: its own line, the declaration below it, or the
+            whole file. Rules disabled in the configuration or not run on the file are not checked,
+            and unknown or missing rule names are left to `unknown-suppression-rule` and
+            `blanket-suppression`."},
         why_is_this_bad: indoc::indoc! {r"
             A suppression that matches nothing is stale: the code was fixed or moved, or the
             directive sits on the wrong line. It misleads readers into thinking the line breaks a
@@ -88,6 +87,11 @@ const UNUSED_SUPPRESSION: Declaration = Declaration {
             reported.
 
             Remove the rule from the directive, or the whole directive when no rule is left."},
+        known_problems: Some(indoc::indoc! {r"
+            A directive on its own line covers the lines below it that start with `@`, `#` or `//`
+            (decorators, attributes, comments) and the first line after them, nothing further. A
+            finding further down a multi-line statement, or below a decorator or attribute spanning
+            several lines, is not suppressed, and the directive is reported as unused."}),
         references: &[Reference {
             title: "Ruff: unused-noqa (RUF100)",
             url: "https://docs.astral.sh/ruff/rules/unused-noqa/",
@@ -119,15 +123,15 @@ const UNKNOWN_SUPPRESSION_RULE: Declaration = Declaration {
         what_it_does: indoc::indoc! {r"
             Flags each rule name in an `omni:ignore` or `omni:disable-file` directive that is not a
             code rule known to Omni, such as the typo `[nested-functions]`. The suppression audits
-            themselves (`missing-suppression-reason`, `unused-suppression`,
-            `unknown-suppression-rule` and `blanket-suppression`) cannot be suppressed by a
-            directive, so naming one is flagged too."},
+            themselves, such as `unused-suppression`, cannot be suppressed by a directive, so
+            naming one is flagged too."},
         why_is_this_bad: indoc::indoc! {r"
             A misspelled or obsolete rule name suppresses nothing, but reads as if it did. The
             finding it was meant to hide is still reported, or a reader wrongly assumes a check is
             off. Names of renamed or removed rules pile up as noise.
 
             Fix the name (`--list-rules` prints every rule name), or remove it from the directive."},
+        known_problems: None,
         references: &[],
         examples: &[],
     },
@@ -154,16 +158,16 @@ const BLANKET_SUPPRESSION: Declaration = Declaration {
     doc: RuleDoc {
         summary: "Flags suppression directives that name no rule.",
         what_it_does: indoc::indoc! {r"
-            Flags `omni:ignore` and `omni:disable-file` directives with no bracketed rule list, an
-            empty list `[]`, or an unclosed `[`. For example, `# omni:ignore -- legacy code` is
-            flagged, while `# omni:ignore [nested-function] -- legacy code` is not. Such a directive
-            suppresses no finding."},
+            Flags `omni:ignore` and `omni:disable-file` directives that name no rule. For example,
+            `# omni:ignore -- legacy code` is flagged, while
+            `# omni:ignore [nested-function] -- legacy code` is not."},
         why_is_this_bad: indoc::indoc! {r"
             Omni has no catch-all suppression: a directive silences only the rules it names. A
             directive without names does nothing, yet reads as if it switched off every check on the
             line or in the file, which misleads the reader.
 
             Name the rules to suppress in brackets, followed by a reason: `[rule-name] -- reason`."},
+        known_problems: None,
         references: &[Reference {
             title: "Ruff: blanket-noqa (PGH004)",
             url: "https://docs.astral.sh/ruff/rules/blanket-noqa/",

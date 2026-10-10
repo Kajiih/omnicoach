@@ -32,28 +32,13 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags private helpers that are neither colocated right after their single public consumer nor placed in the trailing helper section at the end of the scope.",
             what_it_does: indoc::indoc! {r"
-                Checks module scopes, Python `class` definitions, and Rust inherent `impl` blocks
-                that every private helper declared below its public callers sits in one of two
-                places:
-                1. **Right after its only public caller**: directly below that function, among
-                   that function's other helpers.
-                2. **In the trailing helper section**: after the last public function or method of
-                   the scope. Shared helpers must go here. A helper with a single public caller
-                   may go here too, as long as that caller's helpers are not split between both
-                   places.
-
-                A helper's public callers are the public entrypoints that reach it, directly or
-                through other private helpers (the walk stops at public functions).
-
-                This supports both vertical-slice modules (`[pub_a, _a_helpers, pub_b, _b_helpers]`)
-                and public-first scopes (`[pub_a, pub_b, _a_helpers, _b_helpers, _shared_helpers]`),
-                while flagging helpers stranded in the middle of a scope between unrelated public
-                functions. Private functions that no public entrypoint reaches, and helpers
-                declared above a public caller, are handled by `private-before-public-function`.
-                Python `@overload` signatures and `@property` accessors (`getter`, `setter`,
-                `deleter`) are grouped at their first definition; Rust trait `impl` blocks, test
-                files, and `#[cfg(test)]` / `#[test]` items are not checked. Calls are resolved by
-                name within the file, assuming the code compiles (Rust) or type-checks (Python)."},
+                Flags a private helper declared below its public callers that is neither right
+                after its only public caller nor in the trailing helper section after the last
+                public function of the module, Python `class` or Rust inherent `impl` block. Both
+                `[pub_a, _a_helper, pub_b, _b_helper]` and `[pub_a, pub_b, _a_helper, _b_helper]`
+                pass, but one caller's helpers are not split between the two places. Helpers above
+                their callers and unreached private functions are left to
+                `private-before-public-function`."},
             why_is_this_bad: indoc::indoc! {r"
                 A private helper belongs either directly underneath the single public entrypoint it
                 implements (vertical slice) or in the trailing private implementation section at the
@@ -64,6 +49,13 @@ pub const RULE: CodeRule = CodeRule {
                 Place each single-use helper either immediately after its consumer or in the
                 trailing helper section at the end of the scope, and always place multi-use helpers
                 at the end of the scope."},
+            known_problems: Some(indoc::indoc! {r"
+                - A module-level helper used only by a `class` or `impl` block is checked against it
+                  only when the module also defines a public top-level function.
+                - Only functions are ordered: a private `struct`, `class` or constant is not placed
+                  with the function that uses it.
+                - In Rust macro arguments, a pattern binding or named argument that shares a sibling
+                  function's name counts as a call."}),
             references: &[
                 Reference {
                     title: "Robert C. Martin: Clean Code — Chapter 5: Formatting (Vertical Distance & Dependent Functions)",

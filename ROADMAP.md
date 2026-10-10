@@ -7,15 +7,6 @@ Items here represent design areas and technical directions to evaluate rather th
 ---
 
 ## Unclassified
-- In cases like in too_many_assertions where the python and rust versions have almost the same violation message, should we factorize this?
-- I feel like our documentation repeats the same thing everywhere creating noise that hides the actual behavior of the rule, e.g.
-```
-Callees are resolved against module-level
-                imports and definitions: `patch` imported from an unrelated library or defined
-                locally is not flagged, import aliases such as `from unittest.mock import patch as p`
-                are resolved to their canonical path
-```
-  - More generally I think our description might be too verbose and noisy and including uninteresting things for the person who wants to understand the rule, it sholud not give explicit list of what is or isn't supported. We should use ruff documentation as a reference
 
 ## Architecture & Conformance
 
@@ -58,13 +49,14 @@ Design: `decisions/006_architectural_dag_and_conformance.md`. Enforcement: `src/
   - *Target*: Use AST decorated/attributed node spans in the suppression resolver so `omni:ignore` placed above a multiline decorator/attribute block suppresses diagnostics on the underlying declaration.
 - **Generic Container Base-Type Matching (`identical-positional-types`)**:
   - *Current*: Positional parameter types are compared by exact formatted annotation string (`dict[str, int]` != `dict[str, float]`).
-  - *Target*: Optionally normalize or group generic collection/mapping containers (`dict[...]`, `Mapping[...]`, `list[...]`, `Sequence[...]`) so multiple positional mappings or sequences are flagged even when their inner type arguments differ.
+  - *Target*: Optionally normalize or group generic collection/mapping containers (`dict[...]`, `Mapping[...]`, `list[...]`, `Sequence[...]`) so multiple positional mappings or sequences are flagged even when their inner type arguments differ. Equivalent spellings of one type (`Optional[str]` vs `str | None`, `List[int]` vs `list[int]`) are also compared as different today.
 - **Escaping Nested Scopes (`environment-variable-in-function`)**:
   - *Current*: The boundary exemption (`main`, `from_env`, ...) is inherited by every scope declared inside it, which is correct for nested functions and closures but also exempts a class declared inside a boundary whose methods later escape (returned, registered as a callback).
   - *Target*: Treat a `class` / `impl` declared inside a boundary as a barrier that resets the exemption, once a real-world occurrence justifies the added language-specific complexity.
 - **Import-Aware Qualified Call Resolution (`src/code_lint/semantic/calls.rs`)**:
   - *Current*: Literal banned-call entries and Python collection annotations are resolved through a per-file import map (`ast::resolve_name`): an imported callee matches only by its canonical path (`import typing as t; t.cast(...)` matches `typing.cast`; `from sqlalchemy import cast` no longer matches `cast`), a module-level definition never matches, and an unimported name matches as written (decision D1 in [docs/dev/semantic_index/01_understand.md](docs/dev/semantic_index/01_understand.md)). Only module-level Python imports and root-level Rust `use` items are considered; imports inside functions or `mod` blocks, function parameters, assignment aliases, and the receiver of `<callee>().<method>` entries are not resolved.
   - *Target*: Evaluate scope-aware resolution (nested imports, parameter/fixture receivers such as `mocker.patch`, `monkeypatch.setattr`, `loop.create_task`), modeled on Ruff's `SemanticModel::resolve_qualified_name`.
+  - *Matchers that bypass `resolve_name`*: decorators (`@dataclass` in `classes.rs::dataclass_decorator`, `@override` / `@overload` in `ast/python/functions.rs`), class bases (`Protocol` / `ABC` in `fake-without-protocol`, `BaseModel` in `is_field_synthesizing_class`, direct bases only), the `bare-multiline-string` allow list (`resolve_path_and_terminal_expr`, Rust `is_enclosed_in_macro`) and Rust type paths in `nullable-collection-return` are matched as written. Routing them through `resolve_name` would make aliases match and same-named imports from other libraries stop matching, and would retire the corresponding Known problems in those rule docs.
 - **Dependency-Aware Rule Activation (`pyproject.toml` / `Cargo.toml`) & Loguru Format Enforcement (`LoggerPrintfFormatRule`)**:
   - *Context*: Some rules only make sense when a project uses a specific library ecosystem. The legacy linter's `LoggerPrintfFormatRule` ([docs/dev/logger_printf_format/02_references.md](docs/dev/logger_printf_format/02_references.md)) targets `loguru`: while `"..." % ...` is covered by Ruff `G002` (`logging-percent-format`) and `UP031` (`printf-string-formatting`), multi-argument `logger.info("User %s", user)` is required in stdlib `logging` (enforced by Ruff `G001`–`G004`), yet in `loguru` it is a silent data-loss bug (`str.format` ignores unused positional arguments when no `{}` is present; today only Pylint `E1205` with `[tool.pylint.logging] logging-format-style = "new"` and `logging-modules = ["loguru"]` checks this).
   - *Target*: Investigate dependency-aware rule activation (inspecting `pyproject.toml` / `uv.lock` / `Cargo.toml` or project-wide imports) or a configurable logging format mode so a `printf-log-format` rule enforcing `{}` placeholders over `%s` in logger calls can be enabled automatically when `loguru` is installed.
@@ -125,8 +117,7 @@ Source: Python Tip of the Week #069 "Prefer constants over wild values" (go/pyth
   - *Overlap*: Clippy `excessive_precision` only flags digits beyond `f64` representability, not unreadable test values.
 - **`repeated-literal`** (Python, Rust — tip core rule and `#no_magic`) — **implemented**, design in `docs/dev/repeated_literal/`. Follow-ups:
   - *Values inside exempt macros* (Rust): the whole exempt macro (`assert_eq!`, `format!`, …) is skipped, so `assert_eq!(x, "expected")` repeated in production code is not counted (pass case `known_gap_values_inside_exempt_macros`). Counting only value arguments needs per-macro knowledge of which arguments are format strings.
-  - *Negative numbers as separate tokens*: where the sign is a bare `-` token (Rust macro `token_tree`, Python mapping, keyword and union patterns), the number is skipped rather than counted as `N` (pass cases `known_gap_negative_numbers_in_macros`, `known_gap_negative_numbers_in_mapping_and_keyword_patterns`).
-  - *Tuple indices in non-exempt macros* (Rust): inside a `token_tree`, `pair.0` is a bare integer token, so repeated tuple indices in custom macros count as numbers.
+  - *Negative numbers as separate tokens* (Rust): inside a macro `token_tree` the sign is a bare `-` token, so the number is skipped rather than counted as `N` (pass case `known_gap_negative_numbers_in_macros`).
   - *Unpacked and chained constants* (Python): `A, B = 1, 2` and `A = B = 1` are not recognized as constant definitions; their values count as inline uses.
   - *Typed template placeholders*: constants such as `CALLEE = "callee"` exist only to name a template placeholder once. A typed placeholder (enum or typed key) would remove them.
   - *Multi-diagnostic `rule_test!` cases*: see "Rule test harness".

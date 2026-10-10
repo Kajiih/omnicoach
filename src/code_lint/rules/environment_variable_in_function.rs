@@ -13,7 +13,7 @@ use std::path::Path;
 
 const BANNED: ListOption = ListOption {
     kind: ListKind::Deny,
-    doc: "Environment variable accesses flagged inside functions.",
+    doc: "Environment variable accesses flagged inside functions; Python `os.environ[...]` subscripts are flagged whatever this list holds.",
     default: FilterListDefaults {
         base: &[],
         extend: &[
@@ -82,18 +82,12 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         },
         doc: RuleDoc {
             summary: "Flags environment variable access inside functions.",
-            what_it_does: indoc::indoc! {r"
-                Flags reads and writes of environment variables inside a function or method in
-                source files; test files are not checked. In Python this covers `os.getenv`,
-                `os.putenv`, `os.unsetenv`, the `os.environ` methods `get`, `pop`, `setdefault`,
-                `update` and `clear`, and `os.environ[...]` subscripts. In Rust it covers
-                `std::env::var`, `var_os`, `vars`, `vars_os`, `set_var` and `remove_var`. The deny
-                list configures the calls; Python `environ[...]` subscripts are always checked.
-                Access at module, class or `static` scope is allowed, and so is the compile-time
-                `env!` macro. Functions named `from_env`, `from_environ` or `load_env`, and a
-                `main` at the top level of the file, are configuration boundaries: access inside
-                them, including inside functions, closures and lambdas nested in them, is not
-                flagged. A method or `mod`-level function named `main` is not a boundary."},
+            what_it_does: indoc::indoc! {r#"
+                Flags reads and writes of environment variables inside a function or method, such
+                as `os.environ["HOST"]` or `std::env::var("PORT")`; access at module, class or
+                `static` scope is not flagged. Functions named `from_env`, `from_environ` or
+                `load_env`, and a top-level `main`, are configuration boundaries: access inside
+                them, or inside functions and closures nested in them, is not flagged."#},
             why_is_this_bad: indoc::indoc! {r"
                 A function that reads the environment depends on hidden global state: its signature
                 does not say what configuration it needs, and its behaviour changes with the process
@@ -104,10 +98,16 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Read the environment once, at startup or in a `from_env` constructor, into a typed
                 configuration object, and pass that object, or the values it holds, to the code that
                 needs them."},
-            references: &[Reference {
-                title: "Rust docs: std::env::set_var (safety)",
-                url: "https://doc.rust-lang.org/std/env/fn.set_var.html",
-            }],
+            known_problems: Some(indoc::indoc! {r"
+                A class or `impl` block defined inside a boundary function inherits its exemption,
+                even when its methods are later called from outside the boundary."}),
+            references: &[
+                Reference {
+                    title: "Rust docs: std::env::set_var (safety)",
+                    url: "https://doc.rust-lang.org/std/env/fn.set_var.html",
+                },
+                Reference::NAME_RESOLUTION,
+            ],
             examples: &[
                 Example {
                     language: Language::Python,

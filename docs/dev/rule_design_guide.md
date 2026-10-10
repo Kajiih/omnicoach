@@ -50,7 +50,20 @@ Static rules should establish sane defaults while respecting domain vocabulary.
 
 ---
 
-## 6. Where the Mechanics Live
+## 6. Predictable Documentation
+A rule's documentation exists so that a reader can **predict whether the rule flags their code** without reading its implementation. A rule that surprises its users loses their trust, whether it fires where they did not expect or stays silent where they did.
+
+* **The Prediction Test**: Read the `--explain` output as a user would and ask, for common code: *would I guess right whether this is flagged?* Every sentence must help answer that question; one that does not is noise and hides the behavior that matters.
+* **State what changes the answer**: An exemption, a cross-rule hand-off (`zero-sleep-in-tests` takes zero-duration sleeps from `sleep-in-tests`), or an exception to an exemption (a `Mapping` annotation exempts a `dict`, but not a `defaultdict(...)`) belongs in the doc as soon as a reader would otherwise mispredict common code.
+* **State the limits**: False positives and false negatives a user may hit go in `known_problems`, not in a code comment or the roadmap alone.
+* **Say it once, where the reader looks**: The doc never restates what `--explain` renders from the declaration or documents elsewhere: list defaults and thresholds (`## Configuration`), file scope (`## Tags`), import-aware name matching (`docs/name_resolution.md`). A behavior that overrides an option belongs in that option's `doc`, which is rendered next to it (`os.environ[...]` is flagged whatever the `environment-variable-in-function` deny list holds).
+* **Leave edge cases to the tests**: Rare constructs that no reader would guess about are `rule_test!` cases, not prose. An exhaustive list of covered and exempt constructs fails the Prediction Test by burying the cases that matter.
+
+The field-by-field contract is `RuleDoc` (`src/rule_declaration/documentation.rs`).
+
+---
+
+## 7. Where the Mechanics Live
 
 This guide is about *why*. For the steps to add a rule, follow [adding_a_rule.md](adding_a_rule.md). The contracts live next to the code, so they cannot drift from it:
 

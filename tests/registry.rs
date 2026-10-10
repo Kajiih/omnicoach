@@ -643,11 +643,11 @@ fn test_rules_with_a_mode_leave_comment_explanations_to_the_framework() {
         let template = rule.template;
         let doc = rule.doc;
         let template_fields = [template.summary, template.rationale, template.suggestion];
-        let fields = template_fields.iter().flat_map(texts).chain([
-            doc.summary,
-            doc.what_it_does,
-            doc.why_is_this_bad,
-        ]);
+        let fields = template_fields.iter().flat_map(texts).chain(
+            [doc.summary, doc.what_it_does, doc.why_is_this_bad]
+                .into_iter()
+                .chain(doc.known_problems),
+        );
         for text in fields {
             assert!(
                 !text.contains("require-explanation"),

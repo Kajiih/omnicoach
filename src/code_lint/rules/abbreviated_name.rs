@@ -45,18 +45,12 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags names that contain an abbreviation such as `ctx` or `msg`.",
             what_it_does: indoc::indoc! {r"
-                Splits each name the code defines into words, at underscores and at
-                lowercase-to-uppercase or digit-to-uppercase boundaries, and flags the name if any
-                word is a banned abbreviation, ignoring case. Only whole words match: `strategy` and
-                `category` are not flagged, `handle_msg` and `TaskRes` are. Checked names:
-                variables, parameters, loop and pattern bindings, functions, classes, structs,
-                enums, traits, type aliases, constants, and attributes where they are declared
-                (Python class-body declarations, the first `self.name = ...` in `__init__`, Rust
-                named struct fields). Not checked: imports (including aliased imports such as
-                `import os as os_cfg`), later attribute writes (`self.ctx = ...` outside
-                `__init__`), and names imposed by a contract (Python methods marked `@override`,
-                members of a Rust `impl Trait for Type` block), although the parameters of those
-                methods are still checked."},
+                Flags a name the code defines when one of its words is a banned abbreviation,
+                such as `handle_msg` or `TaskRes`. Only whole words match, so `strategy` and
+                `category` are not flagged. Import aliases such as `import numpy as np` and names
+                imposed by a contract (Python `@override` methods, members of a Rust
+                `impl Trait for Type` block) are skipped, but the parameters of those methods are
+                still checked."},
             why_is_this_bad: indoc::indoc! {r"
                 An abbreviation makes the reader guess: `res` can be a result, a response or a
                 resource, `ch` a channel or a character. Different authors also shorten the same
@@ -64,6 +58,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 others.
 
                 Spell the word out (`context`, `message`, `result`, `config`)."},
+            known_problems: None,
             references: &[Reference {
                 title: "Google Python Style Guide: Naming",
                 url: "https://google.github.io/styleguide/pyguide.html#316-naming",

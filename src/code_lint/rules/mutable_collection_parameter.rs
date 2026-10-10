@@ -37,18 +37,13 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags Python function parameters annotated with `MutableSequence`, `MutableMapping`, or `MutableSet` when the function never mutates them.",
             what_it_does: indoc::indoc! {r"
-                Flags non-variadic parameters of functions and methods in Python source files (test
-                files are not checked) whose type annotation uses `MutableSequence`,
-                `MutableMapping`, or `MutableSet` (at the top level or inside transparent `|`,
-                `Optional`, `Union`, or `Annotated` wrappers) when the parameter is only read inside
-                the function body. Parameters mutated in place (`append`, `extend`, `update`, `add`,
-                subscript writes, `del`, or augmented assignment), aliased, returned, yielded, or
-                passed to an unknown function or method are not flagged. Stub bodies (`...`, `pass`,
-                `raise NotImplementedError`), methods on `Protocol` or `ABC` classes, dunder methods
-                other than `__init__`, `__new__`, and `__call__`, and functions decorated with
-                `@override`, `@overload`, `@abstractmethod`, `@fixture`, `@<function>.register`, or
-                `@<property>.setter` are exempt. Once fixed, `specific-collection-parameter` may
-                suggest a still broader interface for a parameter that is only iterated."},
+                Flags parameters annotated with an abstract mutable collection type
+                (`MutableSequence`, `MutableMapping` or `MutableSet`) that the function only reads,
+                never mutating, aliasing, returning or passing them to an unknown function. Methods
+                that cannot freely change their signature, such as `@override` methods, `Protocol`
+                and `ABC` members and most dunder methods, are skipped. Once fixed,
+                `specific-collection-parameter` may suggest a still broader type for a parameter
+                that is only iterated."},
             why_is_this_bad: indoc::indoc! {r"
                 `MutableSequence`, `MutableMapping`, and `MutableSet` are invariant in their type
                 arguments and require a mutable container at call sites. Requiring
@@ -60,10 +55,18 @@ pub const RULE: CodeRule = CodeRule {
                 `Mapping`, or `Set` (imported as `AbstractSet`) unless mutating the argument is the
                 point of the function. The mutation check is syntactic, so confirm that intent
                 before applying the suggested read-only type."},
-            references: &[Reference {
-                title: "Python collections.abc — Collections Abstract Base Classes",
-                url: "https://docs.python.org/3/library/collections.abc.html",
-            }],
+            known_problems: Some(indoc::indoc! {r"
+                - A mutable type nested in another, such as `Sequence[MutableMapping[K, V]]`, is not
+                  checked, because mutation of the elements is not tracked.
+                - Type aliases such as `Tags: TypeAlias = MutableSet[str]` are not expanded, so
+                  annotations that use them are not checked."}),
+            references: &[
+                Reference {
+                    title: "Python collections.abc — Collections Abstract Base Classes",
+                    url: "https://docs.python.org/3/library/collections.abc.html",
+                },
+                Reference::NAME_RESOLUTION,
+            ],
             examples: &[Example {
                 language: Language::Python,
                 flagged: indoc::indoc! {r"

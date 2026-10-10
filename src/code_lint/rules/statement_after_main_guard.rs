@@ -32,13 +32,9 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags top-level Python statements placed after the `if __name__ == \"__main__\":` guard.",
             what_it_does: indoc::indoc! {r#"
-                Checks Python source files for top-level module statements or definitions that
-                appear after a top-level `if __name__ == "__main__":` (or
-                `if "__main__" == __name__:`) block.
-
-                Statements inside the `__main__` block's own body or its `elif` / `else` branches,
-                subsequent `if __name__ == "__main__":` guards, non-guard `if` statements (such as
-                `if __name__ != "__main__":`), and test files are not flagged."#},
+                Flags a top-level statement or definition placed after the `if __name__ ==
+                "__main__":` block of a Python module. A further `__main__` guard below the first
+                one is not flagged."#},
             why_is_this_bad: indoc::indoc! {r#"
                 Python executes top-level module statements sequentially from top to bottom. When
                 a module is executed as a script (`python module.py`), the `if __name__ ==
@@ -50,6 +46,7 @@ pub const RULE: CodeRule = CodeRule {
 
                 Keep the `if __name__ == "__main__":` block at the very bottom of the module and
                 place all definitions above it."#},
+            known_problems: None,
             references: &[Reference {
                 title: "Python Documentation: __main__ — Top-level code environment",
                 url: "https://docs.python.org/3/library/__main__.html",

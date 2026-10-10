@@ -45,17 +45,10 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags names that end with a type suffix such as `_list` or `_str`.",
             what_it_does: indoc::indoc! {r"
-                Flags variables, parameters, loop and pattern bindings, constants, and attributes
-                where they are declared (Python class-body declarations, the first
-                `self.name = ...` in `__init__`, Rust named struct fields) whose name ends,
-                ignoring case, with a type suffix: `_list`, `_arr`, `_dict`, `_map`, `_vec`,
-                `_str`, `_int`, `_bool`, `_set`, `_ptr`, `_float` or `_byte` by default
-                (`users_dict`, `MY_INT`). A name that is only the suffix, such as `_list`, is not
-                flagged, nor is a boolean predicate name starting with `is_` or `has_` (`is_dict`),
-                whose type word names what is tested. Functions, classes, structs, enums, traits,
-                type aliases, imports (aliased or not), later attribute writes
-                (`self.users_dict = ...` outside `__init__`), and members of a Rust
-                `impl Trait for Type` block are not checked."},
+                Flags variables, parameters, constants and attributes whose name ends with a
+                type suffix, such as `users_dict` or `MY_INT`. Function and type names are not
+                checked, nor are boolean predicates such as `is_dict`, whose type word names
+                what is tested."},
             why_is_this_bad: indoc::indoc! {r"
                 The suffix repeats what the type annotation or the compiler already knows, and it
                 lies as soon as the type changes: a `user_list` that becomes a set or a generator
@@ -64,6 +57,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
 
                 Name the value by its role, using a plural for collections (`users`, `name`,
                 `scores_by_player`), and leave the type to the annotation."},
+            known_problems: None,
             references: &[Reference {
                 title: "Making Wrong Code Look Wrong (Joel Spolsky)",
                 url: "https://www.joelonsoftware.com/2005/05/11/making-wrong-code-look-wrong/",

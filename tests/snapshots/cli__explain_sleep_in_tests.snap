@@ -11,10 +11,8 @@ Status: enabled (default)
 
 ## What it does
 
-Flags wall-clock and async sleep calls in test files: `time.sleep`, `asyncio.sleep`,
-`anyio.sleep` and `trio.sleep` in Python, `std::thread::sleep` and
-`tokio::time::sleep` in Rust, and a bare `sleep`. Calls on an injected object, such
-as `fake_clock.sleep(10)`, are not flagged. Zero-duration sleeps are left to
+Flags fixed-duration sleep calls, such as `time.sleep(1)`, `asyncio.sleep(0.5)` or
+`std::thread::sleep(delay)`. Sleeps with a literal zero duration are left to
 `zero-sleep-in-tests`.
 
 ## Why is this bad?
@@ -99,6 +97,7 @@ extend-banned = ["thread::sleep", "std::thread::sleep", "time::sleep", "tokio::t
 
 - [Eradicating Non-Determinism in Tests (Martin Fowler)](https://martinfowler.com/articles/nonDeterminism.html)
 - [Flaky Tests at Google and How We Mitigate Them](https://testing.googleblog.com/2016/05/flaky-tests-at-google-and-how-we.html)
+- [How Omni resolves names](https://github.com/Kajiih/omni-lint/blob/main/docs/name_resolution.md)
 
 ## Tags
 

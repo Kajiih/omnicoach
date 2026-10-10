@@ -31,22 +31,11 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags private functions and methods defined before their private callers.",
             what_it_does: indoc::indoc! {r"
-                Checks module scopes, Python `class` definitions, and Rust inherent `impl` blocks
-                for a private function or method `callee` declared above its private caller
-                `caller` (`Private -> Private`).
-
-                Public functions and methods (`Public -> Public`) are not constrained because
-                public APIs legitimately order either top-down (orchestrator before step) or
-                core-primitive-first (fundamental accessor before convenience wrapper).
-                Self-recursive and mutually recursive functions (Strongly Connected Components in
-                the scope's call graph), cross-tier calls (`Public -> Private`, governed by
-                `private-before-public-function` and `uncolocated-helper`), calls from unrooted
-                private functions into rooted helpers, local variable or parameter shadowing, Rust
-                trait `impl` blocks, test files, and `#[cfg(test)]` / `#[test]` items are also
-                exempt. Any function already flagged by `private-before-public-function` or
-                `uncolocated-helper` is skipped so a misplaced helper is never reported twice.
-                Calls are resolved by name within the file, assuming the code compiles (Rust) or
-                type-checks (Python)."},
+                Flags a private function or method declared above a private function that calls
+                it, in a module, Python `class` or Rust inherent `impl` block: `_parse` above
+                `_load` when `_load` calls `_parse`. Calls between public functions and recursive
+                calls are not constrained, and a function already flagged by
+                `private-before-public-function` or `uncolocated-helper` is not reported again."},
             why_is_this_bad: indoc::indoc! {r"
                 Unlike public entrypoints, a private helper exists solely as an internal
                 decomposition step of its callers. Defining private callees above their private
@@ -54,6 +43,11 @@ pub const RULE: CodeRule = CodeRule {
                 higher-level helper logic that gives them context.
 
                 Order private helpers from higher-level callers down to lower-level callees."},
+            known_problems: Some(indoc::indoc! {r"
+                - Only functions are ordered: a private `struct`, `class` or constant can sit above
+                  the private function that uses it.
+                - In Rust macro arguments, a pattern binding or named argument that shares a sibling
+                  function's name counts as a call, which can create a false ordering constraint."}),
             references: &[
                 Reference {
                     title: "Robert C. Martin: Clean Code — Chapter 5: Formatting (The Stepdown Rule)",
