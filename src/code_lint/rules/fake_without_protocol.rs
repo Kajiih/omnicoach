@@ -1,4 +1,8 @@
 //! Flags Python `Fake*` classes that do not inherit from a `Protocol` or base class.
+//!
+//! Uses `RuleTarget::All` because shared test fakes commonly live in `testing.py`, `fakes.py`, or
+//! root `conftest.py` outside `DEFAULT_TEST_PATTERNS`. Python-only because Rust's `impl Trait for
+//! FakeFoo` is separate from `struct FakeFoo` and `rustc` enforces trait contracts nominally.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{PythonBaseClass, extract_classes};

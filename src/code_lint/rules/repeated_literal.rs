@@ -126,11 +126,17 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
             ],
         },
     },
+    // Test files repeat self-contained literals across independent test cases (DAMP), so only
+    // production files (and non-`#[cfg(test)]` Rust items) are checked.
     target: RuleTarget::SourceOnly,
     check: check_file,
 };
 
 /// The occurrences of one literal value in a file.
+///
+/// Only direct scalar constant initializers (`X = "a"`) count toward `definitions`; composite
+/// constant initializers (`HOSTS = ["a", "b"]`, `pub const RULE: CodeRule = ...`) are skipped by
+/// the AST extractor so a single inline use of the same literal elsewhere in the file is not flagged.
 struct LiteralGroup<'a> {
     definitions: usize,
     inline_uses: Vec<AstNode<'a>>,

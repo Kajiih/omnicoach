@@ -1,4 +1,12 @@
 //! Flags tuple elements read by literal position instead of being unpacked once.
+//!
+//! Scope notes:
+//! - Python `lambda` bodies are skipped because PEP 3113 removed tuple parameter unpacking and
+//!   lambdas cannot contain assignment statements; Rust closures support `|(a, b)|` and block bodies.
+//! - Receivers used with `.get()`, `in`, `len()`, iteration, negative indices, or slices are
+//!   exempt (`ScopePositionalReads::exempt_receivers`) because unpacking mappings iterates keys,
+//!   `first, *_, last = xs` copies the middle into a `list` ($O(n)$) and raises `ValueError` on a
+//!   1-element sequence, and `*rest` turns slices (`tuple`, `str`) into a `list`.
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile, ScopePositionalReads};
 use crate::code_lint::contract::{CodeRule, RuleTarget};

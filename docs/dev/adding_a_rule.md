@@ -15,7 +15,7 @@ The Rust items below are documented in Rustdoc: hover them in your IDE, or run `
 6. **Document it.** Fill `RuleDoc`, with one executed `Example` per language. The goal is predictability: a reader of `--explain` can tell whether their code is flagged ([rule_design_guide.md](rule_design_guide.md) §6). Contract: `RuleDoc` and `Example` in [documentation.rs](../../src/rule_declaration/documentation.rs). Doc summary wording: [naming_and_message_style_guide.md](naming_and_message_style_guide.md) §2.5.
 7. **Implement the check** through `code_lint::ast` / `code_lint::semantic` helpers; add a named helper there for any new structural fact. Contract: `CodeRule`.
 8. **Test it** with one `rule_test!` invocation at the end of the file. Contract and case-writing standards: `rule_test!` in [test_utils.rs](../../src/test_utils.rs). Map each named exemption to its dedicated `pass` case in [scripts/exemption_mutations.py](../../scripts/exemption_mutations.py) and run it; re-run it whenever the rule or its `ast` helpers change.
-9. **Verify.** The repository has no CI, so run all four; rustdoc lints (broken links) only run under `cargo doc`:
+9. **Verify.** Run all four checks locally (rustdoc broken-link lints only run under `cargo doc`):
 
    ```bash
    cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo doc --no-deps --document-private-items

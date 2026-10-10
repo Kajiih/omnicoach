@@ -1,5 +1,20 @@
 //! End-to-end, semantic-stage, and marginal rule performance & allocation benchmarks for Omni.
 //!
+//! ## Fixture & Measurement Invariants
+//! - **`.fixture` extension**: Fixtures under `benches/fixtures/*.fixture` use `.fixture` rather
+//!   than `.py` / `.rs` so `omni-code-lint .` self-dogfooding does not flag intentional lint
+//!   violations inside benchmark stress inputs.
+//! - **No `source.repeat(N)`**: Repeating small snippets creates unrealistically flat scope tables
+//!   and artificially warms the branch predictor (which previously hid quadratic $O(F \times N)$
+//!   annotation traversal on real 800+ LOC modules). All fixtures are single unrepeated modules.
+//! - **Warm `OnceLock` isolation (`warm_shared_indexes`)**: `ParsedFile` caches shared semantic
+//!   projections (`ImportMap`, call candidates, bindings, comments) in `OnceLock` fields. Rule-family
+//!   and per-rule benchmarks pre-warm those indexes so timings and `AllocProfiler` counts measure
+//!   each rule's marginal cost rather than blaming the first rule in `CODE_RULES`.
+//! - **Noise control on shared machines**: Compare deterministic `AllocProfiler` counts (`allocs`,
+//!   `bytes`) and `fastest` / CPU time (`user + sys`) across paired runs rather than raw wall-clock
+//!   medians when evaluating optimizations.
+//!
 //! Run the full suite:
 //! ```bash
 //! cargo bench --bench omni_bench

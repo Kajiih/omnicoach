@@ -1,4 +1,12 @@
 //! Flags Python function parameters annotated with `Sequence` or `Collection` when a broader `Collection` or `Iterable` interface suffices.
+//!
+//! Scope notes:
+//! - Parameter-only: for returns, returning a more specific read-only ABC (`Sequence` over
+//!   `Iterable`) is strictly better for callers (Postel's law); for attributes, widening
+//!   `self.items` to `Iterable` permits single-use generators that exhaust on first read.
+//! - Truthiness (`if x:`, `bool(x)`) and multi-pass iteration require `Collection` (because
+//!   `bool(generator)` is always `True` and generators exhaust after one pass); `reversed(x)`
+//!   requires `Sequence` (`Reversible`).
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{

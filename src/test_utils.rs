@@ -439,7 +439,11 @@ fn dummy_filename(lang: Language) -> &'static str {
 ///   `nested-function`) and rules reporting every occurrence inside one node. Per-scope
 ///   aggregation fits when each case sits in its own scope (`repeated-index-access`).
 /// - Without `=> r#"..."#`, the whole snippet must be the flagged node. With it, the finding
-///   must span exactly that inner slice. Leading indentation of lines `2..N` is normalized,
+///   must span exactly that inner slice (because `rule_test!` compares the flagged slice text
+///   rather than its byte offset, a case asserting *which* of two occurrences is flagged must
+///   spell the two occurrences differently, such as `'fast'` vs. `"fast"` or `404u16` vs. `404`).
+//    TODO: Investigate if this is ricr or should be improved.
+///   Leading indentation of lines `2..N` is normalized,
 ///   so the slice can be written as a clean `indoc!` string.
 /// - The code is also run repeated twice in one file and must report both occurrences, so
 ///   a rule that stops after its first match (`find` instead of `find_all`, early `return`,
