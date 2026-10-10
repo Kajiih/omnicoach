@@ -1,7 +1,7 @@
 //! Python type annotation unwrapping, constructor resolution, union flattening, and collection type vocabularies.
 
-use super::{AstNode, ParsedFile, find_expr_at_span, resolve_path_and_terminal_expr};
-use crate::code_lint::ast::{ResolvedName, resolve_name, span_from_ruff_range};
+use super::{AstNode, ParsedFile, find_expr_at_span, resolved_path_and_terminal_expr};
+use crate::code_lint::ast::span_from_ruff_range;
 use ruff_python_ast::{Expr, Operator};
 use ruff_text_size::Ranged as _;
 
@@ -200,7 +200,8 @@ pub(super) fn has_final_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> 
     let unwrapped = unwrap_annotated_expr(type_expr, file);
     let candidate =
         extract_generic_base_and_args(unwrapped).map_or(unwrapped, |(base_node, _)| base_node);
-    resolve_path_and_terminal_expr(candidate, &file.source).1 == TYPE_FINAL
+    resolved_path_and_terminal_expr(candidate, file)
+        .is_some_and(|(path, terminal)| is_std_type_constructor(&path, &terminal, &[TYPE_FINAL]))
 }
 
 /// Returns true if `type_expr` is an unparameterized `Final` qualifier (`Final`, `typing.Final`,
@@ -218,7 +219,7 @@ pub(super) fn is_bare_final_annotation_expr(type_expr: &Expr, file: &ParsedFile)
 /// Collects the standard-library collection types in `type_node` according to `depth`, in
 /// source order and deduplicated by path.
 ///
-/// Names are resolved through the file's imports (see [`resolve_name`]), so
+/// Names are resolved through the file's imports (see [`super::resolve_name`]), so
 /// `from collections.abc import Set` makes `Set` the abstract `collections.abc.Set` rather than
 /// the concrete `typing.Set`, and a locally defined `class Set` is not a collection type.
 #[must_use]
@@ -554,24 +555,6 @@ fn classify_collection(path: &str, terminal: &str) -> Option<(CollectionKind, Co
         _ => CollectionShape::Sequence,
     };
     Some((kind, shape))
-}
-
-/// The `(path, terminal)` that the type constructor expression `expr` names, resolved through the
-/// imports of `file` (`t.List` after `import typing as t` is `("typing.List", "List")`), or `None`
-/// if it names a definition of `file` (see [`resolve_name`]).
-fn resolved_path_and_terminal_expr(expr: &Expr, file: &ParsedFile) -> Option<(String, String)> {
-    let (path, terminal) = resolve_path_and_terminal_expr(expr, &file.source);
-    match resolve_name(file, &path) {
-        ResolvedName::Imported(resolved) => {
-            let terminal = resolved
-                .rsplit_once('.')
-                .map_or(resolved.as_str(), |(_, terminal)| terminal)
-                .to_owned();
-            Some((resolved, terminal))
-        }
-        ResolvedName::Local => None,
-        ResolvedName::Unbound => Some((path, terminal)),
-    }
 }
 
 /// Returns true if `(path, terminal)` refers to an unqualified or standard-library (`typing`,

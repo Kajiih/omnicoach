@@ -48,10 +48,8 @@ pub const RULE: CodeRule = CodeRule {
                 method signature at the class definition and rejects instantiating a fake with
                 missing methods."},
             known_problems: Some(indoc::indoc! {r"
-                - Any other base counts as a collaborator, even an unrelated one such as
-                  `class FakeClient(Exception):`.
-                - Bases are matched by spelling, so an alias such as `Protocol as P` makes
-                  `class FakeClient(P):` pass."}),
+                Any other base counts as a collaborator, even an unrelated one such as
+                `class FakeClient(Exception):`."}),
             references: &[
                 Reference {
                     title: "PEP 544: Explicitly Declaring Implementation",
@@ -61,6 +59,7 @@ pub const RULE: CodeRule = CodeRule {
                     title: "Software Engineering at Google, ch. 13: Test Doubles",
                     url: "https://abseil.io/resources/swe-book/html/ch13.html",
                 },
+                Reference::NAME_RESOLUTION,
             ],
             examples: &[Example {
                 language: Language::Python,
@@ -205,6 +204,12 @@ crate::test_utils::rule_test!(
                     class FakeTypingProtocolClient(typing.Protocol):
                         pass
                 "# => "FakeTypingProtocolClient",
+                inherits_only_aliased_protocol => r#"
+                    from typing import Protocol as P
+
+                    class FakeAliasedProtocolClient(P):
+                        pass
+                "# => "FakeAliasedProtocolClient",
                 inherits_only_abc => r#"
                     class FakeBaseStorage(ABC):
                         pass

@@ -367,7 +367,7 @@ mod tests {
     #[rstest::rstest]
     #[case::module_upper_name_defines("MAX = 30", &[("30", ConstantDefinition)])]
     #[case::class_final_lowercase_defines("class C:\n    limit: Final[int] = -5", &[("-5", ConstantDefinition)])]
-    #[case::aliased_final_defines("timeout: t.Final = 30", &[("30", ConstantDefinition)])]
+    #[case::aliased_final_defines("import typing as t\ntimeout: t.Final = 30", &[("30", ConstantDefinition)])]
     #[case::class_lowercase_is_inline("class C:\n    name = 'cc'", &[("'cc'", Inline)])]
     #[case::function_level_upper_name_is_inline("def f():\n    MAX = 30", &[("30", Inline)])]
     #[case::module_if_body_defines("if WIN:\n    RETRIES = 3\nelse:\n    RETRIES = 5", &[("3", ConstantDefinition), ("5", ConstantDefinition)])]

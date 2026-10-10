@@ -43,14 +43,14 @@ pub const RULE: CodeRule = CodeRule {
                 Write `@dataclass(frozen=True)` and derive modified copies with
                 `dataclasses.replace`. When in-place mutation is really needed, say so with
                 `frozen=False`."},
-            known_problems: Some(indoc::indoc! {r"
-                The decorator is matched as written, not through imports: a `@dataclass` imported
-                from another library is checked, and one imported under another name, such as
-                `from dataclasses import dataclass as dc`, is not."}),
-            references: &[Reference {
-                title: "Python docs: dataclasses",
-                url: "https://docs.python.org/3/library/dataclasses.html",
-            }],
+            known_problems: None,
+            references: &[
+                Reference {
+                    title: "Python docs: dataclasses",
+                    url: "https://docs.python.org/3/library/dataclasses.html",
+                },
+                Reference::NAME_RESOLUTION,
+            ],
             examples: &[Example {
                 language: Language::Python,
                 flagged: indoc::indoc! {r"
@@ -121,6 +121,13 @@ crate::test_utils::rule_test!(
                     class DecoratedClass:
                         pass
                 "#,
+                non_stdlib_dataclass_decorator_exempt => r#"
+                    from marvin import dataclass
+
+                    @dataclass
+                    class CustomModel:
+                        id: str
+                "#,
             ],
             fail: [
                 bare_unqualified_dataclass => r#"
@@ -152,6 +159,13 @@ crate::test_utils::rule_test!(
                     class StackedModel:
                         id: str
                 "# => "StackedModel",
+                aliased_dataclass_missing_frozen => r#"
+                    from dataclasses import dataclass as dc
+
+                    @dc(slots=True)
+                    class AliasedModel:
+                        id: str
+                "# => "AliasedModel",
             ],
         },
     }

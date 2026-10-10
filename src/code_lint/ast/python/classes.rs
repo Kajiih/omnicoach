@@ -4,7 +4,7 @@ use super::scopes::{collect_local_bound_names, parameters_shadow_name};
 use super::{
     AstNode, DecoratorInfo, ParsedFile, direct_function_definitions, extract_decorators_from_slice,
     in_place_mutated_receiver_expr, is_bare_final_annotation_expr, method_receiver_name_ast,
-    resolve_path_and_terminal_expr,
+    resolved_path_and_terminal_expr,
 };
 use crate::code_lint::ast::{
     CallableItem, CallableScope, MethodVisibility, TypeMethod, TypeMethodScope,
@@ -15,12 +15,28 @@ use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef};
 use ruff_text_size::Ranged as _;
 use std::collections::{HashMap, HashSet};
 
-const PROTOCOL_CLASS: &str = "Protocol";
-const ABC_CLASS: &str = "ABC";
 const SELF_RECEIVER: &str = "self";
 const CLS_RECEIVER: &str = "cls";
-const DATACLASS_DECORATOR: &str = "dataclass";
-const QUALIFIED_DATACLASS_DECORATOR: &str = "dataclasses.dataclass";
+const DATACLASS_DECORATOR_PATHS: &[&str] = &["dataclass", "dataclasses.dataclass"];
+const PROTOCOL_AND_ABC_PATHS: &[&str] = &[
+    "Protocol",
+    "typing.Protocol",
+    "typing_extensions.Protocol",
+    "ABC",
+    "abc.ABC",
+];
+const STRUCTURAL_MARKER_PATHS: &[&str] = &[
+    "object",
+    "builtins.object",
+    "Generic",
+    "typing.Generic",
+    "typing_extensions.Generic",
+    "Protocol",
+    "typing.Protocol",
+    "typing_extensions.Protocol",
+    "ABC",
+    "abc.ABC",
+];
 const PYTHON_CONSTRUCTOR_NAMES: &[&str] = &[
     "__prepare__",
     "__init_subclass__",
@@ -36,6 +52,9 @@ const PYTHON_CONSTRUCTOR_NAMES: &[&str] = &[
 pub struct PythonBaseClass {
     /// Base class identifier or dotted path text (e.g. `"Protocol"`, `"abc.ABC"`).
     pub name: String,
+    /// Canonical path of the unsubscripted base class resolved through [`super::resolve_name`], or
+    /// `None` when the first segment is defined in the file.
+    resolved_path: Option<String>,
 }
 
 impl PythonBaseClass {
@@ -48,22 +67,13 @@ impl PythonBaseClass {
     }
 
     /// Returns true if this base class is a structural marker rather than a supertype:
-    /// `object`, `Generic`, `Protocol`, or `ABC` itself (optionally subscripted or qualified).
+    /// `object`, `Generic`, `Protocol`, or `ABC` itself (optionally subscripted, qualified, or
+    /// imported under an alias).
     #[must_use]
     pub fn is_structural_marker(&self) -> bool {
-        matches!(
-            self.unsubscripted_name(),
-            "object"
-                | "builtins.object"
-                | "Generic"
-                | "typing.Generic"
-                | "typing_extensions.Generic"
-                | PROTOCOL_CLASS
-                | "typing.Protocol"
-                | "typing_extensions.Protocol"
-                | ABC_CLASS
-                | "abc.ABC"
-        )
+        self.resolved_path
+            .as_deref()
+            .is_some_and(|path| STRUCTURAL_MARKER_PATHS.contains(&path))
     }
 }
 
@@ -89,15 +99,12 @@ impl PythonClassInfo<'_> {
             .is_some_and(|decorator| !decorator.has_arg(key))
     }
 
-    /// The `@dataclass` or `@dataclasses.dataclass` decorator, matched by name rather than by
-    /// import, if the class carries one.
+    /// The `@dataclass` or `@dataclasses.dataclass` decorator, resolved through the file's
+    /// imports, if the class carries one.
     fn dataclass_decorator(&self) -> Option<&DecoratorInfo> {
-        self.decorators.iter().find(|decorator| {
-            matches!(
-                decorator.path.as_str(),
-                DATACLASS_DECORATOR | QUALIFIED_DATACLASS_DECORATOR
-            )
-        })
+        self.decorators
+            .iter()
+            .find(|decorator| decorator.matches_any(DATACLASS_DECORATOR_PATHS))
     }
 }
 
@@ -119,6 +126,7 @@ pub fn extract_classes(file: &ParsedFile) -> Vec<PythonClassInfo<'_>> {
                         let base_span = span_from_ruff_range(base.range());
                         PythonBaseClass {
                             name: self.file.source[base_span.start..base_span.end].to_string(),
+                            resolved_path: resolved_base_class_path(base, self.file),
                         }
                     })
                     .collect();
@@ -180,8 +188,8 @@ pub fn collect_class_attributes(file: &ParsedFile) -> Vec<PythonAnnotatedAttribu
         fn visit_stmt(&mut self, statement: &'a Stmt) {
             if let Stmt::ClassDef(class_def) = statement {
                 let class_name = class_def.name.id.to_string();
-                let is_typed_dict = is_typed_dict_class(class_def, &self.file.source);
-                let is_in_protocol_or_abc = is_protocol_or_abc_class(class_def, &self.file.source);
+                let is_typed_dict = is_typed_dict_class(class_def, self.file);
+                let is_in_protocol_or_abc = is_protocol_or_abc_class(class_def, self.file);
                 let mutated_attrs = collect_mutated_class_attr_names(&class_def.body, &class_name);
 
                 for child in &class_def.body {
@@ -292,25 +300,31 @@ fn record_mutated_class_receiver(receiver: &Expr, class_name: &str, out: &mut Ha
 
 /// Returns true if a Python `StmtClassDef` inherits from `Protocol` or `ABC` or declares
 /// `metaclass=ABCMeta`.
-pub(super) fn is_protocol_or_abc_class(class_def: &StmtClassDef, source: &str) -> bool {
+pub(super) fn is_protocol_or_abc_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
     let has_abc_metaclass = class_def.keywords().iter().any(|keyword| {
         keyword
             .arg
             .as_ref()
             .is_some_and(|arg| arg.id == "metaclass")
-            && resolve_path_and_terminal_expr(&keyword.value, source).1 == "ABCMeta"
+            && resolved_path_and_terminal_expr(&keyword.value, file)
+                .is_some_and(|(path, _)| matches!(path.as_str(), "ABCMeta" | "abc.ABCMeta"))
     });
     has_abc_metaclass
-        || base_class_terminals(class_def, source)
+        || resolved_base_class_paths(class_def, file)
             .iter()
-            .any(|terminal| matches!(terminal.as_str(), PROTOCOL_CLASS | ABC_CLASS))
+            .any(|path| PROTOCOL_AND_ABC_PATHS.contains(&path.as_str()))
 }
 
 /// Returns true if a Python `StmtClassDef` inherits from `TypedDict`.
-pub(super) fn is_typed_dict_class(class_def: &StmtClassDef, source: &str) -> bool {
-    base_class_terminals(class_def, source)
+pub(super) fn is_typed_dict_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
+    resolved_base_class_paths(class_def, file)
         .iter()
-        .any(|terminal| terminal == "TypedDict")
+        .any(|path| {
+            matches!(
+                path.as_str(),
+                "TypedDict" | "typing.TypedDict" | "typing_extensions.TypedDict"
+            )
+        })
 }
 
 /// A Python instance attribute annotated inline (`self.<name>: <type>`) inside an instance method.
@@ -404,36 +418,44 @@ pub fn collect_instance_attribute_annotations(
     visitor.out
 }
 
+const FIELD_SYNTHESIZING_DECORATOR_PATHS: &[&str] = &[
+    "dataclass",
+    "dataclasses.dataclass",
+    "pydantic.dataclasses.dataclass",
+    "define",
+    "frozen",
+    "mutable",
+    "s",
+    "attrs",
+    "attr.define",
+    "attr.frozen",
+    "attr.mutable",
+    "attr.s",
+    "attr.attrs",
+    "attr.dataclass",
+    "attrs.define",
+    "attrs.frozen",
+    "attrs.mutable",
+    "attrs.s",
+    "attrs.attrs",
+    "attrs.dataclass",
+];
+
 /// Returns true if `class_def` synthesizes constructor fields from class-body annotations
 /// (`@dataclass`, `attrs` decorators, or Pydantic `BaseModel` subclasses).
 fn is_field_synthesizing_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
     let has_field_decorator = extract_decorators_from_slice(&class_def.decorator_list, file)
         .iter()
-        .any(|decorator| {
-            matches!(
-                decorator.path.as_str(),
-                DATACLASS_DECORATOR
-                    | QUALIFIED_DATACLASS_DECORATOR
-                    | "define"
-                    | "frozen"
-                    | "mutable"
-                    | "s"
-                    | "attrs"
-                    | "attr.s"
-                    | "attr.attrs"
-                    | "attr.dataclass"
-                    | "attrs.define"
-                    | "attrs.frozen"
-                    | "attrs.mutable"
-                    | "attrs.s"
-                    | "attrs.attrs"
-                    | "attrs.dataclass"
-            )
-        });
+        .any(|decorator| decorator.matches_any(FIELD_SYNTHESIZING_DECORATOR_PATHS));
     has_field_decorator
-        || base_class_terminals(class_def, &file.source)
+        || resolved_base_class_paths(class_def, file)
             .iter()
-            .any(|terminal| terminal == "BaseModel")
+            .any(|path| {
+                matches!(
+                    path.as_str(),
+                    "BaseModel" | "pydantic.BaseModel" | "pydantic.main.BaseModel"
+                )
+            })
 }
 
 /// A grouped Python function or method (merging `@overload` stubs and `@property` accessors).
@@ -804,21 +826,25 @@ pub fn collect_fields_after_methods(file: &ParsedFile) -> Vec<PythonFieldAfterMe
     visitor.out
 }
 
-/// Returns the terminal name of each positional base class of a Python `StmtClassDef`,
-/// unwrapping generic subscripts (`Protocol[T]` yields `Protocol`).
-fn base_class_terminals(class_def: &StmtClassDef, source: &str) -> Vec<String> {
+/// Returns the import-resolved paths of each positional base class of a Python `StmtClassDef`,
+/// excluding base classes defined in the file.
+fn resolved_base_class_paths(class_def: &StmtClassDef, file: &ParsedFile) -> Vec<String> {
     class_def
         .bases()
         .iter()
-        .map(|base| {
-            let base_expr = if let Expr::Subscript(subscript) = base {
-                subscript.value.as_ref()
-            } else {
-                base
-            };
-            resolve_path_and_terminal_expr(base_expr, source).1
-        })
+        .filter_map(|base| resolved_base_class_path(base, file))
         .collect()
+}
+
+/// Resolves the canonical path of a base class expression `base`, unwrapping generic subscripts
+/// (`Protocol[T]` yields `"typing.Protocol"` when imported from `typing`).
+fn resolved_base_class_path(base: &Expr, file: &ParsedFile) -> Option<String> {
+    let base_expr = if let Expr::Subscript(subscript) = base {
+        subscript.value.as_ref()
+    } else {
+        base
+    };
+    resolved_path_and_terminal_expr(base_expr, file).map(|(path, _)| path)
 }
 
 /// Walks statements inside a method body (without entering nested functions, classes, or lambdas)
@@ -854,6 +880,9 @@ fn collect_self_annotated_assignments(body: &[Stmt]) -> Vec<(&StmtAnnAssign, Str
     visitor.out
 }
 
+const OVERLOAD_DECORATOR_PATHS: &[&str] =
+    &["overload", "typing.overload", "typing_extensions.overload"];
+
 /// Collects direct functions in `scope_body` in source order, grouping `@overload` signatures
 /// and `@<prop>.setter` / `@<prop>.deleter` accessors with their first definition.
 fn group_python_callables<'a, 'ast>(
@@ -875,13 +904,10 @@ fn group_python_callables<'a, 'ast>(
         let decorators = extract_decorators_from_slice(&function_def.decorator_list, file);
         let is_overload = decorators
             .iter()
-            .any(|decorator| decorator.terminal_name == "overload");
-        let is_property_accessor = decorators.iter().any(|decorator| {
-            matches!(
-                decorator.terminal_name.as_str(),
-                "getter" | "setter" | "deleter"
-            )
-        });
+            .any(|decorator| decorator.matches_any(OVERLOAD_DECORATOR_PATHS));
+        let is_property_accessor = decorators
+            .iter()
+            .any(|decorator| decorator.is_attribute_named(&["getter", "setter", "deleter"]));
 
         if let Some(seen) = seen_by_name.get_mut(&name) {
             let continues_overload = is_overload || (seen.has_overload && !seen.has_non_overload);

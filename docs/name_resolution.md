@@ -1,6 +1,6 @@
 # How Omni resolves names
 
-Some rules flag specific functions or types: `sleep-in-tests` flags `time.sleep`, `type-cast` flags `typing.cast`, and the collection-type rules recognize `list` or `typing.Dict` in annotations. These rules match what a name refers to in the file, not only how it is spelled. This page describes that matching once, so the rule docs don't repeat it.
+Some rules match specific functions, macros, decorators, or types: `sleep-in-tests` flags `time.sleep`, `type-cast` flags `typing.cast`, and the collection-type rules recognize `list` or `typing.Dict` in annotations. These rules match what a name refers to in the file, not only how it is spelled. This page describes that matching once, so the rule docs don't repeat it.
 
 ## Matching
 

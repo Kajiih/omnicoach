@@ -48,7 +48,8 @@ use self::literals::is_constant_name;
 use self::logging::extract_logger_call;
 use self::strings::{fstring_segments_and_interpolations, static_string_text};
 use crate::code_lint::ast::{
-    AstNode, EnclosingFunction, ParsedFile, span_from_ruff_range, with_innermost_function,
+    AstNode, EnclosingFunction, ParsedFile, ResolvedName, resolve_name, span_from_ruff_range,
+    with_innermost_function,
 };
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
@@ -124,10 +125,13 @@ pub(super) fn find_expr_at_span(module: &ModModule, target_span: SourceSpan) -> 
 /// Structured metadata for a Python decorator.
 #[derive(Clone)]
 pub(super) struct DecoratorInfo {
-    /// Full path string (e.g. `"dataclasses.dataclass"`, `"pytest.mark.parametrize"`).
+    /// Full path string as written (e.g. `"dataclasses.dataclass"`, `"pytest.mark.parametrize"`).
     pub(super) path: String,
-    /// Terminal identifier (e.g. `"dataclass"`, `"parametrize"`).
+    /// Terminal identifier as written (e.g. `"dataclass"`, `"parametrize"`).
     pub(super) terminal_name: String,
+    /// Canonical path resolved through [`resolve_name`], or `None` when the first segment is a
+    /// module-level definition in the file.
+    resolved_path: Option<String>,
     /// Keyword argument names if invoked as a call.
     keyword_args: Vec<String>,
 }
@@ -137,6 +141,22 @@ impl DecoratorInfo {
     #[must_use]
     pub(super) fn has_arg(&self, key: &str) -> bool {
         self.keyword_args.iter().any(|arg| arg == key)
+    }
+
+    /// Returns true if the import-resolved decorator path equals one of `candidates`,
+    /// excluding decorators whose first segment is defined in the file.
+    #[must_use]
+    pub(super) fn matches_any(&self, candidates: &[&str]) -> bool {
+        self.resolved_path
+            .as_deref()
+            .is_some_and(|path| candidates.contains(&path))
+    }
+
+    /// Returns true if this decorator is an attribute access (`@<receiver>.<attr>`) whose
+    /// attribute name is in `attrs` (e.g. `@prop.setter`, `@func.register`).
+    #[must_use]
+    pub(super) fn is_attribute_named(&self, attrs: &[&str]) -> bool {
+        self.path.contains('.') && attrs.contains(&self.terminal_name.as_str())
     }
 }
 
@@ -160,9 +180,12 @@ pub(super) fn extract_decorators_from_slice(
         };
 
         let (path, terminal_name) = resolve_path_and_terminal_expr(target_expr, &file.source);
+        let resolved_path =
+            resolved_path_and_terminal_expr(target_expr, file).map(|(resolved, _)| resolved);
         out.push(DecoratorInfo {
             path,
             terminal_name,
+            resolved_path,
             keyword_args,
         });
     }
@@ -629,6 +652,27 @@ pub(super) fn resolve_path_and_terminal_expr(expr: &Expr, source: &str) -> (Stri
         path.rsplit('.').next().unwrap_or("").to_string()
     };
     (path, terminal)
+}
+
+/// The `(path, terminal)` that `expr` names, resolved through the imports of `file`
+/// (`t.List` after `import typing as t` is `("typing.List", "List")`), or `None`
+/// if it names a definition of `file` (see [`resolve_name`]).
+pub(super) fn resolved_path_and_terminal_expr(
+    expr: &Expr,
+    file: &ParsedFile,
+) -> Option<(String, String)> {
+    let (path, terminal) = resolve_path_and_terminal_expr(expr, &file.source);
+    match resolve_name(file, &path) {
+        ResolvedName::Imported(resolved) => {
+            let terminal = resolved
+                .rsplit_once('.')
+                .map_or(resolved.as_str(), |(_, terminal)| terminal)
+                .to_owned();
+            Some((resolved, terminal))
+        }
+        ResolvedName::Local => None,
+        ResolvedName::Unbound => Some((path, terminal)),
+    }
 }
 
 /// Collects function or method names whose return values are mutated in place in `file`.
