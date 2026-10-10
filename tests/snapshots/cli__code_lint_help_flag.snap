@@ -37,6 +37,9 @@ Options:
       --tag <LABEL>
           With --list-rules, keep only the rules a `select` label selects (tag, synonym or rule)
 
+      --list-tags
+          List the topic tree with each topic's parent, synonyms, description and scope note
+
       --explain <RULE>
           Print one rule's documentation as Markdown
 

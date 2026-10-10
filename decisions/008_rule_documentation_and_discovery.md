@@ -52,6 +52,7 @@ pub struct Example {
 Both `omni-code-lint` and `omni-command-lint` provide symmetric rule discovery for all registered rules:
 - `--list-rules`: Lists every rule sorted by name, displaying its name, languages/input, and single-sentence summary.
 - `--list-rules --tag <LABEL>`: Filters the list to rules matched by `select = ["<LABEL>"]` (topics, subtopics, facet values, or synonyms).
+- `--list-tags`: Renders the topic tree as a Markdown table (topic, parent, synonyms, description, and scope note), with children listed under their parent.
 - `--explain <RULE>`: Renders the full Markdown documentation of a rule, including its message templates, configuration keys, external references, and tag paths.
 - **Terminal Plain Markdown Rendering (`D50`)**: Markdown is printed directly as plain text without ANSI escapes, ensuring compatibility across terminal emulators, pagers, and CI logs.
 - **Diagnostics Pointer Footer (`D48`, `DI14`)**: Plain diagnostics output appends a single terminal line: `For details on a rule, run: <binary> --explain <rule>`.
