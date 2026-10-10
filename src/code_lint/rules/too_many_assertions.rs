@@ -19,7 +19,6 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Test `{function}` contains {count} assertions; the limit is {max_assertions}.",
     rationale: "A test with many assertions checks several unrelated behaviors at once and stops at the first failure, hiding the others and blurring what the test is about.",
     suggestion: {
-        base: "Assert on one expected value or struct, split distinct scenarios into separate tests, or parameterize the variations.",
         Python => "Assert on one expected value or object, split distinct scenarios into separate `test_*` functions, or parameterize the variations with `@pytest.mark.parametrize`.",
         Rust => "Assert on one expected value or struct, split distinct scenarios into separate `#[test]` functions, or parameterize the cases with `#[rstest]`.",
     },

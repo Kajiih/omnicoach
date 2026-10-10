@@ -92,19 +92,26 @@ impl ViolationMessage {
     }
 }
 
-/// A text string that defines a default baseline and language-specific overrides.
+/// A text string with an optional language-neutral fallback and language-specific overrides.
+///
+/// A field that overrides every language of its rule has no fallback: it would never be shown.
+/// `tests/registry.rs` checks that each rule language resolves to exactly one reachable text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LanguageText {
-    /// Default text used when no language-specific override matches.
-    pub base: &'static str,
+    /// Text used when no language-specific override matches, absent when every language of
+    /// the rule is overridden.
+    pub base: Option<&'static str>,
     /// Language-specific overrides.
     pub overrides: &'static [(Language, &'static str)],
 }
 
 impl LanguageText {
-    /// Creates a new `LanguageText` with a base string and language-specific overrides.
+    /// Creates a new `LanguageText` with an optional fallback and language-specific overrides.
     #[must_use]
-    pub const fn new(base: &'static str, overrides: &'static [(Language, &'static str)]) -> Self {
+    pub const fn new(
+        base: Option<&'static str>,
+        overrides: &'static [(Language, &'static str)],
+    ) -> Self {
         Self { base, overrides }
     }
 
@@ -112,20 +119,22 @@ impl LanguageText {
     #[must_use]
     pub const fn from_static(base: &'static str) -> Self {
         Self {
-            base,
+            base: Some(base),
             overrides: &[],
         }
     }
 
-    /// Resolves the raw static text for the given language.
+    /// Resolves the raw static text for the given language: its override, else the fallback.
+    ///
+    /// Empty only for a language the rule does not declare, which `tests/registry.rs` rules out.
     #[must_use]
     pub fn resolve_for_lang(&self, lang: Language) -> &'static str {
-        for &(override_lang, text) in self.overrides {
-            if override_lang == lang {
-                return text;
-            }
-        }
-        self.base
+        self.overrides
+            .iter()
+            .find(|&&(override_lang, _)| override_lang == lang)
+            .map(|&(_, text)| text)
+            .or(self.base)
+            .unwrap_or_default()
     }
 
     /// Resolves and interpolates named `{key}` placeholders for the given language.
@@ -134,10 +143,11 @@ impl LanguageText {
         Self::interpolate(self.resolve_for_lang(lang), params)
     }
 
-    /// Interpolates named `{key}` placeholders on the base text (for language-independent rules).
+    /// Interpolates named `{key}` placeholders on the fallback text (for language-independent
+    /// rules, which always declare one).
     #[must_use]
     pub fn render(&self, params: &[(&str, &str)]) -> String {
-        Self::interpolate(self.base, params)
+        Self::interpolate(self.base.unwrap_or_default(), params)
     }
 
     /// Replaces each known `{key}` in one left-to-right pass, so substituted values are never
@@ -176,7 +186,7 @@ impl LanguageText {
 /// - [`rationale`](Self::rationale): the concrete failure mode it causes.
 /// - [`suggestion`](Self::suggestion): the single canonical fix, specialized per language.
 ///
-/// Any field may override its `base` text per language. `{placeholder}`s are filled in when
+/// Any field may override its text per language. `{placeholder}`s are filled in when
 /// the rule renders a finding ([`Self::render_for_lang`]). Why the fields are split is
 /// explained in `docs/dev/rule_design_guide.md` §2; their wording and the closed
 /// placeholder list are fixed by `docs/dev/naming_and_message_style_guide.md` §2–3 and
@@ -245,23 +255,22 @@ impl ViolationTemplate {
 
 /// Declaratively constructs a `const` [`ViolationTemplate`].
 ///
-/// Fields can either be static strings or blocks containing `base:` and per-language overrides:
+/// Fields can either be static strings or blocks with one text per language of the rule:
 /// ```rust,ignore
 /// violation_template! {
 ///     summary: "Test function `{func}` has {count} assertions...",
 ///     rationale: "Tests with too many assertions often verify multiple unrelated behaviors...",
 ///     suggestion: {
-///         base: "Parameterize test variations...",
 ///         Python => "Use `@pytest.mark.parametrize`...",
 ///         Rust => "Use `#[rstest]`...",
 ///     },
 /// }
 /// ```
 macro_rules! violation_template {
-    // Internal arm: field with language overrides
-    (@text { base: $base:expr, $($lang:ident => $text:expr),+ $(,)? }) => {
+    // Internal arm: field overriding every language of the rule
+    (@text { $($lang:ident => $text:expr),+ $(,)? }) => {
         $crate::diagnostic::LanguageText::new(
-            $base,
+            None,
             &[$(($crate::diagnostic::Language::$lang, $text)),+],
         )
     };
@@ -529,11 +538,8 @@ mod tests {
     #[test]
     fn test_language_text_resolve_and_render() {
         const ADVICE: LanguageText = LanguageText::new(
-            "Parameterize variations for {func}",
-            &[
-                (Language::Python, "Use @pytest.mark.parametrize for {func}"),
-                (Language::Rust, "Use #[rstest] for {func}"),
-            ],
+            Some("Parameterize variations for {func}"),
+            &[(Language::Python, "Use @pytest.mark.parametrize for {func}")],
         );
 
         assert_eq!(
@@ -546,7 +552,7 @@ mod tests {
         );
         assert_eq!(
             ADVICE.render_for_lang(Language::Rust, &[("func", "test_math")]),
-            "Use #[rstest] for test_math"
+            "Parameterize variations for test_math"
         );
         assert_eq!(
             ADVICE.render(&[("func", "test_math")]),
@@ -572,7 +578,6 @@ mod tests {
             summary: "Function `{func}` too long",
             rationale: "Long functions are hard to read",
             suggestion: {
-                base: "Split function `{func}` into smaller helpers",
                 Python => "Refactor `{func}` with helper functions",
                 Rust => "Extract logic from `{func}` into sub-functions",
             },

@@ -62,7 +62,6 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Function `{function}` accesses an environment variable through `{expression}`.",
     rationale: "An environment variable accessed inside a function is hidden global state: the function's behavior depends on the process, and parallel tests that set the variable pollute each other.",
     suggestion: {
-        base: "Load environment variables at the composition root (`main`, `from_env`) and pass a typed configuration value into `{function}`.",
         Python => "Load environment variables at the composition root (`main`, `from_env`, or module scope) and pass a typed configuration value into `{function}`.",
         Rust => "Load environment variables at the composition root (`main`, `from_env`, or a `LazyLock`) and pass a typed configuration value into `{function}`.",
     },

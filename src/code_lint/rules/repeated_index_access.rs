@@ -27,7 +27,6 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "`{receiver}` is read by index at positions {positions}.",
     rationale: "A positional index hides what the element means, and every index site misreads or breaks when the layout changes.",
     suggestion: {
-        base: "Unpack the value once into named variables.",
         Python => "Unpack once into named variables (`x, y = point`, or `x, y, *_ = point` when the sequence can be longer); return a `NamedTuple` or dataclass when the tuple crosses a function boundary.",
         Rust => "Destructure once into named bindings (`let (start, end) = span;`, `let Point(x, y) = point;` for tuple structs, or `let (start, end) = &span;` when fields are not `Copy`); use a struct with named fields when the tuple crosses a function boundary.",
     },

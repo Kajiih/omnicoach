@@ -70,7 +70,7 @@ async fn test_session_expires() {
 
 - Summary: Test calls `{callee}()`.
 - Rationale: Sleeping in a test slows the suite and makes the outcome depend on timing: the test passes on a fast machine and fails under load.
-- Suggestion: Wait on a deterministic signal (an event, a channel, a condition) or advance an injected clock.
+- Suggestion:
   - Python: Wait on an `asyncio.Event`, an `anyio.Event` or a queue, or advance an injected clock (`clock.sleep(...)`).
   - Rust: Wait on a `tokio::sync::Notify`, a channel or a `Condvar`, or pause time with `tokio::time::pause()`.
 

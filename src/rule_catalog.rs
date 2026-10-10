@@ -134,7 +134,10 @@ fn render_rule(rule: &RegisteredRule) -> String {
         ("Rationale", template.rationale),
         ("Suggestion", template.suggestion),
     ] {
-        lines.push(format!("- {label}: {}", text.base));
+        lines.push(text.base.map_or_else(
+            || format!("- {label}:"),
+            |base| format!("- {label}: {base}"),
+        ));
         lines.extend(
             text.overrides
                 .iter()

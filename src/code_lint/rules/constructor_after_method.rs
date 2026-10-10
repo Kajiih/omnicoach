@@ -13,7 +13,6 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Constructor `{function}` of `{class}` is defined after a non-constructor method.",
     rationale: "Burying initialization logic below regular methods forces readers to scan the body of `{class}` to find how instances are constructed.",
     suggestion: {
-        base: "Move `{function}` above all non-constructor methods in `{class}`.",
         Python => "Move `{function}` to the top of `{class}`, before any regular methods.",
         Rust => "Move `{function}` to the top of the `impl {class}` block, before any non-constructor methods.",
     },
