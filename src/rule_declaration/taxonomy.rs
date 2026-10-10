@@ -12,7 +12,7 @@ use strum::{EnumIter, EnumMessage, IntoStaticStr};
 /// Admit a topic only when it (1) names a subject (not a quality), (2) passes the
 /// all-and-some test under its parent, (3) has a `description` and an includes/excludes
 /// `scope_note`, (4) has a unique `kebab-case` label, and (5) has at least one rule
-/// (`docs/dev/tag_guide.md` §4). Add a matching row to `tag_guide.md` §5.
+/// (`docs/dev/tag_guide.md` §4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Topic {
     /// The topic's canonical `kebab-case` label, e.g. `test-timing`.

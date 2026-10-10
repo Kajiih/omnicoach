@@ -63,18 +63,19 @@ ignore = ["test-doubles"]
 "tests/**" = ["single-letter-name", "heuristic"]
 ```
 
-Unknown labels, facet names (`precision`) and a selector in both `select` and `ignore` fail at config load. Tags, their meaning and the full topic tree are in [docs/dev/tag_guide.md](docs/dev/tag_guide.md).
+Unknown labels, facet names (`precision`) and a selector in both `select` and `ignore` fail at config load. Run `omni-code-lint --list-tags` for the topic tree; facet definitions and selection rules are in [docs/dev/tag_guide.md](docs/dev/tag_guide.md).
 
 ---
 
 ## 📋 Rules
 
-Both binaries document every rule, code and command alike:
+Both binaries document every rule and topic, code and command alike:
 
 ```bash
 omni-code-lint --list-rules              # every rule, with its languages and summary
 omni-code-lint --list-rules --tag testing # the rules `select = ["testing"]` would select
-omni-code-lint --explain sleep-in-tests # one rule: what it does, why, configuration, tags, status
+omni-code-lint --list-tags               # the topic tree: parents, synonyms, descriptions, scope notes
+omni-code-lint --explain sleep-in-tests  # one rule: what it does, why, configuration, tags, status
 ```
 
 `--explain` also reports whether the rule is on under the `.omnilint.toml` of the current directory, and which selector decided it.

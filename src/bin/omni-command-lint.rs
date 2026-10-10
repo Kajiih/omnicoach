@@ -21,7 +21,7 @@ struct Cli {
     format: OutputFormat,
 
     /// Shell command string to validate
-    #[arg(long, required_unless_present_any = ["list_rules", "explain"])]
+    #[arg(long, required_unless_present_any = ["list_rules", "list_tags", "explain"])]
     cmd: Option<String>,
 
     #[command(flatten)]

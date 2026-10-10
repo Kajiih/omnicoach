@@ -292,6 +292,21 @@ pub fn closest_rule_name(label: &str) -> Option<&'static str> {
     closest_match(label, REGISTERED_RULES.iter().map(|rule| rule.name.0))
 }
 
+/// Every topic in use, collected from registered rules and their ancestors, ordered by
+/// root-to-leaf path so each parent precedes its children.
+#[must_use]
+pub fn registered_topics() -> Vec<Topic> {
+    let mut topics: Vec<Topic> = all_topics().collect();
+    topics.sort_by_cached_key(|topic| {
+        topic
+            .path()
+            .into_iter()
+            .map(|step| step.label)
+            .collect::<Vec<_>>()
+    });
+    topics
+}
+
 /// The single global label registry: rule names, tag labels and topic synonyms.
 fn labels() -> impl Iterator<Item = (&'static str, Selector)> {
     let rules = REGISTERED_RULES
@@ -382,50 +397,6 @@ mod tests {
             .map(|topic| topic.label)
             .collect();
         assert!(undocumented.is_empty(), "document {undocumented:?}");
-    }
-
-    #[test]
-    fn topic_tree_table_matches_the_topics() {
-        const GUIDE: &str = include_str!("../../docs/dev/tag_guide.md");
-        let (_, section) = GUIDE
-            .split_once("## 5. Current topic tree")
-            .expect("tag_guide.md has a topic tree section");
-        let (section, _) = section
-            .split_once("\n## ")
-            .expect("the topic tree section is followed by another section");
-        let documented: BTreeSet<Vec<String>> = section
-            .lines()
-            .filter(|line| line.starts_with("| `"))
-            .map(|row| {
-                row.trim_matches('|')
-                    .split('|')
-                    .map(|cell| cell.trim().to_owned())
-                    .collect()
-            })
-            .collect();
-        let declared: BTreeSet<Vec<String>> = all_topics()
-            .map(|topic| {
-                let synonyms: Vec<_> = topic
-                    .synonyms
-                    .iter()
-                    .map(|synonym| format!("`{synonym}`"))
-                    .collect();
-                vec![
-                    format!("`{}`", topic.label),
-                    topic.parent.map_or("—", |parent| parent.label).to_owned(),
-                    synonyms.join(", "),
-                    topic.description.to_owned(),
-                    topic.scope_note.to_owned(),
-                ]
-            })
-            .collect();
-        let stale: Vec<_> = documented.difference(&declared).collect();
-        assert!(
-            stale.is_empty(),
-            "fix or remove in tag_guide.md §5: {stale:#?}"
-        );
-        let missing: Vec<_> = declared.difference(&documented).collect();
-        assert!(missing.is_empty(), "add to tag_guide.md §5: {missing:#?}");
     }
 
     #[test]

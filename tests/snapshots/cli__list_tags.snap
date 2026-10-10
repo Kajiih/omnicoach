@@ -1,0 +1,34 @@
+---
+source: tests/cli.rs
+expression: "output.replace(binary, \"<binary>\")"
+---
+--- exit code ---
+0
+--- stdout ---
+| Topic | Parent | Synonyms | Description | Scope note |
+|---|---|---|---|---|
+| `concurrency` | — |  | Concurrent execution: coroutines, tasks and threads. | Spawning, awaiting and joining concurrent work and its lifetimes. Not sleeping or waiting in tests (see `test-timing`). |
+| `declaration-order` | — |  | Order in which declarations appear in a scope. | Ordering of functions, methods and items within a module or class. Not nesting depth (see `nesting`) or naming. |
+| `durations` | — |  | How spans of time are represented. | Representing lengths of time and their units. Not sleeping/waiting (see `test-timing`) or wall-clock dates. |
+| `error-handling` | — |  | Raising, catching, swallowing and reporting errors. | Exceptions and `Result`s, including `contextlib.suppress`. Not `omni:` directives (see `suppression-directives`). |
+| `global-state` | — |  | Process-wide state read or written implicitly. | Reading or writing ambient process-wide state (environment variables, globals). Not file or network I/O. |
+| `literals` | — |  | How literal values are written in code. | Writing string and number literals (multiline strings, format placeholders, magic numbers). Not identifiers or logging calls (see `logging`). |
+| `logging` | — |  | Use of logging APIs. | Log calls and their arguments. Not `print` or metrics. |
+| `naming` | — |  | How identifiers are named. | Identifier names. Not string contents, file names, formatting or layout. |
+| `abbreviated-names` | naming |  | Too short or cryptic names: abbreviations and single letters. | Abbreviations and single-letter identifiers. Not type or unit suffixes. |
+| `type-encoded-names` | naming |  | Names encoding a type, container or unit. | Type, container or unit encoded in the name (`users_dict`, `timeout_secs`). Not names that are just short. |
+| `nesting` | — |  | Nesting depth and scope structure of code units. | Nested functions, closures and scope depth. Not naming or "readability" in general. |
+| `positional-meaning` | — |  | Meaning carried by position instead of a name. | Meaning carried by argument order or tuple position instead of a name. Not named-field access. |
+| `positional-indexing` | positional-meaning |  | Reading sequence elements by literal index instead of unpacking. | Access by literal index (`t[0]`) where destructuring would name the parts. Not loops over indices or slicing. |
+| `record-types` | — |  | Declaring named records (`dataclass`, `NamedTuple`, `struct`). | Field-bundle declarations, mutability and slots. Not enums or protocols. |
+| `static-typing` | — |  | What the static type checker can see and verify. | What static type checking can prove. Not runtime validation or dataclass mutability (see `record-types`). |
+| `type-checker-bypass` | static-typing |  | Code that overrides or routes around the type checker. | Casts and dynamic access (`cast`, `getattr`) that hide types from the checker. Not `omni:` directives. |
+| `suppression-directives` | — |  | Hygiene of `omni:` suppression comments. | `omni:` directives that silence Omni. Not `contextlib.suppress` (see `error-handling`). |
+| `testing` | — |  | Practices specific to test code. | How test code is structured and written. Not production code, even when tested. |
+| `test-assertions` | testing |  | Count, shape and granularity of test assertions. | Number and shape of test assertions. Not production `assert` or what the test exercises. |
+| `test-doubles` | testing |  | Mocks, fakes, stubs, spies and monkeypatching. | Replacing collaborators in tests and asserting on those replacements. Not fixtures that only build data. |
+| `test-timing` | testing |  | Sleeps, clocks and timeouts in tests. | Sleeping or waiting in tests. Not production retries or duration representation (see `durations`). |
+| `vcs` | — | `version-control` | Version-control operations and history. | Commands and workflows of any version-control system. Not CI or code review. |
+| `jj` | vcs | `jujutsu` | Rules specific to Jujutsu. | Commands and workflows specific to Jujutsu. Not generic VCS behaviour. |
+
+--- stderr ---

@@ -159,6 +159,7 @@ fn test_code_lint_invalid_config() {
 
 #[rstest::rstest]
 #[case::list_rules("omni-code-lint", &["--list-rules"], "list_rules")]
+#[case::list_tags("omni-code-lint", &["--list-tags"], "list_tags")]
 #[case::tag_typo("omni-code-lint", &["--list-rules", "--tag", "tesing"], "tag_typo")]
 #[case::tag_without_list("omni-code-lint", &["--tag", "testing"], "tag_without_list")]
 #[case::explain("omni-code-lint", &["--explain", "sleep-in-tests"], "explain_sleep_in_tests")]
@@ -177,6 +178,7 @@ fn test_discovery_and_cli_errors(
 /// Both binaries serve the same rule catalog.
 #[rstest::rstest]
 #[case::list_rules(&["--list-rules"])]
+#[case::list_tags(&["--list-tags"])]
 #[case::explain(&["--explain", "edit-of-described-commit"])]
 fn test_discovery_is_identical_across_binaries(#[case] args: &[&str]) {
     let code_lint = run_and_sanitize_cli("omni-code-lint", args, None, &[]);

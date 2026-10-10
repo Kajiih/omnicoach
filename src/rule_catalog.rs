@@ -9,7 +9,7 @@ use crate::rule_declaration::{
 };
 use crate::rule_selection::{
     ConfigError, Facet, RegisteredRule, UnknownLabel, find_rule, load_rule_status,
-    registered_rules, rules_tagged,
+    registered_rules, registered_topics, rules_tagged,
 };
 
 /// Why a discovery request failed. The message is what the user sees.
@@ -23,7 +23,7 @@ pub enum CatalogError {
     Config(#[from] ConfigError),
 }
 
-/// Command-line flags for rule discovery: `--list-rules`, `--tag` and `--explain`.
+/// Command-line flags for rule discovery: `--list-rules`, `--tag`, `--list-tags` and `--explain`.
 #[derive(Debug, clap::Args)]
 pub struct DiscoveryArgs {
     /// List every rule with its languages and summary, as Markdown
@@ -34,8 +34,12 @@ pub struct DiscoveryArgs {
     #[arg(long, value_name = "LABEL", requires = "list_rules")]
     pub tag: Option<String>,
 
+    /// List the topic tree with each topic's parent, synonyms, description and scope note
+    #[arg(long, conflicts_with_all = ["list_rules", "explain"])]
+    pub list_tags: bool,
+
     /// Print one rule's documentation as Markdown
-    #[arg(long, value_name = "RULE", conflicts_with = "list_rules")]
+    #[arg(long, value_name = "RULE", conflicts_with_all = ["list_rules", "list_tags"])]
     pub explain: Option<String>,
 }
 
@@ -45,6 +49,9 @@ impl DiscoveryArgs {
     pub fn render(&self) -> Option<Result<String, CatalogError>> {
         if let Some(name) = &self.explain {
             return Some(explain(name));
+        }
+        if self.list_tags {
+            return Some(Ok(list_tags()));
         }
         self.list_rules.then(|| list_rules(self.tag.as_deref()))
     }
@@ -77,6 +84,32 @@ pub fn list_rules(tag: Option<&str>) -> Result<String, CatalogError> {
         })
         .collect();
     Ok(lines.join("\n") + "\n")
+}
+
+/// The topic tree as a Markdown table: each topic's label, parent, synonyms, description and
+/// scope note, with children listed under their parent.
+#[must_use]
+pub fn list_tags() -> String {
+    let mut lines = vec![
+        "| Topic | Parent | Synonyms | Description | Scope note |".to_owned(),
+        "|---|---|---|---|---|".to_owned(),
+    ];
+    for topic in registered_topics() {
+        let parent = topic.parent.map_or("—", |parent| parent.label);
+        let synonyms: Vec<String> = topic
+            .synonyms
+            .iter()
+            .map(|synonym| format!("`{synonym}`"))
+            .collect();
+        lines.push(format!(
+            "| `{}` | {parent} | {} | {} | {} |",
+            topic.label,
+            synonyms.join(", "),
+            topic.description,
+            topic.scope_note,
+        ));
+    }
+    lines.join("\n") + "\n"
 }
 
 /// The rule's full documentation as Markdown, including its active status.

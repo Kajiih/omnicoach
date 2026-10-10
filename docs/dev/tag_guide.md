@@ -3,7 +3,7 @@
 > [!NOTE]
 > Normative contributor guide for Omni's rule taxonomy and selection system. Design rationale: [ADR 007](../../decisions/007_rule_taxonomy_and_selection.md).
 
-This guide is for contributors who **classify a rule** or **add a tag**. Every structural rule below is enforced by the compiler or a test (§6). The guide explains the *why* and gives the yes/no questions that tests cannot answer.
+This guide is for contributors who **classify a rule** or **add a tag**. Every structural rule below is enforced by the compiler or a test (§5). The guide explains the *why* and gives the yes/no questions that tests cannot answer.
 
 ---
 
@@ -13,7 +13,7 @@ A rule is described by **facets**. Each facet answers one question. Its **values
 
 | Facet (display label) | Question | Values | How it is set |
 |---|---|---|---|
-| **Topic** | What construct, API or domain does the rule inspect? | the topic tree (§5) | Declared, **one or more**, most specific only |
+| **Topic** | What construct, API or domain does the rule inspect? | the topic tree (`omni-code-lint --list-tags`) | Declared, **one or more**, most specific only |
 | **Precision** | Can it flag correct code? (False positives only; an `exact` rule may still miss violations.) | `exact`, `heuristic` | Declared, **exactly one** |
 | **Consensus** | Would reasonable people disagree with it? | `opinionated`, `unopinionated` | Declared, **exactly one** |
 | **Impacted quality** | What software quality suffers when it is violated? | `reliability`, `maintainability` (from ISO/IEC 25010; §2.4) | Declared, **exactly one** |
@@ -156,37 +156,7 @@ There are no aliases for old labels: renaming a topic breaks configs that name i
 
 ---
 
-## 5. Current topic tree
-
-| Topic | Parent | Synonyms | Description (`Topic::description`) | Scope note (`Topic::scope_note`: includes / excludes) |
-|---|---|---|---|---|
-| `naming` | — | | How identifiers are named. | Identifier names. Not string contents, file names, formatting or layout. |
-| `abbreviated-names` | naming | | Too short or cryptic names: abbreviations and single letters. | Abbreviations and single-letter identifiers. Not type or unit suffixes. |
-| `type-encoded-names` | naming | | Names encoding a type, container or unit. | Type, container or unit encoded in the name (`users_dict`, `timeout_secs`). Not names that are just short. |
-| `testing` | — | | Practices specific to test code. | How test code is structured and written. Not production code, even when tested. |
-| `test-assertions` | testing | | Count, shape and granularity of test assertions. | Number and shape of test assertions. Not production `assert` or what the test exercises. |
-| `test-doubles` | testing | | Mocks, fakes, stubs, spies and monkeypatching. | Replacing collaborators in tests and asserting on those replacements. Not fixtures that only build data. |
-| `test-timing` | testing | | Sleeps, clocks and timeouts in tests. | Sleeping or waiting in tests. Not production retries or duration representation (see `durations`). |
-| `static-typing` | — | | What the static type checker can see and verify. | What static type checking can prove. Not runtime validation or dataclass mutability (see `record-types`). |
-| `type-checker-bypass` | static-typing | | Code that overrides or routes around the type checker. | Casts and dynamic access (`cast`, `getattr`) that hide types from the checker. Not `omni:` directives. |
-| `positional-meaning` | — | | Meaning carried by position instead of a name. | Meaning carried by argument order or tuple position instead of a name. Not named-field access. |
-| `positional-indexing` | positional-meaning | | Reading sequence elements by literal index instead of unpacking. | Access by literal index (`t[0]`) where destructuring would name the parts. Not loops over indices or slicing. |
-| `vcs` | — | `version-control` | Version-control operations and history. | Commands and workflows of any version-control system. Not CI or code review. |
-| `jj` | vcs | `jujutsu` | Rules specific to Jujutsu. | Commands and workflows specific to Jujutsu. Not generic VCS behaviour. |
-| `durations` | — | | How spans of time are represented. | Representing lengths of time and their units. Not sleeping/waiting (see `test-timing`) or wall-clock dates. |
-| `record-types` | — | | Declaring named records (`dataclass`, `NamedTuple`, `struct`). | Field-bundle declarations, mutability and slots. Not enums or protocols. |
-| `literals` | — | | How literal values are written in code. | Writing string and number literals (multiline strings, format placeholders, magic numbers). Not identifiers or logging calls (see `logging`). |
-| `nesting` | — | | Nesting depth and scope structure of code units. | Nested functions, closures and scope depth. Not naming or "readability" in general. |
-| `global-state` | — | | Process-wide state read or written implicitly. | Reading or writing ambient process-wide state (environment variables, globals). Not file or network I/O. |
-| `error-handling` | — | | Raising, catching, swallowing and reporting errors. | Exceptions and `Result`s, including `contextlib.suppress`. Not `omni:` directives (see `suppression-directives`). |
-| `logging` | — | | Use of logging APIs. | Log calls and their arguments. Not `print` or metrics. |
-| `concurrency` | — | | Concurrent execution: coroutines, tasks and threads. | Spawning, awaiting and joining concurrent work and its lifetimes. Not sleeping or waiting in tests (see `test-timing`). |
-| `suppression-directives` | — | | Hygiene of `omni:` suppression comments. | `omni:` directives that silence Omni. Not `contextlib.suppress` (see `error-handling`). |
-| `declaration-order` | — | | Order in which declarations appear in a scope. | Ordering of functions, methods and items within a module or class. Not nesting depth (see `nesting`) or naming. |
-
----
-
-## 6. Enforcement map
+## 5. Enforcement map
 
 Compiler checks are pinned by `compile_fail` doctests on `Classification` in `src/rule_declaration/taxonomy.rs`. The named tests live in `src/rule_selection/taxonomy.rs` unless stated otherwise.
 
@@ -204,5 +174,4 @@ Compiler checks are pinned by `compile_fail` doctests on `Classification` in `sr
 | §4.2: a topic's parent is a topic | Compiler (`E0308` type mismatch) |
 | §1: behaviour never depends on a tag | Architecture graph (`src/architecture.rs`: rules and runners cannot depend on `RuleSelection`) checked by `test_architecture_conformance` in `tests/architecture_conformance.rs` |
 | §4.1.3: every tag has a description and every topic has a scope note | `missing_docs` lint (facet values) + compiler (`E0063` missing struct field on `Topic`) + test `every_topic_is_documented` (non-empty); **Review** (meaning) |
-| §5: the table matches the `Topic` consts | Test `topic_tree_table_matches_the_topics` |
 | §2.2–§2.4, §4.1.1–4.1.2: the yes/no questions | **Review.** A test cannot judge meaning; the worked examples are the reference. |

@@ -17,7 +17,7 @@ use std::fmt;
 use serde::Deserialize;
 use strum::IntoEnumIterator as _;
 
-pub use self::taxonomy::{Derived, Facet, RegisteredRule, Tag};
+pub use self::taxonomy::{Derived, Facet, RegisteredRule, Tag, registered_topics};
 use self::taxonomy::{REGISTERED_RULES, Selector};
 use crate::config::{CONFIG_FILE_NAME, Config, ContextConfig, compile_glob};
 use crate::diagnostic::RuleName;
