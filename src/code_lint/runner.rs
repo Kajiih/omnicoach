@@ -247,6 +247,11 @@ fn collect_targets(options: &LintOptions) -> anyhow::Result<Vec<LintTarget>> {
             .iter()
             .map(|path| path.canonicalize().unwrap_or_else(|_| path.clone()))
             .collect();
+        // Changed paths are canonical; report them relative to the working directory like
+        // non-diff runs, instead of leaking canonical forms (`\\?\C:\...`, `/private/var/...`).
+        let working_dir = std::env::current_dir()
+            .and_then(|dir| dir.canonicalize())
+            .ok();
 
         let targets = changes
             .into_iter()
@@ -260,9 +265,15 @@ fn collect_targets(options: &LintOptions) -> anyhow::Result<Vec<LintTarget>> {
                 }) && Language::from_path(file_path).is_some()
                     && file_path.is_file()
             })
-            .map(|(file_path, changed_lines)| LintTarget {
-                path: file_path,
-                changed_lines: Some(changed_lines),
+            .map(|(file_path, changed_lines)| {
+                let relative_path = working_dir
+                    .as_deref()
+                    .and_then(|dir| file_path.strip_prefix(dir).ok())
+                    .map(Path::to_path_buf);
+                LintTarget {
+                    path: relative_path.unwrap_or(file_path),
+                    changed_lines: Some(changed_lines),
+                }
             })
             .collect();
         Ok(targets)

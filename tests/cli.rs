@@ -92,13 +92,21 @@ fn run_and_sanitize_cli(
         stderr
     );
 
-    // Sanitize any dynamic temporary paths
+    // Sanitize any dynamic temporary paths, raw and JSON-escaped (identical off Windows)
     for path in temp_paths {
-        combined = combined.replace(&*path.to_string_lossy(), "[TEMP_PATH]");
+        let raw = path.to_string_lossy();
+        combined = combined
+            .replace(&raw.replace('\\', "\\\\"), "[TEMP_PATH]")
+            .replace(&*raw, "[TEMP_PATH]");
     }
 
-    // Normalize windows CRLF to LF
-    combined.replace("\r\n", "\n")
+    // Normalize Windows specifics: path separators after the placeholder, clap's `.exe`
+    // usage name, and CRLF line endings
+    combined
+        .replace("[TEMP_PATH]\\\\", "[TEMP_PATH]/")
+        .replace("[TEMP_PATH]\\", "[TEMP_PATH]/")
+        .replace(&format!("{bin_name}.exe"), bin_name)
+        .replace("\r\n", "\n")
 }
 
 #[test]
