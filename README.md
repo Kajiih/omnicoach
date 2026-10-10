@@ -4,6 +4,22 @@ Lightweight, high-signal static analysis engine designed to enforce domain-speci
 
 ---
 
+## 📦 Installation
+
+Prebuilt binaries are published to PyPI:
+```bash
+uv tool install omni-lint   # or: pipx install omni-lint
+```
+
+From crates.io:
+```bash
+cargo install omni-lint --locked
+```
+
+Both install the `omni-code-lint` and `omni-command-lint` binaries.
+
+---
+
 ## 🚀 Quickstart
 
 Scan the entire repository:
@@ -63,7 +79,7 @@ ignore = ["test-doubles"]
 "tests/**" = ["single-letter-name", "heuristic"]
 ```
 
-Unknown labels, facet names (`precision`) and a selector in both `select` and `ignore` fail at config load. Run `omni-code-lint --list-tags` for the topic tree; facet definitions and selection rules are in [docs/dev/tag_guide.md](docs/dev/tag_guide.md).
+Unknown labels, facet names (`precision`) and a selector in both `select` and `ignore` fail at config load. Run `omni-code-lint --list-tags` for the topic tree; facet definitions and selection rules are in [docs/dev/tag_guide.md](https://github.com/Kajiih/omni-lint/blob/main/docs/dev/tag_guide.md).
 
 ---
 
@@ -112,4 +128,4 @@ def make_handler():
 
 ## 🤝 Contributing
 
-To add a rule, follow [docs/dev/adding_a_rule.md](docs/dev/adding_a_rule.md).
+To add a rule, follow [docs/dev/adding_a_rule.md](https://github.com/Kajiih/omni-lint/blob/main/docs/dev/adding_a_rule.md).
