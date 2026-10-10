@@ -19,12 +19,7 @@ fn validate_rule(rule: &DeclaredRule) {
 
     let template = rule.template;
     for field in [template.summary, template.rationale, template.suggestion] {
-        for text in std::iter::once(field.base).chain(
-            field
-                .overrides
-                .iter()
-                .map(|(_, override_text)| *override_text),
-        ) {
+        for text in texts(&field) {
             let trimmed = text.trim();
             assert!(
                 !trimmed.is_empty(),
@@ -49,6 +44,15 @@ fn validate_rule(rule: &DeclaredRule) {
                 "Rule {name} declares template override for {lang:?}, which is not in its languages"
             );
         }
+        let overrides_every_language =
+            !field.overrides.is_empty() && seen_langs.len() == rule.languages.len();
+        assert_eq!(
+            field.base.is_some(),
+            !overrides_every_language,
+            "Rule {name} must declare a template `base` exactly when some language is not \
+             overridden (an unreachable `base` is dead text; a missing one leaves a language \
+             without a message)"
+        );
     }
 }
 
@@ -457,9 +461,12 @@ const PLACEHOLDERS: [&str; 17] = [
     "count",
 ];
 
-/// The base text and every language override of a template field.
+/// The fallback text, if any, and every language override of a template field.
 fn texts(field: &LanguageText) -> impl Iterator<Item = &'static str> {
-    std::iter::once(field.base).chain(field.overrides.iter().map(|(_, text)| *text))
+    field
+        .base
+        .into_iter()
+        .chain(field.overrides.iter().map(|(_, text)| *text))
 }
 
 /// `text` without its backtick spans: the prose the style rules apply to.

@@ -14,12 +14,10 @@ use std::path::Path;
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Return annotation `{expression}` of `{function}` makes collection type `{token}` nullable.",
     rationale: {
-        base: "Wrapping a collection return type in an optional type creates two representations for an empty result and forces callers to unwrap before iterating or querying length.",
         Python => "Wrapping a collection return type in `| None` or `Optional` creates two representations for an empty result and forces callers to check for `None` before iterating or querying length.",
         Rust => "Wrapping a collection return type in `Option` creates two representations for an empty result and forces callers to unwrap or match before iterating or querying length.",
     },
     suggestion: {
-        base: "Remove the optional wrapper from the return annotation of `{function}` and return an empty collection when no elements are present.",
         Python => "Remove `None` from the return annotation of `{function}` and return an empty collection such as `()`, `[]`, `{}`, or `frozenset()` when no elements are present.",
         Rust => "Remove `Option` from the return type of `{function}` and return an empty collection such as `Vec::new()`, `&[]`, `BTreeMap::new()`, or `HashSet::new()` when no elements are present.",
     },

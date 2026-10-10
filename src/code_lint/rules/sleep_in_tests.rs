@@ -47,7 +47,6 @@ const SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Test calls `{callee}()`.",
     rationale: "Sleeping in a test slows the suite and makes the outcome depend on timing: the test passes on a fast machine and fails under load.",
     suggestion: {
-        base: "Wait on a deterministic signal (an event, a channel, a condition) or advance an injected clock.",
         Python => "Wait on an `asyncio.Event`, an `anyio.Event` or a queue, or advance an injected clock (`clock.sleep(...)`).",
         Rust => "Wait on a `tokio::sync::Notify`, a channel or a `Condvar`, or pause time with `tokio::time::pause()`.",
     },
@@ -57,7 +56,6 @@ const ZERO_SLEEP_TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Test calls `{callee}()` with a zero duration.",
     rationale: "A zero-duration sleep yields to the scheduler in the hope that background work completes; how many ticks that takes varies between runs and runtimes.",
     suggestion: {
-        base: "Wait on an explicit event or queue, or call the runtime's explicit yield primitive.",
         Python => "Wait on an `asyncio.Event` or `asyncio.Queue`, or call `await anyio.lowlevel.checkpoint()` under AnyIO.",
         Rust => "Wait on an explicit signal, or call `tokio::task::yield_now().await` to yield once explicitly.",
     },

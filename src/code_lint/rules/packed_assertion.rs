@@ -11,13 +11,11 @@ use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: {
-        base: "Assertion packs several checks into {construct}.",
         Python => "`assert` packs several checks into {construct}.",
         Rust => "`{callee}!` packs several checks into {construct}.",
     },
     rationale: "When one assertion holds several independent checks, a failure does not say which check failed, and the diff shows the whole compound value instead of the mismatching part.",
     suggestion: {
-        base: "Split the checks into separate assertions, or compare one domain object directly.",
         Python => "Split the checks into separate `assert` statements, or compare one domain object directly.",
         Rust => "Split the checks into separate `assert!` / `assert_eq!` calls, or compare one domain struct directly.",
     },

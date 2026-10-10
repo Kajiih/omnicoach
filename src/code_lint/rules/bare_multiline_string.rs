@@ -41,7 +41,6 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Multiline string literal is not wrapped in a dedent helper.",
     rationale: "An indented multiline literal carries the block's leading spaces and first newline into the runtime value, which corrupts indentation-sensitive text and shifts line and column coordinates; flushing it to column 0 breaks the indentation of the surrounding code instead.",
     suggestion: {
-        base: "Wrap the literal in a dedent helper, or write a single-line literal if the value has one line.",
         Python => "Wrap the literal in `inspect.cleandoc(\"\"\"...\"\"\")`, or write a single-line literal if the value has one line.",
         Rust => "Wrap the literal in `indoc::indoc! {r\"...\"}` (`indoc::formatdoc!` when interpolating), or write a single-line literal if the value has one line.",
     },

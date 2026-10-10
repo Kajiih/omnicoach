@@ -73,7 +73,7 @@ The three fields are orthogonal (`rule_design_guide.md` §2). This section fixes
 ### 2.4 `suggestion`: the fix
 
 * Imperative mood, starts with a verb from the current list: `Wrap`, `Replace`, `Rename`, `Split`, `Add`, `Remove`, `Move`, `Pass`, `Wait`, `Destructure`, `Unpack`, `Insert`, `Spawn`, `Create`, `Load`, `Narrow`, `Assert`, `Inject`, `Specify`, `Verify`, `Extract`, `Synchronize`, `Access`. The list grows when a fix needs a verb that is not in it (see the introduction).
-* One canonical replacement per language, idiomatic to that language. The base text is language-neutral; per-language variants replace it entirely.
+* One canonical replacement per language, idiomatic to that language. Per-language variants replace the language-neutral `base` text entirely; a field that has a variant for every language of the rule declares no `base`, since it would never be shown (checked by `tests/registry.rs`).
 * Does not repeat "instead of `<bad construct>`" and does not re-explain the harm.
 * Claims no more certainty than the rule has. When the replacement is inferred heuristically, the summary hedges ("appears to") and the suggestion is conditional on intent ("if `{function}` is not meant to mutate `{name}`"). When the rule cannot know the right replacement, the suggestion states the criterion and names `{replacement}` only as an example ("such as").
 
