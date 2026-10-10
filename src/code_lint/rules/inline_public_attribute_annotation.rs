@@ -49,9 +49,9 @@ pub const RULE: CodeRule = CodeRule {
                 class's public contract can be prefixed with `_` and annotated either in the class
                 body or inline."},
             known_problems: Some(indoc::indoc! {r"
-                Field-building classes are recognized by their decorator as written or a direct
-                `BaseModel` base, so a Pydantic model that inherits `BaseModel` through another base
-                class is flagged."}),
+                Field-building base classes such as `pydantic.BaseModel` are only recognized as
+                direct bases, so a model that inherits `BaseModel` through an intermediate class is
+                still flagged."}),
             references: &[
                 Reference {
                     title: "PEP 526: Syntax for Variable Annotations — Class and instance variable annotations",
@@ -61,6 +61,7 @@ pub const RULE: CodeRule = CodeRule {
                     title: "Google Python Style Guide: Type Annotations",
                     url: "https://google.github.io/styleguide/pyguide.html#319-type-annotations",
                 },
+                Reference::NAME_RESOLUTION,
             ],
             examples: &[Example {
                 language: Language::Python,
@@ -247,6 +248,22 @@ crate::test_utils::rule_test!(
                         def model_post_init(self, __context: object) -> None:
                             self.total: int = sum(self.items)
                 "#,
+                aliased_pydantic_base_model_inline_annotation_exempt => r#"
+                    from pydantic import BaseModel as Model
+
+                    class PydanticSummary(Model):
+                        items: list[int]
+
+                        def model_post_init(self, __context: object) -> None:
+                            self.total: int = sum(self.items)
+                "#,
+                aliased_bare_final_inline_annotation_exempt => r#"
+                    from typing import Final as Const
+
+                    class Record:
+                        def __init__(self, record_id: int) -> None:
+                            self.record_id: Const = record_id
+                "#,
             ],
             fail: [
                 inline_public_attribute_in_init => r#"
@@ -290,6 +307,14 @@ crate::test_utils::rule_test!(
                         def __init__(self, record_id: int) -> None:
                             self.record_id: Final[int] = record_id
                 "# => "self.record_id: Final[int] = record_id",
+                locally_shadowed_final_flagged => r#"
+                    class Final:
+                        pass
+
+                    class Record:
+                        def __init__(self, record_id: Final) -> None:
+                            self.record_id: Final = record_id
+                "# => "self.record_id: Final = record_id",
                 redundant_inline_annotation_when_also_annotated_in_class_body => r#"
                     class Worker:
                         count: int

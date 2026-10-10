@@ -763,7 +763,7 @@ pub fn collect_test_function_assertion_counts(
 #[must_use]
 pub fn find_unwrapped_multiline_strings(
     file: &ParsedFile,
-    is_allowed_wrapper: impl Fn(&str, &str) -> bool,
+    is_allowed_wrapper: impl Fn(&str) -> bool,
 ) -> Vec<AstNode<'_>> {
     dispatch_lang!(
         file.lang(),

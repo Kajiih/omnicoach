@@ -65,10 +65,8 @@ pub const RULE: CodeRule = CodeRule {
                 three-state contract where `None` means something distinct from zero elements, such
                 as a cache miss, an unparsed field, or an omitted filter."},
             known_problems: Some(indoc::indoc! {r"
-                - Type aliases such as `Names: TypeAlias = list[str]` or `type Names = Vec<String>;`
-                  are not expanded, so return types that use them are not checked.
-                - In Rust, collection type paths are matched as written, without resolving `use`
-                  aliases or re-exports."}),
+                Type aliases such as `Names: TypeAlias = list[str]` or `type Names = Vec<String>;`
+                are not expanded, so return types that use them are not checked."}),
             references: &[
                 Reference {
                     title: "SonarSource RSPEC-1168: Empty arrays and collections should be returned instead of null",
@@ -625,6 +623,13 @@ crate::test_utils::rule_test!(
                         None
                     }
                 "#,
+                locally_shadowed_vec_exempt => r#"
+                    struct Vec<T>(T);
+
+                    fn get_wrapped() -> Option<Vec<String>> {
+                        None
+                    }
+                "#,
             ],
             fail: [
                 option_vec_return => r#"
@@ -637,6 +642,13 @@ crate::test_utils::rule_test!(
                         None
                     }
                 "# => "std::option::Option<std::collections::HashMap<String, usize>>",
+                aliased_hashmap_return => r#"
+                    use std::collections::HashMap as Map;
+
+                    fn get_counts() -> Option<Map<String, usize>> {
+                        None
+                    }
+                "# => "Option<Map<String, usize>>",
                 option_btreeset_return => r#"
                     use std::collections::BTreeSet;
 

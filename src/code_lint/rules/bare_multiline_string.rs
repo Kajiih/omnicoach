@@ -77,10 +77,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 indentation: `inspect.cleandoc("""...""")` in Python, `indoc::indoc!` (or
                 `formatdoc!` to interpolate) in Rust. Write a single-line literal when the value has
                 one line."#},
-            known_problems: Some(indoc::indoc! {r"
-                The allow list matches a call or macro by its written path or its last segment,
-                without resolving imports: any `x.cleandoc(...)` is accepted, and an aliased
-                helper such as `from inspect import cleandoc as dedent` is not."}),
+            known_problems: None,
             references: &[
                 Reference {
                     title: "Python docs: inspect.cleandoc",
@@ -90,6 +87,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                     title: "indoc crate documentation",
                     url: "https://docs.rs/indoc",
                 },
+                Reference::NAME_RESOLUTION,
             ],
             examples: &[
                 Example {
@@ -149,8 +147,12 @@ fn check_file(
     file: &ParsedFile,
     allowed: &HashSet<String>,
 ) -> Vec<Diagnostic> {
-    ast::find_unwrapped_multiline_strings(file, |full_path, terminal| {
-        allowed.contains(full_path) || allowed.contains(terminal)
+    ast::find_unwrapped_multiline_strings(file, |full_path| {
+        match ast::resolve_name(file, full_path) {
+            ast::ResolvedName::Imported(resolved) => allowed.contains(resolved.as_str()),
+            ast::ResolvedName::Local => false,
+            ast::ResolvedName::Unbound => allowed.contains(full_path),
+        }
     })
     .iter()
     .map(|node| rule.diagnostic_at_node(path, node, &[]))
@@ -177,6 +179,13 @@ crate::test_utils::rule_test!(
                 inspect_cleandoc_allowed => r#"
                     import inspect
                     x = inspect.cleandoc("""
+                        line 1
+                        line 2
+                    """)
+                "#,
+                aliased_cleandoc_allowed => r#"
+                    from inspect import cleandoc as dedent
+                    x = dedent("""
                         line 1
                         line 2
                     """)
@@ -246,6 +255,17 @@ line 2
                         line 2
                     """
                 "#,
+                unrelated_cleandoc_method_flagged => r#"
+                    x = formatter.cleandoc("""
+                        line 1
+                        line 2
+                    """)
+                "# => r#"
+                    """
+                        line 1
+                        line 2
+                    """
+                "#,
             ],
         },
         Rust => {
@@ -277,6 +297,16 @@ line 2
                     line 2"]
                     fn documented() {}
                 "#,
+                aliased_indoc_macro_allowed => r#"
+                    use indoc::indoc as dedent;
+
+                    fn build() {
+                        let good = dedent! {r"
+                            alpha
+                            beta
+                        "};
+                    }
+                "#,
             ],
             fail: [
                 const_multiline_flagged => r#"
@@ -296,6 +326,21 @@ line 2
                             alpha
                             beta
                         ";
+                    }
+                "# => r#"
+                    r"
+                        alpha
+                        beta
+                    "
+                "#,
+                unrelated_indoc_macro_flagged => r#"
+                    use other::indoc;
+
+                    fn build() {
+                        let bad = indoc! {r"
+                            alpha
+                            beta
+                        "};
                     }
                 "# => r#"
                     r"

@@ -108,7 +108,22 @@ impl PythonFunctionSignature<'_> {
 
 const SELF_PARAMETER: &str = "self";
 const NOT_IMPLEMENTED_ERROR: &str = "NotImplementedError";
-const OVERRIDE_DECORATOR: &str = "override";
+const OVERRIDE_DECORATOR_PATHS: &[&str] =
+    &["override", "typing.override", "typing_extensions.override"];
+const EXEMPT_SIGNATURE_DECORATOR_PATHS: &[&str] = &[
+    "override",
+    "typing.override",
+    "typing_extensions.override",
+    "overload",
+    "typing.overload",
+    "typing_extensions.overload",
+    "abstractmethod",
+    "abc.abstractmethod",
+    "fixture",
+    "pytest.fixture",
+    "pytest_asyncio.fixture",
+    "register",
+];
 
 /// Returns the receiver parameter name (`"self"`, or `"cls"` when `allow_classmethod_cls` is true)
 /// for a method `function_def`, or `None` if decorated with `@staticmethod` (or `@classmethod`
@@ -120,8 +135,9 @@ pub(super) fn method_receiver_name_ast(
 ) -> Option<String> {
     let decorators = extract_decorators_from_slice(&function_def.decorator_list, file);
     let is_excluded_decorator = decorators.iter().any(|decorator| {
-        decorator.terminal_name == "staticmethod"
-            || (!allow_classmethod_cls && decorator.terminal_name == "classmethod")
+        decorator.matches_any(&["staticmethod", "builtins.staticmethod"])
+            || (!allow_classmethod_cls
+                && decorator.matches_any(&["classmethod", "builtins.classmethod"]))
     });
     if is_excluded_decorator {
         return None;
@@ -175,8 +191,7 @@ pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSigna
                     self.in_protocol_or_abc_class = false;
                 }
                 Stmt::ClassDef(class_def) => {
-                    self.in_protocol_or_abc_class =
-                        is_protocol_or_abc_class(class_def, &self.file.source);
+                    self.in_protocol_or_abc_class = is_protocol_or_abc_class(class_def, self.file);
                 }
                 _ => {}
             }
@@ -202,15 +217,10 @@ pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSigna
 /// implementations, which dispatch on their annotations), or `@<property>.setter` (whose value
 /// type mirrors the getter's return type).
 fn has_exempt_signature_decorator(decorators: &[DecoratorInfo]) -> bool {
-    let is_exempt = |name: &str| {
-        matches!(
-            name,
-            OVERRIDE_DECORATOR | "overload" | "abstractmethod" | "fixture" | "register" | "setter"
-        )
-    };
-    decorators
-        .iter()
-        .any(|decorator| is_exempt(&decorator.terminal_name) || is_exempt(&decorator.path))
+    decorators.iter().any(|decorator| {
+        decorator.matches_any(EXEMPT_SIGNATURE_DECORATOR_PATHS)
+            || decorator.is_attribute_named(&["register", "setter"])
+    })
 }
 
 /// Returns true if the function body `statements` is a stub consisting only of an optional
@@ -376,9 +386,7 @@ fn build_variadic_parameter<'a>(
 pub(super) fn has_override_decorator(decorators: &[Decorator], file: &ParsedFile) -> bool {
     extract_decorators_from_slice(decorators, file)
         .iter()
-        .any(|decorator| {
-            decorator.terminal_name == OVERRIDE_DECORATOR || decorator.path == OVERRIDE_DECORATOR
-        })
+        .any(|decorator| decorator.matches_any(OVERRIDE_DECORATOR_PATHS))
 }
 
 /// Finds all nested Python function definitions (`def ...` inside another `def ...`) and returns

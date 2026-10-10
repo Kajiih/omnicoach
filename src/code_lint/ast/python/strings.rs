@@ -65,7 +65,7 @@ pub(super) fn static_string_text(expr: &Expr) -> Option<String> {
 #[must_use]
 pub(in crate::code_lint::ast) fn find_unwrapped_multiline_strings(
     file: &ParsedFile,
-    is_allowed_wrapper: impl Fn(&str, &str) -> bool,
+    is_allowed_wrapper: impl Fn(&str) -> bool,
 ) -> Vec<AstNode<'_>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
@@ -102,7 +102,7 @@ impl<F> UnwrappedMultilineFinder<'_, F> {
     }
 }
 
-impl<'a, F: Fn(&str, &str) -> bool> SourceOrderVisitor<'a> for UnwrappedMultilineFinder<'a, F> {
+impl<'a, F: Fn(&str) -> bool> SourceOrderVisitor<'a> for UnwrappedMultilineFinder<'a, F> {
     fn visit_stmt(&mut self, statement: &'a Stmt) {
         match statement {
             Stmt::FunctionDef(func) => {
@@ -152,9 +152,8 @@ impl<'a, F: Fn(&str, &str) -> bool> SourceOrderVisitor<'a> for UnwrappedMultilin
                 self.allowed_call_depth = prev_depth;
             }
             Expr::Call(call) => {
-                let (path, terminal) =
-                    resolve_path_and_terminal_expr(&call.func, &self.file.source);
-                let is_allowed = (self.is_allowed_wrapper)(&path, &terminal);
+                let (path, _) = resolve_path_and_terminal_expr(&call.func, &self.file.source);
+                let is_allowed = (self.is_allowed_wrapper)(&path);
                 if is_allowed {
                     self.allowed_call_depth += 1;
                 }

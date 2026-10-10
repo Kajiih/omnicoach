@@ -470,7 +470,7 @@ pub fn is_boolean_literal_collection(node: &AstNode<'_>) -> bool {
 #[must_use]
 pub(super) fn find_unwrapped_multiline_strings(
     file: &ParsedFile,
-    is_allowed_wrapper: impl Fn(&str, &str) -> bool,
+    is_allowed_wrapper: impl Fn(&str) -> bool,
 ) -> Vec<AstNode<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
@@ -535,24 +535,24 @@ fn is_doc_attribute(attribute: &ast::Attr) -> bool {
 }
 
 /// Returns true if `token` is enclosed in a Rust `macro_invocation` (or nested macro `token_tree`)
-/// within the current scope whose `(full_path, terminal_name)` satisfies `predicate`.
+/// within the current scope whose path satisfies `predicate`.
 #[must_use]
-fn is_enclosed_in_macro(token: &SyntaxToken, predicate: &impl Fn(&str, &str) -> bool) -> bool {
+fn is_enclosed_in_macro(token: &SyntaxToken, predicate: &impl Fn(&str) -> bool) -> bool {
     for ancestor in token.parent_ancestors() {
         if matches!(ancestor.kind(), SyntaxKind::FN | SyntaxKind::CLOSURE_EXPR) {
             break;
         }
         if let Some(macro_call) = ast::MacroCall::cast(ancestor.clone()) {
-            let terminal = macro_call_terminal_name(&macro_call);
             let full_path = macro_call.path().map_or_else(String::new, |path| {
                 compact_path_text(&path.syntax().text().to_string())
             });
-            if predicate(&full_path, &terminal) {
+            let normalized = full_path.trim_start_matches("::");
+            if predicate(normalized) {
                 return true;
             }
         } else if ancestor.kind() == SyntaxKind::TOKEN_TREE
-            && let Some((full_path, terminal)) = resolve_preceding_macro_path(&ancestor)
-            && predicate(&full_path, &terminal)
+            && let Some((full_path, _)) = resolve_preceding_macro_path(&ancestor)
+            && predicate(full_path.trim_start_matches("::"))
         {
             return true;
         }
@@ -1451,10 +1451,11 @@ pub enum NullableReturnPayload {
 /// `T`. Returns `None` if there is no `Option` or `T` is neither a slice nor a generic path type.
 #[must_use]
 pub fn nullable_return_payload(return_type: &AstNode<'_>) -> Option<NullableReturnPayload> {
-    let source = &return_type.file.source;
+    let file = return_type.file;
+    let source = &file.source;
     let return_type = cast_at_span::<ast::Type>(return_type)?;
-    let payload = option_payload(&unwrap_rust_return_envelope(return_type, source), source)?;
-    let inner = unwrap_rust_pointer_wrappers(payload, source);
+    let payload = option_payload(&unwrap_rust_return_envelope(return_type, file), file)?;
+    let inner = unwrap_rust_pointer_wrappers(payload, file);
     match &inner {
         ast::Type::SliceType(_) => {
             let span = span_from_rowan_range(inner.syntax().text_range());
@@ -1469,7 +1470,7 @@ pub fn nullable_return_payload(return_type: &AstNode<'_>) -> Option<NullableRetu
             ))
         }
         ast::Type::PathType(path_type) => {
-            let (base_span, (path, terminal), _) = extract_path_type_generics(path_type, source)?;
+            let (base_span, (path, terminal), _) = extract_path_type_generics(path_type, file)?;
             Some(NullableReturnPayload::Generic {
                 base: source[base_span.start..base_span.end].trim().to_owned(),
                 path,
@@ -1481,11 +1482,11 @@ pub fn nullable_return_payload(return_type: &AstNode<'_>) -> Option<NullableRetu
 }
 
 /// Unwraps outer `Result<T, ...>` and `Poll<T>` return type envelopes from `type_node`.
-fn unwrap_rust_return_envelope(type_node: ast::Type, source: &str) -> ast::Type {
+fn unwrap_rust_return_envelope(type_node: ast::Type, file: &ParsedFile) -> ast::Type {
     let mut current = type_node;
     while let ast::Type::PathType(ref path_type) = current {
         let Some((_, (base_path, base_terminal), type_args)) =
-            extract_path_type_generics(path_type, source)
+            extract_path_type_generics(path_type, file)
         else {
             break;
         };
@@ -1506,12 +1507,12 @@ fn unwrap_rust_return_envelope(type_node: ast::Type, source: &str) -> ast::Type 
 
 /// Returns `T` if `type_node` is `Option<T>` (unqualified, `std::option::Option`, or
 /// `core::option::Option`).
-fn option_payload(type_node: &ast::Type, source: &str) -> Option<ast::Type> {
+fn option_payload(type_node: &ast::Type, file: &ParsedFile) -> Option<ast::Type> {
     let ast::Type::PathType(path_type) = type_node else {
         return None;
     };
     let (_, (option_path, option_terminal), option_args) =
-        extract_path_type_generics(path_type, source)?;
+        extract_path_type_generics(path_type, file)?;
     if option_terminal != OPTION_TYPE_NAME
         || !matches!(
             option_path.as_str(),
@@ -1526,7 +1527,7 @@ fn option_payload(type_node: &ast::Type, source: &str) -> Option<ast::Type> {
 
 /// Unwraps transparent borrow and smart-pointer wrappers (`&T`, `&mut T`, `Box<T>`, `Rc<T>`,
 /// `Arc<T>`, `Cow<'_, T>`) around a Rust type node.
-fn unwrap_rust_pointer_wrappers(type_node: ast::Type, source: &str) -> ast::Type {
+fn unwrap_rust_pointer_wrappers(type_node: ast::Type, file: &ParsedFile) -> ast::Type {
     let mut current = type_node;
     loop {
         match &current {
@@ -1539,7 +1540,7 @@ fn unwrap_rust_pointer_wrappers(type_node: ast::Type, source: &str) -> ast::Type
             }
             ast::Type::PathType(path_type) => {
                 if let Some((_, (base_path, base_terminal), type_args)) =
-                    extract_path_type_generics(path_type, source)
+                    extract_path_type_generics(path_type, file)
                 {
                     let is_pointer_wrapper = match base_terminal.as_str() {
                         BOX_TYPE_NAME => matches!(
@@ -1579,11 +1580,11 @@ fn unwrap_rust_pointer_wrappers(type_node: ast::Type, source: &str) -> ast::Type
     current
 }
 
-/// Extracts `(base_span, (normalized_base_path, base_terminal), type_argument_nodes)` from an [`ast::PathType`]
+/// Extracts `(base_span, (resolved_base_path, base_terminal), type_argument_nodes)` from an [`ast::PathType`]
 /// whose terminal segment has a `<...>` generic argument list, excluding lifetime and associated-type arguments.
 fn extract_path_type_generics(
     path_type: &ast::PathType,
-    source: &str,
+    file: &ParsedFile,
 ) -> Option<(SourceSpan, (String, String), Vec<ast::Type>)> {
     let path = path_type.path()?;
     let segment = path.segment()?;
@@ -1592,7 +1593,19 @@ fn extract_path_type_generics(
     let base_start: usize = path.syntax().text_range().start().into();
     let base_end: usize = name_ref.syntax().text_range().end().into();
     let base_span = SourceSpan::new(base_start, base_end);
-    let base_resolved = normalize_type_path_text(&source[base_start..base_end])?;
+    let (normalized, terminal) = normalize_type_path_text(&file.source[base_start..base_end])?;
+    let base_resolved = match super::resolve_name(file, &normalized) {
+        super::ResolvedName::Imported(resolved) => {
+            let resolved_terminal = resolved
+                .rsplit("::")
+                .next()
+                .unwrap_or(resolved.as_str())
+                .to_owned();
+            (resolved, resolved_terminal)
+        }
+        super::ResolvedName::Local => return None,
+        super::ResolvedName::Unbound => (normalized, terminal),
+    };
     let type_arguments = generic_args
         .generic_args()
         .filter_map(|generic_arg| match generic_arg {
@@ -2673,10 +2686,10 @@ mod tests {
         let functions = collect_functions(&file);
         let return_type = cast_at_span::<ast::Type>(functions[0].return_type.as_ref().unwrap())
             .expect("return type");
-        let unwrapped_envelope = unwrap_rust_return_envelope(return_type, &file.source);
-        let payload = option_payload(&unwrapped_envelope, &file.source).expect("option payload");
+        let unwrapped_envelope = unwrap_rust_return_envelope(return_type, &file);
+        let payload = option_payload(&unwrapped_envelope, &file).expect("option payload");
         assert_eq!(payload.syntax().text().to_string(), expected_payload);
-        let inner = unwrap_rust_pointer_wrappers(payload, &file.source);
+        let inner = unwrap_rust_pointer_wrappers(payload, &file);
         assert_eq!(inner.syntax().text().to_string(), expected_unwrapped);
     }
 
