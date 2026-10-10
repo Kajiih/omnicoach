@@ -1,5 +1,10 @@
 //! Lint policy shared by several consumers: the suggestions code rules make from AST facts, and
 //! the literals `repeated-literal` and the `rule_test!` harness treat as not worth naming.
+//!
+//! Boundary: `code_lint::ast` (`CodeLintAst`) exposes only rule-agnostic language facts (including
+//! standard-library collection taxonomy and syntax positions where the language or API requires a
+//! literal); single-rule policy lives in that rule's file (`CodeLintRules`); policy shared by two
+//! or more rules or by a rule and `TestUtils` lives here (`CodeLintPolicy`).
 
 architecture_component!(CodeLintPolicy);
 

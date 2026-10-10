@@ -1,4 +1,9 @@
 //! Flags Python function parameters annotated with concrete mutable collection types.
+//!
+//! Python-only because Rust's `clippy::ptr_arg` (`&Vec<T>`, `&String`, `&PathBuf`) and borrow
+//! checker already enforce the Rust equivalent with compiler type resolution. Note that
+//! `collections.abc.Set` (`AbstractSet`) provides set operators (`|`, `&`, `-`, `^`, `<=`) and
+//! `isdisjoint`, rather than named methods like `.union()` or `.intersection()`.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{

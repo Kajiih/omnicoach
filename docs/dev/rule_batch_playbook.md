@@ -1,7 +1,7 @@
 # Rule Batch Playbook
 
 > [!NOTE]
-> How-to for the agent (or person) who leads the creation of several rules at once with one worker agent per rule, standing in for the user during reviews. A single rule follows [adding_a_rule.md](adding_a_rule.md); this playbook only adds what changes when rules are built in parallel. Lessons come from the legacy batch (10 candidates, 6 shipped, 4 dropped; per-rule records in `docs/dev/<slug>/`).
+> How-to for the agent (or person) who leads the creation of several rules at once with one worker agent per rule, standing in for the user during reviews. A single rule follows [adding_a_rule.md](adding_a_rule.md); this playbook only adds what changes when rules are built in parallel. Lessons come from the legacy batch (10 candidates, 6 shipped, 4 dropped).
 
 ## Roles
 
@@ -42,7 +42,7 @@ Parallel workers cannot see each other's helpers, so a consolidation pass is man
 ### 6. Review (two reviewers, whole batch)
 
 - Ask reviewers explicitly for cross-rule findings: duplicated helpers, inconsistent conventions, overlapping diagnostics between the new rules and existing ones.
-- Split the code review by structural cluster (strings and logging, scopes and bindings, types and classes), not by rule. In the legacy batch, per-rule reviews and the 23/23 mutation check missed 11 behavior bugs that cluster reviewers then found ([python_ast_consolidation](python_ast_consolidation/01_understand.md)).
+- Split the code review by structural cluster (strings and logging, scopes and bindings, types and classes), not by rule. In the legacy batch, per-rule reviews and the 23/23 mutation check missed 11 behavior bugs that cluster reviewers then found.
 - Read-only reviewers cannot run code. Run each repro they claim against the built binary before acting on it.
 - Apply findings, then record each finding and its resolution in every affected `06_review_and_audit.md`.
 

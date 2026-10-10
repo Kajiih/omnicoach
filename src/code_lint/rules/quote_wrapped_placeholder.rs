@@ -109,6 +109,9 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
 
 /// Returns the placeholder as matched inside quotes and its `repr` replacement, or `None` when
 /// the placeholder already sets a conversion or format spec, or is not a bare field.
+///
+/// Placeholders with `:format_spec` (such as `f"'{x:.2f}'"`) must be skipped because `!r`
+/// converts `x` to `str` via `repr()` *before* `__format__` runs, raising `ValueError` at runtime.
 fn repr_replacement(
     style: PythonFormatStyle,
     placeholder: &PythonFormatPlaceholder,

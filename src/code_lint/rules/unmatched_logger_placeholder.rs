@@ -79,6 +79,8 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
+    // Calls without positional format arguments (including keyword-only calls like
+    // `logger.info("GET /users/{id}", status=200)` in structlog) are never formatted positionally.
     collect_logger_calls(file)
         .into_iter()
         .filter(|call| call.has_trailing_positional_args && !call.has_keyword_splat)

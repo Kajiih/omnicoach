@@ -10,7 +10,7 @@ Omni's initial rule tagging and selection mechanism in `src/core.rs` and `src/co
 4. **Coarse Precedence**: Any matching `ignore` beat any `select`, making it impossible to ignore a broad tag (`ignore = ["testing"]` or `ignore = ["vcs"]`) while re-enabling a child tag (`select = ["jj"]`) or a specific rule (`select = ["no-sleep-in-tests"]`).
 5. **Behaviour Coupled to Tags**: `src/code_lint/runner.rs` branched on `rule.tags().contains(&Tag::Suppression)` in four places to separate suppression-directive audits from ordinary AST rules, and `Rule::tags()` exposed tags to rule implementations and runners.
 
-Full exploration records, SOTA survey, experiments (E1/E2), and five competing prototypes (`P0`–`P4`) are documented in [docs/dev/rule_docs_and_tags/t1/](../docs/dev/rule_docs_and_tags/t1/) (`D1`–`D38`). Contributor guidelines and yes/no classification tests live in [docs/dev/tag_guide.md](../docs/dev/tag_guide.md).
+Contributor guidelines and yes/no classification tests live in [tag_guide.md](../tag_guide.md).
 
 ---
 

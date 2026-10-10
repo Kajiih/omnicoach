@@ -1,4 +1,12 @@
 //! Flags function return annotations that wrap a collection type in `| None`, `Optional`, or `Option`.
+//!
+//! Scope notes:
+//! - Parameters (`B006` forbids mutable defaults like `= {}` / `= set()`, and optional filter
+//!   parameters use `None` to mean "match all" vs. `()` = "match nothing") and class attributes
+//!   (partial-update payloads and lazy-loaded caches distinguish `None` from `[]`) are not flagged.
+//! - Fixed-length tuples and arrays (`tuple[int, str] | None`, `Option<(String, u32)>`,
+//!   `Option<[u8; 4]>`) are fixed-arity records where `()` is not a valid inhabitant, whereas
+//!   variadic `tuple[T, ...] | None` is a variable-length sequence and is flagged.
 
 use crate::code_lint::ast::python::PythonReturnTypeBranch;
 use crate::code_lint::ast::rust::NullableReturnPayload;

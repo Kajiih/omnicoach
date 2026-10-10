@@ -16,6 +16,7 @@ env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   CARGO_TERM_COLOR: always
+  RUSTDOCFLAGS: -D warnings
   RUSTUP_MAX_RETRIES: 10
 
 jobs:
@@ -59,6 +60,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo doc --no-deps --locked
+      - run: cargo doc --no-deps --document-private-items --locked
       - name: Dogfood (Omni lints its own repository)
         run: cargo run --locked --bin omni-code-lint -- .
 

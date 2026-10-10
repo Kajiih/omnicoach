@@ -1,6 +1,6 @@
 //! Architecture DAG conformance tests enforcing modular boundaries and component encapsulation.
 //!
-//! See `decisions/006_architectural_dag_and_conformance.md` for architectural design rationale.
+//! See `docs/dev/decisions/006_architectural_dag_and_conformance.md` for architectural design rationale.
 
 // Workaround for rust-lang/rust-clippy#13981 so clippy.toml `allow-*-in-tests` applies to the whole file.
 #![cfg(test)]

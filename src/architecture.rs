@@ -6,7 +6,7 @@
 //!
 //! The `define_architecture!` block at the end of this file is the single list of components
 //! and their allowed dependencies; design rationale is in
-//! `decisions/006_architectural_dag_and_conformance.md`. `tests/architecture_conformance.rs`
+//! `docs/dev/decisions/006_architectural_dag_and_conformance.md`. `tests/architecture_conformance.rs`
 //! enforces:
 //! - **Naming**: a component is named after its module path (`code_lint::ast` →
 //!   `CodeLintAst`), and every source file declares its component.

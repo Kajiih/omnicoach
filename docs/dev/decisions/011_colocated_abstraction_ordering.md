@@ -47,7 +47,7 @@ This aligns with empirical program-comprehension research:
 Within a scope (a module's top-level functions, a Python `class` body, or a Rust inherent `impl` block), every callable is classified as either a **Public Entrypoint** or a **Private Helper**:
 
 - **Public Entrypoints**:
-  - In a class or inherent `impl`: constructors and public/exported methods (`pub`, `pub(crate)`, `pub(super)`, `pub(in ...)` in Rust; non-`_` methods and `__dunder__` methods in Python).
+  - In a class or inherent `impl`: constructors and public/exported methods (`pub`, `pub(crate)`, `pub(super)`, `pub(in ...)` in Rust; non-`_` methods and `__dunder__` methods in Python). Visibility is intentionally 2-tier (`Exported` vs. `Private`) rather than 3-tier (`pub` $\to$ `pub(crate)` $\to$ `fn`), because 3-tier visibility would force a subsystem-scoped constructor (`pub(crate) fn new`) below `pub fn` methods, contradicting `constructor-after-method`.
   - In a module: exported functions (`pub` / `pub(...)` in Rust; non-`_` functions in Python), plus `fn main` in Rust.
 - **Root Set of a Private Helper (`Roots(h)`)**:
   - For each private helper `h`, `Roots(h)` is the set of public entrypoints in the scope that can reach `h` **walking only through private helpers** (stopping at public boundaries so that if `pub_b` calls `pub_a` and `pub_a` calls `_a1`, `_a1` still has `Roots(_a1) = {pub_a}`).

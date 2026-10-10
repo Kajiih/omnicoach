@@ -117,7 +117,7 @@ A hand-declared relation goes stale when either rule's detector or suggestion ch
 
 Today's 41 registered rules (36 code rules, 4 suppression audits, 1 command rule) contain only 8 Omni ↔ Omni directed edges — 5 of them inside the collection family — and 0 Omni ↔ Omni overlaps. Locking in a relation schema and rolling it out across 41 files now would overfit both the types and the ergonomics to those 8 edges.
 
-Upcoming work on the roadmap will expand the rule corpus and introduce new kinds of interactions: declaration ordering, `nested-class`, tuple-returning functions, third-party suppression hygiene, `printf-log-format`, the `command_lint` expansion, and the AST migration (`docs/dev/ast_robustness/`).
+Upcoming work on the roadmap will expand the rule corpus and introduce new kinds of interactions: declaration ordering, `nested-class`, tuple-returning functions, third-party suppression hygiene, `printf-log-format`, the `command_lint` expansion, and the AST migration.
 
 - **Independent fixes that need no relation schema (can land anytime):**
   - **D9:** give each naming token one owner (`str` in `type-suffixed-name`, `num` in `abbreviated-name`).

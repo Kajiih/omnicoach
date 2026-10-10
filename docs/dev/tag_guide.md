@@ -1,7 +1,7 @@
 # Tag Guide
 
 > [!NOTE]
-> Normative contributor guide for Omni's rule taxonomy and selection system. Design rationale: [ADR 007](../../decisions/007_rule_taxonomy_and_selection.md).
+> Normative contributor guide for Omni's rule taxonomy and selection system. Design rationale: [ADR 007](decisions/007_rule_taxonomy_and_selection.md).
 
 This guide is for contributors who **classify a rule** or **add a tag**. Every structural rule below is enforced by the compiler or a test (§5). The guide explains the *why* and gives the yes/no questions that tests cannot answer.
 
