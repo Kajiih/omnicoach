@@ -1,6 +1,6 @@
 ---
 source: tests/cli.rs
-expression: "output.replace(binary, \"<binary>\")"
+expression: "output.replace(BIN_NAME, \"<binary>\")"
 ---
 --- exit code ---
 2
@@ -10,6 +10,6 @@ expression: "output.replace(binary, \"<binary>\")"
 error: the following required arguments were not provided:
   --cmd <CMD>
 
-Usage: <binary> --cmd <CMD>
+Usage: <binary> command --cmd <CMD>
 
 For more information, try '--help'.

@@ -5,10 +5,10 @@
 Following the establishment of the faceted taxonomy and hierarchical selector model in ADR 007, Omni lacked an integrated documentation and discovery mechanism:
 
 1. **No Authoritative In-Code Documentation**: Rule rationale, standard violation messages, and configuration options were scattered across README tables, AST visitor comments, or tests.
-2. **Missing Discovery Surface**: Users configuring Omni in `.omnilint.toml` had to inspect source files or read a manual README catalog to discover rules, available tags, or configuration keys.
+2. **Missing Discovery Surface**: Users configuring Omni in `.omnicoach.toml` had to inspect source files or read a manual README catalog to discover rules, available tags, or configuration keys.
 3. **No Resolution Explanation**: Linters frequently frustrate users when rules do or do not run. There was no way to ask Omni: "Is rule X currently active in my project, and which selector enabled or ignored it?"
 4. **README Drift Risk**: The hand-maintained "Rules Catalog" in `README.md` was prone to obsolescence as rules were added or refactored.
-5. **Stringly CLI Format Flag**: Both binaries accepted raw strings for `--format` (e.g. `format: String`), failing to leverage `clap::ValueEnum` for typed validation and error suggestions.
+5. **Stringly CLI Format Flag**: The CLI accepted raw strings for `--format` (e.g. `format: String`), failing to leverage `clap::ValueEnum` for typed validation and error suggestions.
 
 ---
 
@@ -49,17 +49,17 @@ pub struct Example {
 
 ### 2.2. Discovery CLI Flags (`DI8`, `DI9`, `DI14`, `D50`)
 
-Both `omni-code-lint` and `omni-command-lint` provide symmetric rule discovery for all registered rules:
+`omnicoach` (and its `code` / `command` subcommands) provides symmetric rule discovery for all registered rules:
 - `--list-rules`: Lists every rule sorted by name, displaying its name, languages/input, and single-sentence summary.
 - `--list-rules --tag <LABEL>`: Filters the list to rules matched by `select = ["<LABEL>"]` (topics, subtopics, facet values, or synonyms).
 - `--list-tags`: Renders the topic tree as a Markdown table (topic, parent, synonyms, description, and scope note), with children listed under their parent.
 - `--explain <RULE>`: Renders the full Markdown documentation of a rule, including its message templates, configuration keys, external references, and tag paths.
 - **Terminal Plain Markdown Rendering (`D50`)**: Markdown is printed directly as plain text without ANSI escapes, ensuring compatibility across terminal emulators, pagers, and CI logs.
-- **Diagnostics Pointer Footer (`D48`, `DI14`)**: Plain diagnostics output appends a single terminal line: `For details on a rule, run: <binary> --explain <rule>`.
+- **Diagnostics Pointer Footer (`D48`, `DI14`)**: Plain diagnostics output appends a single terminal line: `For details on a rule, run: omnicoach --explain <rule>`.
 
 ### 2.3. Active Configuration Status in `explain` (`DI13`)
 
-`--explain <rule>` checks the current project's `.omnilint.toml` and displays:
+`--explain <rule>` checks the current project's `.omnicoach.toml` and displays:
 ```markdown
 # <rule-name>
 
@@ -91,8 +91,8 @@ pub enum OutputFormat {
    - Non-empty rationale and valid URLs on references.
    - Placeholder rules are skipped until written.
 2. **Architecture DAG Conformance**: Validated by `tests/architecture_conformance.rs`.
-3. **Snapshot Tests for Discovery**: CLI tests assert exact snapshots for `--list-rules`, `--tag` filtering, `--explain`, typo corrections, and error exits across both binaries.
-4. **Self-Dogfooding**: `omni-code-lint` runs over its own codebase to ensure all doc rendering complies with active rules.
+3. **Snapshot Tests for Discovery**: CLI tests assert exact snapshots for `--list-rules`, `--tag` filtering, `--explain`, typo corrections, and error exits.
+4. **Self-Dogfooding**: `omnicoach code .` runs over its own codebase to ensure all doc rendering complies with active rules.
 
 ---
 

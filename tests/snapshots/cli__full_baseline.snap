@@ -13,6 +13,6 @@ test.py:5:5: [nested-function] Function `world` is defined inside another functi
   Rationale: A nested named function captures the enclosing scope implicitly and cannot be imported or tested on its own.
   Suggestion: Extract `world` to a module-level private function (`_world`), or use an inline `lambda` for a trivial callback.
 
-For details on a rule, run: omni-code-lint --explain <rule>
+For details on a rule, run: omnicoach --explain <rule>
 
 --- stderr ---

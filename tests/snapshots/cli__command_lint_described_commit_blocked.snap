@@ -9,6 +9,6 @@ VCS_Context:1:1: [edit-of-described-commit] `jj edit @` targets a described comm
   Rationale: Editing a described commit rewrites reviewed history in place and tangles unrelated work into an existing change.
   Suggestion: Create a child change with `jj new @`, then move the intentional fixes with `jj squash`.
 
-For details on a rule, run: omni-command-lint --explain <rule>
+For details on a rule, run: omnicoach --explain <rule>
 
 --- stderr ---

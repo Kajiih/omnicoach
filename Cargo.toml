@@ -1,14 +1,14 @@
 [package]
-name = "omni-lint"
+name = "omnicoach"
 version = "0.1.0"
 edition = "2024"
 description = "Lightweight, high-signal static analysis and command linter for Python and Rust"
 license = "MIT"
-repository = "https://github.com/Kajiih/omni-lint"
+repository = "https://github.com/Kajiih/omnicoach"
 readme = "README.md"
 keywords = ["linter", "static-analysis", "ast-grep", "python", "rust"]
 categories = ["development-tools", "command-line-utilities"]
-default-run = "omni-code-lint"
+default-run = "omnicoach"
 autobins = false
 include = ["/src/**", "/README.md", "/LICENSE"]
 
@@ -17,12 +17,8 @@ name = "omni"
 path = "src/lib.rs"
 
 [[bin]]
-name = "omni-code-lint"
-path = "src/bin/omni-code-lint.rs"
-
-[[bin]]
-name = "omni-command-lint"
-path = "src/bin/omni-command-lint.rs"
+name = "omnicoach"
+path = "src/bin/omnicoach.rs"
 
 [[example]]
 name = "ast_dumper"

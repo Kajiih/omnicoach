@@ -5,7 +5,9 @@ architecture_component!(CodeLintRunner);
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{AnyCodeRule, RuleTarget};
 use crate::code_lint::rules::CODE_RULES;
-use crate::code_lint::suppression::{SUPPRESSION_AUDITS, SuppressionTracker};
+use crate::code_lint::suppression::{
+    SUPPRESSION_AUDITS, SuppressionTracker, contains_directive_prefix,
+};
 use crate::config::Config;
 use crate::diagnostic::{Diagnostic, Language};
 use rayon::prelude::*;
@@ -103,7 +105,7 @@ fn is_rule_applicable(
 }
 
 /// Returns true if any active suppression hygiene rule is enabled and applicable to `path`,
-/// and the file content contains a suppression directive prefix (`"omni:"`).
+/// and the file content contains a suppression directive prefix (`"omni:"` or `"omnicoach:"`).
 #[must_use]
 fn has_active_suppression_audit(
     path: &Path,
@@ -111,7 +113,7 @@ fn has_active_suppression_audit(
     content: &str,
     config: &Config,
 ) -> bool {
-    if !content.contains("omni:") {
+    if !contains_directive_prefix(content) {
         return false;
     }
     SUPPRESSION_AUDITS.iter().any(|audit| {

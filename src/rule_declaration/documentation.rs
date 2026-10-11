@@ -19,7 +19,7 @@ impl Reference {
     /// matches depend on it, instead of restating it in `what_it_does`.
     pub const NAME_RESOLUTION: Self = Self {
         title: "How Omni resolves names",
-        url: "https://github.com/Kajiih/omni-lint/blob/main/docs/name_resolution.md",
+        url: "https://github.com/Kajiih/omnicoach/blob/main/docs/name_resolution.md",
     };
 }
 

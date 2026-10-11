@@ -679,7 +679,7 @@ fn pascal_case(module_path: &str) -> String {
 }
 
 /// The module a component is named after: its root, or the parent its roots share when it
-/// spans several files (`bin::ast_dumper`, `bin::omni_code_lint`, … → `bin`).
+/// spans several files (`bin::ast_dumper`, `bin::omnicoach`, … → `bin`).
 fn naming_module(roots: &[String]) -> Option<&str> {
     if let [root] = roots {
         return Some(root);

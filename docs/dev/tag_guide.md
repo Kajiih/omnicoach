@@ -13,7 +13,7 @@ A rule is described by **facets**. Each facet answers one question. Its **values
 
 | Facet (display label) | Question | Values | How it is set |
 |---|---|---|---|
-| **Topic** | What construct, API or domain does the rule inspect? | the topic tree (`omni-code-lint --list-tags`) | Declared, **one or more**, most specific only |
+| **Topic** | What construct, API or domain does the rule inspect? | the topic tree (`omnicoach --list-tags`) | Declared, **one or more**, most specific only |
 | **Precision** | Can it flag correct code? (False positives only; an `exact` rule may still miss violations.) | `exact`, `heuristic` | Declared, **exactly one** |
 | **Consensus** | Would reasonable people disagree with it? | `opinionated`, `unopinionated` | Declared, **exactly one** |
 | **Impacted quality** | What software quality suffers when it is violated? | `reliability`, `maintainability` (from ISO/IEC 25010; §2.4) | Declared, **exactly one** |

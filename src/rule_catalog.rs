@@ -27,19 +27,19 @@ pub enum CatalogError {
 #[derive(Debug, clap::Args)]
 pub struct DiscoveryArgs {
     /// List every rule with its languages and summary, as Markdown
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub list_rules: bool,
 
     /// With --list-rules, keep only the rules a `select` label selects (tag, synonym or rule)
-    #[arg(long, value_name = "LABEL", requires = "list_rules")]
+    #[arg(long, global = true, value_name = "LABEL", requires = "list_rules")]
     pub tag: Option<String>,
 
     /// List the topic tree with each topic's parent, synonyms, description and scope note
-    #[arg(long, conflicts_with_all = ["list_rules", "explain"])]
+    #[arg(long, global = true, conflicts_with_all = ["list_rules", "explain"])]
     pub list_tags: bool,
 
     /// Print one rule's documentation as Markdown
-    #[arg(long, value_name = "RULE", conflicts_with_all = ["list_rules", "list_tags"])]
+    #[arg(long, global = true, value_name = "RULE", conflicts_with_all = ["list_rules", "list_tags"])]
     pub explain: Option<String>,
 }
 

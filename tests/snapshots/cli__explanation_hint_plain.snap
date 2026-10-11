@@ -14,6 +14,6 @@ test.py:6:10: [suppressed-exception] An exception is silenced with `contextlib.s
   Suggestion: Replace the block with an explicit `except` handler.
   Or: Explain why in a comment at the end of the flagged line or directly above it.
 
-For details on a rule, run: omni-code-lint --explain <rule>
+For details on a rule, run: omnicoach --explain <rule>
 
 --- stderr ---

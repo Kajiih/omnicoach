@@ -2,7 +2,7 @@
 //!
 //! ## Fixture & Measurement Invariants
 //! - **`.fixture` extension**: Fixtures under `benches/fixtures/*.fixture` use `.fixture` rather
-//!   than `.py` / `.rs` so `omni-code-lint .` self-dogfooding does not flag intentional lint
+//!   than `.py` / `.rs` so `omnicoach code .` self-dogfooding does not flag intentional lint
 //!   violations inside benchmark stress inputs.
 //! - **No `source.repeat(N)`**: Repeating small snippets creates unrealistically flat scope tables
 //!   and artificially warms the branch predictor (which previously hid quadratic $O(F \times N)$

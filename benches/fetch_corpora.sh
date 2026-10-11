@@ -7,7 +7,7 @@
 # - ripgrep 15.2.0, cargo 0.100.0: from Clippy's lintcheck crate list (lintcheck_crates.toml).
 #
 # Usage: bash benches/fetch_corpora.sh
-# Then:  hyperfine -N -i "target/release/omni-code-lint target/bench-corpora/cpython"
+# Then:  hyperfine -N -i "target/release/omnicoach code target/bench-corpora/cpython"
 set -euo pipefail
 
 DEST="$(dirname "$0")/../target/bench-corpora"

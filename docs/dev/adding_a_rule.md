@@ -21,7 +21,7 @@ The Rust items below are documented in Rustdoc: hover them in your IDE, or run `
    cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo doc --no-deps --document-private-items
    ```
 
-   `cargo test` includes the registry tests (`tests/registry.rs`), which check names, messages, docs and examples against the guides. `omni-code-lint --explain <rule-name>` shows the rule as users will see it.
+   `cargo test` includes the registry tests (`tests/registry.rs`), which check names, messages, docs and examples against the guides. `omnicoach --explain <rule-name>` shows the rule as users will see it.
 
 ## Command rules
 

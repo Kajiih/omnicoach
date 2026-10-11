@@ -35,6 +35,6 @@ The full rules live in `docs/dev/naming_and_message_style_guide.md`. The choices
 
 ## 4. Consequences
 
-* Every `.omnilint.toml` and every `omni:ignore [...]` directive written before this ADR is invalid and must be updated.
+* Every `.omnicoach.toml` and every `omni:ignore [...]` directive written before this ADR is invalid and must be updated.
 * `enforce-frozen-slots-dataclass` is split into `mutable-dataclass` and `unslotted-dataclass`: the two conditions have different exceptions (slots break multiple inheritance), so a user needs to disable them separately.
 * Adding a rule now means passing the registry tests, which reject a name with a prefix, a summary without a verb, or a placeholder outside the vocabulary. The guide is the reference; the tests are the enforcement.

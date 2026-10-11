@@ -26,7 +26,7 @@ Evidence and prior art: `02_references.md`.
 **Objects.**
 
 - An *input* is a file: a path and its source. The path is part of the input, not of the configuration.
-- A *configuration* C is everything in `.omnilint.toml`: selection, `per-file-ignores`, rule options, enforcement modes and `test-patterns`. Whether a path is a source or a test path is computed from the input's path and C's `test-patterns`.
+- A *configuration* C is everything in `.omnicoach.toml`: selection, `per-file-ignores`, rule options, enforcement modes and `test-patterns`. Whether a path is a source or a test path is computed from the input's path and C's `test-patterns`.
 - Under C, a rule r has a *detector*: for an input x, the set V(r, x) of locations it flags. x is *r-clean* when V(r, x) is empty. A disabled or ignored rule flags nothing.
 - r also has a *suggestion*: for each finding, the set F_r of rewrites it accepts, meaning every rewrite its template or doc recommends. The template is prose and `Example.fixed` is one member of that set.
 - A rule set R is *clean* on x when x is r-clean for every r in R.
@@ -145,7 +145,7 @@ Verified (2026-10-05) with a report-only prototype of option D (§6): every code
 
 - **T1** (introduced chain, in the example only). `repeated-index-access`'s suggestion shows `x, y = point` (Python) and `let Point(x, y) = point;` (Rust). `single-letter-name` allows only `i`, `j`, `x`, `f` (and `c` in Rust), so it flags `y`. The input `point[1]` had no single-letter name; the example introduced it.
 - **T2** (revealed chain, not a relation). `primitive-duration` and `type-suffixed-name` propose the stem: `t_ms` → `t`, `res_list` → `res`. The stem was already bad in the input; the suffix only hid it from `single-letter-name` and `abbreviated-name`. The same holds for `timeout_secs_int` (§3.3) and for `res_list` under both naming rules.
-- **T3** (divergent advice, conditional; resolved by D9). For `name_str` in Python, `abbreviated-name` says spell out `str` and `type-suffixed-name` says rename to `name`. No rule flags `name_string`, so the two paths end in different names. Rust is not affected: `abbreviated-name` does not list `str` there. `user_num` gets both findings in both languages and also ends in two names (`user_number` or `user`). Contrast `res_list` (§2.1, Two findings at one location), where both paths end at `result`. T1–T3 verified 2026-10-05 by running `omni-code-lint` on probe files.
+- **T3** (divergent advice, conditional; resolved by D9). For `name_str` in Python, `abbreviated-name` says spell out `str` and `type-suffixed-name` says rename to `name`. No rule flags `name_string`, so the two paths end in different names. Rust is not affected: `abbreviated-name` does not list `str` there. `user_num` gets both findings in both languages and also ends in two names (`user_number` or `user`). Contrast `res_list` (§2.1, Two findings at one location), where both paths end at `result`. T1–T3 verified 2026-10-05 by running `omnicoach code` on probe files.
 - **T4** (possible chain, depends on an option). `packed-assertion`'s fix (split asserts) raises the count that `too-many-assertions` caps. `too-many-assertions`' fix (compare one domain object) is not flagged by `packed-assertion`, so the chain ends clean. It happens only past the threshold option, and it is per function, not per location.
 - **T5** (chain from an external rule). Ruff SIM105 rewrites `try/except: pass` to `contextlib.suppress`, which `suppressed-exception` flags. `suppressed-exception`'s fix logs in an explicit handler, which SIM105 does not flag, so the chain ends clean. It would be a cycle only if the explicit handler did nothing.
 - **T6** (possible chains). `nested-function` suggests extracting a module-level `_helper` or using an *inline* `lambda` at the call site. Extracting `_helper` below its caller triggers `call-before-definition` (and `call-before-definition` would contradict the candidate "public before private" rule in ROADMAP). An inline `lambda` at the call site is clean under Ruff E731 (`lambda-assignment`), whereas assigning the `lambda` to a variable would cycle with E731.
@@ -180,7 +180,7 @@ Verified (2026-10-05) with a report-only prototype of option D (§6): every code
 
 ## 4. How rules are selected today
 
-- `.omnilint.toml`: `select`, `ignore`, `per-file-ignores`, `[rules.<name>]`, `[context] test-patterns`. Every rule is on when `select` is absent (ADR 007).
+- `.omnicoach.toml`: `select`, `ignore`, `per-file-ignores`, `[rules.<name>]`, `[context] test-patterns`. Every rule is on when `select` is absent (ADR 007).
 - Selection is resolved once at load into `Config.disabled_rules` and `per_file_ignores`. A companion check belongs there and must handle per-path ignores.
 - Config problems are errors only; there is no warning channel (ROADMAP already needs one for shadowed selectors).
 - `enforcement_mode` (`Ban` / `RequireExplanation`) only changes the escape: `# omni:ignore` with a reason, or a plain explanatory comment. It does not change relations (D2).

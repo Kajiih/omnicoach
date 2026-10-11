@@ -63,7 +63,7 @@ jobs:
       - run: cargo doc --no-deps --locked
       - run: cargo doc --no-deps --document-private-items --locked
       - name: Dogfood (Omni lints its own repository)
-        run: cargo run --locked --bin omni-code-lint -- .
+        run: cargo run --locked --bin omnicoach -- code .
 
   zizmor:
     name: Audit workflows (zizmor)

@@ -1,4 +1,4 @@
-//! Project configuration resolved from `.omnilint.toml`.
+//! Project configuration resolved from `.omnicoach.toml`.
 
 architecture_component!(Config);
 
@@ -11,7 +11,7 @@ use crate::diagnostic::RuleName;
 use crate::rule_declaration::RuleOverrides;
 
 /// The default configuration file name.
-pub const CONFIG_FILE_NAME: &str = ".omnilint.toml";
+pub const CONFIG_FILE_NAME: &str = ".omnicoach.toml";
 
 const DEFAULT_TEST_PATTERNS: &[&str] = &[
     "**/tests/**",
@@ -41,7 +41,7 @@ impl Default for ContextConfig {
     }
 }
 
-/// Configuration settings resolved from `.omnilint.toml` by `rule_selection::parse_config`.
+/// Configuration settings resolved from `.omnicoach.toml` by `rule_selection::parse_config`.
 #[derive(Debug, Default, Clone)]
 pub struct Config {
     /// Rules disabled by `select` and `ignore`.

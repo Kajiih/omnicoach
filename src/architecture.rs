@@ -102,7 +102,7 @@ define_architecture! {
     Diff                => [],
     /// What every rule states about itself: name, template, languages, options, classification and doc (`rule_declaration`).
     RuleDeclaration     => [Diagnostic],
-    /// Project configuration resolved from `.omnilint.toml` (`config`).
+    /// Project configuration resolved from `.omnicoach.toml` (`config`).
     Config              => [Diagnostic, RuleDeclaration],
 
     // --- Static Code Analysis Domain (`code_lint`) ---

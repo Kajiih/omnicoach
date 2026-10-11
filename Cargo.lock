@@ -813,7 +813,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "omni-lint"
+name = "omnicoach"
 version = "0.1.0"
 dependencies = [
  "anyhow",

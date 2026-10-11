@@ -12,7 +12,7 @@ The conventions follow Ruff and Clippy where the two agree, and the Google error
 
 ## 1. Rule names
 
-A rule name is read in three places: `omni:ignore [name] -- reason`, `ignore = ["name"]` in `.omnilint.toml`, and `--explain name`. The first two read as *"ignore the bad thing"*, so the name **is** the bad thing.
+A rule name is read in three places: `omni:ignore [name] -- reason`, `ignore = ["name"]` in `.omnicoach.toml`, and `--explain name`. The first two read as *"ignore the bad thing"*, so the name **is** the bad thing.
 
 | Rule | Do | Don't |
 | :--- | :--- | :--- |
@@ -112,7 +112,7 @@ The vocabulary grows the same way as the verb list: when a message needs a thing
 
 ## 4. Option and configuration keys
 
-`.omnilint.toml` is TOML, so keys follow the TOML ecosystem (Ruff, Clippy, Pylint): **kebab-case**. Values that are enums are kebab-case words.
+`.omnicoach.toml` is TOML, so keys follow the TOML ecosystem (Ruff, Clippy, Pylint): **kebab-case**. Values that are enums are kebab-case words.
 
 | Kind | Form | Examples |
 | :--- | :--- | :--- |
@@ -140,7 +140,7 @@ The description of a component says what the module does, not what the name alre
 ## 6. Taxonomy, CLI and files
 
 * Topic labels, facet values and synonyms are kebab-case nouns describing a subject, never a verb or a policy (`concurrency`, not `async-hygiene`).
-* CLI flags and subcommands are kebab-case; binaries are kebab-case (`omni-code-lint`).
+* CLI flags and subcommands are kebab-case; binaries are kebab-case (`omnicoach`).
 * Rust modules and files are snake_case.
 
 ---
