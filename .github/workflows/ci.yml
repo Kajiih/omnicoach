@@ -42,7 +42,7 @@ jobs:
       - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: jj-cli@0.46.0
-      - run: cargo test --locked
+      - run: cargo test --workspace --locked
 
   lint:
     name: Lint
@@ -54,14 +54,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
+      - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy --target wasm32-unknown-unknown && rustup default stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets --locked -- -D warnings
-      - run: cargo doc --no-deps --locked
-      - run: cargo doc --no-deps --document-private-items --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy -p omnicoach-playground --target wasm32-unknown-unknown --locked -- -D warnings
+      - run: cargo doc --workspace --no-deps --locked
+      - run: cargo doc --workspace --no-deps --document-private-items --locked
       - name: Dogfood (Omni lints its own repository)
         run: cargo run --locked --bin omnicoach -- code .
 

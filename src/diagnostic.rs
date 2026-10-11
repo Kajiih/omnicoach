@@ -499,10 +499,9 @@ pub enum OutputFormat {
 ///
 /// Returns an error if JSON serialization or writing to stdout fails.
 pub fn print_diagnostics(diagnostics: &[Diagnostic], format: OutputFormat) -> anyhow::Result<()> {
-    let mut sorted: Vec<&Diagnostic> = diagnostics.iter().collect();
-    sorted.sort_unstable();
-
     if format == OutputFormat::Json {
+        let mut sorted: Vec<&Diagnostic> = diagnostics.iter().collect();
+        sorted.sort_unstable();
         println!("{}", serde_json::to_string_pretty(&sorted)?);
     } else {
         let mut stdout = BufWriter::new(io::stdout().lock());
