@@ -2,6 +2,7 @@
 
 mod annotations;
 mod classes;
+mod docstrings;
 mod format_strings;
 mod functions;
 mod literals;
@@ -22,6 +23,10 @@ pub use self::classes::{
     collect_instance_attribute_annotations, extract_classes,
 };
 pub(super) use self::classes::{collect_callable_scopes, collect_type_method_scopes};
+pub use self::docstrings::{
+    DocstringEntry, DocstringLine, DocstringSection, DocstringSectionKind, PythonDocstring,
+    normalize_docstring_text, parse_google_sections,
+};
 pub use self::format_strings::{
     PythonFormatPlaceholder, PythonFormatString, PythonFormatStyle, collect_format_strings,
     extract_valid_field_root, named_format_field_roots,

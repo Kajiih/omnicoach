@@ -1,5 +1,6 @@
 //! Python function signatures, parameter extraction, method receivers, and direct scope definitions.
 
+use super::docstrings::{PythonDocstring, docstring_of};
 use super::{
     AstNode, DecoratorInfo, ParsedFile, extract_decorators_from_slice, is_protocol_or_abc_class,
     resolve_path_and_terminal_expr,
@@ -106,6 +107,14 @@ impl PythonFunctionSignature<'_> {
     }
 }
 
+impl<'a> PythonFunctionSignature<'a> {
+    /// The function's docstring, if its body starts with one.
+    #[must_use]
+    pub fn docstring(&self) -> Option<PythonDocstring<'a>> {
+        docstring_of(&self.definition.body, self.name_node.file)
+    }
+}
+
 const SELF_PARAMETER: &str = "self";
 const NOT_IMPLEMENTED_ERROR: &str = "NotImplementedError";
 const OVERRIDE_DECORATOR_PATHS: &[&str] =
@@ -169,25 +178,8 @@ pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSigna
             let enclosing = self.in_protocol_or_abc_class;
             match statement {
                 Stmt::FunctionDef(func_def) => {
-                    let parameters = extract_parameters_from_ast(&func_def.parameters, self.file);
-                    let return_type_node = func_def.returns.as_ref().map(|ret| {
-                        AstNode::from_span(self.file, span_from_ruff_range(ret.range()))
-                    });
-                    let decorators =
-                        extract_decorators_from_slice(&func_def.decorator_list, self.file);
-                    self.signatures.push(PythonFunctionSignature {
-                        name_node: AstNode::from_span(
-                            self.file,
-                            span_from_ruff_range(func_def.name.range),
-                        ),
-                        name: func_def.name.id.to_string(),
-                        parameters,
-                        return_type_node,
-                        has_exempt_signature_decorator: has_exempt_signature_decorator(&decorators),
-                        is_in_protocol_or_abc_class: enclosing,
-                        has_stub_body: is_stub_body(&func_def.body, &self.file.source),
-                        definition: func_def,
-                    });
+                    self.signatures
+                        .push(function_signature(func_def, self.file, enclosing));
                     self.in_protocol_or_abc_class = false;
                 }
                 Stmt::ClassDef(class_def) => {
@@ -210,6 +202,29 @@ pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSigna
     };
     visitor.visit_body(&parsed.syntax().body);
     visitor.signatures
+}
+
+/// Builds the signature of `func_def`; `is_in_protocol_or_abc_class` is true when it is defined
+/// directly in a `Protocol` or `ABC` class body.
+pub(super) fn function_signature<'a>(
+    func_def: &'a StmtFunctionDef,
+    file: &'a ParsedFile,
+    is_in_protocol_or_abc_class: bool,
+) -> PythonFunctionSignature<'a> {
+    let decorators = extract_decorators_from_slice(&func_def.decorator_list, file);
+    PythonFunctionSignature {
+        name_node: AstNode::from_span(file, span_from_ruff_range(func_def.name.range)),
+        name: func_def.name.id.to_string(),
+        parameters: extract_parameters_from_ast(&func_def.parameters, file),
+        return_type_node: func_def
+            .returns
+            .as_ref()
+            .map(|ret| AstNode::from_span(file, span_from_ruff_range(ret.range()))),
+        has_exempt_signature_decorator: has_exempt_signature_decorator(&decorators),
+        is_in_protocol_or_abc_class,
+        has_stub_body: is_stub_body(&func_def.body, &file.source),
+        definition: func_def,
+    }
 }
 
 /// Returns true if `decorators` include `@override`, `@overload`, `@abstractmethod`,
@@ -266,16 +281,6 @@ fn is_stub_statement(statement: &Stmt, source: &str) -> bool {
         }
         _ => false,
     }
-}
-
-/// Returns true if `func_name` is a Python Data Model dunder method with a fixed signature
-/// (all `__*__` methods except constructors `__init__` and `__new__`, and `__call__`, whose
-/// signature is designed by the class author).
-fn is_exempt_dunder_method(func_name: &str) -> bool {
-    func_name.starts_with("__")
-        && func_name.ends_with("__")
-        && func_name.len() > 4
-        && !matches!(func_name, "__init__" | "__new__" | "__call__")
 }
 
 /// Returns each direct `StmtFunctionDef` in `scope_body` (`module` or class `body`).
@@ -435,4 +440,14 @@ pub fn find_nested_functions(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
     };
     visitor.visit_body(&parsed.syntax().body);
     visitor.out
+}
+
+/// Returns true if `func_name` is a Python Data Model dunder method with a fixed signature
+/// (all `__*__` methods except constructors `__init__` and `__new__`, and `__call__`, whose
+/// signature is designed by the class author).
+fn is_exempt_dunder_method(func_name: &str) -> bool {
+    func_name.starts_with("__")
+        && func_name.ends_with("__")
+        && func_name.len() > 4
+        && !matches!(func_name, "__init__" | "__new__" | "__call__")
 }
