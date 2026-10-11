@@ -37,15 +37,18 @@ inherits = "release"
 debug = "line-tables-only"
 strip = "none"
 
-[lints.rust]
-unsafe_code = "forbid"
+[lints]
+workspace = true
+
+[workspace.lints.rust]
+unsafe_code = "deny"
 unused_qualifications = "deny"
 missing_docs = "deny"
 unused = { level = "deny", priority = -1 }
 dead_code = "deny"
 rust_2018_idioms = { level = "deny", priority = -1 }
 
-[lints.clippy]
+[workspace.lints.clippy]
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
@@ -54,6 +57,9 @@ cargo = { level = "deny", priority = -1 }
 # `ruff_python_parser` and `ra_ap_syntax` pull in different versions of shared transitive
 # crates (such as `itertools` and `hashbrown`).
 multiple_crate_versions = "allow"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+undocumented_unsafe_blocks = "deny"
 unwrap_used = "deny"
 expect_used = "deny"
 dbg_macro = "deny"
@@ -61,7 +67,7 @@ todo = "deny"
 panic = "deny"
 unimplemented = "deny"
 
-[lints.rustdoc]
+[workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
 private_intra_doc_links = "deny"
 

@@ -77,19 +77,15 @@ let activeTab = "cards";
 let latestResult = null;
 let selectedRule = "sleep-in-tests";
 
-function updateLanguageBadge(pathValue) {
-  const trimmed = pathValue.trim();
-  const isTest =
-    trimmed.includes("tests/") ||
-    trimmed.startsWith("test_") ||
-    trimmed.includes("/test_") ||
-    trimmed.endsWith("_test.py") ||
-    trimmed.endsWith("_test.rs") ||
-    trimmed.endsWith("/tests.rs");
-  const scopeSuffix = isTest ? "test path" : "source path";
-  if (trimmed.endsWith(".py")) {
+function updateLanguageBadge(result) {
+  if (!result || !result.ok) {
+    languageBadge.textContent = "Config error";
+    return;
+  }
+  const scopeSuffix = result.is_test_path ? "test path" : "source path";
+  if (result.language === "python") {
     languageBadge.textContent = `Python (${scopeSuffix})`;
-  } else if (trimmed.endsWith(".rs")) {
+  } else if (result.language === "rust") {
     languageBadge.textContent = `Rust (${scopeSuffix})`;
   } else {
     languageBadge.textContent = "Unsupported extension (use .py or .rs)";
@@ -243,7 +239,6 @@ function switchTab(tabName) {
 }
 
 function runLint() {
-  updateLanguageBadge(pathInput.value);
   if (!client) {
     return;
   }
@@ -260,6 +255,7 @@ function runLint() {
     };
   }
 
+  updateLanguageBadge(latestResult);
   if (!latestResult.ok) {
     setStatusBadge("Error", "err");
   } else if (latestResult.diagnostics.length === 0) {
@@ -357,7 +353,6 @@ shareButton.addEventListener("click", async () => {
 });
 
 loadInitialStateFromUrl();
-updateLanguageBadge(pathInput.value);
 
 loadOmnicoach("./omnicoach_playground.wasm")
   .then((loadedClient) => {

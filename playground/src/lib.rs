@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use omni::code_lint;
-use omni::diagnostic::{self, Diagnostic};
+use omni::diagnostic::{self, Diagnostic, Language};
 use omni::rule_catalog;
 use omni::rule_selection;
 use serde::{Deserialize, Serialize};
@@ -19,47 +19,40 @@ static OUTPUT_BUFFER: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 const FALLBACK_SERIALIZATION_ERROR: &str =
     r#"{"ok":false,"error":"internal serialization failure"}"#;
 
-/// Resizes the WASM input buffer to `byte_length` bytes and returns its linear-memory pointer.
-#[no_mangle]
-pub extern "C" fn prepare_input(byte_length: usize) -> *mut u8 {
-    let mut guard = INPUT_BUFFER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    guard.resize(byte_length, 0);
-    guard.as_mut_ptr()
-}
+pub use wasm_abi::{execute_request, output_pointer, prepare_input};
 
-/// Executes the UTF-8 JSON request currently in the input buffer, stores the UTF-8 JSON
-/// response in the output buffer, and returns the response byte length.
-#[no_mangle]
-pub extern "C" fn execute_request() -> usize {
-    let response_json = {
-        let input_guard = INPUT_BUFFER
+#[expect(
+    unsafe_code,
+    reason = "WASM cdylib exports require #[unsafe(no_mangle)] in Edition 2024"
+)]
+mod wasm_abi {
+    use super::{INPUT_BUFFER, OUTPUT_BUFFER, execute_buffered_request};
+
+    /// Resizes the WASM input buffer to `byte_length` bytes and returns its linear-memory pointer.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn prepare_input(byte_length: usize) -> *mut u8 {
+        let mut guard = INPUT_BUFFER
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match std::str::from_utf8(&input_guard) {
-            Ok(request_text) => handle_request(request_text),
-            Err(utf8_error) => serialize_response(&PlaygroundResponse::Error {
-                ok: false,
-                error: format!("invalid UTF-8 request payload: {utf8_error}"),
-            }),
-        }
-    };
-    let mut output_guard = OUTPUT_BUFFER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    output_guard.clear();
-    output_guard.extend_from_slice(response_json.as_bytes());
-    output_guard.len()
-}
+        guard.resize(byte_length, 0);
+        guard.as_mut_ptr()
+    }
 
-/// Returns the linear-memory pointer to the most recent UTF-8 JSON response buffer.
-#[no_mangle]
-pub extern "C" fn output_pointer() -> *const u8 {
-    let guard = OUTPUT_BUFFER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    guard.as_ptr()
+    /// Executes the UTF-8 JSON request currently in the input buffer, stores the UTF-8 JSON
+    /// response in the output buffer, and returns the response byte length.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn execute_request() -> usize {
+        execute_buffered_request()
+    }
+
+    /// Returns the linear-memory pointer to the most recent UTF-8 JSON response buffer.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn output_pointer() -> *const u8 {
+        let guard = OUTPUT_BUFFER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.as_ptr()
+    }
 }
 
 /// Processes a JSON-encoded [`PlaygroundRequest`] and returns a JSON-encoded [`PlaygroundResponse`].
@@ -104,6 +97,8 @@ struct LintPayload {
 enum PlaygroundResponse {
     Lint {
         ok: bool,
+        language: Option<&'static str>,
+        is_test_path: bool,
         diagnostics: Vec<Diagnostic>,
         plain: String,
     },
@@ -129,6 +124,27 @@ struct CatalogEntry {
     summary: &'static str,
 }
 
+fn execute_buffered_request() -> usize {
+    let response_json = {
+        let input_guard = INPUT_BUFFER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match std::str::from_utf8(&input_guard) {
+            Ok(request_text) => handle_request(request_text),
+            Err(utf8_error) => serialize_response(&PlaygroundResponse::Error {
+                ok: false,
+                error: format!("invalid UTF-8 request payload: {utf8_error}"),
+            }),
+        }
+    };
+    let mut output_guard = OUTPUT_BUFFER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    output_guard.clear();
+    output_guard.extend_from_slice(response_json.as_bytes());
+    output_guard.len()
+}
+
 fn dispatch_request(request: PlaygroundRequest) -> PlaygroundResponse {
     match request {
         PlaygroundRequest::Lint(payload) => run_lint(&payload),
@@ -148,10 +164,14 @@ fn run_lint(payload: &LintPayload) -> PlaygroundResponse {
         }
     };
     let virtual_path = Path::new(&payload.path);
+    let language = Language::from_path(virtual_path).map(Language::as_str);
+    let is_test_path = parsed_config.is_test_path(virtual_path);
     let diagnostics = code_lint::runner::lint_file(virtual_path, &payload.code, &parsed_config);
     let plain = diagnostic::format_plain(&diagnostics);
     PlaygroundResponse::Lint {
         ok: true,
+        language,
+        is_test_path,
         diagnostics,
         plain,
     }
@@ -179,7 +199,8 @@ fn run_catalog() -> PlaygroundResponse {
             let languages = rule
                 .languages
                 .iter()
-                .map(|language| language.as_str())
+                .copied()
+                .map(Language::as_str)
                 .collect();
             CatalogEntry {
                 name: rule.name.0,
@@ -201,55 +222,106 @@ mod tests {
     use super::handle_request;
 
     #[test]
-    fn lint_action_returns_diagnostics_for_python_and_rust() {
+    fn lint_action_returns_diagnostics_and_path_classification_for_python_and_rust()
+    -> serde_json::Result<()> {
         let python_response = handle_request(
             r#"{"action":"lint","path":"tests/test_order.py","code":"import time\n\ndef test_order():\n    time.sleep(1)\n","config":""}"#,
         );
-        let parsed: serde_json::Value = serde_json::from_str(&python_response).unwrap();
-        assert_eq!(parsed["ok"], true);
-        assert_eq!(parsed["diagnostics"][0]["rule_name"], "sleep-in-tests");
-        assert!(parsed["plain"]
-            .as_str()
-            .unwrap()
-            .contains("[sleep-in-tests]"));
+        let parsed: serde_json::Value = serde_json::from_str(&python_response)?;
+        assert_eq!(
+            (
+                parsed["ok"].as_bool(),
+                parsed["language"].as_str(),
+                parsed["is_test_path"].as_bool(),
+                parsed["diagnostics"][0]["rule_name"].as_str(),
+            ),
+            (
+                Some(true),
+                Some("python"),
+                Some(true),
+                Some("sleep-in-tests")
+            ),
+        );
+        assert!(
+            parsed["plain"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("[sleep-in-tests]")
+        );
 
         let rust_response = handle_request(
             r#"{"action":"lint","path":"src/lib.rs","code":"pub fn compute(price_list: &Vec<u64>) -> u64 { price_list.len() as u64 }\n","config":""}"#,
         );
-        let rust_parsed: serde_json::Value = serde_json::from_str(&rust_response).unwrap();
-        assert_eq!(rust_parsed["ok"], true);
-        assert!(!rust_parsed["diagnostics"].as_array().unwrap().is_empty());
+        let rust_parsed: serde_json::Value = serde_json::from_str(&rust_response)?;
+        assert_eq!(
+            (
+                rust_parsed["ok"].as_bool(),
+                rust_parsed["language"].as_str(),
+                rust_parsed["is_test_path"].as_bool(),
+                rust_parsed["diagnostics"][0]["rule_name"].as_str(),
+            ),
+            (
+                Some(true),
+                Some("rust"),
+                Some(false),
+                Some("type-suffixed-name")
+            ),
+        );
+        Ok(())
     }
 
     #[test]
-    fn lint_action_respects_toml_config_and_reports_invalid_config() {
+    fn lint_action_respects_toml_config_and_reports_invalid_config() -> serde_json::Result<()> {
         let ignored_response = handle_request(
             r#"{"action":"lint","path":"tests/test_order.py","code":"import time\n\ndef test_order():\n    time.sleep(1)\n","config":"ignore = [\"sleep-in-tests\"]"}"#,
         );
-        let ignored_parsed: serde_json::Value = serde_json::from_str(&ignored_response).unwrap();
-        assert_eq!(ignored_parsed["ok"], true);
-        assert_eq!(ignored_parsed["diagnostics"].as_array().unwrap().len(), 0);
+        let ignored_parsed: serde_json::Value = serde_json::from_str(&ignored_response)?;
+        assert_eq!(
+            (
+                ignored_parsed["ok"].as_bool(),
+                ignored_parsed["diagnostics"].as_array().map(Vec::len),
+            ),
+            (Some(true), Some(0)),
+        );
+
+        let custom_context_response = handle_request(
+            r#"{"action":"lint","path":"spec/order.py","code":"import time\n\ndef test_order():\n    time.sleep(1)\n","config":"[context]\ntest-patterns = [\"**/spec/**\"]"}"#,
+        );
+        let custom_context_parsed: serde_json::Value =
+            serde_json::from_str(&custom_context_response)?;
+        assert_eq!(
+            (
+                custom_context_parsed["ok"].as_bool(),
+                custom_context_parsed["is_test_path"].as_bool(),
+                custom_context_parsed["diagnostics"][0]["rule_name"].as_str(),
+            ),
+            (Some(true), Some(true), Some("sleep-in-tests")),
+        );
 
         let invalid_response = handle_request(
             r#"{"action":"lint","path":"src/app.py","code":"x = 1\n","config":"select = [\"tesing\"]"}"#,
         );
-        let invalid_parsed: serde_json::Value = serde_json::from_str(&invalid_response).unwrap();
+        let invalid_parsed: serde_json::Value = serde_json::from_str(&invalid_response)?;
         assert_eq!(invalid_parsed["ok"], false);
-        assert!(invalid_parsed["error"]
-            .as_str()
-            .unwrap()
-            .contains("did you mean `testing`?"));
+        assert!(
+            invalid_parsed["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("did you mean `testing`?")
+        );
+        Ok(())
     }
 
     #[test]
-    fn explain_action_renders_rule_markdown_with_live_config_status() {
+    fn explain_action_renders_rule_markdown_with_live_config_status() -> serde_json::Result<()> {
         let response = handle_request(
             r#"{"action":"explain","rule":"sleep-in-tests","config":"ignore = [\"testing\"]"}"#,
         );
-        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&response)?;
         assert_eq!(parsed["ok"], true);
-        let markdown = parsed["markdown"].as_str().unwrap();
+        let markdown = parsed["markdown"].as_str().unwrap_or_default();
         assert!(markdown.contains("# sleep-in-tests"));
         assert!(markdown.contains("Status: disabled by `ignore = [\"testing\"]`"));
+        Ok(())
     }
 }
