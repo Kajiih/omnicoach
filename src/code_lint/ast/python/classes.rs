@@ -1,5 +1,7 @@
 //! Python class definitions, base-class classification, and class/instance attribute walkers.
 
+use super::docstrings::{PythonDocstring, docstring_of};
+use super::functions::{PythonFunctionSignature, function_signature};
 use super::scopes::{collect_local_bound_names, parameters_shadow_name};
 use super::{
     AstNode, DecoratorInfo, ParsedFile, direct_function_definitions, extract_decorators_from_slice,
@@ -86,8 +88,31 @@ pub struct PythonClassInfo<'a> {
     pub name_node: AstNode<'a>,
     /// Base classes from `class Foo(Base1, Base2):`.
     pub bases: Vec<PythonBaseClass>,
+    /// The class docstring, if the class body starts with one.
+    pub docstring: Option<PythonDocstring<'a>>,
     /// Parsed decorators on this class definition.
     pub(super) decorators: Vec<DecoratorInfo>,
+    /// The parsed definition, for analyses of the body.
+    pub(super) definition: &'a StmtClassDef,
+}
+
+impl<'a> PythonClassInfo<'a> {
+    /// The functions defined directly in the class body (not nested deeper), in source order.
+    #[must_use]
+    pub fn methods(&self) -> Vec<PythonFunctionSignature<'a>> {
+        let file = self.name_node.file;
+        let in_protocol_or_abc_class = is_protocol_or_abc_class(self.definition, file);
+        self.definition
+            .body
+            .iter()
+            .filter_map(|statement| match statement {
+                Stmt::FunctionDef(func_def) => {
+                    Some(function_signature(func_def, file, in_protocol_or_abc_class))
+                }
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 impl PythonClassInfo<'_> {
@@ -139,7 +164,9 @@ pub fn extract_classes(file: &ParsedFile) -> Vec<PythonClassInfo<'_>> {
                         span_from_ruff_range(class_def.name.range),
                     ),
                     bases,
+                    docstring: docstring_of(&class_def.body, self.file),
                     decorators,
+                    definition: class_def,
                 });
             }
             walk_stmt(self, statement);
@@ -951,5 +978,23 @@ fn python_method_visibility(name: &str) -> MethodVisibility {
         MethodVisibility::Public
     } else {
         MethodVisibility::Private
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Language;
+
+    #[test]
+    fn methods_are_direct_definitions_in_source_order() {
+        let source = "class Outer:\n    def b(self): pass\n    x = 1\n    def a(self):\n        def nested(): pass\n    class Inner:\n        def inner(self): pass\n";
+        let file = ParsedFile::new(source, Language::Python);
+        let method_names: Vec<String> = extract_classes(&file)[0]
+            .methods()
+            .into_iter()
+            .map(|method| method.name)
+            .collect();
+        assert_eq!(method_names, ["b", "a"]);
     }
 }
