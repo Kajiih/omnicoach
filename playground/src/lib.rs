@@ -212,6 +212,13 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("[sleep-in-tests]"));
+
+        let rust_response = handle_request(
+            r#"{"action":"lint","path":"src/lib.rs","code":"pub fn compute(price_list: &Vec<u64>) -> u64 { price_list.len() as u64 }\n","config":""}"#,
+        );
+        let rust_parsed: serde_json::Value = serde_json::from_str(&rust_response).unwrap();
+        assert_eq!(rust_parsed["ok"], true);
+        assert!(!rust_parsed["diagnostics"].as_array().unwrap().is_empty());
     }
 
     #[test]
