@@ -3,7 +3,7 @@ requires = ["maturin>=1.9,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "omni-lint"
+name = "omnicoach"
 dynamic = ["version", "description", "readme", "license", "keywords", "urls"]
 requires-python = ">=3.10"
 classifiers = [

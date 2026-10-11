@@ -18,4 +18,4 @@ This document records the foundational design choices for the Custom Lint Toolki
 
 ## Branch 3: Configuration & Standard Alignment
 **Decision:** Option B: Ruff-Aligned TOML
-**Rationale:** We adopt a Ruff-like `.omnilint.toml` configuration syntax. It supports `select`/`ignore` filtering by rule names and taxonomy tags, `per-file-ignores`, per-rule and per-language configuration tables (`[rules.<name>]` and `[rules.<name>.<lang>]`), inline suppression comments (`omni:ignore[rule] -- reason`), and aligns cleanly with modern linter ergonomics.
+**Rationale:** We adopt a Ruff-like `.omnicoach.toml` configuration syntax. It supports `select`/`ignore` filtering by rule names and taxonomy tags, `per-file-ignores`, per-rule and per-language configuration tables (`[rules.<name>]` and `[rules.<name>.<lang>]`), inline suppression comments (`omni:ignore[rule] -- reason` / `omnicoach:ignore[rule] -- reason`), and aligns cleanly with modern linter ergonomics.

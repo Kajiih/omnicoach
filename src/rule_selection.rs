@@ -115,7 +115,7 @@ pub enum ConfigError {
     RuleOptions(#[from] RuleOptionsError),
 }
 
-/// The raw `.omnilint.toml` table before selector and rule-option validation.
+/// The raw `.omnicoach.toml` table before selector and rule-option validation.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct RawConfig {
@@ -182,7 +182,7 @@ pub fn find_rule(name: &str) -> Result<&'static RegisteredRule, UnknownLabel> {
         })
 }
 
-/// Loads `.omnilint.toml` from the current directory, or the default config if it is absent.
+/// Loads `.omnicoach.toml` from the current directory, or the default config if it is absent.
 ///
 /// # Errors
 ///
@@ -191,7 +191,7 @@ pub fn load_config() -> Result<Config, ConfigError> {
     read_config_file()?.map_or_else(|| Ok(Config::default()), |content| parse_config(&content))
 }
 
-/// Whether `rule` is on under `.omnilint.toml` in the current directory, and why.
+/// Whether `rule` is on under `.omnicoach.toml` in the current directory, and why.
 ///
 /// # Errors
 ///

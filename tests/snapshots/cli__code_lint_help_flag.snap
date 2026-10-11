@@ -5,15 +5,14 @@ expression: output
 --- exit code ---
 0
 --- stdout ---
-Static analysis codebase linter
+Static code analysis and command workflow coach
 
-Usage: omni-code-lint [OPTIONS] [PATHS]...
+Usage: omnicoach [OPTIONS] [COMMAND]
 
-Arguments:
-  [PATHS]...
-          Paths to inspect
-          
-          [default: .]
+Commands:
+  code     Inspect source files and directories
+  command  Validate an intercepted shell command string
+  help     Print this message or the help of the given subcommand(s)
 
 Options:
       --format <FORMAT>

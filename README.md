@@ -1,6 +1,6 @@
-# Omni Lints: Custom Domain & Code Style Linters
+# Omnicoach: Custom Domain & Code Style Linter
 
-Lightweight, high-signal static analysis engine designed to enforce domain-specific code style rules, architectural boundaries, and test hygiene across Python and Rust codebases.
+Lightweight, high-signal static analysis engine and command coach designed to enforce domain-specific code style rules, architectural boundaries, and test hygiene across Python and Rust codebases.
 
 ---
 
@@ -8,15 +8,15 @@ Lightweight, high-signal static analysis engine designed to enforce domain-speci
 
 Prebuilt binaries are published to PyPI:
 ```bash
-uv tool install omni-lint   # or: pipx install omni-lint
+uv tool install omnicoach   # or: pipx install omnicoach
 ```
 
 From crates.io:
 ```bash
-cargo install omni-lint --locked
+cargo install omnicoach --locked
 ```
 
-Both install the `omni-code-lint` and `omni-command-lint` binaries.
+Both install the `omnicoach` binary.
 
 ---
 
@@ -24,29 +24,29 @@ Both install the `omni-code-lint` and `omni-command-lint` binaries.
 
 Scan the entire repository:
 ```bash
-omni-code-lint .
+omnicoach code .   # or simply: omnicoach
 ```
 
 Scan only modified lines/files (VCS aware):
 ```bash
-omni-code-lint --diff
+omnicoach code --diff
 ```
 
 Validate an intercepted workflow command:
 ```bash
-omni-command-lint --cmd "jj edit @"
+omnicoach command --cmd "jj edit @"
 ```
 
 ---
 
-## ⚙️ Configuration (`.omnilint.toml`)
+## ⚙️ Configuration (`.omnicoach.toml`)
 
-Create a `.omnilint.toml` file at the root of your project workspace.
+Create a `.omnicoach.toml` file at the root of your project workspace.
 
 ### Framework Rule Design: Enforcement Modes
 
-Every rule in Omni is built on a unified enforcement framework:
-- **`enforcement-mode = "ban"`** (default for most rules): Prohibits the pattern. Violations can only be bypassed using explicit `# omni:ignore[rule] -- <reason>` directives.
+Every rule in Omnicoach is built on a unified enforcement framework:
+- **`enforcement-mode = "ban"`** (default for most rules): Prohibits the pattern. Violations can only be bypassed using explicit `# omni:ignore[rule] -- <reason>` (or `# omnicoach:ignore[rule] -- <reason>`) directives.
 - **`enforcement-mode = "require-explanation"`**: Permits the pattern as long as it is accompanied by an adjacent or inline substantive explanatory comment.
 
 You can configure enforcement mode globally or per-language for any code rule (suppression audits and command rules reject it):
@@ -79,30 +79,30 @@ ignore = ["test-doubles"]
 "tests/**" = ["single-letter-name", "heuristic"]
 ```
 
-Unknown labels, facet names (`precision`) and a selector in both `select` and `ignore` fail at config load. Run `omni-code-lint --list-tags` for the topic tree; facet definitions and selection rules are in [docs/dev/tag_guide.md](https://github.com/Kajiih/omni-lint/blob/main/docs/dev/tag_guide.md).
+Unknown labels, facet names (`precision`) and a selector in both `select` and `ignore` fail at config load. Run `omnicoach --list-tags` for the topic tree; facet definitions and selection rules are in [docs/dev/tag_guide.md](https://github.com/Kajiih/omnicoach/blob/main/docs/dev/tag_guide.md).
 
 ---
 
 ## 📋 Rules
 
-Both binaries document every rule and topic, code and command alike:
+`omnicoach` documents every rule and topic, code and command alike:
 
 ```bash
-omni-code-lint --list-rules              # every rule, with its languages and summary
-omni-code-lint --list-rules --tag testing # the rules `select = ["testing"]` would select
-omni-code-lint --list-tags               # the topic tree: parents, synonyms, descriptions, scope notes
-omni-code-lint --explain sleep-in-tests  # one rule: what it does, why, configuration, tags, status
+omnicoach --list-rules              # every rule, with its languages and summary
+omnicoach --list-rules --tag testing # the rules `select = ["testing"]` would select
+omnicoach --list-tags               # the topic tree: parents, synonyms, descriptions, scope notes
+omnicoach --explain sleep-in-tests  # one rule: what it does, why, configuration, tags, status
 ```
 
-`--explain` also reports whether the rule is on under the `.omnilint.toml` of the current directory, and which selector decided it.
+`--explain` also reports whether the rule is on under the `.omnicoach.toml` of the current directory, and which selector decided it.
 
 ---
 
 ## 🔕 Suppressions
 
-Suppression directives require explicit bracketed rule targets and a `-- <reason>` explanation:
+Suppression directives accept either `omni:` or `omnicoach:` and require explicit bracketed rule targets and a `-- <reason>` explanation:
 
-### Inline Suppression (`omni:ignore`)
+### Inline Suppression (`omni:ignore` / `omnicoach:ignore`)
 ```python
 task = asyncio.create_task(loop())  # omni:ignore [unstructured-task] -- top-level daemon lifecycle
 ```
@@ -110,7 +110,7 @@ task = asyncio.create_task(loop())  # omni:ignore [unstructured-task] -- top-lev
 let x = 1; // omni:ignore [single-letter-name] -- 2D vector coordinate
 ```
 
-### Preceding-Line Suppression (`omni:ignore`)
+### Preceding-Line Suppression (`omni:ignore` / `omnicoach:ignore`)
 ```python
 # omni:ignore [nested-function] -- factory requires localized closure
 @dataclass
@@ -119,7 +119,7 @@ def make_handler():
     return helper
 ```
 
-### File-Level Suppression (`omni:disable-file`)
+### File-Level Suppression (`omni:disable-file` / `omnicoach:disable-file`)
 ```python
 # omni:disable-file [nested-function, single-letter-name] -- generated schema
 ```
@@ -128,4 +128,4 @@ def make_handler():
 
 ## 🤝 Contributing
 
-To add a rule, follow [docs/dev/adding_a_rule.md](https://github.com/Kajiih/omni-lint/blob/main/docs/dev/adding_a_rule.md).
+To add a rule, follow [docs/dev/adding_a_rule.md](https://github.com/Kajiih/omnicoach/blob/main/docs/dev/adding_a_rule.md).

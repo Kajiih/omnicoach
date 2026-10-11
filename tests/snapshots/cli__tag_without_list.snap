@@ -1,6 +1,6 @@
 ---
 source: tests/cli.rs
-expression: "output.replace(binary, \"<binary>\")"
+expression: "output.replace(BIN_NAME, \"<binary>\")"
 ---
 --- exit code ---
 2
@@ -10,6 +10,6 @@ expression: "output.replace(binary, \"<binary>\")"
 error: the following required arguments were not provided:
   --list-rules
 
-Usage: <binary> --list-rules --tag <LABEL> [PATHS]...
+Usage: <binary> --list-rules --tag <LABEL>
 
 For more information, try '--help'.

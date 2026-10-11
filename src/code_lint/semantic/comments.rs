@@ -139,6 +139,8 @@ impl<'a> CommentIndex<'a> {
 }
 
 const DIRECTIVE_PREFIXES: &[&str] = &[
+    "omnicoach:ignore",
+    "omnicoach:disable-file",
     "omni:ignore",
     "omni:disable-file",
     "ruff: noqa",

@@ -3,7 +3,7 @@
 To maintain a cohesive and performant toolkit while avoiding "reinventing the wheel," we rely on world-class ecosystem crates to perform the heavy lifting across our package modules.
 
 ## Why Not a Pre-Existing Framework?
-While tools like `ast-grep` and `semgrep` exist for parsing code, they do not support orchestrating Command Guards or Environment Context. Our package acts as a unified orchestrator (sharing config and reporting via `src/config.rs` and `src/diagnostic.rs`) to bring these disparate domains under a single `.toml` configuration, while deploying them as separate, focused binaries (`omni-code-lint` and `omni-command-lint`).
+While tools like `ast-grep` and `semgrep` exist for parsing code, they do not support orchestrating Command Guards or Environment Context. Our package acts as a unified orchestrator (sharing config and reporting via `src/config.rs` and `src/diagnostic.rs`) to bring these disparate domains under a single `.toml` configuration and CLI binary (`omnicoach code` and `omnicoach command`).
 
 ## Heavy-Lifting Crates to Reuse
 Instead of writing complex traversal or parsing logic from scratch, the modules delegate to the following dependencies:
@@ -21,5 +21,5 @@ Instead of writing complex traversal or parsing logic from scratch, the modules 
 ### 4. Environment & Context Guards (`src/command_lint/rules/`)
 *   **`std::process::Command` (for Git & Jujutsu)**: To keep compilation fast and avoid borrow-checker conflicts and API churn from raw library dependencies (like `gix` or `jj-lib`), we spawn subprocess calls (e.g., `git status`, `jj log`) to query repository state. The ~5ms overhead is completely negligible for a local hook execution.
 
-### 5. File System Traversal (`src/bin/omni-code-lint.rs`)
+### 5. File System Traversal (`src/bin/omnicoach.rs`)
 *   **`ignore`**: Rather than writing custom recursive directory walkers and manually parsing gitignore rules, we embed the `ignore` crate (powering `ripgrep`). It respects `.gitignore`, `.ignore`, global exclusions, and hidden files out of the box.

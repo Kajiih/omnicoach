@@ -103,7 +103,7 @@ const UNUSED_SUPPRESSION: Declaration = Declaration {
 const UNKNOWN_SUPPRESSION_TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Suppression directive names `{rule}`, which is unknown or cannot be suppressed inline.",
     rationale: "The name is not a rule Omni knows, or it is a suppression audit, which inline directives cannot silence; either way the directive does nothing.",
-    suggestion: "Verify the rule name with `--list-rules`, or disable suppression audits in `.omnilint.toml`.",
+    suggestion: "Verify the rule name with `--list-rules`, or disable suppression audits in `.omnicoach.toml`.",
 };
 
 /// Flags suppression directives targeting unknown or non-suppressible rules.
@@ -230,12 +230,22 @@ pub struct SuppressionTracker {
     directives: Vec<ParsedDirective>,
 }
 
+const DIRECTIVE_NAMESPACES: &[&str] = &["omnicoach:", "omni:"];
+
+/// Returns `true` if `content` may contain an `omni:` or `omnicoach:` suppression directive.
+#[must_use]
+pub fn contains_directive_prefix(content: &str) -> bool {
+    DIRECTIVE_NAMESPACES
+        .iter()
+        .any(|namespace| content.contains(namespace))
+}
+
 impl SuppressionTracker {
     /// Parses suppression directives from the parsed file and its content.
     #[must_use]
     pub fn from_file(file: &ParsedFile, content: &str) -> Self {
-        // Every directive contains `omni:`; skip the comment-node traversal when none can exist.
-        if !content.contains("omni:") {
+        // Skip the comment-node traversal when no `omni:` / `omnicoach:` directive can exist.
+        if !contains_directive_prefix(content) {
             return Self::default();
         }
 
@@ -346,12 +356,15 @@ impl SuppressionTracker {
     }
 }
 
-/// Parses the `omni:disable-file` or `omni:ignore` prefix and validates boundary delimiters.
+/// Parses the `omni:` or `omnicoach:` (`disable-file` / `ignore`) prefix and validates boundary delimiters.
 fn parse_directive_prefix(stripped: &str) -> Option<(bool, &str)> {
-    let (is_file, remainder) = if let Some(rest) = stripped.strip_prefix("omni:disable-file") {
+    let body = DIRECTIVE_NAMESPACES
+        .iter()
+        .find_map(|namespace| stripped.strip_prefix(namespace))?;
+    let (is_file, remainder) = if let Some(rest) = body.strip_prefix("disable-file") {
         (true, rest)
     } else {
-        (false, stripped.strip_prefix("omni:ignore")?)
+        (false, body.strip_prefix("ignore")?)
     };
 
     // Require boundary delimiter (whitespace, '[', or '-') after directive prefix
@@ -495,9 +508,10 @@ mod tests {
     use crate::diagnostic::Language;
     use rstest::rstest;
 
-    #[test]
-    fn test_parse_valid_inline_directive_same_line() {
-        let content = "let a = 1; // omni:ignore [single-letter-name] -- math variable";
+    #[rstest]
+    #[case::omni("let a = 1; // omni:ignore [single-letter-name] -- math variable")]
+    #[case::omnicoach("let a = 1; // omnicoach:ignore [single-letter-name] -- math variable")]
+    fn test_parse_valid_inline_directive_same_line(#[case] content: &str) {
         let file = ParsedFile::new(content, Language::Rust);
         let tracker = SuppressionTracker::from_file(&file, content);
 
@@ -554,9 +568,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_parse_file_level_directive() {
-        let content = "# omni:disable-file [nested-function, single-letter-name] -- legacy generated file\ndef foo(): pass";
+    #[rstest]
+    #[case::omni(
+        "# omni:disable-file [nested-function, single-letter-name] -- legacy generated file\ndef foo(): pass"
+    )]
+    #[case::omnicoach(
+        "# omnicoach:disable-file [nested-function, single-letter-name] -- legacy generated file\ndef foo(): pass"
+    )]
+    fn test_parse_file_level_directive(#[case] content: &str) {
         let file = ParsedFile::new(content, Language::Python);
         let tracker = SuppressionTracker::from_file(&file, content);
 
