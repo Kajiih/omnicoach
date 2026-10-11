@@ -9,3 +9,6 @@
 
 # Local scratch and temporary scripts
 scratch/
+
+# Generated playground WebAssembly binary
+playground/www/*.wasm

@@ -37,6 +37,14 @@ Validate an intercepted workflow command:
 omnicoach command --cmd "jj edit @"
 ```
 
+Try `omnicoach` in the browser or call its WebAssembly request/response module directly at **[kajiih.github.io/omnicoach](https://kajiih.github.io/omnicoach/)**:
+```javascript
+import { loadOmnicoach } from "https://kajiih.github.io/omnicoach/omnicoach.js";
+
+const omni = await loadOmnicoach("https://kajiih.github.io/omnicoach/omnicoach_playground.wasm");
+const result = omni.lint({ path: "tests/test_app.py", code: "import time\ndef test_a(): time.sleep(1)\n", config: "" });
+```
+
 ---
 
 ## ⚙️ Configuration (`.omnicoach.toml`)

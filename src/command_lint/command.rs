@@ -3,11 +3,15 @@
 
 architecture_component!(CommandLintCommand);
 
+#[cfg(not(target_arch = "wasm32"))]
 use ast_grep_core::AstGrep;
+#[cfg(not(target_arch = "wasm32"))]
 use ast_grep_core::tree_sitter::StrDoc;
+#[cfg(not(target_arch = "wasm32"))]
 use ast_grep_language::SupportLang;
 
 /// Private Bash syntax node type used only to parse intercepted shell commands.
+#[cfg(not(target_arch = "wasm32"))]
 type BashNode<'a> = ast_grep_core::Node<'a, StrDoc<SupportLang>>;
 
 /// Schema defining a program's command-line interface options layout.
@@ -34,6 +38,7 @@ pub struct InterceptedCommand {
 
 impl InterceptedCommand {
     /// Parses a raw CLI input string into all individual command invocations.
+    #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub fn parse_all(raw_string: &str) -> Vec<Self> {
         let grep = AstGrep::new(raw_string, SupportLang::Bash);
@@ -42,6 +47,13 @@ impl InterceptedCommand {
             .filter(|node| node.kind() == "command")
             .filter_map(|node| Self::parse_single(&node, raw_string))
             .collect()
+    }
+
+    /// Parses a raw CLI input string on `wasm32` (command linting deferred until pure-Rust shell parser).
+    #[cfg(target_arch = "wasm32")]
+    #[must_use]
+    pub const fn parse_all(_raw_string: &str) -> Vec<Self> {
+        Vec::new()
     }
 
     /// Extracts positional arguments (skipping option flags and their values) and option key-values.
@@ -59,6 +71,7 @@ impl InterceptedCommand {
             .unwrap_or(&self.program_name)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn parse_single(node: &BashNode<'_>, raw_string: &str) -> Option<Self> {
         let mut children = node.children();
         let command_name_node = children.find(|child| child.kind() == "command_name")?;

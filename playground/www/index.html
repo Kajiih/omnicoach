@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none';">
+  <title>Omnicoach Playground</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-title">omnicoach</span>
+      <span class="brand-subtitle">WebAssembly Playground</span>
+    </div>
+    <div class="toolbar">
+      <label class="toolbar-field">
+        <span class="field-label">Preset</span>
+        <select id="preset-select" aria-label="Code preset">
+          <option value="python-test">Python — Test Hygiene</option>
+          <option value="python-source">Python — Source Rules</option>
+          <option value="rust-source">Rust — Source Rules</option>
+          <option value="rust-test">Rust — Test Hygiene</option>
+        </select>
+      </label>
+      <label class="toolbar-field">
+        <span class="field-label">Virtual path</span>
+        <input id="path-input" type="text" value="tests/test_order.py" spellcheck="false" autocomplete="off">
+      </label>
+      <button id="share-button" type="button" class="button-secondary">Copy Share Link</button>
+      <a class="repo-link" href="https://github.com/Kajiih/omnicoach" target="_blank" rel="noopener noreferrer">GitHub</a>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <section class="editor-column" aria-label="Inputs">
+      <div class="pane code-pane">
+        <div class="pane-header">
+          <span class="pane-title">Source Code</span>
+          <span id="language-badge" class="badge">Python (test path)</span>
+        </div>
+        <textarea id="code-editor" class="code-textarea" spellcheck="false" aria-label="Source code editor"></textarea>
+      </div>
+
+      <div class="pane config-pane">
+        <div class="pane-header">
+          <span class="pane-title">.omnicoach.toml</span>
+          <span class="pane-hint">select, ignore, per-file-ignores, [rules.&lt;name&gt;]</span>
+        </div>
+        <textarea id="config-editor" class="code-textarea config-textarea" spellcheck="false" aria-label=".omnicoach.toml configuration editor" placeholder="# Optional .omnicoach.toml overrides&#10;# ignore = [&quot;sleep-in-tests&quot;]"></textarea>
+      </div>
+    </section>
+
+    <section class="output-column" aria-label="Diagnostics and Rule Documentation">
+      <div class="pane output-pane">
+        <div class="pane-header">
+          <div class="output-status">
+            <span class="pane-title">Output</span>
+            <span id="status-badge" class="badge badge-neutral">Loading WASM…</span>
+          </div>
+          <div class="tab-bar" role="tablist">
+            <button id="tab-cards" type="button" role="tab" class="tab-button active" data-tab="cards">Diagnostics</button>
+            <button id="tab-plain" type="button" role="tab" class="tab-button" data-tab="plain">Plain CLI</button>
+            <button id="tab-json" type="button" role="tab" class="tab-button" data-tab="json">JSON</button>
+            <button id="tab-explain" type="button" role="tab" class="tab-button" data-tab="explain">Rule Docs</button>
+            <button id="tab-api" type="button" role="tab" class="tab-button" data-tab="api">API</button>
+          </div>
+        </div>
+
+        <div id="explain-toolbar" class="explain-toolbar hidden">
+          <label class="toolbar-field explain-field">
+            <span class="field-label">Rule</span>
+            <select id="rule-select" aria-label="Select rule to explain"></select>
+          </label>
+        </div>
+
+        <div id="output-body" class="output-body" aria-live="polite"></div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

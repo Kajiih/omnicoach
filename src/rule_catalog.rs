@@ -8,8 +8,8 @@ use crate::rule_declaration::{
     DeclaredOptions, EnforcementMode, FilterListDefaults, LanguageDefaults, OptionSpec,
 };
 use crate::rule_selection::{
-    ConfigError, Facet, RegisteredRule, UnknownLabel, find_rule, load_rule_status,
-    registered_rules, registered_topics, rules_tagged,
+    ConfigError, Facet, RegisteredRule, RuleStatus, UnknownLabel, find_rule, load_rule_status,
+    registered_rules, registered_topics, rule_status, rules_tagged,
 };
 
 /// Why a discovery request failed. The message is what the user sees.
@@ -112,20 +112,30 @@ pub fn list_tags() -> String {
     lines.join("\n") + "\n"
 }
 
-/// The rule's full documentation as Markdown, including its active status.
+/// The rule's full documentation as Markdown, including its active status in the working directory.
 ///
 /// # Errors
 ///
 /// Returns [`CatalogError::Label`] if no rule is named `name`.
 pub fn explain(name: &str) -> Result<String, CatalogError> {
     let rule = find_rule(name)?;
-    Ok(render_rule(rule))
+    Ok(render_rule(rule, &load_rule_status(rule)))
 }
 
-fn render_rule(rule: &RegisteredRule) -> String {
+/// The rule's full documentation as Markdown, evaluating its active status against `config_toml`.
+///
+/// # Errors
+///
+/// Returns [`CatalogError::Label`] if no rule is named `name`.
+pub fn explain_with_config(name: &str, config_toml: &str) -> Result<String, CatalogError> {
+    let rule = find_rule(name)?;
+    Ok(render_rule(rule, &rule_status(config_toml, rule)))
+}
+
+fn render_rule(rule: &RegisteredRule, status_result: &Result<RuleStatus, ConfigError>) -> String {
     let doc = rule.doc;
     let template = rule.template;
-    let status_line = match load_rule_status(rule) {
+    let status_line = match status_result {
         Ok(status) => format!("Status: {status}"),
         Err(error) => format!("Status: <config error: {error}>"),
     };

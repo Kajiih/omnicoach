@@ -506,29 +506,42 @@ pub fn print_diagnostics(diagnostics: &[Diagnostic], format: OutputFormat) -> an
         println!("{}", serde_json::to_string_pretty(&sorted)?);
     } else {
         let mut stdout = BufWriter::new(io::stdout().lock());
-        for diagnostic in sorted {
-            let location_header = diagnostic.location.format_header();
-            let hint_line = diagnostic
-                .message
-                .explanation_hint
-                .as_ref()
-                .map(|hint| format!("  Or: {hint}\n"))
-                .unwrap_or_default();
-
-            writeln!(
-                stdout,
-                "{}: [{}] {}\n  Rationale: {}\n  Suggestion: {}\n{}",
-                location_header,
-                diagnostic.rule_name,
-                diagnostic.message.summary,
-                diagnostic.message.rationale,
-                diagnostic.message.suggestion,
-                hint_line
-            )?;
-        }
+        stdout.write_all(format_plain(diagnostics).as_bytes())?;
         stdout.flush()?;
     }
     Ok(())
+}
+
+/// Formats a slice of diagnostics into deterministic human-readable plain text.
+#[must_use]
+pub fn format_plain(diagnostics: &[Diagnostic]) -> String {
+    use std::fmt::Write as _;
+
+    let mut sorted: Vec<&Diagnostic> = diagnostics.iter().collect();
+    sorted.sort_unstable();
+
+    let mut output = String::new();
+    for diagnostic in sorted {
+        let location_header = diagnostic.location.format_header();
+        let hint_line = diagnostic
+            .message
+            .explanation_hint
+            .as_ref()
+            .map(|hint| format!("  Or: {hint}\n"))
+            .unwrap_or_default();
+
+        let _ = writeln!(
+            output,
+            "{}: [{}] {}\n  Rationale: {}\n  Suggestion: {}\n{}",
+            location_header,
+            diagnostic.rule_name,
+            diagnostic.message.summary,
+            diagnostic.message.rationale,
+            diagnostic.message.suggestion,
+            hint_line
+        );
+    }
+    output
 }
 
 #[cfg(test)]
