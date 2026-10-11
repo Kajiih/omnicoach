@@ -247,14 +247,21 @@ function runLint() {
   if (!client) {
     return;
   }
-  latestResult = client.lint({
-    path: pathInput.value.trim(),
-    code: codeEditor.value,
-    config: configEditor.value,
-  });
+  try {
+    latestResult = client.lint({
+      path: pathInput.value.trim(),
+      code: codeEditor.value,
+      config: configEditor.value,
+    });
+  } catch (runtimeError) {
+    latestResult = {
+      ok: false,
+      error: `WASM runtime error: ${String(runtimeError)}`,
+    };
+  }
 
   if (!latestResult.ok) {
-    setStatusBadge("Config Error", "err");
+    setStatusBadge("Error", "err");
   } else if (latestResult.diagnostics.length === 0) {
     setStatusBadge("0 violations", "ok");
   } else {

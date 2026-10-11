@@ -1,0 +1,4 @@
+[target.wasm32-unknown-unknown]
+# Disable `ra_ap_syntax::Parse<T>::drop`'s background `ParseNodeDropper` thread on `wasm32`,
+# where `std::thread::Builder::spawn` is unsupported and panics.
+rustflags = ["--cfg", "no_salsa_async_drops"]
