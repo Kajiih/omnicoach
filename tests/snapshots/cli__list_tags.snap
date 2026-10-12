@@ -1,6 +1,6 @@
 ---
 source: tests/cli.rs
-expression: "output.replace(binary, \"<binary>\")"
+expression: "output.replace(BIN_NAME, \"<binary>\")"
 ---
 --- exit code ---
 0
@@ -9,6 +9,7 @@ expression: "output.replace(binary, \"<binary>\")"
 |---|---|---|---|---|
 | `concurrency` | — |  | Concurrent execution: coroutines, tasks and threads. | Spawning, awaiting and joining concurrent work and its lifetimes. Not sleeping or waiting in tests (see `test-timing`). |
 | `declaration-order` | — |  | Order in which declarations appear in a scope. | Ordering of functions, methods and items within a module or class. Not nesting depth (see `nesting`) or naming. |
+| `docstrings` | — | `documentation` | Presence, content and sections of docstrings. | Whether a docstring is present, what it says and how its Google-style sections (`Args:`, `Returns:`, `Attributes:`) are written. Not comments or `omni:` directives. |
 | `durations` | — |  | How spans of time are represented. | Representing lengths of time and their units. Not sleeping/waiting (see `test-timing`) or wall-clock dates. |
 | `error-handling` | — |  | Raising, catching, swallowing and reporting errors. | Exceptions and `Result`s, including `contextlib.suppress`. Not `omni:` directives (see `suppression-directives`). |
 | `global-state` | — |  | Process-wide state read or written implicitly. | Reading or writing ambient process-wide state (environment variables, globals). Not file or network I/O. |

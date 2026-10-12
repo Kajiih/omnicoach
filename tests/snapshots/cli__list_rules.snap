@@ -1,6 +1,6 @@
 ---
 source: tests/cli.rs
-expression: "output.replace(binary, \"<binary>\")"
+expression: "output.replace(BIN_NAME, \"<binary>\")"
 ---
 --- exit code ---
 0
@@ -52,6 +52,7 @@ expression: "output.replace(binary, \"<binary>\")"
 - `unslotted-dataclass` (python): Requires Python dataclasses to declare `slots=True`.
 - `unstructured-task` (python): Flags asyncio tasks spawned outside a task group.
 - `unused-suppression` (python, rust): Flags suppression directives that suppress no finding.
+- `verb-led-returns-section` (python): Flags docstring `Returns:` and `Yields:` sections that start with the verb `Returns` or `Yields`.
 - `zero-sleep-in-tests` (python, rust): Flags zero-duration sleeps used to yield in tests.
 
 --- stderr ---

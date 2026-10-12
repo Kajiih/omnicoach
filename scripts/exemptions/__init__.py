@@ -6,6 +6,7 @@ from . import (
     collection_types_1,
     collection_types_2,
     declaration_order,
+    docstrings,
     literals_and_placeholders,
     names,
     positional_and_scopes,
@@ -22,4 +23,5 @@ CLUSTERS = (
     tests_cluster.CLUSTER,
     positional_and_scopes.CLUSTER,
     types_errors_concurrency.CLUSTER,
+    docstrings.CLUSTER,
 )

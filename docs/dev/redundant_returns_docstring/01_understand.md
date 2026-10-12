@@ -1,7 +1,7 @@
 # 01 — Understand: the legacy linter `RedundantReturnsDocstringRule`
 
 > [!NOTE]
-> Status: **PENDING** (lead validation). Batch D (docstrings), worker phase 1 of 7. Playbook: [rule_batch_playbook.md](../rule_batch_playbook.md).
+> Status: **VALIDATED** (lead, 2026-10-12; implemented). Batch D (docstrings), worker phase 1 of 7. Playbook: [rule_batch_playbook.md](../rule_batch_playbook.md).
 
 ## 1. The source check
 
@@ -23,7 +23,7 @@ class RedundantReturnsDocstringRule(LintRule):
                 if re.match(r"^(?:Return|Returns|Yield|Yields)\b", stripped, re.IGNORECASE):
                     word = stripped.split()[0]
                     self.visitor.report_warning(node.lineno,
-                        f"Docstring return description should not start with '{word}...' "
+                        f"Docstring return description should not start with '{phrase}...' "
                         "as the section header already specifies Returns/Yields.")
                 break
 ```

@@ -252,6 +252,17 @@ impl Topic {
                      nesting depth (see `nesting`) or naming.",
         synonyms: &[],
     };
+
+    /// Presence, content and sections of docstrings.
+    pub(crate) const DOCSTRINGS: Self = Self {
+        label: "docstrings",
+        parent: None,
+        description: "Presence, content and sections of docstrings.",
+        scope_note: "Whether a docstring is present, what it says and how its Google-style \
+                     sections (`Args:`, `Returns:`, `Attributes:`) are written. Not comments or \
+                     `omni:` directives.",
+        synonyms: &["documentation"],
+    };
 }
 
 /// Precision facet: can the rule flag correct code?
