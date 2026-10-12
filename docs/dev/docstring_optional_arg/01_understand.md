@@ -1,7 +1,7 @@
 # Docstring optional argument: 01 Understand
 
 > [!NOTE]
-> **Status: PENDING** (lead validation).
+> **Status: VALIDATED** (lead, 2026-10-12; implemented).
 > Batch D (docstrings), worker for the legacy linter `DocstringOptionalArgRule`. Process: [rule_batch_playbook.md](../rule_batch_playbook.md). References: [02_references.md](02_references.md). Design: [03_design.md](03_design.md).
 > [U] marks claims not checked against code, documentation text, or tool output.
 

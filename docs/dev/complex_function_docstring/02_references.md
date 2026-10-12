@@ -1,7 +1,7 @@
 # Complex function docstring: 02 References
 
 > [!IMPORTANT]
-> **Status: PENDING** (lead validation).
+> **Status: VALIDATED** (lead, 2026-10-12; implemented).
 
 Sources read for this document (all on 2026-10-11):
 

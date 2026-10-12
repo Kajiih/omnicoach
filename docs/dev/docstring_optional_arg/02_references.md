@@ -1,7 +1,7 @@
 # Docstring optional argument: 02 References
 
 > [!NOTE]
-> **Status: PENDING** (lead validation).
+> **Status: VALIDATED** (lead, 2026-10-12; implemented).
 > Sources verified verbatim: Google pyguide (`scratch/pyguide.md` of the lead's conversation), pydoclint `violation_codes.md`, `config_options.md`, `checking_class_attributes.md` (same directory), the legacy source. Web sources were read through search summaries only and are marked [U] where the exact wording was not seen.
 
 ## 1. Style guides

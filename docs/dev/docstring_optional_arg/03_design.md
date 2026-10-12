@@ -1,8 +1,17 @@
 # Docstring optional argument: 03 Design
 
 > [!NOTE]
-> **Status: PENDING** (lead validation).
-> Inputs: [01_understand.md](01_understand.md), [02_references.md](02_references.md). Shared helper: `src/code_lint/ast/python/docstrings.rs` (lead). Canonical rule file: `src/code_lint/rules/nullable_collection_return.rs`.
+> **Status: VALIDATED** (lead, 2026-10-12; implemented).
+> Inputs: [01_understand.md](01_understand.md), [02_references.md](02_references.md). Shared helper: `src/code_lint/ast/python/docstrings.rs` (lead). Canonical rule file: `src/code_lint/rules/nullable_collection_return.rs`. Execution: [04_execution_log.md](04_execution_log.md).
+
+## 0. Lead decisions (2026-10-12)
+
+These override the rest of this document where they differ.
+
+1. **Placeholder.** The batch uses one prose placeholder, `{phrase}`, which already exists (§6 needs no new row).
+2. **Type slot.** A type slot that is exactly `(optional)` is this rule's marker (D7). `(int, optional)` belongs to `annotated-type-in-docstring` and is not read here (E7). Fixing that finding leaves `(optional)`, which this rule then flags: an intended chain, stated in the rule docs.
+3. **Q2 accepted (R8).** Omission markers are exempt when the matched parameter has a non-`None` default (`retries: int = 3`): E9 is in v1. It uses the new `PythonParameterInfo::default_node`; class docstrings match `Args:` entries with the `__init__` found by `PythonClassInfo::methods()` (containment, no new class helper). `Attributes:` entries and `**kwargs` keys stay text-only.
+4. **Q1 and Q3 are not in v1.** `= None` parameters with no marker and no explanation (Q1) and `Returns:` / `Yields:` wording (Q3) become ROADMAP candidates, added by the lead.
 
 ## 1. Verdict and name
 

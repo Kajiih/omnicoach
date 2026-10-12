@@ -1,7 +1,7 @@
 # Class docstring completeness: 01 Understand
 
 > [!IMPORTANT]
-> **Status: PENDING** (lead validation). Batch D, the legacy linter check `ClassDocstringRule`. Worker phases 1–3 only.
+> **Status: VALIDATED** (lead, 2026-10-12; implemented). Batch D, the legacy linter check `ClassDocstringRule`.
 
 ## 1. The candidate
 

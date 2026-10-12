@@ -1,7 +1,7 @@
 # Trivial override docstring: 01 Understand
 
 > [!IMPORTANT]
-> **Status: PENDING** lead validation.
+> **Status: VALIDATED** (lead, 2026-10-12; implemented).
 
 Phase 1 of porting the legacy linter's `TrivialOverrideDocstringRule` ([legacy_lints.py, lines 3389–3429](../../../scratch/legacy_reference/legacy_lints.py)) to omnicoach, Batch D (docstrings). Lead gate: rule 6, verdict *Narrow*.
 

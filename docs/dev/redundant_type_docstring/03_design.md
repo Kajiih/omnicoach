@@ -1,7 +1,7 @@
 # Repeated docstring type: 03 Design
 
 > [!NOTE]
-> **Status: PENDING (lead validation).**
+> **Status: VALIDATED** (lead, 2026-10-12; implemented as `annotated-type-in-docstring`, the user's answer to Q1). Q2: `Returns` / `Yields` ship in v1 (H2 built as `generator_yield_type`). Q3: a parenthetical that is exactly `(optional)` or `(default …)` has no type and belongs to `unexplained-optional-argument`. The message template uses `{section}` and `{phrase}` instead of §4's `{name}` / `{expression}` (lead decision). Implementation notes: [04_execution_log.md](04_execution_log.md).
 > Designed against `src/code_lint/ast/python/docstrings.rs` as landed (`PythonFunctionSignature::docstring`, `PythonClassInfo::docstring`, `PythonDocstring::sections` / `line_node`, `DocstringSection`, `DocstringEntry`). Canonical conventions: `src/code_lint/rules/nullable_collection_return.rs`.
 
 ## 1. Verdict and name

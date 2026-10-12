@@ -1,7 +1,7 @@
 # Repeated docstring type: 01 Understand
 
 > [!NOTE]
-> **Status: PENDING (lead validation).**
+> **Status: VALIDATED (lead, 2026-10-12; implemented).**
 > Scope: port of the legacy linter `RedundantTypeDocstringRule` (Batch D, docstrings). Python only.
 > Sources: `scratch/legacy_reference/legacy_lints.py` lines 2087–2148; Google Python Style Guide §3.8.3 and §3.8.4; pydoclint and Pylint docs (quoted in `02_references.md`). [U] marks claims not checked against a tool run or its source code.
 

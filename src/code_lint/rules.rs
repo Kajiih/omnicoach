@@ -4,6 +4,7 @@ architecture_component!(CodeLintRules);
 use crate::code_lint::contract::AnyCodeRule;
 
 pub mod abbreviated_name;
+pub mod annotated_type_in_docstring;
 pub mod associated_item_after_method;
 pub mod bare_multiline_string;
 pub mod callee_before_caller;
@@ -11,6 +12,8 @@ pub mod concrete_collection_attribute;
 pub mod concrete_collection_parameter;
 pub mod concrete_collection_return;
 pub mod constructor_after_method;
+pub mod copied_base_docstring;
+pub mod deferral_docstring;
 pub mod dynamic_attribute_access;
 pub mod environment_variable_in_function;
 pub mod error_log_in_except;
@@ -28,6 +31,7 @@ pub mod mutable_module_constant;
 pub mod nested_function;
 pub mod nullable_collection_return;
 pub mod packed_assertion;
+pub mod partial_override_docstring;
 pub mod primitive_duration;
 pub mod private_before_public_function;
 pub mod quote_wrapped_placeholder;
@@ -42,6 +46,11 @@ pub mod too_many_assertions;
 pub mod type_cast;
 pub mod type_suffixed_name;
 pub mod uncolocated_helper;
+pub mod undocumented_nontrivial_function;
+pub mod undocumented_public_attribute;
+pub mod undocumented_tuple_return;
+pub mod unexplained_optional_argument;
+pub mod unexplained_parameter;
 pub mod unmatched_logger_placeholder;
 pub mod unslotted_dataclass;
 pub mod unstructured_task;
@@ -93,4 +102,13 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &unmatched_logger_placeholder::RULE,
     &quote_wrapped_placeholder::RULE,
     &verb_led_returns_section::RULE,
+    &undocumented_public_attribute::RULE,
+    &annotated_type_in_docstring::RULE,
+    &unexplained_optional_argument::RULE,
+    &deferral_docstring::RULE,
+    &copied_base_docstring::RULE,
+    &partial_override_docstring::RULE,
+    &undocumented_nontrivial_function::RULE,
+    &unexplained_parameter::RULE,
+    &undocumented_tuple_return::RULE,
 ];

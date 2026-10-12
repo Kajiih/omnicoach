@@ -1,7 +1,7 @@
 # Class docstring completeness: 03 Design
 
 > [!IMPORTANT]
-> **Status: PENDING** (lead validation). Verdict: **narrow** to one rule, `undocumented-public-attribute`. The constructor-parameter half goes to `undocumented-parameter`, owned by [complex_function_docstring](../complex_function_docstring/03_design.md) (D16).
+> **Status: VALIDATED** (lead, 2026-10-12; implemented). Verdict: **narrow** to one rule, `undocumented-public-attribute`. The constructor-parameter half was handed to `undocumented-parameter` (D16), which the user later dropped (Ruff `D417` covers it). User decisions: Q1 skip one-line docstrings, Q2 option A of [03b_attribute_options.md](03b_attribute_options.md), Q3 no stale-entry check, `InitVar` pseudo-fields exempt. Implementation notes: [04_execution_log.md](04_execution_log.md).
 
 ## 1. Decisions
 
