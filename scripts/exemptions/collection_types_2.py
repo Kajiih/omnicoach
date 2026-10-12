@@ -353,7 +353,7 @@ CLUSTER = Cluster(
             label="data-model dunder methods exempt from Python signature rules (batch 3)",
             path=FUNCTIONS,
             edits=((
-                '!matches!(func_name, "__init__" | "__new__" | "__call__")',
+                '!matches!(func_name, INIT_METHOD | NEW_METHOD | "__call__")',
                 "false",
             ),),
             cases=("nullable_collection_return::pass::data_model_dunder_exempt",),

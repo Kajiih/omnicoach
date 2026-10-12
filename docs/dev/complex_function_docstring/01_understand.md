@@ -1,7 +1,7 @@
 # Complex function docstring: 01 Understand
 
 > [!IMPORTANT]
-> **Status: PENDING** (lead validation). Batch D, the legacy linter check `ComplexFunctionDocstringRule`.
+> **Status: VALIDATED** (lead, 2026-10-12; implemented). Batch D, the legacy linter check `ComplexFunctionDocstringRule`.
 
 ## 1. The candidate
 

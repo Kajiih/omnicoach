@@ -1,14 +1,16 @@
 //! Python function signatures, parameter extraction, method receivers, and direct scope definitions.
 
+use super::classes::PythonClassInfo;
 use super::docstrings::{PythonDocstring, docstring_of};
 use super::{
     AstNode, DecoratorInfo, ParsedFile, extract_decorators_from_slice, is_protocol_or_abc_class,
     resolve_path_and_terminal_expr,
 };
 use crate::code_lint::ast::span_from_ruff_range;
-use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
+use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{
-    Decorator, Expr, Parameter, ParameterWithDefault, Parameters, Stmt, StmtFunctionDef,
+    Decorator, Expr, Parameter, ParameterWithDefault, Parameters, Stmt, StmtClassDef,
+    StmtFunctionDef,
 };
 use ruff_text_size::Ranged as _;
 
@@ -38,6 +40,8 @@ pub struct PythonParameterInfo<'a> {
     pub type_node: Option<AstNode<'a>>,
     /// Formatted type annotation text.
     pub type_text: Option<String>,
+    /// Default value expression AST node if present (e.g. `None` in `x: int | None = None`).
+    pub default_node: Option<AstNode<'a>>,
     /// Parameter classification kind.
     pub kind: PythonParameterKind,
 }
@@ -57,6 +61,38 @@ impl PythonParameterInfo<'_> {
             PythonParameterKind::VarPositional | PythonParameterKind::VarKeyword
         )
     }
+
+    /// Returns true if the parameter's value changes behavior in ways its name and type
+    /// annotation do not state: `*args` / `**kwargs`, a default of `None`, `True` or `False`, or
+    /// an annotation that includes `None`, `bool` or `Callable`.
+    #[must_use]
+    pub fn is_non_obvious(&self) -> bool {
+        if self.kind == PythonParameterKind::Receiver {
+            return false;
+        }
+        let has_non_obvious_default = self
+            .default_node
+            .as_ref()
+            .is_some_and(|node| matches!(node.text().trim(), "None" | "True" | "False"));
+        self.is_variadic()
+            || has_non_obvious_default
+            || self
+                .type_node
+                .as_ref()
+                .is_some_and(super::annotations::is_non_obvious_parameter_type)
+    }
+
+    /// The parameter name with its leading `*` or `**` when variadic.
+    #[must_use]
+    pub fn display_name(&self) -> String {
+        match self.kind {
+            PythonParameterKind::VarPositional => format!("*{}", self.name),
+            PythonParameterKind::VarKeyword => format!("**{}", self.name),
+            PythonParameterKind::Receiver
+            | PythonParameterKind::Positional
+            | PythonParameterKind::KeywordOnly => self.name.clone(),
+        }
+    }
 }
 
 /// Structured representation of a Python function signature.
@@ -73,10 +109,13 @@ pub struct PythonFunctionSignature<'a> {
     /// True if the function is decorated with an exempt signature decorator
     /// ([`has_exempt_signature_decorator`]).
     pub(super) has_exempt_signature_decorator: bool,
-    /// True if the function is directly enclosed in a `Protocol` or `ABC` class definition.
-    pub(super) is_in_protocol_or_abc_class: bool,
     /// True if the body is a stub ([`is_stub_body`]).
     pub(super) has_stub_body: bool,
+    /// The `class` whose body contains this function when it is the nearest enclosing `def` or
+    /// `class`.
+    pub(super) enclosing_class: Option<&'a StmtClassDef>,
+    /// The `def` whose body contains this one when it is the nearest enclosing `def` or `class`.
+    pub(super) enclosing_function: Option<&'a StmtFunctionDef>,
     /// The parsed definition, for analyses of the body.
     pub(super) definition: &'a StmtFunctionDef,
 }
@@ -96,7 +135,10 @@ impl PythonFunctionSignature<'_> {
     /// class.
     #[must_use]
     pub fn is_exempt_from_signature_rules(&self) -> bool {
-        self.has_imposed_signature() || self.is_in_protocol_or_abc_class
+        self.has_imposed_signature()
+            || self
+                .enclosing_class
+                .is_some_and(|class_def| is_protocol_or_abc_class(class_def, self.name_node.file))
     }
 
     /// Returns true if the function is exempt from body-usage parameter rules (signature-exempt
@@ -104,6 +146,66 @@ impl PythonFunctionSignature<'_> {
     #[must_use]
     pub fn is_exempt_from_body_usage_rules(&self) -> bool {
         self.is_exempt_from_signature_rules() || self.has_stub_body
+    }
+
+    /// Returns true if the function is decorated with `@override` (`typing.override` or
+    /// `typing_extensions.override`), resolved through the file's imports.
+    #[must_use]
+    pub fn has_override_decorator(&self) -> bool {
+        has_override_decorator(&self.definition.decorator_list, self.name_node.file)
+    }
+
+    /// Returns true if the function is defined in another function's body (its nearest
+    /// enclosing `def` or `class` is a `def`). Methods of a class defined in a function are not
+    /// nested.
+    #[must_use]
+    pub const fn is_nested(&self) -> bool {
+        self.enclosing_function.is_some()
+    }
+
+    /// Returns true if the function is a class constructor (`__init__` or `__new__`) defined
+    /// directly in a class body.
+    #[must_use]
+    pub fn is_constructor(&self) -> bool {
+        self.enclosing_class.is_some() && matches!(self.name.as_str(), INIT_METHOD | NEW_METHOD)
+    }
+
+    /// Returns true if the function is a constructor (`__init__` or `__new__`) whose enclosing
+    /// class has a docstring.
+    #[must_use]
+    pub fn is_documented_by_enclosing_class(&self) -> bool {
+        self.is_constructor()
+            && self
+                .enclosing_class()
+                .is_some_and(|class| class.docstring.is_some())
+    }
+
+    /// Returns true if the function is documented elsewhere, so docstring rules skip it: a
+    /// data-model dunder method other than `__init__`, `__new__`, and `__call__` (documented by
+    /// the data model), an `@override` method (documented on the base method), or a
+    /// `@<property>.setter` / `@<property>.deleter` accessor (documented on the getter).
+    #[must_use]
+    pub fn is_exempt_from_docstring_rules(&self) -> bool {
+        is_exempt_dunder_method(&self.name)
+            || extract_decorators_from_slice(&self.definition.decorator_list, self.name_node.file)
+                .iter()
+                .any(|decorator| {
+                    decorator.matches_any(OVERRIDE_DECORATOR_PATHS)
+                        || decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])
+                })
+    }
+
+    /// Returns true if the function returns or yields a positional tuple of at least two
+    /// elements: either by its return annotation (`tuple[A, B, ...]` / `Tuple[A, B, ...]` without
+    /// `...`, including inside unions, `Awaitable`/`Coroutine` and generator yield types) or,
+    /// when unannotated, by a `return` or `yield` of a tuple display of at least two elements in
+    /// the function's own scope.
+    #[must_use]
+    pub fn returns_positional_tuple(&self) -> bool {
+        self.return_type_node.as_ref().map_or_else(
+            || body_returns_or_yields_tuple_display(&self.definition.body),
+            super::annotations::is_positional_tuple_return_type,
+        )
     }
 }
 
@@ -113,10 +215,22 @@ impl<'a> PythonFunctionSignature<'a> {
     pub fn docstring(&self) -> Option<PythonDocstring<'a>> {
         docstring_of(&self.definition.body, self.name_node.file)
     }
+
+    /// The class whose body directly contains this function (when that `class` is its nearest
+    /// enclosing `def` or `class`), or `None` for module-level and nested functions.
+    #[must_use]
+    pub fn enclosing_class(&self) -> Option<PythonClassInfo<'a>> {
+        self.enclosing_class
+            .map(|class_def| PythonClassInfo::from_ast(class_def, self.name_node.file))
+    }
 }
 
 const SELF_PARAMETER: &str = "self";
+const INIT_METHOD: &str = "__init__";
+const NEW_METHOD: &str = "__new__";
 const NOT_IMPLEMENTED_ERROR: &str = "NotImplementedError";
+/// The attribute of a property setter decorator (`@<property>.setter`).
+const SETTER_ATTRIBUTE: &str = "setter";
 const OVERRIDE_DECORATOR_PATHS: &[&str] =
     &["override", "typing.override", "typing_extensions.override"];
 const EXEMPT_SIGNATURE_DECORATOR_PATHS: &[&str] = &[
@@ -168,27 +282,37 @@ pub(super) fn method_receiver_name_ast(
 pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSignature<'_>> {
     struct SignatureVisitor<'a> {
         file: &'a ParsedFile,
-        /// True while directly inside a `Protocol` or `ABC` class body (not a nested `def`).
-        in_protocol_or_abc_class: bool,
+        /// The `class` being walked while it is the nearest enclosing `def` or `class`.
+        enclosing_class: Option<&'a StmtClassDef>,
+        /// The `def` being walked while it is the nearest enclosing `def` or `class`.
+        enclosing_function: Option<&'a StmtFunctionDef>,
         signatures: Vec<PythonFunctionSignature<'a>>,
     }
 
     impl<'a> SourceOrderVisitor<'a> for SignatureVisitor<'a> {
         fn visit_stmt(&mut self, statement: &'a Stmt) {
-            let enclosing = self.in_protocol_or_abc_class;
+            let enclosing_class = self.enclosing_class;
+            let enclosing_function = self.enclosing_function;
             match statement {
                 Stmt::FunctionDef(func_def) => {
-                    self.signatures
-                        .push(function_signature(func_def, self.file, enclosing));
-                    self.in_protocol_or_abc_class = false;
+                    self.signatures.push(function_signature(
+                        func_def,
+                        self.file,
+                        enclosing_class,
+                        enclosing_function,
+                    ));
+                    self.enclosing_class = None;
+                    self.enclosing_function = Some(func_def);
                 }
                 Stmt::ClassDef(class_def) => {
-                    self.in_protocol_or_abc_class = is_protocol_or_abc_class(class_def, self.file);
+                    self.enclosing_class = Some(class_def);
+                    self.enclosing_function = None;
                 }
                 _ => {}
             }
             walk_stmt(self, statement);
-            self.in_protocol_or_abc_class = enclosing;
+            self.enclosing_class = enclosing_class;
+            self.enclosing_function = enclosing_function;
         }
     }
 
@@ -197,19 +321,21 @@ pub fn extract_function_signatures(file: &ParsedFile) -> Vec<PythonFunctionSigna
     };
     let mut visitor = SignatureVisitor {
         file,
-        in_protocol_or_abc_class: false,
+        enclosing_class: None,
+        enclosing_function: None,
         signatures: Vec::new(),
     };
     visitor.visit_body(&parsed.syntax().body);
     visitor.signatures
 }
 
-/// Builds the signature of `func_def`; `is_in_protocol_or_abc_class` is true when it is defined
-/// directly in a `Protocol` or `ABC` class body.
+/// Builds the signature of `func_def`; `enclosing_class` and `enclosing_function` name the
+/// nearest enclosing `class` or `def` whose body contains `func_def`.
 pub(super) fn function_signature<'a>(
     func_def: &'a StmtFunctionDef,
     file: &'a ParsedFile,
-    is_in_protocol_or_abc_class: bool,
+    enclosing_class: Option<&'a StmtClassDef>,
+    enclosing_function: Option<&'a StmtFunctionDef>,
 ) -> PythonFunctionSignature<'a> {
     let decorators = extract_decorators_from_slice(&func_def.decorator_list, file);
     PythonFunctionSignature {
@@ -221,8 +347,9 @@ pub(super) fn function_signature<'a>(
             .as_ref()
             .map(|ret| AstNode::from_span(file, span_from_ruff_range(ret.range()))),
         has_exempt_signature_decorator: has_exempt_signature_decorator(&decorators),
-        is_in_protocol_or_abc_class,
         has_stub_body: is_stub_body(&func_def.body, &file.source),
+        enclosing_class,
+        enclosing_function,
         definition: func_def,
     }
 }
@@ -234,7 +361,7 @@ pub(super) fn function_signature<'a>(
 fn has_exempt_signature_decorator(decorators: &[DecoratorInfo]) -> bool {
     decorators.iter().any(|decorator| {
         decorator.matches_any(EXEMPT_SIGNATURE_DECORATOR_PATHS)
-            || decorator.is_attribute_named(&["register", "setter"])
+            || decorator.is_attribute_named(&["register", SETTER_ATTRIBUTE])
     })
 }
 
@@ -352,12 +479,17 @@ fn build_parameter_with_default<'a>(
         .map(|ann| span_from_ruff_range(ann.range()));
     let type_text = type_span.map(|span| file.source[span.start..span.end].to_string());
     let type_node = type_span.map(|span| AstNode::from_span(file, span));
+    let default_node = param_with_default
+        .default
+        .as_ref()
+        .map(|default| AstNode::from_span(file, span_from_ruff_range(default.range())));
 
     PythonParameterInfo {
         name: parameter.name.id.to_string(),
         name_node: AstNode::from_span(file, span_from_ruff_range(parameter.name.range)),
         type_node,
         type_text,
+        default_node,
         kind,
     }
 }
@@ -379,6 +511,7 @@ fn build_variadic_parameter<'a>(
         name_node: AstNode::from_span(file, span_from_ruff_range(parameter.name.range)),
         type_node,
         type_text,
+        default_node: None,
         kind,
     }
 }
@@ -449,5 +582,57 @@ fn is_exempt_dunder_method(func_name: &str) -> bool {
     func_name.starts_with("__")
         && func_name.ends_with("__")
         && func_name.len() > 4
-        && !matches!(func_name, "__init__" | "__new__" | "__call__")
+        && !matches!(func_name, INIT_METHOD | NEW_METHOD | "__call__")
+}
+
+/// Returns true if `body` (without entering nested functions, classes or lambdas) has a `return`
+/// or `yield` of a tuple display of at least two elements.
+fn body_returns_or_yields_tuple_display(body: &[Stmt]) -> bool {
+    struct TupleResultVisitor {
+        found: bool,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for TupleResultVisitor {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if self.found {
+                return;
+            }
+            match statement {
+                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,
+                Stmt::Return(return_statement) => {
+                    if let Some(Expr::Tuple(tuple)) = return_statement.value.as_deref()
+                        && tuple.elts.len() >= 2
+                    {
+                        self.found = true;
+                        return;
+                    }
+                }
+                _ => {}
+            }
+            walk_stmt(self, statement);
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if self.found {
+                return;
+            }
+            match expr {
+                Expr::Lambda(_) => return,
+                Expr::Yield(yield_expr) => {
+                    if let Some(Expr::Tuple(tuple)) = yield_expr.value.as_deref()
+                        && tuple.elts.len() >= 2
+                    {
+                        self.found = true;
+                        return;
+                    }
+                }
+                _ => {}
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut visitor = TupleResultVisitor { found: false };
+    visitor.visit_body(body);
+    visitor.found
 }

@@ -1,7 +1,7 @@
 # Trivial override docstring: 03 Design
 
 > [!IMPORTANT]
-> **Status: PENDING** lead validation. Verdict: **split and narrow**. The legacy linter's line-count check is replaced by three rules on what an `@override` docstring hides: `deferral-docstring`, `copied-base-docstring` and `partial-override-docstring`.
+> **Status: VALIDATED** (lead, 2026-10-12; implemented). Verdict: **split and narrow**. The legacy linter's line-count check is replaced by three rules on what an `@override` docstring hides: `deferral-docstring`, `copied-base-docstring` and `partial-override-docstring`. Lead answers to §8: Q1 accept the double report, Q2 no entry comparison, Q3 ship Rules 2 and 3 now, Q4 default `ban` for all three, Q5 three rules, Q6 `docstrings` topic added. Implementation deviations: `04_execution_log.md`.
 
 Inputs: `01_understand.md` (philosophy §5: no docstring, or a complete one; scope §6: `@override` only) and `02_references.md` §3 (measurements).
 
@@ -118,7 +118,7 @@ Each gets one dedicated, mutation-tested `pass` case.
 | E2 | 2 | Same summary paragraph, different further paragraphs | compare summaries only |
 | E3 | 2 | Adapted copy with a changed key word (`"Return a new datetime …"` vs `"Return a new date …"`) | add a token-overlap threshold |
 | E4 | 2 | Override is a word-prefix of the inherited docstring but not its whole summary paragraph (cuts a sentence: a narrowing) | match on "override is a prefix of base" |
-| E5 | 2, 3 | Nearest in-file ancestor defining the method has no docstring, and no further ancestor documents it | treat an undocumented definition as an empty docstring |
+| E5 | 2, 3 | Nearest in-file ancestor defining the method has no docstring, and no further ancestor documents it | None (lead, 2026-10-12): listed as unmutated, since no lookup edit makes a docstring appear; the skip is protected by the `undocumented_nearer_ancestor_skipped` `fail` cases and the mutation "stop at the nearest ancestor defining the method" |
 | E6 | 2, 3 | Base class not resolvable in the file: imported, written as `module.Base`, or defined *after* the subclass | resolve bases by name anywhere in the file |
 | E7 | 1 | Deferral phrase followed by more text (`"See base class. Also invalidates the cache."`), or a sentence that only starts like one (`"Override this method to …"`) | match the phrase as a prefix |
 | E8 | 1 | Named reference to a class that is not a base (`"See :meth:`Pytester.spawn`."`) | let `{base}` match any dotted name |
@@ -140,9 +140,10 @@ Not exemptions but required `pass` regressions: an `@override` method with no do
 | `PythonClassInfo::methods()`: the `def` / `async def` statements directly in the class body, in source order | lead | Adopted batch-wide; replaces the planned `constructor()` (that is `methods()` filtered to a non-`@overload` `__init__`) |
 | `PythonDocstring::normalized()` (D7: cleandoc dedent, whitespace collapse, case-fold, trailing-period strip), `PythonDocstring::summary_paragraph()`, `PythonDocstring::summary()` and `DocstringEntry::bare_name()` | lead (`src/code_lint/ast/python/docstrings.rs`) | Adopted. Rule 3 uses `summary()` (E14), `bare_name()` (E16), `normalized()` and `summary_paragraph()` (E15) |
 | `PythonDocstring::sections()`, `DocstringSectionKind` | existing (`docstrings.rs`) | Used by Rule 3 as is |
-| `PythonFunctionSignature::has_override_decorator()`: public, import-resolved, same `OVERRIDE_DECORATOR_PATHS` | this worker, Phase 4 | Proposed |
-| `local_base_classes(classes, index) -> Vec<usize>` (D10): for each simple-name base, the last class of that name defined before class `index` | this worker, Phase 4 | Proposed |
-| `inherited_method_docstring(classes, index, name)` (D9, D11): the first in-file ancestor documenting `name`, with that docstring | this worker, Phase 4 | Proposed. Shared by Rules 2 and 3, which live in separate files, so it goes in `src/code_lint/ast/python/classes.rs` |
+| `PythonFunctionSignature::has_override_decorator()`: public, import-resolved, same `OVERRIDE_DECORATOR_PATHS` | this worker, Phase 4 | Implemented |
+| `local_base_classes(classes, index) -> Vec<usize>` (D10): for each simple-name base, the last class of that name defined before class `index` | this worker, Phase 4 | Implemented |
+| `local_ancestors(classes, index) -> Vec<usize>` (D9): the in-file ancestors, depth-first, left to right, each once | this worker, Phase 4 | Implemented (lead, 2026-10-12); also used by Rule 1's `{base}` |
+| `inherited_method_docstring(classes, index, name)` (D9, D11): the first in-file ancestor documenting `name`, with that docstring | this worker, Phase 4 | Implemented. Shared by Rules 2 and 3, which live in separate files, so it goes in `src/code_lint/ast/python/classes.rs` |
 
 The Rule 1–specific stripping (backticks, Sphinx roles, `()`) stays in the rule. `{base}` reads the raw base texts from `PythonBaseClass::name`.
 

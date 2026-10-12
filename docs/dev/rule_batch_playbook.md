@@ -30,14 +30,14 @@
 - **Mutation check per exemption.** Give each named exemption one dedicated `pass` case, add an entry for it to [scripts/exemption_mutations.py](../../scripts/exemption_mutations.py) (a source edit that disables the exemption, plus the case), and run the script. It also fails when a listed case no longer exists or a `pass` case of a covered rule is unlisted. Do not keep the harness in scratch space: the legacy harness was lost, and the declaration-order batch later found 7 cases that still passed with their exemption removed.
 - Know the harness: `rule_test!` also runs every `fail` case as `{code}\n{code}` in one module and expects exactly the two copies' spans. The second copy redefines every top-level name, so a rule that reasons about the other definitions in a scope (declaration order, redefinitions, same-name grouping) must plan for it in Phase 3. `call-before-definition` bent its semantics to pass (epochs), and a simpler same-name merge had to be reverted. Open design problem: "Rule test harness" in [ROADMAP.md](../../ROADMAP.md).
 
-### 5. Consolidate (lead, new phase)
+### 5. Consolidate (lead, mandatory holistic synthesis)
 
-Parallel workers cannot see each other's helpers, so a consolidation pass is mandatory before review:
+Parallel workers design and implement each rule from that rule's perspective alone. Left as stitched-together worker outputs, a batch bloats the framework with narrow helpers and leaves cross-rule plumbing inside rule files. Before review, the lead must re-architect the shared `ast/`/`semantic/`/`command_lint/` layers and the rules together so the result is as cohesive, idiomatic and minimal as if all rules had been designed as one system—improving the framework's abstractions at the end of the batch rather than accreting around them:
 
-1. Diff all new helpers and group them by structural fact.
-2. Merge duplicates into one helper per fact, reusing pre-existing helpers where they exist.
-3. Split modules that grew past readability (the legacy linter added ~2.4k lines to `ast/python.rs`).
-4. Re-run `scripts/exemption_mutations.py`: refactors can silently drop an exemption or leave a case testing nothing.
+1. **Audit both the shared layers and `rules/` across the batch.** Look beyond duplicate free functions in `ast/`: inspect the rule files for shared domain concepts implemented locally, ad-hoc `SourceSpan` join tables that stitch together separately extracted AST items because a structural link was missing, and partition predicates duplicated between sibling rules.
+2. **Elevate shared domain concepts onto the core types.** Express each domain concept once on the shared AST, semantic, or command types (whether cross-language abstractions like `CallableItem` / `TypeMethod` or language-specific nodes across Rust, Python, Markdown, and shell commands) so every rule's check is a direct, readable composition of domain predicates with no local plumbing. When two workers implemented the same concept with slightly different edge cases, unify them on the stronger semantics.
+3. **Refactor and simplify pre-existing abstractions.** Use the batch's broader view to replace narrow one-off flags on existing types with the underlying structural relationship from which both old and new queries derive, and split modules that grew past readability.
+4. **Sync and re-run `scripts/exemption_mutations.py`.** When an exemption moves from rule files into a shared helper, point its mutation at the shared helper (covering all rules that rely on it) and re-run the script to verify that no exemption was weakened or orphaned.
 
 ### 6. Review (two reviewers, whole batch)
 

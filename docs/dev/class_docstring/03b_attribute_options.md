@@ -1,7 +1,7 @@
 # Class docstring completeness: 03b Options for constructor arguments stored on `self`
 
 > [!IMPORTANT]
-> **Status: PENDING** (user decision on Q2 of [03_design.md](03_design.md)). Question: must a constructor argument stored on `self` also be listed under `Attributes:`?
+> **Status: VALIDATED** (lead, 2026-10-12; implemented). The user chose **option A**: every public attribute, constructor arguments stored on `self` included, goes under the class docstring's `Attributes:`; an `Attributes:` section in the `__init__` docstring does not count. Question was: must a constructor argument stored on `self` also be listed under `Attributes:`?
 
 Inputs: [01_understand.md](01_understand.md), [02_references.md](02_references.md), [03_design.md](03_design.md) (D9, Q2), [complex_function_docstring/03_design.md](../complex_function_docstring/03_design.md) (`undocumented-parameter`: D14, D17, E27), Google pyguide §3.8.3 and §3.8.4, the legacy linter `ClassDocstringRule` (`scratch/legacy_reference/legacy_lints.py`, lines 637–698). Markers: **[run]** = probed in this study (Sphinx 8 + Napoleon, pydoclint 0.11.0 via `uv`), **[U]** = not verified.
 

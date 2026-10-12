@@ -2,6 +2,7 @@
 
 mod annotations;
 mod classes;
+mod complexity;
 mod docstrings;
 mod format_strings;
 mod functions;
@@ -15,12 +16,13 @@ mod strings;
 pub use self::annotations::{
     AnnotationTraversalDepth, CollectionKind, CollectionShape, PythonCollectionType,
     PythonReturnTypeBranch, PythonReturnTypeUnion, collect_collection_types, collection_display,
-    collection_type, return_type_union,
+    collection_type, generator_yield_type, return_type_union,
 };
 pub use self::classes::{
-    PythonAnnotatedAttribute, PythonBaseClass, PythonClassInfo, PythonFieldAfterMethod,
-    PythonInstanceAttributeAnnotation, collect_class_attributes, collect_fields_after_methods,
-    collect_instance_attribute_annotations, extract_classes,
+    PythonAnnotatedAttribute, PythonAttributeDefinition, PythonBaseClass, PythonClassInfo,
+    PythonFieldAfterMethod, PythonInstanceAttributeAnnotation, collect_class_attributes,
+    collect_fields_after_methods, collect_instance_attribute_annotations, extract_classes,
+    inherited_method_docstring, local_ancestors, local_base_classes,
 };
 pub(super) use self::classes::{collect_callable_scopes, collect_type_method_scopes};
 pub use self::docstrings::{
@@ -1136,7 +1138,7 @@ mod tests {
     fn test_is_in_protocol_or_abc_class(#[case] source: &str, #[case] expected: bool) {
         let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
-        assert_eq!(sigs[0].is_in_protocol_or_abc_class, expected);
+        assert_eq!(sigs[0].is_exempt_from_signature_rules(), expected);
     }
 
     /// Collects the top-level collection types of the annotation of the first parameter of the

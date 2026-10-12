@@ -1,7 +1,7 @@
 # Trivial override docstring: 02 References
 
 > [!IMPORTANT]
-> **Status: PENDING** lead validation.
+> **Status: VALIDATED** (lead, 2026-10-12; implemented).
 
 ## 1. Existing tools
 

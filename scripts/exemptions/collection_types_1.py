@@ -298,7 +298,7 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    '!matches!(func_name, "__init__" | "__new__" | "__call__")',
+                    '!matches!(func_name, INIT_METHOD | NEW_METHOD | "__call__")',
                     "false",
                 ),
             ),

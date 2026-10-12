@@ -1,7 +1,7 @@
 # Repeated docstring type: 02 References
 
 > [!NOTE]
-> **Status: PENDING (lead validation).**
+> **Status: VALIDATED (lead, 2026-10-12; implemented).**
 > Quotes are verbatim from the copies in the lead's scratch directory (Google pyguide, pydoclint `violation_codes.md`, `config_options.md`, `checking_class_attributes.md`) and from the Pylint extensions page fetched on 2026-10-11. [U] marks what was not verified against a page or a tool run.
 
 ## 1. Google Python Style Guide

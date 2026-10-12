@@ -441,7 +441,7 @@ const JUDGEMENT_WORDS: [&str; 5] = ["banned", "forbidden", "discouraged", "illeg
 const ABBREVIATIONS: [&str; 2] = ["e.g.", "i.e."];
 /// The placeholders every template draws from (guide §3); a rule may also use the `snake_case`
 /// of its own count option keys.
-const PLACEHOLDERS: [&str; 19] = [
+const PLACEHOLDERS: [&str; 22] = [
     "callee",
     "caller",
     "function",
@@ -459,8 +459,11 @@ const PLACEHOLDERS: [&str; 19] = [
     "rule",
     "revision",
     "count",
+    "metric",
     "section",
     "phrase",
+    "sections",
+    "parameters",
 ];
 
 /// The fallback text, if any, and every language override of a template field.

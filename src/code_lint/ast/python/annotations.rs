@@ -33,6 +33,9 @@ const TYPE_DEFAULTDICT: &str = "defaultdict";
 const TYPE_TYPING_DEFAULTDICT: &str = "DefaultDict";
 const TYPE_COUNTER: &str = "Counter";
 const ORDERED_DICT_CONSTRUCTOR: &str = "OrderedDict";
+const TUPLE_CONSTRUCTOR: &str = "tuple";
+const TYPING_TUPLE_CONSTRUCTOR: &str = "Tuple";
+const TYPE_CALLABLE: &str = "Callable";
 
 /// Transparent type wrappers whose all type arguments preserve the enclosing variance.
 const TRANSPARENT_UNION_WRAPPERS: &[&str] = &["Optional", "Union"];
@@ -81,7 +84,12 @@ const READ_ONLY_COLLECTION_ABCS: &[&str] = &[
 ];
 
 /// Immutable collection constructors in `builtins` and `typing`.
-const IMMUTABLE_COLLECTIONS: &[&str] = &["tuple", "Tuple", "frozenset", "FrozenSet"];
+const IMMUTABLE_COLLECTIONS: &[&str] = &[
+    TUPLE_CONSTRUCTOR,
+    TYPING_TUPLE_CONSTRUCTOR,
+    "frozenset",
+    "FrozenSet",
+];
 
 /// What a standard-library collection type lets its holder do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -287,12 +295,12 @@ fn collect_collection_types_expr(
                             collect_collection_types_expr(first_arg, file, depth, out);
                         }
                     }
-                    "tuple" | "Tuple" => {
+                    TUPLE_CONSTRUCTOR | TYPING_TUPLE_CONSTRUCTOR => {
                         for arg in &type_args {
                             collect_collection_types_expr(arg, file, depth, out);
                         }
                     }
-                    TYPE_MAPPING | "Callable" => {
+                    TYPE_MAPPING | TYPE_CALLABLE => {
                         if let Some(second_arg) = type_args.get(1) {
                             collect_collection_types_expr(second_arg, file, depth, out);
                         }
@@ -418,6 +426,79 @@ pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnType
     }
 }
 
+/// Iterator and generator types whose first type argument is the yielded item type.
+const GENERATOR_TYPES: &[&str] = &[
+    "Iterator",
+    "Iterable",
+    "Generator",
+    "AsyncIterator",
+    "AsyncIterable",
+    "AsyncGenerator",
+];
+
+/// The yielded item type of iterator or generator annotation `return_type_node`.
+///
+/// It is the first type argument of `Iterator[...]`, `Iterable[...]`, `Generator[...]` or their
+/// `Async` forms from `typing`, `typing_extensions` or `collections.abc`, resolved through the
+/// file's imports.
+#[must_use]
+pub fn generator_yield_type<'a>(return_type_node: &AstNode<'a>) -> Option<AstNode<'a>> {
+    let file = return_type_node.file;
+    let expr = find_expr_at_span(file.py_module()?.syntax(), return_type_node.span())?;
+    let (base_node, type_args) = extract_generic_base_and_args(expr)?;
+    let (base_path, base_terminal) = resolved_path_and_terminal_expr(base_node, file)?;
+    if !is_std_type_constructor(&base_path, &base_terminal, GENERATOR_TYPES) {
+        return None;
+    }
+    let item_type = type_args.first()?;
+    Some(AstNode::from_span(
+        file,
+        span_from_ruff_range(item_type.range()),
+    ))
+}
+
+/// Returns true if `type_node` (flattened across `|`, `Union[...]`, `Optional[...]` and
+/// `Annotated[T, ...]`) includes `None`, `bool` or `Callable`.
+#[must_use]
+pub fn is_non_obvious_parameter_type(type_node: &AstNode<'_>) -> bool {
+    let file = type_node.file;
+    let Some(parsed) = file.py_module() else {
+        return false;
+    };
+    let Some(expr) = find_expr_at_span(parsed.syntax(), type_node.span()) else {
+        return false;
+    };
+    let mut has_none = false;
+    let mut branches = Vec::new();
+    collect_union_branches_expr(expr, file, &mut has_none, &mut branches);
+    has_none
+        || branches
+            .into_iter()
+            .any(|branch| is_bool_or_callable_type_expr(branch, file))
+}
+
+/// Returns true if `return_type_node` (or its yielded type when it is a generator or iterator
+/// annotation, and after unwrapping `Awaitable`, `Coroutine`, `Annotated` and unions) has a
+/// fixed-length tuple branch `tuple[A, B, ...]` / `Tuple[A, B, ...]` of at least two positions
+/// (without `...`).
+#[must_use]
+pub fn is_positional_tuple_return_type(return_type_node: &AstNode<'_>) -> bool {
+    let target = generator_yield_type(return_type_node).unwrap_or(*return_type_node);
+    return_type_union(&target).branches.iter().any(|branch| {
+        branch.collection.as_ref().is_some_and(|collection| {
+            matches!(
+                collection.name.as_str(),
+                TUPLE_CONSTRUCTOR | TYPING_TUPLE_CONSTRUCTOR
+            )
+        }) && branch.type_arguments.as_ref().is_some_and(|arguments| {
+            arguments.len() >= 2
+                && arguments
+                    .iter()
+                    .all(|argument| argument.text().trim() != "...")
+        })
+    })
+}
+
 /// Unwraps outer return-annotation envelopes (`Annotated[T, ...]`, `Awaitable[T]`, and
 /// `Coroutine[YieldT, SendT, ReturnT]`).
 fn unwrap_return_envelope_expr<'a>(mut current: &'a Expr, file: &ParsedFile) -> &'a Expr {
@@ -494,6 +575,15 @@ fn collect_union_branches_expr<'a>(
     }
 }
 
+/// Returns true if `expr` is the `bool` builtin or a `Callable` constructor (optionally
+/// subscripted), resolved through the file's imports.
+fn is_bool_or_callable_type_expr(expr: &Expr, file: &ParsedFile) -> bool {
+    let base = extract_generic_base_and_args(expr).map_or(expr, |(base_node, _)| base_node);
+    resolved_path_and_terminal_expr(base, file).is_some_and(|(path, terminal)| {
+        is_std_type_constructor(&path, &terminal, &["bool", TYPE_CALLABLE])
+    })
+}
+
 /// Unwraps outer `Annotated[T, ...]` wrappers from `type_expr`.
 fn unwrap_annotated_expr<'a>(mut current: &'a Expr, file: &ParsedFile) -> &'a Expr {
     while let Some((base_node, type_args)) = extract_generic_base_and_args(current)
@@ -567,4 +657,45 @@ fn is_std_type_constructor_prefix(path: &str, terminal: &str) -> bool {
                 TYPING_PREFIX | TYPING_EXTENSIONS_PREFIX | "collections.abc." | "builtins."
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::code_lint::ast::python::extract_function_signatures;
+    use crate::diagnostic::Language;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::iterator(
+        "from typing import Iterator\ndef f() -> Iterator[str]: pass",
+        Some("str")
+    )]
+    #[case::abc_alias(
+        "import collections.abc as abc\ndef f() -> abc.AsyncGenerator[bytes, None]: pass",
+        Some("bytes")
+    )]
+    #[case::generator(
+        "def f() -> Generator[tuple[int, str], None, None]: pass",
+        Some("tuple[int, str]")
+    )]
+    #[case::not_a_generator("def f() -> list[str]: pass", None)]
+    #[case::unsubscripted("def f() -> Iterator: pass", None)]
+    #[case::local_class("class Iterator: pass\ndef f() -> Iterator[str]: pass", None)]
+    fn generator_yield_type_is_the_first_type_argument(
+        #[case] source: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let file = ParsedFile::new(source, Language::Python);
+        let signatures = extract_function_signatures(&file);
+        let return_type_node = signatures[0].return_type_node.as_ref().expect("annotation");
+        let yield_type = generator_yield_type(return_type_node);
+        assert_eq!(
+            yield_type
+                .as_ref()
+                .map(|node| node.text().into_owned())
+                .as_deref(),
+            expected
+        );
+    }
 }

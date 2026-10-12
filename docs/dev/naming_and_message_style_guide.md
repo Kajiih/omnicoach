@@ -104,8 +104,11 @@ Templates use a fixed vocabulary so the same thing has the same name in every me
 | `{rule}` | A rule name inside a suppression directive | `` `{rule}` `` |
 | `{revision}` | A VCS revision | `` `{revision}` `` |
 | `{count}` | The observed number | bare |
+| `{metric}` | What `{count}` measures, when a rule reports one of several measures (`statement count`, `cognitive complexity`) | bare |
 | `{section}` | A docstring section header as written, without its colon (`Returns`, `Keyword Args`) | `` `{section}:` `` |
 | `{phrase}` | Prose words quoted from a docstring (`Returns`, `Optional`, `or None`) | `` `{phrase}` `` |
+| `{sections}` | Canonical docstring section headers, each with its colon and in backticks, joined by "or" (`` `Args:` or `Returns:` ``) | bare |
+| `{parameters}` | Parameter names, each in backticks, joined by commas (`` `dry_run`, `*args` ``) | bare |
 | `{max_assertions}`, `{min_positional_parameters}`, … | A threshold; always the snake_case of the option key | bare |
 
 The vocabulary grows the same way as the verb list: when a message needs a thing none of these names, add a row here and an entry in the vocabulary test, in the same change. Do not reuse an existing placeholder for a different meaning to avoid adding one.

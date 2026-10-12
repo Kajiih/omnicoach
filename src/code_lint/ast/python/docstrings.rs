@@ -5,8 +5,11 @@ use crate::code_lint::ast::span_from_ruff_range;
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::Ranged as _;
+use std::collections::HashSet;
 
 const QUOTE_CHARS: &[char] = &['"', '\''];
+const RESULT_SUMMARY_VERBS: &[&str] = &["return", "returns", "yield", "yields"];
+const OPTIONAL_MARKER: &str = "optional";
 
 /// The docstring of a Python module, class, or function: the string literal that is the first
 /// statement of its body.
@@ -22,13 +25,7 @@ pub struct PythonDocstring<'a> {
     lines_match_source: bool,
 }
 
-impl<'a> PythonDocstring<'a> {
-    /// The string literal expression node.
-    #[must_use]
-    pub const fn node(&self) -> AstNode<'a> {
-        self.node
-    }
-
+impl PythonDocstring<'_> {
     /// The docstring value after escape processing, without indentation removal.
     #[must_use]
     pub fn text(&self) -> &str {
@@ -48,6 +45,23 @@ impl<'a> PythonDocstring<'a> {
     #[must_use]
     pub fn sections(&self) -> Vec<DocstringSection> {
         parse_google_sections(&self.text)
+    }
+
+    /// Returns true if the docstring contains at least one section of `kind`.
+    #[must_use]
+    pub fn has_section(&self, kind: DocstringSectionKind) -> bool {
+        self.sections().iter().any(|section| section.kind == kind)
+    }
+
+    /// The `name` of every entry across all sections of `kind`.
+    #[must_use]
+    pub fn section_entry_names(&self, kind: DocstringSectionKind) -> HashSet<String> {
+        self.sections()
+            .into_iter()
+            .filter(|section| section.kind == kind)
+            .flat_map(|section| section.entries)
+            .map(|entry| entry.name)
+            .collect()
     }
 
     /// The first non-blank line, without surrounding whitespace.
@@ -77,6 +91,50 @@ impl<'a> PythonDocstring<'a> {
     #[must_use]
     pub fn normalized(&self) -> String {
         normalize_docstring_text(&self.text)
+    }
+
+    /// Returns true if the docstring, once normalized, equals the normalized summary paragraph of
+    /// `other`.
+    #[must_use]
+    pub fn copies_summary_of(&self, other: &Self) -> bool {
+        self.normalized() == normalize_docstring_text(&other.summary_paragraph())
+    }
+
+    /// Returns true if the docstring has a `Returns:` or `Yields:` section.
+    #[must_use]
+    pub fn has_result_section(&self) -> bool {
+        self.sections().iter().any(|section| {
+            matches!(
+                section.kind,
+                DocstringSectionKind::Returns | DocstringSectionKind::Yields
+            )
+        })
+    }
+
+    /// Returns true if the summary opens with `Return`, `Returns`, `Yield`, or `Yields`
+    /// (case-insensitive).
+    #[must_use]
+    pub fn has_result_verb_summary(&self) -> bool {
+        self.summary().is_some_and(|summary| {
+            let first_token = summary.split_whitespace().next().unwrap_or_default();
+            let word = first_token.trim_matches(|character: char| !character.is_alphabetic());
+            RESULT_SUMMARY_VERBS.contains(&word.to_ascii_lowercase().as_str())
+        })
+    }
+
+    /// Returns true if the docstring describes the function's return or yield value: either via a
+    /// `Returns:` / `Yields:` section or via a summary opening with `Return(s)` or `Yield(s)`.
+    #[must_use]
+    pub fn describes_result(&self) -> bool {
+        self.has_result_section() || self.has_result_verb_summary()
+    }
+}
+
+impl<'a> PythonDocstring<'a> {
+    /// The string literal expression node.
+    #[must_use]
+    pub const fn node(&self) -> AstNode<'a> {
+        self.node
     }
 
     /// The source node of line `line_index` (0-based, as in [`DocstringLine::index`]), without
@@ -261,6 +319,26 @@ impl DocstringEntry {
     #[must_use]
     pub fn bare_name(&self) -> &str {
         self.name.trim_start_matches('*')
+    }
+
+    /// The parenthesized slot if it is bare `optional` (case-insensitive), as written.
+    #[must_use]
+    pub fn optional_marker(&self) -> Option<&str> {
+        self.type_text
+            .as_deref()
+            .filter(|slot| slot.eq_ignore_ascii_case(OPTIONAL_MARKER))
+    }
+
+    /// The parenthesized type in `name (type): …`, or `None` when absent or when the
+    /// parenthetical is only `optional` or a `default …` note.
+    #[must_use]
+    pub fn declared_type(&self) -> Option<&str> {
+        let type_text = self.type_text.as_deref()?;
+        let lowercase = type_text.to_ascii_lowercase();
+        let is_default_note = lowercase.strip_prefix("default").is_some_and(|rest| {
+            !rest.starts_with(|character: char| character.is_alphanumeric() || character == '_')
+        });
+        (lowercase != OPTIONAL_MARKER && !is_default_note).then_some(type_text)
     }
 }
 
@@ -660,5 +738,41 @@ mod tests {
             docstring.line_node(entry_line).span(),
             docstring.node().span()
         );
+    }
+
+    #[rstest]
+    #[case::concrete_type(Some("int"), Some("int"), None)]
+    #[case::napoleon_optional(Some("int, optional"), Some("int, optional"), None)]
+    #[case::bare_optional(Some("Optional"), None, Some("Optional"))]
+    #[case::default_note(Some("default 3"), None, None)]
+    #[case::absent(None, None, None)]
+    fn classifies_entry_parenthetical_slot(
+        #[case] slot: Option<&str>,
+        #[case] expected_type: Option<&str>,
+        #[case] expected_optional: Option<&str>,
+    ) {
+        let item = entry("x", slot, "Desc.", 0);
+        assert_eq!(item.declared_type(), expected_type);
+        assert_eq!(item.optional_marker(), expected_optional);
+    }
+
+    #[rstest]
+    #[case::returns_section(
+        "def f():\n    \"\"\"Doc.\n\n    Returns:\n        A pair.\n    \"\"\"\n",
+        true
+    )]
+    #[case::yields_section(
+        "def f():\n    \"\"\"Doc.\n\n    Yields:\n        Items.\n    \"\"\"\n",
+        true
+    )]
+    #[case::return_verb_summary("def f():\n    \"\"\"Returns a pair.\"\"\"\n", true)]
+    #[case::yield_verb_summary("def f():\n    \"\"\"Yields items.\"\"\"\n", true)]
+    #[case::action_summary_only("def f():\n    \"\"\"Computes a pair.\"\"\"\n", false)]
+    fn detects_whether_docstring_describes_result(#[case] source: &str, #[case] expected: bool) {
+        let file = ParsedFile::new(source, Language::Python);
+        let docstring = super::super::extract_function_signatures(&file)[0]
+            .docstring()
+            .expect("docstring");
+        assert_eq!(docstring.describes_result(), expected);
     }
 }

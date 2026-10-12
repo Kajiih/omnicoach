@@ -1,7 +1,13 @@
 # Complex function docstring: 03 Design
 
 > [!IMPORTANT]
-> **Status: PENDING** (lead validation). Verdict proposed: **split** into three Python rules and implement them; do not port the `Raises:` part.
+> **Status: VALIDATED** (lead, 2026-10-12; implemented as `undocumented-nontrivial-function`, `unexplained-parameter` and `undocumented-tuple-return`).
+
+> [!NOTE]
+> **Implemented rules** (see [03b_complexity_gate.md](03b_complexity_gate.md), [03c_section_requirements.md](03c_section_requirements.md) and [04_execution_log.md](04_execution_log.md)):
+> 1. `undocumented-nontrivial-function`: replaces the line gate (D4, D5, E1) with `statements >= 12 OR cognitive complexity >= 6` (options `min-statements`, `min-cognitive-complexity`).
+> 2. `unexplained-parameter`: flags a nontrivial function (`statements >= 12 OR cognitive >= 6`) whose docstring has no `Args:` section and has at least one `Optional`/`= None`, `bool`/`= True`/`= False`, `Callable`, or `*args`/`**kwargs` parameter (incomplete `Args:` sections are covered by Ruff `D417`; constructor parameters stored unchanged on `self` and documented under class `Attributes:` are exempt).
+> 3. `undocumented-tuple-return`: flags a documented function at any size returning or yielding a positional tuple of `>= 2` elements without `...` when the docstring has neither a `Returns:`/`Yields:` section nor a `Return(s)`/`Yield(s)` summary.
 
 ## 1. Verdict
 

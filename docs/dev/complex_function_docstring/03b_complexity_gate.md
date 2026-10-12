@@ -1,6 +1,6 @@
 # Complexity gate for the docstring rules: calibration
 
-> **Status: PENDING.** Decision proposals for the lead and the user. Nothing here changes the repository code.
+> **Status: VALIDATED** (lead & user, 2026-10-12; implemented as `statements >= 12 OR cognitive >= 6` in `src/code_lint/ast/python/complexity.rs`).
 
 Scope: the "nontrivial function" gate used by `undocumented-long-function`, `undocumented-parameter` and `undocumented-return-value` ([03_design.md](03_design.md) D4–D6, D17, Q1). The draft gate was "code lines >= 20". The user prefers complexity over length; this document checks the earlier proposal (cognitive complexity >= 5 OR statements >= 12) against primary sources and real code.
 

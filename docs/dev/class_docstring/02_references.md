@@ -1,7 +1,7 @@
 # Class docstring completeness: 02 References
 
 > [!IMPORTANT]
-> **Status: PENDING** (lead validation).
+> **Status: VALIDATED** (lead, 2026-10-12; implemented).
 
 Sources read verbatim: Google pyguide §3.8.3 / §3.8.4 (`scratch/pyguide.md` in the lead's scratch directory); pydoclint `violation_codes.md`, `config_options.md`, `checking_class_attributes.md` (same directory, copies of jsh9.github.io/pydoclint); the Pylint docparams extension page (pylint.readthedocs.io/en/latest/user_guide/checkers/extensions.html). Behavior that the docs imply but nobody ran is marked **[U]**. The lead ran pydoclint (via `uvx`) on Google's §3.8.4 `SampleClass` verbatim and on a class with an undocumented `self.cache = {}`; probe file: `scratch/docstring_probe/google_sample_class.py` in the lead's scratch directory. Results are cited as **[run]**.
 
