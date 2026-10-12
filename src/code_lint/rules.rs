@@ -45,6 +45,7 @@ pub mod uncolocated_helper;
 pub mod unmatched_logger_placeholder;
 pub mod unslotted_dataclass;
 pub mod unstructured_task;
+pub mod verb_led_returns_section;
 
 /// Every registered code rule.
 pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
@@ -91,4 +92,5 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &statement_after_main_guard::RULE,
     &unmatched_logger_placeholder::RULE,
     &quote_wrapped_placeholder::RULE,
+    &verb_led_returns_section::RULE,
 ];

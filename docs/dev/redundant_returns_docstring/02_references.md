@@ -1,7 +1,7 @@
 # 02 — References: docstring `Returns:` / `Yields:` sections that start with `Returns`
 
 > [!NOTE]
-> Status: **PENDING** (lead validation). Batch D (docstrings), worker phase 2 of 7. Previous: [01_understand.md](01_understand.md).
+> Status: **VALIDATED** (lead, 2026-10-12; implemented). Batch D (docstrings), worker phase 2 of 7. Previous: [01_understand.md](01_understand.md).
 
 ## 1. Style guides
 

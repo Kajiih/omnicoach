@@ -1,7 +1,7 @@
-# 03 — Design: `returns-section-stutter`
+# 03 — Design: `verb-led-returns-section`
 
 > [!NOTE]
-> Status: **PENDING** (lead validation). Batch D (docstrings), worker phase 3 of 7. Previous: [01_understand.md](01_understand.md), [02_references.md](02_references.md).
+> Status: **VALIDATED** (lead, 2026-10-12; implemented). Batch D (docstrings), worker phase 3 of 7. Previous: [01_understand.md](01_understand.md), [02_references.md](02_references.md).
 
 **Verdict: implement, narrowed and improved.** One rule, one template, Python only. No external tool covers it ([02_references.md](02_references.md) §2). The port fixes the legacy linter's noun false positive (G1), its typed-line, multi-section and `Return:` header misses (G2–G4), and its location (G5).
 
@@ -39,19 +39,19 @@ Fail cases to cover besides the basic one: `Yields:` with `Yields`, `Yields:` wi
 
 ## 3. Name
 
-`returns-section-stutter`: names the flagged pattern, three words, no polarity, no library identifier ([naming_and_message_style_guide.md](../naming_and_message_style_guide.md) §1). "Stutter" is established vocabulary for repeating the enclosing name ([02_references.md](02_references.md) §4); "returns section" follows Google, where `Yields:` is a variant of the Returns section. Rejected: `redundant-returns-docstring` (judgement word, and Pylint's `redundant-returns-doc` W9008 means something else), `verb-led-returns-section` (accurate but less recognizable; acceptable fallback, Q5).
+`verb-led-returns-section`: names the flagged pattern, three words, no polarity, no library identifier ([naming_and_message_style_guide.md](../naming_and_message_style_guide.md) §1). "Stutter" is established vocabulary for repeating the enclosing name ([02_references.md](02_references.md) §4); "returns section" follows Google, where `Yields:` is a variant of the Returns section. Rejected: `redundant-returns-docstring` (judgement word, and Pylint's `redundant-returns-doc` W9008 means something else), `verb-led-returns-section` (accurate but less recognizable; acceptable fallback, Q5).
 
 ## 4. Message template
 
 ```rust
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "`{section}:` section of `{function}` starts with `{word}`.",
+    summary: "`{section}:` section of `{function}` starts with `{phrase}`.",
     rationale: "The section header already says that a value is returned, so the leading verb repeats it and the text describes the call again instead of the value the caller receives.",
-    suggestion: "Remove the leading `{word}` so the section starts with a noun phrase that describes the value, such as `True if the device is ready.` or `A dict mapping keys to rows.`",
+    suggestion: "Remove the leading `{phrase}` so the section starts with a noun phrase that describes the value, such as `True if the device is ready.` or `A dict mapping keys to rows.`",
 };
 ```
 
-- `{section}` is the header as written (`Returns`, `Yields`, `Return`); `{word}` the opening word as written (`Returns`, `returns`). Both placeholders are **new** (Q2): the vocabulary has none for a docstring section or a prose word, and `{token}` is defined as part of an identifier.
+- `{section}` is the header as written (`Returns`, `Yields`, `Return`); `{phrase}` the opening word as written (`Returns`, `returns`). Both placeholders are **new** (Q2): the vocabulary has none for a docstring section or a prose word, and `{token}` is defined as part of an identifier.
 - One language, so no per-language variants.
 
 ## 5. Documentation (`RuleDoc`) draft
@@ -90,7 +90,7 @@ No change needed to `src/code_lint/ast/python/docstrings.rs`. The rule uses:
 - `body.first()` → `DocstringLine { index, text }`;
 - `PythonDocstring::line_node(index)` for the span.
 
-The D5 type-prefix split is a rule-local private function unless another Batch D rule needs the `Returns` type; then it belongs on `DocstringSection` in `docstrings.rs` (lead's call, Q6).
+Lead decision (2026-10-12): the D5 type-prefix split is the shared `DocstringLine::split_type_prefix()` in `src/code_lint/ast/python/docstrings.rs`, also used by `annotated-type-in-docstring`. The name `verb-led-returns-section` and the `{phrase}` placeholder are the user's and lead's choices (Q5, Q2). Superseded text below is kept for history: The D5 type-prefix split is a rule-local private function unless another Batch D rule needs the `Returns` type; then it belongs on `DocstringSection` in `docstrings.rs` (lead's call, Q6).
 
 ## 9. Rust analogue (ROADMAP suggestion only)
 
@@ -99,8 +99,8 @@ None worth a rule. Rustdoc has no `Returns` section convention (the recognized h
 ## 10. Open questions
 
 - **Q1 (user).** Keep the D7 noun list fixed, or expose it as an `allowed` list option (`extend-allowed = ["address"]`)? Recommendation: fixed; [rule_design_guide.md](../rule_design_guide.md) §5 targets domain vocabulary, and this is English grammar.
-- **Q2 (lead).** Add placeholders `{section}` (a docstring section header as written) and `{word}` (a prose word as written) to the style guide §3 and the vocabulary test. Other Batch D rules matching prose (the `Optional` check) may need `{word}` too.
+- **Q2 (lead).** Add placeholders `{section}` (a docstring section header as written) and `{phrase}` (a prose word as written) to the style guide §3 and the vocabulary test. Other Batch D rules matching prose (the `Optional` check) may need `{phrase}` too.
 - **Q3 (lead).** Create the `docstrings` topic for the batch (label, description, scope note).
 - **Q4 (user).** Add the `@property` candidate (§7) to ROADMAP, or drop it?
-- **Q5 (user).** Name: `returns-section-stutter` (recommended) or `verb-led-returns-section`?
+- **Q5 (user).** Name: `verb-led-returns-section` (recommended) or `verb-led-returns-section`?
 - **Q6 (lead).** Type-prefix split: rule-local or shared in `docstrings.rs`?
