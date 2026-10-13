@@ -99,22 +99,22 @@ Ruff (preview) adds `DOC201`, `DOC402` and `D417` under `[tool.ruff.lint] select
 
 | # | Gap | Example | Tools affected |
 | :-- | :--- | :--- | :--- |
-| G1 | Size counts the docstring, so writing docs puts a function in scope. | 20 body lines + 6-line docstring → flagged | The legacy linter, Pylint |
+| G1 | Size counts the docstring, so writing docs puts a function in scope. | 20 body lines + 6-line docstring → flagged | Legacy linter, Pylint |
 | G2 | A long function with a one-line docstring is not checked. | 300 lines, `"""Syncs the cache."""`, 4 parameters | pydoclint (default), Pylint (default `accept-no-*`), Ruff D417 |
-| G3 | A short function with a partial `Args:` section is not checked. | 5 lines, `Args:` lists `x` but not `y` | The legacy linter, Pylint (size gate) |
-| G4 | Private long functions are skipped. | `def _reconcile(...)`, 80 lines, no docstring | The legacy linter (`__x` only), Pylint, Ruff D1xx |
-| G5 | `Raises:` accepted for `Returns:`. | `-> int`, only `Raises:` | The legacy linter |
+| G3 | A short function with a partial `Args:` section is not checked. | 5 lines, `Args:` lists `x` but not `y` | Legacy linter, Pylint (size gate) |
+| G4 | Private long functions are skipped. | `def _reconcile(...)`, 80 lines, no docstring | Legacy linter (`__x` only), Pylint, Ruff D1xx |
+| G5 | `Raises:` accepted for `Returns:`. | `-> int`, only `Raises:` | Legacy linter |
 | G6 | `"""Returns …"""` summary not honored. | `"""Returns the active rows.\n\nArgs: …"""` | pydoclint, Ruff DOC201 [U for Pylint] |
 | G7 | Decorated generator documented with `Returns:` reported. | Google's `@contextmanager` example | Pylint, pydoclint DOC402, Ruff DOC402 |
-| G8 | Properties asked for `Returns:`. | `@property def path(self) -> str:` (long) | The legacy linter; pydoclint only when not outer-most |
-| G9 | Unannotated value returns ignored, `NoReturn` flagged. | `def f(): return 1` / `def g() -> NoReturn:` | The legacy linter |
-| G10 | Size is physical lines, so formatting and comments change the verdict. | A 22-line call reformatted to one argument per line | The legacy linter, Pylint |
+| G8 | Properties asked for `Returns:`. | `@property def path(self) -> str:` (long) | Legacy linter; pydoclint only when not outer-most |
+| G9 | Unannotated value returns ignored, `NoReturn` flagged. | `def f(): return 1` / `def g() -> NoReturn:` | Legacy linter |
+| G10 | Size is physical lines, so formatting and comments change the verdict. | A 22-line call reformatted to one argument per line | Legacy linter, Pylint |
 
 ## 5. Prior art for the size signal
 
 | Tool | Signal |
 | :--- | :--- |
-| The legacy linter | Physical lines `def` → end, > 25 |
+| Legacy linter | Physical lines `def` → end, > 25 |
 | Pylint `docstring-min-length` | Physical lines `def` → end (docstring included), default `-1` (off) |
 | Ruff `PLR0915` too-many-statements | Statements, default 50 |
 | Ruff `C901` / `PLR0912` | Cyclomatic complexity 10 / branches 12 |

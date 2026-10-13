@@ -23,7 +23,8 @@ pub use self::classes::{
     PythonAnnotatedAttribute, PythonAttributeDefinition, PythonBaseClass, PythonClassInfo,
     PythonFieldAfterMethod, PythonInheritedDocstring, PythonInstanceAttributeAnnotation,
     collect_class_attributes, collect_fields_after_methods, collect_instance_attribute_annotations,
-    extract_classes, inherited_method_docstring, local_ancestors, local_base_classes,
+    extract_classes, inherited_method_docstring, is_fake_class_name, local_ancestors,
+    local_base_classes,
 };
 pub(super) use self::classes::{collect_callable_scopes, collect_type_method_scopes};
 pub use self::complexity::PythonComplexityMetric;

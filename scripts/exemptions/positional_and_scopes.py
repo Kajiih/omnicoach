@@ -282,36 +282,8 @@ CLUSTER = Cluster(
             ),
             cases=("identical_positional_types::pass::dunder_method_exempt",),
         ),
-        Mutation(
-            label="@overload decorator exempt from identical-positional-types",
-            path=FUNCTIONS,
-            edits=(('| "overload"', ""),),
-            cases=("identical_positional_types::pass::decorator_overload_exempt",),
-        ),
-        Mutation(
-            label="@fixture decorator exempt from identical-positional-types",
-            path=FUNCTIONS,
-            edits=(('| "fixture"', ""),),
-            cases=("identical_positional_types::pass::decorator_fixture_exempt",),
-        ),
-        Mutation(
-            label="@override decorator exempt from identical-positional-types",
-            path=FUNCTIONS,
-            edits=(("OVERRIDE_DECORATOR | ", ""),),
-            cases=("identical_positional_types::pass::decorator_override_exempt",),
-        ),
-        Mutation(
-            label="@abstractmethod decorator exempt from identical-positional-types",
-            path=FUNCTIONS,
-            edits=(('| "abstractmethod"', ""),),
-            cases=("identical_positional_types::pass::decorator_abstractmethod_exempt",),
-        ),
-        Mutation(
-            label="@<fn>.register decorator exempt from identical-positional-types",
-            path=FUNCTIONS,
-            edits=(('| "register"', ""),),
-            cases=("identical_positional_types::pass::decorator_singledispatch_register_exempt",),
-        ),
+        # The @overload/@fixture/@override/@abstractmethod/@<fn>.register exemptions share
+        # `has_exempt_signature_decorator`: their cases are listed in `collection_types_1`.
         # --- repeated-index-access ---
         Mutation(
             label="single distinct position read exempt from repeated-index-access",

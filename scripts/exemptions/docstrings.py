@@ -137,8 +137,10 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,\n"
-                    "                Stmt::Assign(assign) => {\n",
-                    "                Stmt::Assign(assign) => {\n",
+                    "                Stmt::Assign(assign) => {\n"
+                    "                    self.out\n",
+                    "                Stmt::Assign(assign) => {\n"
+                    "                    self.out\n",
                 ),
             ),
             cases=("undocumented_public_attribute::pass::nested_scope_assignments_exempt",),

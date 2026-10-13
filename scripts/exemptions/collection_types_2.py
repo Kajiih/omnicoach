@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from .model import (
     ANNOTATIONS,
-    CLASSES,
     FUNCTIONS,
     MUTABLE_COLLECTION_ATTRIBUTE,
     MUTABLE_MODULE_CONSTANT,
@@ -266,96 +265,8 @@ CLUSTER = Cluster(
             ),
             cases=("mutable_collection_parameter::pass::raise_not_implemented_stub_body_exempt",),
         ),
-        Mutation(
-            label="Protocol class methods exempt from collection type rules (batch 3)",
-            path=CLASSES,
-            edits=((
-                "matches!(terminal.as_str(), PROTOCOL_CLASS | ABC_CLASS)",
-                "terminal.as_str() == ABC_CLASS",
-            ),),
-            cases=(
-                "mutable_collection_parameter::pass::protocol_class_exempt",
-                "mutable_collection_return::pass::protocol_class_exempt",
-                "mutable_collection_attribute::pass::protocol_class_exempt",
-                "nullable_collection_return::pass::protocol_class_exempt",
-            ),
-        ),
-        Mutation(
-            label="ABC class exempt from collection type rules (batch 3)",
-            path=CLASSES,
-            edits=((
-                "matches!(terminal.as_str(), PROTOCOL_CLASS | ABC_CLASS)",
-                "terminal.as_str() == PROTOCOL_CLASS",
-            ),),
-            cases=(
-                "mutable_collection_attribute::pass::abc_class_exempt",
-                "nullable_collection_return::pass::abc_class_exempt",
-            ),
-        ),
-        Mutation(
-            label="@override decorator exempt from Python signature rules (batch 3)",
-            path=FUNCTIONS,
-            edits=((
-                'OVERRIDE_DECORATOR | "overload"',
-                '"overload"',
-            ),),
-            cases=(
-                "mutable_collection_parameter::pass::override_exempt",
-                "mutable_collection_return::pass::override_exempt",
-                "nullable_collection_return::pass::override_exempt",
-            ),
-        ),
-        Mutation(
-            label="@overload decorator exempt from Python signature rules (batch 3)",
-            path=FUNCTIONS,
-            edits=((
-                '| "overload" |',
-                "|",
-            ),),
-            cases=(
-                "mutable_collection_return::pass::overload_exempt",
-                "nullable_collection_return::pass::overload_exempt",
-            ),
-        ),
-        Mutation(
-            label="@abstractmethod decorator exempt from Python signature rules (batch 3)",
-            path=FUNCTIONS,
-            edits=((
-                '| "abstractmethod" |',
-                "|",
-            ),),
-            cases=(
-                "mutable_collection_return::pass::abstractmethod_exempt",
-                "nullable_collection_return::pass::abstractmethod_exempt",
-            ),
-        ),
-        Mutation(
-            label="@pytest.fixture decorator exempt from Python signature rules (batch 3)",
-            path=FUNCTIONS,
-            edits=((
-                '| "fixture" |',
-                "|",
-            ),),
-            cases=("nullable_collection_return::pass::pytest_fixture_exempt",),
-        ),
-        Mutation(
-            label="@<fn>.register singledispatch decorator exempt from Python signature rules (batch 3)",
-            path=FUNCTIONS,
-            edits=((
-                '| "register" |',
-                "|",
-            ),),
-            cases=("nullable_collection_return::pass::singledispatch_register_exempt",),
-        ),
-        Mutation(
-            label="data-model dunder methods exempt from Python signature rules (batch 3)",
-            path=FUNCTIONS,
-            edits=((
-                '!matches!(func_name, INIT_METHOD | NEW_METHOD | "__call__")',
-                "false",
-            ),),
-            cases=("nullable_collection_return::pass::data_model_dunder_exempt",),
-        ),
+        # Protocol/ABC, signature-decorator and data-model dunder exemptions are shared with
+        # batch 2: their cases are listed in the matching mutations of `collection_types_1`.
         # --- Local return-value mutation exemptions (mutable-collection-return) ---
         Mutation(
             label="chained call mutation exempts function in mutable-collection-return",
@@ -503,6 +414,12 @@ CLUSTER = Cluster(
                 ),
             ),
             cases=("nullable_collection_return::pass::trait_impl_exempt",),
+        ),
+        Mutation(
+            label="Rust locally defined type shadowing a collection name exempt from nullable-collection-return",
+            path=RUST,
+            edits=(("        super::ResolvedName::Local => return None,", "        super::ResolvedName::Local => normalized,"),),
+            cases=("nullable_collection_return::pass::locally_shadowed_vec_exempt",),
         ),
         # --- Module constant exemptions (mutable-module-constant) ---
         Mutation(

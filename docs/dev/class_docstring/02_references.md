@@ -21,7 +21,7 @@ Defaults: `--style=numpy` (`config_options.md` §3), so Google users must set `s
 | :--- | :--- | :--- |
 | Constructor parameters documented | `DOC101` (fewer args), `DOC103` (different args) on the class docstring | Placement is a single global choice: `--allow-init-docstring` (default `False`) "If it is set to `True`, having a docstring for class constructors (`__init__()`) is allowed, and the arguments are expected to be documented under `__init__()` rather than in the class docstring." With the default, `DOC301` "`__init__()` should not have a docstring; please combine it with the docstring of the class" fires on Google's own `SampleClass`, together with `DOC101`/`DOC103` on `__init__` **[run]**. With `True`, `SampleClass` still fails `DOC602`/`DOC603`, plus `DOC105`/`DOC109`/`DOC110` because `arg-type-hints-in-docstring` defaults to `True`, the opposite of Google §3.8.3 **[run]**. A class-docstring `Args:` in that mode should give `DOC304` "Class docstring has an argument/parameter section; please put it in the `__init__()` docstring" **[U]** (not probed). |
 | Stale constructor parameters | `DOC102`, `DOC103` | |
-| Short docstrings | `--skip-checking-short-docstrings` (default `True`): "won't check functions that have only a short description" | Same gate as the legacy linter P1. |
+| Short docstrings | `--skip-checking-short-docstrings` (default `True`): "won't check functions that have only a short description" | Same gate as the legacy linter's P1. |
 | Class attributes documented | `DOC601`/`DOC602`/`DOC603` with `--check-class-attributes` (default `True`): "check the class attributes (defined under the class definition) against the "Attributes" section" | **Only the class body.** `self.x = …` attributes are invisible. |
 | Private / dunder attributes | `--ignore-private-class-attributes`, `--ignore-special-dunder-class-attributes` (both default `True`). "Ignore" means "An ignored name must not appear in the docstring; documenting it produces an extra-name violation" | |
 | Properties | `--treat-property-methods-as-class-attributes` (default `False`) | Default matches Google. |
@@ -81,7 +81,7 @@ With both tools, a project still misses `self.x` attributes (G1) and must pick o
 
 ## 6. Coverage summary
 
-| The legacy linter sub-check | Covered by | Gap left |
+| Legacy sub-check | Covered by | Gap left |
 | :--- | :--- | :--- |
 | Constructor parameters in class `Args:` | pydoclint `DOC101`/`DOC103` (one placement); Pylint `W9015` (either placement) | Two linters for one fact; pydoclint's single placement; the legacy linter's own defects (01_understand.md §1.2). |
 | Class-body attributes in `Attributes:` | pydoclint `DOC601`–`DOC603` | Enum / framework names (G4). |

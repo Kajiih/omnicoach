@@ -24,7 +24,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 | `record-types` | — |  | Declaring named records (`dataclass`, `NamedTuple`, `struct`). | Field-bundle declarations, mutability and slots. Not enums or protocols. |
 | `static-typing` | — |  | What the static type checker can see and verify. | What static type checking can prove. Not runtime validation or dataclass mutability (see `record-types`). |
 | `type-checker-bypass` | static-typing |  | Code that overrides or routes around the type checker. | Casts and dynamic access (`cast`, `getattr`) that hide types from the checker. Not `omni:` directives. |
-| `suppression-directives` | — |  | Hygiene of `omni:` suppression comments. | `omni:` directives that silence Omni. Not `contextlib.suppress` (see `error-handling`). |
+| `suppression-directives` | — |  | Hygiene of suppression directives. | `omni:` directives that silence Omni, and the reasons given on third-party Python ones (`# noqa`, `# type: ignore`, ...). Not `contextlib.suppress` (see `error-handling`). |
 | `testing` | — |  | Practices specific to test code. | How test code is structured and written. Not production code, even when tested. |
 | `test-assertions` | testing |  | Count, shape and granularity of test assertions. | Number and shape of test assertions. Not production `assert` or what the test exercises. |
 | `test-doubles` | testing |  | Mocks, fakes, stubs, spies and monkeypatching. | Replacing collaborators in tests and asserting on those replacements. Not fixtures that only build data. |

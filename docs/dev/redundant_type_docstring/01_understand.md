@@ -2,7 +2,7 @@
 
 > [!NOTE]
 > **Status: VALIDATED (lead, 2026-10-12; implemented).**
-> Scope: port of the legacy linter `RedundantTypeDocstringRule` (Batch D, docstrings). Python only.
+> Scope: port of the legacy `RedundantTypeDocstringRule` (Batch D, docstrings). Python only.
 > Sources: `scratch/legacy_reference/legacy_lints.py` lines 2087–2148; Google Python Style Guide §3.8.3 and §3.8.4; pydoclint and Pylint docs (quoted in `02_references.md`). [U] marks claims not checked against a tool run or its source code.
 
 ## 1. What the legacy linter does
@@ -15,7 +15,7 @@
 4. Inside the section, every line (entry or continuation) is matched against `^(\*?\*?[\w_]+)\s*\(([^)]+)\)\s*:`. The name has its `*` stripped.
 5. If the name is an annotated parameter, it reports at the `def` line: "Argument `x` in docstring has type annotation `(int)`. Type annotations are banned from docstrings when repeating the signature's annotation."
 
-## 2. The legacy linter defects found while reading
+## 2. Legacy linter defects found while reading
 
 | ID | Defect | Example | Effect |
 | :-- | :--- | :--- | :--- |

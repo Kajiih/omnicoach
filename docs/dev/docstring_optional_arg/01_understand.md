@@ -2,7 +2,7 @@
 
 > [!NOTE]
 > **Status: VALIDATED** (lead, 2026-10-12; implemented).
-> Batch D (docstrings), worker for the legacy linter `DocstringOptionalArgRule`. Process: [rule_batch_playbook.md](../rule_batch_playbook.md). References: [02_references.md](02_references.md). Design: [03_design.md](03_design.md).
+> Batch D (docstrings), worker for the legacy `DocstringOptionalArgRule`. Process: [rule_batch_playbook.md](../rule_batch_playbook.md). References: [02_references.md](02_references.md). Design: [03_design.md](03_design.md).
 > [U] marks claims not checked against code, documentation text, or tool output.
 
 ## 1. The legacy check
@@ -49,7 +49,7 @@ Google's rule for docstrings is the yardstick (pyguide §3.8.3): "A docstring sh
 
 R2 is a "type information in the docstring" rule, the territory of the `redundant_type_docstring` worker (pyguide §3.8.3 Args: "include required type(s) if the code does not contain a corresponding type annotation"), and its harm is one redundant word. R1 is the harm the legacy message names. The design takes **R1** (`03_design.md` D1).
 
-## 3. The legacy linter defects found
+## 3. Legacy linter defects found
 
 | # | Defect | Effect | Example |
 | :-- | :--- | :--- | :--- |

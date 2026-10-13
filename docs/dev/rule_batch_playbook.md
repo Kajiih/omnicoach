@@ -1,7 +1,7 @@
 # Rule Batch Playbook
 
 > [!NOTE]
-> How-to for the agent (or person) who leads the creation of several rules at once with one worker agent per rule, standing in for the user during reviews. A single rule follows [adding_a_rule.md](adding_a_rule.md); this playbook only adds what changes when rules are built in parallel. Lessons come from the legacy batch (10 candidates, 6 shipped, 4 dropped).
+> How-to for the agent (or person) who leads the creation of several rules at once with one worker agent per rule, standing in for the user during reviews. A single rule follows [adding_a_rule.md](adding_a_rule.md); this playbook only adds what changes when rules are built in parallel. Lessons come from the legacy custom lints batch (10 candidates, 6 shipped, 4 dropped).
 
 ## Roles
 
@@ -13,7 +13,7 @@
 
 ### 0. Triage (lead, before spawning workers)
 
-1. **Redundancy gate.** For each candidate, list the Ruff / Clippy / Mypy / Pyright / Pylint rules that already cover it. In the legacy batch, 4 of 10 candidates and 3 sub-checks were fully covered. A dropped candidate still gets `01_understand.md` and `02_references.md`, ending with the exact `pyproject.toml` / `Cargo.toml` configuration that replaces it, plus a *Not pursued* entry in [ROADMAP.md](../../ROADMAP.md) linking that file.
+1. **Redundancy gate.** For each candidate, list the Ruff / Clippy / Mypy / Pyright / Pylint rules that already cover it. In the legacy custom lints batch, 4 of 10 candidates and 3 sub-checks were fully covered. A dropped candidate still gets `01_understand.md` and `02_references.md`, ending with the exact `pyproject.toml` / `Cargo.toml` configuration that replaces it, plus a *Not pursued* entry in [ROADMAP.md](../../ROADMAP.md) linking that file.
 2. **Language scope.** Decide per rule which languages apply, and record why the others do not ([rule_design_guide.md](rule_design_guide.md)). Workers ported Python rules and never asked; the Rust question came up only after shipping.
 3. **Shared-helper inventory.** Before workers start, list the structural facts several candidates will need (logger-call detection, string literal text, format-placeholder parsing, local bindings, union flattening, collection type names) and grep `src/code_lint/ast/` and `src/code_lint/semantic/` for existing helpers. Assign each new shared fact to one owner (the lead or one worker). Without this step, parallel workers each wrote their own logger matcher, format-field parser and literal extractor in `ast/python.rs`.
 
@@ -27,7 +27,7 @@
 
 - Workers may write their rule file in parallel, but **shared files are integrated one rule at a time by the lead**: `ast/python.rs`, `rules.rs`, `taxonomy.rs`, `tests/snapshots/cli__list_rules.snap`, [ROADMAP.md](../../ROADMAP.md).
 - After each integration run the full verification from [adding_a_rule.md](adding_a_rule.md) step 9, including self-dogfooding (`omnicoach code .`), which caught naming violations in the new helpers.
-- **Mutation check per exemption.** Give each named exemption one dedicated `pass` case, add an entry for it to [scripts/exemption_mutations.py](../../scripts/exemption_mutations.py) (a source edit that disables the exemption, plus the case), and run the script. It also fails when a listed case no longer exists or a `pass` case of a covered rule is unlisted. Do not keep the harness in scratch space: the legacy harness was lost, and the declaration-order batch later found 7 cases that still passed with their exemption removed.
+- **Mutation check per exemption.** Give each named exemption one dedicated `pass` case, add an entry for it to [scripts/exemption_mutations.py](../../scripts/exemption_mutations.py) (a source edit that disables the exemption, plus the case), and run the script. It also fails when a listed case no longer exists or a `pass` case of a covered rule is unlisted. Do not keep the harness in scratch space: the legacy batch harness was lost, and the declaration-order batch later found 7 cases that still passed with their exemption removed.
 - Know the harness: `rule_test!` also runs every `fail` case as `{code}\n{code}` in one module and expects exactly the two copies' spans. The second copy redefines every top-level name, so a rule that reasons about the other definitions in a scope (declaration order, redefinitions, same-name grouping) must plan for it in Phase 3. `call-before-definition` bent its semantics to pass (epochs), and a simpler same-name merge had to be reverted. Open design problem: "Rule test harness" in [ROADMAP.md](../../ROADMAP.md).
 
 ### 5. Consolidate (lead, mandatory holistic synthesis)
@@ -42,7 +42,7 @@ Parallel workers design and implement each rule from that rule's perspective alo
 ### 6. Review (two reviewers, whole batch)
 
 - Ask reviewers explicitly for cross-rule findings: duplicated helpers, inconsistent conventions, overlapping diagnostics between the new rules and existing ones.
-- Split the code review by structural cluster (strings and logging, scopes and bindings, types and classes), not by rule. In the legacy batch, per-rule reviews and the 23/23 mutation check missed 11 behavior bugs that cluster reviewers then found.
+- Split the code review by structural cluster (strings and logging, scopes and bindings, types and classes), not by rule. In the legacy custom lints batch, per-rule reviews and the 23/23 mutation check missed 11 behavior bugs that cluster reviewers then found.
 - Read-only reviewers cannot run code. Run each repro they claim against the built binary before acting on it.
 - Apply findings, then record each finding and its resolution in every affected `06_review_and_audit.md`.
 

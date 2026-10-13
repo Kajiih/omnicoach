@@ -57,7 +57,7 @@ convention = "google"
 
 ## 3. Gaps in the legacy linter to improve on
 
-| # | The legacy linter behavior | Kind | Example |
+| # | Legacy linter behavior | Kind | Example |
 | :-- | :--- | :--- | :--- |
 | G1 | Flags the noun reading `Return code …`, `return value …`, `Return type …` | False positive | `Returns:` / `Return code based on current program state.` (monorepo, see [01_understand.md](01_understand.md) §3) |
 | G2 | Misses a typed first line | False negative | `Returns:` / `bool: Returns True if ready.` |

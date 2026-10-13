@@ -78,7 +78,7 @@ Raw P3 count before E15 is 7: 3 above and the 4 summary copies. None overlaps `d
 
 Reach: `copied-base-docstring` and `partial-override-docstring` see 21 of 715 documented `@override` methods (3%), because most bases are imported. The project-level base index (`03_design.md` §8) is what would make them broadly useful. An estimate of the reach once explicit-override adds `@override` to undecorated in-file overrides was not re-run (the previous run found 77 of 89 same-file exact copies on undecorated methods, §3.3).
 
-### 3.1 the legacy linter's proxy on real `@override` code (previous worker, monorepo sample)
+### 3.1 The legacy linter's proxy on real `@override` code (previous worker, monorepo sample)
 
 Corpus: 16 directories with many `@override` (11,107 files, 94,107 methods, 2,304 `@override` methods). Of 2,304 `@override` methods, 1,397 have no docstring and 907 have one: 680 one-line (all flagged by the legacy linter) and 227 multi-line (none flagged).
 

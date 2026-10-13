@@ -1,7 +1,7 @@
 # Complex function docstring: 01 Understand
 
 > [!IMPORTANT]
-> **Status: VALIDATED** (lead, 2026-10-12; implemented). Batch D, the legacy linter check `ComplexFunctionDocstringRule`.
+> **Status: VALIDATED** (lead, 2026-10-12; implemented). Batch D, legacy check `ComplexFunctionDocstringRule`.
 
 ## 1. The candidate
 
@@ -33,7 +33,7 @@ Helpers it relies on: `is_overridden_method` (line 1178) matches a decorator nam
 
 ### 1.1 Exact behavior
 
-| Aspect | The legacy linter behavior |
+| Aspect | Legacy linter behavior |
 | :--- | :--- |
 | Unit | `def` and `async def`, nested ones included. |
 | Size | Physical lines from the `def` line to the last body line, so it counts the docstring, comments and blank lines but not decorators. Flagged above 25. |

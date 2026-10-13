@@ -140,12 +140,12 @@ CLUSTER = Cluster(
                     "        }",
                 ),
                 (
-                    '                    TYPE_MAPPING | "Callable" => {\n'
+                    "                    TYPE_MAPPING | TYPE_CALLABLE => {\n"
                     "                        if let Some(second_arg) = type_args.get(1) {\n"
                     "                            collect_collection_types_expr(second_arg, file, depth, out);\n"
                     "                        }\n"
                     "                    }",
-                    '                    TYPE_MAPPING | "Callable" => {\n'
+                    "                    TYPE_MAPPING | TYPE_CALLABLE => {\n"
                     "                        for arg in &type_args {\n"
                     "                            collect_collection_types_expr(arg, file, depth, out);\n"
                     "                        }\n"
@@ -244,52 +244,67 @@ CLUSTER = Cluster(
         Mutation(
             label="@override decorator exempt from Python signature rules",
             path=FUNCTIONS,
-            edits=((
-                'OVERRIDE_DECORATOR | "overload"',
-                '"overload"',
-            ),),
+            edits=(('    "override",\n    "typing.override",\n    "typing_extensions.override",\n', ""),),
             cases=(
                 "concrete_collection_parameter::pass::override_exempt",
                 "concrete_collection_return::pass::override_exempt",
                 "specific_collection_parameter::pass::override_exempt",
+                "mutable_collection_parameter::pass::override_exempt",
+                "mutable_collection_return::pass::override_exempt",
+                "nullable_collection_return::pass::override_exempt",
+                "identical_positional_types::pass::decorator_override_exempt",
             ),
         ),
         Mutation(
             label="@overload decorator exempt from Python signature rules",
             path=FUNCTIONS,
-            edits=(('| "overload" |', "|"),),
+            edits=(('    "overload",\n    "typing.overload",\n    "typing_extensions.overload",\n', ""),),
             cases=(
                 "concrete_collection_parameter::pass::overload_exempt",
                 "concrete_collection_return::pass::overload_exempt",
                 "specific_collection_parameter::pass::overload_exempt",
+                "mutable_collection_return::pass::overload_exempt",
+                "nullable_collection_return::pass::overload_exempt",
+                "identical_positional_types::pass::decorator_overload_exempt",
             ),
         ),
         Mutation(
             label="@abstractmethod decorator exempt from Python signature rules",
             path=FUNCTIONS,
-            edits=(('| "abstractmethod" |', "|"),),
+            edits=(('    "abstractmethod",\n    "abc.abstractmethod",\n', ""),),
             cases=(
                 "concrete_collection_parameter::pass::abstractmethod_exempt",
                 "concrete_collection_return::pass::abstractmethod_exempt",
                 "specific_collection_parameter::pass::abstractmethod_exempt",
+                "mutable_collection_return::pass::abstractmethod_exempt",
+                "nullable_collection_return::pass::abstractmethod_exempt",
+                "identical_positional_types::pass::decorator_abstractmethod_exempt",
             ),
         ),
         Mutation(
             label="@pytest.fixture decorator exempt from Python signature rules",
             path=FUNCTIONS,
-            edits=(('| "fixture" |', "|"),),
-            cases=("concrete_collection_parameter::pass::pytest_fixture_exempt",),
+            edits=(('    "fixture",\n    "pytest.fixture",\n    "pytest_asyncio.fixture",\n', ""),),
+            cases=(
+                "concrete_collection_parameter::pass::pytest_fixture_exempt",
+                "nullable_collection_return::pass::pytest_fixture_exempt",
+                "identical_positional_types::pass::decorator_fixture_exempt",
+            ),
         ),
         Mutation(
             label="@singledispatch.register decorator exempt from Python signature rules",
             path=FUNCTIONS,
-            edits=(('| "register" |', "|"),),
-            cases=("concrete_collection_parameter::pass::singledispatch_register_exempt",),
+            edits=(('&["register", SETTER_ATTRIBUTE]', "&[SETTER_ATTRIBUTE]"),),
+            cases=(
+                "concrete_collection_parameter::pass::singledispatch_register_exempt",
+                "nullable_collection_return::pass::singledispatch_register_exempt",
+                "identical_positional_types::pass::decorator_singledispatch_register_exempt",
+            ),
         ),
         Mutation(
             label="@property.setter decorator exempt from Python signature rules",
             path=FUNCTIONS,
-            edits=(('| "setter"', ""),),
+            edits=(('&["register", SETTER_ATTRIBUTE]', '&["register"]'),),
             cases=("concrete_collection_parameter::pass::property_setter_exempt",),
         ),
         Mutation(
@@ -305,6 +320,7 @@ CLUSTER = Cluster(
                 "concrete_collection_parameter::pass::data_model_dunders_exempt",
                 "concrete_collection_return::pass::data_model_dunder_exempt",
                 "specific_collection_parameter::pass::data_model_dunder_exempt",
+                "nullable_collection_return::pass::data_model_dunder_exempt",
             ),
         ),
         Mutation(
@@ -312,8 +328,8 @@ CLUSTER = Cluster(
             path=CLASSES,
             edits=(
                 (
-                    "matches!(terminal.as_str(), PROTOCOL_CLASS | ABC_CLASS)",
-                    "matches!(terminal.as_str(), ABC_CLASS)",
+                    "    is_protocol_class(class_def, file) || is_abc_class(class_def, file)",
+                    "    is_abc_class(class_def, file)",
                 ),
             ),
             cases=(
@@ -321,6 +337,10 @@ CLUSTER = Cluster(
                 "concrete_collection_return::pass::protocol_class_exempt",
                 "concrete_collection_attribute::pass::protocol_class_exempt",
                 "specific_collection_parameter::pass::protocol_class_exempt",
+                "mutable_collection_parameter::pass::protocol_class_exempt",
+                "mutable_collection_return::pass::protocol_class_exempt",
+                "mutable_collection_attribute::pass::protocol_class_exempt",
+                "nullable_collection_return::pass::protocol_class_exempt",
             ),
         ),
         Mutation(
@@ -328,14 +348,16 @@ CLUSTER = Cluster(
             path=CLASSES,
             edits=(
                 (
-                    "matches!(terminal.as_str(), PROTOCOL_CLASS | ABC_CLASS)",
-                    "matches!(terminal.as_str(), PROTOCOL_CLASS)",
+                    "    is_protocol_class(class_def, file) || is_abc_class(class_def, file)",
+                    "    is_protocol_class(class_def, file)",
                 ),
             ),
             cases=(
                 "concrete_collection_parameter::pass::abc_class_exempt",
                 "concrete_collection_attribute::pass::abc_class_exempt",
                 "specific_collection_parameter::pass::abc_class_exempt",
+                "mutable_collection_attribute::pass::abc_class_exempt",
+                "nullable_collection_return::pass::abc_class_exempt",
             ),
         ),
         # --- concrete-collection-attribute ---
@@ -530,27 +552,26 @@ CLUSTER = Cluster(
             cases=("inline_public_attribute_annotation::pass::annotated_wrapped_bare_final_exempt",),
         ),
         Mutation(
-            label="@staticmethod methods exempt from inline-public-attribute-annotation",
-            path=FUNCTIONS,
+            label="aliased bare Final inline annotation exempt from inline-public-attribute-annotation",
+            path=ANNOTATIONS,
             edits=(
                 (
-                    '        decorator.terminal_name == "staticmethod"\n'
-                    '            || (!allow_classmethod_cls && decorator.terminal_name == "classmethod")',
-                    '        !allow_classmethod_cls && decorator.terminal_name == "classmethod"',
+                    "    resolved_path_and_terminal_expr(unwrapped, file)\n",
+                    "    Some(super::resolve_path_and_terminal_expr(unwrapped, &file.source))\n",
                 ),
             ),
+            cases=("inline_public_attribute_annotation::pass::aliased_bare_final_inline_annotation_exempt",),
+        ),
+        Mutation(
+            label="@staticmethod methods exempt from inline-public-attribute-annotation",
+            path=FUNCTIONS,
+            edits=(('decorator.matches_any(&["staticmethod", "builtins.staticmethod"])', "false"),),
             cases=("inline_public_attribute_annotation::pass::staticmethod_exempt",),
         ),
         Mutation(
             label="@classmethod methods exempt from inline-public-attribute-annotation",
             path=FUNCTIONS,
-            edits=(
-                (
-                    '        decorator.terminal_name == "staticmethod"\n'
-                    '            || (!allow_classmethod_cls && decorator.terminal_name == "classmethod")',
-                    '        decorator.terminal_name == "staticmethod"',
-                ),
-            ),
+            edits=(('decorator.matches_any(&["classmethod", "builtins.classmethod"])', "false"),),
             cases=("inline_public_attribute_annotation::pass::classmethod_exempt",),
         ),
         Mutation(
@@ -590,8 +611,10 @@ CLUSTER = Cluster(
             path=CLASSES,
             edits=(
                 (
-                    "Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,",
-                    "Stmt::ClassDef(_) => return,",
+                    "                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,\n"
+                    "                Stmt::AnnAssign(ann) => {",
+                    "                Stmt::ClassDef(_) => return,\n"
+                    "                Stmt::AnnAssign(ann) => {",
                 ),
             ),
             cases=("inline_public_attribute_annotation::pass::nested_function_inside_method_not_entered",),
@@ -599,20 +622,13 @@ CLUSTER = Cluster(
         Mutation(
             label="@dataclass classes exempt from inline-public-attribute-annotation",
             path=CLASSES,
-            edits=(
-                (
-                    "                DATACLASS_DECORATOR\n"
-                    "                    | QUALIFIED_DATACLASS_DECORATOR\n"
-                    "                    |",
-                    "               ",
-                ),
-            ),
+            edits=(('    "dataclass",\n    "dataclasses.dataclass",\n', ""),),
             cases=("inline_public_attribute_annotation::pass::dataclass_post_init_inline_annotation_exempt",),
         ),
         Mutation(
             label="attrs @define classes exempt from inline-public-attribute-annotation",
             path=CLASSES,
-            edits=(('| "define"', ""),),
+            edits=(('    "attrs.define",\n', ""),),
             cases=("inline_public_attribute_annotation::pass::attrs_define_inline_annotation_exempt",),
         ),
         Mutation(
@@ -620,13 +636,42 @@ CLUSTER = Cluster(
             path=CLASSES,
             edits=(
                 (
-                    "        || base_class_terminals(class_def, &file.source)\n"
+                    "\n"
+                    "        || resolved_base_class_paths(class_def, file)\n"
                     "            .iter()\n"
-                    '            .any(|terminal| terminal == "BaseModel")',
+                    "            .any(|path| {\n"
+                    "                matches!(\n"
+                    "                    path.as_str(),\n"
+                    '                    "BaseModel" | "pydantic.BaseModel" | "pydantic.main.BaseModel"\n'
+                    "                )\n"
+                    "            })",
                     "",
                 ),
             ),
             cases=("inline_public_attribute_annotation::pass::pydantic_base_model_inline_annotation_exempt",),
+        ),
+        Mutation(
+            label="aliased Pydantic BaseModel subclasses exempt from inline-public-attribute-annotation",
+            path=CLASSES,
+            edits=(
+                (
+                    "        || resolved_base_class_paths(class_def, file)\n"
+                    "            .iter()\n"
+                    "            .any(|path| {\n"
+                    "                matches!(\n"
+                    "                    path.as_str(),\n"
+                    '                    "BaseModel" | "pydantic.BaseModel" | "pydantic.main.BaseModel"',
+                    "        || class_def\n"
+                    "            .bases()\n"
+                    "            .iter()\n"
+                    "            .map(|base| super::resolve_path_and_terminal_expr(base, &file.source).path)\n"
+                    "            .any(|path| {\n"
+                    "                matches!(\n"
+                    "                    path.as_str(),\n"
+                    '                    "BaseModel" | "pydantic.BaseModel" | "pydantic.main.BaseModel"',
+                ),
+            ),
+            cases=("inline_public_attribute_annotation::pass::aliased_pydantic_base_model_inline_annotation_exempt",),
         ),
     ),
     unmutated=(

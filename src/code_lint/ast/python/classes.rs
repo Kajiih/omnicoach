@@ -20,12 +20,12 @@ use std::collections::{HashMap, HashSet};
 const SELF_RECEIVER: &str = "self";
 const CLS_RECEIVER: &str = "cls";
 const DATACLASS_DECORATOR_PATHS: &[&str] = &["dataclass", "dataclasses.dataclass"];
-const PROTOCOL_AND_ABC_PATHS: &[&str] = &[
-    "Protocol",
-    "typing.Protocol",
-    "typing_extensions.Protocol",
-    "ABC",
-    "abc.ABC",
+const PROTOCOL_PATHS: &[&str] = &["Protocol", "typing.Protocol", "typing_extensions.Protocol"];
+const ABC_PATHS: &[&str] = &["ABC", "abc.ABC"];
+const NAMED_TUPLE_PATHS: &[&str] = &[
+    "NamedTuple",
+    "typing.NamedTuple",
+    "typing_extensions.NamedTuple",
 ];
 const STRUCTURAL_MARKER_PATHS: &[&str] = &[
     "object",
@@ -237,6 +237,30 @@ impl PythonClassInfo<'_> {
             .any(|path| ENUM_BASE_PATHS.contains(&path.as_str()))
     }
 
+    /// Returns true if a direct base class resolves to `typing.Protocol` or
+    /// `typing_extensions.Protocol` (optionally subscripted), making the class a `Protocol`
+    /// rather than an implementation of one.
+    #[must_use]
+    pub fn is_protocol(&self) -> bool {
+        is_protocol_class(self.definition, self.name_node.file)
+    }
+
+    /// Returns true if a direct base class resolves to `abc.ABC` or the class declares
+    /// `metaclass=ABCMeta`.
+    #[must_use]
+    pub fn is_abc(&self) -> bool {
+        is_abc_class(self.definition, self.name_node.file)
+    }
+
+    /// Returns true if a direct base class resolves to `typing.NamedTuple` or
+    /// `typing_extensions.NamedTuple`.
+    #[must_use]
+    pub fn is_named_tuple(&self) -> bool {
+        resolved_base_class_paths(self.definition, self.name_node.file)
+            .iter()
+            .any(|path| NAMED_TUPLE_PATHS.contains(&path.as_str()))
+    }
+
     /// Returns true if the class carries a `@dataclass` or `@dataclasses.dataclass` decorator
     /// that does not pass the keyword argument `key`.
     #[must_use]
@@ -356,6 +380,15 @@ pub fn local_ancestors(classes: &[PythonClassInfo<'_>], index: usize) -> Vec<usi
         }
     }
     ancestors
+}
+
+/// Returns true if `name` starts with the word `Fake` after any leading `_`: `Fake` alone or
+/// followed by anything but a lowercase letter, so `Faker` and `Fakeable` do not match.
+#[must_use]
+pub fn is_fake_class_name(name: &str) -> bool {
+    name.trim_start_matches('_')
+        .strip_prefix("Fake")
+        .is_some_and(|rest| !rest.starts_with(|character: char| character.is_ascii_lowercase()))
 }
 
 /// A method docstring inherited from an in-file ancestor class.
@@ -612,18 +645,7 @@ fn record_mutated_class_receiver(receiver: &Expr, class_name: &str, out: &mut Ha
 /// Returns true if a Python `StmtClassDef` inherits from `Protocol` or `ABC` or declares
 /// `metaclass=ABCMeta`.
 pub(super) fn is_protocol_or_abc_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
-    let has_abc_metaclass = class_def.keywords().iter().any(|keyword| {
-        keyword
-            .arg
-            .as_ref()
-            .is_some_and(|arg| arg.id == "metaclass")
-            && resolved_path_and_terminal_expr(&keyword.value, file)
-                .is_some_and(|name| matches!(name.path.as_str(), "ABCMeta" | "abc.ABCMeta"))
-    });
-    has_abc_metaclass
-        || resolved_base_class_paths(class_def, file)
-            .iter()
-            .any(|path| PROTOCOL_AND_ABC_PATHS.contains(&path.as_str()))
+    is_protocol_class(class_def, file) || is_abc_class(class_def, file)
 }
 
 /// Returns true if a Python `StmtClassDef` inherits from `TypedDict`.
@@ -1135,6 +1157,29 @@ pub fn collect_fields_after_methods(file: &ParsedFile) -> Vec<PythonFieldAfterMe
     };
     visitor.visit_body(&parsed.syntax().body);
     visitor.out
+}
+
+/// Returns true if a Python `StmtClassDef` inherits from `Protocol`.
+fn is_protocol_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
+    resolved_base_class_paths(class_def, file)
+        .iter()
+        .any(|path| PROTOCOL_PATHS.contains(&path.as_str()))
+}
+
+/// Returns true if a Python `StmtClassDef` inherits from `ABC` or declares `metaclass=ABCMeta`.
+fn is_abc_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
+    let has_abc_metaclass = class_def.keywords().iter().any(|keyword| {
+        keyword
+            .arg
+            .as_ref()
+            .is_some_and(|arg| arg.id == "metaclass")
+            && resolved_path_and_terminal_expr(&keyword.value, file)
+                .is_some_and(|name| matches!(name.path.as_str(), "ABCMeta" | "abc.ABCMeta"))
+    });
+    has_abc_metaclass
+        || resolved_base_class_paths(class_def, file)
+            .iter()
+            .any(|path| ABC_PATHS.contains(&path.as_str()))
 }
 
 /// Returns the import-resolved paths of each positional base class of a Python `StmtClassDef`,
