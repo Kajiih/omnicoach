@@ -58,6 +58,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `unexplained-optional-argument` (python): Flags docstring argument and attribute descriptions that call a value optional or nullable without saying what `None` or omission does.
 - `unexplained-parameter` (python): Requires an `Args:` section when a nontrivial function has an optional, boolean, callable or variadic parameter.
 - `unexplained-return` (python): Requires a `Returns:` section when a nontrivial function has an optional, boolean, union or unannotated result.
+- `uninherited-protocol` (python): Flags Python classes that implement every method of an in-file Protocol without inheriting from it.
 - `unknown-suppression-rule` (python, rust): Flags suppression directives that name an unknown or unsuppressible rule.
 - `unmatched-logger-placeholder` (python): Flags logger calls that pass positional arguments to a message with an unmatched named placeholder.
 - `unslotted-dataclass` (python): Requires Python dataclasses to declare `slots=True`.

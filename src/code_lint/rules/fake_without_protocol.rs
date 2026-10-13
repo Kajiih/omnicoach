@@ -5,7 +5,7 @@
 //! FakeFoo` is separate from `struct FakeFoo` and `rustc` enforces trait contracts nominally.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::ast::python::{PythonBaseClass, extract_classes};
+use crate::code_lint::ast::python::{PythonBaseClass, extract_classes, is_fake_class_name};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -103,14 +103,6 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         })
         .map(|class| rule.diagnostic_at_node(path, &class.name_node, &[("class", &class.name)]))
         .collect()
-}
-
-/// Returns true if `name` starts with the word `Fake` after any leading `_`: `Fake` alone or
-/// followed by anything but a lowercase letter, so `Faker` and `Fakeable` do not match.
-fn is_fake_class_name(name: &str) -> bool {
-    name.trim_start_matches('_')
-        .strip_prefix("Fake")
-        .is_some_and(|rest| !rest.starts_with(|character: char| character.is_ascii_lowercase()))
 }
 
 #[cfg(test)]

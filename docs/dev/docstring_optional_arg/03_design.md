@@ -89,7 +89,7 @@ These override the rest of this document where they differ.
 | E8 | `Returns:` / `Yields:` / `Raises:` not read | `Returns:` / `    The row, or None.` |
 | E9 | Only if Q2 is accepted: omission marker on a parameter with a non-`None` default | `retries: Optional number of retries.` with `retries: int = 3` |
 
-Regression cases, not exemptions (the shared parser owns the behavior, so a rule-side mutation cannot disable them): the legacy linter P1 (`Format: Optional prefix.` on a continuation line passes), P2 and P3 (fail cases below).
+Regression cases, not exemptions (the shared parser owns the behavior, so a rule-side mutation cannot disable them): the legacy linter's P1 (`Format: Optional prefix.` on a continuation line passes), P2 and P3 (fail cases below).
 
 ### 3.1 `fail` cases (sketch)
 
@@ -100,7 +100,7 @@ Regression cases, not exemptions (the shared parser owns the behavior, so a rule
 - `The timeout (optional).`;
 - `The parent node or None.`;
 - ``The parent node or `None`.``;
-- `A float | None.` (the legacy linter P5);
+- `A float | None.` (the legacy linter's P5);
 - `The parent; can be None.`;
 - Napoleon's `The second parameter. Defaults to None.`;
 - description on the next line (P2);

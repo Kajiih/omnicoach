@@ -3,7 +3,7 @@
 architecture_component!(CodeLintSuppression);
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::semantic::comments::strip_comment_delimiters;
+use crate::code_lint::semantic::comments::{CommentIndex, strip_comment_delimiters};
 use crate::config::Config;
 use crate::diagnostic::{
     Diagnostic, Language, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationTemplate,
@@ -17,9 +17,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 const MISSING_REASON_TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Suppression directive has no `-- reason`.",
+    summary: "Suppression directive gives no reason.",
     rationale: "A suppression without a reason cannot be reviewed: nobody can later tell whether it is still justified.",
-    suggestion: "Add `-- <reason>` after the rule names, stating why the finding is acceptable here.",
+    suggestion: "Add `-- <reason>` after the directive, or a comment above it, stating why the finding is acceptable here.",
 };
 
 /// Flags suppression directives missing a non-empty explanation reason.
@@ -37,19 +37,38 @@ const MISSING_SUPPRESSION_REASON: Declaration = Declaration {
     doc: RuleDoc {
         summary: "Requires every suppression directive to give a reason.",
         what_it_does: indoc::indoc! {r"
-            Flags `omni:ignore` and `omni:disable-file` directives that do not end with
-            `-- <reason>`, or whose reason is empty. For example, `# omni:ignore [nested-function]`
-            is flagged, while `# omni:ignore [nested-function] -- required for fixture` is not."},
+            Flags suppression directives that give no reason, either as a non-empty `-- <reason>`
+            at the end of the directive or as a substantive comment block directly above its line.
+            For example, `# omni:ignore [nested-function]` is flagged, while
+            `# omni:ignore [nested-function] -- required for fixture` is not.
+
+            Checked directives are `omni:ignore` and `omni:disable-file` in Python and Rust, plus
+            Python comments starting with a third-party directive: `noqa`, `type: ignore`,
+            `pyright: ignore`, `ty: ignore`, `pyrefly: ignore`, `ruff: noqa`, `ruff: ignore`,
+            `ruff: disable`, `ruff: file-ignore`, `flake8: noqa`, `pylint: disable` and
+            `pylint: skip-file`. One `-- <reason>` covers every directive chained in the same
+            comment, as in `# noqa: F401  # type: ignore[attr-defined] -- <reason>`. Rust
+            `#[allow]` attributes are left to Clippy's `allow_attributes_without_reason`."},
         why_is_this_bad: indoc::indoc! {r"
             A suppression switches a check off, and only its author knows why. Without a reason, a
             reviewer cannot tell a deliberate exception from a shortcut, and a later reader cannot
             tell whether the suppression is still needed. The reason keeps the decision reviewable,
             and makes stale suppressions easy to spot and remove."},
-        known_problems: None,
-        references: &[Reference {
-            title: "Ruff: Error suppression",
-            url: "https://docs.astral.sh/ruff/linter/#error-suppression",
-        }],
+        known_problems: Some(indoc::indoc! {r"
+            Any substantive comment block directly above the directive's line counts as its
+            reason, including an unrelated one such as a license header above a file-level
+            directive. A third-party directive is recognized only at the start of a comment and in
+            lowercase, so `# see below  # noqa: E501` and `# NOQA: E501` are not checked."}),
+        references: &[
+            Reference {
+                title: "Ruff: Error suppression",
+                url: "https://docs.astral.sh/ruff/linter/#error-suppression",
+            },
+            Reference {
+                title: "Clippy: allow_attributes_without_reason",
+                url: "https://rust-lang.github.io/rust-clippy/master/index.html#allow_attributes_without_reason",
+            },
+        ],
         examples: &[],
     },
 };
@@ -215,12 +234,21 @@ struct ParsedDirective {
     coord: LineColumn,
     /// Rule names targeted by the directive (e.g. `["single-letter-name"]`).
     target_rules: Vec<String>,
-    /// Optional explanatory reason provided after `--`.
-    reason: Option<String>,
+    /// Whether a reason is given after `--` or in the comment block directly above.
+    is_explained: bool,
     /// Whether the directive omitted bracketed rule names (`[...]`).
     is_blanket: bool,
     /// Counter of violations matched and suppressed for each target rule.
     matched_count: HashMap<String, usize>,
+}
+
+/// Where a suppression directive comment sits in the source file.
+#[derive(Debug, Clone, Copy)]
+struct DirectiveSite {
+    /// The byte span of the comment.
+    span: SourceSpan,
+    /// The 1-indexed line and column where the comment starts.
+    coord: LineColumn,
 }
 
 /// Tracker responsible for collecting directives, filtering diagnostics, and auditing hygiene.
@@ -228,38 +256,58 @@ struct ParsedDirective {
 pub struct SuppressionTracker {
     /// Collected suppression directives in the file.
     directives: Vec<ParsedDirective>,
+    /// Third-party Python suppression directives (`# noqa`, `# type: ignore`, ...) giving no reason.
+    unexplained_tool_directives: Vec<DirectiveSite>,
 }
 
 const DIRECTIVE_NAMESPACES: &[&str] = &["omnicoach:", "omni:"];
 
-/// Returns `true` if `content` may contain an `omni:` or `omnicoach:` suppression directive.
+/// Substrings of which every third-party Python suppression directive contains at least one.
+const TOOL_DIRECTIVE_MARKERS: &[&str] = &["noqa", "ignore", "disable", "skip-file"];
+
+/// Returns `true` if `content` may contain a suppression directive: an `omni:` or `omnicoach:`
+/// one in any language, or a third-party one in Python.
 #[must_use]
-pub fn contains_directive_prefix(content: &str) -> bool {
+pub fn contains_directive_prefix(content: &str, lang: Language) -> bool {
     DIRECTIVE_NAMESPACES
         .iter()
         .any(|namespace| content.contains(namespace))
+        || (lang == Language::Python
+            && TOOL_DIRECTIVE_MARKERS
+                .iter()
+                .any(|marker| content.contains(marker)))
 }
 
 impl SuppressionTracker {
     /// Parses suppression directives from the parsed file and its content.
     #[must_use]
     pub fn from_file(file: &ParsedFile, content: &str) -> Self {
-        // Skip the comment-node traversal when no `omni:` / `omnicoach:` directive can exist.
-        if !contains_directive_prefix(content) {
+        // Skip the comment-node traversal when no suppression directive can exist.
+        if !contains_directive_prefix(content, file.lang()) {
             return Self::default();
         }
 
-        let directives = ast::collect_comment_nodes(file)
-            .into_iter()
-            .filter_map(|comment_node| {
-                let text = comment_node.text();
-                let span = comment_node.span();
-                let coord = comment_node.start_coordinate();
-                Self::parse_comment_text(&text, span, coord, content)
-            })
-            .collect();
-
-        Self { directives }
+        let comment_index = CommentIndex::from_file(file);
+        let mut tracker = Self::default();
+        for comment_node in ast::collect_comment_nodes(file) {
+            let text = comment_node.text();
+            let site = DirectiveSite {
+                span: comment_node.span(),
+                coord: comment_node.start_coordinate(),
+            };
+            let is_explained_above = || comment_index.has_explanation_above(site.coord.line);
+            if let Some(directive) =
+                Self::parse_comment_text(&text, site, content, is_explained_above)
+            {
+                tracker.directives.push(directive);
+            } else if file.lang() == Language::Python
+                && is_unexplained_tool_directive(&text)
+                && !is_explained_above()
+            {
+                tracker.unexplained_tool_directives.push(site);
+            }
+        }
+        tracker
     }
 
     /// Filters diagnostics against active directives, marking matched rules as used.
@@ -320,15 +368,23 @@ impl SuppressionTracker {
                 &mut diagnostics,
             );
         }
+        if config.is_rule_enabled_for_path(MISSING_SUPPRESSION_REASON.name, path) {
+            diagnostics.extend(self.unexplained_tool_directives.iter().map(|site| {
+                MISSING_SUPPRESSION_REASON
+                    .render_diagnostic(&[], SourceLocation::file_span(path, site.span, site.coord))
+            }));
+        }
         diagnostics
     }
 
     /// Helper to parse a single comment's text into a `ParsedDirective` if it is an omni directive.
+    ///
+    /// `is_explained_above` reports whether the comment block above the directive gives a reason.
     fn parse_comment_text(
         text: &str,
-        span: SourceSpan,
-        coord: LineColumn,
+        site: DirectiveSite,
         content: &str,
+        is_explained_above: impl FnOnce() -> bool,
     ) -> Option<ParsedDirective> {
         let stripped = strip_comment_delimiters(text)?;
         let DirectivePrefix { is_file, remainder } = parse_directive_prefix(stripped)?;
@@ -338,26 +394,99 @@ impl SuppressionTracker {
         } = parse_bracketed_rules(remainder.trim_start());
         let is_blanket = target_rules.is_empty();
 
-        let reason = after_rules
+        let has_inline_reason = after_rules
             .trim_start()
             .strip_prefix("--")
-            .map(str::trim)
-            .filter(|reason_text| !reason_text.is_empty())
-            .map(ToString::to_string);
+            .is_some_and(|reason| !reason.trim().is_empty());
 
-        let placement = resolve_directive_placement(is_file, content, span, coord.line);
+        let placement = resolve_directive_placement(is_file, content, site.span, site.coord.line);
         let matched_count = target_rules.iter().map(|rule| (rule.clone(), 0)).collect();
 
         Some(ParsedDirective {
             placement,
-            span,
-            coord,
+            span: site.span,
+            coord: site.coord,
             target_rules,
-            reason,
+            is_explained: has_inline_reason || is_explained_above(),
             is_blanket,
             matched_count,
         })
     }
+}
+
+/// A third-party Python suppression directive, written `# <tool>: <keyword>...`.
+struct ToolDirective {
+    /// The tool namespace before the colon, such as `type` or `pylint`.
+    tool: &'static str,
+    /// The keywords after the colon that suppress findings, such as `ignore` or `disable`.
+    keywords: &'static [&'static str],
+}
+
+/// Third-party Python suppression directives besides bare `# noqa`.
+const TOOL_DIRECTIVES: &[ToolDirective] = &[
+    ToolDirective {
+        tool: "type",
+        keywords: &["ignore"],
+    },
+    ToolDirective {
+        tool: "pyright",
+        keywords: &["ignore"],
+    },
+    ToolDirective {
+        tool: "ty",
+        keywords: &["ignore"],
+    },
+    ToolDirective {
+        tool: "pyrefly",
+        keywords: &["ignore"],
+    },
+    ToolDirective {
+        tool: "ruff",
+        keywords: &["noqa", "ignore", "disable", "file-ignore"],
+    },
+    ToolDirective {
+        tool: "flake8",
+        keywords: &["noqa"],
+    },
+    ToolDirective {
+        tool: "pylint",
+        keywords: &["disable", "skip-file"],
+    },
+];
+
+/// Returns true if a Python comment starts with a third-party suppression directive and has no
+/// non-empty `-- <reason>`.
+///
+/// The reason may follow any directive chained in the same comment, as in
+/// `# noqa: F401  # type: ignore[attr-defined] -- <reason>`.
+fn is_unexplained_tool_directive(text: &str) -> bool {
+    let Some(body) = strip_comment_delimiters(text) else {
+        return false;
+    };
+    let is_directive = starts_with_keyword(body, "noqa")
+        || body.split_once(':').is_some_and(|(tool, rest)| {
+            TOOL_DIRECTIVES.iter().any(|directive| {
+                directive.tool == tool
+                    && directive
+                        .keywords
+                        .iter()
+                        .any(|keyword| starts_with_keyword(rest.trim_start(), keyword))
+            })
+        });
+    is_directive
+        && body
+            .split_once("--")
+            .is_none_or(|(_, reason)| reason.trim().is_empty())
+}
+
+/// Returns true if `text` starts with `keyword` as a whole word, so `ignore` matches
+/// `ignore[code]` and `ignore-errors` but not `ignored`.
+fn starts_with_keyword(text: &str, keyword: &str) -> bool {
+    text.strip_prefix(keyword).is_some_and(|rest| {
+        rest.chars()
+            .next()
+            .is_none_or(|next| !next.is_alphanumeric() && next != '_')
+    })
 }
 
 /// The `omni:` or `omnicoach:` prefix of a suppression directive.
@@ -496,7 +625,7 @@ fn audit_single_directive(
         diagnostics.push(BLANKET_SUPPRESSION.render_diagnostic(&[], location.clone()));
     }
 
-    if directive.reason.is_none()
+    if !directive.is_explained
         && config.is_rule_enabled_for_path(MISSING_SUPPRESSION_REASON.name, path)
     {
         diagnostics.push(MISSING_SUPPRESSION_REASON.render_diagnostic(&[], location.clone()));
@@ -546,10 +675,7 @@ mod tests {
         assert_eq!(tracker.directives.len(), 1);
         let directive = &tracker.directives[0];
         assert_eq!(directive.target_rules, vec!["single-letter-name"]);
-        assert_eq!(
-            (directive.reason.as_deref(), directive.is_blanket),
-            (Some("math variable"), false)
-        );
+        assert!(directive.is_explained);
         assert_eq!(
             directive.placement,
             DirectivePlacement::SameLine { line: 1 }
@@ -613,7 +739,7 @@ mod tests {
             directive.target_rules,
             vec!["nested-function", "single-letter-name"]
         );
-        assert_eq!(directive.reason.as_deref(), Some("legacy generated file"));
+        assert!(directive.is_explained);
         assert_eq!(directive.placement, DirectivePlacement::File);
     }
 
@@ -627,5 +753,83 @@ mod tests {
 
         assert_eq!(tracker.directives.len(), 1);
         assert!(tracker.directives[0].is_blanket);
+    }
+
+    #[rstest]
+    #[case::noqa("# noqa: F401")]
+    #[case::bare_noqa("# noqa")]
+    #[case::type_ignore("# type: ignore[attr-defined]")]
+    #[case::type_ignore_without_space("# type:ignore")]
+    #[case::pyright("# pyright: ignore[reportAttributeAccessIssue]")]
+    #[case::ty("# ty: ignore[unresolved-attribute]")]
+    #[case::pyrefly_file("# pyrefly: ignore-errors")]
+    #[case::ruff_noqa("# ruff: noqa: F401")]
+    #[case::ruff_disable("# ruff: disable[E501]")]
+    #[case::ruff_file_ignore("# ruff: file-ignore[E501]")]
+    #[case::flake8("# flake8: noqa")]
+    #[case::pylint_disable_next("# pylint: disable-next=protected-access")]
+    #[case::pylint_skip_file("# pylint: skip-file")]
+    #[case::empty_reason("# type: ignore[attr-defined] --   ")]
+    #[case::chained_without_reason("# noqa: F401  # type: ignore[attr-defined]")]
+    fn test_unexplained_tool_directive_detected(#[case] comment: &str) {
+        assert!(is_unexplained_tool_directive(comment));
+    }
+
+    #[rstest]
+    #[case::inline_reason("# type: ignore[attr-defined] -- set by the plugin loader")]
+    #[case::chained_shared_reason("# noqa: F401  # type: ignore[attr-defined] -- re-exported")]
+    #[case::reenable("# pylint: enable=protected-access")]
+    #[case::type_comment("# type: int")]
+    #[case::keyword_prefix("# noquality checks below")]
+    #[case::keyword_suffix("# type: ignored on purpose")]
+    #[case::directive_mid_comment("# see below  # noqa: E501")]
+    #[case::omni_directive("# omni:ignore [nested-function]")]
+    fn test_explained_or_non_tool_directive_not_detected(#[case] comment: &str) {
+        assert!(!is_unexplained_tool_directive(comment));
+    }
+
+    #[rstest]
+    #[case::omni_standalone(
+        "# The fixture needs a closure over the client.\n# omni:ignore [nested-function]\ndef inner(): pass",
+        true
+    )]
+    #[case::omni_trailing(
+        "# Coordinates follow the paper's notation.\na = 1  # omni:ignore [single-letter-name]",
+        true
+    )]
+    #[case::omni_too_short_above(
+        "# why\n# omni:ignore [nested-function]\ndef inner(): pass",
+        false
+    )]
+    #[case::omni_trailing_comment_above_is_not_standalone(
+        "b = 2  # The fixture needs a closure here.\na = 1  # omni:ignore [single-letter-name]",
+        false
+    )]
+    fn test_omni_directive_explained_above(#[case] content: &str, #[case] expected: bool) {
+        let file = ParsedFile::new(content, Language::Python);
+        let tracker = SuppressionTracker::from_file(&file, content);
+
+        assert_eq!(tracker.directives.len(), 1);
+        assert_eq!(tracker.directives[0].is_explained, expected);
+    }
+
+    #[rstest]
+    #[case::unexplained("import os  # noqa: F401", Language::Python, 1)]
+    #[case::explained_above(
+        "# Re-exported so plugins can import it from here.\nimport os  # noqa: F401",
+        Language::Python,
+        0
+    )]
+    #[case::string_ignored("TEXT = \"# noqa: F401\"", Language::Python, 0)]
+    #[case::rust_ignored("let a = 1; // noqa: F401", Language::Rust, 0)]
+    fn test_unexplained_tool_directives_collected(
+        #[case] content: &str,
+        #[case] lang: Language,
+        #[case] expected_count: usize,
+    ) {
+        let file = ParsedFile::new(content, lang);
+        let tracker = SuppressionTracker::from_file(&file, content);
+
+        assert_eq!(tracker.unexplained_tool_directives.len(), expected_count);
     }
 }

@@ -13,7 +13,7 @@
 
 The gate (`batch_d_status.md`) proposed dropping the check in favor of Pylint configuration. Under the batch decision (a), the rule is designed anyway, because the external tools leave the gaps G1–G10 (`02_references.md` §4) and the configuration that comes closest needs Pylint plus a plugin plus four options.
 
-| Rule | Flags | The legacy linter part |
+| Rule | Flags | Legacy linter part |
 | :--- | :--- | :--- |
 | `undocumented-long-function` | A function of at least `min-lines` code lines with no docstring (V1). | Implicit (B5) |
 | `undocumented-parameter` | A docstring that omits parameters from its `Args:` sections (V2). | `Args:` half |
@@ -32,7 +32,7 @@ V4 (`Raises:`) is not ported (D9).
 ### When documentation is required
 
 - **D4. Size signal: code lines of the body.** Count the lines from the first statement after the docstring to the end of the function, skipping blank lines and comment-only lines. Nested functions count. This removes B3/G1 (documenting a function never puts it in scope) and most of G10 (comments and blank lines do not count). Lines are kept over statements or branches because a reader can check them at a glance, which the Prediction Test favors, and because Google's trigger is "nontrivial size". Argument-per-line formatting still inflates the count; that goes in `known_problems`. Branch complexity ("non-obvious logic", the third Google trigger) is a different signal and is not added (Q1).
-- **D5. Option `min-lines`, default 20, declared by each rule.** the legacy linter's 25 physical lines included the `def` line, the docstring and blank lines; 20 code lines is roughly the same size. Each rule declares its own `CountOption` (rule files cannot share consts); the same default is used in all three. A project that wants one threshold sets it three times (Q2).
+- **D5. Option `min-lines`, default 20, declared by each rule.** The legacy linter's 25 physical lines included the `def` line, the docstring and blank lines; 20 code lines is roughly the same size. Each rule declares its own `CountOption` (rule files cannot share consts); the same default is used in all three. A project that wants one threshold sets it three times (Q2).
 - **D6. A structured docstring is checked at any size.** `undocumented-parameter` and `undocumented-return-value` apply when the function has at least `min-lines` code lines **or** its docstring already has an `Args:`, `Returns:`, `Yields:` or `Raises:` section. Google lets sections be omitted only when a one-line docstring suffices (§3.8.3); once the author writes sections, an omitted parameter or return value is an omission, whatever the size. This closes G3 (the legacy linter, Pylint) and G2 (pydoclint, Pylint defaults) together. `Example:` / `Note:` sections do not make a docstring structured.
 - **D7. Private functions are checked.** Google's size trigger is independent of visibility. This deliberately differs from the legacy linter (`__x`), Pylint (`^_`) and Ruff D1xx (G4).
 - **D8. Test files are skipped (`RuleTarget::SourceOnly`).** As in the legacy linter. Google §3.8.2.1 (Test modules) says "method docstrings are not required on `test_` methods in subclasses of `unittest.TestCase`" and that "Docstrings that do not provide any new information should not be used"; long tests are better fixed by splitting than by documenting.

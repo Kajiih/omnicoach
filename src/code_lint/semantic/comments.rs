@@ -80,12 +80,30 @@ impl<'a> CommentIndex<'a> {
     /// 2. Contiguous preceding comment lines walking upward from `line - 1`.
     #[must_use]
     fn has_adjacent_explanation(&self, line: usize) -> bool {
-        // 1. Inline comment on the same line
-        if self.has_inline_explanation(line) {
-            return true;
-        }
+        self.has_inline_explanation(line) || self.has_explanation_above(line)
+    }
 
-        // 2. Contiguous standalone comment block directly above `line`
+    /// Checks whether a given 1-indexed line has an inline, substantive explanation.
+    #[must_use]
+    fn has_inline_explanation(&self, line: usize) -> bool {
+        self.comment_on_line(line).is_some_and(|text| {
+            let cleaned = clean_explanation(text.as_ref());
+            is_substantive_explanation(cleaned)
+        })
+    }
+
+    /// Returns the raw comment text on a specific 1-indexed line, if any.
+    #[must_use]
+    fn comment_on_line(&self, line: usize) -> Option<std::borrow::Cow<'_, str>> {
+        self.comments_by_line
+            .get(&line)
+            .map(|entry| entry.node.text())
+    }
+
+    /// Verifies if the contiguous standalone comment block directly above 1-indexed `line`
+    /// holds a substantive explanation.
+    #[must_use]
+    pub fn has_explanation_above(&self, line: usize) -> bool {
         let mut curr_line = line.saturating_sub(1);
         let mut prev_range: Option<crate::diagnostic::SourceSpan> = None;
         let mut parts = Vec::new();
@@ -118,23 +136,6 @@ impl<'a> CommentIndex<'a> {
         }
         parts.reverse();
         is_substantive_explanation(&parts.join(" "))
-    }
-
-    /// Checks whether a given 1-indexed line has an inline, substantive explanation.
-    #[must_use]
-    fn has_inline_explanation(&self, line: usize) -> bool {
-        self.comment_on_line(line).is_some_and(|text| {
-            let cleaned = clean_explanation(text.as_ref());
-            is_substantive_explanation(cleaned)
-        })
-    }
-
-    /// Returns the raw comment text on a specific 1-indexed line, if any.
-    #[must_use]
-    fn comment_on_line(&self, line: usize) -> Option<std::borrow::Cow<'_, str>> {
-        self.comments_by_line
-            .get(&line)
-            .map(|entry| entry.node.text())
     }
 }
 

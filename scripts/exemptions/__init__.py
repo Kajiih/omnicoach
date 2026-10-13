@@ -10,6 +10,7 @@ from . import (
     literals_and_placeholders,
     names,
     positional_and_scopes,
+    protocol_inheritance,
     return_contracts,
     tests_cluster,
     types_errors_concurrency,
@@ -26,4 +27,5 @@ CLUSTERS = (
     types_errors_concurrency.CLUSTER,
     docstrings.CLUSTER,
     return_contracts.CLUSTER,
+    protocol_inheritance.CLUSTER,
 )

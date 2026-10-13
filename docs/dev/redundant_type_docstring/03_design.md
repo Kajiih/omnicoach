@@ -126,7 +126,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 | H2 | `generator_yield_type(return_type_node: &AstNode) -> Option<AstNode>` in `ast/python/annotations.rs`: the first type argument when the annotation's base resolves to `Iterator`, `Iterable`, `Generator` or their `Async` forms (`typing` or `collections.abc`). | D4 for `Yields`; rules cannot read ruff nodes. Only if Q2 keeps `Yields`. |
 | H3 (optional) | `DocstringEntry` byte range of the parenthetical within its line, or `PythonDocstring::line_node` taking a sub-range. | D8: point at `(int)` instead of the whole entry line. Not needed for v1. |
 
-No change is needed to `parse_google_sections`: `type_text` already balances nested parentheses and keeps `, optional`, and continuation lines are never entries (fixes the legacy linter P1, P2, P3).
+No change is needed to `parse_google_sections`: `type_text` already balances nested parentheses and keeps `, optional`, and continuation lines are never entries (fixes the legacy linter's P1, P2, P3).
 
 ## 12. Test plan (Phase 4 sketch)
 

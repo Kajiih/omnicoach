@@ -233,12 +233,13 @@ impl Topic {
         synonyms: &[],
     };
 
-    /// Hygiene of `omni:` suppression comments.
+    /// Hygiene of suppression directives.
     pub(crate) const SUPPRESSION_DIRECTIVES: Self = Self {
         label: "suppression-directives",
         parent: None,
-        description: "Hygiene of `omni:` suppression comments.",
-        scope_note: "`omni:` directives that silence Omni. Not `contextlib.suppress` \
+        description: "Hygiene of suppression directives.",
+        scope_note: "`omni:` directives that silence Omni, and the reasons given on third-party \
+                     Python ones (`# noqa`, `# type: ignore`, ...). Not `contextlib.suppress` \
                      (see `error-handling`).",
         synonyms: &[],
     };

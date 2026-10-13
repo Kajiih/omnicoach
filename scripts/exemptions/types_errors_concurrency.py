@@ -140,18 +140,29 @@ CLUSTER = Cluster(
             path=CLASSES,
             edits=(
                 (
-                    "        self.decorators.iter().find(|decorator| {\n"
-                    "            matches!(\n"
-                    "                decorator.path.as_str(),\n"
-                    "                DATACLASS_DECORATOR | QUALIFIED_DATACLASS_DECORATOR\n"
-                    "            )\n"
-                    "        })",
+                    "        self.decorators\n"
+                    "            .iter()\n"
+                    "            .find(|decorator| decorator.matches_any(DATACLASS_DECORATOR_PATHS))",
                     "        self.decorators.first()",
                 ),
             ),
             cases=(
                 "mutable_dataclass::pass::other_decorator_class_exempt",
                 "unslotted_dataclass::pass::other_decorator_class_exempt",
+            ),
+        ),
+        Mutation(
+            label="non-stdlib `dataclass` decorator exempt from mutable-dataclass and unslotted-dataclass",
+            path=CLASSES,
+            edits=(
+                (
+                    ".find(|decorator| decorator.matches_any(DATACLASS_DECORATOR_PATHS))",
+                    ".find(|decorator| DATACLASS_DECORATOR_PATHS.contains(&decorator.path.as_str()))",
+                ),
+            ),
+            cases=(
+                "mutable_dataclass::pass::non_stdlib_dataclass_decorator_exempt",
+                "unslotted_dataclass::pass::non_stdlib_dataclass_decorator_exempt",
             ),
         ),
         # --- suppressed-exception ---

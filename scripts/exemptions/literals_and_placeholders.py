@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .model import (
     AST,
+    BARE_MULTILINE_STRING,
     FORMAT_STRINGS,
     INLINE_TEST_ALWAYS_FALSE,
     LOGGING,
@@ -75,6 +76,20 @@ CLUSTER = Cluster(
             path=RUST,
             edits=(("&& !is_enclosed_in_doc_attribute(token)", ""),),
             cases=("bare_multiline_string::pass::doc_attribute_exempt",),
+        ),
+        Mutation(
+            label="aliased dedent wrapper exempt from bare-multiline-string",
+            path=BARE_MULTILINE_STRING,
+            edits=(
+                (
+                    "ast::ResolvedName::Imported(resolved) => allowed.contains(resolved.as_str()),",
+                    "ast::ResolvedName::Imported(_) => allowed.contains(full_path),",
+                ),
+            ),
+            cases=(
+                "bare_multiline_string::pass::aliased_cleandoc_allowed",
+                "bare_multiline_string::pass::aliased_indoc_macro_allowed",
+            ),
         ),
         # --- repeated-literal ---
         Mutation(

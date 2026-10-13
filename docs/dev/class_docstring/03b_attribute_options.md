@@ -3,7 +3,7 @@
 > [!IMPORTANT]
 > **Status: VALIDATED** (lead, 2026-10-12; implemented). The user chose **option A**: every public attribute, constructor arguments stored on `self` included, goes under the class docstring's `Attributes:`; an `Attributes:` section in the `__init__` docstring does not count. Question was: must a constructor argument stored on `self` also be listed under `Attributes:`?
 
-Inputs: [01_understand.md](01_understand.md), [02_references.md](02_references.md), [03_design.md](03_design.md) (D9, Q2), [complex_function_docstring/03_design.md](../complex_function_docstring/03_design.md) (`undocumented-parameter`: D14, D17, E27), Google pyguide §3.8.3 and §3.8.4, the legacy linter `ClassDocstringRule` (`scratch/legacy_reference/legacy_lints.py`, lines 637–698). Markers: **[run]** = probed in this study (Sphinx 8 + Napoleon, pydoclint 0.11.0 via `uv`), **[U]** = not verified.
+Inputs: [01_understand.md](01_understand.md), [02_references.md](02_references.md), [03_design.md](03_design.md) (D9, Q2), [complex_function_docstring/03_design.md](../complex_function_docstring/03_design.md) (`undocumented-parameter`: D14, D17, E27), Google pyguide §3.8.3 and §3.8.4, the legacy `ClassDocstringRule` (`scratch/legacy_reference/legacy_lints.py`, lines 637–698). Markers: **[run]** = probed in this study (Sphinx 8 + Napoleon, pydoclint 0.11.0 via `uv`), **[U]** = not verified.
 
 ## 1. The options
 
@@ -52,7 +52,7 @@ That is layout L1 (Google). The other layouts change only the docstrings:
 | Layout | Class `Attributes:` | `Args:` (class or `__init__`) |
 | :--- | :--- | :--- |
 | L1 Google | url, retries, tags, attempts | url, retries, tags |
-| L2 the legacy linter | attempts | url, retries, tags |
+| L2 legacy linter | attempts | url, retries, tags |
 | L3 Middle | retries, tags, attempts | url, retries, tags |
 | L4 Attributes only, short `__init__` (no docstring, < 20 code lines) | url, retries, tags, attempts | none |
 | L5 Attributes only, `__init__` ≥ 20 code lines | url, retries, tags, attempts | none |
@@ -123,7 +123,7 @@ Side finding for D8 (any option): `dataclasses.InitVar[...]` pseudo-fields are c
 
 ## 6. Agreement with references
 
-| Option | Google §3.8.4 / §3.8.3 | pydoclint 0.11.0 [run] | Pylint docparams | The legacy linter |
+| Option | Google §3.8.4 / §3.8.3 | pydoclint 0.11.0 [run] | Pylint docparams | Legacy linter |
 | :--- | :--- | :--- | :--- | :--- |
 | A | Matches the example (`likes_spam` in both). | Neutral: it rejects *every* `Attributes:` entry for a `self.x` attribute (`DOC602`/`DOC603`) in all four probed layouts, including the legacy linter's lone `attempts`. | No attribute check; requires constructor params in `Args:` (`W9015`), like strict UP. | Diverges (stricter). |
 | B | Contradicts the example. | Neutral (same). | Same as A. | Matches. |
@@ -153,7 +153,7 @@ Where stored arguments are documented, in classes with at least one section (nam
 | Both | 79 (10%) | 36 (5%) |
 | Neither | 9 (1%) | 12 (2%) |
 
-Classes **that have an `Attributes:` section** (131 and 73): stored arguments listed under Attributes only (no `Args:`) in 62% / 63%, in both in 33% / 27%, excluded from Attributes the legacy linter-style in 1 / 2 classes (≈1%).
+Classes **that have an `Attributes:` section** (131 and 73): stored arguments listed under Attributes only (no `Args:`) in 62% / 63%, in both in 33% / 27%, excluded from Attributes legacy-style in 1 / 2 classes (≈1%).
 
 Record types (dataclass, attrs, NamedTuple, Pydantic) with a multi-line docstring and public fields: 255 / 271; fields under `Attributes:` in 227 / 244 (89% / 90%), under `Args:` in 0 / 0.
 

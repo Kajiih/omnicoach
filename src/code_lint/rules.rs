@@ -53,6 +53,7 @@ pub mod undocumented_public_attribute;
 pub mod unexplained_optional_argument;
 pub mod unexplained_parameter;
 pub mod unexplained_return;
+pub mod uninherited_protocol;
 pub mod unmatched_logger_placeholder;
 pub mod unslotted_dataclass;
 pub mod unstructured_task;
@@ -115,4 +116,5 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &unexplained_return::RULE,
     &positional_tuple_return::RULE,
     &non_boolean_predicate::RULE,
+    &uninherited_protocol::RULE,
 ];

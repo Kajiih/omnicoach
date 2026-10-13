@@ -9,7 +9,7 @@ Inputs: `01_understand.md` (philosophy §5: no docstring, or a complete one; sco
 
 | Signal | Decision | Why (from `02_references.md` §3) |
 | :--- | :--- | :--- |
-| The legacy linter: any one-line docstring on `@override` | Rejected (D1) | Line count does not separate pointer, copy, difference and complete docstring; its fix pads instead of completing |
+| Legacy linter: any one-line docstring on `@override` | Rejected (D1) | Line count does not separate pointer, copy, difference and complete docstring; its fix pads instead of completing |
 | S1: the whole docstring is a deferral phrase | **Rule 1** `deferral-docstring` | 92/92 in `@override` scope; works without seeing the base |
 | S2: equal to the inherited docstring, or to its summary paragraph | **Rule 2** `copied-base-docstring` | 12/12 in `@override` scope; 36/36 exact copies on all methods |
 | S2 variants: same summary with a different body, extends the base, token overlap | Rejected (E1–E3) | Different text that adds information; complete or not, it is Rule 3's question |
@@ -21,7 +21,7 @@ Inputs: `01_understand.md` (philosophy §5: no docstring, or a complete one; sco
 
 ### Common to the three rules
 
-- **D1.** the legacy linter's line-count proxy is not ported (`01_understand.md` D1).
+- **D1.** The legacy linter's line-count proxy is not ported (`01_understand.md` D1).
 - **D4. Three rules, split by why and how.** P1 and P2 share the fix (remove) but not the harm: a pointer hides the docstring it names; a copy adds nothing and drifts. P3 has a different fix (complete it, or remove it). The configuration needs differ too: a legacy codebase may keep its pointers while banning copies, and Rule 3 is the most opinionated (D17). One rule per template (batch decision c).
 - **D7. Matching normalization** (Rules 1 and 2, and E15 of Rule 3): dedent like `inspect.cleandoc`, collapse whitespace runs, case-fold, strip one trailing period (`PythonDocstring::normalized()`). For Rule 1 also strip backticks, Sphinx roles (`:meth:`, `:class:`, `:func:`, with an optional `py` domain) and a trailing `()`.
 - **D8. Only `@override` methods (user decision, reverses the previous D8).** A method is in scope when it is decorated with `@override`, resolved through imports (`typing.override`, `typing_extensions.override`; `PythonFunctionSignature::has_override_decorator()`). Undecorated overrides are not inspected (E10). The rules rely on mypy `explicit-override` or Pyright `reportImplicitOverride` to make overrides explicit (`02_references.md` §1); Ruff has no such rule. Consequences: suggestions no longer say "decorate with `@override`"; `__init__` and structural `Protocol` implementations, which neither type checker asks to decorate, are out of scope unless decorated (`01_understand.md` §6); legacy `"""See base class."""` code without `@override` (~15,000 google3 files) is not flagged.
@@ -162,4 +162,4 @@ The Rule 1–specific stripping (backticks, Sphinx roles, `()`) stays in the rul
 - **Duplicated docstrings across sibling implementations** (S3), narrowed to siblings whose shared in-file base declares the method **without** a docstring. Fix: move the docstring to the base declaration. This is a different fix, so a separate rule.
 - **`name-restating-docstring`** (S4): a docstring whose words only repeat the function name. General rather than override-specific; Google §3.8.2.1 condemns it for tests.
 - **Rust analogue**: `/// See trait.`, a trait method's doc copied onto an `impl` item, or an `impl` doc dropping the trait doc's `# Errors` / `# Panics` sections. rustdoc already shows the trait's docs on undocumented impl items. Detectable when the trait is in the same file.
-- **Not pursued**: the legacy linter's "one-line docstring on `@override`" proxy (`01_understand.md` §3).
+- **Not pursued**: The legacy linter's "one-line docstring on `@override`" proxy (`01_understand.md` §3).

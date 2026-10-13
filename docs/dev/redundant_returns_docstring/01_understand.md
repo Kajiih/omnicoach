@@ -1,4 +1,4 @@
-# 01 — Understand: the legacy linter `RedundantReturnsDocstringRule`
+# 01 — Understand: Legacy `RedundantReturnsDocstringRule`
 
 > [!NOTE]
 > Status: **VALIDATED** (lead, 2026-10-12; implemented). Batch D (docstrings), worker phase 1 of 7. Playbook: [rule_batch_playbook.md](../rule_batch_playbook.md).
@@ -30,7 +30,7 @@ class RedundantReturnsDocstringRule(LintRule):
 
 Exact behavior:
 
-| Aspect | The legacy linter |
+| Aspect | Legacy linter |
 | :--- | :--- |
 | Scope | Every `def` / `async def` (methods, nested functions, properties, tests). Not classes or modules. |
 | Section detection | A line that is exactly `Returns:` or `Yields:` after stripping. Case-sensitive; `Return:`, `Yield:` and `Returns :` are not sections. |

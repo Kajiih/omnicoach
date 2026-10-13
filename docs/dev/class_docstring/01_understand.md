@@ -1,7 +1,7 @@
 # Class docstring completeness: 01 Understand
 
 > [!IMPORTANT]
-> **Status: VALIDATED** (lead, 2026-10-12; implemented). Batch D, the legacy linter check `ClassDocstringRule`.
+> **Status: VALIDATED** (lead, 2026-10-12; implemented). Batch D, legacy check `ClassDocstringRule`.
 
 ## 1. The candidate
 
@@ -24,7 +24,7 @@ The legacy linter's own docstring states the intent:
 | P7 | Entry matching | `re.compile(r"^\s*" + re.escape(identifier) + r"\s*(?:\(.*\))?\s*:")` against **every** line of the section | A continuation line that starts with `name:` satisfies the check (false negative). |
 | P8 | Reporting | `self.visitor.report(node.lineno, …)`: one "missing `Args:` block" / "missing `Attributes:` block" finding, otherwise one finding per missing name, all on the `class` line | Every finding of a class shares one line, so one suppression silences all of them. |
 
-### 1.2 the legacy linter false positives and false negatives
+### 1.2 Legacy linter false positives and false negatives
 
 False positives:
 
@@ -101,7 +101,7 @@ No omnicoach rule reads docstrings today (batch_d_status.md, shared-helper inven
 
 ## 4. Problem statement
 
-Two different defects hide in one the legacy linter check:
+Two different defects hide in one legacy check:
 
 1. **A constructor parameter is not documented.** The caller cannot write a call without reading the constructor. The fix is an `Args:` entry, in the class or `__init__` docstring.
 2. **A public attribute is not documented.** A reader of an instance cannot know its state without reading every assignment. The fix is an `Attributes:` entry, always in the class docstring.

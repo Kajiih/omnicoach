@@ -57,7 +57,7 @@ Also relevant:
 
 The legacy linter uses *line count* as a proxy for *trivial*. Against what a reader actually sees (§4):
 
-| Docstring on an `@override` method | What hover / `help()` shows | The legacy linter |
+| Docstring on an `@override` method | What hover / `help()` shows | Legacy linter |
 | :--- | :--- | :--- |
 | none | the full base docstring | fine |
 | `"""See base class."""` | only the pointer | flagged ✓ |
@@ -127,7 +127,7 @@ The two unflagged cases are consistent with §4 for structural implementations: 
 
 ## 7. Decisions
 
-- **D1.** the legacy linter's line-count proxy is not ported (§3).
+- **D1.** The legacy linter's line-count proxy is not ported (§3).
 - **D2.** The target is redefined in content terms: an `@override` docstring that hides what the method would inherit, either by adding nothing (P1, P2) or by omitting part of the inherited contract (P3). The philosophy is §5; the split is decided in `03_design.md`.
 - **D3.** Python only (batch decision b). Rust's rustdoc also shows the trait method's documentation on an undocumented impl method; a Rust analogue goes to `03_design.md` as a ROADMAP suggestion only.
 
