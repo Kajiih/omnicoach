@@ -172,13 +172,6 @@ crate::test_utils::rule_test!(
                         def __init__(self) -> None:
                             self._buffer: MutableSequence[int] = []
                 "#,
-                explained_public_mutable_attribute => r#"
-                    from collections.abc import MutableSequence
-
-                    class BatchContext:
-                        # Callers append emitted events directly to this buffer during traversal.
-                        events: MutableSequence[str]
-                "#,
                 protocol_class_exempt => r#"
                     from collections.abc import MutableSequence
                     from typing import Protocol

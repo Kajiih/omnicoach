@@ -129,7 +129,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
 fn opening_verb(line: &DocstringLine) -> Option<&str> {
     let text = line
         .split_type_prefix()
-        .map_or(line.text.as_str(), |(_, rest)| rest);
+        .map_or(line.text.as_str(), |typed| typed.description);
     let word = leading_word(text);
     let lowercase = word.to_ascii_lowercase();
     if !SECTION_VERBS.contains(&lowercase.as_str()) {

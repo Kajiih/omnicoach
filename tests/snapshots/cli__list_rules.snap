@@ -34,9 +34,11 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `mutable-dataclass` (python): Requires Python dataclasses to declare `frozen=True`.
 - `mutable-module-constant` (python): Flags Python module-level constants whose type annotation or value is a mutable collection.
 - `nested-function` (python): Flags Python functions defined inside other functions.
+- `non-boolean-predicate` (python, rust): Flags functions named like a yes/no question that do not return a boolean.
 - `nullable-collection-return` (python, rust): Flags function return annotations that wrap a collection type in `| None`, `Optional`, or `Option`.
 - `packed-assertion` (python, rust): Flags assertions that pack several checks into one condition.
 - `partial-override-docstring` (python): Flags `@override` method docstrings that omit an `Args:`, `Returns:`, `Yields:` or `Raises:` section of the inherited docstring.
+- `positional-tuple-return` (python, rust): Flags functions that return a positional tuple instead of a named record.
 - `primitive-duration` (python, rust): Flags durations held as plain numbers, detected by a time-unit suffix such as `timeout_secs` or `delay_ms`.
 - `private-before-public-function` (python, rust): Flags private functions and methods defined above their owning or calling public entrypoints.
 - `quote-wrapped-placeholder` (python): Flags Python format placeholders wrapped in literal single or double quotes.
@@ -53,9 +55,9 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `uncolocated-helper` (python, rust): Flags private helpers that are neither colocated right after their single public consumer nor placed in the trailing helper section at the end of the scope.
 - `undocumented-nontrivial-function` (python): Requires a docstring on functions with many statements or a high cognitive complexity.
 - `undocumented-public-attribute` (python): Requires detailed Python class docstrings to list every public attribute under `Attributes:`.
-- `undocumented-tuple-return` (python): Requires a `Returns:` or `Yields:` description when a documented function returns or yields a positional tuple.
 - `unexplained-optional-argument` (python): Flags docstring argument and attribute descriptions that call a value optional or nullable without saying what `None` or omission does.
 - `unexplained-parameter` (python): Requires an `Args:` section when a nontrivial function has an optional, boolean, callable or variadic parameter.
+- `unexplained-return` (python): Requires a `Returns:` section when a nontrivial function has an optional, boolean, union or unannotated result.
 - `unknown-suppression-rule` (python, rust): Flags suppression directives that name an unknown or unsuppressible rule.
 - `unmatched-logger-placeholder` (python): Flags logger calls that pass positional arguments to a message with an unmatched named placeholder.
 - `unslotted-dataclass` (python): Requires Python dataclasses to declare `slots=True`.

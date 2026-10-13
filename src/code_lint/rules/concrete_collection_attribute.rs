@@ -9,8 +9,8 @@ use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::read_only_collection_replacements;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, EnforcementMode, Example, ImpactedQuality,
-    LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
+    RuleDoc, RuleOptions, Topic,
 };
 use std::path::Path;
 
@@ -26,13 +26,7 @@ pub const RULE: CodeRule = CodeRule {
         name: RuleName("concrete-collection-attribute"),
         template: &TEMPLATE,
         languages: &[Language::Python],
-        options: RuleOptions {
-            enforcement_mode: Some(LanguageDefaults::new(
-                EnforcementMode::RequireExplanation,
-                &[],
-            )),
-            options: (),
-        },
+        options: RuleOptions::code_rule(()),
         classification: Classification {
             topics: &[Topic::STATIC_TYPING],
             precision: Precision::Exact,
@@ -166,11 +160,6 @@ crate::test_utils::rule_test!(
 
                         def __init__(self) -> None:
                             self._history: list[str] = []
-                "#,
-                explained_public_concrete_attribute => r#"
-                    class WorkerState:
-                        # Callers append pending job identifiers directly to this concrete list.
-                        pending_jobs: list[str]
                 "#,
                 module_variable_ignored => r#"
                     MODULE_ITEMS: list[int] = []

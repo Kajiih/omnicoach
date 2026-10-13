@@ -178,13 +178,6 @@ crate::test_utils::rule_test!(
                             mapping = self.create_map()
                             mapping["count"] = 2
                 "#,
-                explained_by_header_comment => r#"
-                    from collections.abc import MutableSet
-
-                    # External plugins add and discard tags directly on the returned set.
-                    def plugin_tags() -> MutableSet[str]:
-                        return set()
-                "#,
                 protocol_class_exempt => r#"
                     from collections.abc import MutableSequence
                     from typing import Protocol

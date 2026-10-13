@@ -8,7 +8,6 @@ from .model import (
     AST,
     CALLS,
     CLASSES,
-    COMMENTS,
     ERROR_LOG_IN_EXCEPT,
     PYTHON,
     SUPPRESSED_EXCEPTION,
@@ -156,67 +155,6 @@ CLUSTER = Cluster(
             ),
         ),
         # --- suppressed-exception ---
-        Mutation(
-            label="inline explanation comment on `with` line licenses suppressed-exception",
-            path=COMMENTS,
-            edits=(
-                (
-                    "    fn has_inline_explanation(&self, line: usize) -> bool {\n"
-                    "        self.comment_on_line(line).is_some_and(|text| {\n"
-                    "            let cleaned = clean_explanation(text.as_ref());\n"
-                    "            is_substantive_explanation(cleaned)\n"
-                    "        })\n"
-                    "    }",
-                    "    fn has_inline_explanation(&self, line: usize) -> bool {\n"
-                    "        let _ = line;\n"
-                    "        false\n"
-                    "    }",
-                ),
-            ),
-            cases=(
-                "suppressed_exception::pass::single_line_inline",
-                "suppressed_exception::pass::multiline_parenthesized_with_inline",
-                "suppressed_exception::pass::multiline_header_trailing_comment",
-            ),
-        ),
-        Mutation(
-            label="preceding standalone comment block licenses suppressed-exception",
-            path=COMMENTS,
-            edits=(
-                (
-                    "        while curr_line > 0 {",
-                    "        while false && curr_line > 0 {",
-                ),
-            ),
-            cases=(
-                "suppressed_exception::pass::preceding_comment_block",
-                "suppressed_exception::pass::multiline_parenthesized_with_preceding",
-            ),
-        ),
-        Mutation(
-            label="preceding comment above multiline `with (` header licenses suppressed-exception",
-            path=COMMENTS,
-            edits=(
-                (
-                    "        self.has_adjacent_explanation(*header_lines.start())",
-                    "        false",
-                ),
-            ),
-            cases=("suppressed_exception::pass::multiline_parenthesized_with_preceding",),
-        ),
-        Mutation(
-            label="trailing comment on closing `):` of multiline `with` header licenses suppressed-exception",
-            path=COMMENTS,
-            edits=(
-                (
-                    "            || header_lines\n"
-                    "                .into_iter()\n"
-                    "                .any(|header_line| self.has_inline_explanation(header_line))",
-                    "",
-                ),
-            ),
-            cases=("suppressed_exception::pass::multiline_header_trailing_comment",),
-        ),
         Mutation(
             label="suppress() call outside `with` context manager exempt from suppressed-exception",
             path=SUPPRESSED_EXCEPTION,

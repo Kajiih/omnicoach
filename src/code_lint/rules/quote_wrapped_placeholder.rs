@@ -90,7 +90,10 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
     let mut diagnostics = Vec::new();
     for format_string in collect_format_strings(file) {
         for (index, placeholder) in format_string.placeholders.iter().enumerate() {
-            let Some((body, replacement)) = repr_replacement(format_string.style, placeholder)
+            let Some(ReprReplacement {
+                placeholder: body,
+                replacement,
+            }) = repr_replacement(format_string.style, placeholder)
             else {
                 continue;
             };
@@ -107,6 +110,14 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
     diagnostics
 }
 
+/// A placeholder as matched inside quotes, with the `repr` placeholder that replaces it.
+struct ReprReplacement {
+    /// The placeholder as matched inside quotes (`{name}`, `%s`).
+    placeholder: String,
+    /// The `repr` placeholder that replaces the quoted one (`{name!r}`, `%r`).
+    replacement: String,
+}
+
 /// Returns the placeholder as matched inside quotes and its `repr` replacement, or `None` when
 /// the placeholder already sets a conversion or format spec, or is not a bare field.
 ///
@@ -115,29 +126,41 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
 fn repr_replacement(
     style: PythonFormatStyle,
     placeholder: &PythonFormatPlaceholder,
-) -> Option<(String, String)> {
+) -> Option<ReprReplacement> {
     let field = &placeholder.field;
     match style {
         PythonFormatStyle::FString => (placeholder.conversion.is_none()
             && placeholder.format_spec.is_none()
             && !placeholder.is_self_documenting
             && !field.is_empty())
-        .then(|| (format!("{{{field}}}"), format!("{{{field}!r}}"))),
+        .then(|| ReprReplacement {
+            placeholder: format!("{{{field}}}"),
+            replacement: format!("{{{field}!r}}"),
+        }),
         PythonFormatStyle::StrFormat => (placeholder.conversion.is_none()
             && placeholder.format_spec.is_none()
             && extract_valid_field_root(field).is_some())
-        .then(|| (placeholder.text.clone(), format!("{{{field}!r}}"))),
+        .then(|| ReprReplacement {
+            placeholder: placeholder.text.clone(),
+            replacement: format!("{{{field}!r}}"),
+        }),
         PythonFormatStyle::Printf => {
             if placeholder.conversion.as_deref() != Some("s") || placeholder.format_spec.is_some() {
                 return None;
             }
             if field.is_empty() {
-                Some((placeholder.text.clone(), "%r".to_owned()))
+                Some(ReprReplacement {
+                    placeholder: placeholder.text.clone(),
+                    replacement: "%r".to_owned(),
+                })
             } else if field
                 .chars()
                 .all(|character| character.is_alphanumeric() || character == '_')
             {
-                Some((placeholder.text.clone(), format!("%({field})r")))
+                Some(ReprReplacement {
+                    placeholder: placeholder.text.clone(),
+                    replacement: format!("%({field})r"),
+                })
             } else {
                 None
             }

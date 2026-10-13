@@ -17,8 +17,8 @@ use crate::code_lint::ast::python::{
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, EnforcementMode, Example, ImpactedQuality,
-    LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
+    RuleDoc, RuleOptions, Topic,
 };
 use std::cell::LazyCell;
 use std::path::Path;
@@ -38,13 +38,7 @@ pub const RULE: CodeRule = CodeRule {
         name: RuleName("specific-collection-parameter"),
         template: &TEMPLATE,
         languages: &[Language::Python],
-        options: RuleOptions {
-            enforcement_mode: Some(LanguageDefaults::new(
-                EnforcementMode::RequireExplanation,
-                &[],
-            )),
-            options: (),
-        },
+        options: RuleOptions::code_rule(()),
         classification: Classification {
             topics: &[Topic::STATIC_TYPING],
             precision: Precision::Heuristic,
@@ -264,13 +258,6 @@ crate::test_utils::rule_test!(
                         return flag and items
                 ",
 
-                explained_sequence_parameter => r"
-                    from collections.abc import Sequence
-
-                    # Sequence required to preserve deterministic ordering of layers.
-                    def build(layers: Sequence[str]) -> list[str]:
-                        return [layer.strip() for layer in layers]
-                ",
 
                 unused_parameter_not_flagged => r"
                     from collections.abc import Sequence

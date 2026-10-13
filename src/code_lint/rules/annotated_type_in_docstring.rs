@@ -212,7 +212,7 @@ fn repeated_prefix(section: &DocstringSection, annotations: &[String]) -> Vec<Fi
     let Some(line) = section.body.first() else {
         return Vec::new();
     };
-    let Some((prefix, _)) = line.split_type_prefix() else {
+    let Some(prefix) = line.split_type_prefix().map(|typed| typed.type_text) else {
         return Vec::new();
     };
     let prefix_text = without_whitespace(prefix);

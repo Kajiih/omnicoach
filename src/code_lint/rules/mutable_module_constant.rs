@@ -102,7 +102,11 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         if is_dunder || !assignment.is_constant() {
             continue;
         }
-        let Some((target_node, matched)) = mutable_collections(&assignment) else {
+        let Some(MutableCollections {
+            node: target_node,
+            collection_types: matched,
+        }) = mutable_collections(&assignment)
+        else {
             continue;
         };
         let token = PythonCollectionType::joined_paths(&matched);
@@ -124,11 +128,19 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
     diagnostics
 }
 
+/// The mutable collection types of a module constant and the node that names them.
+struct MutableCollections<'tree, 'assignment> {
+    /// The node to report: the annotation or the value.
+    node: &'assignment AstNode<'tree>,
+    /// The mutable collection types `node` names or builds.
+    collection_types: Vec<PythonCollectionType>,
+}
+
 /// The node to report and the mutable collection types of `assignment`: those of its annotation,
 /// or else the collection its value builds.
 fn mutable_collections<'tree, 'assignment>(
     assignment: &'assignment PythonModuleAssignment<'tree>,
-) -> Option<(&'assignment AstNode<'tree>, Vec<PythonCollectionType>)> {
+) -> Option<MutableCollections<'tree, 'assignment>> {
     if let Some(annotation) = &assignment.annotation {
         let matched: Vec<_> =
             collect_collection_types(annotation, AnnotationTraversalDepth::CovariantPositions)
@@ -141,7 +153,10 @@ fn mutable_collections<'tree, 'assignment>(
                 })
                 .collect();
         if !matched.is_empty() {
-            return Some((annotation, matched));
+            return Some(MutableCollections {
+                node: annotation,
+                collection_types: matched,
+            });
         }
     }
     let value = assignment.value.as_ref()?;
@@ -161,7 +176,10 @@ fn mutable_collections<'tree, 'assignment>(
     if is_read_only_mapping && built.name == DICT {
         return None;
     }
-    Some((value, vec![built]))
+    Some(MutableCollections {
+        node: value,
+        collection_types: vec![built],
+    })
 }
 
 /// Returns true if `constructed` is called at runtime to build a mutable collection: `list`,

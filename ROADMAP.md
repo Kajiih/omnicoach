@@ -49,6 +49,9 @@ Design: [ADR 006](docs/dev/decisions/006_architectural_dag_and_conformance.md). 
 - **Multiline Decorator & Attribute Span Awareness for `omni:ignore`**:
   - *Current*: `compute_effective_target_line` in `src/code_lint/suppression.rs` advances `end_target_line` across contiguous lines starting with `@`, `#[`, `//`, or `#`, handling single-line decorators and attributes. However, multiline decorators or attributes whose continuation lines do not start with `@` or `#[` stop the line scan early.
   - *Target*: Use AST decorated/attributed node spans in the suppression resolver so `omni:ignore` placed above a multiline decorator/attribute block suppresses diagnostics on the underlying declaration.
+- **Doc comments count as `require-explanation` explanations**:
+  - *Current*: `CommentIndex` (`src/code_lint/semantic/comments.rs`) indexes every Rust comment token, `///` and `//!` included, so any doc comment of three or more words directly above a flagged item excuses it. Every documented Rust function therefore passes a `require-explanation` rule on its signature: with `positional-tuple-return` in that mode, all 25 tuple-returning functions in `src/` passed unchanged, while `ban` flags them. Python is unaffected (docstrings are string literals, not comments), so the two languages behave differently.
+  - *Target*: Skip doc comments (`///`, `//!`, `/** */`, `/*! */`) when looking for explanations only (not for `omni:ignore` directives), say so in `EnforcementMode::DOC`, and first measure on `src/` how many findings of the `require-explanation` rules (`nullable-collection-return`, `suppressed-exception`, `specific-collection-parameter`, `concrete-collection-attribute`, `concrete-collection-return`, `mutable-collection-return`, `mutable-collection-attribute`) are excused only by a doc comment today.
 - **Generic Container Base-Type Matching (`identical-positional-types`)**:
   - *Current*: Positional parameter types are compared by exact formatted annotation string (`dict[str, int]` != `dict[str, float]`).
   - *Target*: Optionally normalize or group generic collection/mapping containers (`dict[...]`, `Mapping[...]`, `list[...]`, `Sequence[...]`) so multiple positional mappings or sequences are flagged even when their inner type arguments differ. Equivalent spellings of one type (`Optional[str]` vs `str | None`, `List[int]` vs `list[int]`) are also compared as different today.
@@ -88,7 +91,6 @@ Candidates and known-gap follow-ups to prioritize, not commitments.
 
 - **`repeated-index-access` follow-ups** (Python, Rust):
   - *Named record for sparse positional access*: reads needing more `_` placeholders than `repeated-index-access` allows (`row[0]`, `row[7]`) → `NamedTuple` / dataclass / struct (or `csv.DictReader` for CSV rows).
-  - *Tuple-returning functions*: functions returning tuples of ≥3 elements → `NamedTuple` / dataclass / struct.
   - *Multi-field tuple structs* (Rust): tuple structs with ≥2 fields → named-field struct (tuple structs reserved for newtypes).
   - *`re.Match` group indexing* (Python): `m[1]`, `m[2]` → `a, b = m.groups()`.
   - *Rust slice patterns*: `arr[0]`, `arr[1]` on fixed-size arrays → `let [a, b] = arr;`.

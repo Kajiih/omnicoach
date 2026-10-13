@@ -29,9 +29,11 @@ pub mod mutable_collection_return;
 pub mod mutable_dataclass;
 pub mod mutable_module_constant;
 pub mod nested_function;
+pub mod non_boolean_predicate;
 pub mod nullable_collection_return;
 pub mod packed_assertion;
 pub mod partial_override_docstring;
+pub mod positional_tuple_return;
 pub mod primitive_duration;
 pub mod private_before_public_function;
 pub mod quote_wrapped_placeholder;
@@ -48,9 +50,9 @@ pub mod type_suffixed_name;
 pub mod uncolocated_helper;
 pub mod undocumented_nontrivial_function;
 pub mod undocumented_public_attribute;
-pub mod undocumented_tuple_return;
 pub mod unexplained_optional_argument;
 pub mod unexplained_parameter;
+pub mod unexplained_return;
 pub mod unmatched_logger_placeholder;
 pub mod unslotted_dataclass;
 pub mod unstructured_task;
@@ -110,5 +112,7 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &partial_override_docstring::RULE,
     &undocumented_nontrivial_function::RULE,
     &unexplained_parameter::RULE,
-    &undocumented_tuple_return::RULE,
+    &unexplained_return::RULE,
+    &positional_tuple_return::RULE,
+    &non_boolean_predicate::RULE,
 ];

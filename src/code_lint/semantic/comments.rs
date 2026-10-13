@@ -519,6 +519,38 @@ mod tests {
         "suppress(TimeoutError)",
         true
     )]
+    #[case::multiline_with_trailing_comment_on_closing_paren(
+        indoc! {r#"
+            with (
+                open("log.txt"),
+                suppress(FileNotFoundError),
+            ):  # Safe if lock file was already deleted
+                pass
+        "#},
+        "suppress(FileNotFoundError)",
+        true
+    )]
+    #[case::decorated_function_header_with_preceding_comment(
+        indoc! {r"
+            class Cache:
+                # Returns None when the key has expired; an empty list means zero events.
+                @staticmethod
+                def cached_batch(key: str) -> list[int] | None:
+                    return None
+        "},
+        "list[int] | None",
+        true
+    )]
+    #[case::decorated_function_body_comment_not_counted_for_header(
+        indoc! {r"
+            @staticmethod
+            def get_items() -> Sequence[str] | None:
+                # Internal implementation comment inside the body block.
+                return None
+        "},
+        "Sequence[str] | None",
+        false
+    )]
     fn test_has_explanation_for_span(
         #[case] source: &str,
         #[case] target_call: &str,
@@ -531,21 +563,51 @@ mod tests {
         assert_eq!(index.has_explanation_for_span(&file, span, line), expected);
     }
 
-    #[test]
-    fn test_has_explanation_for_span_rust_block_body_isolation() {
-        let source = indoc! {r"
+    #[rstest]
+    #[case::block_body_comment_does_not_license_later_expression(
+        indoc! {r"
             fn f() {
                 let x = {
                     foo(); // Unrelated note about foo and its quirks
                     compute()
                 };
             }
-        "};
+        "},
+        "compute()",
+        false
+    )]
+    #[case::attributed_function_header_with_preceding_comment(
+        indoc! {r"
+            // Returns None on cache miss; an empty slice means the user has no tags.
+            #[must_use]
+            fn cached_tags(&self, user_id: &str) -> Option<&[String]> {
+                let _ = user_id;
+                None
+            }
+        "},
+        "Option<&[String]>",
+        true
+    )]
+    #[case::attributed_function_body_comment_not_counted_for_header(
+        indoc! {r"
+            #[must_use]
+            fn get_items() -> Option<Vec<String>> {
+                // Internal implementation comment inside the body block.
+                None
+            }
+        "},
+        "Option<Vec<String>>",
+        false
+    )]
+    fn test_has_explanation_for_span_rust(
+        #[case] source: &str,
+        #[case] target: &str,
+        #[case] expected: bool,
+    ) {
         let file = ParsedFile::new(source, Language::Rust);
         let index = CommentIndex::from_file(&file);
-        let (span, line) = span_of(source, "compute()");
+        let (span, line) = span_of(source, target);
 
-        // The inline comment on foo() inside the block must NOT license compute()
-        assert!(!index.has_explanation_for_span(&file, span, line));
+        assert_eq!(index.has_explanation_for_span(&file, span, line), expected);
     }
 }

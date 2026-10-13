@@ -331,8 +331,12 @@ impl SuppressionTracker {
         content: &str,
     ) -> Option<ParsedDirective> {
         let stripped = strip_comment_delimiters(text)?;
-        let (is_file, remainder) = parse_directive_prefix(stripped)?;
-        let (target_rules, is_blanket, after_rules) = parse_bracketed_rules(remainder.trim_start());
+        let DirectivePrefix { is_file, remainder } = parse_directive_prefix(stripped)?;
+        let BracketedRules {
+            rules: target_rules,
+            rest: after_rules,
+        } = parse_bracketed_rules(remainder.trim_start());
+        let is_blanket = target_rules.is_empty();
 
         let reason = after_rules
             .trim_start()
@@ -356,8 +360,16 @@ impl SuppressionTracker {
     }
 }
 
+/// The `omni:` or `omnicoach:` prefix of a suppression directive.
+struct DirectivePrefix<'a> {
+    /// True for `disable-file`, false for `ignore`.
+    is_file: bool,
+    /// The directive text after the prefix.
+    remainder: &'a str,
+}
+
 /// Parses the `omni:` or `omnicoach:` (`disable-file` / `ignore`) prefix and validates boundary delimiters.
-fn parse_directive_prefix(stripped: &str) -> Option<(bool, &str)> {
+fn parse_directive_prefix(stripped: &str) -> Option<DirectivePrefix<'_>> {
     let body = DIRECTIVE_NAMESPACES
         .iter()
         .find_map(|namespace| stripped.strip_prefix(namespace))?;
@@ -375,16 +387,30 @@ fn parse_directive_prefix(stripped: &str) -> Option<(bool, &str)> {
         return None;
     }
 
-    Some((is_file, remainder))
+    Some(DirectivePrefix { is_file, remainder })
+}
+
+/// The bracketed rule names `[rule-a, rule-b]` of a directive body.
+struct BracketedRules<'a> {
+    /// The rule names, empty for a blanket directive (no list, an unclosed list or an empty one).
+    rules: Vec<String>,
+    /// The directive body after the closing `]`, or the whole body without a closed list.
+    rest: &'a str,
 }
 
 /// Parses bracketed rule names `[rule-a, rule-b]` from the directive body.
-fn parse_bracketed_rules(remainder_trimmed: &str) -> (Vec<String>, bool, &str) {
+fn parse_bracketed_rules(remainder_trimmed: &str) -> BracketedRules<'_> {
     if !remainder_trimmed.starts_with('[') {
-        return (Vec::new(), true, remainder_trimmed);
+        return BracketedRules {
+            rules: Vec::new(),
+            rest: remainder_trimmed,
+        };
     }
     remainder_trimmed.find(']').map_or_else(
-        || (Vec::new(), true, remainder_trimmed),
+        || BracketedRules {
+            rules: Vec::new(),
+            rest: remainder_trimmed,
+        },
         |close_idx| {
             let raw_rules = &remainder_trimmed[1..close_idx];
             let rules: Vec<String> = raw_rules
@@ -392,8 +418,10 @@ fn parse_bracketed_rules(remainder_trimmed: &str) -> (Vec<String>, bool, &str) {
                 .map(|segment| segment.trim().to_string())
                 .filter(|segment| !segment.is_empty())
                 .collect();
-            let is_blanket = rules.is_empty();
-            (rules, is_blanket, &remainder_trimmed[close_idx + 1..])
+            BracketedRules {
+                rules,
+                rest: &remainder_trimmed[close_idx + 1..],
+            }
         },
     )
 }

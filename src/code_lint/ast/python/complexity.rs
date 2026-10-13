@@ -14,6 +14,34 @@ use ruff_python_ast::{BoolOp, ExceptHandler, Expr, Stmt};
 const STATEMENT_COUNT_METRIC: &str = "statement count";
 const COGNITIVE_COMPLEXITY_METRIC: &str = "cognitive complexity";
 
+/// A complexity threshold reached by a function, with the function's value for that metric.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PythonComplexityMetric {
+    /// The function's statement count ([`PythonFunctionSignature::statement_count`]).
+    StatementCount(usize),
+    /// The function's cognitive complexity ([`PythonFunctionSignature::cognitive_complexity`]).
+    CognitiveComplexity(usize),
+}
+
+impl PythonComplexityMetric {
+    /// The metric's name (`"statement count"` or `"cognitive complexity"`).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::StatementCount(_) => STATEMENT_COUNT_METRIC,
+            Self::CognitiveComplexity(_) => COGNITIVE_COMPLEXITY_METRIC,
+        }
+    }
+
+    /// The function's value for the metric.
+    #[must_use]
+    pub const fn value(self) -> usize {
+        match self {
+            Self::StatementCount(value) | Self::CognitiveComplexity(value) => value,
+        }
+    }
+}
+
 impl PythonFunctionSignature<'_> {
     /// The number of statements in the function's own body, docstring excluded.
     ///
@@ -63,22 +91,22 @@ impl PythonFunctionSignature<'_> {
         visitor.complexity + usize::from(visitor.calls_itself)
     }
 
-    /// Returns the name and value of the first complexity threshold reached by the function
-    /// (`"statement count"` first, then `"cognitive complexity"`), or `None` if neither threshold
-    /// is reached. A threshold of `0` disables that trigger.
+    /// Returns the first complexity threshold reached by the function (statement count first,
+    /// then cognitive complexity), or `None` if neither threshold is reached. A threshold of `0`
+    /// disables that trigger.
     #[must_use]
     pub fn nontrivial_metric(
         &self,
         min_statements: usize,
         min_cognitive_complexity: usize,
-    ) -> Option<(&'static str, usize)> {
+    ) -> Option<PythonComplexityMetric> {
         let statements = self.statement_count();
         if min_statements > 0 && statements >= min_statements {
-            return Some((STATEMENT_COUNT_METRIC, statements));
+            return Some(PythonComplexityMetric::StatementCount(statements));
         }
         let complexity = self.cognitive_complexity();
         (min_cognitive_complexity > 0 && complexity >= min_cognitive_complexity)
-            .then_some((COGNITIVE_COMPLEXITY_METRIC, complexity))
+            .then_some(PythonComplexityMetric::CognitiveComplexity(complexity))
     }
 
     /// Returns true if the function reaches `min_statements` or `min_cognitive_complexity` (`0`
@@ -608,7 +636,9 @@ mod tests {
         let file = ParsedFile::new(source, Language::Python);
         let signature = &extract_function_signatures(&file)[0];
         assert_eq!(
-            signature.nontrivial_metric(thresholds.0, thresholds.1),
+            signature
+                .nontrivial_metric(thresholds.0, thresholds.1)
+                .map(|metric| (metric.name(), metric.value())),
             expected
         );
         assert_eq!(

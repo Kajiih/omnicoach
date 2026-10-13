@@ -128,8 +128,8 @@ CLUSTER = Cluster(
             path=RUST,
             edits=(
                 (
-                    "if let Some((true, initializer)) = constant_initializer_expr(node) {",
-                    "if let Some((true, initializer)) = None::<(bool, Option<ast::Expr>)> {",
+                    "if let Some(ScalarConstant { initializer }) = constant_initializer_expr(node) {",
+                    "if let Some(ScalarConstant { initializer }) = None::<ScalarConstant> {",
                 ),
             ),
             cases=("repeated_literal::pass::composite_constant_does_not_pair_with_single_use@rust",),
@@ -202,7 +202,8 @@ CLUSTER = Cluster(
             path=PY_LITERALS,
             edits=(
                 (
-                    'if resolve_path_and_terminal_expr(&sub.value, &self.file.source).1 == "Literal" =>',
+                    "if resolve_path_and_terminal_expr(&sub.value, &self.file.source).terminal\n"
+                    '                    == "Literal" =>',
                     "if false =>",
                 ),
             ),
@@ -362,10 +363,10 @@ CLUSTER = Cluster(
                 (
                     "if bytes.get(index + 1) == Some(&b'%') {\n            index += 2;\n            continue;\n        }",
                     "if bytes.get(index + 1) == Some(&b'%') {\n"
-                    "            if let Some((end, placeholder)) = parse_printf_field(content, index + 1) {\n"
+                    "            if let Some(placeholder) = parse_printf_field(content, index + 1) {\n"
                     "                literals.push(content[literal_start..index].to_owned());\n"
+                    "                index += 1 + placeholder.text.len();\n"
                     "                placeholders.push(placeholder);\n"
-                    "                index = end;\n"
                     "                literal_start = index;\n"
                     "                continue;\n"
                     "            }\n"

@@ -1,10 +1,11 @@
 //! AST helper predicates and structural extractors for Rust (`ra_ap_syntax`).
 
 use crate::code_lint::ast::{
-    AstNode, Binding, BindingKind, CallableItem, CallableScope, EnclosingFunction,
+    AstNode, Binding, BindingKind, CallableItem, CallableScope, EnclosingFunction, FunctionReturn,
     LiteralOccurrence, LiteralRole, LiteralValue, MethodVisibility, ParsedFile, PositionalRead,
-    ScopePositionalReads, TypeMethod, TypeMethodScope, is_rust_comment_kind, parse_float_literal,
-    parse_integer_literal, push_bindings, span_from_rowan_range,
+    QualifiedName, ReturnShape, ScopePositionalReads, TypeMethod, TypeMethodScope,
+    is_rust_comment_kind, parse_float_literal, parse_integer_literal, push_bindings,
+    span_from_rowan_range,
 };
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast::{
@@ -37,6 +38,8 @@ const RC_TYPE_NAME: &str = "Rc";
 const ARC_TYPE_NAME: &str = "Arc";
 /// Unqualified name of `std::borrow::Cow`.
 const COW_TYPE_NAME: &str = "Cow";
+/// The Rust boolean primitive.
+const BOOL_TYPE_NAME: &str = "bool";
 
 /// Returns `node` as an [`EnclosingFunction`] if it is a named function or method item; top level
 /// if it is an item of the source file.
@@ -551,8 +554,8 @@ fn is_enclosed_in_macro(token: &SyntaxToken, predicate: &impl Fn(&str) -> bool) 
                 return true;
             }
         } else if ancestor.kind() == SyntaxKind::TOKEN_TREE
-            && let Some((full_path, _)) = resolve_preceding_macro_path(&ancestor)
-            && predicate(full_path.trim_start_matches("::"))
+            && let Some(macro_path) = resolve_preceding_macro_path(&ancestor)
+            && predicate(macro_path.path.trim_start_matches("::"))
         {
             return true;
         }
@@ -632,7 +635,10 @@ pub fn summarize_rust_file(file: &ParsedFile) -> RustFileSummary {
         if file.is_in_rust_inline_test(start_offset) {
             continue;
         }
-        let (item_line, declaration_text) = item_line_and_text(file, item.syntax());
+        let ItemDeclaration {
+            line: item_line,
+            text: declaration_text,
+        } = item_line_and_text(file, item.syntax());
         match &item {
             ast::Item::Module(module) if module.item_list().is_none() => {
                 if let Some(name_node) = module.name() {
@@ -718,7 +724,7 @@ fn summarize_rust_node(
             summary.architecture_components.push(component_argument);
         }
         if let Some(token_tree) = macro_call.token_tree() {
-            let (_, statement_text) = item_line_and_text(file, node);
+            let statement_text = item_line_and_text(file, node).text;
             collect_token_tree_paths(
                 &token_tree,
                 file,
@@ -751,7 +757,10 @@ fn summarize_use_item(
     for attribute in use_item.attrs() {
         summarize_rust_node(attribute.syntax(), file, defined_macros, summary);
     }
-    let (line, declaration_text) = item_line_and_text(file, use_item.syntax());
+    let ItemDeclaration {
+        line,
+        text: declaration_text,
+    } = item_line_and_text(file, use_item.syntax());
     let mut target_paths = Vec::new();
     if let Some(use_tree) = use_item.use_tree() {
         expand_use_tree(&use_tree, "", &mut target_paths);
@@ -880,9 +889,17 @@ fn is_simple_path_segment(segment: &ast::PathSegment) -> bool {
         && segment.ret_type().is_none()
 }
 
-/// Returns `(start_line, trimmed_declaration_text)` of `node`, starting after any leading
-/// outer attributes, doc comments, and whitespace.
-fn item_line_and_text(file: &ParsedFile, node: &SyntaxNode) -> (usize, String) {
+/// The declaration of an item, after its leading outer attributes and doc comments.
+struct ItemDeclaration {
+    /// 1-indexed starting line number.
+    line: usize,
+    /// Trimmed source text.
+    text: String,
+}
+
+/// Returns the declaration of `node`, starting after any leading outer attributes, doc comments,
+/// and whitespace.
+fn item_line_and_text(file: &ParsedFile, node: &SyntaxNode) -> ItemDeclaration {
     let start_offset: usize = node
         .children_with_tokens()
         .find(|element| {
@@ -898,7 +915,7 @@ fn item_line_and_text(file: &ParsedFile, node: &SyntaxNode) -> (usize, String) {
     let end_offset: usize = node.text_range().end().into();
     let line = file.line_index.line(start_offset);
     let text = file.source[start_offset..end_offset].trim().to_string();
-    (line, text)
+    ItemDeclaration { line, text }
 }
 
 fn collect_token_tree_paths(
@@ -1158,7 +1175,7 @@ fn collect_literal_occurrences_rec<'a>(
     }
     if kind == SyntaxKind::TOKEN_TREE {
         if resolve_preceding_macro_path(node)
-            .is_some_and(|(_, terminal)| is_literal_exempt_macro(&terminal))
+            .is_some_and(|macro_path| is_literal_exempt_macro(&macro_path.terminal))
         {
             return;
         }
@@ -1201,7 +1218,7 @@ fn collect_literal_occurrences_rec<'a>(
         }
         return;
     }
-    if let Some((true, initializer)) = constant_initializer_expr(node) {
+    if let Some(ScalarConstant { initializer }) = constant_initializer_expr(node) {
         if let Some(expr_node) = initializer
             && let Some(value) = node_literal_value(expr_node.syntax())
         {
@@ -1234,25 +1251,33 @@ fn is_literal_exempt_macro(name: &str) -> bool {
     LITERAL_EXEMPT_MACROS.contains(&name)
 }
 
-/// Returns the initializer expression node of a scalar constant (`const`, non-`mut` `static`, or `enum` variant).
-fn constant_initializer_expr(node: &SyntaxNode) -> Option<(bool, Option<ast::Expr>)> {
+/// A scalar constant item (`const`, non-`mut` `static`, or `enum` variant).
+struct ScalarConstant {
+    /// The initializer expression node, absent when the item has none (`const N: usize;`).
+    initializer: Option<ast::Expr>,
+}
+
+/// Returns `node` as a scalar constant (`const`, non-`mut` `static`, or `enum` variant).
+fn constant_initializer_expr(node: &SyntaxNode) -> Option<ScalarConstant> {
     if let Some(const_item) = ast::Const::cast(node.clone()) {
-        return Some((true, const_item.body()));
+        return Some(ScalarConstant {
+            initializer: const_item.body(),
+        });
     }
     if let Some(variant) = ast::Variant::cast(node.clone()) {
-        return Some((
-            true,
-            variant
+        return Some(ScalarConstant {
+            initializer: variant
                 .const_arg()
                 .and_then(|const_arg| const_arg.expr())
                 .or_else(|| variant.syntax().children().find_map(ast::Expr::cast)),
-        ));
+        });
     }
-    if let Some(static_item) = ast::Static::cast(node.clone()) {
-        if static_item.mut_token().is_none() {
-            return Some((true, static_item.body()));
-        }
-        return Some((false, None));
+    if let Some(static_item) = ast::Static::cast(node.clone())
+        && static_item.mut_token().is_none()
+    {
+        return Some(ScalarConstant {
+            initializer: static_item.body(),
+        });
     }
     None
 }
@@ -1374,6 +1399,8 @@ fn integer_literal_value(text: &str) -> Option<LiteralValue> {
 pub struct RustFunction<'a> {
     /// Function identifier name.
     pub name: String,
+    /// Function identifier AST node.
+    pub name_node: AstNode<'a>,
     /// Function item AST node.
     pub node: AstNode<'a>,
     /// Declared return type annotation node, if present (`-> T`).
@@ -1406,6 +1433,10 @@ pub fn collect_functions(file: &ParsedFile) -> Vec<RustFunction<'_>> {
             });
         out.push(RustFunction {
             name: name_node.text().trim().to_owned(),
+            name_node: AstNode::from_span(
+                file,
+                span_from_rowan_range(name_node.syntax().text_range()),
+            ),
             return_type,
             is_trait_or_trait_impl: is_trait_or_trait_impl_function(&function),
             node: AstNode::from_span(file, span_from_rowan_range(function.syntax().text_range())),
@@ -1444,11 +1475,61 @@ pub enum NullableReturnPayload {
     },
 }
 
+impl RustFunction<'_> {
+    /// What the function returns, read from its return type; see [`ReturnShape`].
+    #[must_use]
+    pub fn return_shape(&self) -> ReturnShape {
+        let Some(return_type) = &self.return_type else {
+            return ReturnShape::Unit;
+        };
+        let file = return_type.file;
+        let Some(type_node) = cast_at_span::<ast::Type>(return_type) else {
+            return ReturnShape::Other;
+        };
+        let success = unwrap_rust_return_envelope(type_node, file);
+        match &success {
+            ast::Type::TupleType(tuple) if tuple.fields().next().is_none() => {
+                return ReturnShape::Unit;
+            }
+            ast::Type::PathType(path_type) if path_type.syntax().text() == BOOL_TYPE_NAME => {
+                return ReturnShape::Boolean;
+            }
+            _ => {}
+        }
+        let value = option_payload(&success, file).unwrap_or(success);
+        match unwrap_rust_pointer_wrappers(value, file) {
+            ast::Type::TupleType(tuple) => match tuple.fields().count() {
+                arity @ 2.. => ReturnShape::PositionalTuple { arity },
+                _ => ReturnShape::Other,
+            },
+            _ => ReturnShape::Other,
+        }
+    }
+}
+
+/// See [`crate::code_lint::ast::collect_function_returns`]: trait items, trait implementations and
+/// inline tests are skipped.
+pub(super) fn collect_function_returns(file: &ParsedFile) -> Vec<FunctionReturn<'_>> {
+    collect_functions(file)
+        .into_iter()
+        .filter(|function| {
+            !function.is_trait_or_trait_impl && !function.node.is_in_rust_inline_test()
+        })
+        .map(|function| FunctionReturn {
+            shape: function.return_shape(),
+            name: function.name,
+            name_node: function.name_node,
+            declared_type: function.return_type,
+        })
+        .collect()
+}
+
 /// Classifies the payload `T` of `return_type` if it is `Option<T>`.
 ///
-/// Outer `Result<T, ...>` and `Poll<T>` envelopes are unwrapped first, then transparent borrow
-/// and smart-pointer wrappers (`&T`, `&mut T`, `Box<T>`, `Rc<T>`, `Arc<T>`, `Cow<'_, T>`) around
-/// `T`. Returns `None` if there is no `Option` or `T` is neither a slice nor a generic path type.
+/// Outer `Result<T, ...>` (and aliases ending in `Result`) and `Poll<T>` envelopes are unwrapped
+/// first, then transparent borrow and smart-pointer wrappers (`&T`, `&mut T`, `Box<T>`, `Rc<T>`,
+/// `Arc<T>`, `Cow<'_, T>`) around `T`. Returns `None` if there is no `Option` or `T` is neither a
+/// slice nor a generic path type.
 #[must_use]
 pub fn nullable_return_payload(return_type: &AstNode<'_>) -> Option<NullableReturnPayload> {
     let file = return_type.file;
@@ -1470,7 +1551,11 @@ pub fn nullable_return_payload(return_type: &AstNode<'_>) -> Option<NullableRetu
             ))
         }
         ast::Type::PathType(path_type) => {
-            let (base_span, (path, terminal), _) = extract_path_type_generics(path_type, file)?;
+            let GenericPathType {
+                base_span,
+                base: QualifiedName { path, terminal },
+                ..
+            } = extract_path_type_generics(path_type, file)?;
             Some(NullableReturnPayload::Generic {
                 base: source[base_span.start..base_span.end].trim().to_owned(),
                 path,
@@ -1479,161 +1564,6 @@ pub fn nullable_return_payload(return_type: &AstNode<'_>) -> Option<NullableRetu
         }
         _ => None,
     }
-}
-
-/// Unwraps outer `Result<T, ...>` and `Poll<T>` return type envelopes from `type_node`.
-fn unwrap_rust_return_envelope(type_node: ast::Type, file: &ParsedFile) -> ast::Type {
-    let mut current = type_node;
-    while let ast::Type::PathType(ref path_type) = current {
-        let Some((_, (base_path, base_terminal), type_args)) =
-            extract_path_type_generics(path_type, file)
-        else {
-            break;
-        };
-        let is_result_or_poll = base_terminal == "Result"
-            || (base_terminal == POLL_TYPE_NAME
-                && matches!(
-                    base_path.as_str(),
-                    POLL_TYPE_NAME | "task::Poll" | "std::task::Poll" | "core::task::Poll"
-                ));
-        if is_result_or_poll && let Some(first_arg) = type_args.into_iter().next() {
-            current = first_arg;
-        } else {
-            break;
-        }
-    }
-    current
-}
-
-/// Returns `T` if `type_node` is `Option<T>` (unqualified, `std::option::Option`, or
-/// `core::option::Option`).
-fn option_payload(type_node: &ast::Type, file: &ParsedFile) -> Option<ast::Type> {
-    let ast::Type::PathType(path_type) = type_node else {
-        return None;
-    };
-    let (_, (option_path, option_terminal), option_args) =
-        extract_path_type_generics(path_type, file)?;
-    if option_terminal != OPTION_TYPE_NAME
-        || !matches!(
-            option_path.as_str(),
-            OPTION_TYPE_NAME | "option::Option" | "std::option::Option" | "core::option::Option"
-        )
-        || option_args.len() != 1
-    {
-        return None;
-    }
-    option_args.into_iter().next()
-}
-
-/// Unwraps transparent borrow and smart-pointer wrappers (`&T`, `&mut T`, `Box<T>`, `Rc<T>`,
-/// `Arc<T>`, `Cow<'_, T>`) around a Rust type node.
-fn unwrap_rust_pointer_wrappers(type_node: ast::Type, file: &ParsedFile) -> ast::Type {
-    let mut current = type_node;
-    loop {
-        match &current {
-            ast::Type::RefType(ref_type) => {
-                if let Some(inner) = ref_type.ty() {
-                    current = inner;
-                    continue;
-                }
-                break;
-            }
-            ast::Type::PathType(path_type) => {
-                if let Some((_, (base_path, base_terminal), type_args)) =
-                    extract_path_type_generics(path_type, file)
-                {
-                    let is_pointer_wrapper = match base_terminal.as_str() {
-                        BOX_TYPE_NAME => matches!(
-                            base_path.as_str(),
-                            BOX_TYPE_NAME | "boxed::Box" | "std::boxed::Box" | "alloc::boxed::Box"
-                        ),
-                        RC_TYPE_NAME => matches!(
-                            base_path.as_str(),
-                            RC_TYPE_NAME | "rc::Rc" | "std::rc::Rc" | "alloc::rc::Rc"
-                        ),
-                        ARC_TYPE_NAME => matches!(
-                            base_path.as_str(),
-                            ARC_TYPE_NAME | "sync::Arc" | "std::sync::Arc" | "alloc::sync::Arc"
-                        ),
-                        COW_TYPE_NAME => matches!(
-                            base_path.as_str(),
-                            COW_TYPE_NAME
-                                | "borrow::Cow"
-                                | "std::borrow::Cow"
-                                | "alloc::borrow::Cow"
-                        ),
-                        _ => false,
-                    };
-                    if is_pointer_wrapper
-                        && type_args.len() == 1
-                        && let Some(first_arg) = type_args.into_iter().next()
-                    {
-                        current = first_arg;
-                        continue;
-                    }
-                }
-                break;
-            }
-            _ => break,
-        }
-    }
-    current
-}
-
-/// Extracts `(base_span, (resolved_base_path, base_terminal), type_argument_nodes)` from an [`ast::PathType`]
-/// whose terminal segment has a `<...>` generic argument list, excluding lifetime and associated-type arguments.
-fn extract_path_type_generics(
-    path_type: &ast::PathType,
-    file: &ParsedFile,
-) -> Option<(SourceSpan, (String, String), Vec<ast::Type>)> {
-    let path = path_type.path()?;
-    let segment = path.segment()?;
-    let name_ref = segment.name_ref()?;
-    let generic_args = segment.generic_arg_list()?;
-    let base_start: usize = path.syntax().text_range().start().into();
-    let base_end: usize = name_ref.syntax().text_range().end().into();
-    let base_span = SourceSpan::new(base_start, base_end);
-    let (normalized, terminal) = normalize_type_path_text(&file.source[base_start..base_end])?;
-    let base_resolved = match super::resolve_name(file, &normalized) {
-        super::ResolvedName::Imported(resolved) => {
-            let resolved_terminal = resolved
-                .rsplit("::")
-                .next()
-                .unwrap_or(resolved.as_str())
-                .to_owned();
-            (resolved, resolved_terminal)
-        }
-        super::ResolvedName::Local => return None,
-        super::ResolvedName::Unbound => (normalized, terminal),
-    };
-    let type_arguments = generic_args
-        .generic_args()
-        .filter_map(|generic_arg| match generic_arg {
-            ast::GenericArg::TypeArg(type_arg) => type_arg.ty(),
-            _ => None,
-        })
-        .collect();
-    Some((base_span, base_resolved, type_arguments))
-}
-
-/// Normalizes a raw type path string by stripping whitespace and any leading `::`,
-/// returning `(normalized_path, terminal_identifier)`.
-fn normalize_type_path_text(raw_text: &str) -> Option<(String, String)> {
-    let compact = compact_path_text(raw_text);
-    if compact.is_empty() || compact.contains('<') || compact.contains('[') || compact.contains('(')
-    {
-        return None;
-    }
-    let normalized = compact
-        .strip_prefix("::")
-        .unwrap_or(compact.as_str())
-        .to_owned();
-    let terminal = normalized
-        .rsplit("::")
-        .next()
-        .unwrap_or(normalized.as_str())
-        .to_owned();
-    Some((normalized, terminal))
 }
 
 /// Collects each Rust inherent `impl` block in `file` with its direct non-test `fn` items in
@@ -2223,9 +2153,9 @@ fn macro_call_terminal_name(macro_call: &ast::MacroCall) -> String {
         .map_or_else(String::new, |name_ref| name_ref.text().trim().to_string())
 }
 
-/// Resolves `(full_path, terminal_name)` if `token_tree` is immediately preceded by `!` and a macro path
+/// Resolves the macro path if `token_tree` is immediately preceded by `!` and a macro path
 /// (such as `indoc! { ... }` or `indoc::indoc! { ... }` inside an outer `token_tree`).
-fn resolve_preceding_macro_path(token_tree: &SyntaxNode) -> Option<(String, String)> {
+fn resolve_preceding_macro_path(token_tree: &SyntaxNode) -> Option<QualifiedName> {
     let first_token = token_tree.first_token()?;
     let bang = previous_non_trivia_token(&first_token)?;
     if bang.kind() != SyntaxKind::BANG {
@@ -2258,7 +2188,10 @@ fn resolve_preceding_macro_path(token_tree: &SyntaxNode) -> Option<(String, Stri
             break;
         }
     }
-    Some((full_path, terminal))
+    Some(QualifiedName {
+        path: full_path,
+        terminal,
+    })
 }
 
 /// Returns the previous non-trivia token before `token`.
@@ -2273,12 +2206,6 @@ const fn is_path_segment_token_kind(kind: SyntaxKind) -> bool {
         kind,
         SyntaxKind::IDENT | SyntaxKind::CRATE_KW | SyntaxKind::SELF_KW | SyntaxKind::SUPER_KW
     )
-}
-
-fn compact_path_text(text: &str) -> String {
-    text.chars()
-        .filter(|character| !character.is_whitespace())
-        .collect()
 }
 
 /// Extracts the terminal type name of `impl_item.self_ty()` (or its trimmed source text when
@@ -2362,6 +2289,208 @@ fn returns_self_type(function: &ast::Fn, type_name: &str) -> bool {
                     || (token.kind() == SyntaxKind::IDENT && token.text() == type_name)
             })
     })
+}
+
+/// Unwraps outer `Result<T, ...>` (or an alias whose last segment ends in `Result`, such as
+/// `io::Result<T>` or `CargoResult<T>`) and `Poll<T>` return type envelopes from `type_node`.
+fn unwrap_rust_return_envelope(type_node: ast::Type, file: &ParsedFile) -> ast::Type {
+    let mut current = type_node;
+    while let ast::Type::PathType(ref path_type) = current {
+        let Some(GenericPathType {
+            base:
+                QualifiedName {
+                    path: base_path,
+                    terminal: base_terminal,
+                },
+            arguments: type_args,
+            ..
+        }) = extract_path_type_generics(path_type, file)
+        else {
+            break;
+        };
+        let is_result_or_poll = base_terminal.ends_with("Result")
+            || (base_terminal == POLL_TYPE_NAME
+                && matches!(
+                    base_path.as_str(),
+                    POLL_TYPE_NAME | "task::Poll" | "std::task::Poll" | "core::task::Poll"
+                ));
+        if is_result_or_poll && let Some(first_arg) = type_args.into_iter().next() {
+            current = first_arg;
+        } else {
+            break;
+        }
+    }
+    current
+}
+
+/// Returns `T` if `type_node` is `Option<T>` (unqualified, `std::option::Option`, or
+/// `core::option::Option`).
+fn option_payload(type_node: &ast::Type, file: &ParsedFile) -> Option<ast::Type> {
+    let ast::Type::PathType(path_type) = type_node else {
+        return None;
+    };
+    let GenericPathType {
+        base:
+            QualifiedName {
+                path: option_path,
+                terminal: option_terminal,
+            },
+        arguments: option_args,
+        ..
+    } = extract_path_type_generics(path_type, file)?;
+    if option_terminal != OPTION_TYPE_NAME
+        || !matches!(
+            option_path.as_str(),
+            OPTION_TYPE_NAME | "option::Option" | "std::option::Option" | "core::option::Option"
+        )
+        || option_args.len() != 1
+    {
+        return None;
+    }
+    option_args.into_iter().next()
+}
+
+/// Unwraps transparent borrow and smart-pointer wrappers (`&T`, `&mut T`, `Box<T>`, `Rc<T>`,
+/// `Arc<T>`, `Cow<'_, T>`) around a Rust type node.
+fn unwrap_rust_pointer_wrappers(type_node: ast::Type, file: &ParsedFile) -> ast::Type {
+    let mut current = type_node;
+    loop {
+        match &current {
+            ast::Type::RefType(ref_type) => {
+                if let Some(inner) = ref_type.ty() {
+                    current = inner;
+                    continue;
+                }
+                break;
+            }
+            ast::Type::PathType(path_type) => {
+                if let Some(GenericPathType {
+                    base:
+                        QualifiedName {
+                            path: base_path,
+                            terminal: base_terminal,
+                        },
+                    arguments: type_args,
+                    ..
+                }) = extract_path_type_generics(path_type, file)
+                {
+                    let is_pointer_wrapper = match base_terminal.as_str() {
+                        BOX_TYPE_NAME => matches!(
+                            base_path.as_str(),
+                            BOX_TYPE_NAME | "boxed::Box" | "std::boxed::Box" | "alloc::boxed::Box"
+                        ),
+                        RC_TYPE_NAME => matches!(
+                            base_path.as_str(),
+                            RC_TYPE_NAME | "rc::Rc" | "std::rc::Rc" | "alloc::rc::Rc"
+                        ),
+                        ARC_TYPE_NAME => matches!(
+                            base_path.as_str(),
+                            ARC_TYPE_NAME | "sync::Arc" | "std::sync::Arc" | "alloc::sync::Arc"
+                        ),
+                        COW_TYPE_NAME => matches!(
+                            base_path.as_str(),
+                            COW_TYPE_NAME
+                                | "borrow::Cow"
+                                | "std::borrow::Cow"
+                                | "alloc::borrow::Cow"
+                        ),
+                        _ => false,
+                    };
+                    if is_pointer_wrapper
+                        && type_args.len() == 1
+                        && let Some(first_arg) = type_args.into_iter().next()
+                    {
+                        current = first_arg;
+                        continue;
+                    }
+                }
+                break;
+            }
+            _ => break,
+        }
+    }
+    current
+}
+
+/// A path type whose terminal segment has a `<...>` generic argument list (`io::Result<T>`).
+struct GenericPathType {
+    /// The source span of the base path, through its terminal segment's name (`io::Result`).
+    base_span: SourceSpan,
+    /// The base path resolved through the file's imports.
+    base: QualifiedName,
+    /// The type arguments, excluding lifetime and associated-type arguments.
+    arguments: Vec<ast::Type>,
+}
+
+/// Extracts the base and type arguments of an [`ast::PathType`] whose terminal segment has a
+/// `<...>` generic argument list.
+fn extract_path_type_generics(
+    path_type: &ast::PathType,
+    file: &ParsedFile,
+) -> Option<GenericPathType> {
+    let path = path_type.path()?;
+    let segment = path.segment()?;
+    let name_ref = segment.name_ref()?;
+    let generic_args = segment.generic_arg_list()?;
+    let base_start: usize = path.syntax().text_range().start().into();
+    let base_end: usize = name_ref.syntax().text_range().end().into();
+    let base_span = SourceSpan::new(base_start, base_end);
+    let normalized = normalize_type_path_text(&file.source[base_start..base_end])?;
+    let base_resolved = match super::resolve_name(file, &normalized.path) {
+        super::ResolvedName::Imported(resolved) => {
+            let resolved_terminal = resolved
+                .rsplit("::")
+                .next()
+                .unwrap_or(resolved.as_str())
+                .to_owned();
+            QualifiedName {
+                path: resolved,
+                terminal: resolved_terminal,
+            }
+        }
+        super::ResolvedName::Local => return None,
+        super::ResolvedName::Unbound => normalized,
+    };
+    let type_arguments = generic_args
+        .generic_args()
+        .filter_map(|generic_arg| match generic_arg {
+            ast::GenericArg::TypeArg(type_arg) => type_arg.ty(),
+            _ => None,
+        })
+        .collect();
+    Some(GenericPathType {
+        base_span,
+        base: base_resolved,
+        arguments: type_arguments,
+    })
+}
+
+/// Normalizes a raw type path string by stripping whitespace and any leading `::`.
+fn normalize_type_path_text(raw_text: &str) -> Option<QualifiedName> {
+    let compact = compact_path_text(raw_text);
+    if compact.is_empty() || compact.contains('<') || compact.contains('[') || compact.contains('(')
+    {
+        return None;
+    }
+    let normalized = compact
+        .strip_prefix("::")
+        .unwrap_or(compact.as_str())
+        .to_owned();
+    let terminal = normalized
+        .rsplit("::")
+        .next()
+        .unwrap_or(normalized.as_str())
+        .to_owned();
+    Some(QualifiedName {
+        path: normalized,
+        terminal,
+    })
+}
+
+fn compact_path_text(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
 }
 
 #[cfg(test)]

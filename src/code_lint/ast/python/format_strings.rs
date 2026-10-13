@@ -1,7 +1,9 @@
 //! Python format strings: f-strings, `str.format` templates and `%` (printf-style) templates,
 //! split into literal text and replacement fields, plus PEP 3101 field-name parsing.
 
-use super::{AstNode, ParsedFile, extract_logger_call, fstring_segments_and_interpolations};
+use super::{
+    AstNode, ParsedFile, TemplateParts, extract_logger_call, fstring_segments_and_interpolations,
+};
 use crate::code_lint::ast::span_from_ruff_range;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_arguments, walk_expr};
 use ruff_python_ast::{Expr, FStringPartRef, InterpolatedElement, Operator, StringLiteral};
@@ -100,8 +102,10 @@ impl FormatStringVisitor<'_> {
                     }
                 }
                 FStringPartRef::FString(fstring) => {
-                    let (literals, interpolations) =
-                        fstring_segments_and_interpolations(fstring, &self.file.source);
+                    let TemplateParts {
+                        literals,
+                        fields: interpolations,
+                    } = fstring_segments_and_interpolations(fstring, &self.file.source);
                     if !fstring.flags.prefix().is_raw() {
                         let placeholders = interpolations
                             .iter()
@@ -175,7 +179,10 @@ impl FormatStringVisitor<'_> {
         let content =
             &self.file.source[usize::from(content_range.start())..usize::from(content_range.end())];
         if !part.flags.prefix().is_raw() {
-            let (literals, placeholders) = match style {
+            let TemplateParts {
+                literals,
+                fields: placeholders,
+            } = match style {
                 PythonFormatStyle::StrFormat => split_brace_fields(content),
                 PythonFormatStyle::Printf => split_printf_fields(content),
                 PythonFormatStyle::FString => unreachable!(),
@@ -247,7 +254,7 @@ fn fstring_placeholder(
 
 /// Splits `str.format` template text into literals and `{...}` fields. Escaped `{{` and `}}`
 /// stay in the literals.
-fn split_brace_fields(content: &str) -> (Vec<String>, Vec<PythonFormatPlaceholder>) {
+fn split_brace_fields(content: &str) -> TemplateParts<PythonFormatPlaceholder> {
     let bytes = content.as_bytes();
     let mut literals = Vec::new();
     let mut placeholders = Vec::new();
@@ -273,7 +280,10 @@ fn split_brace_fields(content: &str) -> (Vec<String>, Vec<PythonFormatPlaceholde
         index += 1;
     }
     literals.push(content[literal_start..].to_owned());
-    (literals, placeholders)
+    TemplateParts {
+        literals,
+        fields: placeholders,
+    }
 }
 
 /// Finds the closing `}` byte offset of a `{...}` field opening at `open_index`, returning
@@ -317,7 +327,7 @@ fn brace_placeholder(text: &str) -> PythonFormatPlaceholder {
 
 /// Splits printf-style template text into literals and `%` fields. Escaped `%%` and `%`
 /// signs that start no valid field stay in the literals.
-fn split_printf_fields(content: &str) -> (Vec<String>, Vec<PythonFormatPlaceholder>) {
+fn split_printf_fields(content: &str) -> TemplateParts<PythonFormatPlaceholder> {
     let bytes = content.as_bytes();
     let mut literals = Vec::new();
     let mut placeholders = Vec::new();
@@ -332,25 +342,25 @@ fn split_printf_fields(content: &str) -> (Vec<String>, Vec<PythonFormatPlacehold
             index += 2;
             continue;
         }
-        if let Some((end, placeholder)) = parse_printf_field(content, index) {
+        if let Some(placeholder) = parse_printf_field(content, index) {
             literals.push(content[literal_start..index].to_owned());
+            index += placeholder.text.len();
             placeholders.push(placeholder);
-            index = end;
             literal_start = index;
             continue;
         }
         index += 1;
     }
     literals.push(content[literal_start..].to_owned());
-    (literals, placeholders)
+    TemplateParts {
+        literals,
+        fields: placeholders,
+    }
 }
 
 /// Parses the `%[(key)][flags][width][.precision][length]type` field starting at
-/// `percent_index`, returning the index after it.
-fn parse_printf_field(
-    content: &str,
-    percent_index: usize,
-) -> Option<(usize, PythonFormatPlaceholder)> {
+/// `percent_index`; its `text` spans `content` from `percent_index` to the end of the field.
+fn parse_printf_field(content: &str, percent_index: usize) -> Option<PythonFormatPlaceholder> {
     let bytes = content.as_bytes();
     let mut cursor = percent_index + 1;
     let mut field = "";
@@ -379,16 +389,13 @@ fn parse_printf_field(
         return None;
     }
     let end = cursor + 1;
-    Some((
-        end,
-        PythonFormatPlaceholder {
-            text: content[percent_index..end].to_owned(),
-            field: field.to_owned(),
-            conversion: Some(char::from(conversion).to_string()),
-            format_spec: (cursor > spec_start).then(|| content[spec_start..cursor].to_owned()),
-            is_self_documenting: false,
-        },
-    ))
+    Some(PythonFormatPlaceholder {
+        text: content[percent_index..end].to_owned(),
+        field: field.to_owned(),
+        conversion: Some(char::from(conversion).to_string()),
+        format_spec: (cursor > spec_start).then(|| content[spec_start..cursor].to_owned()),
+        is_self_documenting: false,
+    })
 }
 
 /// Advances `cursor` past a printf width or precision (`*` or digits).
@@ -417,14 +424,15 @@ pub fn named_format_field_roots(message: &str) -> Option<Vec<String>> {
         } else if rest.starts_with('}') {
             return None;
         } else if rest.starts_with('{') {
-            let (next_cursor, field_roots) = parse_replacement_field(message, cursor + 1)?;
+            let field = parse_replacement_field(message, cursor + 1)?;
             roots.extend(
-                field_roots
+                field
+                    .roots
                     .into_iter()
                     .filter(|root| is_python_identifier(root))
                     .map(str::to_owned),
             );
-            cursor = next_cursor;
+            cursor = field.end;
         } else {
             cursor += rest.chars().next()?.len_utf8();
         }
@@ -465,9 +473,16 @@ pub fn extract_valid_field_root(field_name: &str) -> Option<&str> {
     Some(root)
 }
 
-/// Parses one `{...}` replacement field whose body starts at `start` (immediately after `{`),
-/// returning the byte index after the matching `}` and the root `arg_name`s found inside it.
-fn parse_replacement_field(message: &str, start: usize) -> Option<(usize, Vec<&str>)> {
+/// The root `arg_name`s of one parsed `{...}` replacement field.
+struct ReplacementFieldRoots<'a> {
+    /// The byte index after the field's closing `}`.
+    end: usize,
+    /// The root `arg_name`s found inside the field, in source order.
+    roots: Vec<&'a str>,
+}
+
+/// Parses one `{...}` replacement field whose body starts at `start` (immediately after `{`).
+fn parse_replacement_field(message: &str, start: usize) -> Option<ReplacementFieldRoots<'_>> {
     let mut cursor = start;
     let mut in_brackets = false;
     let mut delimiter = None;
@@ -501,10 +516,16 @@ fn parse_replacement_field(message: &str, start: usize) -> Option<(usize, Vec<&s
     }
 
     if delimiter_char == '}' {
-        return Some((delimiter_index + 1, roots));
+        return Some(ReplacementFieldRoots {
+            end: delimiter_index + 1,
+            roots,
+        });
     }
     let next_cursor = parse_format_spec_section(message, delimiter_index + 1, &mut roots)?;
-    Some((next_cursor, roots))
+    Some(ReplacementFieldRoots {
+        end: next_cursor,
+        roots,
+    })
 }
 
 /// Parses the `:format_spec` portion of a PEP 3101 replacement field starting at `start`,

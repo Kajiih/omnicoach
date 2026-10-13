@@ -47,6 +47,12 @@ Static rules should establish sane defaults while respecting domain vocabulary.
 
 * **Allowlists & Denylists**: Name-checking rules (abbreviations, type suffixes) must let a project replace, extend, or remove items from the default list. Certain terms may be primitive keywords in one language or valid domain acronyms in a specific codebase (e.g., `str` is a primitive in Rust, not an abbreviation).
 * **Thresholds**: Numeric bounds (e.g., maximum assertions per test) must be configurable so teams can adjust the strictness without disabling the rule entirely.
+* **Enforcement mode default: `ban` unless suppressions would be noise**: A legitimate exception to a `ban` rule is still possible: `omni:ignore[rule] -- reason` names the rule, states the reason, and is checked by the suppression audits. `require-explanation` is weaker: any comment of three or more words excuses the finding, without naming the rule, and a comment above a header excuses every finding on that header. So "a legitimate case exists" is not a reason to choose it. The question is whether legitimate cases are so common that a suppression at each one is noise. Default to `require-explanation` only when:
+  * the rule exists to record a reason, so the explanation is the fix (`suppressed-exception`); or
+  * a legitimate case is common and documented in the rule (`nullable-collection-return`: `None` meaning something other than empty); or
+  * the rule's false positives are common and structural, such as single-file analysis missing mutations in other modules (`mutable-collection-return`, `mutable-collection-attribute`).
+
+  An `Exact` rule whose exception is deliberate and rare (`concrete-collection-return`: callers that `sort()` the result) defaults to `ban`.
 
 ---
 
