@@ -358,6 +358,14 @@ pub fn local_ancestors(classes: &[PythonClassInfo<'_>], index: usize) -> Vec<usi
     ancestors
 }
 
+/// A method docstring inherited from an in-file ancestor class.
+pub struct PythonInheritedDocstring<'c, 'a> {
+    /// The ancestor class whose method declares the docstring.
+    pub ancestor: &'c PythonClassInfo<'a>,
+    /// The inherited docstring.
+    pub docstring: PythonDocstring<'a>,
+}
+
 /// The docstring that documentation tools show for method `name` of `classes[index]` when the
 /// method has none of its own, as far as the file shows, with the ancestor that declares it.
 ///
@@ -370,7 +378,7 @@ pub fn inherited_method_docstring<'c, 'a>(
     classes: &'c [PythonClassInfo<'a>],
     index: usize,
     name: &str,
-) -> Option<(&'c PythonClassInfo<'a>, PythonDocstring<'a>)> {
+) -> Option<PythonInheritedDocstring<'c, 'a>> {
     local_ancestors(classes, index)
         .into_iter()
         .find_map(|ancestor| {
@@ -381,7 +389,10 @@ pub fn inherited_method_docstring<'c, 'a>(
                 .rev()
                 .filter(|method| method.name == name)
                 .find_map(PythonFunctionSignature::docstring)
-                .map(|docstring| (class, docstring))
+                .map(|docstring| PythonInheritedDocstring {
+                    ancestor: class,
+                    docstring,
+                })
         })
 }
 
@@ -607,7 +618,7 @@ pub(super) fn is_protocol_or_abc_class(class_def: &StmtClassDef, file: &ParsedFi
             .as_ref()
             .is_some_and(|arg| arg.id == "metaclass")
             && resolved_path_and_terminal_expr(&keyword.value, file)
-                .is_some_and(|(path, _)| matches!(path.as_str(), "ABCMeta" | "abc.ABCMeta"))
+                .is_some_and(|name| matches!(name.path.as_str(), "ABCMeta" | "abc.ABCMeta"))
     });
     has_abc_metaclass
         || resolved_base_class_paths(class_def, file)
@@ -1144,7 +1155,7 @@ fn resolved_base_class_path(base: &Expr, file: &ParsedFile) -> Option<String> {
     } else {
         base
     };
-    resolved_path_and_terminal_expr(base_expr, file).map(|(path, _)| path)
+    resolved_path_and_terminal_expr(base_expr, file).map(|name| name.path)
 }
 
 /// Walks statements inside a method body (without entering nested functions, classes, or lambdas)
@@ -1382,7 +1393,7 @@ fn is_init_var_annotation(annotation: &Expr, file: &ParsedFile) -> bool {
         annotation
     };
     resolved_path_and_terminal_expr(base, file)
-        .is_some_and(|(path, _)| INIT_VAR_PATHS.contains(&path.as_str()))
+        .is_some_and(|name| INIT_VAR_PATHS.contains(&name.path.as_str()))
 }
 
 #[cfg(test)]

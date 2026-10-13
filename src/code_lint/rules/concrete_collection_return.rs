@@ -9,8 +9,8 @@ use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::read_only_collection_replacements;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, EnforcementMode, Example, ImpactedQuality,
-    LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
+    RuleDoc, RuleOptions, Topic,
 };
 use std::path::Path;
 
@@ -26,13 +26,7 @@ pub const RULE: CodeRule = CodeRule {
         name: RuleName("concrete-collection-return"),
         template: &TEMPLATE,
         languages: &[Language::Python],
-        options: RuleOptions {
-            enforcement_mode: Some(LanguageDefaults::new(
-                EnforcementMode::RequireExplanation,
-                &[],
-            )),
-            options: (),
-        },
+        options: RuleOptions::code_rule(()),
         classification: Classification {
             topics: &[Topic::STATIC_TYPING],
             precision: Precision::Exact,
@@ -160,18 +154,6 @@ crate::test_utils::rule_test!(
                     def get_flags() -> frozenset[str]:
                         return frozenset()
                 "#,
-                explained_by_preceding_header_comment => r#"
-                    # Callers sort and append to the returned buffer in place.
-                    def make_buffer() -> list[str]:
-                        return []
-                "#,
-                explained_on_decorated_function_header => r#"
-                    class Builder:
-                        # Callers mutate the returned list directly to assemble batches.
-                        @staticmethod
-                        def make_batch() -> list[int]:
-                            return []
-                "#,
                 protocol_class_exempt => r#"
                     from typing import Protocol
 
@@ -235,12 +217,6 @@ crate::test_utils::rule_test!(
                     def fetch_tags() -> Awaitable[set[str]]:
                         raise NotImplementedError
                 "# => "Awaitable[set[str]]",
-                body_comment_does_not_count_as_header_explanation => r#"
-                    @staticmethod
-                    def get_items() -> list[str]:
-                        # Internal implementation comment inside the body block.
-                        return ["a"]
-                "# => "list[str]",
             ],
         },
     }

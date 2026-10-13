@@ -5,8 +5,6 @@ from __future__ import annotations
 from .model import (
     ANNOTATIONS,
     CLASSES,
-    COMMENTS,
-    CONTRACT,
     FUNCTIONS,
     MUTABLE_COLLECTION_ATTRIBUTE,
     MUTABLE_MODULE_CONSTANT,
@@ -257,7 +255,7 @@ CLUSTER = Cluster(
                     "                && raise_statement.exc.as_deref().is_some_and(|exc| match exc {\n"
                     "                    Expr::Name(name) => name.id == NOT_IMPLEMENTED_ERROR,\n"
                     "                    Expr::Call(call) => {\n"
-                    "                        resolve_path_and_terminal_expr(&call.func, source).1\n"
+                    "                        resolve_path_and_terminal_expr(&call.func, source).terminal\n"
                     "                            == NOT_IMPLEMENTED_ERROR\n"
                     "                    }\n"
                     "                    _ => false,\n"
@@ -357,21 +355,6 @@ CLUSTER = Cluster(
                 "false",
             ),),
             cases=("nullable_collection_return::pass::data_model_dunder_exempt",),
-        ),
-        Mutation(
-            label="preceding header comment satisfies RequireExplanation (batch 3)",
-            path=CONTRACT,
-            edits=((
-                "if mode == EnforcementMode::RequireExplanation && !diagnostics.is_empty() {",
-                "if false && mode == EnforcementMode::RequireExplanation && !diagnostics.is_empty() {",
-            ),),
-            cases=(
-                "mutable_collection_return::pass::explained_by_header_comment",
-                "mutable_collection_attribute::pass::explained_public_mutable_attribute",
-                "nullable_collection_return::pass::explained_by_preceding_header_comment",
-                "nullable_collection_return::pass::explained_on_decorated_function_header",
-                "nullable_collection_return::pass::explained_attributed_rust_function_exempt",
-            ),
         ),
         # --- Local return-value mutation exemptions (mutable-collection-return) ---
         Mutation(
@@ -715,16 +698,19 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="from collections.abc import Set exempts unqualified Set in mutable-module-constant",
-            path=ANNOTATIONS,
+            path=PYTHON,
             edits=((
                 "        ResolvedName::Imported(resolved) => {\n"
                 "            let terminal = resolved\n"
                 "                .rsplit_once('.')\n"
                 "                .map_or(resolved.as_str(), |(_, terminal)| terminal)\n"
                 "                .to_owned();\n"
-                "            Some((resolved, terminal))\n"
+                "            Some(QualifiedName {\n"
+                "                path: resolved,\n"
+                "                terminal,\n"
+                "            })\n"
                 "        }",
-                "        ResolvedName::Imported(_) => Some((path, terminal)),",
+                "        ResolvedName::Imported(_) => Some(name),",
             ),),
             cases=("mutable_module_constant::pass::collections_abc_set_import_exempts_set_annotation",),
         ),

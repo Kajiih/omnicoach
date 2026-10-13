@@ -10,6 +10,7 @@ mod literals;
 mod logging;
 mod parameter_usage;
 mod positional_reads;
+mod returns;
 mod scopes;
 mod strings;
 
@@ -20,14 +21,15 @@ pub use self::annotations::{
 };
 pub use self::classes::{
     PythonAnnotatedAttribute, PythonAttributeDefinition, PythonBaseClass, PythonClassInfo,
-    PythonFieldAfterMethod, PythonInstanceAttributeAnnotation, collect_class_attributes,
-    collect_fields_after_methods, collect_instance_attribute_annotations, extract_classes,
-    inherited_method_docstring, local_ancestors, local_base_classes,
+    PythonFieldAfterMethod, PythonInheritedDocstring, PythonInstanceAttributeAnnotation,
+    collect_class_attributes, collect_fields_after_methods, collect_instance_attribute_annotations,
+    extract_classes, inherited_method_docstring, local_ancestors, local_base_classes,
 };
 pub(super) use self::classes::{collect_callable_scopes, collect_type_method_scopes};
+pub use self::complexity::PythonComplexityMetric;
 pub use self::docstrings::{
-    DocstringEntry, DocstringLine, DocstringSection, DocstringSectionKind, PythonDocstring,
-    normalize_docstring_text, parse_google_sections,
+    DocstringEntry, DocstringLine, DocstringSection, DocstringSectionKind, DocstringTypedLine,
+    PythonDocstring, normalize_docstring_text, parse_google_sections,
 };
 pub use self::format_strings::{
     PythonFormatPlaceholder, PythonFormatString, PythonFormatStyle, collect_format_strings,
@@ -43,6 +45,8 @@ pub use self::parameter_usage::{
     ParameterCollectionCapability, ParameterUsage, summarize_parameter_usages,
 };
 pub(super) use self::positional_reads::collect_positional_reads;
+pub use self::returns::PythonBodyResults;
+pub(super) use self::returns::collect_function_returns;
 pub(super) use self::scopes::collect_bindings;
 pub(super) use self::strings::find_unwrapped_multiline_strings;
 
@@ -53,10 +57,10 @@ use self::functions::{
 };
 use self::literals::is_constant_name;
 use self::logging::extract_logger_call;
-use self::strings::{fstring_segments_and_interpolations, static_string_text};
+use self::strings::{TemplateParts, fstring_segments_and_interpolations, static_string_text};
 use crate::code_lint::ast::{
-    AstNode, EnclosingFunction, ParsedFile, ResolvedName, resolve_name, span_from_ruff_range,
-    with_innermost_function,
+    AstNode, EnclosingFunction, ParsedFile, QualifiedName, ResolvedName, resolve_name,
+    span_from_ruff_range, with_innermost_function,
 };
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
@@ -186,12 +190,13 @@ pub(super) fn extract_decorators_from_slice(
             (&decorator.expression, Vec::new())
         };
 
-        let (path, terminal_name) = resolve_path_and_terminal_expr(target_expr, &file.source);
+        let QualifiedName { path, terminal } =
+            resolve_path_and_terminal_expr(target_expr, &file.source);
         let resolved_path =
-            resolved_path_and_terminal_expr(target_expr, file).map(|(resolved, _)| resolved);
+            resolved_path_and_terminal_expr(target_expr, file).map(|name| name.path);
         out.push(DecoratorInfo {
             path,
-            terminal_name,
+            terminal_name: terminal,
             resolved_path,
             keyword_args,
         });
@@ -650,7 +655,7 @@ pub(super) fn in_place_mutated_receiver_expr(expr: &Expr) -> Option<&Expr> {
 }
 
 /// Helper to resolve the dotted expression path and terminal identifier from an `Expr`.
-pub(super) fn resolve_path_and_terminal_expr(expr: &Expr, source: &str) -> (String, String) {
+pub(super) fn resolve_path_and_terminal_expr(expr: &Expr, source: &str) -> QualifiedName {
     let span = span_from_ruff_range(expr.range());
     let path = source[span.start..span.end].to_string();
     let terminal = if let Expr::Attribute(attr) = expr {
@@ -658,27 +663,30 @@ pub(super) fn resolve_path_and_terminal_expr(expr: &Expr, source: &str) -> (Stri
     } else {
         path.rsplit('.').next().unwrap_or("").to_string()
     };
-    (path, terminal)
+    QualifiedName { path, terminal }
 }
 
-/// The `(path, terminal)` that `expr` names, resolved through the imports of `file`
-/// (`t.List` after `import typing as t` is `("typing.List", "List")`), or `None`
+/// The name that `expr` names, resolved through the imports of `file`
+/// (`t.List` after `import typing as t` is `typing.List` with terminal `List`), or `None`
 /// if it names a definition of `file` (see [`resolve_name`]).
 pub(super) fn resolved_path_and_terminal_expr(
     expr: &Expr,
     file: &ParsedFile,
-) -> Option<(String, String)> {
-    let (path, terminal) = resolve_path_and_terminal_expr(expr, &file.source);
-    match resolve_name(file, &path) {
+) -> Option<QualifiedName> {
+    let name = resolve_path_and_terminal_expr(expr, &file.source);
+    match resolve_name(file, &name.path) {
         ResolvedName::Imported(resolved) => {
             let terminal = resolved
                 .rsplit_once('.')
                 .map_or(resolved.as_str(), |(_, terminal)| terminal)
                 .to_owned();
-            Some((resolved, terminal))
+            Some(QualifiedName {
+                path: resolved,
+                terminal,
+            })
         }
         ResolvedName::Local => None,
-        ResolvedName::Unbound => Some((path, terminal)),
+        ResolvedName::Unbound => Some(name),
     }
 }
 
@@ -796,7 +804,7 @@ fn called_terminal_name_expr(expr: &Expr, source: &str) -> Option<String> {
     let Expr::Call(call) = expr else {
         return None;
     };
-    let (_, terminal) = resolve_path_and_terminal_expr(&call.func, source);
+    let terminal = resolve_path_and_terminal_expr(&call.func, source).terminal;
     (!terminal.is_empty()).then_some(terminal)
 }
 

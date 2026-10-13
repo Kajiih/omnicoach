@@ -9,13 +9,22 @@ use ruff_python_ast::{
 };
 use ruff_text_size::Ranged as _;
 
+/// Template text split into literal segments around its replacement fields.
+pub(super) struct TemplateParts<F> {
+    /// Literal text around `fields`: `literals[i]` precedes `fields[i]` and the last entry
+    /// follows the last field, so there is one more literal than fields.
+    pub(super) literals: Vec<String>,
+    /// The replacement fields, in source order.
+    pub(super) fields: Vec<F>,
+}
+
 /// Splits an `FString` node into its literal text segments (between delimiters and
 /// `InterpolatedElement` children) and its `InterpolatedElement` nodes, using raw source byte
 /// offsets so escape sequences are not decoded.
 pub(super) fn fstring_segments_and_interpolations<'a>(
     fstring: &'a FString,
     source: &str,
-) -> (Vec<String>, Vec<&'a InterpolatedElement>) {
+) -> TemplateParts<&'a InterpolatedElement> {
     let content_start = usize::from(fstring.range.start() + fstring.flags.opener_len());
     let content_end = usize::from(fstring.range.end() - fstring.flags.closer_len());
 
@@ -47,7 +56,10 @@ pub(super) fn fstring_segments_and_interpolations<'a>(
             .unwrap_or_default()
             .to_owned(),
     );
-    (segments, interpolations)
+    TemplateParts {
+        literals: segments,
+        fields: interpolations,
+    }
 }
 
 /// Extracts the decoded text of a plain string literal or an implicit concatenation of plain
@@ -152,7 +164,7 @@ impl<'a, F: Fn(&str) -> bool> SourceOrderVisitor<'a> for UnwrappedMultilineFinde
                 self.allowed_call_depth = prev_depth;
             }
             Expr::Call(call) => {
-                let (path, _) = resolve_path_and_terminal_expr(&call.func, &self.file.source);
+                let path = resolve_path_and_terminal_expr(&call.func, &self.file.source).path;
                 let is_allowed = (self.is_allowed_wrapper)(&path);
                 if is_allowed {
                     self.allowed_call_depth += 1;

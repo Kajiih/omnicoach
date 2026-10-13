@@ -1,6 +1,6 @@
 # Complex function docstring: 04 Execution log
 
-> **Status: VALIDATED** (lead, 2026-10-12; implemented). Scope: `undocumented-nontrivial-function`, `unexplained-parameter` and `undocumented-tuple-return`.
+> **Status: VALIDATED** (lead, 2026-10-12; implemented). Scope: `undocumented-nontrivial-function`, `unexplained-parameter` and `undocumented-tuple-return` (removed 2026-10-13, superseded by `positional-tuple-return` and `unexplained-return`; see [../return_contracts/03_design.md](../return_contracts/03_design.md)).
 
 ## What was built
 

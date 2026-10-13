@@ -150,15 +150,14 @@ fn check_file(
                 && !signature.is_documented_by_enclosing_class()
         })
         .filter_map(|signature| {
-            let (metric, count) =
-                signature.nontrivial_metric(min_statements, min_cognitive_complexity)?;
+            let metric = signature.nontrivial_metric(min_statements, min_cognitive_complexity)?;
             Some(rule.diagnostic_at_node(
                 path,
                 &signature.name_node,
                 &[
                     (FUNCTION, &signature.name),
-                    (METRIC, metric),
-                    (COUNT, &count.to_string()),
+                    (METRIC, metric.name()),
+                    (COUNT, &metric.value().to_string()),
                 ],
             ))
         })

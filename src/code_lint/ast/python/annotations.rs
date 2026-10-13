@@ -1,7 +1,7 @@
 //! Python type annotation unwrapping, constructor resolution, union flattening, and collection type vocabularies.
 
 use super::{AstNode, ParsedFile, find_expr_at_span, resolved_path_and_terminal_expr};
-use crate::code_lint::ast::span_from_ruff_range;
+use crate::code_lint::ast::{QualifiedName, span_from_ruff_range};
 use ruff_python_ast::{Expr, Operator};
 use ruff_text_size::Ranged as _;
 
@@ -36,6 +36,7 @@ const ORDERED_DICT_CONSTRUCTOR: &str = "OrderedDict";
 const TUPLE_CONSTRUCTOR: &str = "tuple";
 const TYPING_TUPLE_CONSTRUCTOR: &str = "Tuple";
 const TYPE_CALLABLE: &str = "Callable";
+const BOOL_CONSTRUCTOR: &str = "bool";
 
 /// Transparent type wrappers whose all type arguments preserve the enclosing variance.
 const TRANSPARENT_UNION_WRAPPERS: &[&str] = &["Optional", "Union"];
@@ -145,9 +146,17 @@ impl PythonCollectionType {
     }
 }
 
-/// Extracts `(base_expr, type_argument_exprs)` from a Python `Expr::Subscript` node inside a
-/// type annotation.
-pub(super) fn extract_generic_base_and_args(expr: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
+/// A subscripted type annotation (`dict[str, int]`).
+pub(super) struct GenericType<'a> {
+    /// The subscripted base expression (`dict`).
+    pub(super) base: &'a Expr,
+    /// The type argument expressions, in source order (`str` and `int`).
+    pub(super) arguments: Vec<&'a Expr>,
+}
+
+/// Extracts the base and type arguments from a Python `Expr::Subscript` node inside a type
+/// annotation.
+pub(super) fn extract_generic_base_and_args(expr: &Expr) -> Option<GenericType<'_>> {
     let Expr::Subscript(subscript) = expr else {
         return None;
     };
@@ -156,7 +165,10 @@ pub(super) fn extract_generic_base_and_args(expr: &Expr) -> Option<(&Expr, Vec<&
     } else {
         vec![subscript.slice.as_ref()]
     };
-    Some((subscript.value.as_ref(), type_args))
+    Some(GenericType {
+        base: subscript.value.as_ref(),
+        arguments: type_args,
+    })
 }
 
 /// Returns true if `(path, terminal)` matches one of `targets` in the standard typing namespaces.
@@ -207,9 +219,9 @@ pub(super) fn is_concrete_collection_constructor(path: &str, terminal: &str) -> 
 pub(super) fn has_final_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> bool {
     let unwrapped = unwrap_annotated_expr(type_expr, file);
     let candidate =
-        extract_generic_base_and_args(unwrapped).map_or(unwrapped, |(base_node, _)| base_node);
+        extract_generic_base_and_args(unwrapped).map_or(unwrapped, |generic| generic.base);
     resolved_path_and_terminal_expr(candidate, file)
-        .is_some_and(|(path, terminal)| is_std_type_constructor(&path, &terminal, &[TYPE_FINAL]))
+        .is_some_and(|name| is_std_type_constructor(&name.path, &name.terminal, &[TYPE_FINAL]))
 }
 
 /// Returns true if `type_expr` is an unparameterized `Final` qualifier (`Final`, `typing.Final`,
@@ -221,7 +233,7 @@ pub(super) fn is_bare_final_annotation_expr(type_expr: &Expr, file: &ParsedFile)
         return false;
     }
     resolved_path_and_terminal_expr(unwrapped, file)
-        .is_some_and(|(path, terminal)| is_std_type_constructor(&path, &terminal, &[TYPE_FINAL]))
+        .is_some_and(|name| is_std_type_constructor(&name.path, &name.terminal, &[TYPE_FINAL]))
 }
 
 /// Collects the standard-library collection types in `type_node` according to `depth`, in
@@ -261,10 +273,17 @@ fn collect_collection_types_expr(
         }
         Expr::Name(_) | Expr::Attribute(_) => push_collection_type(expr, file, out),
         Expr::Subscript(_) => {
-            let Some((base_node, type_args)) = extract_generic_base_and_args(expr) else {
+            let Some(GenericType {
+                base: base_node,
+                arguments: type_args,
+            }) = extract_generic_base_and_args(expr)
+            else {
                 return;
             };
-            let Some((base_path, base_terminal)) = resolved_path_and_terminal_expr(base_node, file)
+            let Some(QualifiedName {
+                path: base_path,
+                terminal: base_terminal,
+            }) = resolved_path_and_terminal_expr(base_node, file)
             else {
                 return;
             };
@@ -374,6 +393,54 @@ pub struct PythonReturnTypeUnion<'a> {
     pub branches: Vec<PythonReturnTypeBranch<'a>>,
 }
 
+impl PythonReturnTypeUnion<'_> {
+    /// Returns true if the union admits `None` and at least one other type (`int | None`,
+    /// `Optional[str]`).
+    #[must_use]
+    pub const fn is_nullable(&self) -> bool {
+        self.has_none && !self.branches.is_empty()
+    }
+
+    /// Returns true if the type is exactly a boolean: `bool`, `TypeGuard[T]` or `TypeIs[T]`,
+    /// without `None`.
+    #[must_use]
+    pub fn is_boolean(&self) -> bool {
+        self.single_branch()
+            .is_some_and(|branch| branch.is_std_type(BOOLEAN_TYPES))
+    }
+
+    /// Returns true if the type is exactly `Any` or `object`, which says nothing about the value.
+    #[must_use]
+    pub fn is_opaque(&self) -> bool {
+        self.single_branch()
+            .is_some_and(|branch| branch.is_std_type(OPAQUE_TYPES))
+    }
+
+    /// The largest element count among the fixed-length tuple branches of at least two elements
+    /// (`tuple[str, int]`, `Tuple[a, b, c]`; not `tuple[int, ...]` or `tuple[int]`).
+    #[must_use]
+    pub fn positional_tuple_arity(&self) -> Option<usize> {
+        self.branches
+            .iter()
+            .filter_map(PythonReturnTypeBranch::positional_tuple_arity)
+            .max()
+    }
+
+    /// The only branch, when the type is a single type without `None`.
+    const fn single_branch(&self) -> Option<&PythonReturnTypeBranch<'_>> {
+        match self.branches.as_slice() {
+            [branch] if !self.has_none => Some(branch),
+            _ => None,
+        }
+    }
+}
+
+/// Types that are booleans to their callers.
+const BOOLEAN_TYPES: &[&str] = &[BOOL_CONSTRUCTOR, "TypeGuard", "TypeIs"];
+
+/// Types that say nothing about the value.
+const OPAQUE_TYPES: &[&str] = &["Any", "object"];
+
 /// A non-`None` alternative of a [`PythonReturnTypeUnion`].
 #[derive(Clone)]
 pub struct PythonReturnTypeBranch<'a> {
@@ -384,6 +451,35 @@ pub struct PythonReturnTypeBranch<'a> {
     pub collection: Option<PythonCollectionType>,
     /// The type arguments if the branch is a subscript (`int` and `...` in `tuple[int, ...]`).
     pub type_arguments: Option<Vec<AstNode<'a>>>,
+    /// The constructor (the branch, or the base of its subscript) resolved through the file's
+    /// imports, as a path and its terminal name.
+    constructor: Option<QualifiedName>,
+}
+
+impl PythonReturnTypeBranch<'_> {
+    /// The element count if the branch is a fixed-length tuple of at least two elements.
+    #[must_use]
+    pub fn positional_tuple_arity(&self) -> Option<usize> {
+        let collection = self.collection.as_ref()?;
+        if !matches!(
+            collection.name.as_str(),
+            TUPLE_CONSTRUCTOR | TYPING_TUPLE_CONSTRUCTOR
+        ) {
+            return None;
+        }
+        let arguments = self.type_arguments.as_ref()?;
+        let is_fixed_length = arguments
+            .iter()
+            .all(|argument| argument.text().trim() != "...");
+        (arguments.len() >= 2 && is_fixed_length).then_some(arguments.len())
+    }
+
+    /// Returns true if the branch's constructor is one of the standard-library types `names`.
+    fn is_std_type(&self, names: &[&str]) -> bool {
+        self.constructor.as_ref().is_some_and(|constructor| {
+            is_std_type_constructor(&constructor.path, &constructor.terminal, names)
+        })
+    }
 }
 
 /// Flattens `return_type_node` across union constructs (`|`, `Union[...]`, `Optional[...]`)
@@ -414,12 +510,13 @@ pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnType
             .into_iter()
             .map(|branch| {
                 let generic = extract_generic_base_and_args(branch);
-                let constructor = generic.as_ref().map_or(branch, |&(base, _)| base);
+                let constructor = generic.as_ref().map_or(branch, |generic| generic.base);
                 PythonReturnTypeBranch {
                     node: node_of(branch),
                     collection: collection_type_expr(constructor, file),
                     type_arguments: generic
-                        .map(|(_, arguments)| arguments.into_iter().map(node_of).collect()),
+                        .map(|generic| generic.arguments.into_iter().map(node_of).collect()),
+                    constructor: resolved_path_and_terminal_expr(constructor, file),
                 }
             })
             .collect(),
@@ -445,8 +542,14 @@ const GENERATOR_TYPES: &[&str] = &[
 pub fn generator_yield_type<'a>(return_type_node: &AstNode<'a>) -> Option<AstNode<'a>> {
     let file = return_type_node.file;
     let expr = find_expr_at_span(file.py_module()?.syntax(), return_type_node.span())?;
-    let (base_node, type_args) = extract_generic_base_and_args(expr)?;
-    let (base_path, base_terminal) = resolved_path_and_terminal_expr(base_node, file)?;
+    let GenericType {
+        base: base_node,
+        arguments: type_args,
+    } = extract_generic_base_and_args(expr)?;
+    let QualifiedName {
+        path: base_path,
+        terminal: base_terminal,
+    } = resolved_path_and_terminal_expr(base_node, file)?;
     if !is_std_type_constructor(&base_path, &base_terminal, GENERATOR_TYPES) {
         return None;
     }
@@ -477,33 +580,25 @@ pub fn is_non_obvious_parameter_type(type_node: &AstNode<'_>) -> bool {
             .any(|branch| is_bool_or_callable_type_expr(branch, file))
 }
 
-/// Returns true if `return_type_node` (or its yielded type when it is a generator or iterator
-/// annotation, and after unwrapping `Awaitable`, `Coroutine`, `Annotated` and unions) has a
-/// fixed-length tuple branch `tuple[A, B, ...]` / `Tuple[A, B, ...]` of at least two positions
-/// (without `...`).
+/// The element count of the positional tuple that `return_type_node` returns or, for a generator
+/// or iterator annotation, yields (see [`PythonReturnTypeUnion::positional_tuple_arity`]).
 #[must_use]
-pub fn is_positional_tuple_return_type(return_type_node: &AstNode<'_>) -> bool {
+pub fn positional_tuple_return_arity(return_type_node: &AstNode<'_>) -> Option<usize> {
     let target = generator_yield_type(return_type_node).unwrap_or(*return_type_node);
-    return_type_union(&target).branches.iter().any(|branch| {
-        branch.collection.as_ref().is_some_and(|collection| {
-            matches!(
-                collection.name.as_str(),
-                TUPLE_CONSTRUCTOR | TYPING_TUPLE_CONSTRUCTOR
-            )
-        }) && branch.type_arguments.as_ref().is_some_and(|arguments| {
-            arguments.len() >= 2
-                && arguments
-                    .iter()
-                    .all(|argument| argument.text().trim() != "...")
-        })
-    })
+    return_type_union(&target).positional_tuple_arity()
 }
 
 /// Unwraps outer return-annotation envelopes (`Annotated[T, ...]`, `Awaitable[T]`, and
 /// `Coroutine[YieldT, SendT, ReturnT]`).
 fn unwrap_return_envelope_expr<'a>(mut current: &'a Expr, file: &ParsedFile) -> &'a Expr {
-    while let Some((base_node, type_args)) = extract_generic_base_and_args(current)
-        && let Some((base_path, base_terminal)) = resolved_path_and_terminal_expr(base_node, file)
+    while let Some(GenericType {
+        base: base_node,
+        arguments: type_args,
+    }) = extract_generic_base_and_args(current)
+        && let Some(QualifiedName {
+            path: base_path,
+            terminal: base_terminal,
+        }) = resolved_path_and_terminal_expr(base_node, file)
     {
         if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_ANNOTATED, "Awaitable"])
             && let Some(&first_arg) = type_args.first()
@@ -539,11 +634,18 @@ fn collect_union_branches_expr<'a>(
             *has_none = true;
         }
         Expr::Subscript(_) => {
-            let Some((base_node, type_args)) = extract_generic_base_and_args(expr) else {
+            let Some(GenericType {
+                base: base_node,
+                arguments: type_args,
+            }) = extract_generic_base_and_args(expr)
+            else {
                 branches.push(expr);
                 return;
             };
-            let Some((base_path, base_terminal)) = resolved_path_and_terminal_expr(base_node, file)
+            let Some(QualifiedName {
+                path: base_path,
+                terminal: base_terminal,
+            }) = resolved_path_and_terminal_expr(base_node, file)
             else {
                 branches.push(expr);
                 return;
@@ -578,16 +680,26 @@ fn collect_union_branches_expr<'a>(
 /// Returns true if `expr` is the `bool` builtin or a `Callable` constructor (optionally
 /// subscripted), resolved through the file's imports.
 fn is_bool_or_callable_type_expr(expr: &Expr, file: &ParsedFile) -> bool {
-    let base = extract_generic_base_and_args(expr).map_or(expr, |(base_node, _)| base_node);
-    resolved_path_and_terminal_expr(base, file).is_some_and(|(path, terminal)| {
-        is_std_type_constructor(&path, &terminal, &["bool", TYPE_CALLABLE])
+    let base = extract_generic_base_and_args(expr).map_or(expr, |generic| generic.base);
+    resolved_path_and_terminal_expr(base, file).is_some_and(|name| {
+        is_std_type_constructor(
+            &name.path,
+            &name.terminal,
+            &[BOOL_CONSTRUCTOR, TYPE_CALLABLE],
+        )
     })
 }
 
 /// Unwraps outer `Annotated[T, ...]` wrappers from `type_expr`.
 fn unwrap_annotated_expr<'a>(mut current: &'a Expr, file: &ParsedFile) -> &'a Expr {
-    while let Some((base_node, type_args)) = extract_generic_base_and_args(current)
-        && let Some((base_path, base_terminal)) = resolved_path_and_terminal_expr(base_node, file)
+    while let Some(GenericType {
+        base: base_node,
+        arguments: type_args,
+    }) = extract_generic_base_and_args(current)
+        && let Some(QualifiedName {
+            path: base_path,
+            terminal: base_terminal,
+        }) = resolved_path_and_terminal_expr(base_node, file)
         && is_std_type_constructor(&base_path, &base_terminal, &[TYPE_ANNOTATED])
         && let Some(&first_arg) = type_args.first()
     {
@@ -601,8 +713,12 @@ fn collection_type_expr(expr: &Expr, file: &ParsedFile) -> Option<PythonCollecti
     if !matches!(expr, Expr::Name(_) | Expr::Attribute(_)) {
         return None;
     }
-    let (resolved_path, name) = resolved_path_and_terminal_expr(expr, file)?;
-    let (kind, shape) = classify_collection(&resolved_path, &name)?;
+    let QualifiedName {
+        path: resolved_path,
+        terminal: name,
+    } = resolved_path_and_terminal_expr(expr, file)?;
+    let kind = collection_kind(&resolved_path, &name)?;
+    let shape = collection_shape(&name);
     let span = span_from_ruff_range(expr.range());
     Some(PythonCollectionType {
         path: file.source[span.start..span.end].to_owned(),
@@ -614,7 +730,7 @@ fn collection_type_expr(expr: &Expr, file: &ParsedFile) -> Option<PythonCollecti
 
 /// Classifies the import-resolved `(path, terminal)` as a standard-library collection type
 /// constructor.
-fn classify_collection(path: &str, terminal: &str) -> Option<(CollectionKind, CollectionShape)> {
+fn collection_kind(path: &str, terminal: &str) -> Option<CollectionKind> {
     let kind = if is_concrete_collection_constructor(path, terminal) {
         CollectionKind::ConcreteMutable
     } else if is_std_type_constructor(path, terminal, MUTABLE_COLLECTION_ABCS) {
@@ -626,7 +742,12 @@ fn classify_collection(path: &str, terminal: &str) -> Option<(CollectionKind, Co
     } else {
         return None;
     };
-    let shape = match terminal {
+    Some(kind)
+}
+
+/// The element access shape of the collection type constructor named `terminal`.
+fn collection_shape(terminal: &str) -> CollectionShape {
+    match terminal {
         DICT_CONSTRUCTOR
         | TYPING_DICT_CONSTRUCTOR
         | TYPE_DEFAULTDICT
@@ -643,8 +764,7 @@ fn classify_collection(path: &str, terminal: &str) -> Option<(CollectionKind, Co
         | "FrozenSet" => CollectionShape::Set,
         "Collection" | "Iterable" | "Iterator" | "Reversible" => CollectionShape::Iterable,
         _ => CollectionShape::Sequence,
-    };
-    Some((kind, shape))
+    }
 }
 
 /// Returns true if `(path, terminal)` refers to an unqualified or standard-library (`typing`,

@@ -7,7 +7,6 @@ use crate::code_lint::ast::{
     AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, parse_float_literal,
     parse_integer_literal, span_from_ruff_range,
 };
-use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{ExceptHandler, Expr, Stmt};
 use ruff_text_size::Ranged as _;
@@ -57,13 +56,8 @@ struct LiteralOccurrenceCollector<'a> {
 
 impl<'a> LiteralOccurrenceCollector<'a> {
     fn record_constant_rhs(&mut self, value: &Expr) {
-        if let Some((span, lit_val)) = scalar_literal_value(value, &self.file.source) {
-            self.out.push(LiteralOccurrence {
-                node: AstNode::from_span(self.file, span),
-                value: lit_val,
-                role: LiteralRole::ConstantDefinition,
-            });
-        }
+        self.out
+            .extend(constant_definition_occurrence(value, self.file));
     }
 
     fn visit_non_constant_expr(&mut self, expr: &'a Expr) {
@@ -197,12 +191,14 @@ impl<'a> SourceOrderVisitor<'a> for LiteralOccurrenceCollector<'a> {
     fn visit_expr(&mut self, expr: &'a Expr) {
         match expr {
             Expr::Subscript(sub)
-                if resolve_path_and_terminal_expr(&sub.value, &self.file.source).1 == "Literal" =>
+                if resolve_path_and_terminal_expr(&sub.value, &self.file.source).terminal
+                    == "Literal" =>
             {
                 return;
             }
             Expr::Call(call) => {
-                let (_, terminal) = resolve_path_and_terminal_expr(&call.func, &self.file.source);
+                let terminal =
+                    resolve_path_and_terminal_expr(&call.func, &self.file.source).terminal;
                 if TYPE_NAME_FIRST_ARGUMENT_CALLS.contains(&terminal.as_str()) {
                     self.visit_expr(&call.func);
                     if call.arguments.args.is_empty() {
@@ -289,36 +285,38 @@ fn is_standalone_string_expr(expr: &Expr) -> bool {
     }
 }
 
-/// Returns the `(span, LiteralValue)` of a scalar literal expression suitable as a
-/// [`LiteralRole::ConstantDefinition`] RHS (`None` for composite values like lists or
-/// implicitly concatenated strings `'aa' 'bb'`).
-fn scalar_literal_value(expr: &Expr, source: &str) -> Option<(SourceSpan, LiteralValue)> {
-    match expr {
-        Expr::NumberLiteral(_) => Some((
+/// Returns the [`LiteralRole::ConstantDefinition`] occurrence of a scalar literal constant
+/// RHS (`None` for composite values like lists or implicitly concatenated strings `'aa' 'bb'`).
+fn constant_definition_occurrence<'a>(
+    expr: &Expr,
+    file: &'a ParsedFile,
+) -> Option<LiteralOccurrence<'a>> {
+    let (span, value) = match expr {
+        Expr::NumberLiteral(_) => (
             span_from_ruff_range(expr.range()),
-            number_literal_value(expr, source)?,
-        )),
+            number_literal_value(expr, &file.source)?,
+        ),
         Expr::UnaryOp(unary) if unary.op == ruff_python_ast::UnaryOp::USub => {
-            let negated = number_literal_value(&unary.operand, source)?.negated()?;
-            Some((span_from_ruff_range(unary.range()), negated))
+            let negated = number_literal_value(&unary.operand, &file.source)?.negated()?;
+            (span_from_ruff_range(unary.range()), negated)
         }
         Expr::StringLiteral(str_lit) => {
             let [part] = str_lit.value.as_slice() else {
                 return None;
             };
-            Some((
+            (
                 span_from_ruff_range(part.range()),
                 LiteralValue::Str(part.as_str().to_string()),
-            ))
+            )
         }
         Expr::BytesLiteral(bytes_lit) => {
             let [part] = bytes_lit.value.as_slice() else {
                 return None;
             };
-            Some((
+            (
                 span_from_ruff_range(part.range()),
                 LiteralValue::Bytes(String::from_utf8_lossy(part.as_slice()).into_owned()),
-            ))
+            )
         }
         Expr::FString(fstr) => {
             let mut parts = fstr.value.iter();
@@ -339,10 +337,15 @@ fn scalar_literal_value(expr: &Expr, source: &str) -> Option<(SourceSpan, Litera
                 .iter()
                 .filter_map(|elt| elt.as_literal().map(|lit| lit.value.as_ref()))
                 .collect();
-            Some((span_from_ruff_range(fpart.range()), LiteralValue::Str(text)))
+            (span_from_ruff_range(fpart.range()), LiteralValue::Str(text))
         }
-        _ => None,
-    }
+        _ => return None,
+    };
+    Some(LiteralOccurrence {
+        node: AstNode::from_span(file, span),
+        value,
+        role: LiteralRole::ConstantDefinition,
+    })
 }
 
 /// Parses a non-complex Python `Expr::NumberLiteral` into a [`LiteralValue`].

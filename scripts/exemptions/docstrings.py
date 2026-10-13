@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .model import ANNOTATIONS, CLASSES, DOCSTRINGS, FUNCTIONS, Cluster, Mutation, Unmutated
+from .model import CLASSES, DOCSTRINGS, FUNCTIONS, Cluster, Mutation, Unmutated
 
 VERB_LED_RETURNS_SECTION = "src/code_lint/rules/verb_led_returns_section.rs"
 UNDOCUMENTED_PUBLIC_ATTRIBUTE = "src/code_lint/rules/undocumented_public_attribute.rs"
@@ -13,7 +13,6 @@ COPIED_BASE_DOCSTRING = "src/code_lint/rules/copied_base_docstring.rs"
 PARTIAL_OVERRIDE_DOCSTRING = "src/code_lint/rules/partial_override_docstring.rs"
 UNDOCUMENTED_NONTRIVIAL_FUNCTION = "src/code_lint/rules/undocumented_nontrivial_function.rs"
 UNEXPLAINED_PARAMETER = "src/code_lint/rules/unexplained_parameter.rs"
-UNDOCUMENTED_TUPLE_RETURN = "src/code_lint/rules/undocumented_tuple_return.rs"
 
 CHECK_EVERY_FUNCTION = (
     (
@@ -34,7 +33,6 @@ CLUSTER = Cluster(
         "partial_override_docstring",
         "undocumented_nontrivial_function",
         "unexplained_parameter",
-        "undocumented_tuple_return",
     ),
     mutations=(
         Mutation(
@@ -522,7 +520,7 @@ CLUSTER = Cluster(
             cases=("partial_override_docstring::pass::yields_for_returns_exempt",),
         ),
         Mutation(
-            label="a Returns/Yields summary documents the result (partial-override-docstring E14, undocumented-tuple-return)",
+            label="a Returns/Yields summary documents the result (partial-override-docstring E14)",
             path=DOCSTRINGS,
             edits=(
                 (
@@ -532,7 +530,6 @@ CLUSTER = Cluster(
             ),
             cases=(
                 "partial_override_docstring::pass::result_verb_summary_exempt",
-                "undocumented_tuple_return::pass::result_verb_summary_exempt",
             ),
         ),
         Mutation(
@@ -665,63 +662,6 @@ CLUSTER = Cluster(
             ),
             cases=("unexplained_parameter::pass::class_args_section_satisfies_constructor_exempt",),
         ),
-        Mutation(
-            label="variadic `tuple[T, ...]` and 1-tuples are not positional tuples (undocumented-tuple-return)",
-            path=ANNOTATIONS,
-            edits=(
-                (
-                    "            arguments.len() >= 2\n"
-                    "                && arguments\n"
-                    "                    .iter()\n"
-                    "                    .all(|argument| argument.text().trim() != \"...\")",
-                    "            !arguments.is_empty()",
-                ),
-            ),
-            cases=("undocumented_tuple_return::pass::variadic_or_single_element_tuple_exempt",),
-        ),
-        Mutation(
-            label="undocumented functions are not checked (undocumented-tuple-return)",
-            path=UNDOCUMENTED_TUPLE_RETURN,
-            edits=(
-                (
-                    "                    .is_some_and(|docstring| !PythonDocstring::describes_result(docstring))",
-                    "                    .is_none_or(|docstring| !PythonDocstring::describes_result(docstring))",
-                ),
-            ),
-            cases=("undocumented_tuple_return::pass::undocumented_function_exempt",),
-        ),
-        Mutation(
-            label="nested functions are not checked (undocumented-tuple-return)",
-            path=UNDOCUMENTED_TUPLE_RETURN,
-            edits=(("            !signature.is_nested()\n                && ", "            "),),
-            cases=("undocumented_tuple_return::pass::nested_function_exempt",),
-        ),
-        Mutation(
-            label="@override and exempt methods (undocumented-tuple-return)",
-            path=UNDOCUMENTED_TUPLE_RETURN,
-            edits=(
-                (
-                    "                && !signature.is_exempt_from_docstring_rules()\n",
-                    "\n",
-                ),
-            ),
-            cases=("undocumented_tuple_return::pass::override_method_exempt",),
-        ),
-        Mutation(
-            label="nested scopes not entered when scanning unannotated returns (undocumented-tuple-return)",
-            path=FUNCTIONS,
-            edits=(
-                (
-                    "                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,\n",
-                    "",
-                ),
-                (
-                    "                Expr::Lambda(_) => return,\n",
-                    "",
-                ),
-            ),
-            cases=("undocumented_tuple_return::pass::nested_scope_tuple_return_exempt",),
-        ),
     ),
     unmutated=(
         Unmutated(
@@ -805,14 +745,6 @@ CLUSTER = Cluster(
                 "unexplained_parameter::pass::args_section_present_exempt",
                 "unexplained_parameter::pass::ordinary_parameters_exempt",
                 "unexplained_parameter::pass::below_complexity_gate_exempt",
-            ),
-        ),
-        Unmutated(
-            label="positive layouts (undocumented-tuple-return)",
-            reason="No exemption: a function with a `Returns:` section and a function returning a non-tuple type.",
-            cases=(
-                "undocumented_tuple_return::pass::returns_or_yields_section_exempt",
-                "undocumented_tuple_return::pass::non_tuple_return_exempt",
             ),
         ),
     ),

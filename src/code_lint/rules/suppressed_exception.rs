@@ -102,37 +102,6 @@ crate::test_utils::rule_test!(
     {
         Python => {
             pass: [
-                single_line_inline => r#"
-                    with suppress(FileNotFoundError):  # Safe to ignore if temp file was already deleted
-                        os.remove("tmp.txt")
-                "#,
-                preceding_comment_block => r#"
-                    # The background worker cleans up stale lock files,
-                    # so ignoring FileNotFoundError is safe here.
-                    with suppress(FileNotFoundError):
-                        os.remove("lock.txt")
-                "#,
-                multiline_parenthesized_with_inline => r#"
-                    with (
-                        open("log.txt") as log,
-                        suppress(KeyError),  # Config key is optional in legacy environments
-                    ):
-                        process(log)
-                "#,
-                multiline_parenthesized_with_preceding => r#"
-                    # Optional cleanup of lock file if created
-                    with (
-                        suppress(FileNotFoundError),
-                    ):
-                        pass
-                "#,
-                multiline_header_trailing_comment => r#"
-                    with (
-                        open("log.txt"),
-                        suppress(FileNotFoundError),
-                    ):  # Safe if lock file was already deleted
-                        pass
-                "#,
                 suppress_call_outside_with_ignored => r#"
                     mgr = suppress(FileNotFoundError)
                 "#,
@@ -146,14 +115,6 @@ crate::test_utils::rule_test!(
                     with contextlib.suppress(KeyError):
                         data = cache["missing"]
                 "# => "contextlib.suppress(KeyError)",
-                body_inline_comment_does_not_mask => r#"
-                    with suppress(FileNotFoundError):
-                        os.remove("tmp.txt")  # inline comment inside body
-                "# => "suppress(FileNotFoundError)",
-                directive_only_comment_does_not_mask => r#"
-                    with suppress(FileNotFoundError):  # noqa: SIM105
-                        os.remove("tmp.txt")
-                "# => "suppress(FileNotFoundError)",
             ],
         },
     }

@@ -368,20 +368,6 @@ crate::test_utils::rule_test!(
                     def find_callback() -> Callable[[Sequence[str]], None] | None:
                         return None
                 "#,
-                explained_by_preceding_header_comment => r#"
-                    from collections.abc import Sequence
-
-                    # Returns None on cache miss; an empty sequence means the user has no tags.
-                    def cached_tags(user_id: str) -> Sequence[str] | None:
-                        return None
-                "#,
-                explained_on_decorated_function_header => r#"
-                    class Cache:
-                        # Returns None when the key has expired; an empty list means zero events.
-                        @staticmethod
-                        def cached_batch(key: str) -> list[int] | None:
-                            return None
-                "#,
                 protocol_class_exempt => r#"
                     from collections.abc import Sequence
                     from typing import Protocol
@@ -530,14 +516,6 @@ crate::test_utils::rule_test!(
                     def fetch_items() -> Coroutine[object, object, dict[str, int] | None]:
                         raise NotImplementedError
                 "# => "Coroutine[object, object, dict[str, int] | None]",
-                body_comment_does_not_count_as_header_explanation => r#"
-                    from collections.abc import Sequence
-
-                    @staticmethod
-                    def get_items() -> Sequence[str] | None:
-                        # Internal implementation comment inside the body block.
-                        return None
-                "# => "Sequence[str] | None",
             ],
         },
         Rust => {
@@ -621,14 +599,6 @@ crate::test_utils::rule_test!(
                             let _ = user_id;
                             None
                         }
-                    }
-                "#,
-                explained_attributed_rust_function_exempt => r#"
-                    // Returns None on cache miss; an empty slice means the user has no tags.
-                    #[must_use]
-                    fn cached_tags(&self, user_id: &str) -> Option<&[String]> {
-                        let _ = user_id;
-                        None
                     }
                 "#,
                 locally_shadowed_vec_exempt => r#"
@@ -715,13 +685,6 @@ crate::test_utils::rule_test!(
                         fn load_tags(&self) -> Option<Vec<String>> {
                             None
                         }
-                    }
-                "# => "Option<Vec<String>>",
-                rust_body_comment_does_not_count_as_header_explanation => r#"
-                    #[must_use]
-                    fn get_items() -> Option<Vec<String>> {
-                        // Internal implementation comment inside the body block.
-                        None
                     }
                 "# => "Option<Vec<String>>",
             ],

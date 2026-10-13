@@ -7,7 +7,7 @@ use super::{
     resolve_path_and_terminal_expr,
 };
 use crate::code_lint::ast::span_from_ruff_range;
-use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
+use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
 use ruff_python_ast::{
     Decorator, Expr, Parameter, ParameterWithDefault, Parameters, Stmt, StmtClassDef,
     StmtFunctionDef,
@@ -195,17 +195,13 @@ impl PythonFunctionSignature<'_> {
                 })
     }
 
-    /// Returns true if the function returns or yields a positional tuple of at least two
-    /// elements: either by its return annotation (`tuple[A, B, ...]` / `Tuple[A, B, ...]` without
-    /// `...`, including inside unions, `Awaitable`/`Coroutine` and generator yield types) or,
-    /// when unannotated, by a `return` or `yield` of a tuple display of at least two elements in
-    /// the function's own scope.
+    /// Returns true if the function is a property getter (`@property`,
+    /// `@functools.cached_property`), documented like an attribute rather than a function.
     #[must_use]
-    pub fn returns_positional_tuple(&self) -> bool {
-        self.return_type_node.as_ref().map_or_else(
-            || body_returns_or_yields_tuple_display(&self.definition.body),
-            super::annotations::is_positional_tuple_return_type,
-        )
+    pub fn is_property_getter(&self) -> bool {
+        extract_decorators_from_slice(&self.definition.decorator_list, self.name_node.file)
+            .iter()
+            .any(|decorator| decorator.matches_any(PROPERTY_DECORATOR_PATHS))
     }
 }
 
@@ -231,6 +227,12 @@ const NEW_METHOD: &str = "__new__";
 const NOT_IMPLEMENTED_ERROR: &str = "NotImplementedError";
 /// The attribute of a property setter decorator (`@<property>.setter`).
 const SETTER_ATTRIBUTE: &str = "setter";
+const PROPERTY_DECORATOR_PATHS: &[&str] = &[
+    "property",
+    "builtins.property",
+    "functools.cached_property",
+    "cached_property",
+];
 const OVERRIDE_DECORATOR_PATHS: &[&str] =
     &["override", "typing.override", "typing_extensions.override"];
 const EXEMPT_SIGNATURE_DECORATOR_PATHS: &[&str] = &[
@@ -400,7 +402,7 @@ fn is_stub_statement(statement: &Stmt, source: &str) -> bool {
                 && raise_statement.exc.as_deref().is_some_and(|exc| match exc {
                     Expr::Name(name) => name.id == NOT_IMPLEMENTED_ERROR,
                     Expr::Call(call) => {
-                        resolve_path_and_terminal_expr(&call.func, source).1
+                        resolve_path_and_terminal_expr(&call.func, source).terminal
                             == NOT_IMPLEMENTED_ERROR
                     }
                     _ => false,
@@ -583,56 +585,4 @@ fn is_exempt_dunder_method(func_name: &str) -> bool {
         && func_name.ends_with("__")
         && func_name.len() > 4
         && !matches!(func_name, INIT_METHOD | NEW_METHOD | "__call__")
-}
-
-/// Returns true if `body` (without entering nested functions, classes or lambdas) has a `return`
-/// or `yield` of a tuple display of at least two elements.
-fn body_returns_or_yields_tuple_display(body: &[Stmt]) -> bool {
-    struct TupleResultVisitor {
-        found: bool,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for TupleResultVisitor {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if self.found {
-                return;
-            }
-            match statement {
-                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,
-                Stmt::Return(return_statement) => {
-                    if let Some(Expr::Tuple(tuple)) = return_statement.value.as_deref()
-                        && tuple.elts.len() >= 2
-                    {
-                        self.found = true;
-                        return;
-                    }
-                }
-                _ => {}
-            }
-            walk_stmt(self, statement);
-        }
-
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if self.found {
-                return;
-            }
-            match expr {
-                Expr::Lambda(_) => return,
-                Expr::Yield(yield_expr) => {
-                    if let Some(Expr::Tuple(tuple)) = yield_expr.value.as_deref()
-                        && tuple.elts.len() >= 2
-                    {
-                        self.found = true;
-                        return;
-                    }
-                }
-                _ => {}
-            }
-            walk_expr(self, expr);
-        }
-    }
-
-    let mut visitor = TupleResultVisitor { found: false };
-    visitor.visit_body(body);
-    visitor.found
 }

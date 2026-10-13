@@ -115,11 +115,9 @@ impl PythonDocstring<'_> {
     /// (case-insensitive).
     #[must_use]
     pub fn has_result_verb_summary(&self) -> bool {
-        self.summary().is_some_and(|summary| {
-            let first_token = summary.split_whitespace().next().unwrap_or_default();
-            let word = first_token.trim_matches(|character: char| !character.is_alphabetic());
-            RESULT_SUMMARY_VERBS.contains(&word.to_ascii_lowercase().as_str())
-        })
+        self.summary_words()
+            .first()
+            .is_some_and(|word| RESULT_SUMMARY_VERBS.contains(&word.as_str()))
     }
 
     /// Returns true if the docstring describes the function's return or yield value: either via a
@@ -127,6 +125,34 @@ impl PythonDocstring<'_> {
     #[must_use]
     pub fn describes_result(&self) -> bool {
         self.has_result_section() || self.has_result_verb_summary()
+    }
+
+    /// Returns true if the summary states the condition of a boolean result: it contains the word
+    /// `whether`, or opens with `True if`, `True when`, `False if` or `False when`
+    /// (case-insensitive).
+    #[must_use]
+    pub fn has_condition_summary(&self) -> bool {
+        let words = self.summary_words();
+        words.iter().any(|word| word == "whether")
+            || matches!(
+                words.as_slice(),
+                [first, second, ..]
+                    if matches!(first.as_str(), "true" | "false")
+                        && matches!(second.as_str(), "if" | "when")
+            )
+    }
+
+    /// The words of the summary line, lowercase, without surrounding punctuation.
+    fn summary_words(&self) -> Vec<String> {
+        self.summary()
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(|token| {
+                token
+                    .trim_matches(|character: char| !character.is_alphabetic())
+                    .to_ascii_lowercase()
+            })
+            .collect()
     }
 }
 
@@ -263,6 +289,15 @@ const SECTION_HEADERS: &[(&str, DocstringSectionKind)] = &[
     ("methods", DocstringSectionKind::Other),
 ];
 
+/// A docstring line split at its leading Napoleon type prefix (`bool: True if ready.`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DocstringTypedLine<'a> {
+    /// The type prefix before the colon (`bool`).
+    pub type_text: &'a str,
+    /// The text after the colon, without leading whitespace (`True if ready.`).
+    pub description: &'a str,
+}
+
 /// One line of a docstring section body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocstringLine {
@@ -274,13 +309,13 @@ pub struct DocstringLine {
 
 impl DocstringLine {
     /// Splits a leading Napoleon type prefix off the line: `bool: True if ready.` gives
-    /// `("bool", "True if ready.")`.
+    /// type `bool` and description `True if ready.`.
     ///
     /// The prefix is the text before the first `:` when it is non-empty, has no whitespace
     /// outside brackets (`dict[str, int]` qualifies, `Note that` does not), and the colon is
     /// followed by whitespace or the end of the line.
     #[must_use]
-    pub fn split_type_prefix(&self) -> Option<(&str, &str)> {
+    pub fn split_type_prefix(&self) -> Option<DocstringTypedLine<'_>> {
         let mut depth = 0_usize;
         for (offset, character) in self.text.char_indices() {
             match character {
@@ -290,8 +325,10 @@ impl DocstringLine {
                     let (prefix, rest) = (&self.text[..offset], &self.text[offset + 1..]);
                     let followed_by_space =
                         rest.is_empty() || rest.starts_with(char::is_whitespace);
-                    return (!prefix.is_empty() && followed_by_space)
-                        .then(|| (prefix, rest.trim_start()));
+                    return (!prefix.is_empty() && followed_by_space).then(|| DocstringTypedLine {
+                        type_text: prefix,
+                        description: rest.trim_start(),
+                    });
                 }
                 _ if depth == 0 && character.is_whitespace() => return None,
                 _ => {}
@@ -368,7 +405,7 @@ pub fn parse_google_sections(text: &str) -> Vec<DocstringSection> {
     let mut sections = Vec::new();
     let mut index = 0;
     while index < lines.len() {
-        let Some((kind, header)) = section_header(lines[index]) else {
+        let Some(SectionHeader { kind, text: header }) = section_header(lines[index]) else {
             index += 1;
             continue;
         };
@@ -408,14 +445,22 @@ pub fn parse_google_sections(text: &str) -> Vec<DocstringSection> {
     sections
 }
 
-/// Returns the kind and header text if `line` is only a recognized section header and a colon.
-fn section_header(line: &str) -> Option<(DocstringSectionKind, &str)> {
+/// A recognized Google-style section header line.
+struct SectionHeader<'a> {
+    /// The section kind the header names.
+    kind: DocstringSectionKind,
+    /// The header text without the colon and surrounding whitespace (`Keyword Args`).
+    text: &'a str,
+}
+
+/// Returns the header if `line` is only a recognized section header and a colon.
+fn section_header(line: &str) -> Option<SectionHeader<'_>> {
     let header = line.trim().strip_suffix(':')?.trim_end();
     let lowercase = header.to_ascii_lowercase();
     SECTION_HEADERS
         .iter()
         .find(|(name, _)| *name == lowercase)
-        .map(|&(_, kind)| (kind, header))
+        .map(|&(_, kind)| SectionHeader { kind, text: header })
 }
 
 /// Groups section body lines into entries: lines at the first line's indentation start an entry,
@@ -438,21 +483,17 @@ fn parse_entries(body: &[(usize, &str)]) -> Vec<DocstringEntry> {
             continue;
         }
         continues_entry = false;
-        if let Some((name, type_text, description)) = split_entry_line(line.trim()) {
-            entries.push(DocstringEntry {
-                name: name.to_owned(),
-                type_text: type_text.map(str::to_owned),
-                description: description.to_owned(),
-                line_index,
-            });
+        if let Some(entry) = split_entry_line(line.trim(), line_index) {
+            entries.push(entry);
             continues_entry = true;
         }
     }
     entries
 }
 
-/// Splits `name (type): description` (type and description optional) into its parts.
-fn split_entry_line(line: &str) -> Option<(&str, Option<&str>, &str)> {
+/// Splits `name (type): description` (type and description optional) at 0-based docstring line
+/// `line_index` into an entry.
+fn split_entry_line(line: &str, line_index: usize) -> Option<DocstringEntry> {
     let name_start = line.len() - line.trim_start_matches('*').len();
     if name_start > 2 {
         return None;
@@ -476,7 +517,12 @@ fn split_entry_line(line: &str) -> Option<(&str, Option<&str>, &str)> {
         None => (None, rest),
     };
     let description = rest.strip_prefix(':')?.trim();
-    Some((name, type_text, description))
+    Some(DocstringEntry {
+        name: name.to_owned(),
+        type_text: type_text.map(str::to_owned),
+        description: description.to_owned(),
+        line_index,
+    })
 }
 
 /// Returns the byte offset of the `)` closing an already-opened parenthesis in `text`.
@@ -611,7 +657,10 @@ mod tests {
         #[case] line: &str,
         #[case] expected: Option<(&str, Option<&str>, &str)>,
     ) {
-        assert_eq!(split_entry_line(line), expected);
+        assert_eq!(
+            split_entry_line(line, 0),
+            expected.map(|(name, type_text, description)| entry(name, type_text, description, 0))
+        );
     }
 
     #[test]
@@ -660,7 +709,11 @@ mod tests {
             index: 1,
             text: text.to_owned(),
         };
-        assert_eq!(line.split_type_prefix(), expected);
+        assert_eq!(
+            line.split_type_prefix()
+                .map(|typed| (typed.type_text, typed.description)),
+            expected
+        );
     }
 
     #[rstest]

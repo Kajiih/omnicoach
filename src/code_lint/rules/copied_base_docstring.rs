@@ -115,8 +115,10 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             let Some(docstring) = method.docstring() else {
                 continue;
             };
-            let Some((ancestor, inherited)) =
-                ast::python::inherited_method_docstring(&classes, index, &method.name)
+            let Some(ast::python::PythonInheritedDocstring {
+                ancestor,
+                docstring: inherited,
+            }) = ast::python::inherited_method_docstring(&classes, index, &method.name)
             else {
                 continue;
             };

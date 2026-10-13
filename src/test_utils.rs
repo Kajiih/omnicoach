@@ -14,7 +14,8 @@ use crate::rule_declaration::{
 use std::fmt::Write;
 use std::path::Path;
 
-/// Executes the rule's `check_file` with its default options (including `RequireExplanation` filtering).
+/// Executes the rule's `check_file` in `ban` mode with its default options, so `rule_test!`
+/// cases test the rule's own logic rather than `require-explanation` comment filtering.
 ///
 /// # Panics
 /// Panics if `filename` does not have a recognized file extension (`.py` or `.rs`).
@@ -28,7 +29,21 @@ pub fn run_code_rule<Options: OptionsDeclaration>(
     let lang = Language::from_path(path).unwrap_or_else(|| {
         panic!("run_code_rule: unsupported extension in test file '{filename}'")
     });
-    rule.check_file(path, &ParsedFile::new(source, lang), None)
+    let banned = CodeRule {
+        declaration: Declaration {
+            options: RuleOptions {
+                enforcement_mode: rule
+                    .declaration
+                    .options
+                    .enforcement_mode
+                    .map(|_| LanguageDefaults::new(EnforcementMode::Ban, &[])),
+                ..rule.declaration.options
+            },
+            ..rule.declaration
+        },
+        ..*rule
+    };
+    banned.check_file(path, &ParsedFile::new(source, lang), None)
 }
 
 /// Formats a list of diagnostics to a clean, human-readable simplified snapshot string.
@@ -146,8 +161,8 @@ pub fn assert_rule_fail<Options: OptionsDeclaration>(
 /// Asserts each of the rule's documented examples exactly like a `rule_test!` case: the flagged
 /// snippet as a `fail` case expecting its `flagged_span`, the fixed snippet as a `pass` case.
 ///
-/// For a rule with an enforcement mode, the fixed snippet must also pass in `ban` mode, so a
-/// documented fix never relies on an explanatory comment.
+/// Because [`run_code_rule`] runs in `ban` mode, a documented fix can never rely on an
+/// explanatory comment.
 ///
 /// # Panics
 /// Panics as [`assert_rule_fail`] and [`assert_rule_pass`] do.
@@ -156,25 +171,6 @@ pub fn assert_documented_examples<Options: OptionsDeclaration>(
     rule: &CodeRule<Options>,
     repeat: RepeatCheck,
 ) {
-    let declaration = &rule.declaration;
-    let banned = CodeRule {
-        declaration: Declaration {
-            name: declaration.name,
-            template: declaration.template,
-            languages: declaration.languages,
-            options: RuleOptions {
-                enforcement_mode: declaration
-                    .options
-                    .enforcement_mode
-                    .map(|_| LanguageDefaults::new(EnforcementMode::Ban, &[])),
-                options: declaration.options.options,
-            },
-            classification: declaration.classification,
-            doc: declaration.doc,
-        },
-        target: rule.target,
-        check: rule.check,
-    };
     for example in rule.declaration.doc.examples {
         assert_rule_fail(
             rule,
@@ -185,12 +181,6 @@ pub fn assert_documented_examples<Options: OptionsDeclaration>(
             repeat,
         );
         assert_rule_pass(rule, example.language, "documented fix", example.fixed);
-        assert_rule_pass(
-            &banned,
-            example.language,
-            "documented fix in `ban` mode",
-            example.fixed,
-        );
     }
 }
 
@@ -465,9 +455,14 @@ fn dummy_filename(lang: Language) -> &'static str {
 ///   script after changing the rule or its helpers: a one-off check goes stale.
 /// - An accepted false negative is a `pass` case named `known_gap_*` with a `ROADMAP.md`
 ///   entry, so fixing it forces the case to be updated.
-/// - Do not re-test option parsing or per-language resolution: `rule_declaration` tests it
-///   centrally. Do not snapshot template prose: `tests/registry.rs` checks templates, and
-///   snapshots are reserved for CLI output (`tests/cli.rs`).
+/// - Test the rule, never the framework. Every case runs in `ban` mode (via [`run_code_rule`]),
+///   so an explanation comment never excuses a `pass` case. No case may depend on behaviour
+///   the rule does not implement: enforcement modes, explanation comments
+///   (`require-explanation`), `omni:ignore` suppressions, option parsing or per-language
+///   resolution. Those are tested once, next to their code (`code_lint::contract`,
+///   `semantic::comments`, `code_lint::suppression`, `rule_declaration`). Do not snapshot
+///   template prose: `tests/registry.rs` checks templates, and snapshots are reserved for CLI
+///   output (`tests/cli.rs`).
 /// - When a case cannot be expressed (e.g. a module-level construct broken by the
 ///   repeated-occurrence check), unit-test the `ast` / `semantic` helper that computes the
 ///   fact. Change the harness only for a whole class of rules, with a guardrail so the

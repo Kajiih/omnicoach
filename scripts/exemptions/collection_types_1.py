@@ -5,13 +5,12 @@ from __future__ import annotations
 from .model import (
     ANNOTATIONS,
     CLASSES,
-    COMMENTS,
     CONCRETE_COLLECTION_ATTRIBUTE,
     CONCRETE_COLLECTION_PARAMETER,
-    CONTRACT,
     FUNCTIONS,
     INLINE_PUBLIC_ATTRIBUTE_ANNOTATION,
     PARAMETER_USAGE,
+    PYTHON,
     SPECIFIC_COLLECTION_PARAMETER,
     Cluster,
     Mutation,
@@ -214,8 +213,8 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="local class definition shadowing typing name exempt from collection classification",
-            path=ANNOTATIONS,
-            edits=(("        ResolvedName::Local => None,", "        ResolvedName::Local => Some((path, terminal)),"),),
+            path=PYTHON,
+            edits=(("        ResolvedName::Local => None,", "        ResolvedName::Local => Some(name),"),),
             cases=("concrete_collection_parameter::pass::local_class_shadows_typing_name",),
         ),
         # --- Signature, parameter, decorator, and class exemptions ---
@@ -338,40 +337,6 @@ CLUSTER = Cluster(
                 "concrete_collection_attribute::pass::abc_class_exempt",
                 "specific_collection_parameter::pass::abc_class_exempt",
             ),
-        ),
-        # --- Explanation comment exemptions (contract.rs & comments.rs) ---
-        Mutation(
-            label="RequireExplanation comment suppression on collection rules",
-            path=CONTRACT,
-            edits=(
-                (
-                    "if mode == EnforcementMode::RequireExplanation && !diagnostics.is_empty() {",
-                    "if false && mode == EnforcementMode::RequireExplanation && !diagnostics.is_empty() {",
-                ),
-            ),
-            cases=(
-                "concrete_collection_return::pass::explained_by_preceding_header_comment",
-                "concrete_collection_return::pass::explained_on_decorated_function_header",
-                "concrete_collection_attribute::pass::explained_public_concrete_attribute",
-                "specific_collection_parameter::pass::explained_sequence_parameter",
-            ),
-        ),
-        Mutation(
-            label="explanation comment above decorated function header",
-            path=COMMENTS,
-            edits=(
-                (
-                    "        let Some(header_lines) = statements::enclosing_statement_header_range(file, span) else {\n"
-                    "            return false;\n"
-                    "        };",
-                    "        let _ = (file, span);\n"
-                    "        if true {\n"
-                    "            return false;\n"
-                    "        }\n"
-                    "        let header_lines = 0..=0;",
-                ),
-            ),
-            cases=("concrete_collection_return::pass::explained_on_decorated_function_header",),
         ),
         # --- concrete-collection-attribute ---
         Mutation(
