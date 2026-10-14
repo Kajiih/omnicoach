@@ -19,10 +19,16 @@ const BANNED: ListOption = ListOption {
             "hasattr",
             "setattr",
             "delattr",
+            "vars",
             "builtins.getattr",
             "builtins.hasattr",
             "builtins.setattr",
             "builtins.delattr",
+            "builtins.vars",
+            "object.__setattr__",
+            "object.__getattribute__",
+            "object.__delattr__",
+            "type.__setattr__",
         ],
         extend: &[],
         remove: &[],
@@ -51,8 +57,9 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         doc: RuleDoc {
             summary: "Flags `getattr`, `hasattr`, `setattr` and `delattr` calls in Python.",
             what_it_does: indoc::indoc! {r#"
-                Flags calls to the built-in reflection functions, such as
-                `getattr(service, "timeout")` or `hasattr(record, field_name)`."#},
+                Flags calls to the built-in reflection functions and dunder equivalents, such as
+                `getattr(service, "timeout")`, `hasattr(record, field_name)`, `vars(service)`, or
+                `object.__setattr__(self, "replies", [])`."#},
             why_is_this_bad: indoc::indoc! {r#"
                 These functions take the attribute name as a runtime string. The type checker cannot
                 verify that the attribute exists and usually types the result as `Any`; renaming
@@ -149,6 +156,12 @@ crate::test_utils::rule_test!(
                 builtins_qualified_delattr => r#"
                     builtins.delattr(service, "name")
                 "# => r#"builtins.delattr(service, "name")"#,
+                object_dunder_setattr => r#"
+                    object.__setattr__(self, "replies", [])
+                "# => r#"object.__setattr__(self, "replies", [])"#,
+                vars_call => r#"
+                    fields = vars(service)
+                "# => r#"vars(service)"#,
             ],
         },
     }

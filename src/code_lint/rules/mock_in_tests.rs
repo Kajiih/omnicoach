@@ -64,7 +64,9 @@ const BANNED: ListOption = ListOption {
             "mocker.async_stub",
             // pytest monkeypatch symbols
             "MonkeyPatch",
+            "MonkeyPatch.context",
             "pytest.MonkeyPatch",
+            "pytest.MonkeyPatch.context",
             "monkeypatch.setattr",
             "monkeypatch.delattr",
             "monkeypatch.setitem",
@@ -240,6 +242,13 @@ crate::test_utils::rule_test!(
                     def test_service():
                         client = mock.Mock()
                 "# => r#"mock.Mock()"#,
+                pytest_monkeypatch_context => r#"
+                    import pytest
+
+                    def test_overrides():
+                        with pytest.MonkeyPatch.context() as mp:
+                            pass
+                "# => r#"pytest.MonkeyPatch.context()"#,
             ],
         },
     }

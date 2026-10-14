@@ -86,14 +86,8 @@ Design: [ADR 006](docs/dev/decisions/006_architectural_dag_and_conformance.md). 
 
 Candidates and known-gap follow-ups to prioritize, not commitments.
 
-- **Test-design rule candidates** ([01_understand.md](docs/dev/assertion_gaming/01_understand.md), [02_references.md](docs/dev/assertion_gaming/02_references.md), [03_design.md](docs/dev/assertion_gaming/03_design.md)):
-  - *`multi-phase-test`*: Act–Assert–Act interleaving in one test function.
-  - *`duplicated-test-setup`*: identical setup blocks repeated across sibling tests instead of a fixture or helper.
-  - *`conditional-test-logic`*: `if`/`else`, `for`/`while`, or filtering comprehensions (`[x for x in items if ...]`) inside test assertions.
-- **`dynamic-attribute-access` follow-ups** (Python):
-  - *Dunder & `__dict__` reflection*: `object.__setattr__`, `object.__getattribute__`, `object.__delattr__`, `type.__setattr__`, `vars(obj)`, `obj.__dict__`.
-- **`mock-in-tests` follow-ups** (Python):
-  - *`pytest.MonkeyPatch.context()`*: add `MonkeyPatch.context` and `pytest.MonkeyPatch.context` to the default `banned` list.
+- **`logic-in-tests`** (Python, Rust — [SWE at Google, ch. 12](https://abseil.io/resources/swe-book/html/ch12.html), [03_design.md](docs/dev/assertion_gaming/03_design.md)):
+  - *Detection*: flag conditionals (`if`, `match`), loops (`for`, `while`, `loop`), `try` blocks, and `if`-filtered comprehensions (`[x for x in items if ...]`) directly inside test functions.
 - **`repeated-index-access` follow-ups** (Python, Rust):
   - *Named record for sparse positional access*: reads needing more `_` placeholders than `repeated-index-access` allows (`row[0]`, `row[7]`) → `NamedTuple` / dataclass / struct (or `csv.DictReader` for CSV rows).
   - *Multi-field tuple structs* (Rust): tuple structs with ≥2 fields → named-field struct (tuple structs reserved for newtypes).
@@ -210,8 +204,8 @@ Candidates and known-gap follow-ups to prioritize, not commitments.
 
 ## 4. Reporting, CLI & Distribution
 
-- **Advisory severity & diff-scoped reporting (`--ref`)**:
-  - *Target*: Non-blocking `warn` severity and/or `--ref <git-ref>` to scope findings to modified lines.
+- **Diff-scoped reporting (`--ref`)**:
+  - *Target*: `--ref <git-ref>` to scope findings to modified lines.
 - **CLI configuration overrides (`--config`, `--select`, `--ignore`)**:
   - *Target*: Layer CLI overrides on top of `.omnicoach.toml`.
 - **Signed macOS release binaries**:
