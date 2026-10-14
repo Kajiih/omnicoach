@@ -441,194 +441,162 @@ const fn is_multi_element_collection_expr(expr: &Expr) -> bool {
 pub(super) fn collect_test_function_assertion_counts(
     file: &ParsedFile,
 ) -> Vec<(AstNode<'_>, String, usize)> {
-    struct TestAssertionCollector<'a> {
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    collect_outer_python_test_functions(&parsed.syntax().body)
+        .into_iter()
+        .map(|func_def| {
+            let count = count_python_assertions_in_slice(&func_def.body, &func_def.body);
+            (
+                AstNode::from_span(file, span_from_ruff_range(func_def.name.range)),
+                func_def.name.to_string(),
+                count,
+            )
+        })
+        .collect()
+}
+
+/// Collects control-flow and conditional constructs directly inside outermost Python test functions.
+#[must_use]
+pub(super) fn collect_test_logic_constructs(
+    file: &ParsedFile,
+) -> Vec<(AstNode<'_>, String, &'static str)> {
+    struct TestLogicCollector<'a> {
         file: &'a ParsedFile,
-        out: Vec<(AstNode<'a>, String, usize)>,
+        func_name: &'a str,
+        out: Vec<(AstNode<'a>, String, &'static str)>,
     }
 
-    impl<'a> SourceOrderVisitor<'a> for TestAssertionCollector<'a> {
+    impl<'a> SourceOrderVisitor<'a> for TestLogicCollector<'a> {
         fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if let Stmt::FunctionDef(func_def) = statement {
-                if is_test_function_def(func_def) {
-                    let count = count_python_assertions_in_body(&func_def.body);
-                    self.out.push((
-                        AstNode::from_span(self.file, span_from_ruff_range(func_def.name.range)),
-                        func_def.name.to_string(),
-                        count,
-                    ));
-                }
+            let construct = match statement {
+                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,
+                Stmt::If(_) => Some("an `if` statement"),
+                Stmt::Match(_) => Some("a `match` statement"),
+                Stmt::For(_) => Some("a `for` loop"),
+                Stmt::While(_) => Some("a `while` loop"),
+                Stmt::Try(_) => Some("a `try` statement"),
+                _ => None,
+            };
+            if let Some(description) = construct {
+                self.out.push((
+                    AstNode::from_span(self.file, span_from_ruff_range(statement.range())),
+                    self.func_name.to_string(),
+                    description,
+                ));
                 return;
             }
             walk_stmt(self, statement);
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            const FILTERED_COMPREHENSION: &str = "a filtered comprehension";
+
+            let construct = match expr {
+                Expr::Lambda(_) => return,
+                Expr::If(_) => Some("a conditional `if`-`else` expression"),
+                Expr::ListComp(comp)
+                    if comp
+                        .generators
+                        .iter()
+                        .any(|generator| !generator.ifs.is_empty()) =>
+                {
+                    Some(FILTERED_COMPREHENSION)
+                }
+                Expr::SetComp(comp)
+                    if comp
+                        .generators
+                        .iter()
+                        .any(|generator| !generator.ifs.is_empty()) =>
+                {
+                    Some(FILTERED_COMPREHENSION)
+                }
+                Expr::DictComp(comp)
+                    if comp
+                        .generators
+                        .iter()
+                        .any(|generator| !generator.ifs.is_empty()) =>
+                {
+                    Some(FILTERED_COMPREHENSION)
+                }
+                Expr::Generator(comp)
+                    if comp
+                        .generators
+                        .iter()
+                        .any(|generator| !generator.ifs.is_empty()) =>
+                {
+                    Some(FILTERED_COMPREHENSION)
+                }
+                _ => None,
+            };
+            if let Some(description) = construct {
+                self.out.push((
+                    AstNode::from_span(self.file, span_from_ruff_range(expr.range())),
+                    self.func_name.to_string(),
+                    description,
+                ));
+                return;
+            }
+            walk_expr(self, expr);
         }
     }
 
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
-    let mut collector = TestAssertionCollector {
-        file,
-        out: Vec::new(),
+    let mut out = Vec::new();
+    for func_def in collect_outer_python_test_functions(&parsed.syntax().body) {
+        let mut collector = TestLogicCollector {
+            file,
+            func_name: func_def.name.as_str(),
+            out: Vec::new(),
+        };
+        collector.visit_body(&func_def.body);
+        out.extend(collector.out);
+    }
+    out
+}
+
+/// Collects outermost Python test functions that interleave non-assertion statements between
+/// behavioral assertions.
+#[must_use]
+pub(super) fn collect_multi_phase_test_functions(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
     };
-    collector.visit_body(&parsed.syntax().body);
-    collector.out
+    collect_outer_python_test_functions(&parsed.syntax().body)
+        .into_iter()
+        .filter(|func_def| is_multi_phase_python_test_body(&func_def.body))
+        .map(|func_def| {
+            (
+                AstNode::from_span(file, span_from_ruff_range(func_def.name.range)),
+                func_def.name.to_string(),
+            )
+        })
+        .collect()
 }
 
-/// Returns true if a Python `StmtFunctionDef` is a test function (`test` or `test_*`).
-fn is_test_function_def(func_def: &StmtFunctionDef) -> bool {
-    let func_name = func_def.name.as_str();
-    func_name == "test" || func_name.starts_with("test_")
-}
-
-/// Counts top-level assertion constructs in a Python test function body.
-fn count_python_assertions_in_body(body: &[Stmt]) -> usize {
-    struct AssertionCounter<'a> {
-        body: &'a [Stmt],
-        count: usize,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for AssertionCounter<'a> {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            match statement {
-                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
-                Stmt::Assert(assert_statement) => {
-                    let is_narrowing_guard =
-                        narrowed_variable_name(assert_statement).is_some_and(|name| {
-                            body_loads_name_after(self.body, name, assert_statement.range().end())
-                        });
-                    if !is_narrowing_guard {
-                        self.count += 1;
-                    }
-                }
-                _ => walk_stmt(self, statement),
-            }
+/// Returns true if `body` interleaves a non-assertion statement between two behavioral assertions.
+fn is_multi_phase_python_test_body(body: &[Stmt]) -> bool {
+    let mut seen_assertion = false;
+    let mut seen_action_after_assertion = false;
+    for statement in body {
+        if let Stmt::Assert(assert_statement) = statement
+            && is_narrowing_guard_assert(assert_statement, body)
+        {
+            continue;
         }
-
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if let Expr::Call(call) = expr
-                && is_assertion_call_expr(call)
-            {
-                self.count += 1;
-                return;
-            }
-            walk_expr(self, expr);
-        }
-    }
-
-    let mut counter = AssertionCounter { body, count: 0 };
-    counter.visit_body(body);
-    counter.count
-}
-
-/// If `assert_statement` is `assert <name> is not None`, `assert None is not <name>`, or
-/// `assert isinstance(<name>, ...)`, returns `<name>`.
-fn narrowed_variable_name(assert_statement: &ruff_python_ast::StmtAssert) -> Option<&str> {
-    match assert_statement.test.as_ref() {
-        Expr::Compare(compare) => {
-            let ([ruff_python_ast::CmpOp::IsNot], [left, right]) =
-                (&*compare.ops, &*compare.operands)
-            else {
-                return None;
-            };
-            match (left, right) {
-                (Expr::Name(name), Expr::NoneLiteral(_))
-                | (Expr::NoneLiteral(_), Expr::Name(name)) => Some(name.id.as_str()),
-                _ => None,
-            }
-        }
-        Expr::Call(call) => {
-            let is_isinstance = match call.func.as_ref() {
-                Expr::Name(name) => name.id.as_str() == ISINSTANCE_NAME,
-                Expr::Attribute(attr) => {
-                    attr.attr.as_str() == ISINSTANCE_NAME
-                        && matches!(
-                            attr.value.as_ref(),
-                            Expr::Name(module) if module.id.as_str() == "builtins"
-                        )
-                }
-                _ => false,
-            };
-            if !is_isinstance
-                || call.arguments.args.len() != 2
-                || !call.arguments.keywords.is_empty()
-            {
-                return None;
-            }
-            match &call.arguments.args[0] {
-                Expr::Name(name) => Some(name.id.as_str()),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-/// Returns true if `body` (excluding nested functions and classes) loads `target_name` after `offset`.
-fn body_loads_name_after(
-    body: &[Stmt],
-    target_name: &str,
-    offset: ruff_text_size::TextSize,
-) -> bool {
-    struct LaterLoadFinder<'a> {
-        target_name: &'a str,
-        offset: ruff_text_size::TextSize,
-        found: bool,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for LaterLoadFinder<'a> {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if self.found || statement.range().end() <= self.offset {
-                return;
-            }
-            if !matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
-                walk_stmt(self, statement);
-            }
-        }
-
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if self.found || expr.range().end() <= self.offset {
-                return;
-            }
-            if let Expr::Name(name) = expr
-                && name.ctx.is_load()
-                && name.range().start() > self.offset
-                && name.id.as_str() == self.target_name
-            {
-                self.found = true;
-                return;
-            }
-            walk_expr(self, expr);
-        }
-    }
-
-    let mut finder = LaterLoadFinder {
-        target_name,
-        offset,
-        found: false,
-    };
-    finder.visit_body(body);
-    finder.found
-}
-
-/// Returns true if a Python `ExprCall` is a test assertion call
-/// (`self.assert*()`, `pytest.raises(...)`, `raises(...)`, `pytest.warns(...)`, `self.fail(...)`).
-fn is_assertion_call_expr(call: &ruff_python_ast::ExprCall) -> bool {
-    match call.func.as_ref() {
-        Expr::Name(name) => name.id.as_str() == PYTEST_RAISES,
-        Expr::Attribute(attr) => {
-            let attr_name = attr.attr.as_str();
-            if attr_name.starts_with("assert") {
+        if count_python_assertions_in_slice(std::slice::from_ref(statement), body) > 0 {
+            if seen_action_after_assertion {
                 return true;
             }
-            let Expr::Name(obj) = attr.value.as_ref() else {
-                return false;
-            };
-            let obj_text = obj.id.as_str();
-            (obj_text == "pytest" && (attr_name == PYTEST_RAISES || attr_name == "warns"))
-                || (obj_text == "self" && attr_name == "fail")
+            seen_assertion = true;
+        } else if seen_assertion {
+            seen_action_after_assertion = true;
         }
-        _ => false,
     }
+    false
 }
 
 /// Tracks the functions enclosing the statement visited by a source-order walk.
@@ -931,6 +899,194 @@ fn called_terminal_name_expr(expr: &Expr, source: &str) -> Option<String> {
     (!terminal.is_empty()).then_some(terminal)
 }
 
+/// Collects all outermost Python `StmtFunctionDef` nodes in `body` that are test functions.
+fn collect_outer_python_test_functions(body: &[Stmt]) -> Vec<&StmtFunctionDef> {
+    struct OuterTestFinder<'a> {
+        out: Vec<&'a StmtFunctionDef>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for OuterTestFinder<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if let Stmt::FunctionDef(func_def) = statement {
+                if is_test_function_def(func_def) {
+                    self.out.push(func_def);
+                }
+                return;
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let mut finder = OuterTestFinder { out: Vec::new() };
+    finder.visit_body(body);
+    finder.out
+}
+
+/// Returns true if a Python `StmtFunctionDef` is a test function (`test` or `test_*`).
+fn is_test_function_def(func_def: &StmtFunctionDef) -> bool {
+    let func_name = func_def.name.as_str();
+    func_name == "test" || func_name.starts_with("test_")
+}
+
+/// Counts behavioral assertion constructs in `statements`, using `full_body` to resolve narrowing guards.
+fn count_python_assertions_in_slice(statements: &[Stmt], full_body: &[Stmt]) -> usize {
+    struct AssertionCounter<'a> {
+        full_body: &'a [Stmt],
+        count: usize,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for AssertionCounter<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            match statement {
+                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
+                Stmt::Assert(assert_statement) => {
+                    if !is_narrowing_guard_assert(assert_statement, self.full_body) {
+                        self.count += 1;
+                    }
+                }
+                _ => walk_stmt(self, statement),
+            }
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Call(call) = expr
+                && is_assertion_call_expr(call)
+            {
+                self.count += 1;
+                return;
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut counter = AssertionCounter {
+        full_body,
+        count: 0,
+    };
+    counter.visit_body(statements);
+    counter.count
+}
+
+/// Returns true if `assert_statement` narrows a local variable that is loaded later in `body`.
+fn is_narrowing_guard_assert(
+    assert_statement: &ruff_python_ast::StmtAssert,
+    body: &[Stmt],
+) -> bool {
+    narrowed_variable_name(assert_statement)
+        .is_some_and(|name| body_loads_name_after(body, name, assert_statement.range().end()))
+}
+
+/// If `assert_statement` is `assert <name> is not None`, `assert None is not <name>`, or
+/// `assert isinstance(<name>, ...)`, returns `<name>`.
+fn narrowed_variable_name(assert_statement: &ruff_python_ast::StmtAssert) -> Option<&str> {
+    match assert_statement.test.as_ref() {
+        Expr::Compare(compare) => {
+            let ([ruff_python_ast::CmpOp::IsNot], [left, right]) =
+                (&*compare.ops, &*compare.operands)
+            else {
+                return None;
+            };
+            match (left, right) {
+                (Expr::Name(name), Expr::NoneLiteral(_))
+                | (Expr::NoneLiteral(_), Expr::Name(name)) => Some(name.id.as_str()),
+                _ => None,
+            }
+        }
+        Expr::Call(call) => {
+            let is_isinstance = match call.func.as_ref() {
+                Expr::Name(name) => name.id.as_str() == ISINSTANCE_NAME,
+                Expr::Attribute(attr) => {
+                    attr.attr.as_str() == ISINSTANCE_NAME
+                        && matches!(
+                            attr.value.as_ref(),
+                            Expr::Name(module) if module.id.as_str() == "builtins"
+                        )
+                }
+                _ => false,
+            };
+            if !is_isinstance
+                || call.arguments.args.len() != 2
+                || !call.arguments.keywords.is_empty()
+            {
+                return None;
+            }
+            match &call.arguments.args[0] {
+                Expr::Name(name) => Some(name.id.as_str()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Returns true if `body` (excluding nested functions and classes) loads `target_name` after `offset`.
+fn body_loads_name_after(
+    body: &[Stmt],
+    target_name: &str,
+    offset: ruff_text_size::TextSize,
+) -> bool {
+    struct LaterLoadFinder<'a> {
+        target_name: &'a str,
+        offset: ruff_text_size::TextSize,
+        found: bool,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for LaterLoadFinder<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if self.found || statement.range().end() <= self.offset {
+                return;
+            }
+            if !matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
+                walk_stmt(self, statement);
+            }
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if self.found || expr.range().end() <= self.offset {
+                return;
+            }
+            if let Expr::Name(name) = expr
+                && name.ctx.is_load()
+                && name.range().start() > self.offset
+                && name.id.as_str() == self.target_name
+            {
+                self.found = true;
+                return;
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut finder = LaterLoadFinder {
+        target_name,
+        offset,
+        found: false,
+    };
+    finder.visit_body(body);
+    finder.found
+}
+
+/// Returns true if a Python `ExprCall` is a test assertion call
+/// (`self.assert*()`, `pytest.raises(...)`, `raises(...)`, `pytest.warns(...)`, `self.fail(...)`).
+fn is_assertion_call_expr(call: &ruff_python_ast::ExprCall) -> bool {
+    match call.func.as_ref() {
+        Expr::Name(name) => name.id.as_str() == PYTEST_RAISES,
+        Expr::Attribute(attr) => {
+            let attr_name = attr.attr.as_str();
+            if attr_name.starts_with("assert") {
+                return true;
+            }
+            let Expr::Name(obj) = attr.value.as_ref() else {
+                return false;
+            };
+            let obj_text = obj.id.as_str();
+            (obj_text == "pytest" && (attr_name == PYTEST_RAISES || attr_name == "warns"))
+                || (obj_text == "self" && attr_name == "fail")
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1081,12 +1237,11 @@ mod tests {
         "#};
         let file = ParsedFile::new(source, Language::Python);
         let decorators = first_function_decorators(&file);
-
         let dec0 = &decorators[0];
+        let dec1 = &decorators[1];
+
         assert_eq!(dec0.terminal_name, "parametrize");
         assert_eq!(dec0.path, "pytest.mark.parametrize");
-
-        let dec1 = &decorators[1];
         assert_eq!(dec1.terminal_name, "custom");
         assert_eq!(dec1.path, "custom");
     }
@@ -1110,10 +1265,10 @@ mod tests {
         "};
         let file = ParsedFile::new(source, Language::Python);
         let classes = extract_classes(&file);
-        assert_eq!(classes.len(), 1);
         let cls = &classes[0];
-        assert_eq!(cls.name, "FakeService");
         let base_names: Vec<&str> = cls.bases.iter().map(|base| base.name.as_str()).collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(cls.name, "FakeService");
         assert_eq!(base_names, vec!["abc.ABC", "Protocol"]);
     }
 
@@ -1195,7 +1350,6 @@ mod tests {
     ) {
         let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
-        assert_eq!(sigs.len(), 1);
         let actual: Vec<Vec<String>> = sigs[0]
             .parameters
             .iter()
@@ -1219,6 +1373,7 @@ mod tests {
                     .collect()
             })
             .collect();
+        assert_eq!(sigs.len(), 1);
         assert_eq!(actual, expected);
     }
 
@@ -1703,12 +1858,12 @@ mod tests {
             .as_ref()
             .expect("function should have return annotation");
         let union = return_type_union(return_type_node);
-        assert_eq!(union.has_none, expected_has_none);
         let branches: Vec<_> = union
             .branches
             .iter()
             .map(|branch| branch.node.text())
             .collect();
+        assert_eq!(union.has_none, expected_has_none);
         assert_eq!(branches, expected_branches);
     }
 
@@ -1720,8 +1875,8 @@ mod tests {
         let union = return_type_union(return_type_node);
         let branch = &union.branches[0];
         let collection = branch.collection.as_ref().expect("collection type");
-        assert_eq!(collection.name, "tuple");
         let args = branch.type_arguments.as_ref().expect("generic type");
+        assert_eq!(collection.name, "tuple");
         assert_eq!(args.len(), 2);
         assert_eq!(args[0].text(), "int");
         assert_eq!(args[1].text(), "...");

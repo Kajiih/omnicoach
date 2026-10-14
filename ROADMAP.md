@@ -86,8 +86,6 @@ Design: [ADR 006](docs/dev/decisions/006_architectural_dag_and_conformance.md). 
 
 Candidates and known-gap follow-ups to prioritize, not commitments.
 
-- **`logic-in-tests`** (Python, Rust — [SWE at Google, ch. 12](https://abseil.io/resources/swe-book/html/ch12.html), [03_design.md](docs/dev/assertion_gaming/03_design.md)):
-  - *Detection*: flag conditionals (`if`, `match`), loops (`for`, `while`, `loop`), `try` blocks, and `if`-filtered comprehensions (`[x for x in items if ...]`) directly inside test functions.
 - **`repeated-index-access` follow-ups** (Python, Rust):
   - *Named record for sparse positional access*: reads needing more `_` placeholders than `repeated-index-access` allows (`row[0]`, `row[7]`) → `NamedTuple` / dataclass / struct (or `csv.DictReader` for CSV rows).
   - *Multi-field tuple structs* (Rust): tuple structs with ≥2 fields → named-field struct (tuple structs reserved for newtypes).

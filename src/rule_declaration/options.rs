@@ -795,12 +795,11 @@ mod tests {
         };
 
         let python_defaults = DEFAULTS.resolve_default_for_lang(Language::Python);
+        let rust_defaults = DEFAULTS.resolve_default_for_lang(Language::Rust);
         assert_eq!(
             python_defaults,
             HashSet::from(["common", "shared", "temp"].map(String::from))
         );
-
-        let rust_defaults = DEFAULTS.resolve_default_for_lang(Language::Rust);
         assert_eq!(
             rust_defaults,
             HashSet::from(["common", "shared", "rust_only"].map(String::from))

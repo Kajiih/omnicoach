@@ -1,4 +1,5 @@
 //! Centralized registry integrity and uniqueness validation tests.
+// omni:disable-file[logic-in-tests] -- registry conformance tests iterate over every registered rule and source file
 
 // Workaround for rust-lang/rust-clippy#13981 so clippy.toml `allow-*-in-tests` applies to the whole file.
 #![cfg(test)]

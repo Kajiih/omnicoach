@@ -767,6 +767,22 @@ pub fn collect_test_function_assertion_counts(
     dispatch_lang!(file.lang(), collect_test_function_assertion_counts(file))
 }
 
+/// Collects control-flow and conditional constructs directly inside outermost test functions in `file`,
+/// returning `(construct_node, test_function_name, construct_description)`.
+#[must_use]
+pub fn collect_test_logic_constructs(
+    file: &ParsedFile,
+) -> Vec<(AstNode<'_>, String, &'static str)> {
+    dispatch_lang!(file.lang(), collect_test_logic_constructs(file))
+}
+
+/// Collects outermost test functions in `file` that interleave non-assertion statements between
+/// behavioral assertions, returning `(function_name_node, test_function_name)`.
+#[must_use]
+pub fn collect_multi_phase_test_functions(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
+    dispatch_lang!(file.lang(), collect_multi_phase_test_functions(file))
+}
+
 /// Finds all multiline string literals in `file` that are not docstrings/doc-attributes/snapshots
 /// and are not wrapped in an allowed dedent helper.
 #[must_use]

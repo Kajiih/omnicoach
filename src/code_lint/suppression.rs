@@ -671,9 +671,9 @@ mod tests {
     fn test_parse_valid_inline_directive_same_line(#[case] content: &str) {
         let file = ParsedFile::new(content, Language::Rust);
         let tracker = SuppressionTracker::from_file(&file, content);
+        let directive = &tracker.directives[0];
 
         assert_eq!(tracker.directives.len(), 1);
-        let directive = &tracker.directives[0];
         assert_eq!(directive.target_rules, vec!["single-letter-name"]);
         assert!(directive.is_explained);
         assert_eq!(
@@ -709,9 +709,9 @@ mod tests {
     ) {
         let file = ParsedFile::new(content, lang);
         let tracker = SuppressionTracker::from_file(&file, content);
+        let directive = &tracker.directives[0];
 
         assert_eq!(tracker.directives.len(), 1);
-        let directive = &tracker.directives[0];
         assert!(!directive.is_blanket);
         assert_eq!(
             directive.placement,
@@ -732,9 +732,9 @@ mod tests {
     fn test_parse_file_level_directive(#[case] content: &str) {
         let file = ParsedFile::new(content, Language::Python);
         let tracker = SuppressionTracker::from_file(&file, content);
+        let directive = &tracker.directives[0];
 
         assert_eq!(tracker.directives.len(), 1);
-        let directive = &tracker.directives[0];
         assert_eq!(
             directive.target_rules,
             vec!["nested-function", "single-letter-name"]

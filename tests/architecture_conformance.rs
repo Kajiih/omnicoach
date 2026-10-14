@@ -850,7 +850,6 @@ fn test_relative_path_boundary_allows_intra_component_and_rejects_cross_componen
             .into_iter()
             .map(|(line, _)| line)
             .collect();
-    assert_eq!(child_lines, vec![14, 15, 18]);
 
     let root_source = indoc::indoc! {r"
         pub mod rust;
@@ -867,6 +866,7 @@ fn test_relative_path_boundary_allows_intra_component_and_rejects_cross_componen
             .into_iter()
             .map(|(line, _)| line)
             .collect();
+    assert_eq!(child_lines, vec![14, 15, 18]);
     assert_eq!(root_lines, vec![5, 6]);
 }
 
@@ -961,10 +961,6 @@ fn test_namespace_validator_accepts_pure_routers_and_rejects_code_or_orphan_rout
             "architecture_component!(CodeLintAst);\npub struct ParsedFile;\n",
         ),
     ];
-    assert_eq!(
-        validate_component_declarations_and_routers(&valid_entries, false),
-        Vec::<String>::new()
-    );
 
     let impure_and_orphan_entries = [
         SourceFileEntry::from_source(
@@ -984,6 +980,10 @@ fn test_namespace_validator_accepts_pure_routers_and_rejects_code_or_orphan_rout
         ),
     ];
     let violations = validate_component_declarations_and_routers(&impure_and_orphan_entries, false);
+    assert_eq!(
+        validate_component_declarations_and_routers(&valid_entries, false),
+        Vec::<String>::new()
+    );
     assert_eq!(
         violations,
         vec![

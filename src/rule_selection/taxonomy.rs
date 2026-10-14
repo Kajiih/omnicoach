@@ -356,6 +356,7 @@ mod tests {
     #[test]
     fn no_rule_lists_a_topic_with_its_ancestor_or_twice() {
         let mut failures = Vec::new();
+        // omni:ignore[logic-in-tests] -- verifies taxonomy invariants across all registered rules
         for rule in REGISTERED_RULES.iter() {
             let topics = rule.classification.topics;
             for (index, &topic) in topics.iter().enumerate() {
@@ -402,6 +403,7 @@ mod tests {
     #[test]
     fn labels_are_globally_unique_and_not_facet_labels() {
         let mut owners: BTreeMap<&str, Vec<Selector>> = BTreeMap::new();
+        // omni:ignore[logic-in-tests] -- groups all registered taxonomy labels to check global uniqueness
         for (label, selector) in labels() {
             owners.entry(label).or_default().push(selector);
         }
@@ -410,21 +412,22 @@ mod tests {
             .filter(|(_, selectors)| selectors.len() > 1)
             .map(|(label, selectors)| format!("`{label}` names {selectors:?}"))
             .collect();
-        assert!(collisions.is_empty(), "{}", collisions.join("\n"));
         let non_kebab: Vec<_> = owners
             .keys()
             .filter(|label| !is_kebab_case(label))
             .collect();
-        assert!(non_kebab.is_empty(), "{non_kebab:?} are not kebab-case");
         let facet_like: Vec<_> = owners
             .keys()
             .filter(|label| Facet::iter().any(|facet| facet.matches_label(label)))
             .collect();
+        assert!(collisions.is_empty(), "{}", collisions.join("\n"));
+        assert!(non_kebab.is_empty(), "{non_kebab:?} are not kebab-case");
         assert!(facet_like.is_empty(), "{facet_like:?} read as facet labels");
     }
 
     #[test]
     fn code_rules_and_only_code_rules_have_a_language() {
+        // omni:ignore[logic-in-tests] -- verifies language facet invariant across all registered rules
         for rule in REGISTERED_RULES.iter() {
             let has_language = rule
                 .derived
