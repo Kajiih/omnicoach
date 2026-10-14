@@ -72,6 +72,7 @@ use std::sync::Arc;
 
 const PYTEST_RAISES: &str = "raises";
 const ENVIRON_NAME: &str = "environ";
+const ISINSTANCE_NAME: &str = "isinstance";
 
 /// The callee of `call` if it is a `call` node, without the type arguments of a generic
 /// instantiation (`list[str]()` has callee `list`).
@@ -353,6 +354,9 @@ pub struct PythonAssert<'a> {
     /// True if the condition is a comparison with an operand that is a tuple or list of two or
     /// more boolean literals.
     pub has_boolean_literal_comparison: bool,
+    /// True if the condition compares two or more multi-element collection literals (`tuple`,
+    /// `list`, `set`, or `dict`).
+    pub has_composite_collection_comparison: bool,
 }
 
 /// Collects all Python `Stmt::Assert` nodes in `file`.
@@ -380,6 +384,16 @@ pub fn collect_assert_statements(file: &ParsedFile) -> Vec<PythonAssert<'_>> {
                         test,
                         Expr::Compare(comparison)
                             if comparison.operands.iter().any(is_boolean_literal_collection_expr)
+                    ),
+                    has_composite_collection_comparison: matches!(
+                        test,
+                        Expr::Compare(comparison)
+                            if comparison
+                                .operands
+                                .iter()
+                                .filter(|operand| is_multi_element_collection_expr(operand))
+                                .count()
+                                >= 2
                     ),
                 });
             }
@@ -409,6 +423,17 @@ fn is_boolean_literal_collection_expr(expr: &Expr) -> bool {
         && elements
             .iter()
             .all(|element| matches!(element, Expr::BooleanLiteral(_)))
+}
+
+/// Returns true if `expr` is a Python `tuple`, `list`, `set`, or `dict` literal with `>= 2` elements.
+const fn is_multi_element_collection_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::Tuple(tuple) => tuple.elts.len() >= 2,
+        Expr::List(list) => list.elts.len() >= 2,
+        Expr::Set(set) => set.elts.len() >= 2,
+        Expr::Dict(dict) => dict.items.len() >= 2,
+        _ => false,
+    }
 }
 
 /// Collects all outermost Python test functions along with their identifier node, name, and assertion count.
@@ -457,16 +482,23 @@ fn is_test_function_def(func_def: &StmtFunctionDef) -> bool {
 
 /// Counts top-level assertion constructs in a Python test function body.
 fn count_python_assertions_in_body(body: &[Stmt]) -> usize {
-    struct AssertionCounter {
+    struct AssertionCounter<'a> {
+        body: &'a [Stmt],
         count: usize,
     }
 
-    impl<'a> SourceOrderVisitor<'a> for AssertionCounter {
+    impl<'a> SourceOrderVisitor<'a> for AssertionCounter<'a> {
         fn visit_stmt(&mut self, statement: &'a Stmt) {
             match statement {
                 Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
-                Stmt::Assert(_) => {
-                    self.count += 1;
+                Stmt::Assert(assert_statement) => {
+                    let is_narrowing_guard =
+                        narrowed_variable_name(assert_statement).is_some_and(|name| {
+                            body_loads_name_after(self.body, name, assert_statement.range().end())
+                        });
+                    if !is_narrowing_guard {
+                        self.count += 1;
+                    }
                 }
                 _ => walk_stmt(self, statement),
             }
@@ -483,9 +515,99 @@ fn count_python_assertions_in_body(body: &[Stmt]) -> usize {
         }
     }
 
-    let mut counter = AssertionCounter { count: 0 };
+    let mut counter = AssertionCounter { body, count: 0 };
     counter.visit_body(body);
     counter.count
+}
+
+/// If `assert_statement` is `assert <name> is not None`, `assert None is not <name>`, or
+/// `assert isinstance(<name>, ...)`, returns `<name>`.
+fn narrowed_variable_name(assert_statement: &ruff_python_ast::StmtAssert) -> Option<&str> {
+    match assert_statement.test.as_ref() {
+        Expr::Compare(compare) => {
+            let ([ruff_python_ast::CmpOp::IsNot], [left, right]) =
+                (&*compare.ops, &*compare.operands)
+            else {
+                return None;
+            };
+            match (left, right) {
+                (Expr::Name(name), Expr::NoneLiteral(_))
+                | (Expr::NoneLiteral(_), Expr::Name(name)) => Some(name.id.as_str()),
+                _ => None,
+            }
+        }
+        Expr::Call(call) => {
+            let is_isinstance = match call.func.as_ref() {
+                Expr::Name(name) => name.id.as_str() == ISINSTANCE_NAME,
+                Expr::Attribute(attr) => {
+                    attr.attr.as_str() == ISINSTANCE_NAME
+                        && matches!(
+                            attr.value.as_ref(),
+                            Expr::Name(module) if module.id.as_str() == "builtins"
+                        )
+                }
+                _ => false,
+            };
+            if !is_isinstance
+                || call.arguments.args.len() != 2
+                || !call.arguments.keywords.is_empty()
+            {
+                return None;
+            }
+            match &call.arguments.args[0] {
+                Expr::Name(name) => Some(name.id.as_str()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Returns true if `body` (excluding nested functions and classes) loads `target_name` after `offset`.
+fn body_loads_name_after(
+    body: &[Stmt],
+    target_name: &str,
+    offset: ruff_text_size::TextSize,
+) -> bool {
+    struct LaterLoadFinder<'a> {
+        target_name: &'a str,
+        offset: ruff_text_size::TextSize,
+        found: bool,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for LaterLoadFinder<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if self.found || statement.range().end() <= self.offset {
+                return;
+            }
+            if !matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
+                walk_stmt(self, statement);
+            }
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if self.found || expr.range().end() <= self.offset {
+                return;
+            }
+            if let Expr::Name(name) = expr
+                && name.ctx.is_load()
+                && name.range().start() > self.offset
+                && name.id.as_str() == self.target_name
+            {
+                self.found = true;
+                return;
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut finder = LaterLoadFinder {
+        target_name,
+        offset,
+        found: false,
+    };
+    finder.visit_body(body);
+    finder.found
 }
 
 /// Returns true if a Python `ExprCall` is a test assertion call
@@ -1004,13 +1126,10 @@ mod tests {
         "};
         let file = ParsedFile::new(source, Language::Python);
         let classes = extract_classes(&file);
-        assert_eq!(classes.len(), 1);
 
         let cls = &classes[0];
-        assert_eq!(
-            (cls.name.as_str(), cls.decorators[0].terminal_name.as_str()),
-            ("Config", "dataclass")
-        );
+        assert_eq!(cls.name, "Config");
+        assert_eq!(cls.decorators[0].terminal_name, "dataclass");
         assert!(!cls.is_dataclass_missing_arg("frozen"));
         assert!(cls.is_dataclass_missing_arg("slots"));
     }
@@ -1767,16 +1886,14 @@ mod tests {
             .map(|node| node.text().into_owned())
             .collect();
         assert_eq!(
-            (fields, trailing),
-            (
-                vec![(
-                    "Config".to_owned(),
-                    "retries".to_owned(),
-                    "retries: int = 3".to_owned(),
-                )],
-                vec!["EXTRA = 1".to_owned()],
-            )
+            fields,
+            vec![(
+                "Config".to_owned(),
+                "retries".to_owned(),
+                "retries: int = 3".to_owned(),
+            )]
         );
+        assert_eq!(trailing, vec!["EXTRA = 1".to_owned()]);
     }
 
     /// `(style, preceding_text, literals, [(field, conversion, format_spec)])`.
@@ -1882,10 +1999,9 @@ mod tests {
     fn test_collect_format_strings_reads_concatenated_prefix() {
         let summaries = summarize_format_strings("message = (\"Load \" f\"'{name}'\")");
         let (style, preceding_text, ..) = &summaries[0];
-        assert_eq!(
-            (summaries.len(), *style, preceding_text.as_str()),
-            (1, PythonFormatStyle::FString, "Load ")
-        );
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(*style, PythonFormatStyle::FString);
+        assert_eq!(preceding_text.as_str(), "Load ");
     }
 
     #[test]

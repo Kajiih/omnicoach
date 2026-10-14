@@ -60,7 +60,7 @@ Design: [ADR 006](docs/dev/decisions/006_architectural_dag_and_conformance.md). 
   - *Target*: Treat a `class` / `impl` declared inside a boundary as a barrier that resets the exemption, once a real-world occurrence justifies the added language-specific complexity.
 - **Import-Aware Qualified Call Resolution (`src/code_lint/semantic/calls.rs`)**:
   - *Current*: Literal banned-call entries, dedent wrappers, decorators, class bases, and collection annotations are resolved through a per-file import map (`ast::resolve_name`, documented in [docs/name_resolution.md](docs/name_resolution.md)): an imported name matches only by its canonical path (`import typing as t; t.cast(...)` matches `typing.cast`; `from sqlalchemy import cast` no longer matches `cast`), a module-level definition never matches, and an unimported name matches as written. Only module-level Python imports and root-level Rust `use` items are considered; imports inside functions or `mod` blocks, function parameters, assignment aliases, and the receiver of `<callee>().<method>` entries are not resolved.
-  - *Target*: Evaluate scope-aware resolution (nested imports, parameter/fixture receivers such as `mocker.patch`, `monkeypatch.setattr`, `loop.create_task`), modeled on Ruff's `SemanticModel::resolve_qualified_name`.
+  - *Target*: Evaluate scope-aware resolution (nested imports, parameter/fixture receivers such as `mocker.patch`, `monkeypatch.setattr`, `loop.create_task`, and context-manager aliases such as `with pytest.MonkeyPatch.context() as mp: mp.setattr(...)`), modeled on Ruff's `SemanticModel::resolve_qualified_name`.
 - **Dependency-Aware Rule Activation (`pyproject.toml` / `Cargo.toml`) & Loguru Format Enforcement (`LoggerPrintfFormatRule`)**:
   - *Context*: Some rules only make sense when a project uses a specific library ecosystem. The legacy linter's `LoggerPrintfFormatRule` targets `loguru`: while `"..." % ...` is covered by Ruff `G002` (`logging-percent-format`) and `UP031` (`printf-string-formatting`), multi-argument `logger.info("User %s", user)` is required in stdlib `logging` (enforced by Ruff `G001`–`G004`), yet in `loguru` it is a silent data-loss bug (`str.format` ignores unused positional arguments when no `{}` is present; today only Pylint `E1205` with `[tool.pylint.logging] logging-format-style = "new"` and `logging-modules = ["loguru"]` checks this).
   - *Target*: Investigate dependency-aware rule activation (inspecting `pyproject.toml` / `uv.lock` / `Cargo.toml` or project-wide imports) or a configurable logging format mode so a `printf-log-format` rule enforcing `{}` placeholders over `%s` in logger calls can be enabled automatically when `loguru` is installed. (Implementation note: unparenthesized printf regexes must exclude the `' '` space flag so ordinary English percentages like `"100% complete"` or `"50% discount"` do not match `% c` / `% d`.)
@@ -86,6 +86,14 @@ Design: [ADR 006](docs/dev/decisions/006_architectural_dag_and_conformance.md). 
 
 Candidates and known-gap follow-ups to prioritize, not commitments.
 
+- **Test-design rule candidates** ([01_understand.md](docs/dev/assertion_gaming/01_understand.md), [02_references.md](docs/dev/assertion_gaming/02_references.md), [03_design.md](docs/dev/assertion_gaming/03_design.md)):
+  - *`multi-phase-test`*: Act–Assert–Act interleaving in one test function.
+  - *`duplicated-test-setup`*: identical setup blocks repeated across sibling tests instead of a fixture or helper.
+  - *`conditional-test-logic`*: `if`/`else`, `for`/`while`, or filtering comprehensions (`[x for x in items if ...]`) inside test assertions.
+- **`dynamic-attribute-access` follow-ups** (Python):
+  - *Dunder & `__dict__` reflection*: `object.__setattr__`, `object.__getattribute__`, `object.__delattr__`, `type.__setattr__`, `vars(obj)`, `obj.__dict__`.
+- **`mock-in-tests` follow-ups** (Python):
+  - *`pytest.MonkeyPatch.context()`*: add `MonkeyPatch.context` and `pytest.MonkeyPatch.context` to the default `banned` list.
 - **`repeated-index-access` follow-ups** (Python, Rust):
   - *Named record for sparse positional access*: reads needing more `_` placeholders than `repeated-index-access` allows (`row[0]`, `row[7]`) → `NamedTuple` / dataclass / struct (or `csv.DictReader` for CSV rows).
   - *Multi-field tuple structs* (Rust): tuple structs with ≥2 fields → named-field struct (tuple structs reserved for newtypes).
@@ -141,6 +149,7 @@ Candidates and known-gap follow-ups to prioritize, not commitments.
   - `EmptyInitRule`: covered 1:1 by Ruff `[tool.ruff.lint] preview = true`, `extend-select = ["RUF067", "INP001"]`, and `[tool.ruff.lint.ruff] strictly-empty-init-modules = true` (or `false` for library facades; add `extend-ignore = ["D104"]` if `pydocstyle` `D` is enabled).
   - `LoggerRedundantExceptionRule`: covered by Ruff `[tool.ruff.lint] extend-select = ["TRY400", "TRY401", "G201", "LOG004", "LOG007", "LOG014"]` (plus `logger-objects = ["loguru.logger"]` and `extend-ignore = ["PLE1205"]` when using Loguru).
   - `LoggerPrintfFormatRule` Branch B (`"..." % ...` in logs): covered by Ruff `[tool.ruff.lint] extend-select = ["UP031", "G001", "G002", "G003", "G004"]` (and Branch A for Loguru today via Pylint `E1205` with `[tool.pylint.logging] logging-format-style = "new"` and `logging-modules = ["loguru"]`).
+  - `LoggerPositionalPlaceholderRule` (banning matched named placeholders like `logger.info("{count}", count=10)`): intentionally narrowed to `unmatched-logger-placeholder`.
   - `InstanceAttributeAnnotationRule` Checks 2 & 3: Check 2 conflicts with PEP 526/PEP 591/Pydantic/attrs/`__slots__`; Check 3 is covered by Mypy (`[tool.mypy] enable_error_code = ["no-redef"]`), Pyright (`[tool.pyright] reportUninitializedInstanceVariable = "warning"`, `reportGeneralTypeIssues = "error"`), Ruff (`RUF012`), and Pylint (`W0201`).
   - `DefineBeforeUseRule` (`call-before-definition`), file-wide `constant-after-function`, and rigid module-level item-kind / visibility ordering: top-level undefined/forward references in Python are covered by Ruff `[tool.ruff.lint] extend-select = ["F821", "F823"]` and Pylint `E0601` (`used-before-assignment`), module-level import placement is covered by Ruff `E402` (`module-import-not-at-top-of-file`), and rigid module-level item-kind or constant-before-function ordering (`clippy::arbitrary_source_item_ordering`) breaks cohesion by splitting types and functions from their colocated constants, constructors, errors, and helpers.
   - `AvoidOptionalOrNoneRule` Check 1 (`Optional[T]` syntax): covered by Ruff `target-version = "py310"` and `[tool.ruff.lint] extend-select = ["UP007", "UP045", "RUF013", "RUF036"]`; scalar returns, attributes, and parameters under Check 2 are intentionally not flagged.
@@ -199,8 +208,14 @@ Candidates and known-gap follow-ups to prioritize, not commitments.
 
 ---
 
-## 4. Reporting & Diagnostics
+## 4. Reporting, CLI & Distribution
 
+- **Advisory severity & diff-scoped reporting (`--ref`)**:
+  - *Target*: Non-blocking `warn` severity and/or `--ref <git-ref>` to scope findings to modified lines.
+- **CLI configuration overrides (`--config`, `--select`, `--ignore`)**:
+  - *Target*: Layer CLI overrides on top of `.omnicoach.toml`.
+- **Signed macOS release binaries**:
+  - *Target*: Sign and notarize `aarch64-apple-darwin` and `x86_64-apple-darwin` release artifacts.
 - **On-Demand Suppression / Explanation Comment Placement Hint**:
   - *Context*: When a diagnostic spans an inner node (e.g. a function or parameter name inside a multi-line signature, a decorated declaration, or a statement inside a block), it is not always obvious which lines `SuppressionTracker` accepts for an `# omni:ignore[rule] -- reason` directive or a `RequireExplanation` comment. At the same time, including suppression instructions in the default diagnostic output would clutter every finding and nudge authors/agents toward suppressing instead of fixing.
   - *Investigation*: Explore an opt-in mechanism (such as a CLI flag, `--format json` metadata field, or query subcommand) that reports the valid comment insertion line(s) for a diagnostic without showing it in default terminal messages.

@@ -450,11 +450,11 @@ pub fn extract_macro_arguments<'a>(macro_node: &AstNode<'a>) -> Vec<AstNode<'a>>
         .collect()
 }
 
-/// Returns true if `node` is a Rust macro argument `token_tree` (tuple, array, or parenthesized
-/// group) consisting solely of `>= 2` boolean literals (`true` / `false`).
+/// Returns true if `node` is a standalone Rust macro argument `token_tree` (tuple, array, or
+/// `vec![...]`) consisting solely of `>= 2` boolean literals (`true` / `false`).
 #[must_use]
 pub fn is_boolean_literal_collection(node: &AstNode<'_>) -> bool {
-    let Some(token_tree) = cast_at_span::<ast::TokenTree>(node) else {
+    let Some(token_tree) = standalone_collection_token_tree(node) else {
         return false;
     };
     let items = meaningful_token_tree_elements(&token_tree);
@@ -466,6 +466,20 @@ pub fn is_boolean_literal_collection(node: &AstNode<'_>) -> bool {
                     if matches!(token.kind(), SyntaxKind::TRUE_KW | SyntaxKind::FALSE_KW)
             )
         })
+}
+
+/// Returns true if `node` is a standalone Rust tuple, array, or `vec![...]` macro argument
+/// `token_tree` containing `>= 2` comma-separated elements (such as `(a, b)` or `[a, b]`).
+#[must_use]
+pub fn is_multi_element_collection(node: &AstNode<'_>) -> bool {
+    let Some(token_tree) = standalone_collection_token_tree(node) else {
+        return false;
+    };
+    let has_comma = token_tree
+        .syntax()
+        .children_with_tokens()
+        .any(|element| matches!(element, SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMA));
+    has_comma && meaningful_token_tree_elements(&token_tree).len() >= 2
 }
 
 /// Collects all Rust multiline string literal nodes in `file` that are not doc attributes,
@@ -2077,6 +2091,43 @@ fn collect_misplaced_assoc_items<'a>(
     }
 }
 
+/// If `node` is a standalone tuple, array, or `vec![...]` `token_tree` macro argument (not a call
+/// argument list `foo(a, b)` or postfix receiver `(a, b).0`), returns its [`ast::TokenTree`].
+fn standalone_collection_token_tree(node: &AstNode<'_>) -> Option<ast::TokenTree> {
+    let token_tree = cast_at_span::<ast::TokenTree>(node)?;
+    if span_from_rowan_range(token_tree.syntax().text_range()) != node.span() {
+        return None;
+    }
+    let following = std::iter::successors(
+        token_tree.syntax().last_token()?.next_token(),
+        SyntaxToken::next_token,
+    )
+    .find(|candidate| !candidate.kind().is_trivia())?;
+    if !matches!(
+        following.kind(),
+        SyntaxKind::COMMA | SyntaxKind::R_PAREN | SyntaxKind::R_BRACK | SyntaxKind::R_CURLY
+    ) {
+        return None;
+    }
+    if resolve_preceding_macro_path(token_tree.syntax()).is_some_and(|path| path.terminal == "vec")
+    {
+        return Some(token_tree);
+    }
+    let preceding = std::iter::successors(
+        token_tree.syntax().first_token()?.prev_token(),
+        SyntaxToken::prev_token,
+    )
+    .find(|candidate| {
+        !candidate.kind().is_trivia()
+            && !matches!(candidate.kind(), SyntaxKind::AMP | SyntaxKind::MUT_KW)
+    })?;
+    matches!(
+        preceding.kind(),
+        SyntaxKind::L_PAREN | SyntaxKind::L_BRACK | SyntaxKind::L_CURLY | SyntaxKind::COMMA
+    )
+    .then_some(token_tree)
+}
+
 /// Casts the syntax node at `node.span()` (or an exact-range wrapper ancestor) to `T`.
 fn cast_at_span<T: ra_ap_syntax::AstNode>(node: &AstNode<'_>) -> Option<T> {
     let inner = syntax_node(node)?;
@@ -2632,15 +2683,16 @@ mod tests {
             .collect();
 
         assert_eq!(
-            (summary.architecture_components, summary.visible_uses),
-            (
-                vec!["CodeLintAst".to_string()],
-                vec![VisibleUseDeclaration {
-                    line: 11,
-                    declaration_text: "pub use self::detail::Exported;".to_string(),
-                    target_paths: vec!["self::detail::Exported".to_string()],
-                }],
-            )
+            summary.architecture_components,
+            vec!["CodeLintAst".to_string()]
+        );
+        assert_eq!(
+            summary.visible_uses,
+            vec![VisibleUseDeclaration {
+                line: 11,
+                declaration_text: "pub use self::detail::Exported;".to_string(),
+                target_paths: vec!["self::detail::Exported".to_string()],
+            }]
         );
         assert_eq!(
             summary.external_mods,
