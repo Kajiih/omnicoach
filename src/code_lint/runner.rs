@@ -450,25 +450,20 @@ mod tests {
     #[rstest]
     #[case::with_directive(
         "# omni:ignore[error-log-in-except] -- reason\nprint('hi')",
-        false,
+        Config::default(),
         true
     )]
-    #[case::without_directive("print('hello world')", false, false)]
+    #[case::without_directive("print('hello world')", Config::default(), false)]
     #[case::with_directive_but_suppression_disabled(
         "# omni:ignore[error-log-in-except] -- reason\nprint('hi')",
-        true,
+        config_disabling(audit_names()),
         false
     )]
     fn test_has_active_suppression_audit(
         #[case] content: &str,
-        #[case] disable_suppression_rules: bool,
+        #[case] config: Config,
         #[case] expected: bool,
     ) {
-        let config = if disable_suppression_rules {
-            config_disabling(audit_names())
-        } else {
-            Config::default()
-        };
         assert_eq!(
             has_active_suppression_audit(Path::new("main.py"), Language::Python, content, &config),
             expected
@@ -478,7 +473,10 @@ mod tests {
     #[test]
     fn test_should_skip_ast_parse() {
         let config = Config::default();
+        let no_rules_config = config_disabling(code_rule_names().chain(audit_names()));
+        let suppression_only_config = config_disabling(code_rule_names());
         let py_path = Path::new("script.py");
+        let code_with_comment = "# omni:ignore -- missing reason";
 
         // Normal file with default config: standard code rules are enabled, do NOT skip
         assert!(!should_skip_ast_parse(
@@ -490,7 +488,6 @@ mod tests {
         ));
 
         // Config disabling every rule: should skip AST parse
-        let no_rules_config = config_disabling(code_rule_names().chain(audit_names()));
         assert!(should_skip_ast_parse(
             py_path,
             Language::Python,
@@ -501,8 +498,6 @@ mod tests {
 
         // When all general code rules are ignored, but suppression directives are present:
         // do NOT skip so suppression hygiene can be audited
-        let suppression_only_config = config_disabling(code_rule_names());
-        let code_with_comment = "# omni:ignore -- missing reason";
         assert!(!should_skip_ast_parse(
             py_path,
             Language::Python,
@@ -546,10 +541,9 @@ mod tests {
 
         let diagnostics_req_doc =
             lint_file(Path::new("main.py"), source_documented, &req_doc_config);
-        assert_eq!(diagnostics_req_doc, vec![]);
-
         let diagnostics_req_uncommented =
             lint_file(Path::new("main.py"), source_uncommented, &req_doc_config);
+        assert_eq!(diagnostics_req_doc, vec![]);
         assert_eq!(diagnostics_req_uncommented.len(), 1);
     }
 
@@ -559,9 +553,8 @@ mod tests {
         let config = config_enabling(&["sleep-in-tests"]);
 
         let prod_diagnostics = lint_file(Path::new("src/daemon.py"), source_prod, &config);
-        assert_eq!(prod_diagnostics, vec![]);
-
         let test_diagnostics = lint_file(Path::new("tests/test_daemon.py"), source_prod, &config);
+        assert_eq!(prod_diagnostics, vec![]);
         assert_eq!(test_diagnostics.len(), 1);
     }
 
@@ -595,9 +588,8 @@ mod tests {
         let config = config_enabling(&["environment-variable-in-function"]);
 
         let src_diagnostics = lint_file(Path::new("src/service.py"), source_py, &config);
-        assert_eq!(src_diagnostics.len(), 1);
-
         let test_diagnostics = lint_file(Path::new("tests/test_service.py"), source_py, &config);
+        assert_eq!(src_diagnostics.len(), 1);
         assert_eq!(test_diagnostics, vec![]);
     }
 

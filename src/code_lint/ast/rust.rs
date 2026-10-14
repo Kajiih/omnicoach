@@ -330,54 +330,118 @@ pub(super) fn collect_test_function_assertion_counts(
         .collect()
 }
 
-fn collect_outer_test_functions_rec(node: &SyntaxNode, out: &mut Vec<ast::Fn>) {
-    if let Some(function) = ast::Fn::cast(node.clone()) {
-        if is_test_function(&function) {
-            out.push(function);
-        }
+/// Collects control-flow and conditional constructs directly inside outermost Rust test functions.
+#[must_use]
+pub(super) fn collect_test_logic_constructs(
+    file: &ParsedFile,
+) -> Vec<(AstNode<'_>, String, &'static str)> {
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
+    let mut test_functions = Vec::new();
+    collect_outer_test_functions_rec(parsed.tree().syntax(), &mut test_functions);
+    let mut out = Vec::new();
+    for function in test_functions {
+        let Some(name_node) = function.name() else {
+            continue;
+        };
+        let Some(body_node) = function.body() else {
+            continue;
+        };
+        let func_name = name_node.text().to_string();
+        collect_rust_test_logic_rec(body_node.syntax(), file, &func_name, &mut out);
+    }
+    out
+}
+
+fn collect_rust_test_logic_rec<'a>(
+    node: &SyntaxNode,
+    file: &'a ParsedFile,
+    func_name: &str,
+    out: &mut Vec<(AstNode<'a>, String, &'static str)>,
+) {
+    if (ast::Item::can_cast(node.kind()) && !ast::MacroCall::can_cast(node.kind()))
+        || ast::ClosureExpr::can_cast(node.kind())
+    {
+        return;
+    }
+    let construct = match node.kind() {
+        SyntaxKind::IF_EXPR => Some("an `if` expression"),
+        SyntaxKind::MATCH_EXPR => Some("a `match` expression"),
+        SyntaxKind::FOR_EXPR => Some("a `for` loop"),
+        SyntaxKind::WHILE_EXPR => Some("a `while` loop"),
+        SyntaxKind::LOOP_EXPR => Some("a `loop` expression"),
+        _ => None,
+    };
+    if let Some(description) = construct {
+        out.push((
+            AstNode::from_span(file, span_from_rowan_range(node.text_range())),
+            func_name.to_string(),
+            description,
+        ));
         return;
     }
     for child in node.children() {
-        collect_outer_test_functions_rec(&child, out);
+        collect_rust_test_logic_rec(&child, file, func_name, out);
     }
 }
 
-/// Returns true if `function` is a test function (`#[test]` / `#[rstest]` or named `test` / `test_*`).
+/// Collects outermost Rust test functions that interleave non-assertion statements between
+/// behavioral assertions.
 #[must_use]
-fn is_test_function(function: &ast::Fn) -> bool {
-    let is_named_test = function.name().is_some_and(|name_node| {
-        let function_name = name_node.text();
-        function_name == TEST_IDENTIFIER || function_name.starts_with("test_")
-    });
-    let has_test_attr = function
-        .attrs()
-        .any(|attribute| attribute.kind() == ast::AttrKind::Outer && is_test_attribute(&attribute));
-    is_named_test || has_test_attr
+pub(super) fn collect_multi_phase_test_functions(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
+    let mut test_functions = Vec::new();
+    collect_outer_test_functions_rec(parsed.tree().syntax(), &mut test_functions);
+    test_functions
+        .into_iter()
+        .filter_map(|function| {
+            let name_node = function.name()?;
+            let body_node = function.body()?;
+            if !is_multi_phase_rust_test(&body_node) {
+                return None;
+            }
+            Some((
+                AstNode::from_span(file, span_from_rowan_range(name_node.syntax().text_range())),
+                name_node.text().to_string(),
+            ))
+        })
+        .collect()
 }
 
-/// Recursively counts top-level assertion macro invocations in a Rust test function body.
-fn count_rust_assertions(node: &SyntaxNode) -> usize {
-    if ast::Fn::can_cast(node.kind()) {
-        return 0;
+fn is_multi_phase_rust_test(body_node: &ast::BlockExpr) -> bool {
+    let Some(block_statements) = body_node.stmt_list() else {
+        return false;
+    };
+    let mut seen_assertion = false;
+    let mut seen_action_after_assertion = false;
+    let statement_nodes = block_statements
+        .statements()
+        .filter(|statement| {
+            !matches!(
+                statement,
+                ast::Stmt::Item(item) if !matches!(item, ast::Item::MacroCall(_))
+            )
+        })
+        .map(|statement| statement.syntax().clone())
+        .chain(
+            block_statements
+                .tail_expr()
+                .map(|tail| tail.syntax().clone()),
+        );
+    for statement_node in statement_nodes {
+        if count_rust_assertions(&statement_node) > 0 {
+            if seen_action_after_assertion {
+                return true;
+            }
+            seen_assertion = true;
+        } else if seen_assertion {
+            seen_action_after_assertion = true;
+        }
     }
-    if let Some(macro_call) = ast::MacroCall::cast(node.clone())
-        && is_assertion_macro(&macro_call)
-    {
-        return 1;
-    }
-    node.children()
-        .map(|child| count_rust_assertions(&child))
-        .sum()
-}
-
-/// Returns true if `macro_call` invokes an assertion macro (`assert!`, `assert_*!`, `debug_assert!`, `debug_assert_*!`).
-#[must_use]
-fn is_assertion_macro(macro_call: &ast::MacroCall) -> bool {
-    let terminal = macro_call_terminal_name(macro_call);
-    terminal == "assert"
-        || terminal.starts_with("assert_")
-        || terminal == "debug_assert"
-        || terminal.starts_with("debug_assert_")
+    false
 }
 
 /// Collects all `macro_invocation` nodes in `file`.
@@ -2151,6 +2215,31 @@ fn syntax_node(node: &AstNode<'_>) -> Option<SyntaxNode> {
     }
 }
 
+fn collect_outer_test_functions_rec(node: &SyntaxNode, out: &mut Vec<ast::Fn>) {
+    if let Some(function) = ast::Fn::cast(node.clone()) {
+        if is_test_function(&function) {
+            out.push(function);
+        }
+        return;
+    }
+    for child in node.children() {
+        collect_outer_test_functions_rec(&child, out);
+    }
+}
+
+/// Returns true if `function` is a test function (`#[test]` / `#[rstest]` or named `test` / `test_*`).
+#[must_use]
+fn is_test_function(function: &ast::Fn) -> bool {
+    let is_named_test = function.name().is_some_and(|name_node| {
+        let function_name = name_node.text();
+        function_name == TEST_IDENTIFIER || function_name.starts_with("test_")
+    });
+    let has_test_attr = function
+        .attrs()
+        .any(|attribute| attribute.kind() == ast::AttrKind::Outer && is_test_attribute(&attribute));
+    is_named_test || has_test_attr
+}
+
 /// Returns true if `attribute` is a Rust test attribute (`#[test]`, `#[tokio::test]`, `#[rstest]`, `#[test_case(...)]`).
 #[must_use]
 fn is_test_attribute(attribute: &ast::Attr) -> bool {
@@ -2193,6 +2282,31 @@ fn is_token_tree_delimiter_or_trivia(element: &SyntaxElement) -> bool {
                 )
         }
     }
+}
+
+/// Recursively counts top-level assertion macro invocations in a Rust test function body.
+fn count_rust_assertions(node: &SyntaxNode) -> usize {
+    if ast::Fn::can_cast(node.kind()) {
+        return 0;
+    }
+    if let Some(macro_call) = ast::MacroCall::cast(node.clone())
+        && is_assertion_macro(&macro_call)
+    {
+        return 1;
+    }
+    node.children()
+        .map(|child| count_rust_assertions(&child))
+        .sum()
+}
+
+/// Returns true if `macro_call` invokes an assertion macro (`assert!`, `assert_*!`, `debug_assert!`, `debug_assert_*!`).
+#[must_use]
+fn is_assertion_macro(macro_call: &ast::MacroCall) -> bool {
+    let terminal = macro_call_terminal_name(macro_call);
+    terminal == "assert"
+        || terminal.starts_with("assert_")
+        || terminal == "debug_assert"
+        || terminal.starts_with("debug_assert_")
 }
 
 /// Extracts the terminal macro identifier from a [`ast::MacroCall`] node.
@@ -2766,13 +2880,15 @@ mod tests {
 
     #[test]
     fn test_collect_literal_occurrences_rust_skips_every_exempt_macro() {
-        for name in LITERAL_EXEMPT_MACROS {
-            let file = ParsedFile::rust(&format!("fn f() {{ {name}!(\"ee\"); }}"));
-            assert!(
-                collect_literal_occurrences(&file).is_empty(),
-                "`{name}!` arguments were collected"
-            );
-        }
+        let collected: Vec<&str> = LITERAL_EXEMPT_MACROS
+            .iter()
+            .copied()
+            .filter(|name| {
+                let file = ParsedFile::rust(&format!("fn f() {{ {name}!(\"ee\"); }}"));
+                !collect_literal_occurrences(&file).is_empty()
+            })
+            .collect();
+        assert_eq!(collected, Vec::<&str>::new());
     }
 
     #[rstest::rstest]
@@ -2869,8 +2985,9 @@ mod tests {
             .expect("return type");
         let unwrapped_envelope = unwrap_rust_return_envelope(return_type, &file);
         let payload = option_payload(&unwrapped_envelope, &file).expect("option payload");
-        assert_eq!(payload.syntax().text().to_string(), expected_payload);
+        let payload_text = payload.syntax().text().to_string();
         let inner = unwrap_rust_pointer_wrappers(payload, &file);
+        assert_eq!(payload_text, expected_payload);
         assert_eq!(inner.syntax().text().to_string(), expected_unwrapped);
     }
 

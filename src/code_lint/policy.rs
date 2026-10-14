@@ -84,55 +84,44 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_read_only_collection_replacements() {
-        use CollectionKind::{AbstractMutable, ConcreteMutable};
-        use CollectionShape::{Mapping, Sequence, Set};
-        let cases = [
-            (
-                vec![collection_type("list", ConcreteMutable, Sequence)],
-                "collections.abc.Sequence",
-            ),
-            (
-                vec![collection_type(
-                    "collections.deque",
-                    ConcreteMutable,
-                    Sequence,
-                )],
-                "collections.abc.Sequence",
-            ),
-            (
-                vec![collection_type("typing.Dict", ConcreteMutable, Mapping)],
-                "collections.abc.Mapping",
-            ),
-            (
-                vec![collection_type(
-                    "collections.Counter",
-                    ConcreteMutable,
-                    Mapping,
-                )],
-                "collections.abc.Mapping",
-            ),
-            (
-                vec![collection_type("MutableSet", AbstractMutable, Set)],
-                "collections.abc.Set",
-            ),
-            (
-                vec![
-                    collection_type("dict", ConcreteMutable, Mapping),
-                    collection_type("list", ConcreteMutable, Sequence),
-                    collection_type("OrderedDict", ConcreteMutable, Mapping),
-                ],
-                "collections.abc.Mapping, collections.abc.Sequence",
-            ),
-        ];
-        for (collection_types, expected) in cases {
-            assert_eq!(
-                read_only_collection_replacements(&collection_types),
-                expected,
-                "{collection_types:?}"
-            );
-        }
+    #[rstest::rstest]
+    #[case::list(
+        vec![collection_type("list", CollectionKind::ConcreteMutable, CollectionShape::Sequence)],
+        "collections.abc.Sequence"
+    )]
+    #[case::deque(
+        vec![collection_type("collections.deque", CollectionKind::ConcreteMutable, CollectionShape::Sequence)],
+        "collections.abc.Sequence"
+    )]
+    #[case::typing_dict(
+        vec![collection_type("typing.Dict", CollectionKind::ConcreteMutable, CollectionShape::Mapping)],
+        "collections.abc.Mapping"
+    )]
+    #[case::counter(
+        vec![collection_type("collections.Counter", CollectionKind::ConcreteMutable, CollectionShape::Mapping)],
+        "collections.abc.Mapping"
+    )]
+    #[case::mutable_set(
+        vec![collection_type("MutableSet", CollectionKind::AbstractMutable, CollectionShape::Set)],
+        "collections.abc.Set"
+    )]
+    #[case::dedup_and_order(
+        vec![
+            collection_type("dict", CollectionKind::ConcreteMutable, CollectionShape::Mapping),
+            collection_type("list", CollectionKind::ConcreteMutable, CollectionShape::Sequence),
+            collection_type("OrderedDict", CollectionKind::ConcreteMutable, CollectionShape::Mapping),
+        ],
+        "collections.abc.Mapping, collections.abc.Sequence"
+    )]
+    fn test_read_only_collection_replacements(
+        #[case] collection_types: Vec<PythonCollectionType>,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            read_only_collection_replacements(&collection_types),
+            expected,
+            "{collection_types:?}"
+        );
     }
 
     #[rstest::rstest]

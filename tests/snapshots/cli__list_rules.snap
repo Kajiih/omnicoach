@@ -1,5 +1,6 @@
 ---
 source: tests/cli.rs
+assertion_line: 146
 expression: "output.replace(BIN_NAME, \"<binary>\")"
 ---
 --- exit code ---
@@ -25,9 +26,11 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `field-after-method` (python): Flags type-annotated class and instance attributes declared after methods in a Python class body.
 - `identical-positional-types` (python): Flags Python functions whose positional parameters share a type annotation.
 - `inline-public-attribute-annotation` (python): Flags public Python instance attributes annotated inline inside methods instead of in the class body.
+- `logic-in-tests` (python, rust): Flags control-flow statements and conditional expressions inside test functions.
 - `missing-suppression-reason` (python, rust): Requires every suppression directive to give a reason.
 - `mock-call-assertion` (python): Flags assertions on how a mock was called in Python tests.
 - `mock-in-tests` (python): Flags dynamic mocks and monkeypatching in Python tests.
+- `multi-phase-test` (python, rust): Flags test functions that perform further actions and assertions after an earlier assertion.
 - `mutable-collection-attribute` (python): Flags public Python class and instance attributes annotated with `MutableSequence`, `MutableMapping`, or `MutableSet` when never mutated in the class.
 - `mutable-collection-parameter` (python): Flags Python function parameters annotated with `MutableSequence`, `MutableMapping`, or `MutableSet` when the function never mutates them.
 - `mutable-collection-return` (python): Flags Python function return annotations using `MutableSequence`, `MutableMapping`, or `MutableSet` when no caller in the file mutates the result.

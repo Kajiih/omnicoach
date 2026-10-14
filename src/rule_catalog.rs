@@ -500,6 +500,7 @@ mod tests {
     fn explain_toml_block_round_trips_to_default_options_for_every_rule() {
         use crate::rule_selection::parse_config;
 
+        // omni:ignore[logic-in-tests] -- verifies every registered rule in the catalog
         for rule in registered_rules() {
             let rendered = explain(rule.name.0).unwrap();
             let round_tripped = configuration_toml_block(&rendered).map(|toml_block| {

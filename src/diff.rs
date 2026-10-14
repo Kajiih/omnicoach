@@ -294,11 +294,7 @@ mod tests {
         "};
         let changed_lines = parse_git_diff(diff);
         let path = PathBuf::from("src/lib.rs");
-        assert!(changed_lines.contains_key(&path));
-        let lines = &changed_lines[&path];
-        assert_eq!(lines.len(), 2);
-        assert!(lines.contains(&2));
-        assert!(lines.contains(&3));
+        assert_eq!(changed_lines.get(&path), Some(&HashSet::from([2, 3])));
     }
 
     #[test]

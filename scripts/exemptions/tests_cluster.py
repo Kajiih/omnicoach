@@ -21,6 +21,8 @@ CLUSTER = Cluster(
     rules=(
         "packed_assertion",
         "too_many_assertions",
+        "logic_in_tests",
+        "multi_phase_test",
         "sleep_in_tests",
         "zero_sleep_in_tests",
         "mock_in_tests",
@@ -179,20 +181,27 @@ CLUSTER = Cluster(
             ),
             cases=("packed_assertion::pass::call_with_collection_result",),
         ),
-        # --- too-many-assertions ---
+        # --- too-many-assertions, logic-in-tests & multi-phase-test ---
         Mutation(
-            label="Python non-test helper function exempt from too-many-assertions",
+            label="Python non-test helper function exempt from test-function rules",
             path=PYTHON,
             edits=(
                 (
+                    "            if let Stmt::FunctionDef(func_def) = statement {\n"
                     "                if is_test_function_def(func_def) {",
-                    "                let _ = is_test_function_def(func_def);\n                if true {",
+                    "            if let Stmt::FunctionDef(func_def) = statement {\n"
+                    "                let _ = is_test_function_def(func_def);\n"
+                    "                if true {",
                 ),
             ),
-            cases=("too_many_assertions::pass::helper_function_exempt@python",),
+            cases=(
+                "too_many_assertions::pass::helper_function_exempt@python",
+                "logic_in_tests::pass::helper_function_exempt@python",
+                "multi_phase_test::pass::helper_function_exempt@python",
+            ),
         ),
         Mutation(
-            label="Rust non-test helper function exempt from too-many-assertions",
+            label="Rust non-test helper function exempt from test-function rules",
             path=RUST,
             edits=(
                 (
@@ -200,7 +209,11 @@ CLUSTER = Cluster(
                     "        let _ = is_test_function(&function);\n        if true {",
                 ),
             ),
-            cases=("too_many_assertions::pass::helper_function_exempt@rust",),
+            cases=(
+                "too_many_assertions::pass::helper_function_exempt@rust",
+                "logic_in_tests::pass::helper_function_exempt@rust",
+                "multi_phase_test::pass::helper_function_exempt@rust",
+            ),
         ),
         Mutation(
             label="assertion count at exact threshold allowed by too-many-assertions",
@@ -225,7 +238,10 @@ CLUSTER = Cluster(
                     "                Stmt::ClassDef(_) => {}",
                 ),
             ),
-            cases=("too_many_assertions::pass::nested_function_assertions_not_counted@python",),
+            cases=(
+                "too_many_assertions::pass::nested_function_assertions_not_counted@python",
+                "multi_phase_test::pass::nested_function_assertions_not_counted",
+            ),
         ),
         Mutation(
             label="Python nested class assertions not counted toward enclosing test",
@@ -239,17 +255,19 @@ CLUSTER = Cluster(
             cases=("too_many_assertions::pass::nested_class_assertions_not_counted",),
         ),
         Mutation(
-            label="Python type-narrowing guard assertions exempt from too-many-assertions",
+            label="Python type-narrowing guard assertions exempt from assertion counting",
             path=PYTHON,
             edits=(
                 (
-                    "                    if !is_narrowing_guard {\n                        self.count += 1;\n                    }",
-                    "                    let _ = is_narrowing_guard;\n                    self.count += 1;",
+                    "    narrowed_variable_name(assert_statement)\n"
+                    "        .is_some_and(|name| body_loads_name_after(body, name, assert_statement.range().end()))",
+                    "    let _ = (assert_statement, body);\n    false",
                 ),
             ),
             cases=(
                 "too_many_assertions::pass::narrowing_is_not_none_guard_exempt",
                 "too_many_assertions::pass::narrowing_isinstance_guard_exempt",
+                "multi_phase_test::pass::narrowing_is_not_none_before_action_exempt",
             ),
         ),
         Mutation(
@@ -262,6 +280,145 @@ CLUSTER = Cluster(
                 ),
             ),
             cases=("too_many_assertions::pass::nested_function_assertions_not_counted@rust",),
+        ),
+        # --- logic-in-tests ---
+        Mutation(
+            label="Python nested function exempt from logic-in-tests",
+            path=PYTHON,
+            edits=(
+                (
+                    "                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,",
+                    "                Stmt::ClassDef(_) => return,",
+                ),
+            ),
+            cases=("logic_in_tests::pass::nested_function_exempt@python",),
+        ),
+        Mutation(
+            label="Python nested class exempt from logic-in-tests",
+            path=PYTHON,
+            edits=(
+                (
+                    "                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,",
+                    '                Stmt::FunctionDef(func) if func.name.as_str() != "get" => return,',
+                ),
+            ),
+            cases=("logic_in_tests::pass::nested_class_exempt",),
+        ),
+        Mutation(
+            label="Python lambda callback exempt from logic-in-tests",
+            path=PYTHON,
+            edits=(
+                (
+                    "                Expr::Lambda(_) => return,",
+                    "                Expr::Lambda(_) => None,",
+                ),
+            ),
+            cases=("logic_in_tests::pass::lambda_callback_exempt",),
+        ),
+        Mutation(
+            label="Python unfiltered comprehensions exempt from logic-in-tests",
+            path=PYTHON,
+            edits=(
+                (
+                    "                Expr::ListComp(comp)\n"
+                    "                    if comp\n"
+                    "                        .generators\n"
+                    "                        .iter()\n"
+                    "                        .any(|generator| !generator.ifs.is_empty()) =>",
+                    "                Expr::ListComp(_) =>",
+                ),
+            ),
+            cases=("logic_in_tests::pass::unfiltered_comprehensions_allowed",),
+        ),
+        Mutation(
+            label="Rust nested fn item exempt from logic-in-tests",
+            path=RUST,
+            edits=(
+                (
+                    "    if (ast::Item::can_cast(node.kind()) && !ast::MacroCall::can_cast(node.kind()))\n"
+                    "        || ast::ClosureExpr::can_cast(node.kind())",
+                    "    if ast::ClosureExpr::can_cast(node.kind())",
+                ),
+            ),
+            cases=("logic_in_tests::pass::nested_function_exempt@rust",),
+        ),
+        Mutation(
+            label="Rust closure callback exempt from logic-in-tests",
+            path=RUST,
+            edits=(
+                (
+                    "    if (ast::Item::can_cast(node.kind()) && !ast::MacroCall::can_cast(node.kind()))\n"
+                    "        || ast::ClosureExpr::can_cast(node.kind())",
+                    "    if ast::Item::can_cast(node.kind()) && !ast::MacroCall::can_cast(node.kind())",
+                ),
+            ),
+            cases=("logic_in_tests::pass::closure_callback_exempt",),
+        ),
+        # --- multi-phase-test ---
+        Mutation(
+            label="Python narrowing guard between assertions not treated as action in multi-phase-test",
+            path=PYTHON,
+            edits=(
+                (
+                    "        if let Stmt::Assert(assert_statement) = statement\n"
+                    "            && is_narrowing_guard_assert(assert_statement, body)\n"
+                    "        {\n"
+                    "            continue;\n"
+                    "        }",
+                    "        let _ = statement;",
+                ),
+            ),
+            cases=("multi_phase_test::pass::narrowing_isinstance_between_assertions_exempt",),
+        ),
+        Mutation(
+            label="Python consecutive assertions without intervening action allowed in multi-phase-test",
+            path=PYTHON,
+            edits=(
+                (
+                    "        if count_python_assertions_in_slice(std::slice::from_ref(statement), body) > 0 {\n"
+                    "            if seen_action_after_assertion {",
+                    "        if count_python_assertions_in_slice(std::slice::from_ref(statement), body) > 0 {\n"
+                    "            let _ = seen_action_after_assertion;\n"
+                    "            if seen_assertion {",
+                ),
+            ),
+            cases=(
+                "multi_phase_test::pass::single_phase_multiple_assertions_allowed@python",
+                "multi_phase_test::pass::narrowing_isinstance_between_assertions_exempt",
+            ),
+        ),
+        Mutation(
+            label="Rust consecutive assertions without intervening action allowed in multi-phase-test",
+            path=RUST,
+            edits=(
+                (
+                    "        if count_rust_assertions(&statement_node) > 0 {\n"
+                    "            if seen_action_after_assertion {",
+                    "        if count_rust_assertions(&statement_node) > 0 {\n"
+                    "            let _ = seen_action_after_assertion;\n"
+                    "            if seen_assertion {",
+                ),
+            ),
+            cases=(
+                "multi_phase_test::pass::single_phase_multiple_assertions_allowed@rust",
+                "multi_phase_test::pass::local_item_declaration_between_assertions_exempt",
+            ),
+        ),
+        Mutation(
+            label="Rust local item declaration between assertions exempt from multi-phase-test",
+            path=RUST,
+            edits=(
+                (
+                    "        .filter(|statement| {\n"
+                    "            !matches!(\n"
+                    "                statement,\n"
+                    "                ast::Stmt::Item(item) if !matches!(item, ast::Item::MacroCall(_))\n"
+                    "            )\n"
+                    "        })",
+                    "        .filter(|_| true)",
+                ),
+            ),
+            cases=("multi_phase_test::pass::local_item_declaration_between_assertions_exempt",),
         ),
         # --- sleep-in-tests & zero-sleep-in-tests ---
         Mutation(
@@ -438,13 +595,14 @@ CLUSTER = Cluster(
         Unmutated(
             label="positive layouts for Batch 5 test rules",
             reason=(
-                "No exemption: atomic single-condition assertions, dedicated async yield "
-                "primitives (`anyio.lowlevel.checkpoint`, `tokio::task::yield_now`), and "
-                "state-based fakes without mock/sleep calls."
+                "No exemption: atomic single-condition assertions, `matches!` macro assertion, "
+                "dedicated async yield primitives (`anyio.lowlevel.checkpoint`, "
+                "`tokio::task::yield_now`), and state-based fakes without mock/sleep calls."
             ),
             cases=(
                 "packed_assertion::pass::atomic_assertion@python",
                 "packed_assertion::pass::atomic_assertion@rust",
+                "logic_in_tests::pass::matches_macro_allowed",
                 "zero_sleep_in_tests::pass::anyio_checkpoint",
                 "zero_sleep_in_tests::pass::tokio_yield_now",
                 "mock_in_tests::pass::state_based_fake_repository",

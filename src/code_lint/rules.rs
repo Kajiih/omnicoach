@@ -21,8 +21,10 @@ pub mod fake_without_protocol;
 pub mod field_after_method;
 pub mod identical_positional_types;
 pub mod inline_public_attribute_annotation;
+pub mod logic_in_tests;
 pub mod mock_call_assertion;
 pub mod mock_in_tests;
+pub mod multi_phase_test;
 pub mod mutable_collection_attribute;
 pub mod mutable_collection_parameter;
 pub mod mutable_collection_return;
@@ -66,6 +68,8 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &sleep_in_tests::ZERO_SLEEP_IN_TESTS,
     &too_many_assertions::RULE,
     &packed_assertion::RULE,
+    &logic_in_tests::RULE,
+    &multi_phase_test::RULE,
     &mock_in_tests::RULE,
     &mock_call_assertion::RULE,
     &fake_without_protocol::RULE,

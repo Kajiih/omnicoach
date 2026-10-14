@@ -177,9 +177,9 @@ fn test_command_lint_described_commit_blocked() {
         .current_dir(temp_repo.path())
         .status()
         .expect("failed to describe commit");
-    assert!(status.success());
-
     let output = run_cli(&["command", "--cmd", "jj edit @"], Some(temp_repo.path()));
+
+    assert!(status.success());
     insta::assert_snapshot!(output);
 }
 
@@ -210,7 +210,6 @@ fn test_code_lint_diff_flag_jj() {
         .current_dir(repo_path)
         .status()
         .expect("failed to run jj new");
-    assert!(status.success());
 
     // 3. Now the first violation is in parent `@-`.
     // Let's add a second violation in the working copy `@`
@@ -226,11 +225,13 @@ fn test_code_lint_diff_flag_jj() {
 
     // 4. Run full linter (should report BOTH violations: `inner` and `world`)
     let output_full = run_cli(&["code", "test.py"], Some(repo_path));
-    insta::assert_snapshot!("full_baseline", output_full);
 
     // 5. Run with --diff-rev @- (compares @ relative to parent @-)
     // It should ONLY report `world` because `inner` was already in the parent commit!
     let output_diff = run_cli(&["code", "--diff-rev", "@-", "test.py"], Some(repo_path));
+
+    assert!(status.success());
+    insta::assert_snapshot!("full_baseline", output_full);
     insta::assert_snapshot!("diff_only", output_diff);
 }
 
