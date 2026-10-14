@@ -125,6 +125,25 @@ CLUSTER = Cluster(
             ),
         ),
         Mutation(
+            label="Python single-value collection comparison exempt from packed-assertion",
+            path=PYTHON,
+            edits=(
+                (
+                    "                                .filter(|operand| is_multi_element_collection_expr(operand))\n"
+                    "                                .count()\n"
+                    "                                >= 2",
+                    "                                .filter(|operand| is_multi_element_collection_expr(operand))\n"
+                    "                                .count()\n"
+                    "                                >= 1",
+                ),
+            ),
+            cases=(
+                "packed_assertion::pass::non_boolean_tuple_equality@python",
+                "packed_assertion::pass::non_boolean_list_equality",
+                "packed_assertion::pass::single_value_dict_equality",
+            ),
+        ),
+        Mutation(
             label="Rust non-boolean tuple/array equality exempt from packed-assertion",
             path=RUST,
             edits=(
@@ -143,7 +162,22 @@ CLUSTER = Cluster(
             cases=(
                 "packed_assertion::pass::non_boolean_tuple_equality@rust",
                 "packed_assertion::pass::non_boolean_array_equality",
+                "packed_assertion::pass::call_with_collection_result",
             ),
+        ),
+        Mutation(
+            label="Rust function-call argument list exempt from packed-assertion collection check",
+            path=RUST,
+            edits=(
+                (
+                    "    matches!(\n"
+                    "        preceding.kind(),\n"
+                    "        SyntaxKind::L_PAREN | SyntaxKind::L_BRACK | SyntaxKind::L_CURLY | SyntaxKind::COMMA\n"
+                    "    )",
+                    "    let _ = preceding;\n    true",
+                ),
+            ),
+            cases=("packed_assertion::pass::call_with_collection_result",),
         ),
         # --- too-many-assertions ---
         Mutation(
@@ -203,6 +237,20 @@ CLUSTER = Cluster(
                 ),
             ),
             cases=("too_many_assertions::pass::nested_class_assertions_not_counted",),
+        ),
+        Mutation(
+            label="Python type-narrowing guard assertions exempt from too-many-assertions",
+            path=PYTHON,
+            edits=(
+                (
+                    "                    if !is_narrowing_guard {\n                        self.count += 1;\n                    }",
+                    "                    let _ = is_narrowing_guard;\n                    self.count += 1;",
+                ),
+            ),
+            cases=(
+                "too_many_assertions::pass::narrowing_is_not_none_guard_exempt",
+                "too_many_assertions::pass::narrowing_isinstance_guard_exempt",
+            ),
         ),
         Mutation(
             label="Rust nested fn assertions not counted toward enclosing test",

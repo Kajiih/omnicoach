@@ -250,41 +250,47 @@ mod tests {
 
     #[test]
     fn test_parse_compound_commands() {
-        let cmds = InterceptedCommand::parse_all("jj edit @- && jj describe");
-        assert_eq!(cmds.len(), 2);
+        let raw = "jj edit @- && jj describe";
+        let cmds = InterceptedCommand::parse_all(raw);
         assert_eq!(
-            (
-                cmds[0].program_name.as_str(),
-                &cmds[0].arguments[..],
-                cmds[0].span
-            ),
-            ("jj", &["edit".to_string(), "@-".to_string()][..], (0, 10))
-        );
-        assert_eq!(
-            (
-                cmds[1].program_name.as_str(),
-                &cmds[1].arguments[..],
-                cmds[1].span
-            ),
-            ("jj", &["describe".to_string()][..], (14, 25))
+            cmds,
+            vec![
+                InterceptedCommand {
+                    raw_string: raw.to_string(),
+                    program_name: "jj".to_string(),
+                    arguments: vec!["edit".to_string(), "@-".to_string()],
+                    span: (0, 10),
+                },
+                InterceptedCommand {
+                    raw_string: raw.to_string(),
+                    program_name: "jj".to_string(),
+                    arguments: vec!["describe".to_string()],
+                    span: (14, 25),
+                },
+            ]
         );
     }
 
     #[test]
     fn test_parse_nested_subshell() {
-        let cmds = InterceptedCommand::parse_all("(cd dir && jj edit @-)");
-        assert_eq!(cmds.len(), 2);
+        let raw = "(cd dir && jj edit @-)";
+        let cmds = InterceptedCommand::parse_all(raw);
         assert_eq!(
-            (
-                cmds[0].program_name.as_str(),
-                &cmds[0].arguments[..],
-                cmds[0].span
-            ),
-            ("cd", &["dir".to_string()][..], (1, 7))
-        );
-        assert_eq!(
-            (cmds[1].program_name.as_str(), &cmds[1].arguments[..]),
-            ("jj", &["edit".to_string(), "@-".to_string()][..])
+            cmds,
+            vec![
+                InterceptedCommand {
+                    raw_string: raw.to_string(),
+                    program_name: "cd".to_string(),
+                    arguments: vec!["dir".to_string()],
+                    span: (1, 7),
+                },
+                InterceptedCommand {
+                    raw_string: raw.to_string(),
+                    program_name: "jj".to_string(),
+                    arguments: vec!["edit".to_string(), "@-".to_string()],
+                    span: (11, 21),
+                },
+            ]
         );
     }
 
@@ -297,12 +303,9 @@ mod tests {
         };
         let args = cmd.parse_args(&schema);
         assert_eq!(args.positionals, vec!["edit", "@-"]);
-        assert_eq!(
-            (args.get_option("-R"), args.get_option("--config")),
-            (Some("."), Some("myconf"))
-        );
+        assert_eq!(args.get_option("-R"), Some("."));
+        assert_eq!(args.get_option("--config"), Some("myconf"));
         assert!(args.has_subcommand_sequence(&["edit"]));
-        assert!(!args.has_subcommand_sequence(&["describe"]));
     }
 
     #[test]

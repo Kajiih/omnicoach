@@ -38,9 +38,12 @@ pub const RULE: CodeRule = CodeRule {
             summary: "Flags assertions that pack several checks into one condition.",
             what_it_does: indoc::indoc! {r"
                 Flags a test assertion that joins checks with a top-level `and` (Python
-                `assert`) or `&&` (Rust `assert!`), or that compares against a tuple, list or
-                array of boolean literals, such as `assert_eq!((valid, active), (true, false))`.
-                Conditions joined by `or` are not flagged."},
+                `assert`) or `&&` (Rust `assert!`), compares two tuple, list, array, set or
+                dict literals of two or more elements (such as `assert (a, b) == (1, 2)`), or
+                compares against a collection of two or more boolean literals (such as
+                `assert_eq!(flags, (true, false))`). Conditions joined by `or` and comparisons
+                of a single value against an expected collection (such as
+                `assert dimensions == (1920, 1080)`) are not flagged."},
             why_is_this_bad: indoc::indoc! {r"
                 When a packed assertion fails, the report only says the whole condition was false:
                 it does not say which part failed, and a tuple of booleans shows `True`/`False`
@@ -100,6 +103,8 @@ const CONSTRUCT: &str = "construct";
 const CALLEE: &str = "callee";
 /// `construct` value shared by the Python and Rust boolean collection checks.
 const BOOLEAN_COLLECTION_COMPARISON: &str = "a comparison against a collection of boolean literals";
+/// `construct` value shared by the Python and Rust composite collection checks.
+const COMPOSITE_COLLECTION_COMPARISON: &str = "a composite collection comparison";
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     match file.lang() {
@@ -138,20 +143,37 @@ fn check_rust_assertion_macro(
         ));
     }
 
-    // 2. Boolean tuple/array equality packing: assert_eq!((a, b), (true, true))
-    if (macro_name.starts_with("assert_") || macro_name.starts_with("debug_assert_"))
-        && ast::rust::extract_macro_arguments(macro_node)
+    // 2. Boolean or composite tuple/array equality packing: assert_eq!((a, b), (1, 2))
+    if macro_name.starts_with("assert_") || macro_name.starts_with("debug_assert_") {
+        let arguments = ast::rust::extract_macro_arguments(macro_node);
+        if arguments
             .iter()
             .any(ast::rust::is_boolean_literal_collection)
-    {
-        return Some(rule.diagnostic_at_node(
-            path,
-            macro_node,
-            &[
-                (CONSTRUCT, BOOLEAN_COLLECTION_COMPARISON),
-                (CALLEE, &macro_name),
-            ],
-        ));
+        {
+            return Some(rule.diagnostic_at_node(
+                path,
+                macro_node,
+                &[
+                    (CONSTRUCT, BOOLEAN_COLLECTION_COMPARISON),
+                    (CALLEE, &macro_name),
+                ],
+            ));
+        }
+        if arguments
+            .iter()
+            .filter(|argument| ast::rust::is_multi_element_collection(argument))
+            .count()
+            >= 2
+        {
+            return Some(rule.diagnostic_at_node(
+                path,
+                macro_node,
+                &[
+                    (CONSTRUCT, COMPOSITE_COLLECTION_COMPARISON),
+                    (CALLEE, &macro_name),
+                ],
+            ));
+        }
     }
 
     None
@@ -172,12 +194,21 @@ fn check_python_assert_statement(
         ));
     }
 
-    // 2. Boolean tuple/list equality: assert (a, b) == (True, True)
+    // 2. Boolean tuple/list equality: assert flags == (True, True)
     if assert_statement.has_boolean_literal_comparison {
         return Some(rule.diagnostic_at_node(
             path,
             &assert_statement.node,
             &[(CONSTRUCT, BOOLEAN_COLLECTION_COMPARISON)],
+        ));
+    }
+
+    // 3. Composite collection comparison: assert (a, b) == (1, 2)
+    if assert_statement.has_composite_collection_comparison {
+        return Some(rule.diagnostic_at_node(
+            path,
+            &assert_statement.node,
+            &[(CONSTRUCT, COMPOSITE_COLLECTION_COMPARISON)],
         ));
     }
 
@@ -209,11 +240,15 @@ crate::test_utils::rule_test!(
                 "#,
                 non_boolean_tuple_equality => r#"
                     def test_tuple_values():
-                        assert (width, height) == (1920, 1080)
+                        assert dimensions == (1920, 1080)
                 "#,
                 non_boolean_list_equality => r#"
                     def test_list_values():
-                        assert [first, second] == [1, 2]
+                        assert items == [1, 2]
+                "#,
+                single_value_dict_equality => r#"
+                    def test_dict_values():
+                        assert payload == {"status": "ok", "count": 2}
                 "#,
             ],
             fail: [
@@ -229,6 +264,18 @@ crate::test_utils::rule_test!(
                     def test_example():
                         assert [first, second] == [True, True]
                 "# => r#"assert [first, second] == [True, True]"#,
+                composite_tuple_equality => r#"
+                    def test_example():
+                        assert (width, height) == (1920, 1080)
+                "# => r#"assert (width, height) == (1920, 1080)"#,
+                composite_list_equality => r#"
+                    def test_example():
+                        assert [first, second] == [1, 2]
+                "# => r#"assert [first, second] == [1, 2]"#,
+                composite_dict_equality => r#"
+                    def test_example():
+                        assert {"a": first, "b": second} == {"a": 1, "b": 2}
+                "# => r#"assert {"a": first, "b": second} == {"a": 1, "b": 2}"#,
             ],
         },
         Rust => {
@@ -261,13 +308,19 @@ crate::test_utils::rule_test!(
                 non_boolean_tuple_equality => r#"
                     #[test]
                     fn test_tuple_values() {
-                        assert_eq!((width, height), (1920, 1080));
+                        assert_eq!(dimensions, (1920, 1080));
                     }
                 "#,
                 non_boolean_array_equality => r#"
                     #[test]
                     fn test_array_values() {
                         assert_eq!([compute(true), compute(false)], expected);
+                    }
+                "#,
+                call_with_collection_result => r#"
+                    #[test]
+                    fn test_ancestors() {
+                        assert_eq!(local_ancestors(&classes, 3), [1, 0, 2]);
                     }
                 "#,
             ],
@@ -296,6 +349,18 @@ crate::test_utils::rule_test!(
                         debug_assert_ne!([first, second], [true, true]);
                     }
                 "# => r#"debug_assert_ne!([first, second], [true, true])"#,
+                composite_tuple_equality => r#"
+                    #[test]
+                    fn test_example() {
+                        assert_eq!((width, height), (1920, 1080));
+                    }
+                "# => r#"assert_eq!((width, height), (1920, 1080))"#,
+                composite_array_equality => r#"
+                    #[test]
+                    fn test_example() {
+                        assert_eq!([first, second], [1, 2]);
+                    }
+                "# => r#"assert_eq!([first, second], [1, 2])"#,
             ],
         },
     }

@@ -893,10 +893,8 @@ mod tests {
 
         let rust = option.resolve(Language::Rust, Some(&overrides));
         let python = option.resolve(Language::Python, Some(&overrides));
-        assert_eq!(
-            (rust, python),
-            (words(rust_expected), words(python_expected))
-        );
+        assert_eq!(rust, words(rust_expected));
+        assert_eq!(python, words(python_expected));
     }
 
     #[test]
@@ -909,25 +907,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            (
-                pair.specs(),
-                pair.resolve(Language::Python, Some(&overrides))
-            ),
-            (
-                vec![OptionSpec::Count(LIMIT), OptionSpec::List(DENY)],
-                (9, words(&["only"]))
-            )
+            pair.specs(),
+            vec![OptionSpec::Count(LIMIT), OptionSpec::List(DENY)]
+        );
+        assert_eq!(
+            pair.resolve(Language::Python, Some(&overrides)),
+            (9, words(&["only"]))
         );
     }
 
     #[test]
     fn missing_overrides_resolve_to_defaults() {
+        assert_eq!(LIMIT.resolve(Language::Rust, None), 6);
         assert_eq!(
-            (
-                LIMIT.resolve(Language::Rust, None),
-                WITH_COUNT.enforcement_mode(Language::Rust, None)
-            ),
-            (6, EnforcementMode::RequireExplanation)
+            WITH_COUNT.enforcement_mode(Language::Rust, None),
+            EnforcementMode::RequireExplanation
         );
     }
 

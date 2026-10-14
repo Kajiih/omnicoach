@@ -19,8 +19,8 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Test `{function}` contains {count} assertions; the limit is {max_assertions}.",
     rationale: "A test with many assertions checks several unrelated behaviors at once and stops at the first failure, hiding the others and blurring what the test is about.",
     suggestion: {
-        Python => "Assert on one expected value or object, split distinct scenarios into separate `test_*` functions, or parameterize the variations with `@pytest.mark.parametrize`.",
-        Rust => "Assert on one expected value or struct, split distinct scenarios into separate `#[test]` functions, or parameterize the cases with `#[rstest]`.",
+        Python => "Split distinct scenarios into separate `test_*` functions, parameterize variations with `@pytest.mark.parametrize`, or compare one domain object directly.",
+        Rust => "Split distinct scenarios into separate `#[test]` functions, parameterize cases with `#[rstest]`, or compare one domain struct directly.",
     },
 };
 
@@ -42,7 +42,9 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
             what_it_does: indoc::indoc! {r"
                 Flags a test function with more assertions than `max-assertions`. Each `assert`
                 statement, `assert*` method call or `pytest.raises` call counts as one in Python,
-                and each `assert*!` or `debug_assert*!` macro call in Rust."},
+                and each `assert*!` or `debug_assert*!` macro call in Rust. In Python,
+                `assert x is not None` and `assert isinstance(x, ...)` do not count when `x` is
+                read in a later statement of the test."},
             why_is_this_bad: indoc::indoc! {r"
                 A test with many assertions usually checks several behaviours at once. It stops at
                 the first failing assertion, so the later ones are never reported, and its name
@@ -193,6 +195,24 @@ crate::test_utils::rule_test!(
                         assert 3 == 3
                         assert 4 == 4
                 "#,
+                narrowing_is_not_none_guard_exempt => r#"
+                    def test_narrowed_record(store):
+                        record = store.get_record("r1")
+                        assert record is not None
+                        assert record.status == "active"
+                        assert record.owner == "alice"
+                        assert record.version == 1
+                        assert record.archived is False
+                "#,
+                narrowing_isinstance_guard_exempt => r#"
+                    def test_narrowed_event(bus):
+                        event = bus.next_event()
+                        assert isinstance(event, CreatedEvent)
+                        assert event.id == 1
+                        assert event.actor == "alice"
+                        assert event.version == 2
+                        assert event.committed is True
+                "#,
             ],
             fail: [
                 assert_statements_exceeding_threshold => r#"
@@ -206,6 +226,15 @@ crate::test_utils::rule_test!(
                         assert 4 == 4
                         assert 5 == 5
                 "# => "test_too_many",
+                terminal_is_not_none_counted => r#"
+                    def test_terminal_none_check(store):
+                        record = store.get_record("r1")
+                        assert 1 == 1
+                        assert 2 == 2
+                        assert 3 == 3
+                        assert 4 == 4
+                        assert record is not None
+                "# => "test_terminal_none_check",
                 unittest_assertions_exceeding_threshold => r#"
                     class OrderTest:
                         def test_order_lifecycle(self):
