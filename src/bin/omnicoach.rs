@@ -10,7 +10,7 @@ use omni::command_lint::runner::run_command_lint;
 use omni::config::Config;
 use omni::diagnostic::{OutputFormat, print_diagnostics};
 use omni::rule_catalog::{DiscoveryArgs, explain_footer};
-use omni::rule_selection::load_config;
+use omni::rule_selection::{ConfigOverrides, load_config};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -33,6 +33,9 @@ struct Cli {
     /// Run linter comparing against a custom revision/commit (implies --diff)
     #[arg(long)]
     diff_rev: Option<String>,
+
+    #[command(flatten)]
+    config_overrides: ConfigOverrides,
 
     #[command(flatten)]
     discovery: DiscoveryArgs,
@@ -78,13 +81,13 @@ fn main() {
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    if let Some(output) = cli.discovery.render() {
+    if let Some(output) = cli.discovery.render(&cli.config_overrides) {
         print!("{}", output?);
         return Ok(());
     }
 
-    let config =
-        load_config().map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
+    let config = load_config(&cli.config_overrides)
+        .map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
 
     match cli.subcommand {
         Some(DomainCommand::Code(args)) => {

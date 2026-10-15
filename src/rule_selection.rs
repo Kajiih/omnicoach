@@ -13,6 +13,7 @@ mod taxonomy;
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use strum::IntoEnumIterator as _;
@@ -22,6 +23,23 @@ use self::taxonomy::{REGISTERED_RULES, Selector};
 use crate::config::{CONFIG_FILE_NAME, Config, ContextConfig, compile_glob};
 use crate::diagnostic::RuleName;
 use crate::rule_declaration::{RuleOptionsError, RuleOverrides};
+
+/// Command-line overrides for configuration loading and rule selection: `--config`, `--select`
+/// and `--ignore`.
+#[derive(Debug, Default, Clone, clap::Args)]
+pub struct ConfigOverrides {
+    /// Path to the configuration file (overrides `.omnicoach.toml` discovery)
+    #[arg(long = "config", global = true, value_name = "PATH")]
+    pub config_path: Option<PathBuf>,
+
+    /// Comma-separated rule or tag selectors to enable (overrides `select` and `ignore` in `.omnicoach.toml`)
+    #[arg(long, global = true, value_delimiter = ',', value_name = "SELECTOR")]
+    pub select: Option<Vec<String>>,
+
+    /// Comma-separated rule or tag selectors to disable
+    #[arg(long, global = true, value_delimiter = ',', value_name = "SELECTOR")]
+    pub ignore: Vec<String>,
+}
 
 /// Where in the config an entry was written.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +69,7 @@ pub enum ConfigError {
     #[error("failed to read `{path}`: {source}")]
     Io {
         /// Path to the configuration file.
-        path: &'static str,
+        path: String,
         /// The underlying IO error.
         #[source]
         source: std::io::Error,
@@ -182,22 +200,31 @@ pub fn find_rule(name: &str) -> Result<&'static RegisteredRule, UnknownLabel> {
         })
 }
 
-/// Loads `.omnicoach.toml` from the current directory, or the default config if it is absent.
+/// Loads `.omnicoach.toml` from the current directory (or `overrides.config_path`), or the
+/// default config if `.omnicoach.toml` is absent, and applies `overrides`.
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] if the file cannot be read or is rejected by [`parse_config`].
-pub fn load_config() -> Result<Config, ConfigError> {
-    read_config_file()?.map_or_else(|| Ok(Config::default()), |content| parse_config(&content))
+/// Returns [`ConfigError`] if the file cannot be read or is rejected by
+/// [`parse_config_with_overrides`].
+pub fn load_config(overrides: &ConfigOverrides) -> Result<Config, ConfigError> {
+    let content = read_config_file(overrides.config_path.as_deref())?;
+    parse_config_with_overrides(&content, overrides)
 }
 
-/// Whether `rule` is on under `.omnicoach.toml` in the current directory, and why.
+/// Whether `rule` is on under `.omnicoach.toml` in the current directory (or
+/// `overrides.config_path`) with `overrides` applied, and why.
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] if the file cannot be read or is rejected by [`rule_status`].
-pub fn load_rule_status(rule: &RegisteredRule) -> Result<RuleStatus, ConfigError> {
-    rule_status(&read_config_file()?.unwrap_or_default(), rule)
+/// Returns [`ConfigError`] if the file cannot be read or is rejected by
+/// [`rule_status_with_overrides`].
+pub fn load_rule_status(
+    rule: &RegisteredRule,
+    overrides: &ConfigOverrides,
+) -> Result<RuleStatus, ConfigError> {
+    let content = read_config_file(overrides.config_path.as_deref())?;
+    rule_status_with_overrides(&content, overrides, rule)
 }
 
 /// Whether `rule` is on under `config_toml`'s `select` and `ignore`, and why.
@@ -206,8 +233,21 @@ pub fn load_rule_status(rule: &RegisteredRule) -> Result<RuleStatus, ConfigError
 ///
 /// On invalid TOML, unknown selectors, facet labels and conflicts.
 pub fn rule_status(config_toml: &str, rule: &RegisteredRule) -> Result<RuleStatus, ConfigError> {
+    rule_status_with_overrides(config_toml, &ConfigOverrides::default(), rule)
+}
+
+/// Whether `rule` is on under `config_toml` and `overrides`, and why.
+///
+/// # Errors
+///
+/// On invalid TOML, unknown selectors, facet labels and conflicts.
+pub fn rule_status_with_overrides(
+    config_toml: &str,
+    overrides: &ConfigOverrides,
+    rule: &RegisteredRule,
+) -> Result<RuleStatus, ConfigError> {
     let raw: RawConfig = toml::from_str(config_toml)?;
-    Ok(parse_plan(raw.select, raw.ignore)?.decide(rule))
+    Ok(parse_plan_with_overrides(raw.select, raw.ignore, overrides)?.decide(rule))
 }
 
 /// Parses a TOML config and resolves its selectors into rule names.
@@ -216,8 +256,20 @@ pub fn rule_status(config_toml: &str, rule: &RegisteredRule) -> Result<RuleStatu
 ///
 /// On invalid TOML, unknown selectors, facet labels, conflicts and invalid globs.
 pub fn parse_config(config_toml: &str) -> Result<Config, ConfigError> {
+    parse_config_with_overrides(config_toml, &ConfigOverrides::default())
+}
+
+/// Parses a TOML config, applies `overrides`, and resolves selectors into rule names.
+///
+/// # Errors
+///
+/// On invalid TOML, unknown selectors, facet labels, conflicts and invalid globs.
+pub fn parse_config_with_overrides(
+    config_toml: &str,
+    overrides: &ConfigOverrides,
+) -> Result<Config, ConfigError> {
     let raw: RawConfig = toml::from_str(config_toml)?;
-    let plan = parse_plan(raw.select, raw.ignore)?;
+    let plan = parse_plan_with_overrides(raw.select, raw.ignore, overrides)?;
     let disabled_rules = rule_names(|rule| !plan.decide(rule).enabled());
     let per_file_ignores = raw
         .per_file_ignores
@@ -254,12 +306,18 @@ pub fn parse_config(config_toml: &str) -> Result<Config, ConfigError> {
     })
 }
 
-fn read_config_file() -> Result<Option<String>, ConfigError> {
+fn read_config_file(config_path: Option<&Path>) -> Result<String, ConfigError> {
+    if let Some(path) = config_path {
+        return std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
+            path: path.display().to_string(),
+            source,
+        });
+    }
     match std::fs::read_to_string(CONFIG_FILE_NAME) {
-        Ok(content) => Ok(Some(content)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Ok(content) => Ok(content),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         Err(source) => Err(ConfigError::Io {
-            path: CONFIG_FILE_NAME,
+            path: CONFIG_FILE_NAME.to_owned(),
             source,
         }),
     }
@@ -271,6 +329,26 @@ fn rule_names(mut predicate: impl FnMut(&RegisteredRule) -> bool) -> HashSet<Rul
         .filter(|rule| predicate(rule))
         .map(|rule| rule.name)
         .collect()
+}
+
+fn parse_plan_with_overrides(
+    select: Option<Vec<String>>,
+    ignore: Vec<String>,
+    overrides: &ConfigOverrides,
+) -> Result<Plan, ConfigError> {
+    let mut plan = parse_plan(select, ignore)?;
+    let cli = parse_plan(overrides.select.clone(), overrides.ignore.clone())?;
+    if cli.select.is_some() {
+        plan = cli;
+    } else if !cli.ignore.is_empty() {
+        if let Some(selected) = &mut plan.select {
+            for selector in &cli.ignore {
+                selected.remove(selector);
+            }
+        }
+        plan.ignore.extend(cli.ignore);
+    }
+    Ok(plan)
 }
 
 fn parse_plan(select: Option<Vec<String>>, ignore: Vec<String>) -> Result<Plan, ConfigError> {
@@ -661,5 +739,68 @@ mod tests {
         let mut configured: Vec<_> = config.rule_overrides.keys().map(|name| name.0).collect();
         configured.sort_unstable();
         assert_eq!(configured, ["abbreviated-name", "too-many-assertions"]);
+    }
+
+    #[rstest]
+    #[case::cli_select_replaces_toml_select_and_ignore(
+        "select = [\"nested-function\"]\nignore = [\"sleep-in-tests\"]",
+        Some(vec!["testing".to_owned()]),
+        vec![],
+        "sleep-in-tests",
+        "enabled by `select = [\"testing\"]` (via testing > test-timing)"
+    )]
+    #[case::cli_select_discards_toml_select_for_unselected_rules(
+        "select = [\"nested-function\"]",
+        Some(vec!["testing".to_owned()]),
+        vec![],
+        "nested-function",
+        "disabled (not in `select`)"
+    )]
+    #[case::cli_select_and_cli_ignore_compose(
+        "select = [\"nested-function\"]",
+        Some(vec!["testing".to_owned()]),
+        vec!["sleep-in-tests".to_owned()],
+        "sleep-in-tests",
+        "disabled by `ignore = [\"sleep-in-tests\"]`"
+    )]
+    #[case::cli_ignore_without_select_extends_toml_and_removes_from_toml_select(
+        "select = [\"sleep-in-tests\", \"nested-function\"]",
+        None,
+        vec!["sleep-in-tests".to_owned()],
+        "sleep-in-tests",
+        "disabled by `ignore = [\"sleep-in-tests\"]`"
+    )]
+    fn cli_overrides_resolve_precedence(
+        #[case] config_toml: &str,
+        #[case] select: Option<Vec<String>>,
+        #[case] ignore: Vec<String>,
+        #[case] rule_name: &str,
+        #[case] expected: &str,
+    ) {
+        let rule = find_rule(rule_name).unwrap();
+        let overrides = ConfigOverrides {
+            config_path: None,
+            select,
+            ignore,
+        };
+        let status = rule_status_with_overrides(config_toml, &overrides, rule).unwrap();
+        assert_eq!(status.to_string(), expected);
+    }
+
+    #[test]
+    fn cli_select_and_ignore_conflict_is_rejected() {
+        let overrides = ConfigOverrides {
+            config_path: None,
+            select: Some(vec!["jujutsu".to_owned()]),
+            ignore: vec!["jj".to_owned()],
+        };
+        let error = parse_config_with_overrides("", &overrides)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "`jj` is both selected and ignored (synonyms count as the same selector); remove it \
+             from one list"
+        );
     }
 }

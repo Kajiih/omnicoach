@@ -204,8 +204,6 @@ Candidates and known-gap follow-ups to prioritize, not commitments.
 
 - **Diff-scoped reporting (`--ref`)**:
   - *Target*: `--ref <git-ref>` to scope findings to modified lines.
-- **CLI configuration overrides (`--config`, `--select`, `--ignore`)**:
-  - *Target*: Layer CLI overrides on top of `.omnicoach.toml`.
 - **Signed macOS release binaries**:
   - *Target*: Sign and notarize `aarch64-apple-darwin` and `x86_64-apple-darwin` release artifacts.
 - **On-Demand Suppression / Explanation Comment Placement Hint**:

@@ -30,6 +30,16 @@ Options:
       --diff-rev <DIFF_REV>
           Run linter comparing against a custom revision/commit (implies --diff)
 
+      --config <PATH>
+          Path to the configuration file (overrides `.omnicoach.toml` discovery)
+
+      --select <SELECTOR>
+          Comma-separated rule or tag selectors to enable (overrides `select` and `ignore` in
+          `.omnicoach.toml`)
+
+      --ignore <SELECTOR>
+          Comma-separated rule or tag selectors to disable
+
       --list-rules
           List every rule with its languages and summary, as Markdown
 
