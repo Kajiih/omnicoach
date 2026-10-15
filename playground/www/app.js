@@ -70,7 +70,15 @@ const outputBody = document.getElementById("output-body");
 const explainToolbar = document.getElementById("explain-toolbar");
 const ruleSelect = document.getElementById("rule-select");
 const shareButton = document.getElementById("share-button");
+const versionSelect = document.getElementById("version-select");
 const tabButtons = Array.from(document.querySelectorAll(".tab-button"));
+
+// `main` is served at the root; each release at `wasm/<tag>/` (see `.github/workflows/pages.yml`).
+const selectedVersion = new URLSearchParams(window.location.search).get("version") || "main";
+const wasmPath =
+  selectedVersion === "main"
+    ? "omnicoach_playground.wasm"
+    : `wasm/${encodeURIComponent(selectedVersion)}/omnicoach_playground.wasm`;
 
 let client = null;
 let activeTab = "cards";
@@ -195,7 +203,7 @@ function renderApiInstructions() {
     "// Programmatic request/response from JavaScript, Node.js, Deno, Bun, or Cloudflare Workers:",
     `import { loadOmnicoach } from "${origin}/omnicoach.js";`,
     "",
-    `const omni = await loadOmnicoach("${origin}/omnicoach_playground.wasm");`,
+    `const omni = await loadOmnicoach("${origin}/${wasmPath}");`,
     `const response = omni.request(${JSON.stringify(payload, null, 2)});`,
     "// response => { ok: true, diagnostics: [...], plain: \"...\" }",
   ].join("\n");
@@ -332,13 +340,24 @@ for (const button of tabButtons) {
   });
 }
 
-shareButton.addEventListener("click", async () => {
+function stateParams(version) {
   const params = new URLSearchParams();
+  if (version !== "main") {
+    params.set("version", version);
+  }
   params.set("path", pathInput.value);
   params.set("code", codeEditor.value);
   if (configEditor.value.trim()) {
     params.set("config", configEditor.value);
   }
+  if (activeTab === "explain") {
+    params.set("rule", selectedRule);
+  }
+  return params;
+}
+
+shareButton.addEventListener("click", async () => {
+  const params = stateParams(selectedVersion);
   const shareUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
   window.history.replaceState(null, "", `?${params.toString()}`);
   try {
@@ -352,9 +371,24 @@ shareButton.addEventListener("click", async () => {
   }
 });
 
-loadInitialStateFromUrl();
+// Switching version reloads the page, keeping the editor contents in the URL.
+versionSelect.addEventListener("change", () => {
+  window.location.search = stateParams(versionSelect.value).toString();
+});
 
-loadOmnicoach("./omnicoach_playground.wasm")
+async function populateVersions() {
+  const response = await fetch("./versions.json").catch(() => null);
+  const versions = response?.ok ? await response.json() : ["main"];
+  versionSelect.replaceChildren(
+    ...versions.map((version) => new Option(version, version)),
+  );
+  versionSelect.value = selectedVersion;
+}
+
+loadInitialStateFromUrl();
+populateVersions();
+
+loadOmnicoach(`./${wasmPath}`)
   .then((loadedClient) => {
     client = loadedClient;
     populateRuleCatalog();

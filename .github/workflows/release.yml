@@ -98,26 +98,60 @@ jobs:
           name: wheels-sdist
           path: dist
 
+  wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTFLAGS: --cfg no_salsa_async_drops
+      RUSTUP_MAX_RETRIES: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown && rustup default stable
+      - run: cargo build --locked --release --target wasm32-unknown-unknown -p omnicoach-playground
+      - run: mkdir -p dist && cp target/wasm32-unknown-unknown/release/omnicoach_playground.wasm dist/omnicoach_playground.wasm
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-wasm
+          path: dist
+
   github-release:
     name: Create GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, macos, windows, sdist]
+    needs: [linux, macos, windows, sdist, wasm]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write # create the GitHub Release and upload its assets
+      actions: write # dispatch `pages.yml` to publish the release's WASM
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: wheels-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-wasm
+          path: dist
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: gh release create "$TAG" dist/* --generate-notes --title "$TAG"
+      # A release created with `GITHUB_TOKEN` triggers no workflow, so dispatch Pages explicitly.
+      - name: Redeploy Pages with the new release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run pages.yml --ref main
 
   publish-pypi:
     name: Publish to PyPI
