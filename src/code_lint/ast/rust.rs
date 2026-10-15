@@ -3,9 +3,9 @@
 use crate::code_lint::ast::{
     AstNode, Binding, BindingKind, CallableItem, CallableScope, EnclosingFunction, FunctionReturn,
     LiteralOccurrence, LiteralRole, LiteralValue, MethodVisibility, ParsedFile, PositionalRead,
-    QualifiedName, ReturnShape, ScopePositionalReads, TypeMethod, TypeMethodScope,
-    is_rust_comment_kind, parse_float_literal, parse_integer_literal, push_bindings,
-    span_from_rowan_range,
+    QualifiedName, ReturnShape, ScopePositionalReads, TestFunctionSetup, TypeMethod,
+    TypeMethodScope, is_rust_comment_kind, normalize_statement_text, parse_float_literal,
+    parse_integer_literal, push_bindings, span_from_rowan_range,
 };
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast::{
@@ -417,21 +417,7 @@ fn is_multi_phase_rust_test(body_node: &ast::BlockExpr) -> bool {
     };
     let mut seen_assertion = false;
     let mut seen_action_after_assertion = false;
-    let statement_nodes = block_statements
-        .statements()
-        .filter(|statement| {
-            !matches!(
-                statement,
-                ast::Stmt::Item(item) if !matches!(item, ast::Item::MacroCall(_))
-            )
-        })
-        .map(|statement| statement.syntax().clone())
-        .chain(
-            block_statements
-                .tail_expr()
-                .map(|tail| tail.syntax().clone()),
-        );
-    for statement_node in statement_nodes {
+    for statement_node in rust_executable_block_statements(&block_statements) {
         if count_rust_assertions(&statement_node) > 0 {
             if seen_action_after_assertion {
                 return true;
@@ -442,6 +428,83 @@ fn is_multi_phase_rust_test(body_node: &ast::BlockExpr) -> bool {
         }
     }
     false
+}
+
+/// Collects Rust test functions grouped by enclosing file root or `mod` scope (segmented on
+/// duplicate function names) along with their leading non-assertion setup statements.
+#[must_use]
+pub(super) fn collect_test_setup_scopes(file: &ParsedFile) -> Vec<Vec<TestFunctionSetup<'_>>> {
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let root_items: Vec<ast::Item> = parsed.tree().items().collect();
+    collect_rust_test_setup_scope(&root_items, file, &mut out);
+    out
+}
+
+fn collect_rust_test_setup_scope<'a>(
+    items: &[ast::Item],
+    file: &'a ParsedFile,
+    out: &mut Vec<Vec<TestFunctionSetup<'a>>>,
+) {
+    let mut current_segment = Vec::new();
+    let mut seen_names = HashSet::new();
+    for item in items {
+        let ast::Item::Fn(function) = item else {
+            continue;
+        };
+        if !is_test_function(function) {
+            continue;
+        }
+        let Some(name_node) = function.name() else {
+            continue;
+        };
+        let Some(body_node) = function.body() else {
+            continue;
+        };
+        let name = name_node.text().trim().to_owned();
+        if !seen_names.insert(name.clone()) {
+            out.push(std::mem::take(&mut current_segment));
+            seen_names.clear();
+            seen_names.insert(name.clone());
+        }
+        current_segment.push(TestFunctionSetup {
+            name_node: AstNode::from_span(
+                file,
+                span_from_rowan_range(name_node.syntax().text_range()),
+            ),
+            name,
+            leading_setup_statements: extract_rust_leading_setup_statements(&body_node, file),
+        });
+    }
+    if !current_segment.is_empty() {
+        out.push(current_segment);
+    }
+    for item in items {
+        if let ast::Item::Module(module) = item
+            && let Some(body_items) = module.item_list()
+        {
+            let module_items: Vec<ast::Item> = body_items.items().collect();
+            collect_rust_test_setup_scope(&module_items, file, out);
+        }
+    }
+}
+
+fn extract_rust_leading_setup_statements(
+    body_node: &ast::BlockExpr,
+    file: &ParsedFile,
+) -> Vec<String> {
+    let Some(block_statements) = body_node.stmt_list() else {
+        return Vec::new();
+    };
+    rust_executable_block_statements(&block_statements)
+        .take_while(|statement_node| count_rust_assertions(statement_node) == 0)
+        .map(|statement_node| {
+            let span = span_from_rowan_range(statement_node.text_range());
+            normalize_statement_text(&file.source[span.start..span.end])
+        })
+        .collect()
 }
 
 /// Collects all `macro_invocation` nodes in `file`.
@@ -2282,6 +2345,27 @@ fn is_token_tree_delimiter_or_trivia(element: &SyntaxElement) -> bool {
                 )
         }
     }
+}
+
+/// Returns the executable top-level statements and tail expression of `block_statements`,
+/// skipping local item declarations other than macro calls.
+fn rust_executable_block_statements(
+    block_statements: &ast::StmtList,
+) -> impl Iterator<Item = SyntaxNode> {
+    block_statements
+        .statements()
+        .filter(|statement| {
+            !matches!(
+                statement,
+                ast::Stmt::Item(item) if !matches!(item, ast::Item::MacroCall(_))
+            )
+        })
+        .map(|statement| statement.syntax().clone())
+        .chain(
+            block_statements
+                .tail_expr()
+                .map(|tail| tail.syntax().clone()),
+        )
 }
 
 /// Recursively counts top-level assertion macro invocations in a Rust test function body.

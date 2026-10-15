@@ -783,6 +783,28 @@ pub fn collect_multi_phase_test_functions(file: &ParsedFile) -> Vec<(AstNode<'_>
     dispatch_lang!(file.lang(), collect_multi_phase_test_functions(file))
 }
 
+/// A test function and its normalized leading non-assertion setup statements.
+pub struct TestFunctionSetup<'a> {
+    /// Identifier AST node of the test function declaration.
+    pub name_node: AstNode<'a>,
+    /// Name of the test function.
+    pub name: String,
+    /// Normalized source text of each leading non-assertion setup statement, in source order.
+    pub leading_setup_statements: Vec<String>,
+}
+
+/// Collects test functions grouped by enclosing module, class, or `mod` scope (segmented on
+/// duplicate function names) along with their leading non-assertion setup statements.
+#[must_use]
+pub fn collect_test_setup_scopes(file: &ParsedFile) -> Vec<Vec<TestFunctionSetup<'_>>> {
+    dispatch_lang!(file.lang(), collect_test_setup_scopes(file))
+}
+
+/// Normalizes a statement's source slice by trimming each line and joining with `\n`.
+pub(in crate::code_lint::ast) fn normalize_statement_text(raw: &str) -> String {
+    raw.lines().map(str::trim).collect::<Vec<_>>().join("\n")
+}
+
 /// Finds all multiline string literals in `file` that are not docstrings/doc-attributes/snapshots
 /// and are not wrapped in an allowed dedent helper.
 #[must_use]

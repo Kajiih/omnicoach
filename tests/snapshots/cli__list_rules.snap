@@ -18,6 +18,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `constructor-after-method` (python, rust): Flags class and inherent `impl` constructors defined after regular methods.
 - `copied-base-docstring` (python): Flags `@override` method docstrings that repeat the inherited docstring or its summary.
 - `deferral-docstring` (python): Flags `@override` method docstrings that only refer to the inherited documentation.
+- `duplicated-test-setup` (python, rust): Flags sibling test functions that repeat the same leading setup statements.
 - `dynamic-attribute-access` (python): Flags `getattr`, `hasattr`, `setattr` and `delattr` calls in Python.
 - `edit-of-described-commit` (command): Flags `jj edit` on a commit that already has a description.
 - `environment-variable-in-function` (python, rust): Flags environment variable access inside functions.
