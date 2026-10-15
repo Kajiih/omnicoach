@@ -7,6 +7,7 @@ from __future__ import annotations
 from .model import (
     CALLS,
     CLASSES,
+    DUPLICATED_TEST_SETUP,
     FAKE_WITHOUT_PROTOCOL,
     PYTHON,
     RUST,
@@ -23,6 +24,7 @@ CLUSTER = Cluster(
         "too_many_assertions",
         "logic_in_tests",
         "multi_phase_test",
+        "duplicated_test_setup",
         "sleep_in_tests",
         "zero_sleep_in_tests",
         "mock_in_tests",
@@ -405,7 +407,7 @@ CLUSTER = Cluster(
             ),
         ),
         Mutation(
-            label="Rust local item declaration between assertions exempt from multi-phase-test",
+            label="Rust local item declaration exempt from multi-phase-test and duplicated-test-setup",
             path=RUST,
             edits=(
                 (
@@ -418,7 +420,136 @@ CLUSTER = Cluster(
                     "        .filter(|_| true)",
                 ),
             ),
-            cases=("multi_phase_test::pass::local_item_declaration_between_assertions_exempt",),
+            cases=(
+                "multi_phase_test::pass::local_item_declaration_between_assertions_exempt",
+                "duplicated_test_setup::pass::local_item_declarations_not_counted_as_setup",
+            ),
+        ),
+        # --- duplicated-test-setup ---
+        Mutation(
+            label="test count below min-tests threshold allowed by duplicated-test-setup",
+            path=DUPLICATED_TEST_SETUP,
+            edits=(
+                (
+                    "            if group.len() < effective_min_tests {",
+                    "            if group.len() + 1 < effective_min_tests {",
+                ),
+            ),
+            cases=(
+                "duplicated_test_setup::pass::below_min_tests_threshold_allowed@python",
+                "duplicated_test_setup::pass::below_min_tests_threshold_allowed@rust",
+            ),
+        ),
+        Mutation(
+            label="statement count below min-statements threshold allowed by duplicated-test-setup",
+            path=DUPLICATED_TEST_SETUP,
+            edits=(
+                (
+                    "    let effective_min_statements = min_statements.max(1);",
+                    "    let effective_min_statements = min_statements.saturating_sub(1).max(1);",
+                ),
+            ),
+            cases=(
+                "duplicated_test_setup::pass::below_min_statements_threshold_allowed@python",
+                "duplicated_test_setup::pass::below_min_statements_threshold_allowed@rust",
+            ),
+        ),
+        Mutation(
+            label="Python non-test helper function exempt from duplicated-test-setup",
+            path=PYTHON,
+            edits=(
+                (
+                    "        if !is_test_function_def(func_def) {\n            continue;\n        }",
+                    "        let _ = is_test_function_def(func_def);",
+                ),
+            ),
+            cases=("duplicated_test_setup::pass::helper_function_exempt@python",),
+        ),
+        Mutation(
+            label="Rust non-test helper function exempt from duplicated-test-setup",
+            path=RUST,
+            edits=(
+                (
+                    "        if !is_test_function(function) {\n            continue;\n        }",
+                    "        let _ = is_test_function(function);",
+                ),
+            ),
+            cases=("duplicated_test_setup::pass::helper_function_exempt@rust",),
+        ),
+        Mutation(
+            label="Python leading docstring not counted as setup in duplicated-test-setup",
+            path=PYTHON,
+            edits=(
+                (
+                    "    let statements = if docstrings::docstring_of(&func_def.body, file).is_some() {\n"
+                    "        &func_def.body[1..]\n"
+                    "    } else {\n"
+                    "        &func_def.body[..]\n"
+                    "    };",
+                    "    let statements = &func_def.body[..];",
+                ),
+            ),
+            cases=("duplicated_test_setup::pass::leading_docstring_not_counted_as_setup",),
+        ),
+        Mutation(
+            label="Python nested function not counted as setup in duplicated-test-setup",
+            path=PYTHON,
+            edits=(
+                (
+                    "        .filter(|statement| !matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)))",
+                    "        .filter(|statement| !matches!(statement, Stmt::ClassDef(_)))",
+                ),
+            ),
+            cases=("duplicated_test_setup::pass::nested_function_not_counted_as_setup",),
+        ),
+        Mutation(
+            label="Python nested class not counted as setup in duplicated-test-setup",
+            path=PYTHON,
+            edits=(
+                (
+                    "        .filter(|statement| !matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)))",
+                    "        .filter(|statement| !matches!(statement, Stmt::FunctionDef(_)))",
+                ),
+            ),
+            cases=("duplicated_test_setup::pass::nested_class_not_counted_as_setup",),
+        ),
+        Mutation(
+            label="Python assertions not counted as setup in duplicated-test-setup",
+            path=PYTHON,
+            edits=(
+                (
+                    "        .take_while(|statement| {\n"
+                    "            count_python_assertions_in_slice(std::slice::from_ref(*statement), &func_def.body) == 0\n"
+                    "        })",
+                    "        .take_while(|_| true)",
+                ),
+            ),
+            cases=("duplicated_test_setup::pass::assertions_not_counted_as_setup@python",),
+        ),
+        Mutation(
+            label="Rust assertions not counted as setup in duplicated-test-setup",
+            path=RUST,
+            edits=(
+                (
+                    "        .take_while(|statement_node| count_rust_assertions(statement_node) == 0)",
+                    "        .take_while(|_| true)",
+                ),
+            ),
+            cases=("duplicated_test_setup::pass::assertions_not_counted_as_setup@rust",),
+        ),
+        Mutation(
+            label="separate test classes or modules do not pool across scopes in duplicated-test-setup",
+            path=DUPLICATED_TEST_SETUP,
+            edits=(
+                (
+                    "    for scope in ast::collect_test_setup_scopes(file) {",
+                    "    for scope in [ast::collect_test_setup_scopes(file).into_iter().flatten().collect::<Vec<_>>()] {",
+                ),
+            ),
+            cases=(
+                "duplicated_test_setup::pass::separate_test_classes_do_not_pool_across_scopes",
+                "duplicated_test_setup::pass::separate_test_modules_do_not_pool_across_scopes",
+            ),
         ),
         # --- sleep-in-tests & zero-sleep-in-tests ---
         Mutation(

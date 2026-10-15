@@ -60,8 +60,8 @@ use self::literals::is_constant_name;
 use self::logging::extract_logger_call;
 use self::strings::{TemplateParts, fstring_segments_and_interpolations, static_string_text};
 use crate::code_lint::ast::{
-    AstNode, EnclosingFunction, ParsedFile, QualifiedName, ResolvedName, resolve_name,
-    span_from_ruff_range, with_innermost_function,
+    AstNode, EnclosingFunction, ParsedFile, QualifiedName, ResolvedName, TestFunctionSetup,
+    normalize_statement_text, resolve_name, span_from_ruff_range, with_innermost_function,
 };
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
@@ -597,6 +597,76 @@ fn is_multi_phase_python_test_body(body: &[Stmt]) -> bool {
         }
     }
     false
+}
+
+/// Collects Python test functions grouped by enclosing module or class scope (segmented on
+/// duplicate function names) along with their leading non-assertion setup statements.
+#[must_use]
+pub(super) fn collect_test_setup_scopes(file: &ParsedFile) -> Vec<Vec<TestFunctionSetup<'_>>> {
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    collect_python_test_setup_scope(&parsed.syntax().body, file, &mut out);
+    out
+}
+
+fn collect_python_test_setup_scope<'a>(
+    statements: &[Stmt],
+    file: &'a ParsedFile,
+    out: &mut Vec<Vec<TestFunctionSetup<'a>>>,
+) {
+    let mut current_segment = Vec::new();
+    let mut seen_names = HashSet::new();
+    for statement in statements {
+        let Stmt::FunctionDef(func_def) = statement else {
+            continue;
+        };
+        if !is_test_function_def(func_def) {
+            continue;
+        }
+        let name = func_def.name.to_string();
+        if !seen_names.insert(name.clone()) {
+            out.push(std::mem::take(&mut current_segment));
+            seen_names.clear();
+            seen_names.insert(name.clone());
+        }
+        current_segment.push(TestFunctionSetup {
+            name_node: AstNode::from_span(file, span_from_ruff_range(func_def.name.range)),
+            name,
+            leading_setup_statements: extract_python_leading_setup_statements(func_def, file),
+        });
+    }
+    if !current_segment.is_empty() {
+        out.push(current_segment);
+    }
+    for statement in statements {
+        if let Stmt::ClassDef(class_def) = statement {
+            collect_python_test_setup_scope(&class_def.body, file, out);
+        }
+    }
+}
+
+fn extract_python_leading_setup_statements(
+    func_def: &StmtFunctionDef,
+    file: &ParsedFile,
+) -> Vec<String> {
+    let statements = if docstrings::docstring_of(&func_def.body, file).is_some() {
+        &func_def.body[1..]
+    } else {
+        &func_def.body[..]
+    };
+    statements
+        .iter()
+        .filter(|statement| !matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)))
+        .take_while(|statement| {
+            count_python_assertions_in_slice(std::slice::from_ref(*statement), &func_def.body) == 0
+        })
+        .map(|statement| {
+            let span = span_from_ruff_range(statement.range());
+            normalize_statement_text(&file.source[span.start..span.end])
+        })
+        .collect()
 }
 
 /// Tracks the functions enclosing the statement visited by a source-order walk.

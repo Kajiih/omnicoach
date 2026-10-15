@@ -14,6 +14,7 @@ pub mod concrete_collection_return;
 pub mod constructor_after_method;
 pub mod copied_base_docstring;
 pub mod deferral_docstring;
+pub mod duplicated_test_setup;
 pub mod dynamic_attribute_access;
 pub mod environment_variable_in_function;
 pub mod error_log_in_except;
@@ -70,6 +71,7 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &packed_assertion::RULE,
     &logic_in_tests::RULE,
     &multi_phase_test::RULE,
+    &duplicated_test_setup::RULE,
     &mock_in_tests::RULE,
     &mock_call_assertion::RULE,
     &fake_without_protocol::RULE,
