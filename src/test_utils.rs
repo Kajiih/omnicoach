@@ -2,7 +2,9 @@
 
 architecture_component!(TestUtils);
 
-use crate::code_lint::ast::{LiteralValue, ParsedFile, collect_literal_occurrences};
+use crate::code_lint::ast::{
+    LiteralValue, ParsedFile, collect_comment_nodes, collect_literal_occurrences,
+};
 use crate::code_lint::contract::CodeRule;
 use crate::code_lint::policy::is_trivial_literal;
 use crate::command_lint::contract::CommandRule;
@@ -155,6 +157,7 @@ pub fn assert_rule_fail<Options: OptionsDeclaration>(
     );
 
     let span = diagnostic.location.span.start..diagnostic.location.span.end;
+    assert_no_comment_in_explanation_position(rule_name, lang, case_name, code, span.start);
     assert_every_occurrence_reported(rule, lang, case_name, code, span, repeat);
 }
 
@@ -359,6 +362,49 @@ fn changed_digit(digit: char) -> char {
     }
 }
 
+/// Asserts that no comment in a `fail` case sits where `require-explanation` looks for one:
+/// above the snippet's first line of code, on the flagged line, or on the line above it.
+///
+/// Every case runs in `ban` mode, where comments never change the verdict, so such a comment
+/// cannot test the rule: it only restates framework behaviour (`semantic::comments` tests it)
+/// and makes the case look like it checks something it does not. Comments inside the flagged
+/// construct, which test the rule's parsing, stay allowed. Known gap: a comment on another line
+/// of a multi-line statement header, which `require-explanation` also reads, is not rejected.
+#[track_caller]
+fn assert_no_comment_in_explanation_position(
+    rule_name: &str,
+    lang: Language,
+    case_name: &str,
+    code: &str,
+    flagged_start: usize,
+) {
+    let line_of = |offset: usize| code[..offset].matches('\n').count();
+    let flagged_line = line_of(flagged_start);
+    let parsed = ParsedFile::new(code, lang);
+    let comments = collect_comment_nodes(&parsed);
+    let mut without_comments = code.as_bytes().to_vec();
+    for comment in &comments {
+        let span = comment.span();
+        without_comments[span.start..span.end].fill(b' ');
+    }
+    let first_code_line = line_of(
+        without_comments
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .unwrap_or(0),
+    );
+    for comment in comments {
+        let comment_line = line_of(comment.span().start);
+        assert!(
+            comment_line >= first_code_line
+                && comment_line != flagged_line
+                && comment_line + 1 != flagged_line,
+            "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': comment `{}` sits where `require-explanation` reads explanations; cases run in `ban` mode, so it cannot affect the verdict. Test explanation handling in `semantic::comments`, not in a rule (see `rule_test!` \"Writing cases\").\nSource:\n{code}",
+            comment.text()
+        );
+    }
+}
+
 /// Strips the enclosing line's leading indentation from lines `2..N` of a multiline AST slice
 /// so expected snippets written with `indoc!` match regardless of surrounding block nesting.
 fn normalize_span_indentation(code: &str, span_start: usize, raw_slice: &str) -> String {
@@ -456,13 +502,18 @@ fn dummy_filename(lang: Language) -> &'static str {
 /// - An accepted false negative is a `pass` case named `known_gap_*` with a `ROADMAP.md`
 ///   entry, so fixing it forces the case to be updated.
 /// - Test the rule, never the framework. Every case runs in `ban` mode (via [`run_code_rule`]),
-///   so an explanation comment never excuses a `pass` case. No case may depend on behaviour
-///   the rule does not implement: enforcement modes, explanation comments
-///   (`require-explanation`), `omni:ignore` suppressions, option parsing or per-language
-///   resolution. Those are tested once, next to their code (`code_lint::contract`,
-///   `semantic::comments`, `code_lint::suppression`, `rule_declaration`). Do not snapshot
-///   template prose: `tests/registry.rs` checks templates, and snapshots are reserved for CLI
-///   output (`tests/cli.rs`).
+///   so an explanation comment never excuses a `pass` case and never matters in a `fail`
+///   case. No case may depend on behaviour the rule does not implement: enforcement modes,
+///   explanation comments (`require-explanation`, including which comments count, such as
+///   Rust doc comments not counting), `omni:ignore` suppressions, option parsing or
+///   per-language resolution. Such a case is vacuous: it passes whatever the framework does,
+///   so it guards nothing while claiming to. Those behaviours are tested once, next to their
+///   code (`code_lint::contract`, `semantic::comments`, `code_lint::suppression`,
+///   `rule_declaration`). A `fail` case with a comment above its code, on the flagged line or
+///   on the line above it is rejected (`assert_no_comment_in_explanation_position`); a comment
+///   elsewhere inside the construct is fine if it is necessary to test the rule's parsing.
+///   Do not snapshot template prose: `tests/registry.rs` checks templates, and snapshots are
+///   reserved for CLI output (`tests/cli.rs`).
 /// - When a case cannot be expressed (e.g. a module-level construct broken by the
 ///   repeated-occurrence check), unit-test the `ast` / `semantic` helper that computes the
 ///   fact. Change the harness only for a whole class of rules, with a guardrail so the
