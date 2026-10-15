@@ -1,6 +1,6 @@
 """Exemption mutations for Batch 6: Positional Data, Scopes & Globals
 (`repeated-index-access`, `identical-positional-types`, `environment-variable-in-function`,
-`nested-function`)."""
+`nested-function`, `nested-class`)."""
 
 from __future__ import annotations
 
@@ -23,9 +23,10 @@ CLUSTER = Cluster(
         "identical_positional_types",
         "environment_variable_in_function",
         "nested_function",
+        "nested_class",
     ),
     mutations=(
-        # --- nested-function ---
+        # --- nested-function & nested-class ---
         Mutation(
             label="top-level functions exempt from nested-function",
             path=FUNCTIONS,
@@ -61,6 +62,28 @@ CLUSTER = Cluster(
             cases=(
                 "nested_function::pass::class_methods_allowed",
                 "nested_function::pass::method_of_local_class_not_flagged",
+            ),
+        ),
+        Mutation(
+            label="top-level and class-scoped classes exempt from nested-class",
+            path=FUNCTIONS,
+            edits=(
+                (
+                    "    let mut visitor = NestedClassVisitor {\n"
+                    "        file,\n"
+                    "        in_function: false,\n"
+                    "        out: Vec::new(),\n"
+                    "    };",
+                    "    let mut visitor = NestedClassVisitor {\n"
+                    "        file,\n"
+                    "        in_function: true,\n"
+                    "        out: Vec::new(),\n"
+                    "    };",
+                ),
+            ),
+            cases=(
+                "nested_class::pass::top_level_class_allowed",
+                "nested_class::pass::class_nested_in_class_allowed",
             ),
         ),
         # --- environment-variable-in-function ---

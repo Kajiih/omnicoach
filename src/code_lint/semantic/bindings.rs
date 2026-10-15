@@ -21,6 +21,16 @@ pub fn collect_renameable_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
         .collect()
 }
 
+/// Collects the identifier names of all bindings introduced by imports in `file`.
+#[must_use]
+pub fn collect_imported_names(file: &ParsedFile) -> Vec<String> {
+    ast::collect_bindings(file)
+        .into_iter()
+        .filter(|binding| binding.kind == BindingKind::Import)
+        .map(|binding| binding.node.text().into_owned())
+        .collect()
+}
+
 /// A variable, constant, parameter, or attribute/field binding whose identifier ends with a
 /// matched suffix.
 pub struct SuffixedBindingMatch<'a> {

@@ -115,15 +115,6 @@ Candidates and known-gap follow-ups to prioritize, not commitments.
   - *Unpacked and chained constants* (Python): `A, B = 1, 2` and `A = B = 1` are not recognized as constant definitions; their values count as inline uses.
   - *Typed template placeholders*: constants such as `CALLEE = "callee"` exist only to name a template placeholder once. A typed placeholder (enum or typed key) would remove them.
   - *Multi-diagnostic `rule_test!` cases*: see "Rule test harness".
-- **`no-manual-enum-name-map`** (Python, Rust — tip `#protobufs`):
-  - *Detection*: A dict literal where every entry is `'NAME': X.Y.NAME` (string key equals the value's last attribute). Suggest `Enum.Value(name)` (protobuf), `Enum[name]`, or `Enum.__members__`.
-  - *Rust*: `match` arms mapping `"Alpha" => Kind::Alpha` → derive `strum::EnumString`.
-- **`no-overprecise-float-in-tests`** (Python, Rust — tip `#keep_it_simple`):
-  - *Detection*: Float literals in test code with more significant digits than a configurable threshold (e.g. >6).
-  - *Overlap*: Clippy `excessive_precision` only flags digits beyond `f64` representability, not unreadable test values.
-- **`nested-class`** (Python — companion of `nested-function`):
-  - *Detection*: a `class` defined inside a function or method body. Suggest moving it to module level and passing captured values to its constructor.
-  - *Context*: `nested-function` no longer flags the methods of such a class (pass case `method_of_local_class_not_flagged`), since the local class, not each method, is the design choice to review.
 - **Time-unit literal arithmetic** (extension of `primitive-duration` — tip `#rationale`):
   - *Detection*: `24 * 60 * 60`, `60 * 60`, `86400`, `3600` → `timedelta` / `Duration`.
 - **Import alias conventions** (`import x as y`, `use x as y`):
@@ -137,6 +128,7 @@ Candidates and known-gap follow-ups to prioritize, not commitments.
   - No Rust counterpart: traits require an explicit `impl Trait for Type`.
 - *Not pursued* (with external linter alternatives and configuration):
   - Magic numbers in comparisons (Ruff `PLR2004`), bare HTTP status codes (too narrow), path composition (Ruff `PTH`), and test correspondence-signaling / same-value-different-meaning constants (require semantic understanding).
+  - `manual-enum-name-map` (`{"FOO": Enum.FOO}` dicts) and `overprecise-float-in-tests` (test floats with >N digits): dropped for low signal-to-complexity ratio—identity enum-name dicts are vanishingly rare once narrowed to avoid wire-format/alias false positives (and `match` is standard Rust without `strum`), while digit-count thresholds on test floats create suppression noise on legitimate numerical/coordinate/golden test vectors (`clippy::excessive_precision` already covers digits beyond `f32`/`f64` representability).
   - `CatchGenericExceptionRule`: covered by Ruff `[tool.ruff.lint] extend-select = ["E722", "BLE001", "TRY002", "TRY203", "TRY400", "S110", "S112"]` (plus `logger-objects = ["loguru.logger"]` and `[tool.ruff.lint.flake8-bandit] check-typed-exception = true`).
   - `EmptyInitRule`: covered 1:1 by Ruff `[tool.ruff.lint] preview = true`, `extend-select = ["RUF067", "INP001"]`, and `[tool.ruff.lint.ruff] strictly-empty-init-modules = true` (or `false` for library facades; add `extend-ignore = ["D104"]` if `pydocstyle` `D` is enabled).
   - `LoggerRedundantExceptionRule`: covered by Ruff `[tool.ruff.lint] extend-select = ["TRY400", "TRY401", "G201", "LOG004", "LOG007", "LOG014"]` (plus `logger-objects = ["loguru.logger"]` and `extend-ignore = ["PLE1205"]` when using Loguru).

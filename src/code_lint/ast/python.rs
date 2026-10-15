@@ -38,7 +38,7 @@ pub use self::format_strings::{
 };
 pub use self::functions::{
     PythonFunctionSignature, PythonParameterInfo, PythonParameterKind, extract_function_signatures,
-    find_nested_functions,
+    find_nested_classes, find_nested_functions,
 };
 pub(super) use self::literals::collect_literal_occurrences;
 pub use self::logging::{PythonLoggerCall, collect_logger_calls};

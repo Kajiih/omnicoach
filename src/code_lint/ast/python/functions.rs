@@ -577,6 +577,54 @@ pub fn find_nested_functions(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
     visitor.out
 }
 
+/// Finds all Python class definitions inside a function or method body (`class ...` inside `def ...`)
+/// and returns `(class_node, class_name)` pairs.
+#[must_use]
+pub fn find_nested_classes(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
+    struct NestedClassVisitor<'a> {
+        file: &'a ParsedFile,
+        in_function: bool,
+        out: Vec<(AstNode<'a>, String)>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for NestedClassVisitor<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            match statement {
+                Stmt::FunctionDef(_) => {
+                    let prev = self.in_function;
+                    self.in_function = true;
+                    walk_stmt(self, statement);
+                    self.in_function = prev;
+                }
+                Stmt::ClassDef(class_def) => {
+                    if self.in_function {
+                        self.out.push((
+                            AstNode::from_span(self.file, span_from_ruff_range(class_def.range)),
+                            class_def.name.id.to_string(),
+                        ));
+                    }
+                    let prev = self.in_function;
+                    self.in_function = false;
+                    walk_stmt(self, statement);
+                    self.in_function = prev;
+                }
+                _ => walk_stmt(self, statement),
+            }
+        }
+    }
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut visitor = NestedClassVisitor {
+        file,
+        in_function: false,
+        out: Vec::new(),
+    };
+    visitor.visit_body(&parsed.syntax().body);
+    visitor.out
+}
+
 /// Returns true if `func_name` is a Python Data Model dunder method with a fixed signature
 /// (all `__*__` methods except constructors `__init__` and `__new__`, and `__call__`, whose
 /// signature is designed by the class author).

@@ -28,8 +28,9 @@ CLUSTER = Cluster(
             path=ABBREVIATED_NAME,
             edits=(
                 (
-                    "        for segment in split_segments(&name) {\n"
-                    "            if banned.contains(&segment) {",
+                    "        let segments = split_segments(&name);\n"
+                    "        for segment in non_imported_segments(&segments, &imported_segments) {\n"
+                    "            if banned.contains(segment) {",
                     "        let lower = name.to_lowercase();\n"
                     "        for segment in banned {\n"
                     "            if lower.contains(segment.as_str()) {",
@@ -38,6 +39,20 @@ CLUSTER = Cluster(
             cases=(
                 "abbreviated_name::pass::substring_containing_banned_token_allowed@python",
                 "abbreviated_name::pass::substring_containing_banned_token_allowed@rust",
+            ),
+        ),
+        Mutation(
+            label="imported symbol abbreviations exempt in abbreviated-name",
+            path=ABBREVIATED_NAME,
+            edits=(
+                (
+                    "        for segment in non_imported_segments(&segments, &imported_segments) {",
+                    "        for segment in segments.iter().map(String::as_str) {",
+                ),
+            ),
+            cases=(
+                "abbreviated_name::pass::imported_symbol_abbreviation_exempt@python",
+                "abbreviated_name::pass::imported_symbol_abbreviation_exempt@rust",
             ),
         ),
         Mutation(
