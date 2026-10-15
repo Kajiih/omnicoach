@@ -334,6 +334,17 @@ pub(in crate::code_lint::ast) const fn is_rust_comment_kind(
     )
 }
 
+/// Returns true if `text` is a Rust outer or inner doc comment (`///`, `//!`, `/** */`, `/*! */`).
+///
+/// Per the Rust Reference, `////...`, `/***...`, and `/**/` are ordinary non-doc comments.
+#[must_use]
+pub fn is_rust_doc_comment(text: &str) -> bool {
+    (text.starts_with("///") && !text.starts_with("////"))
+        || text.starts_with("//!")
+        || (text.starts_with("/**") && !text.starts_with("/***") && text != "/**/")
+        || text.starts_with("/*!")
+}
+
 /// Candidate call expression extracted from the syntax tree.
 pub struct AstCallCandidate<'a> {
     /// The call expression AST node.

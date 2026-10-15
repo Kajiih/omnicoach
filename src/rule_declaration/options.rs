@@ -94,9 +94,10 @@ impl EnforcementMode {
                                    above that header (above the first decorator, if any), also \
                                    counts and excuses every finding on that header, from any rule \
                                    in this mode; the body of a block statement is not part of its \
-                                   header. The comment needs at least three words; a bare tool \
-                                   directive such as `noqa` or `type: ignore` does not count, but \
-                                   a reason written after it does.";
+                                   header. The comment needs at least three words; docstrings, \
+                                   Rust doc comments (`///`, `//!`, `/** */`, `/*! */`), and bare \
+                                   tool directives such as `noqa` or `type: ignore` do not count, \
+                                   but a reason written after a directive does.";
 
     /// How to excuse a finding in `require-explanation` mode, shown with each finding.
     pub const EXPLANATION_HINT: &'static str =
