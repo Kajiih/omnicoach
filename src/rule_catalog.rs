@@ -8,8 +8,8 @@ use crate::rule_declaration::{
     DeclaredOptions, EnforcementMode, FilterListDefaults, LanguageDefaults, OptionSpec,
 };
 use crate::rule_selection::{
-    ConfigError, Facet, RegisteredRule, RuleStatus, UnknownLabel, find_rule, load_rule_status,
-    registered_rules, registered_topics, rule_status, rules_tagged,
+    ConfigError, ConfigOverrides, Facet, RegisteredRule, RuleStatus, UnknownLabel, find_rule,
+    load_rule_status, registered_rules, registered_topics, rule_status, rules_tagged,
 };
 
 /// Why a discovery request failed. The message is what the user sees.
@@ -46,9 +46,9 @@ pub struct DiscoveryArgs {
 impl DiscoveryArgs {
     /// Renders the requested discovery output, or `None` when no discovery flag is given.
     #[must_use]
-    pub fn render(&self) -> Option<Result<String, CatalogError>> {
+    pub fn render(&self, overrides: &ConfigOverrides) -> Option<Result<String, CatalogError>> {
         if let Some(name) = &self.explain {
-            return Some(explain(name));
+            return Some(explain_with_overrides(name, overrides));
         }
         if self.list_tags {
             return Some(Ok(list_tags()));
@@ -118,8 +118,21 @@ pub fn list_tags() -> String {
 ///
 /// Returns [`CatalogError::Label`] if no rule is named `name`.
 pub fn explain(name: &str) -> Result<String, CatalogError> {
+    explain_with_overrides(name, &ConfigOverrides::default())
+}
+
+/// The rule's full documentation as Markdown, evaluating its active status in the working
+/// directory (or `overrides.config_path`) with `overrides` applied.
+///
+/// # Errors
+///
+/// Returns [`CatalogError::Label`] if no rule is named `name`.
+pub fn explain_with_overrides(
+    name: &str,
+    overrides: &ConfigOverrides,
+) -> Result<String, CatalogError> {
     let rule = find_rule(name)?;
-    Ok(render_rule(rule, &load_rule_status(rule)))
+    Ok(render_rule(rule, &load_rule_status(rule, overrides)))
 }
 
 /// The rule's full documentation as Markdown, evaluating its active status against `config_toml`.

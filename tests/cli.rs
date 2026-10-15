@@ -355,3 +355,80 @@ fn test_code_lint_explanation_hint(#[case] format: &str) {
     );
     insta::assert_snapshot!(format!("explanation_hint_{format}"), output);
 }
+
+#[test]
+fn test_cli_config_override_and_missing_file_error() {
+    let temp_dir = create_temp_file("test.py", "def outer():\n    def inner():\n        pass\n");
+    fs::write(
+        temp_dir.path().join("custom.toml"),
+        "ignore = [\"nested-function\"]\n",
+    )
+    .unwrap();
+    let custom_output = run_cli(
+        &["--config", "custom.toml", "code", "test.py"],
+        Some(temp_dir.path()),
+    );
+    let missing_output = run_cli(
+        &["--config", "missing.toml", "code", "test.py"],
+        Some(temp_dir.path()),
+    );
+
+    assert!(
+        custom_output.contains("--- exit code ---\n0\n"),
+        "{custom_output}"
+    );
+    assert!(
+        custom_output.contains("All checks passed!"),
+        "{custom_output}"
+    );
+    assert!(
+        missing_output.contains("--- exit code ---\n2\n"),
+        "{missing_output}"
+    );
+    assert!(
+        missing_output.contains("failed to read `missing.toml`"),
+        "{missing_output}"
+    );
+}
+
+#[test]
+fn test_cli_select_and_ignore_override_toml_and_explain() {
+    let temp_dir = create_temp_file("test.py", "def outer():\n    def inner():\n        pass\n");
+    fs::write(
+        temp_dir.path().join(omni::config::CONFIG_FILE_NAME),
+        "select = [\"nested-function\"]\n",
+    )
+    .unwrap();
+    let ignored_output = run_cli(
+        &["code", "--ignore", "nested-function", "test.py"],
+        Some(temp_dir.path()),
+    );
+    let selected_other_output = run_cli(
+        &["code", "--select", "testing", "test.py"],
+        Some(temp_dir.path()),
+    );
+    let explain_output = run_cli(
+        &[
+            "--select",
+            "testing",
+            "--ignore",
+            "sleep-in-tests",
+            "--explain",
+            "sleep-in-tests",
+        ],
+        Some(temp_dir.path()),
+    );
+
+    assert!(
+        ignored_output.contains("--- exit code ---\n0\n"),
+        "{ignored_output}"
+    );
+    assert!(
+        selected_other_output.contains("--- exit code ---\n0\n"),
+        "{selected_other_output}"
+    );
+    assert!(
+        explain_output.contains("Status: disabled by `ignore = [\"sleep-in-tests\"]`"),
+        "{explain_output}"
+    );
+}
