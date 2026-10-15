@@ -5,6 +5,7 @@
 //! operations (such as exception suppression) are accompanied by substantive explanation comments.
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile, statements};
+use crate::diagnostic::Language;
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -13,20 +14,24 @@ struct IndexedComment<'a> {
     is_standalone: bool,
 }
 
-/// Index of source comments, mapping 1-indexed lines to comment AST nodes.
+/// Index of non-doc source comments, mapping 1-indexed lines to comment AST nodes.
 #[derive(Default)]
 pub struct CommentIndex<'a> {
     comments_by_line: HashMap<usize, IndexedComment<'a>>,
 }
 
 impl<'a> CommentIndex<'a> {
-    /// Builds a `CommentIndex` from a parsed file.
+    /// Builds a `CommentIndex` from a parsed file, excluding Rust doc comments (`///`, `//!`,
+    /// `/** */`, `/*! */`).
     #[must_use]
     pub fn from_file(file: &'a ParsedFile) -> Self {
         let source_text = file.source_text();
         let source = source_text.as_ref();
         let mut comments_by_line = HashMap::new();
         for node in ast::collect_comment_nodes(file) {
+            if file.lang() == Language::Rust && ast::is_rust_doc_comment(&node.text()) {
+                continue;
+            }
             let start_line = node.start_line();
             let end_line = node.end_line();
             let node_offset = node.span().start;
@@ -68,9 +73,9 @@ impl<'a> CommentIndex<'a> {
         };
 
         self.has_adjacent_explanation(*header_lines.start())
-            || header_lines
-                .into_iter()
-                .any(|header_line| self.has_inline_explanation(header_line))
+            || header_lines.into_iter().any(|header_line| {
+                self.has_inline_explanation(header_line) || self.has_explanation_above(header_line)
+            })
     }
 
     /// Verifies if a given line has an adjacent, substantive explanation comment.
@@ -599,6 +604,78 @@ mod tests {
         "},
         "Option<Vec<String>>",
         false
+    )]
+    #[case::outer_line_doc_comment_not_counted_as_explanation(
+        indoc! {r"
+            /// Returns None on cache miss; an empty slice means the user has no tags.
+            #[must_use]
+            fn cached_tags(&self, user_id: &str) -> Option<&[String]> {
+                let _ = user_id;
+                None
+            }
+        "},
+        "Option<&[String]>",
+        false
+    )]
+    #[case::outer_block_doc_comment_not_counted_as_explanation(
+        indoc! {r"
+            /** Returns None on cache miss; an empty slice means the user has no tags. */
+            fn cached_tags(&self, user_id: &str) -> Option<&[String]> {
+                let _ = user_id;
+                None
+            }
+        "},
+        "Option<&[String]>",
+        false
+    )]
+    #[case::inner_doc_comments_not_counted_as_explanation(
+        indoc! {r"
+            //! Module-level doc comment with more than three words.
+            /*! Block inner doc comment with more than three words. */
+            fn cached_tags(&self, user_id: &str) -> Option<&[String]> {
+                let _ = user_id;
+                None
+            }
+        "},
+        "Option<&[String]>",
+        false
+    )]
+    #[case::regular_comment_above_doc_comment_counts_as_explanation(
+        indoc! {r"
+            // Returns None on cache miss; an empty slice means the user has no tags.
+            /// Public API documentation for cached_tags.
+            #[must_use]
+            fn cached_tags(&self, user_id: &str) -> Option<&[String]> {
+                let _ = user_id;
+                None
+            }
+        "},
+        "Option<&[String]>",
+        true
+    )]
+    #[case::regular_comment_between_doc_comment_and_attribute_counts(
+        indoc! {r"
+            /// Public API documentation for cached_tags.
+            // Returns None on cache miss; an empty slice means the user has no tags.
+            #[must_use]
+            fn cached_tags(&self, user_id: &str) -> Option<&[String]> {
+                let _ = user_id;
+                None
+            }
+        "},
+        "Option<&[String]>",
+        true
+    )]
+    #[case::four_slash_non_doc_comment_counts_as_explanation(
+        indoc! {r"
+            //// Returns None on cache miss; an empty slice means the user has no tags.
+            fn cached_tags(&self, user_id: &str) -> Option<&[String]> {
+                let _ = user_id;
+                None
+            }
+        "},
+        "Option<&[String]>",
+        true
     )]
     fn test_has_explanation_for_span_rust(
         #[case] source: &str,

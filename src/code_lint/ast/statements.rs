@@ -150,9 +150,10 @@ const fn is_rust_statement_container(kind: ra_ap_syntax::SyntaxKind) -> bool {
 
 /// Computes the 1-indexed inclusive header line range of a Rust `statement` node.
 ///
-/// Leading comments and whitespace attached inside `statement` (such as `///` doc comments)
-/// are skipped when determining the header start line so that `#[...]` outer attributes start
-/// the header and preceding doc comments are recognized as adjacent explanations above it.
+/// Leading whitespace and non-doc comments attached inside `statement` are skipped when
+/// determining the header start line so that outer doc comments (`///`, `/** */`) and `#[...]`
+/// outer attributes start the header and preceding `//` explanation comments are recognized
+/// above it.
 fn rust_header_line_range(
     file: &ParsedFile,
     statement: &ra_ap_syntax::SyntaxNode,
@@ -161,7 +162,7 @@ fn rust_header_line_range(
     let start_offset = statement
         .descendants_with_tokens()
         .filter_map(ra_ap_syntax::SyntaxElement::into_token)
-        .find(|token| !is_rust_trivia(token.kind()))
+        .find(|token| !is_rust_non_doc_trivia(token))
         .map_or(fallback_start, |token| {
             usize::from(token.text_range().start())
         });
@@ -191,6 +192,13 @@ const fn is_rust_body_container(kind: ra_ap_syntax::SyntaxKind) -> bool {
             | SyntaxKind::ITEM_LIST
             | SyntaxKind::EXTERN_ITEM_LIST
     )
+}
+
+/// Returns true if `token` is whitespace or a non-doc Rust comment (`//`, `/* */`).
+fn is_rust_non_doc_trivia(token: &ra_ap_syntax::SyntaxToken) -> bool {
+    matches!(token.kind(), ra_ap_syntax::SyntaxKind::WHITESPACE)
+        || (crate::code_lint::ast::is_rust_comment_kind(token.kind())
+            && !crate::code_lint::ast::is_rust_doc_comment(token.text()))
 }
 
 /// Returns true if `kind` is a Rust comment (`//`, `/* */`, `///`, `//!`, `/** */`, `/*! */`)
@@ -314,7 +322,7 @@ mod tests {
                 input.len()
             }
         "},
-        Language::Rust, "usize", 4..=5
+        Language::Rust, "usize", 1..=5
     )]
     fn test_statement_and_header_resolution(
         #[case] source: &str,

@@ -409,6 +409,8 @@ fn skip_printf_count(bytes: &[u8], cursor: &mut usize) {
     }
 }
 
+// `None` rather than an empty list: `str.format` raises on unbalanced braces, so callers must be
+// able to tell an invalid template apart from a valid one with no named fields.
 /// Returns the identifier roots of the named PEP 3101 replacement fields in `message`.
 ///
 /// Roots come in source order (`order` for `{order.id}`, `width` for `{:>{width}}`); the result
