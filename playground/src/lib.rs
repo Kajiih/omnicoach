@@ -222,25 +222,16 @@ mod tests {
     use super::handle_request;
 
     #[test]
-    fn lint_action_returns_diagnostics_and_path_classification_for_python_and_rust()
-    -> serde_json::Result<()> {
-        let python_response = handle_request(
+    fn lint_action_returns_diagnostics_for_python_test_path() -> serde_json::Result<()> {
+        let response = handle_request(
             r#"{"action":"lint","path":"tests/test_order.py","code":"import time\n\ndef test_order():\n    time.sleep(1)\n","config":""}"#,
         );
-        let parsed: serde_json::Value = serde_json::from_str(&python_response)?;
+        let parsed: serde_json::Value = serde_json::from_str(&response)?;
+        assert_eq!(parsed["language"].as_str(), Some("python"));
+        assert_eq!(parsed["is_test_path"].as_bool(), Some(true));
         assert_eq!(
-            (
-                parsed["ok"].as_bool(),
-                parsed["language"].as_str(),
-                parsed["is_test_path"].as_bool(),
-                parsed["diagnostics"][0]["rule_name"].as_str(),
-            ),
-            (
-                Some(true),
-                Some("python"),
-                Some(true),
-                Some("sleep-in-tests")
-            ),
+            parsed["diagnostics"][0]["rule_name"].as_str(),
+            Some("sleep-in-tests")
         );
         assert!(
             parsed["plain"]
@@ -248,63 +239,60 @@ mod tests {
                 .unwrap_or_default()
                 .contains("[sleep-in-tests]")
         );
+        Ok(())
+    }
 
-        let rust_response = handle_request(
+    #[test]
+    fn lint_action_returns_diagnostics_for_rust_source_path() -> serde_json::Result<()> {
+        let response = handle_request(
             r#"{"action":"lint","path":"src/lib.rs","code":"pub fn compute(price_list: &Vec<u64>) -> u64 { price_list.len() as u64 }\n","config":""}"#,
         );
-        let rust_parsed: serde_json::Value = serde_json::from_str(&rust_response)?;
+        let parsed: serde_json::Value = serde_json::from_str(&response)?;
+        assert_eq!(parsed["ok"].as_bool(), Some(true));
+        assert_eq!(parsed["language"].as_str(), Some("rust"));
+        assert_eq!(parsed["is_test_path"].as_bool(), Some(false));
         assert_eq!(
-            (
-                rust_parsed["ok"].as_bool(),
-                rust_parsed["language"].as_str(),
-                rust_parsed["is_test_path"].as_bool(),
-                rust_parsed["diagnostics"][0]["rule_name"].as_str(),
-            ),
-            (
-                Some(true),
-                Some("rust"),
-                Some(false),
-                Some("type-suffixed-name")
-            ),
+            parsed["diagnostics"][0]["rule_name"].as_str(),
+            Some("type-suffixed-name")
         );
         Ok(())
     }
 
     #[test]
-    fn lint_action_respects_toml_config_and_reports_invalid_config() -> serde_json::Result<()> {
-        let ignored_response = handle_request(
+    fn lint_action_respects_toml_ignore_config() -> serde_json::Result<()> {
+        let response = handle_request(
             r#"{"action":"lint","path":"tests/test_order.py","code":"import time\n\ndef test_order():\n    time.sleep(1)\n","config":"ignore = [\"sleep-in-tests\"]"}"#,
         );
-        let ignored_parsed: serde_json::Value = serde_json::from_str(&ignored_response)?;
-        assert_eq!(
-            (
-                ignored_parsed["ok"].as_bool(),
-                ignored_parsed["diagnostics"].as_array().map(Vec::len),
-            ),
-            (Some(true), Some(0)),
-        );
+        let parsed: serde_json::Value = serde_json::from_str(&response)?;
+        assert_eq!(parsed["ok"].as_bool(), Some(true));
+        assert_eq!(parsed["diagnostics"].as_array().map(Vec::len), Some(0));
+        Ok(())
+    }
 
-        let custom_context_response = handle_request(
+    #[test]
+    fn lint_action_respects_custom_test_patterns_in_config() -> serde_json::Result<()> {
+        let response = handle_request(
             r#"{"action":"lint","path":"spec/order.py","code":"import time\n\ndef test_order():\n    time.sleep(1)\n","config":"[context]\ntest-patterns = [\"**/spec/**\"]"}"#,
         );
-        let custom_context_parsed: serde_json::Value =
-            serde_json::from_str(&custom_context_response)?;
+        let parsed: serde_json::Value = serde_json::from_str(&response)?;
+        assert_eq!(parsed["ok"].as_bool(), Some(true));
+        assert_eq!(parsed["is_test_path"].as_bool(), Some(true));
         assert_eq!(
-            (
-                custom_context_parsed["ok"].as_bool(),
-                custom_context_parsed["is_test_path"].as_bool(),
-                custom_context_parsed["diagnostics"][0]["rule_name"].as_str(),
-            ),
-            (Some(true), Some(true), Some("sleep-in-tests")),
+            parsed["diagnostics"][0]["rule_name"].as_str(),
+            Some("sleep-in-tests")
         );
+        Ok(())
+    }
 
-        let invalid_response = handle_request(
+    #[test]
+    fn lint_action_reports_invalid_config_selector() -> serde_json::Result<()> {
+        let response = handle_request(
             r#"{"action":"lint","path":"src/app.py","code":"x = 1\n","config":"select = [\"tesing\"]"}"#,
         );
-        let invalid_parsed: serde_json::Value = serde_json::from_str(&invalid_response)?;
-        assert_eq!(invalid_parsed["ok"], false);
+        let parsed: serde_json::Value = serde_json::from_str(&response)?;
+        assert_eq!(parsed["ok"], false);
         assert!(
-            invalid_parsed["error"]
+            parsed["error"]
                 .as_str()
                 .unwrap_or_default()
                 .contains("did you mean `testing`?")
@@ -318,8 +306,8 @@ mod tests {
             r#"{"action":"explain","rule":"sleep-in-tests","config":"ignore = [\"testing\"]"}"#,
         );
         let parsed: serde_json::Value = serde_json::from_str(&response)?;
-        assert_eq!(parsed["ok"], true);
         let markdown = parsed["markdown"].as_str().unwrap_or_default();
+        assert_eq!(parsed["ok"], true);
         assert!(markdown.contains("# sleep-in-tests"));
         assert!(markdown.contains("Status: disabled by `ignore = [\"testing\"]`"));
         Ok(())
