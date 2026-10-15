@@ -285,8 +285,8 @@ crate::test_utils::rule_test!(
                 "# => r#"["admin", "viewer"]"#,
                 multiline_parenthesized_with_comment => r#"
                     ALLOWED = (
-                        # Default roles
                         ["admin", "viewer"]
+                        # Default roles
                     )
                 "# => r#"["admin", "viewer"]"#,
                 unannotated_dict_literal => r#"
