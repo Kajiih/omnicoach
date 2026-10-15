@@ -6,6 +6,7 @@
 
 use crate::code_lint::ast::{ParsedFile, span_from_ruff_range};
 use crate::diagnostic::{Language, SourceSpan};
+use std::collections::HashMap;
 use std::ops::RangeInclusive;
 
 /// Resolves the 1-indexed inclusive header line range of the innermost statement enclosing `span`.
@@ -206,6 +207,76 @@ fn is_rust_non_doc_trivia(token: &ra_ap_syntax::SyntaxToken) -> bool {
 const fn is_rust_trivia(kind: ra_ap_syntax::SyntaxKind) -> bool {
     matches!(kind, ra_ap_syntax::SyntaxKind::WHITESPACE)
         || crate::code_lint::ast::is_rust_comment_kind(kind)
+}
+
+/// Maps each line where a decorator or attribute begins to the last line it spans.
+///
+/// Lines are 1-indexed. Covers Python `@decorator` and Rust `#[...]` attributes; when several
+/// start on the same line, the largest ending line is kept.
+#[must_use]
+pub fn decorator_and_attribute_end_lines(file: &ParsedFile) -> HashMap<usize, usize> {
+    let mut end_lines = HashMap::new();
+    let mut record = |start: usize, end: usize| {
+        let start_line = file.line_index.line(start);
+        let end_line = file.line_index.line(end);
+        end_lines
+            .entry(start_line)
+            .and_modify(|longest: &mut usize| *longest = (*longest).max(end_line))
+            .or_insert(end_line);
+    };
+    match file.lang() {
+        Language::Python => record_python_decorators(file, &mut record),
+        Language::Rust => record_rust_attributes(file, &mut record),
+    }
+    end_lines
+}
+
+fn record_python_decorators(file: &ParsedFile, record: &mut impl FnMut(usize, usize)) {
+    use ruff_python_ast::Stmt;
+    use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
+    use ruff_text_size::Ranged as _;
+
+    struct DecoratorVisitor<Record> {
+        record: Record,
+    }
+
+    impl<'a, Record: FnMut(usize, usize)> SourceOrderVisitor<'a> for DecoratorVisitor<Record> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            let decorators = match statement {
+                Stmt::FunctionDef(function) => function.decorator_list.as_slice(),
+                Stmt::ClassDef(class) => class.decorator_list.as_slice(),
+                _ => &[],
+            };
+            for decorator in decorators {
+                (self.record)(
+                    decorator.range().start().to_usize(),
+                    decorator.range().end().to_usize(),
+                );
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    if let Some(parsed) = file.py_module() {
+        DecoratorVisitor { record }.visit_body(&parsed.syntax().body);
+    }
+}
+
+fn record_rust_attributes(file: &ParsedFile, record: &mut impl FnMut(usize, usize)) {
+    use ra_ap_syntax::AstNode as _;
+
+    let Some(parsed) = file.rs_parsed() else {
+        return;
+    };
+    for attribute in parsed
+        .tree()
+        .syntax()
+        .descendants()
+        .filter_map(ra_ap_syntax::ast::Attr::cast)
+    {
+        let range = attribute.syntax().text_range();
+        record(usize::from(range.start()), usize::from(range.end()));
+    }
 }
 
 #[cfg(test)]
