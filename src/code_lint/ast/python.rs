@@ -1360,33 +1360,29 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_parameters_kinds() {
+    fn test_extract_parameters_metadata() {
         let source = indoc::indoc! {r"
             def handler(self, a: int, b: str = 'hello', *, c: bool, **kwargs):
                 pass
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let params = &extract_function_signatures(&file)[0].parameters;
+        let signatures = extract_function_signatures(&file);
+        let actual: Vec<(&str, PythonParameterKind, Option<&str>)> = signatures[0]
+            .parameters
+            .iter()
+            .map(|param| (param.name.as_str(), param.kind, param.type_text.as_deref()))
+            .collect();
 
-        assert_eq!(params[0].kind, PythonParameterKind::Receiver);
-        assert_eq!(params[1].kind, PythonParameterKind::Positional);
-        assert_eq!(params[3].kind, PythonParameterKind::KeywordOnly);
-        assert_eq!(params[4].kind, PythonParameterKind::VarKeyword);
-    }
-
-    #[test]
-    fn test_extract_parameters_type_annotations() {
-        let source = indoc::indoc! {r"
-            def handler(self, a: int, b: str = 'hello', *, c: bool, **kwargs):
-                pass
-        "};
-        let file = ParsedFile::new(source, Language::Python);
-        let params = &extract_function_signatures(&file)[0].parameters;
-
-        assert_eq!(params[1].name, "a");
-        assert_eq!(params[1].type_text.as_deref(), Some("int"));
-        assert_eq!(params[2].name, "b");
-        assert_eq!(params[2].type_text.as_deref(), Some("str"));
+        assert_eq!(
+            actual,
+            vec![
+                ("self", PythonParameterKind::Receiver, None),
+                ("a", PythonParameterKind::Positional, Some("int")),
+                ("b", PythonParameterKind::Positional, Some("str")),
+                ("c", PythonParameterKind::KeywordOnly, Some("bool")),
+                ("kwargs", PythonParameterKind::VarKeyword, None),
+            ]
+        );
     }
 
     #[rstest::rstest]

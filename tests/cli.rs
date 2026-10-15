@@ -262,8 +262,10 @@ fn test_code_lint_unreadable_file_reports_error_and_lints_the_rest() {
     );
 }
 
-#[test]
-fn test_code_lint_diff_complex_revset_jj() {
+#[rstest::rstest]
+#[case::complex_revset("immutable()..")]
+#[case::range_revset("@-..@")]
+fn test_code_lint_diff_revset_jj(#[case] revset: &str) {
     let temp_repo = setup_temp_jj_repo();
     let repo_path = temp_repo.path();
 
@@ -275,27 +277,7 @@ fn test_code_lint_diff_complex_revset_jj() {
     let file_path = repo_path.join("test.py");
     fs::write(&file_path, violating_code).unwrap();
 
-    let output = run_cli(
-        &["code", "--diff-rev", "immutable()..", "test.py"],
-        Some(repo_path),
-    );
-    assert!(output.contains("Function `inner` is defined inside another function."));
-}
-
-#[test]
-fn test_code_lint_diff_range_revset_jj() {
-    let temp_repo = setup_temp_jj_repo();
-    let repo_path = temp_repo.path();
-
-    let violating_code = indoc! {r"
-        def outer():
-            def inner():
-                pass
-    "};
-    let file_path = repo_path.join("test.py");
-    fs::write(&file_path, violating_code).unwrap();
-
-    let output = run_cli(&["code", "--diff-rev", "@-..@", "test.py"], Some(repo_path));
+    let output = run_cli(&["code", "--diff-rev", revset, "test.py"], Some(repo_path));
     assert!(output.contains("Function `inner` is defined inside another function."));
 }
 
