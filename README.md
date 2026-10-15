@@ -44,6 +44,7 @@ import { loadOmnicoach } from "https://kajiih.github.io/omnicoach/omnicoach.js";
 const omni = await loadOmnicoach("https://kajiih.github.io/omnicoach/omnicoach_playground.wasm");
 const result = omni.lint({ path: "tests/test_app.py", code: "import time\ndef test_a(): time.sleep(1)\n", config: "" });
 ```
+To pin a release, load `wasm/<tag>/omnicoach_playground.wasm` instead.
 
 ---
 

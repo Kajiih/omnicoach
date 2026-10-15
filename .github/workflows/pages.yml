@@ -3,6 +3,7 @@ name: Pages
 on:
   push:
     branches: [main]
+  # Also dispatched by `release.yml` once a release has its `omnicoach_playground.wasm`.
   workflow_dispatch:
 
 permissions: {}
@@ -35,6 +36,29 @@ jobs:
       - run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown && rustup default stable
       - run: cargo build --locked --release --target wasm32-unknown-unknown -p omnicoach-playground
       - run: cp target/wasm32-unknown-unknown/release/omnicoach_playground.wasm playground/www/omnicoach_playground.wasm
+      # Each release's WASM is served at `wasm/<tag>/omnicoach_playground.wasm`, the newest one
+      # also at `wasm/latest/`, and `versions.json` lists `main` followed by the tags, newest first.
+      - name: Stage released WASM versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tags=()
+          release_tags=$(gh release list --exclude-drafts --limit 100 --json tagName --jq '.[].tagName')
+          for tag in $release_tags; do
+            # Releases from before the WASM build have no asset; any other `gh` failure aborts
+            # the deploy rather than publishing a site without that version.
+            has_wasm=$(gh release view "$tag" --json assets --jq 'any(.assets[]; .name == "omnicoach_playground.wasm")')
+            if [ "$has_wasm" = true ]; then
+              gh release download "$tag" --pattern omnicoach_playground.wasm --dir "playground/www/wasm/$tag"
+              tags+=("$tag")
+            fi
+          done
+          if [ "${#tags[@]}" -gt 0 ]; then
+            cp -r "playground/www/wasm/${tags[0]}" playground/www/wasm/latest
+          fi
+          jq -n '$ARGS.positional' --args main "${tags[@]}" > playground/www/versions.json
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
