@@ -107,10 +107,9 @@ const UNUSED_SUPPRESSION: Declaration = Declaration {
 
             Remove the rule from the directive, or the whole directive when no rule is left."},
         known_problems: Some(indoc::indoc! {r"
-            A directive on its own line covers the lines below it that start with `@`, `#` or `//`
-            (decorators, attributes, comments) and the first line after them, nothing further. A
-            finding further down a multi-line statement, or below a decorator or attribute spanning
-            several lines, is not suppressed, and the directive is reported as unused."}),
+            A directive on its own line covers contiguous decorators, attributes, and comments below
+            it and the first declaration line after them, nothing further. A finding further down a
+            multi-line statement is not suppressed, and the directive is reported as unused."}),
         references: &[Reference {
             title: "Ruff: unused-noqa (RUF100)",
             url: "https://docs.astral.sh/ruff/rules/unused-noqa/",
@@ -288,6 +287,7 @@ impl SuppressionTracker {
         }
 
         let comment_index = CommentIndex::from_file(file);
+        let decorator_end_lines = ast::statements::decorator_and_attribute_end_lines(file);
         let mut tracker = Self::default();
         for comment_node in ast::collect_comment_nodes(file) {
             let text = comment_node.text();
@@ -296,9 +296,13 @@ impl SuppressionTracker {
                 coord: comment_node.start_coordinate(),
             };
             let is_explained_above = || comment_index.has_explanation_above(site.coord.line);
-            if let Some(directive) =
-                Self::parse_comment_text(&text, site, content, is_explained_above)
-            {
+            if let Some(directive) = Self::parse_comment_text(
+                &text,
+                site,
+                content,
+                &decorator_end_lines,
+                is_explained_above,
+            ) {
                 tracker.directives.push(directive);
             } else if file.lang() == Language::Python
                 && is_unexplained_tool_directive(&text)
@@ -384,6 +388,7 @@ impl SuppressionTracker {
         text: &str,
         site: DirectiveSite,
         content: &str,
+        decorator_end_lines: &HashMap<usize, usize>,
         is_explained_above: impl FnOnce() -> bool,
     ) -> Option<ParsedDirective> {
         let stripped = strip_comment_delimiters(text)?;
@@ -399,7 +404,13 @@ impl SuppressionTracker {
             .strip_prefix("--")
             .is_some_and(|reason| !reason.trim().is_empty());
 
-        let placement = resolve_directive_placement(is_file, content, site.span, site.coord.line);
+        let placement = resolve_directive_placement(
+            is_file,
+            content,
+            decorator_end_lines,
+            site.span,
+            site.coord.line,
+        );
         let matched_count = target_rules.iter().map(|rule| (rule.clone(), 0)).collect();
 
         Some(ParsedDirective {
@@ -559,6 +570,7 @@ fn parse_bracketed_rules(remainder_trimmed: &str) -> BracketedRules<'_> {
 fn resolve_directive_placement(
     is_file: bool,
     content: &str,
+    decorator_end_lines: &HashMap<usize, usize>,
     span: SourceSpan,
     raw_line: usize,
 ) -> DirectivePlacement {
@@ -570,7 +582,7 @@ fn resolve_directive_placement(
     if prefix_on_line.trim().is_empty() {
         DirectivePlacement::PrecedingLine {
             target_line: raw_line + 1,
-            end_target_line: compute_effective_target_line(content, raw_line),
+            end_target_line: compute_effective_target_line(content, decorator_end_lines, raw_line),
         }
     } else {
         DirectivePlacement::SameLine { line: raw_line }
@@ -578,11 +590,24 @@ fn resolve_directive_placement(
 }
 
 /// Computes the declaration line after skipping contiguous attributes, decorators, or comments.
-fn compute_effective_target_line(content: &str, raw_line: usize) -> usize {
+///
+/// `decorator_end_lines` maps the first line of each decorator or attribute to its last line,
+/// so continuation lines of a multiline one are skipped too.
+fn compute_effective_target_line(
+    content: &str,
+    decorator_end_lines: &HashMap<usize, usize>,
+    raw_line: usize,
+) -> usize {
     let mut current_line = raw_line + 1;
-    for line_text in content.lines().skip(raw_line) {
+    for (index, line_text) in content.lines().enumerate().skip(raw_line) {
+        let line_number = index + 1;
+        if line_number < current_line {
+            continue;
+        }
         let trimmed = line_text.trim();
-        if trimmed.starts_with("#[")
+        if let Some(&end_line) = decorator_end_lines.get(&line_number) {
+            current_line = end_line + 1;
+        } else if trimmed.starts_with("#[")
             || trimmed.starts_with('@')
             || trimmed.starts_with("//")
             || trimmed.starts_with('#')
@@ -695,11 +720,23 @@ mod tests {
         2,
         4
     )]
+    #[case::skips_multiline_python_decorators_and_comment(
+        "# omni:ignore [nested-function] -- required for fixture\n@decorator_one(\n    \"a\",\n    \"b\",\n)\n# note\n@decorator_two(\n    \"c\",\n)\ndef inner(): pass",
+        Language::Python,
+        2,
+        10
+    )]
     #[case::skips_rust_attribute_and_comment(
         "// omni:ignore [single-letter-name] -- math\n#[allow(dead_code)]\n// note\nfn f(a: i32) {}",
         Language::Rust,
         2,
         4
+    )]
+    #[case::skips_multiline_rust_attributes_and_comment(
+        "// omni:ignore [single-letter-name] -- math\n#[cfg_attr(\n    test,\n    allow(dead_code)\n)]\n// note\n#[derive(\n    Debug\n)]\nfn f(a: i32) {}",
+        Language::Rust,
+        2,
+        10
     )]
     fn test_parse_valid_inline_directive_preceding_line(
         #[case] content: &str,
