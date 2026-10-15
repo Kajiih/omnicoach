@@ -47,10 +47,11 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             what_it_does: indoc::indoc! {r"
                 Flags a name the code defines when one of its words is a banned abbreviation,
                 such as `handle_msg` or `TaskRes`. Only whole words match, so `strategy` and
-                `category` are not flagged. Import aliases such as `import numpy as np` and names
-                imposed by a contract (Python `@override` methods, members of a Rust
-                `impl Trait for Type` block) are skipped, but the parameters of those methods are
-                still checked."},
+                `category` are not flagged. Import aliases such as `import numpy as np`,
+                abbreviations inherited from an imported symbol in the file (such as `ext_bot`
+                when `ExtBot` is imported), and names imposed by a contract (Python `@override`
+                methods, members of a Rust `impl Trait for Type` block) are skipped, but the
+                parameters of those methods are still checked."},
             why_is_this_bad: indoc::indoc! {r"
                 An abbreviation makes the reader guess: `res` can be a result, a response or a
                 resource, `ch` a channel or a character. Different authors also shorten the same
@@ -104,15 +105,22 @@ fn check_file(
     banned: &HashSet<String>,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
+    let imported_segments: Vec<Vec<String>> =
+        crate::code_lint::semantic::bindings::collect_imported_names(file)
+            .into_iter()
+            .map(|name| split_segments(&name))
+            .filter(|segments| !segments.is_empty())
+            .collect();
 
     for node in crate::code_lint::semantic::bindings::collect_renameable_bindings(file) {
         let name = node.text();
-        for segment in split_segments(&name) {
-            if banned.contains(&segment) {
+        let segments = split_segments(&name);
+        for segment in non_imported_segments(&segments, &imported_segments) {
+            if banned.contains(segment) {
                 diagnostics.push(rule.diagnostic_at_node(
                     path,
                     &node,
-                    &[("name", &name), ("token", &segment)],
+                    &[("name", &name), ("token", segment)],
                 ));
                 // Flag each node at most once
                 break;
@@ -121,6 +129,32 @@ fn check_file(
     }
 
     diagnostics
+}
+
+/// Returns the word segments of `segments` that do not belong to a contiguous match of any
+/// imported symbol's segment sequence.
+fn non_imported_segments<'a>(
+    segments: &'a [String],
+    imported_segments: &[Vec<String>],
+) -> Vec<&'a str> {
+    segments
+        .iter()
+        .enumerate()
+        .filter(|&(index, _)| {
+            !imported_segments.iter().any(|imported| {
+                !imported.is_empty()
+                    && segments
+                        .windows(imported.len())
+                        .enumerate()
+                        .any(|(start, window)| {
+                            window == imported.as_slice()
+                                && index >= start
+                                && index < start + imported.len()
+                        })
+            })
+        })
+        .map(|(_, segment)| segment.as_str())
+        .collect()
 }
 
 /// Helper to split identifiers into sub-word segments.
@@ -184,6 +218,12 @@ crate::test_utils::rule_test!(
                 aliased_import_exempt => r#"
                     import os as os_cfg
                 "#,
+                imported_symbol_abbreviation_exempt => r#"
+                    from telegram.ext import ExtBot
+
+                    def notify(ext_bot: ExtBot, primary_ext_bot: ExtBot) -> None:
+                        active_ext_bot = ext_bot
+                "#,
                 override_method_contract_exempt => r#"
                     from typing import override
 
@@ -223,6 +263,12 @@ crate::test_utils::rule_test!(
                 single_diagnostic_when_multiple_tokens_banned => r#"
                     err_msg = "failed"
                 "# => "err_msg",
+                unrelated_abbreviation_not_exempted_by_imported_symbol => r#"
+                    from telegram.ext import ExtBot
+
+                    def notify(ext_bot: ExtBot, file_ext: str) -> None:
+                        pass
+                "# => "file_ext",
                 unannotated_method_flagged => r#"
                     class CustomDecoder:
                         def from_ctx(self, data: bytes) -> None:
@@ -259,6 +305,13 @@ crate::test_utils::rule_test!(
                 aliased_import_exempt => r#"
                     use std::collections::HashMap as my_cfg;
                 "#,
+                imported_symbol_abbreviation_exempt => r#"
+                    use telegram::ExtBot;
+
+                    fn notify(ext_bot: &ExtBot, primary_ext_bot: &ExtBot) {
+                        let active_ext_bot = ext_bot;
+                    }
+                "#,
                 trait_impl_associated_type_exempt => r#"
                     impl Decoder for Wrapper {
                         type Err = ();
@@ -287,6 +340,11 @@ crate::test_utils::rule_test!(
                         let err_msg = 1;
                     }
                 "# => "err_msg",
+                unrelated_abbreviation_not_exempted_by_imported_symbol => r#"
+                    use telegram::ExtBot;
+
+                    fn notify(ext_bot: &ExtBot, file_ext: &str) {}
+                "# => "file_ext",
                 trait_impl_parameter_flagged => r#"
                     impl Decoder for Wrapper {
                         fn from_ctx(&self, msg: u8) {}

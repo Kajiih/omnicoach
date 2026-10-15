@@ -37,6 +37,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `mutable-collection-return` (python): Flags Python function return annotations using `MutableSequence`, `MutableMapping`, or `MutableSet` when no caller in the file mutates the result.
 - `mutable-dataclass` (python): Requires Python dataclasses to declare `frozen=True`.
 - `mutable-module-constant` (python): Flags Python module-level constants whose type annotation or value is a mutable collection.
+- `nested-class` (python): Flags Python classes defined inside functions.
 - `nested-function` (python): Flags Python functions defined inside other functions.
 - `non-boolean-predicate` (python, rust): Flags functions named like a yes/no question that do not return a boolean.
 - `nullable-collection-return` (python, rust): Flags function return annotations that wrap a collection type in `| None`, `Optional`, or `Option`.

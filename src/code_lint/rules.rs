@@ -31,6 +31,7 @@ pub mod mutable_collection_parameter;
 pub mod mutable_collection_return;
 pub mod mutable_dataclass;
 pub mod mutable_module_constant;
+pub mod nested_class;
 pub mod nested_function;
 pub mod non_boolean_predicate;
 pub mod nullable_collection_return;
@@ -80,6 +81,7 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &type_cast::RULE,
     &dynamic_attribute_access::RULE,
     &nested_function::RULE,
+    &nested_class::RULE,
     &single_letter_name::RULE,
     &abbreviated_name::RULE,
     &type_suffixed_name::RULE,
