@@ -12,6 +12,13 @@ use omni::diagnostic::{OutputFormat, print_diagnostics};
 use omni::rule_catalog::{DiscoveryArgs, explain_footer};
 use omni::rule_selection::{ConfigOverrides, load_config};
 
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("Error: {error}");
+        std::process::exit(2);
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "omnicoach",
@@ -69,13 +76,6 @@ struct CommandArgs {
     /// Shell command string to validate
     #[arg(long, required_unless_present_any = ["list_rules", "list_tags", "explain"])]
     cmd: Option<String>,
-}
-
-fn main() {
-    if let Err(error) = run() {
-        eprintln!("Error: {error}");
-        std::process::exit(2);
-    }
 }
 
 fn run() -> anyhow::Result<()> {

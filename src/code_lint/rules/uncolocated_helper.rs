@@ -32,30 +32,28 @@ pub const RULE: CodeRule = CodeRule {
         doc: RuleDoc {
             summary: "Flags private helpers that are neither colocated right after their single public consumer nor placed in the trailing helper section at the end of the scope.",
             what_it_does: indoc::indoc! {r"
-                Flags a private helper declared below its public callers that is neither right
-                after its only public caller nor in the trailing helper section after the last
-                public function of the module, Python `class` or Rust inherent `impl` block. Both
-                `[pub_a, _a_helper, pub_b, _b_helper]` and `[pub_a, pub_b, _a_helper, _b_helper]`
-                pass, but one caller's helpers are not split between the two places. Helpers above
-                their callers and unreached private functions are left to
-                `private-before-public-function`."},
+                Flags a private helper function, method, or type declared below its public
+                consumers that is neither right after its only public consumer nor in the trailing
+                helper section after the last public declaration of the module, Python `class`, or
+                Rust inherent `impl` block. Both `[pub_a, _a_helper, pub_b, _b_helper]` and
+                `[pub_a, pub_b, _a_helper, _b_helper]` pass, but one consumer's helpers are not
+                split between the two places. Helpers above their consumers and unreached private
+                declarations are left to `private-before-public`."},
             why_is_this_bad: indoc::indoc! {r"
                 A private helper belongs either directly underneath the single public entrypoint it
                 implements (vertical slice) or in the trailing private implementation section at the
                 bottom of the scope. Stranding a single-use or shared helper in the middle of a
-                scope between unrelated public functions forces readers to jump over internal
+                scope between unrelated public declarations forces readers to jump over internal
                 helpers while scanning the public API and splits related helpers apart.
 
                 Place each single-use helper either immediately after its consumer or in the
                 trailing helper section at the end of the scope, and always place multi-use helpers
                 at the end of the scope."},
             known_problems: Some(indoc::indoc! {r"
-                - A module-level helper used only by a `class` or `impl` block is checked against it
-                  only when the module also defines a public top-level function.
-                - Only functions are ordered: a private `struct`, `class` or constant is not placed
-                  with the function that uses it.
+                - Module-level constants (`const`, `static`, `UPPER_CASE = ...`) and type aliases
+                  are not ordered.
                 - In Rust macro arguments, a pattern binding or named argument that shares a sibling
-                  function's name counts as a call."}),
+                  declaration's name counts as a reference."}),
             references: &[
                 Reference {
                     title: "Robert C. Martin: Clean Code — Chapter 5: Formatting (Vertical Distance & Dependent Functions)",
@@ -324,6 +322,22 @@ crate::test_utils::rule_test!(
                     def _quote_json(clean: str) -> str:
                         return f'"{clean}"'
                 "# => "_quote_json",
+                private_class_stranded_between_unrelated_public_classes => r#"
+                    class OrderProcessor:
+                        def process(self) -> object:
+                            return _OrderReceipt()
+
+                    class PaymentGateway:
+                        def charge(self) -> bool:
+                            return True
+
+                    class _OrderReceipt:
+                        pass
+
+                    class AuditLogger:
+                        def record(self) -> None:
+                            pass
+                "# => "_OrderReceipt",
             ],
         },
         Rust => {
@@ -436,6 +450,32 @@ crate::test_utils::rule_test!(
                         }
                     }
                 "# => "is_valid_path",
+                private_enum_stranded_before_trailing_pub_struct => r#"
+                    pub fn summarize(input: &str) -> usize {
+                        let role = if input.is_empty() {
+                            UseRole::Read
+                        } else {
+                            UseRole::Write
+                        };
+                        match role {
+                            UseRole::Read => 1,
+                            UseRole::Write => 2,
+                        }
+                    }
+
+                    pub fn validate(input: &str) -> bool {
+                        !input.is_empty()
+                    }
+
+                    enum UseRole {
+                        Read,
+                        Write,
+                    }
+
+                    pub struct SummaryReport {
+                        pub count: usize,
+                    }
+                "# => "UseRole",
             ],
         },
     }

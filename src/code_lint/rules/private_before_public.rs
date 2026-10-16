@@ -1,4 +1,4 @@
-//! Flags private functions and methods defined above their owning or calling public entrypoints.
+//! Flags private functions, methods, and types defined above their owning or calling public entrypoints.
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
@@ -18,7 +18,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 /// The rule's declaration.
 pub const RULE: CodeRule = CodeRule {
     declaration: Declaration {
-        name: RuleName("private-before-public-function"),
+        name: RuleName("private-before-public"),
         template: &TEMPLATE,
         languages: &[Language::Python, Language::Rust],
         options: RuleOptions::code_rule(()),
@@ -29,34 +29,33 @@ pub const RULE: CodeRule = CodeRule {
             impacted_quality: ImpactedQuality::Maintainability,
         },
         doc: RuleDoc {
-            summary: "Flags private functions and methods defined above their owning or calling public entrypoints.",
+            summary: "Flags private functions, methods, and types defined above their owning or calling public entrypoints.",
             what_it_does: indoc::indoc! {r"
-                Flags a private function or method (`_name` in Python, a bare `fn` in Rust) in a
-                module, Python `class` or Rust inherent `impl` block declared above a public
-                function that calls it, or, when no public function reaches it, above the last
-                public one. Helpers below their callers are checked by `uncolocated-helper` and
-                private-only call order by `callee-before-caller`, so each misplaced function is
-                reported once."},
+                Flags a private function, method, or type (`_name` in Python, or a non-`pub` `fn`,
+                `struct`, `enum`, `union`, or `trait` in Rust) in a module, Python `class`, or Rust
+                inherent `impl` block declared above a public declaration that references it, or,
+                when no public declaration reaches it, above the last public one. In Python, items
+                evaluated at import or class-definition time (such as top-level calls, decorators,
+                parameter defaults, base classes, or runtime annotations without
+                `from __future__ import annotations`) and their transitive callees are exempt when
+                pinned above a consumer. Helpers below their callers are checked by
+                `uncolocated-helper` and private-only call order by `callee-before-caller`, so each
+                misplaced declaration is reported once."},
             why_is_this_bad: indoc::indoc! {r"
-                A private helper is a lower-abstraction building block than the public entrypoint
-                that calls it, and a helper shared across multiple public entrypoints is at a lower
-                abstraction level still. Placing private helpers above their public callers inverts
-                the abstraction hierarchy and forces readers to wade through internal mechanics
-                before seeing the scope's public interface.
+                A private helper function or type is a lower-abstraction building block than the
+                public entrypoint that uses it, and a helper shared across multiple public
+                entrypoints is at a lower abstraction level still. Placing private helpers above
+                their public consumers inverts the abstraction hierarchy and forces readers to wade
+                through internal mechanics before seeing the scope's public interface.
 
                 Place single-use helpers either immediately below their owning public entrypoint or
                 in the trailing private helper section, and place shared helpers in the trailing
-                private helper section below all public functions."},
+                private helper section below all public declarations."},
             known_problems: Some(indoc::indoc! {r"
-                - A Python helper run at import time (`TABLE = _build_table()`, a decorator, a
-                  parameter default) has to be defined above that statement, and is still flagged
-                  when this places it above its public caller.
-                - A module-level helper used only by a `class` or `impl` block is checked against it
-                  only when the module also defines a public top-level function.
-                - Only functions are ordered: a private `struct`, `class` or constant can sit above
-                  the public function that uses it.
+                - Module-level constants (`const`, `static`, `UPPER_CASE = ...`) and type aliases
+                  are not ordered.
                 - In Rust macro arguments, a pattern binding or named argument that shares a sibling
-                  function's name counts as a call."}),
+                  declaration's name counts as a reference."}),
             references: &[
                 Reference {
                     title: "Robert C. Martin: Clean Code — Chapter 5 & Chapter 10 (The Newspaper Metaphor, The Stepdown Rule, Class Organization)",
@@ -197,6 +196,42 @@ crate::test_utils::rule_test!(
                         def token(self, value: str | bytes) -> None:
                             pass
                 "#,
+                import_time_pinned_helper_exempt => r#"
+                    def _build_table() -> dict[str, int]:
+                        return {"a": _default_weight()}
+
+                    def _default_weight() -> int:
+                        return 1
+
+                    TABLE = _build_table()
+
+                    def lookup(key: str) -> int:
+                        return TABLE.get(key, _default_weight())
+                "#,
+                decorator_pinned_helper_exempt => r#"
+                    def _trace(fn):
+                        return fn
+
+                    @_trace
+                    def execute(value: int) -> int:
+                        return value
+                "#,
+                base_class_pinned_before_subclass_exempt => r#"
+                    class _BaseClient:
+                        def _send(self) -> int:
+                            return 1
+
+                    class HttpClient(_BaseClient):
+                        def fetch(self) -> int:
+                            return self._send()
+                "#,
+                runtime_annotation_pinned_without_future_annotations => r#"
+                    class _Config:
+                        pass
+
+                    def configure(cfg: _Config) -> None:
+                        pass
+                "#,
             ],
             fail: [
                 exclusive_helper_before_owning_public_function => r#"
@@ -225,6 +260,23 @@ crate::test_utils::rule_test!(
                         def __repr__(self) -> str:
                             return "Formatter"
                 "# => "__trim",
+                private_class_before_public_class_using_it => r#"
+                    class _Entry:
+                        pass
+
+                    class Cache:
+                        def create(self) -> object:
+                            return _Entry()
+                "# => "_Entry",
+                future_annotations_unpins_private_annotation_type => r#"
+                    from __future__ import annotations
+
+                    class _Config:
+                        pass
+
+                    def configure(cfg: _Config) -> None:
+                        pass
+                "# => "_Config",
             ],
         },
         Rust => {
@@ -280,6 +332,19 @@ crate::test_utils::rule_test!(
                         }
                     }
                 "#,
+                private_helper_after_pub_struct_impl_allowed => r#"
+                    pub struct Service;
+
+                    impl Service {
+                        pub fn execute(&self) -> usize {
+                            compute_step()
+                        }
+                    }
+
+                    fn compute_step() -> usize {
+                        1
+                    }
+                "#,
             ],
             fail: [
                 module_private_helper_before_pub_caller => r#"
@@ -323,6 +388,28 @@ crate::test_utils::rule_test!(
                         }
                     }
                 "# => "reset_internal",
+                private_struct_before_pub_struct_using_it => r#"
+                    struct RawEntry {
+                        count: usize,
+                    }
+
+                    pub struct Table {
+                        entry: RawEntry,
+                    }
+                "# => "RawEntry",
+                private_fn_before_pub_struct_impl_caller => r#"
+                    fn compute_hash(input: &str) -> usize {
+                        input.len()
+                    }
+
+                    pub struct Hasher;
+
+                    impl Hasher {
+                        pub fn hash(&self, input: &str) -> usize {
+                            compute_hash(input)
+                        }
+                    }
+                "# => "compute_hash",
             ],
         },
     }

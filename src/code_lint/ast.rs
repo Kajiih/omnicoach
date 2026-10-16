@@ -966,70 +966,86 @@ pub fn collect_type_method_scopes(file: &ParsedFile) -> Vec<TypeMethodScope<'_>>
     dispatch_lang!(file.lang(), collect_type_method_scopes(file))
 }
 
-/// A function or method definition inside a module, Python `class`, or Rust inherent `impl` scope.
+/// Whether a scope declaration is a callable (`fn` / `def`) or a type (`struct`, `enum`,
+/// `union`, `trait`, `class`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ScopeItemKind {
+    /// A function or method (`fn` in Rust, `def` / `async def` in Python).
+    Callable,
+    /// A type or trait declaration (`struct`, `enum`, `union`, `trait` in Rust; `class` in Python).
+    Type,
+}
+
+/// A function, method, or type definition inside a module, Python `class`, or Rust inherent
+/// `impl` scope.
 #[derive(Clone)]
-pub struct CallableItem<'a> {
-    /// Identifier AST node of the function or method declaration.
+pub struct ScopeItem<'a> {
+    /// Identifier AST node of the declaration.
     pub name_node: AstNode<'a>,
-    /// Function or method identifier name.
+    /// Declaration identifier name.
     pub name: String,
+    /// Whether this item is a callable (`fn`/`def`) or a type (`struct`/`enum`/`union`/`trait`/`class`).
+    pub kind: ScopeItemKind,
     /// Visibility tier (`Public` vs. `Private`).
     pub visibility: MethodVisibility,
     /// True if this callable is a Tier 0 lifecycle constructor.
     pub is_constructor: bool,
-    /// Indices in the enclosing [`CallableScope::callables`] slice of sibling callables directly
-    /// called or referenced by this callable.
+    /// Indices in the enclosing [`DeclarationScope::items`] slice of sibling items directly
+    /// called or referenced by this item.
     pub callees: Vec<usize>,
+    /// Smallest index in [`DeclarationScope::items`] before which this item must remain due to
+    /// top-to-bottom runtime evaluation (e.g. Python import-time or class-definition-time uses).
+    pub pinned_before: Option<usize>,
 }
 
-/// A module, Python `class`, or Rust inherent `impl` scope with its direct functions or
-/// methods in source order and their intra-scope call edges.
-pub struct CallableScope<'a> {
-    /// Direct functions or methods in source order.
-    pub callables: Vec<CallableItem<'a>>,
+/// A module, Python `class`, or Rust inherent `impl` scope with its direct declarations in
+/// source order and their intra-scope reference edges.
+pub struct DeclarationScope<'a> {
+    /// Direct declarations in source order.
+    pub items: Vec<ScopeItem<'a>>,
 }
 
-/// A misplaced function or method reported by the call-cluster ordering analyzer.
+/// A misplaced declaration reported by the call-cluster ordering analyzer.
 pub struct CallOrderFinding<'a> {
-    /// Identifier AST node of the misplaced function or method.
+    /// Identifier AST node of the misplaced declaration.
     pub name_node: AstNode<'a>,
-    /// Name of the misplaced function or method (`{function}`).
+    /// Name of the misplaced declaration (`{function}`).
     pub function: String,
-    /// Name of the owning or calling function/method it relates to (`{caller}`).
+    /// Name of the owning or calling declaration it relates to (`{caller}`).
     pub caller: String,
 }
 
-/// Priority-ordered findings for the three call-cluster ordering rules across a file:
-/// 1. `private-before-public-function` (private helper above its public caller `pos < max(Roots(h))`,
-///    or unrooted private function above `last_pub`)
+/// Priority-ordered findings for the three declaration-cluster ordering rules across a file:
+/// 1. `private-before-public` (private helper above its public caller `pos < max(Roots(h))`,
+///    or unrooted private declaration above `last_pub`)
 /// 2. `uncolocated-helper` (private helper after its public callers `pos > max(Roots(h))` that is
 ///    neither in Place 1 immediately after its single consumer nor in Place 2 in the trailing
 ///    private helper section after `last_pub`)
-/// 3. `callee-before-caller` (private callee before private caller among remaining callables)
+/// 3. `callee-before-caller` (private callable callee before private caller among remaining items)
 ///
-/// Evaluating all three together guarantees mutual exclusion so a single misplaced function or
-/// method is never double-reported across rules.
+/// Evaluating all three together guarantees mutual exclusion so a single misplaced declaration
+/// is never double-reported across rules.
 pub struct CallClusterFindings<'a> {
     /// Findings for `uncolocated-helper` (private helpers after their public callers that are
     /// neither in Place 1 nor in Place 2).
     pub uncolocated_helpers: Vec<CallOrderFinding<'a>>,
-    /// Findings for `private-before-public-function` (private helpers declared before their
+    /// Findings for `private-before-public` (private helpers declared before their
     /// public callers).
     pub private_before_public: Vec<CallOrderFinding<'a>>,
     /// Findings for `callee-before-caller` (private callees declared before their private callers).
     pub callee_before_caller: Vec<CallOrderFinding<'a>>,
 }
 
-/// Computes and memoizes the call-cluster ordering findings (`private-before-public-function`,
+/// Computes and memoizes the declaration-cluster ordering findings (`private-before-public`,
 /// `uncolocated-helper`, and `callee-before-caller`) across all module and class/`impl` scopes
 /// in `file`.
 #[must_use]
 pub fn collect_call_cluster_findings(file: &ParsedFile) -> CallClusterFindings<'_> {
     let cached = file.call_cluster_findings.get_or_init(|| {
-        let scopes = dispatch_lang!(file.lang(), collect_callable_scopes(file));
+        let scopes = dispatch_lang!(file.lang(), collect_declaration_scopes(file));
         let mut out = CachedCallClusterFindings::default();
         for scope in &scopes {
-            analyze_callable_scope(scope, &mut out);
+            analyze_declaration_scope(scope, &mut out);
         }
         out
     });
@@ -1050,10 +1066,10 @@ pub fn collect_call_cluster_findings(file: &ParsedFile) -> CallClusterFindings<'
     }
 }
 
-/// Analyzes a single [`CallableScope`] and appends `private-before-public-function`,
+/// Analyzes a single [`DeclarationScope`] and appends `private-before-public`,
 /// `uncolocated-helper`, and `callee-before-caller` findings to `out`.
-fn analyze_callable_scope(scope: &CallableScope<'_>, out: &mut CachedCallClusterFindings) {
-    let callables = &scope.callables;
+fn analyze_declaration_scope(scope: &DeclarationScope<'_>, out: &mut CachedCallClusterFindings) {
+    let callables = &scope.items;
     let count = callables.len();
     if count < 2 {
         return;
@@ -1083,9 +1099,11 @@ fn analyze_callable_scope(scope: &CallableScope<'_>, out: &mut CachedCallCluster
         if callables[pos].visibility == MethodVisibility::Public {
             continue;
         }
+        let pinned_before = callables[pos].pinned_before;
         let roots = &roots_of[pos];
         let Some(&max_root) = roots.last() else {
             if let Some(last_pub_idx) = last_pub
+                && pinned_before.is_none_or(|pin| pin > last_pub_idx)
                 && pos < last_pub_idx
             {
                 out.private_before_public.push(CachedCallOrderFinding {
@@ -1098,14 +1116,17 @@ fn analyze_callable_scope(scope: &CallableScope<'_>, out: &mut CachedCallCluster
             continue;
         };
         if pos < max_root {
-            out.private_before_public.push(CachedCallOrderFinding {
-                span: callables[pos].name_node.span(),
-                function: callables[pos].name.clone(),
-                caller: callables[max_root].name.clone(),
-            });
-            flagged_p1_or_p2[pos] = true;
+            if pinned_before.is_none_or(|pin| pin > max_root) {
+                out.private_before_public.push(CachedCallOrderFinding {
+                    span: callables[pos].name_node.span(),
+                    function: callables[pos].name.clone(),
+                    caller: callables[max_root].name.clone(),
+                });
+                flagged_p1_or_p2[pos] = true;
+            }
         } else if let Some(last_pub_idx) = last_pub
             && !is_valid_helper_placement(callables, &roots_of, pos, last_pub_idx)
+            && (roots.len() == 1 || pinned_before.is_none_or(|pin| pin > last_pub_idx))
         {
             out.uncolocated_helpers.push(CachedCallOrderFinding {
                 span: callables[pos].name_node.span(),
@@ -1120,6 +1141,10 @@ fn analyze_callable_scope(scope: &CallableScope<'_>, out: &mut CachedCallCluster
         if flagged_p1_or_p2[callee] || callables[callee].visibility == MethodVisibility::Public {
             continue;
         }
+        if callables[callee].kind != ScopeItemKind::Callable {
+            continue;
+        }
+        let pinned_before = callables[callee].pinned_before;
         let last_caller = callers_of[callee]
             .iter()
             .copied()
@@ -1128,6 +1153,7 @@ fn analyze_callable_scope(scope: &CallableScope<'_>, out: &mut CachedCallCluster
                     && !flagged_p1_or_p2[caller]
                     && callables[caller].visibility == MethodVisibility::Private
                     && scc_id[caller] != scc_id[callee]
+                    && pinned_before.is_none_or(|pin| pin > caller)
                     // Do not let an unrooted private caller pull a rooted helper below its
                     // public root's cluster.
                     && (!roots_of[caller].is_empty() || roots_of[callee].is_empty())
@@ -1147,7 +1173,7 @@ fn analyze_callable_scope(scope: &CallableScope<'_>, out: &mut CachedCallCluster
 /// either immediately after its single consumer or in the trailing helper section after
 /// `last_pub_idx`.
 fn is_valid_helper_placement(
-    callables: &[CallableItem<'_>],
+    callables: &[ScopeItem<'_>],
     roots_of: &[Vec<usize>],
     pos: usize,
     last_pub_idx: usize,
@@ -1169,12 +1195,9 @@ fn is_valid_helper_placement(
     is_just_after_owner || is_at_scope_end
 }
 
-/// Computes `Roots(f)` for each callable in `callables`: the sorted indices of public entrypoints
-/// that reach `f` through private call paths (stopping at public boundaries).
-fn compute_public_roots(
-    callables: &[CallableItem<'_>],
-    callers_of: &[Vec<usize>],
-) -> Vec<Vec<usize>> {
+/// Computes `Roots(f)` for each item in `callables`: the sorted indices of public entrypoints
+/// that reach `f` through private reference paths (stopping at public boundaries).
+fn compute_public_roots(callables: &[ScopeItem<'_>], callers_of: &[Vec<usize>]) -> Vec<Vec<usize>> {
     let count = callables.len();
     let mut roots_of = vec![Vec::new(); count];
     for idx in 0..count {
@@ -1206,7 +1229,7 @@ fn compute_public_roots(
 }
 
 /// Computes Strongly Connected Component IDs for `callables` using Tarjan's algorithm.
-fn compute_tarjan_scc(callables: &[CallableItem<'_>]) -> Vec<usize> {
+fn compute_tarjan_scc(callables: &[ScopeItem<'_>]) -> Vec<usize> {
     struct TarjanState {
         next_index: usize,
         next_scc: usize,
@@ -1218,7 +1241,7 @@ fn compute_tarjan_scc(callables: &[CallableItem<'_>]) -> Vec<usize> {
     }
 
     impl TarjanState {
-        fn strongconnect(&mut self, node: usize, callables: &[CallableItem<'_>]) {
+        fn strongconnect(&mut self, node: usize, callables: &[ScopeItem<'_>]) {
             let current_index = self.next_index;
             self.next_index += 1;
             self.indices[node] = Some(current_index);

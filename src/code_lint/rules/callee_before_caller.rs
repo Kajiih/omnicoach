@@ -35,7 +35,7 @@ pub const RULE: CodeRule = CodeRule {
                 it, in a module, Python `class` or Rust inherent `impl` block: `_parse` above
                 `_load` when `_load` calls `_parse`. Calls between public functions and recursive
                 calls are not constrained, and a function already flagged by
-                `private-before-public-function` or `uncolocated-helper` is not reported again."},
+                `private-before-public` or `uncolocated-helper` is not reported again."},
             why_is_this_bad: indoc::indoc! {r"
                 Unlike public entrypoints, a private helper exists solely as an internal
                 decomposition step of its callers. Defining private callees above their private
@@ -44,8 +44,9 @@ pub const RULE: CodeRule = CodeRule {
 
                 Order private helpers from higher-level callers down to lower-level callees."},
             known_problems: Some(indoc::indoc! {r"
-                - Only functions are ordered: a private `struct`, `class` or constant can sit above
-                  the private function that uses it.
+                - Private types (`struct`, `enum`, `class`) are exempt from callee-before-caller
+                  ordering inside their owning public root's cluster so data structures can
+                  precede the private functions that use them.
                 - In Rust macro arguments, a pattern binding or named argument that shares a sibling
                   function's name counts as a call, which can create a false ordering constraint."}),
             references: &[
@@ -303,6 +304,19 @@ crate::test_utils::rule_test!(
                         fn render(&self) -> String {
                             format!("{}", self.len)
                         }
+                    }
+                "#,
+                private_helper_type_before_private_caller_exempt => r#"
+                    pub fn parse_config(raw: &str) -> usize {
+                        parse_frame(raw).len
+                    }
+
+                    struct Frame {
+                        len: usize,
+                    }
+
+                    fn parse_frame(raw: &str) -> Frame {
+                        Frame { len: raw.len() }
                     }
                 "#,
             ],

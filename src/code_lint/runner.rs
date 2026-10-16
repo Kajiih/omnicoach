@@ -169,13 +169,6 @@ impl LintOptions {
     }
 }
 
-/// A target file scheduled for static analysis.
-#[derive(Debug)]
-struct LintTarget {
-    path: PathBuf,
-    changed_lines: Option<HashSet<usize>>,
-}
-
 /// A target file that could not be read (for example, because it is not valid UTF-8).
 #[derive(Debug)]
 pub struct UnreadableFile {
@@ -223,6 +216,13 @@ pub fn run_code_lint(options: &LintOptions, config: &Config) -> anyhow::Result<L
         .unreadable_files
         .sort_by(|left, right| left.path.cmp(&right.path));
     Ok(report)
+}
+
+/// A target file scheduled for static analysis.
+#[derive(Debug)]
+struct LintTarget {
+    path: PathBuf,
+    changed_lines: Option<HashSet<usize>>,
 }
 
 fn collect_targets(options: &LintOptions) -> anyhow::Result<Vec<LintTarget>> {

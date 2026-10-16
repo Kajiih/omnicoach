@@ -45,7 +45,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `partial-override-docstring` (python): Flags `@override` method docstrings that omit an `Args:`, `Returns:`, `Yields:` or `Raises:` section of the inherited docstring.
 - `positional-tuple-return` (python, rust): Flags functions that return a positional tuple instead of a named record.
 - `primitive-duration` (python, rust): Flags durations held as plain numbers, detected by a time-unit suffix such as `timeout_secs` or `delay_ms`.
-- `private-before-public-function` (python, rust): Flags private functions and methods defined above their owning or calling public entrypoints.
+- `private-before-public` (python, rust): Flags private functions, methods, and types defined above their owning or calling public entrypoints.
 - `quote-wrapped-placeholder` (python): Flags Python format placeholders wrapped in literal single or double quotes.
 - `repeated-index-access` (python, rust): Flags a value read at several literal positions instead of being unpacked once.
 - `repeated-literal` (python, rust): Flags a string or number literal repeated inline in one file instead of being named once.
