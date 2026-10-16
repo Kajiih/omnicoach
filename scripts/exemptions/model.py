@@ -59,10 +59,14 @@ INLINE_TEST_ALWAYS_FALSE = (
 
 
 class Mutation(NamedTuple):
-    """Disables one exemption by applying `edits` (each `old` must occur exactly once).
+    """Disables one exemption by editing the rule source; each listed case must then fail.
 
-    `cases` are `<rule>::<pass|fail>::<case>`, optionally suffixed with `@python` or `@rust` when
-    the same case name exists in both languages and the mutation only affects one of them.
+    Attributes:
+        label: Name of the exemption, printed with each result.
+        path: Source file to edit, relative to the repository root.
+        edits: `(old, new)` replacements; each `old` must occur exactly once in `path`.
+        cases: `<rule>::<pass|fail>::<case>`, optionally suffixed with `@python` or `@rust` when
+            the same case name exists in both languages and the mutation only affects one.
     """
 
     label: str
@@ -73,7 +77,13 @@ class Mutation(NamedTuple):
 
 class Unmutated(NamedTuple):
     """Cases with no exemption to disable (positive layouts) or whose exemption no small source
-    edit can disable (a construct the extractor never visits), with the reason."""
+    edit can disable (a construct the extractor never visits).
+
+    Attributes:
+        label: Name of the group of cases.
+        reason: Why no mutation covers these cases.
+        cases: `<rule>::pass::<case>` names, in the same format as `Mutation.cases`.
+    """
 
     label: str
     reason: str

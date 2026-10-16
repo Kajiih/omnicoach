@@ -41,6 +41,12 @@ DEFAULT_JOBS = max(1, min(4, (os.cpu_count() or 1) // 4))
 
 
 def main() -> int:
+    """Runs the selected mutations in parallel worker copies and reports unprotected exemptions.
+
+    Returns:
+        The process exit code: 1 if a listed case is missing, a `pass` case is unlisted or a
+        mutation survives, else 0.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("label_filter", nargs="?", default="", help="only run mutations whose label contains this")
     parser.add_argument("--jobs", type=int, default=DEFAULT_JOBS, help="parallel workers (default: %(default)s)")
@@ -151,6 +157,12 @@ def run_on_free_worker(
 
 
 def run_mutation(mutation: Mutation, test_names: Sequence[str], worker: pathlib.Path) -> tuple[str, ...]:
+    """Applies `mutation` in `worker`, runs its cases, then restores the original source.
+
+    Returns:
+        One problem per case that still passes (the mutation survived) or did not run, or the
+        edit that could not be applied.
+    """
     path = worker / mutation.path
     original = path.read_text()
     mutated = original
