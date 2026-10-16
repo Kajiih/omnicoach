@@ -65,12 +65,6 @@ impl<T: Copy + 'static> LanguageDefaults<T> {
     }
 }
 
-fn language_override<T: Copy>(entries: &[(Language, T)], language: Language) -> Option<T> {
-    entries
-        .iter()
-        .find_map(|&(target_lang, value)| (target_lang == language).then_some(value))
-}
-
 /// Enforcement mode for rules targeting sensitive language constructs
 /// (e.g. `cast`, `suppress`, `getattr`, `except Exception`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, IntoStaticStr)]
@@ -451,53 +445,6 @@ impl DeclaredOptions {
     }
 }
 
-fn toml_count(count: usize) -> toml::Value {
-    toml::Value::Integer(i64::try_from(count).unwrap_or(i64::MAX))
-}
-
-fn resolve_enforcement_mode(
-    default: Option<LanguageDefaults<EnforcementMode>>,
-    language: Language,
-    overrides: Option<&RuleOverrides>,
-) -> EnforcementMode {
-    layers(overrides, language)
-        .find_map(|values| values.enforcement_mode)
-        .unwrap_or_else(|| {
-            default.map_or(EnforcementMode::Ban, |default| {
-                default.resolve_default_for_lang(language)
-            })
-        })
-}
-
-/// The items one table puts in place of, adds to, or removes from the inherited list.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct ListOverride {
-    replace: Option<HashSet<String>>,
-    extend: HashSet<String>,
-    remove: HashSet<String>,
-}
-
-impl ListOverride {
-    fn apply_to(&self, items: &mut HashSet<String>) {
-        if let Some(replacement) = &self.replace {
-            items.clone_from(replacement);
-        }
-        items.extend(self.extend.iter().cloned());
-        for item in &self.remove {
-            items.remove(item);
-        }
-    }
-}
-
-/// The validated values of one `[rules.<name>]` table or one of its language tables.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct OptionValues {
-    enforcement_mode: Option<EnforcementMode>,
-    /// Counts keyed by their declared [`CountOption::key`].
-    counts: HashMap<&'static str, usize>,
-    list: ListOverride,
-}
-
 /// A rule's validated configuration: its `[rules.<name>]` values and its language tables.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuleOverrides {
@@ -606,6 +553,59 @@ impl RuleOverrides {
             .iter()
             .find_map(|(candidate, values)| (*candidate == language).then_some(values))
     }
+}
+
+fn toml_count(count: usize) -> toml::Value {
+    toml::Value::Integer(i64::try_from(count).unwrap_or(i64::MAX))
+}
+
+fn resolve_enforcement_mode(
+    default: Option<LanguageDefaults<EnforcementMode>>,
+    language: Language,
+    overrides: Option<&RuleOverrides>,
+) -> EnforcementMode {
+    layers(overrides, language)
+        .find_map(|values| values.enforcement_mode)
+        .unwrap_or_else(|| {
+            default.map_or(EnforcementMode::Ban, |default| {
+                default.resolve_default_for_lang(language)
+            })
+        })
+}
+
+fn language_override<T: Copy>(entries: &[(Language, T)], language: Language) -> Option<T> {
+    entries
+        .iter()
+        .find_map(|&(target_lang, value)| (target_lang == language).then_some(value))
+}
+
+/// The items one table puts in place of, adds to, or removes from the inherited list.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ListOverride {
+    replace: Option<HashSet<String>>,
+    extend: HashSet<String>,
+    remove: HashSet<String>,
+}
+
+impl ListOverride {
+    fn apply_to(&self, items: &mut HashSet<String>) {
+        if let Some(replacement) = &self.replace {
+            items.clone_from(replacement);
+        }
+        items.extend(self.extend.iter().cloned());
+        for item in &self.remove {
+            items.remove(item);
+        }
+    }
+}
+
+/// The validated values of one `[rules.<name>]` table or one of its language tables.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct OptionValues {
+    enforcement_mode: Option<EnforcementMode>,
+    /// Counts keyed by their declared [`CountOption::key`].
+    counts: HashMap<&'static str, usize>,
+    list: ListOverride,
 }
 
 impl OptionValues {

@@ -39,7 +39,7 @@ pub mod packed_assertion;
 pub mod partial_override_docstring;
 pub mod positional_tuple_return;
 pub mod primitive_duration;
-pub mod private_before_public_function;
+pub mod private_before_public;
 pub mod quote_wrapped_placeholder;
 pub mod repeated_index_access;
 pub mod repeated_literal;
@@ -105,7 +105,7 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &inline_public_attribute_annotation::RULE,
     &constructor_after_method::RULE,
     &uncolocated_helper::RULE,
-    &private_before_public_function::RULE,
+    &private_before_public::RULE,
     &callee_before_caller::RULE,
     &field_after_method::RULE,
     &associated_item_after_method::RULE,

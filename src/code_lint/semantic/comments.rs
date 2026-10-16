@@ -8,12 +8,6 @@ use crate::code_lint::ast::{self, AstNode, ParsedFile, statements};
 use crate::diagnostic::Language;
 use std::collections::HashMap;
 
-#[derive(Clone)]
-struct IndexedComment<'a> {
-    node: AstNode<'a>,
-    is_standalone: bool,
-}
-
 /// Index of non-doc source comments, mapping 1-indexed lines to comment AST nodes.
 #[derive(Default)]
 pub struct CommentIndex<'a> {
@@ -176,6 +170,12 @@ pub fn strip_comment_delimiters(text: &str) -> Option<&str> {
                 .strip_prefix("/*")
                 .map(|body| body.trim_start().trim_end_matches("*/").trim_end())
         })
+}
+
+#[derive(Clone)]
+struct IndexedComment<'a> {
+    node: AstNode<'a>,
+    is_standalone: bool,
 }
 
 /// Strips standard linter/tooling directives (`noqa`, `type: ignore`, `pyright`, `pylint`, `omni:ignore`).

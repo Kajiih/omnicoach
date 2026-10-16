@@ -133,21 +133,6 @@ pub enum ConfigError {
     RuleOptions(#[from] RuleOptionsError),
 }
 
-/// The raw `.omnicoach.toml` table before selector and rule-option validation.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-struct RawConfig {
-    select: Option<Vec<String>>,
-    #[serde(default)]
-    ignore: Vec<String>,
-    #[serde(default)]
-    per_file_ignores: BTreeMap<String, Vec<String>>,
-    #[serde(default)]
-    rules: toml::Table,
-    #[serde(default)]
-    context: ContextConfig,
-}
-
 /// A label given on the command line that names no rule or tag.
 #[derive(Debug, thiserror::Error)]
 #[error(
@@ -306,6 +291,73 @@ pub fn parse_config_with_overrides(
     })
 }
 
+/// Whether a rule is on under `select` and `ignore`, and the deciding selector (per-file
+/// ignores aside). Its `Display` is the one-line explanation shown by `--explain`.
+#[derive(Debug)]
+pub struct RuleStatus {
+    selected_by_default: bool,
+    deciding: Option<Decision>,
+}
+
+impl RuleStatus {
+    /// Whether the rule is on.
+    #[must_use]
+    pub fn enabled(&self) -> bool {
+        self.deciding
+            .as_ref()
+            .map_or(self.selected_by_default, |decision| {
+                decision.verdict == Verdict::Select
+            })
+    }
+}
+
+impl fmt::Display for RuleStatus {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let state = if self.enabled() {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        let Some(decision) = &self.deciding else {
+            let reason = if self.selected_by_default {
+                "default"
+            } else {
+                "not in `select`"
+            };
+            return write!(formatter, "{state} ({reason})");
+        };
+        let list = match decision.verdict {
+            Verdict::Select => "select",
+            Verdict::Ignore => "ignore",
+        };
+        write!(
+            formatter,
+            "{state} by `{list} = [\"{}\"]`",
+            decision.selector.label()
+        )?;
+        if matches!(decision.selector, Selector::Tag(_)) && decision.branch.len() > 1 {
+            let path: Vec<_> = decision.branch.iter().map(|&tag| tag.label()).collect();
+            write!(formatter, " (via {})", path.join(" > "))?;
+        }
+        Ok(())
+    }
+}
+
+/// The raw `.omnicoach.toml` table before selector and rule-option validation.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct RawConfig {
+    select: Option<Vec<String>>,
+    #[serde(default)]
+    ignore: Vec<String>,
+    #[serde(default)]
+    per_file_ignores: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    rules: toml::Table,
+    #[serde(default)]
+    context: ContextConfig,
+}
+
 fn read_config_file(config_path: Option<&Path>) -> Result<String, ConfigError> {
     if let Some(path) = config_path {
         return std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
@@ -449,58 +501,6 @@ struct Decision {
     verdict: Verdict,
     selector: Selector,
     branch: Vec<Tag>,
-}
-
-/// Whether a rule is on under `select` and `ignore`, and the deciding selector (per-file
-/// ignores aside). Its `Display` is the one-line explanation shown by `--explain`.
-#[derive(Debug)]
-pub struct RuleStatus {
-    selected_by_default: bool,
-    deciding: Option<Decision>,
-}
-
-impl RuleStatus {
-    /// Whether the rule is on.
-    #[must_use]
-    pub fn enabled(&self) -> bool {
-        self.deciding
-            .as_ref()
-            .map_or(self.selected_by_default, |decision| {
-                decision.verdict == Verdict::Select
-            })
-    }
-}
-
-impl fmt::Display for RuleStatus {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let state = if self.enabled() {
-            "enabled"
-        } else {
-            "disabled"
-        };
-        let Some(decision) = &self.deciding else {
-            let reason = if self.selected_by_default {
-                "default"
-            } else {
-                "not in `select`"
-            };
-            return write!(formatter, "{state} ({reason})");
-        };
-        let list = match decision.verdict {
-            Verdict::Select => "select",
-            Verdict::Ignore => "ignore",
-        };
-        write!(
-            formatter,
-            "{state} by `{list} = [\"{}\"]`",
-            decision.selector.label()
-        )?;
-        if matches!(decision.selector, Selector::Tag(_)) && decision.branch.len() > 1 {
-            let path: Vec<_> = decision.branch.iter().map(|&tag| tag.label()).collect();
-            write!(formatter, " (via {})", path.join(" > "))?;
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]

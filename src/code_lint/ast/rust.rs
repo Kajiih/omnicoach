@@ -1,15 +1,16 @@
 //! AST helper predicates and structural extractors for Rust (`ra_ap_syntax`).
 
 use crate::code_lint::ast::{
-    AstNode, Binding, BindingKind, CallableItem, CallableScope, EnclosingFunction, FunctionReturn,
+    AstNode, Binding, BindingKind, DeclarationScope, EnclosingFunction, FunctionReturn,
     LiteralOccurrence, LiteralRole, LiteralValue, MethodVisibility, ParsedFile, PositionalRead,
-    QualifiedName, ReturnShape, ScopePositionalReads, TestFunctionSetup, TypeMethod,
-    TypeMethodScope, is_rust_comment_kind, normalize_statement_text, parse_float_literal,
-    parse_integer_literal, push_bindings, span_from_rowan_range,
+    QualifiedName, ReturnShape, ScopeItem, ScopeItemKind, ScopePositionalReads, TestFunctionSetup,
+    TypeMethod, TypeMethodScope, is_rust_comment_kind, normalize_statement_text,
+    parse_float_literal, parse_integer_literal, push_bindings, span_from_rowan_range,
 };
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast::{
-    self, HasAttrs as _, HasGenericArgs as _, HasModuleItem as _, HasName as _, HasVisibility as _,
+    self, HasAttrs as _, HasGenericArgs as _, HasGenericParams as _, HasModuleItem as _,
+    HasName as _, HasVisibility as _,
 };
 use ra_ap_syntax::{
     AstNode as _, AstToken as _, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken,
@@ -1741,14 +1742,14 @@ pub(super) fn collect_type_method_scopes(file: &ParsedFile) -> Vec<TypeMethodSco
     scopes
 }
 
-/// Collects all module and inherent `impl` [`CallableScope`]s in a Rust `file`.
+/// Collects all module and inherent `impl` [`DeclarationScope`]s in a Rust `file`.
 #[must_use]
-pub(super) fn collect_callable_scopes(file: &ParsedFile) -> Vec<CallableScope<'_>> {
+pub(super) fn collect_declaration_scopes(file: &ParsedFile) -> Vec<DeclarationScope<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
     let root_items: Vec<ast::Item> = parsed.tree().items().collect();
-    let mut scopes = build_rust_module_callable_scopes(&root_items, file);
+    let mut scopes = build_rust_module_declaration_scopes(&root_items, file);
     for node in parsed.tree().syntax().descendants() {
         if file.is_in_rust_inline_test(node.text_range().start().into()) {
             continue;
@@ -1756,11 +1757,11 @@ pub(super) fn collect_callable_scopes(file: &ParsedFile) -> Vec<CallableScope<'_
         if let Some(module) = ast::Module::cast(node.clone()) {
             if let Some(module_body) = module.item_list() {
                 let items: Vec<ast::Item> = module_body.items().collect();
-                scopes.extend(build_rust_module_callable_scopes(&items, file));
+                scopes.extend(build_rust_module_declaration_scopes(&items, file));
             }
         } else if let Some(impl_item) = ast::Impl::cast(node)
             && impl_item.trait_().is_none()
-            && let Some(scope) = build_rust_impl_callable_scope(&impl_item, file)
+            && let Some(scope) = build_rust_impl_declaration_scope(&impl_item, file)
         {
             scopes.push(scope);
         }
@@ -1768,17 +1769,105 @@ pub(super) fn collect_callable_scopes(file: &ParsedFile) -> Vec<CallableScope<'_
     scopes
 }
 
-/// Builds [`CallableScope`]s for direct `fn` items in a Rust module item list, bridging calls
-/// through `impl` blocks in the same module and starting a new scope segment whenever a function
-/// name is redefined.
-fn build_rust_module_callable_scopes<'a>(
+enum RustModuleItem {
+    Fn(ast::Fn),
+    Type(SyntaxNode),
+}
+
+struct RustModuleDecl<'a> {
+    name_node: AstNode<'a>,
+    name: String,
+    kind: ScopeItemKind,
+    visibility: MethodVisibility,
+    syntax_start: usize,
+    item: RustModuleItem,
+}
+
+/// Builds [`DeclarationScope`]s for direct `fn`, `struct`, `enum`, `union`, and `trait` items in
+/// a Rust module item list, grouping same-module `impl` blocks with their type/trait and starting
+/// a new scope segment whenever an item name is redefined.
+fn build_rust_module_declaration_scopes<'a>(
     items: &[ast::Item],
     file: &'a ParsedFile,
-) -> Vec<CallableScope<'a>> {
-    let mut functions = Vec::new();
+) -> Vec<DeclarationScope<'a>> {
+    let RustModuleContents {
+        declarations,
+        impl_items,
+    } = collect_rust_module_decls(items, file);
+    if declarations.len() < 2 {
+        return Vec::new();
+    }
+
+    let segments = split_rust_module_segments(declarations);
+    let mut scopes = Vec::new();
+
+    for (seg_idx, segment) in segments.iter().enumerate() {
+        if segment.len() < 2 {
+            continue;
+        }
+        let seg_start = if seg_idx == 0 {
+            0
+        } else {
+            segment[0].syntax_start
+        };
+        let seg_end = segments
+            .get(seg_idx + 1)
+            .map_or(usize::MAX, |next| next[0].syntax_start);
+
+        let item_by_name: HashMap<&str, usize> = segment
+            .iter()
+            .enumerate()
+            .map(|(idx, decl)| (decl.name.as_str(), idx))
+            .collect();
+        let segment_kinds: Vec<ScopeItemKind> = segment.iter().map(|decl| decl.kind).collect();
+
+        let impl_callees = collect_rust_impl_callees(
+            &impl_items,
+            seg_start..seg_end,
+            &item_by_name,
+            &segment_kinds,
+            file,
+        );
+
+        let items = segment
+            .iter()
+            .enumerate()
+            .map(|(idx, decl)| {
+                build_rust_module_scope_item(
+                    decl,
+                    &impl_callees.attached[idx],
+                    &item_by_name,
+                    &segment_kinds,
+                    &impl_callees.external,
+                )
+            })
+            .collect();
+
+        scopes.push(DeclarationScope { items });
+    }
+
+    scopes
+}
+
+/// The declarations and `impl` blocks directly inside a Rust module item list.
+struct RustModuleContents<'a> {
+    /// Direct `fn`, `struct`, `enum`, `union`, and `trait` declarations, in source order.
+    declarations: Vec<RustModuleDecl<'a>>,
+    /// Every direct `impl` block, keyed by its starting offset.
+    impl_items: Vec<(usize, ast::Impl)>,
+}
+
+/// Collects the direct `fn`, `struct`, `enum`, `union`, and `trait` declarations in `items`,
+/// alongside every `impl` block keyed by its starting offset.
+fn collect_rust_module_decls<'a>(
+    items: &[ast::Item],
+    file: &'a ParsedFile,
+) -> RustModuleContents<'a> {
+    let mut declarations = Vec::new();
     let mut impl_items = Vec::new();
     for item in items {
-        if file.is_in_rust_inline_test(item.syntax().text_range().start().into()) {
+        let syntax_start: usize = item.syntax().text_range().start().into();
+        if file.is_in_rust_inline_test(syntax_start) {
             continue;
         }
         match item {
@@ -1790,130 +1879,269 @@ fn build_rust_module_callable_scopes<'a>(
                     } else {
                         MethodVisibility::Private
                     };
-                    functions.push((
-                        AstNode::from_span(
+                    declarations.push(RustModuleDecl {
+                        name_node: AstNode::from_span(
                             file,
                             span_from_rowan_range(name_node.syntax().text_range()),
                         ),
                         name,
+                        kind: ScopeItemKind::Callable,
                         visibility,
-                        function.clone(),
-                    ));
+                        syntax_start,
+                        item: RustModuleItem::Fn(function.clone()),
+                    });
                 }
             }
-            ast::Item::Impl(impl_item) => impl_items.push(impl_item.clone()),
+            ast::Item::Struct(struct_item) => {
+                declarations.extend(rust_type_decl(struct_item, syntax_start, file));
+            }
+            ast::Item::Enum(enum_item) => {
+                declarations.extend(rust_type_decl(enum_item, syntax_start, file));
+            }
+            ast::Item::Union(union_item) => {
+                declarations.extend(rust_type_decl(union_item, syntax_start, file));
+            }
+            ast::Item::Trait(trait_item) => {
+                declarations.extend(rust_type_decl(trait_item, syntax_start, file));
+            }
+            ast::Item::Impl(impl_item) => impl_items.push((syntax_start, impl_item.clone())),
             _ => {}
         }
     }
-
-    if functions.len() < 2 {
-        return Vec::new();
+    RustModuleContents {
+        declarations,
+        impl_items,
     }
+}
 
+fn rust_type_decl<'a>(
+    type_item: &(impl ast::HasName + ast::HasVisibility),
+    syntax_start: usize,
+    file: &'a ParsedFile,
+) -> Option<RustModuleDecl<'a>> {
+    let name_node = type_item.name()?;
+    let name = name_node.text().trim().to_owned();
+    let method_visibility = if type_item.visibility().is_some() {
+        MethodVisibility::Public
+    } else {
+        MethodVisibility::Private
+    };
+    Some(RustModuleDecl {
+        name_node: AstNode::from_span(file, span_from_rowan_range(name_node.syntax().text_range())),
+        name,
+        kind: ScopeItemKind::Type,
+        visibility: method_visibility,
+        syntax_start,
+        item: RustModuleItem::Type(type_item.syntax().clone()),
+    })
+}
+
+/// Splits `declarations` into consecutive segments, starting a new segment whenever a name is
+/// redefined.
+fn split_rust_module_segments(
+    declarations: Vec<RustModuleDecl<'_>>,
+) -> Vec<Vec<RustModuleDecl<'_>>> {
     let mut segments = Vec::new();
     let mut current_segment = Vec::new();
     let mut seen_names = HashSet::new();
-    for item in functions {
-        if !seen_names.insert(item.1.clone()) {
+    for decl in declarations {
+        if !seen_names.insert(decl.name.clone()) {
             segments.push(std::mem::take(&mut current_segment));
             seen_names.clear();
-            seen_names.insert(item.1.clone());
+            seen_names.insert(decl.name.clone());
         }
-        current_segment.push(item);
+        current_segment.push(decl);
     }
     if !current_segment.is_empty() {
         segments.push(current_segment);
     }
-
-    let mut scopes = Vec::new();
-
-    for segment in segments {
-        if segment.len() < 2 {
-            continue;
-        }
-        let fn_by_name: HashMap<&str, usize> = segment
-            .iter()
-            .enumerate()
-            .map(|(idx, (_, name, _, _))| (name.as_str(), idx))
-            .collect();
-
-        let impl_callees = collect_rust_impl_callees(&impl_items, &fn_by_name, &file.source);
-
-        let callables = segment
-            .iter()
-            .map(|(name_node, name, visibility, function)| {
-                let local_names = collect_rust_fn_local_names(function);
-                let mut callees = Vec::new();
-                if let Some(body) = function.body() {
-                    collect_rust_module_fn_refs(
-                        body.syntax(),
-                        &fn_by_name,
-                        &impl_callees,
-                        &local_names,
-                        &mut callees,
-                    );
-                }
-                CallableItem {
-                    name_node: *name_node,
-                    name: name.clone(),
-                    visibility: *visibility,
-                    is_constructor: false,
-                    callees,
-                }
-            })
-            .collect();
-
-        scopes.push(CallableScope { callables });
-    }
-
-    scopes
+    segments
 }
 
-/// Maps each `impl` self-type name in `impl_items` to the indices of sibling module functions
-/// referenced inside its methods.
+/// Builds the [`ScopeItem`] for `decl`, merging the sibling references collected from its own
+/// syntax with `attached_impl_callees` from its same-module `impl` blocks.
+fn build_rust_module_scope_item<'a>(
+    decl: &RustModuleDecl<'a>,
+    attached_impl_callees: &[usize],
+    item_by_name: &HashMap<&str, usize>,
+    segment_kinds: &[ScopeItemKind],
+    external_impl_callees: &HashMap<String, Vec<usize>>,
+) -> ScopeItem<'a> {
+    let mut callees = Vec::new();
+    match &decl.item {
+        RustModuleItem::Fn(function) => {
+            let local_names = collect_rust_fn_local_names(function);
+            collect_rust_module_item_refs(
+                function.syntax(),
+                item_by_name,
+                segment_kinds,
+                external_impl_callees,
+                &local_names,
+                &mut callees,
+            );
+        }
+        RustModuleItem::Type(syntax) => {
+            let local_names = collect_rust_generic_param_names(syntax);
+            collect_rust_module_item_refs(
+                syntax,
+                item_by_name,
+                segment_kinds,
+                external_impl_callees,
+                &local_names,
+                &mut callees,
+            );
+        }
+    }
+    for &impl_callee in attached_impl_callees {
+        if !callees.contains(&impl_callee) {
+            callees.push(impl_callee);
+        }
+    }
+    ScopeItem {
+        name_node: decl.name_node,
+        name: decl.name.clone(),
+        kind: decl.kind,
+        visibility: decl.visibility,
+        is_constructor: false,
+        callees,
+        pinned_before: None,
+    }
+}
+
+struct RustImplCallees {
+    attached: Vec<Vec<usize>>,
+    external: HashMap<String, Vec<usize>>,
+}
+
+/// Collects sibling module item references inside `impl_items` within `offset_range`, attaching
+/// them to the corresponding type/trait index in `segment` (or returning them keyed by self-type
+/// name when the self-type is outside `segment`).
 fn collect_rust_impl_callees(
-    impl_items: &[ast::Impl],
-    fn_by_name: &HashMap<&str, usize>,
-    source: &str,
-) -> HashMap<String, Vec<usize>> {
+    impl_items: &[(usize, ast::Impl)],
+    offset_range: std::ops::Range<usize>,
+    item_by_name: &HashMap<&str, usize>,
+    segment_kinds: &[ScopeItemKind],
+    file: &ParsedFile,
+) -> RustImplCallees {
     let empty_impls = HashMap::new();
-    let mut impl_callees: HashMap<String, Vec<usize>> = HashMap::new();
-    for impl_item in impl_items {
-        if let Some(type_name) = impl_self_type_name(impl_item, source)
-            && let Some(assoc_items) = impl_item.assoc_item_list()
-        {
-            let mut callees = Vec::new();
+    let mut attached = vec![Vec::new(); segment_kinds.len()];
+    let mut external: HashMap<String, Vec<usize>> = HashMap::new();
+
+    for (start, impl_item) in impl_items {
+        if !offset_range.contains(start) {
+            continue;
+        }
+        let impl_generics = collect_rust_generic_param_names(impl_item.syntax());
+        let mut callees = Vec::new();
+        if let Some(self_type) = impl_item.self_ty() {
+            collect_rust_module_item_refs(
+                self_type.syntax(),
+                item_by_name,
+                segment_kinds,
+                &empty_impls,
+                &impl_generics,
+                &mut callees,
+            );
+        }
+        if let Some(trait_type) = impl_item.trait_() {
+            collect_rust_module_item_refs(
+                trait_type.syntax(),
+                item_by_name,
+                segment_kinds,
+                &empty_impls,
+                &impl_generics,
+                &mut callees,
+            );
+        }
+        if let Some(where_clause) = impl_item.where_clause() {
+            collect_rust_module_item_refs(
+                where_clause.syntax(),
+                item_by_name,
+                segment_kinds,
+                &empty_impls,
+                &impl_generics,
+                &mut callees,
+            );
+        }
+        if let Some(assoc_items) = impl_item.assoc_item_list() {
             for assoc_item in assoc_items.assoc_items() {
-                if let ast::AssocItem::Fn(method) = assoc_item
-                    && let Some(body) = method.body()
-                {
-                    let local_names = collect_rust_fn_local_names(&method);
-                    collect_rust_module_fn_refs(
-                        body.syntax(),
-                        fn_by_name,
-                        &empty_impls,
-                        &local_names,
-                        &mut callees,
-                    );
+                if file.is_in_rust_inline_test(assoc_item.syntax().text_range().start().into()) {
+                    continue;
+                }
+                match assoc_item {
+                    ast::AssocItem::Fn(method) => {
+                        let mut local_names = impl_generics.clone();
+                        local_names.extend(collect_rust_fn_local_names(&method));
+                        collect_rust_module_item_refs(
+                            method.syntax(),
+                            item_by_name,
+                            segment_kinds,
+                            &empty_impls,
+                            &local_names,
+                            &mut callees,
+                        );
+                    }
+                    other => {
+                        collect_rust_module_item_refs(
+                            other.syntax(),
+                            item_by_name,
+                            segment_kinds,
+                            &empty_impls,
+                            &impl_generics,
+                            &mut callees,
+                        );
+                    }
                 }
             }
-            if !callees.is_empty() {
-                let entry = impl_callees.entry(type_name).or_default();
-                for idx in callees {
+        }
+        if callees.is_empty() {
+            continue;
+        }
+        if let Some(self_name) = impl_self_type_name(impl_item, &file.source) {
+            if let Some(&self_idx) = item_by_name.get(self_name.as_str()) {
+                for &idx in &callees {
+                    if !attached[self_idx].contains(&idx) {
+                        attached[self_idx].push(idx);
+                    }
+                }
+            } else {
+                let entry = external.entry(self_name).or_default();
+                for &idx in &callees {
                     if !entry.contains(&idx) {
                         entry.push(idx);
                     }
                 }
             }
         }
+        if let Some(trait_name) = impl_trait_name(impl_item)
+            && let Some(&trait_idx) = item_by_name.get(trait_name.as_str())
+        {
+            for &idx in &callees {
+                if !attached[trait_idx].contains(&idx) {
+                    attached[trait_idx].push(idx);
+                }
+            }
+        }
     }
-    impl_callees
+
+    RustImplCallees { attached, external }
 }
 
-/// Collects local parameter, pattern, and nested-function names bound inside `function` (without
-/// descending into nested module or `impl` items).
+fn impl_trait_name(impl_item: &ast::Impl) -> Option<String> {
+    if let ast::Type::PathType(path_type) = impl_item.trait_()?
+        && let Some(path) = path_type.path()
+        && let Some(segment) = path.segment()
+        && let Some(name_ref) = segment.name_ref()
+    {
+        return Some(name_ref.text().trim().to_owned());
+    }
+    None
+}
+
+/// Collects generic parameter, local parameter, pattern, and nested-item names bound inside
+/// `function` (without descending into nested module or `impl` items).
 fn collect_rust_fn_local_names(function: &ast::Fn) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = collect_rust_generic_param_names(function.syntax());
     if let Some(params) = function.param_list() {
         for pat in params
             .syntax()
@@ -1928,13 +2156,13 @@ fn collect_rust_fn_local_names(function: &ast::Fn) -> HashSet<String> {
     if let Some(body) = function.body() {
         let mut stack = vec![body.syntax().clone()];
         while let Some(node) = stack.pop() {
-            if let Some(inner_fn) = ast::Fn::cast(node.clone()) {
-                if let Some(name) = inner_fn.name() {
-                    names.insert(name.text().trim().to_owned());
-                }
-                continue;
-            }
             if ast::Item::can_cast(node.kind()) {
+                for child in node.children() {
+                    if let Some(name) = ast::Name::cast(child) {
+                        names.insert(name.text().trim().to_owned());
+                        break;
+                    }
+                }
                 continue;
             }
             if let Some(ident_pat) = ast::IdentPat::cast(node.clone())
@@ -1950,19 +2178,47 @@ fn collect_rust_fn_local_names(function: &ast::Fn) -> HashSet<String> {
     names
 }
 
-/// Collects indices of sibling module functions in `fn_by_name` referenced inside `root`
+fn collect_rust_generic_param_names(node: &SyntaxNode) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for child in node.children() {
+        if let Some(generic_params) = ast::GenericParamList::cast(child) {
+            for param in generic_params.generic_params() {
+                match param {
+                    ast::GenericParam::TypeParam(type_param) => {
+                        if let Some(name) = type_param.name() {
+                            names.insert(name.text().trim().to_owned());
+                        }
+                    }
+                    ast::GenericParam::ConstParam(const_param) => {
+                        if let Some(name) = const_param.name() {
+                            names.insert(name.text().trim().to_owned());
+                        }
+                    }
+                    ast::GenericParam::LifetimeParam(_) => {}
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Collects indices of sibling module items in `item_by_name` referenced inside `root`
 /// (including bridged calls via `impl_callees` and macro token trees).
-fn collect_rust_module_fn_refs(
+fn collect_rust_module_item_refs(
     root: &SyntaxNode,
-    fn_by_name: &HashMap<&str, usize>,
+    item_by_name: &HashMap<&str, usize>,
+    segment_kinds: &[ScopeItemKind],
     impl_callees: &HashMap<String, Vec<usize>>,
     local_names: &HashSet<String>,
     out: &mut Vec<usize>,
 ) {
-    for node in root.descendants() {
-        if let Some(path_expr) = ast::PathExpr::cast(node)
-            && let Some(path) = path_expr.path()
+    let mut stack = vec![root.clone()];
+    while let Some(node) = stack.pop() {
+        if node != *root && (ast::Module::can_cast(node.kind()) || ast::Use::can_cast(node.kind()))
         {
+            continue;
+        }
+        if let Some(path) = ast::Path::cast(node.clone()) {
             let is_module_local = path
                 .qualifier()
                 .is_none_or(|qualifier| qualifier.syntax().text() == SELF_KEYWORD);
@@ -1973,50 +2229,61 @@ fn collect_rust_module_fn_refs(
                 let ident = name_ref.text();
                 let name = ident.trim();
                 if !local_names.contains(name)
-                    && let Some(&idx) = fn_by_name.get(name)
+                    && let Some(&idx) = item_by_name.get(name)
+                    && (path.parent_path().is_none() || segment_kinds[idx] == ScopeItemKind::Type)
                     && !out.contains(&idx)
                 {
                     out.push(idx);
                 }
-            }
-        }
-    }
-
-    for element in root.descendants_with_tokens() {
-        let Some(token) = element.into_token() else {
-            continue;
-        };
-        if token.kind() != SyntaxKind::IDENT {
-            continue;
-        }
-        let name = token.text();
-        if let Some(bridged) = impl_callees.get(name) {
-            for &idx in bridged {
-                if !out.contains(&idx) {
-                    out.push(idx);
+                if let Some(bridged) = impl_callees.get(name) {
+                    for &idx in bridged {
+                        if !out.contains(&idx) {
+                            out.push(idx);
+                        }
+                    }
                 }
             }
-        }
-        if token
-            .parent()
-            .is_some_and(|parent| parent.kind() == SyntaxKind::TOKEN_TREE)
-            && !local_names.contains(name)
-            && let Some(&idx) = fn_by_name.get(name)
-        {
-            let preceded_by_dot_or_colon = previous_non_trivia_token(&token)
-                .is_some_and(|prev| matches!(prev.kind(), SyntaxKind::DOT | SyntaxKind::COLON2));
-            if !preceded_by_dot_or_colon && !out.contains(&idx) {
-                out.push(idx);
+        } else if node.kind() == SyntaxKind::TOKEN_TREE {
+            for element in node.descendants_with_tokens() {
+                let Some(token) = element.into_token() else {
+                    continue;
+                };
+                if token.kind() != SyntaxKind::IDENT {
+                    continue;
+                }
+                let name = token.text();
+                if let Some(bridged) = impl_callees.get(name) {
+                    for &idx in bridged {
+                        if !out.contains(&idx) {
+                            out.push(idx);
+                        }
+                    }
+                }
+                if let Some(&idx) = item_by_name.get(name)
+                    && !local_names.contains(name)
+                {
+                    let preceded_by_dot_or_colon =
+                        previous_non_trivia_token(&token).is_some_and(|prev| {
+                            matches!(prev.kind(), SyntaxKind::DOT | SyntaxKind::COLON2)
+                        });
+                    if !preceded_by_dot_or_colon && !out.contains(&idx) {
+                        out.push(idx);
+                    }
+                }
             }
+            continue;
+        }
+        for child in node.children() {
+            stack.push(child);
         }
     }
 }
 
-/// Builds a [`CallableScope`] for direct non-test methods of an inherent `impl` block.
-fn build_rust_impl_callable_scope<'a>(
+/// Builds a [`DeclarationScope`] for direct non-test methods of an inherent `impl` block.
+fn build_rust_impl_declaration_scope<'a>(
     impl_item: &ast::Impl,
     file: &'a ParsedFile,
-) -> Option<CallableScope<'a>> {
+) -> Option<DeclarationScope<'a>> {
     let type_name = impl_self_type_name(impl_item, &file.source)?;
     let associated_items = impl_item.assoc_item_list()?;
 
@@ -2031,7 +2298,7 @@ fn build_rust_impl_callable_scope<'a>(
         .map(|(idx, (method, _))| (method.name.as_str(), idx))
         .collect();
 
-    let callables = methods
+    let items = methods
         .iter()
         .map(|(method, function)| {
             let mut callees = Vec::new();
@@ -2043,17 +2310,19 @@ fn build_rust_impl_callable_scope<'a>(
                     &mut callees,
                 );
             }
-            CallableItem {
+            ScopeItem {
                 name_node: method.name_node,
                 name: method.name.clone(),
+                kind: ScopeItemKind::Callable,
                 visibility: method.visibility,
                 is_constructor: method.is_constructor,
                 callees,
+                pinned_before: None,
             }
         })
         .collect();
 
-    Some(CallableScope { callables })
+    Some(DeclarationScope { items })
 }
 
 /// Collects indices of sibling `impl` methods in `method_by_name` called via `self.method()`,

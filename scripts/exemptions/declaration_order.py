@@ -10,7 +10,7 @@ FIELD = "field_after_method::pass::"
 ASSOCIATED = "associated_item_after_method::pass::"
 CONSTRUCTOR = "constructor_after_method::pass::"
 UNCOLOCATED = "uncolocated_helper::pass::"
-PRIVATE_FIRST = "private_before_public_function::pass::"
+PRIVATE_FIRST = "private_before_public::pass::"
 CALLEE = "callee_before_caller::pass::"
 MAIN_GUARD = "statement_after_main_guard::"
 
@@ -106,7 +106,7 @@ MUTATIONS = (
         (UNCOLOCATED + "public_caller_of_public_function_does_not_share_its_helpers",),
     ),
     Mutation(
-        "unreached private function left to private-before-public-function",
+        "unreached private function left to private-before-public",
         AST,
         (
             (
@@ -156,6 +156,28 @@ MUTATIONS = (
             ),
         ),
         (PRIVATE_FIRST + "restricted_visibility_is_public",),
+    ),
+    Mutation(
+        "Python runtime evaluation pinning",
+        AST,
+        (("let pinned_before = callables[pos].pinned_before;", "let pinned_before: Option<usize> = None;"),),
+        (
+            PRIVATE_FIRST + "import_time_pinned_helper_exempt",
+            PRIVATE_FIRST + "decorator_pinned_helper_exempt",
+            PRIVATE_FIRST + "base_class_pinned_before_subclass_exempt",
+            PRIVATE_FIRST + "runtime_annotation_pinned_without_future_annotations",
+        ),
+    ),
+    Mutation(
+        "private helper types exempt from callee-before-caller",
+        AST,
+        (
+            (
+                "        if callables[callee].kind != ScopeItemKind::Callable {\n            continue;\n        }",
+                "",
+            ),
+        ),
+        (CALLEE + "private_helper_type_before_private_caller_exempt",),
     ),
     Mutation(
         "mutual recursion",
@@ -221,6 +243,7 @@ UNMUTATED = (
             FIELD + "fields_before_methods",
             ASSOCIATED + "associated_items_before_methods",
             PRIVATE_FIRST + "shared_helper_below_all_its_public_callers_allowed",
+            PRIVATE_FIRST + "private_helper_after_pub_struct_impl_allowed",
             CALLEE + "top_down_caller_before_callee_across_tiers",
             CALLEE + "top_down_impl_order",
             MAIN_GUARD + "pass::main_guard_at_end_of_module",
@@ -263,7 +286,7 @@ CLUSTER = Cluster(
         "associated_item_after_method",
         "constructor_after_method",
         "uncolocated_helper",
-        "private_before_public_function",
+        "private_before_public",
         "callee_before_caller",
         "statement_after_main_guard",
     ),

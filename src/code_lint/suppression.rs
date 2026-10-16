@@ -203,53 +203,6 @@ pub const SUPPRESSION_AUDITS: &[Declaration] = &[
     BLANKET_SUPPRESSION,
 ];
 
-/// The placement scope of a parsed suppression directive.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum DirectivePlacement {
-    /// Directive placed on the same line as code (suppresses violations on `line`).
-    SameLine {
-        /// The 1-indexed line number where the directive is placed.
-        line: usize,
-    },
-    /// Directive placed on its own standalone line preceding code (suppresses violations on `target_line..=end_target_line`).
-    PrecedingLine {
-        /// The 1-indexed line number immediately following the directive.
-        target_line: usize,
-        /// The 1-indexed line number of the declaration after any contiguous attributes/decorators (`#[...]`, `@...`).
-        end_target_line: usize,
-    },
-    /// Directive applying to the entire file.
-    File,
-}
-
-/// A parsed omni suppression directive comment.
-#[derive(Debug, Clone)]
-struct ParsedDirective {
-    /// The placement scope of the directive.
-    placement: DirectivePlacement,
-    /// The byte span of the comment in the source file.
-    span: SourceSpan,
-    /// The 1-indexed line and column coordinate where the directive comment resides.
-    coord: LineColumn,
-    /// Rule names targeted by the directive (e.g. `["single-letter-name"]`).
-    target_rules: Vec<String>,
-    /// Whether a reason is given after `--` or in the comment block directly above.
-    is_explained: bool,
-    /// Whether the directive omitted bracketed rule names (`[...]`).
-    is_blanket: bool,
-    /// Counter of violations matched and suppressed for each target rule.
-    matched_count: HashMap<String, usize>,
-}
-
-/// Where a suppression directive comment sits in the source file.
-#[derive(Debug, Clone, Copy)]
-struct DirectiveSite {
-    /// The byte span of the comment.
-    span: SourceSpan,
-    /// The 1-indexed line and column where the comment starts.
-    coord: LineColumn,
-}
-
 /// Tracker responsible for collecting directives, filtering diagnostics, and auditing hygiene.
 #[derive(Debug, Default)]
 pub struct SuppressionTracker {
@@ -423,6 +376,53 @@ impl SuppressionTracker {
             matched_count,
         })
     }
+}
+
+/// The placement scope of a parsed suppression directive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DirectivePlacement {
+    /// Directive placed on the same line as code (suppresses violations on `line`).
+    SameLine {
+        /// The 1-indexed line number where the directive is placed.
+        line: usize,
+    },
+    /// Directive placed on its own standalone line preceding code (suppresses violations on `target_line..=end_target_line`).
+    PrecedingLine {
+        /// The 1-indexed line number immediately following the directive.
+        target_line: usize,
+        /// The 1-indexed line number of the declaration after any contiguous attributes/decorators (`#[...]`, `@...`).
+        end_target_line: usize,
+    },
+    /// Directive applying to the entire file.
+    File,
+}
+
+/// A parsed omni suppression directive comment.
+#[derive(Debug, Clone)]
+struct ParsedDirective {
+    /// The placement scope of the directive.
+    placement: DirectivePlacement,
+    /// The byte span of the comment in the source file.
+    span: SourceSpan,
+    /// The 1-indexed line and column coordinate where the directive comment resides.
+    coord: LineColumn,
+    /// Rule names targeted by the directive (e.g. `["single-letter-name"]`).
+    target_rules: Vec<String>,
+    /// Whether a reason is given after `--` or in the comment block directly above.
+    is_explained: bool,
+    /// Whether the directive omitted bracketed rule names (`[...]`).
+    is_blanket: bool,
+    /// Counter of violations matched and suppressed for each target rule.
+    matched_count: HashMap<String, usize>,
+}
+
+/// Where a suppression directive comment sits in the source file.
+#[derive(Debug, Clone, Copy)]
+struct DirectiveSite {
+    /// The byte span of the comment.
+    span: SourceSpan,
+    /// The 1-indexed line and column where the comment starts.
+    coord: LineColumn,
 }
 
 /// A third-party Python suppression directive, written `# <tool>: <keyword>...`.

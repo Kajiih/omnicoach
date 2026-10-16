@@ -91,24 +91,6 @@ pub(super) fn is_collection_builtin(name: &str) -> bool {
     matches!(name, BUILTIN_LEN | "reversed") || ITERATING_COLLECTION_BUILTINS.contains(&name)
 }
 
-/// How a function body reads a parameter at one use site.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum UseRole {
-    /// Mutated, rebound, aliased, returned, yielded, or passed to an unknown function or method.
-    Escape,
-    /// Read without mutation by an operation that needs more than `Collection`: indexing,
-    /// `reversed`, `.index()`, equality, arithmetic, `repr`, `print`, ...
-    Read,
-    /// Truth-tested: `if x`, `not x`, `bool(x)`; propagates to `and`/`or` operands.
-    Truthiness,
-    /// Sized or membership-tested: `len(x)`, `v in x`.
-    Sized,
-    /// Iterated once: `for _ in x`, a comprehension, a single-pass builtin, or `*x` in a display.
-    Iterated,
-    /// Compared by identity: `x is None`.
-    Identity,
-}
-
 /// How a function body uses one of its parameters; see [`summarize_parameter_usages`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ParameterUsage {
@@ -153,6 +135,24 @@ pub enum ParameterCollectionCapability {
     Collection,
     /// Parameter uses indexing/slicing, `reversed(x)`, `.index()`/`.count()`, pattern matching, or escapes (`Sequence` required).
     Sequence,
+}
+
+/// How a function body reads a parameter at one use site.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UseRole {
+    /// Mutated, rebound, aliased, returned, yielded, or passed to an unknown function or method.
+    Escape,
+    /// Read without mutation by an operation that needs more than `Collection`: indexing,
+    /// `reversed`, `.index()`, equality, arithmetic, `repr`, `print`, ...
+    Read,
+    /// Truth-tested: `if x`, `not x`, `bool(x)`; propagates to `and`/`or` operands.
+    Truthiness,
+    /// Sized or membership-tested: `len(x)`, `v in x`.
+    Sized,
+    /// Iterated once: `for _ in x`, a comprehension, a single-pass builtin, or `*x` in a display.
+    Iterated,
+    /// Compared by identity: `x is None`.
+    Identity,
 }
 
 /// Classifies every use of a function's parameters in one walk of its body.
