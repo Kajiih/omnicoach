@@ -579,26 +579,6 @@ fn language_override<T: Copy>(entries: &[(Language, T)], language: Language) -> 
         .find_map(|&(target_lang, value)| (target_lang == language).then_some(value))
 }
 
-/// The items one table puts in place of, adds to, or removes from the inherited list.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct ListOverride {
-    replace: Option<HashSet<String>>,
-    extend: HashSet<String>,
-    remove: HashSet<String>,
-}
-
-impl ListOverride {
-    fn apply_to(&self, items: &mut HashSet<String>) {
-        if let Some(replacement) = &self.replace {
-            items.clone_from(replacement);
-        }
-        items.extend(self.extend.iter().cloned());
-        for item in &self.remove {
-            items.remove(item);
-        }
-    }
-}
-
 /// The validated values of one `[rules.<name>]` table or one of its language tables.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct OptionValues {
@@ -659,6 +639,26 @@ impl OptionValues {
             suggestion: closest_match(key, expected.iter().copied()),
             expected,
         }))
+    }
+}
+
+/// The items one table puts in place of, adds to, or removes from the inherited list.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ListOverride {
+    replace: Option<HashSet<String>>,
+    extend: HashSet<String>,
+    remove: HashSet<String>,
+}
+
+impl ListOverride {
+    fn apply_to(&self, items: &mut HashSet<String>) {
+        if let Some(replacement) = &self.replace {
+            items.clone_from(replacement);
+        }
+        items.extend(self.extend.iter().cloned());
+        for item in &self.remove {
+            items.remove(item);
+        }
     }
 }
 

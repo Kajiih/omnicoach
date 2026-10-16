@@ -169,17 +169,6 @@ MUTATIONS = (
         ),
     ),
     Mutation(
-        "private helper types exempt from callee-before-caller",
-        AST,
-        (
-            (
-                "        if callables[callee].kind != ScopeItemKind::Callable {\n            continue;\n        }",
-                "",
-            ),
-        ),
-        (CALLEE + "private_helper_type_before_private_caller_exempt",),
-    ),
-    Mutation(
         "mutual recursion",
         AST,
         (("&& scc_id[caller] != scc_id[callee]", ""),),

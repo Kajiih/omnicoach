@@ -68,62 +68,6 @@ pub fn handle_request(request_json: &str) -> String {
     serialize_response(&response)
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "action", rename_all = "kebab-case")]
-enum PlaygroundRequest {
-    /// Lint a single virtual file path with optional `.omnicoach.toml` configuration.
-    #[serde(alias = "code")]
-    Lint(LintPayload),
-    /// Render `--explain <rule>` Markdown evaluated against optional `.omnicoach.toml` configuration.
-    Explain {
-        rule: String,
-        #[serde(default)]
-        config: String,
-    },
-    /// Return the catalog of registered rules for UI discovery.
-    Catalog,
-}
-
-#[derive(Deserialize)]
-struct LintPayload {
-    path: String,
-    code: String,
-    #[serde(default)]
-    config: String,
-}
-
-#[derive(Serialize)]
-#[serde(untagged)]
-enum PlaygroundResponse {
-    Lint {
-        ok: bool,
-        language: Option<&'static str>,
-        is_test_path: bool,
-        diagnostics: Vec<Diagnostic>,
-        plain: String,
-    },
-    Explain {
-        ok: bool,
-        rule: String,
-        markdown: String,
-    },
-    Catalog {
-        ok: bool,
-        rules: Vec<CatalogEntry>,
-    },
-    Error {
-        ok: bool,
-        error: String,
-    },
-}
-
-#[derive(Serialize)]
-struct CatalogEntry {
-    name: &'static str,
-    languages: Vec<&'static str>,
-    summary: &'static str,
-}
-
 fn execute_buffered_request() -> usize {
     let response_json = {
         let input_guard = INPUT_BUFFER
@@ -153,6 +97,22 @@ fn dispatch_request(request: PlaygroundRequest) -> PlaygroundResponse {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "kebab-case")]
+enum PlaygroundRequest {
+    /// Lint a single virtual file path with optional `.omnicoach.toml` configuration.
+    #[serde(alias = "code")]
+    Lint(LintPayload),
+    /// Render `--explain <rule>` Markdown evaluated against optional `.omnicoach.toml` configuration.
+    Explain {
+        rule: String,
+        #[serde(default)]
+        config: String,
+    },
+    /// Return the catalog of registered rules for UI discovery.
+    Catalog,
+}
+
 fn run_lint(payload: &LintPayload) -> PlaygroundResponse {
     let parsed_config = match rule_selection::parse_config(&payload.config) {
         Ok(parsed) => parsed,
@@ -175,6 +135,14 @@ fn run_lint(payload: &LintPayload) -> PlaygroundResponse {
         diagnostics,
         plain,
     }
+}
+
+#[derive(Deserialize)]
+struct LintPayload {
+    path: String,
+    code: String,
+    #[serde(default)]
+    config: String,
 }
 
 fn run_explain(rule: &str, config: &str) -> PlaygroundResponse {
@@ -215,6 +183,38 @@ fn run_catalog() -> PlaygroundResponse {
 
 fn serialize_response(response: &PlaygroundResponse) -> String {
     serde_json::to_string(response).unwrap_or_else(|_| FALLBACK_SERIALIZATION_ERROR.to_owned())
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum PlaygroundResponse {
+    Lint {
+        ok: bool,
+        language: Option<&'static str>,
+        is_test_path: bool,
+        diagnostics: Vec<Diagnostic>,
+        plain: String,
+    },
+    Explain {
+        ok: bool,
+        rule: String,
+        markdown: String,
+    },
+    Catalog {
+        ok: bool,
+        rules: Vec<CatalogEntry>,
+    },
+    Error {
+        ok: bool,
+        error: String,
+    },
+}
+
+#[derive(Serialize)]
+struct CatalogEntry {
+    name: &'static str,
+    languages: Vec<&'static str>,
+    summary: &'static str,
 }
 
 #[cfg(test)]

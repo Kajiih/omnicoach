@@ -445,14 +445,6 @@ pub fn parse_google_sections(text: &str) -> Vec<DocstringSection> {
     sections
 }
 
-/// A recognized Google-style section header line.
-struct SectionHeader<'a> {
-    /// The section kind the header names.
-    kind: DocstringSectionKind,
-    /// The header text without the colon and surrounding whitespace (`Keyword Args`).
-    text: &'a str,
-}
-
 /// Returns the header if `line` is only a recognized section header and a colon.
 fn section_header(line: &str) -> Option<SectionHeader<'_>> {
     let header = line.trim().strip_suffix(':')?.trim_end();
@@ -461,6 +453,14 @@ fn section_header(line: &str) -> Option<SectionHeader<'_>> {
         .iter()
         .find(|(name, _)| *name == lowercase)
         .map(|&(_, kind)| SectionHeader { kind, text: header })
+}
+
+/// A recognized Google-style section header line.
+struct SectionHeader<'a> {
+    /// The section kind the header names.
+    kind: DocstringSectionKind,
+    /// The header text without the colon and surrounding whitespace (`Keyword Args`).
+    text: &'a str,
 }
 
 /// Groups section body lines into entries: lines at the first line's indentation start an entry,

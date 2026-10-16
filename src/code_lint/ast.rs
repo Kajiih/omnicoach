@@ -966,16 +966,6 @@ pub fn collect_type_method_scopes(file: &ParsedFile) -> Vec<TypeMethodScope<'_>>
     dispatch_lang!(file.lang(), collect_type_method_scopes(file))
 }
 
-/// Whether a scope declaration is a callable (`fn` / `def`) or a type (`struct`, `enum`,
-/// `union`, `trait`, `class`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ScopeItemKind {
-    /// A function or method (`fn` in Rust, `def` / `async def` in Python).
-    Callable,
-    /// A type or trait declaration (`struct`, `enum`, `union`, `trait` in Rust; `class` in Python).
-    Type,
-}
-
 /// A function, method, or type definition inside a module, Python `class`, or Rust inherent
 /// `impl` scope.
 #[derive(Clone)]
@@ -984,8 +974,6 @@ pub struct ScopeItem<'a> {
     pub name_node: AstNode<'a>,
     /// Declaration identifier name.
     pub name: String,
-    /// Whether this item is a callable (`fn`/`def`) or a type (`struct`/`enum`/`union`/`trait`/`class`).
-    pub kind: ScopeItemKind,
     /// Visibility tier (`Public` vs. `Private`).
     pub visibility: MethodVisibility,
     /// True if this callable is a Tier 0 lifecycle constructor.
@@ -1139,9 +1127,6 @@ fn analyze_declaration_scope(scope: &DeclarationScope<'_>, out: &mut CachedCallC
 
     for callee in 0..count {
         if flagged_p1_or_p2[callee] || callables[callee].visibility == MethodVisibility::Public {
-            continue;
-        }
-        if callables[callee].kind != ScopeItemKind::Callable {
             continue;
         }
         let pinned_before = callables[callee].pinned_before;

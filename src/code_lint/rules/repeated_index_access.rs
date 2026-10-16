@@ -120,13 +120,6 @@ pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
     check: check_file,
 };
 
-/// Positions read from one receiver in one scope, anchored on its first read.
-struct ReceiverReads<'a> {
-    receiver: String,
-    first_read: AstNode<'a>,
-    positions: BTreeSet<i64>,
-}
-
 fn check_file(
     rule: &CodeRule<(CountOption, CountOption)>,
     path: &Path,
@@ -178,6 +171,13 @@ fn group_reads_by_receiver(scope: ScopePositionalReads<'_>) -> Vec<ReceiverReads
         }
     }
     groups
+}
+
+/// Positions read from one receiver in one scope, anchored on its first read.
+struct ReceiverReads<'a> {
+    receiver: String,
+    first_read: AstNode<'a>,
+    positions: BTreeSet<i64>,
 }
 
 /// Number of `_` placeholders an unpacking pattern reading `positions` needs, with a free `*_`

@@ -138,16 +138,6 @@ const RUST_COLLECTION_TYPES: &[&str] = &[
     "BinaryHeap",
 ];
 
-/// A return annotation that makes a collection type nullable.
-struct NullableCollectionReturn<'a> {
-    /// The function's name.
-    function: String,
-    /// The return annotation.
-    return_type: AstNode<'a>,
-    /// The collection types made nullable, joined with `", "`.
-    collections: String,
-}
-
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     let findings = match file.lang() {
         Language::Python => python_nullable_collection_returns(file),
@@ -231,6 +221,16 @@ fn rust_nullable_collection_returns(file: &ParsedFile) -> Vec<NullableCollection
             })
         })
         .collect()
+}
+
+/// A return annotation that makes a collection type nullable.
+struct NullableCollectionReturn<'a> {
+    /// The function's name.
+    function: String,
+    /// The return annotation.
+    return_type: AstNode<'a>,
+    /// The collection types made nullable, joined with `", "`.
+    collections: String,
 }
 
 fn extract_rust_nullable_collection_type(return_type_node: &AstNode<'_>) -> Option<String> {

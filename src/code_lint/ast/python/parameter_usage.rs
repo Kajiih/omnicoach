@@ -137,24 +137,6 @@ pub enum ParameterCollectionCapability {
     Sequence,
 }
 
-/// How a function body reads a parameter at one use site.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum UseRole {
-    /// Mutated, rebound, aliased, returned, yielded, or passed to an unknown function or method.
-    Escape,
-    /// Read without mutation by an operation that needs more than `Collection`: indexing,
-    /// `reversed`, `.index()`, equality, arithmetic, `repr`, `print`, ...
-    Read,
-    /// Truth-tested: `if x`, `not x`, `bool(x)`; propagates to `and`/`or` operands.
-    Truthiness,
-    /// Sized or membership-tested: `len(x)`, `v in x`.
-    Sized,
-    /// Iterated once: `for _ in x`, a comprehension, a single-pass builtin, or `*x` in a display.
-    Iterated,
-    /// Compared by identity: `x is None`.
-    Identity,
-}
-
 /// Classifies every use of a function's parameters in one walk of its body.
 struct ParameterUseVisitor<'a> {
     usages: HashMap<&'a str, ParameterUsage>,
@@ -425,6 +407,24 @@ impl<'a> SourceOrderVisitor<'a> for ParameterUseVisitor<'a> {
             _ => walk_expr(self, expr),
         }
     }
+}
+
+/// How a function body reads a parameter at one use site.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UseRole {
+    /// Mutated, rebound, aliased, returned, yielded, or passed to an unknown function or method.
+    Escape,
+    /// Read without mutation by an operation that needs more than `Collection`: indexing,
+    /// `reversed`, `.index()`, equality, arithmetic, `repr`, `print`, ...
+    Read,
+    /// Truth-tested: `if x`, `not x`, `bool(x)`; propagates to `and`/`or` operands.
+    Truthiness,
+    /// Sized or membership-tested: `len(x)`, `v in x`.
+    Sized,
+    /// Iterated once: `for _ in x`, a comprehension, a single-pass builtin, or `*x` in a display.
+    Iterated,
+    /// Compared by identity: `x is None`.
+    Identity,
 }
 
 /// Returns true if `name` is a builtin that reads or iterates a collection without mutating it

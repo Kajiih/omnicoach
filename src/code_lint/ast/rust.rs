@@ -3,9 +3,9 @@
 use crate::code_lint::ast::{
     AstNode, Binding, BindingKind, DeclarationScope, EnclosingFunction, FunctionReturn,
     LiteralOccurrence, LiteralRole, LiteralValue, MethodVisibility, ParsedFile, PositionalRead,
-    QualifiedName, ReturnShape, ScopeItem, ScopeItemKind, ScopePositionalReads, TestFunctionSetup,
-    TypeMethod, TypeMethodScope, is_rust_comment_kind, normalize_statement_text,
-    parse_float_literal, parse_integer_literal, push_bindings, span_from_rowan_range,
+    QualifiedName, ReturnShape, ScopeItem, ScopePositionalReads, TestFunctionSetup, TypeMethod,
+    TypeMethodScope, is_rust_comment_kind, normalize_statement_text, parse_float_literal,
+    parse_integer_literal, push_bindings, span_from_rowan_range,
 };
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast::{
@@ -1031,14 +1031,6 @@ fn is_simple_path_segment(segment: &ast::PathSegment) -> bool {
         && segment.ret_type().is_none()
 }
 
-/// The declaration of an item, after its leading outer attributes and doc comments.
-struct ItemDeclaration {
-    /// 1-indexed starting line number.
-    line: usize,
-    /// Trimmed source text.
-    text: String,
-}
-
 /// Returns the declaration of `node`, starting after any leading outer attributes, doc comments,
 /// and whitespace.
 fn item_line_and_text(file: &ParsedFile, node: &SyntaxNode) -> ItemDeclaration {
@@ -1058,6 +1050,14 @@ fn item_line_and_text(file: &ParsedFile, node: &SyntaxNode) -> ItemDeclaration {
     let line = file.line_index.line(start_offset);
     let text = file.source[start_offset..end_offset].trim().to_string();
     ItemDeclaration { line, text }
+}
+
+/// The declaration of an item, after its leading outer attributes and doc comments.
+struct ItemDeclaration {
+    /// 1-indexed starting line number.
+    line: usize,
+    /// Trimmed source text.
+    text: String,
 }
 
 fn collect_token_tree_paths(
@@ -1393,12 +1393,6 @@ fn is_literal_exempt_macro(name: &str) -> bool {
     LITERAL_EXEMPT_MACROS.contains(&name)
 }
 
-/// A scalar constant item (`const`, non-`mut` `static`, or `enum` variant).
-struct ScalarConstant {
-    /// The initializer expression node, absent when the item has none (`const N: usize;`).
-    initializer: Option<ast::Expr>,
-}
-
 /// Returns `node` as a scalar constant (`const`, non-`mut` `static`, or `enum` variant).
 fn constant_initializer_expr(node: &SyntaxNode) -> Option<ScalarConstant> {
     if let Some(const_item) = ast::Const::cast(node.clone()) {
@@ -1422,6 +1416,12 @@ fn constant_initializer_expr(node: &SyntaxNode) -> Option<ScalarConstant> {
         });
     }
     None
+}
+
+/// A scalar constant item (`const`, non-`mut` `static`, or `enum` variant).
+struct ScalarConstant {
+    /// The initializer expression node, absent when the item has none (`const N: usize;`).
+    initializer: Option<ast::Expr>,
 }
 
 /// Evaluates an [`ast::Literal`], negative [`ast::PrefixExpr`], or [`ast::LiteralPat`] node
@@ -1769,20 +1769,6 @@ pub(super) fn collect_declaration_scopes(file: &ParsedFile) -> Vec<DeclarationSc
     scopes
 }
 
-enum RustModuleItem {
-    Fn(ast::Fn),
-    Type(SyntaxNode),
-}
-
-struct RustModuleDecl<'a> {
-    name_node: AstNode<'a>,
-    name: String,
-    kind: ScopeItemKind,
-    visibility: MethodVisibility,
-    syntax_start: usize,
-    item: RustModuleItem,
-}
-
 /// Builds [`DeclarationScope`]s for direct `fn`, `struct`, `enum`, `union`, and `trait` items in
 /// a Rust module item list, grouping same-module `impl` blocks with their type/trait and starting
 /// a new scope segment whenever an item name is redefined.
@@ -1819,13 +1805,16 @@ fn build_rust_module_declaration_scopes<'a>(
             .enumerate()
             .map(|(idx, decl)| (decl.name.as_str(), idx))
             .collect();
-        let segment_kinds: Vec<ScopeItemKind> = segment.iter().map(|decl| decl.kind).collect();
+        let segment_is_type: Vec<bool> = segment
+            .iter()
+            .map(|decl| matches!(decl.item, RustModuleItem::Type(_)))
+            .collect();
 
         let impl_callees = collect_rust_impl_callees(
             &impl_items,
             seg_start..seg_end,
             &item_by_name,
-            &segment_kinds,
+            &segment_is_type,
             file,
         );
 
@@ -1837,7 +1826,7 @@ fn build_rust_module_declaration_scopes<'a>(
                     decl,
                     &impl_callees.attached[idx],
                     &item_by_name,
-                    &segment_kinds,
+                    &segment_is_type,
                     &impl_callees.external,
                 )
             })
@@ -1847,14 +1836,6 @@ fn build_rust_module_declaration_scopes<'a>(
     }
 
     scopes
-}
-
-/// The declarations and `impl` blocks directly inside a Rust module item list.
-struct RustModuleContents<'a> {
-    /// Direct `fn`, `struct`, `enum`, `union`, and `trait` declarations, in source order.
-    declarations: Vec<RustModuleDecl<'a>>,
-    /// Every direct `impl` block, keyed by its starting offset.
-    impl_items: Vec<(usize, ast::Impl)>,
 }
 
 /// Collects the direct `fn`, `struct`, `enum`, `union`, and `trait` declarations in `items`,
@@ -1885,7 +1866,6 @@ fn collect_rust_module_decls<'a>(
                             span_from_rowan_range(name_node.syntax().text_range()),
                         ),
                         name,
-                        kind: ScopeItemKind::Callable,
                         visibility,
                         syntax_start,
                         item: RustModuleItem::Fn(function.clone()),
@@ -1914,6 +1894,14 @@ fn collect_rust_module_decls<'a>(
     }
 }
 
+/// The declarations and `impl` blocks directly inside a Rust module item list.
+struct RustModuleContents<'a> {
+    /// Direct `fn`, `struct`, `enum`, `union`, and `trait` declarations, in source order.
+    declarations: Vec<RustModuleDecl<'a>>,
+    /// Every direct `impl` block, keyed by its starting offset.
+    impl_items: Vec<(usize, ast::Impl)>,
+}
+
 fn rust_type_decl<'a>(
     type_item: &(impl ast::HasName + ast::HasVisibility),
     syntax_start: usize,
@@ -1929,7 +1917,6 @@ fn rust_type_decl<'a>(
     Some(RustModuleDecl {
         name_node: AstNode::from_span(file, span_from_rowan_range(name_node.syntax().text_range())),
         name,
-        kind: ScopeItemKind::Type,
         visibility: method_visibility,
         syntax_start,
         item: RustModuleItem::Type(type_item.syntax().clone()),
@@ -1964,7 +1951,7 @@ fn build_rust_module_scope_item<'a>(
     decl: &RustModuleDecl<'a>,
     attached_impl_callees: &[usize],
     item_by_name: &HashMap<&str, usize>,
-    segment_kinds: &[ScopeItemKind],
+    segment_is_type: &[bool],
     external_impl_callees: &HashMap<String, Vec<usize>>,
 ) -> ScopeItem<'a> {
     let mut callees = Vec::new();
@@ -1974,7 +1961,7 @@ fn build_rust_module_scope_item<'a>(
             collect_rust_module_item_refs(
                 function.syntax(),
                 item_by_name,
-                segment_kinds,
+                segment_is_type,
                 external_impl_callees,
                 &local_names,
                 &mut callees,
@@ -1985,7 +1972,7 @@ fn build_rust_module_scope_item<'a>(
             collect_rust_module_item_refs(
                 syntax,
                 item_by_name,
-                segment_kinds,
+                segment_is_type,
                 external_impl_callees,
                 &local_names,
                 &mut callees,
@@ -2000,7 +1987,6 @@ fn build_rust_module_scope_item<'a>(
     ScopeItem {
         name_node: decl.name_node,
         name: decl.name.clone(),
-        kind: decl.kind,
         visibility: decl.visibility,
         is_constructor: false,
         callees,
@@ -2008,9 +1994,17 @@ fn build_rust_module_scope_item<'a>(
     }
 }
 
-struct RustImplCallees {
-    attached: Vec<Vec<usize>>,
-    external: HashMap<String, Vec<usize>>,
+struct RustModuleDecl<'a> {
+    name_node: AstNode<'a>,
+    name: String,
+    visibility: MethodVisibility,
+    syntax_start: usize,
+    item: RustModuleItem,
+}
+
+enum RustModuleItem {
+    Fn(ast::Fn),
+    Type(SyntaxNode),
 }
 
 /// Collects sibling module item references inside `impl_items` within `offset_range`, attaching
@@ -2020,11 +2014,11 @@ fn collect_rust_impl_callees(
     impl_items: &[(usize, ast::Impl)],
     offset_range: std::ops::Range<usize>,
     item_by_name: &HashMap<&str, usize>,
-    segment_kinds: &[ScopeItemKind],
+    segment_is_type: &[bool],
     file: &ParsedFile,
 ) -> RustImplCallees {
     let empty_impls = HashMap::new();
-    let mut attached = vec![Vec::new(); segment_kinds.len()];
+    let mut attached = vec![Vec::new(); segment_is_type.len()];
     let mut external: HashMap<String, Vec<usize>> = HashMap::new();
 
     for (start, impl_item) in impl_items {
@@ -2037,7 +2031,7 @@ fn collect_rust_impl_callees(
             collect_rust_module_item_refs(
                 self_type.syntax(),
                 item_by_name,
-                segment_kinds,
+                segment_is_type,
                 &empty_impls,
                 &impl_generics,
                 &mut callees,
@@ -2047,7 +2041,7 @@ fn collect_rust_impl_callees(
             collect_rust_module_item_refs(
                 trait_type.syntax(),
                 item_by_name,
-                segment_kinds,
+                segment_is_type,
                 &empty_impls,
                 &impl_generics,
                 &mut callees,
@@ -2057,7 +2051,7 @@ fn collect_rust_impl_callees(
             collect_rust_module_item_refs(
                 where_clause.syntax(),
                 item_by_name,
-                segment_kinds,
+                segment_is_type,
                 &empty_impls,
                 &impl_generics,
                 &mut callees,
@@ -2075,7 +2069,7 @@ fn collect_rust_impl_callees(
                         collect_rust_module_item_refs(
                             method.syntax(),
                             item_by_name,
-                            segment_kinds,
+                            segment_is_type,
                             &empty_impls,
                             &local_names,
                             &mut callees,
@@ -2085,7 +2079,7 @@ fn collect_rust_impl_callees(
                         collect_rust_module_item_refs(
                             other.syntax(),
                             item_by_name,
-                            segment_kinds,
+                            segment_is_type,
                             &empty_impls,
                             &impl_generics,
                             &mut callees,
@@ -2125,6 +2119,11 @@ fn collect_rust_impl_callees(
     }
 
     RustImplCallees { attached, external }
+}
+
+struct RustImplCallees {
+    attached: Vec<Vec<usize>>,
+    external: HashMap<String, Vec<usize>>,
 }
 
 fn impl_trait_name(impl_item: &ast::Impl) -> Option<String> {
@@ -2207,7 +2206,7 @@ fn collect_rust_generic_param_names(node: &SyntaxNode) -> HashSet<String> {
 fn collect_rust_module_item_refs(
     root: &SyntaxNode,
     item_by_name: &HashMap<&str, usize>,
-    segment_kinds: &[ScopeItemKind],
+    segment_is_type: &[bool],
     impl_callees: &HashMap<String, Vec<usize>>,
     local_names: &HashSet<String>,
     out: &mut Vec<usize>,
@@ -2230,7 +2229,7 @@ fn collect_rust_module_item_refs(
                 let name = ident.trim();
                 if !local_names.contains(name)
                     && let Some(&idx) = item_by_name.get(name)
-                    && (path.parent_path().is_none() || segment_kinds[idx] == ScopeItemKind::Type)
+                    && (path.parent_path().is_none() || segment_is_type[idx])
                     && !out.contains(&idx)
                 {
                     out.push(idx);
@@ -2313,7 +2312,6 @@ fn build_rust_impl_declaration_scope<'a>(
             ScopeItem {
                 name_node: method.name_node,
                 name: method.name.clone(),
-                kind: ScopeItemKind::Callable,
                 visibility: method.visibility,
                 is_constructor: method.is_constructor,
                 callees,
@@ -2930,16 +2928,6 @@ fn unwrap_rust_pointer_wrappers(type_node: ast::Type, file: &ParsedFile) -> ast:
     current
 }
 
-/// A path type whose terminal segment has a `<...>` generic argument list (`io::Result<T>`).
-struct GenericPathType {
-    /// The source span of the base path, through its terminal segment's name (`io::Result`).
-    base_span: SourceSpan,
-    /// The base path resolved through the file's imports.
-    base: QualifiedName,
-    /// The type arguments, excluding lifetime and associated-type arguments.
-    arguments: Vec<ast::Type>,
-}
-
 /// Extracts the base and type arguments of an [`ast::PathType`] whose terminal segment has a
 /// `<...>` generic argument list.
 fn extract_path_type_generics(
@@ -2981,6 +2969,16 @@ fn extract_path_type_generics(
         base: base_resolved,
         arguments: type_arguments,
     })
+}
+
+/// A path type whose terminal segment has a `<...>` generic argument list (`io::Result<T>`).
+struct GenericPathType {
+    /// The source span of the base path, through its terminal segment's name (`io::Result`).
+    base_span: SourceSpan,
+    /// The base path resolved through the file's imports.
+    base: QualifiedName,
+    /// The type arguments, excluding lifetime and associated-type arguments.
+    arguments: Vec<ast::Type>,
 }
 
 /// Normalizes a raw type path string by stripping whitespace and any leading `::`.

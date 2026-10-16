@@ -120,14 +120,6 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
     check: check_file,
 };
 
-/// A `Protocol` defined in the file, with the methods an implementation must define.
-struct LocalProtocol {
-    /// Index of the `Protocol` in [`extract_classes`] order.
-    index: usize,
-    /// Its counted methods and those of the in-file classes it extends.
-    methods: HashSet<String>,
-}
-
 fn check_file(
     rule: &CodeRule<CountOption>,
     path: &Path,
@@ -227,6 +219,14 @@ fn is_bound_protocol(
         .rfind(|other| other.index < index)
         .or_else(|| same_name().find(|other| other.index > index))
         .is_some_and(|bound| bound.index == protocol.index)
+}
+
+/// A `Protocol` defined in the file, with the methods an implementation must define.
+struct LocalProtocol {
+    /// Index of the `Protocol` in [`extract_classes`] order.
+    index: usize,
+    /// Its counted methods and those of the in-file classes it extends.
+    methods: HashSet<String>,
 }
 
 /// Names of the methods defined directly in `class` that count toward a `Protocol` contract:

@@ -44,9 +44,7 @@ pub const RULE: CodeRule = CodeRule {
 
                 Order private helpers from higher-level callers down to lower-level callees."},
             known_problems: Some(indoc::indoc! {r"
-                - Private types (`struct`, `enum`, `class`) are exempt from callee-before-caller
-                  ordering inside their owning public root's cluster so data structures can
-                  precede the private functions that use them.
+                - Constants (`const`, `static`, `UPPER_CASE = ...`) and type aliases are not ordered.
                 - In Rust macro arguments, a pattern binding or named argument that shares a sibling
                   function's name counts as a call, which can create a false ordering constraint."}),
             references: &[
@@ -306,19 +304,6 @@ crate::test_utils::rule_test!(
                         }
                     }
                 "#,
-                private_helper_type_before_private_caller_exempt => r#"
-                    pub fn parse_config(raw: &str) -> usize {
-                        parse_frame(raw).len
-                    }
-
-                    struct Frame {
-                        len: usize,
-                    }
-
-                    fn parse_frame(raw: &str) -> Frame {
-                        Frame { len: raw.len() }
-                    }
-                "#,
             ],
             fail: [
                 private_callee_before_private_caller_in_module => r#"
@@ -356,6 +341,19 @@ crate::test_utils::rule_test!(
                         }
                     }
                 "# => "is_delimiter",
+                private_helper_type_before_private_caller => r#"
+                    pub fn parse_config(raw: &str) -> usize {
+                        parse_frame(raw).len
+                    }
+
+                    struct Frame {
+                        len: usize,
+                    }
+
+                    fn parse_frame(raw: &str) -> Frame {
+                        Frame { len: raw.len() }
+                    }
+                "# => "Frame",
             ],
         },
     }

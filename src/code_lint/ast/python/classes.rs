@@ -9,7 +9,7 @@ use super::{
     resolved_path_and_terminal_expr,
 };
 use crate::code_lint::ast::{
-    DeclarationScope, MethodVisibility, ScopeItem, ScopeItemKind, TypeMethod, TypeMethodScope,
+    DeclarationScope, MethodVisibility, ScopeItem, TypeMethod, TypeMethodScope,
     span_from_ruff_range,
 };
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
@@ -946,12 +946,17 @@ fn build_module_declaration_scopes<'a>(
 
         let first_stmt_indices: Vec<usize> =
             segment.iter().map(|item| item.first_stmt_idx).collect();
+        let is_callable: Vec<bool> = segment
+            .iter()
+            .map(|item| matches!(item.item, PythonScopeItem::Callable(_)))
+            .collect();
         let pinned = compute_python_pinned_before(
             module_body,
             seg_start..seg_end,
             &first_stmt_indices,
             &item_by_name,
             &items,
+            &is_callable,
             future_annotations,
         );
         for (item, pin) in items.iter_mut().zip(pinned) {
@@ -1067,7 +1072,6 @@ fn build_python_module_scope_item<'a>(
     ScopeItem {
         name_node: group.name_node,
         name: group.name.clone(),
-        kind: group.kind,
         visibility: group.visibility,
         is_constructor: group.is_constructor,
         callees,
@@ -1242,7 +1246,6 @@ fn build_class_declaration_scope<'a>(
             ScopeItem {
                 name_node: group.name_node,
                 name: group.name,
-                kind: group.kind,
                 visibility: group.visibility,
                 is_constructor: group.is_constructor,
                 callees,
@@ -1251,12 +1254,14 @@ fn build_class_declaration_scope<'a>(
         })
         .collect();
 
+    let is_callable = vec![true; items.len()];
     let pinned = compute_python_pinned_before(
         &class_def.body,
         0..class_def.body.len(),
         &first_stmt_indices,
         &method_by_name,
         &items,
+        &is_callable,
         future_annotations,
     );
     for (item, pin) in items.iter_mut().zip(pinned) {
@@ -1268,13 +1273,14 @@ fn build_class_declaration_scope<'a>(
 
 /// Computes `pinned_before` for each scope item in `items` by walking top-to-bottom runtime
 /// evaluations in `scope_body[stmt_range]` (outside `Stmt::FunctionDef` bodies) and propagating
-/// constraints through `ScopeItemKind::Callable` call edges.
+/// constraints through callable call edges.
 fn compute_python_pinned_before(
     scope_body: &[Stmt],
     stmt_range: std::ops::Range<usize>,
     first_stmt_indices: &[usize],
     item_by_name: &HashMap<String, usize>,
     items: &[ScopeItem<'_>],
+    is_callable: &[bool],
     future_annotations: bool,
 ) -> Vec<Option<usize>> {
     let count = items.len();
@@ -1310,13 +1316,13 @@ fn compute_python_pinned_before(
         }
     }
 
-    // Propagate runtime pins through Callable callees: if a function `u` is evaluated before
-    // `pin`, any sibling function `v < pin` reachable from `u` must also be defined before `pin`.
+    // Propagate runtime pins through callable callees: if a function `u` is evaluated before
+    // `pin`, any sibling item `v < pin` reachable from `u` must also be defined before `pin`.
     for start in 0..count {
         let Some(pin) = pinned[start] else {
             continue;
         };
-        if items[start].kind != ScopeItemKind::Callable {
+        if !is_callable[start] {
             continue;
         }
         let mut stack = vec![start];
@@ -1329,7 +1335,7 @@ fn compute_python_pinned_before(
             for &callee in &items[cur].callees {
                 if callee < pin {
                     pinned[callee] = Some(pinned[callee].map_or(pin, |prev| prev.min(pin)));
-                    if items[callee].kind == ScopeItemKind::Callable {
+                    if is_callable[callee] {
                         stack.push(callee);
                     }
                 }
@@ -1501,21 +1507,6 @@ fn collect_self_annotated_assignments(body: &[Stmt]) -> Vec<(&StmtAnnAssign, Str
 const OVERLOAD_DECORATOR_PATHS: &[&str] =
     &["overload", "typing.overload", "typing_extensions.overload"];
 
-enum PythonScopeItem<'ast> {
-    Callable(Vec<&'ast StmtFunctionDef>),
-    Type(&'ast StmtClassDef),
-}
-
-struct GroupedPythonScopeItem<'a, 'ast> {
-    name_node: AstNode<'a>,
-    name: String,
-    kind: ScopeItemKind,
-    visibility: MethodVisibility,
-    is_constructor: bool,
-    first_stmt_idx: usize,
-    item: PythonScopeItem<'ast>,
-}
-
 /// Collects direct functions and classes in `scope_body` in source order, grouping `@overload`
 /// signatures and `@<prop>.setter` / `@<prop>.deleter` accessors with their first definition.
 fn group_python_scope_items<'a, 'ast>(
@@ -1575,7 +1566,6 @@ fn group_python_scope_items<'a, 'ast>(
                         span_from_ruff_range(function_def.name.range),
                     ),
                     name,
-                    kind: ScopeItemKind::Callable,
                     visibility,
                     is_constructor,
                     first_stmt_idx: stmt_idx,
@@ -1589,7 +1579,6 @@ fn group_python_scope_items<'a, 'ast>(
                 items.push(GroupedPythonScopeItem {
                     name_node: AstNode::from_span(file, span_from_ruff_range(class_def.name.range)),
                     name,
-                    kind: ScopeItemKind::Type,
                     visibility,
                     is_constructor: false,
                     first_stmt_idx: stmt_idx,
@@ -1601,6 +1590,20 @@ fn group_python_scope_items<'a, 'ast>(
     }
 
     items
+}
+
+struct GroupedPythonScopeItem<'a, 'ast> {
+    name_node: AstNode<'a>,
+    name: String,
+    visibility: MethodVisibility,
+    is_constructor: bool,
+    first_stmt_idx: usize,
+    item: PythonScopeItem<'ast>,
+}
+
+enum PythonScopeItem<'ast> {
+    Callable(Vec<&'ast StmtFunctionDef>),
+    Type(&'ast StmtClassDef),
 }
 
 /// Classifies the visibility tier of a Python function or method identifier: public or

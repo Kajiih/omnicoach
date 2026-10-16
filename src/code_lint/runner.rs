@@ -218,13 +218,6 @@ pub fn run_code_lint(options: &LintOptions, config: &Config) -> anyhow::Result<L
     Ok(report)
 }
 
-/// A target file scheduled for static analysis.
-#[derive(Debug)]
-struct LintTarget {
-    path: PathBuf,
-    changed_lines: Option<HashSet<usize>>,
-}
-
 fn collect_targets(options: &LintOptions) -> anyhow::Result<Vec<LintTarget>> {
     let enable_diff = options.diff || options.diff_rev.is_some();
     let effective_paths = if options.paths.is_empty() {
@@ -310,6 +303,13 @@ fn collect_directory_candidates(dir: &Path) -> impl Iterator<Item = LintTarget> 
                 changed_lines: None,
             })
         })
+}
+
+/// A target file scheduled for static analysis.
+#[derive(Debug)]
+struct LintTarget {
+    path: PathBuf,
+    changed_lines: Option<HashSet<usize>>,
 }
 
 fn lint_single_file(
