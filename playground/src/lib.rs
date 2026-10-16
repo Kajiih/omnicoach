@@ -55,7 +55,7 @@ mod wasm_abi {
     }
 }
 
-/// Processes a JSON-encoded [`PlaygroundRequest`] and returns a JSON-encoded [`PlaygroundResponse`].
+/// Processes a JSON-encoded `PlaygroundRequest` and returns a JSON-encoded `PlaygroundResponse`.
 #[must_use]
 pub fn handle_request(request_json: &str) -> String {
     let response = match serde_json::from_str::<PlaygroundRequest>(request_json) {
