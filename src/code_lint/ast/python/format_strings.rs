@@ -475,14 +475,6 @@ pub fn extract_valid_field_root(field_name: &str) -> Option<&str> {
     Some(root)
 }
 
-/// The root `arg_name`s of one parsed `{...}` replacement field.
-struct ReplacementFieldRoots<'a> {
-    /// The byte index after the field's closing `}`.
-    end: usize,
-    /// The root `arg_name`s found inside the field, in source order.
-    roots: Vec<&'a str>,
-}
-
 /// Parses one `{...}` replacement field whose body starts at `start` (immediately after `{`).
 fn parse_replacement_field(message: &str, start: usize) -> Option<ReplacementFieldRoots<'_>> {
     let mut cursor = start;
@@ -528,6 +520,14 @@ fn parse_replacement_field(message: &str, start: usize) -> Option<ReplacementFie
         end: next_cursor,
         roots,
     })
+}
+
+/// The root `arg_name`s of one parsed `{...}` replacement field.
+struct ReplacementFieldRoots<'a> {
+    /// The byte index after the field's closing `}`.
+    end: usize,
+    /// The root `arg_name`s found inside the field, in source order.
+    roots: Vec<&'a str>,
 }
 
 /// Parses the `:format_spec` portion of a PEP 3101 replacement field starting at `start`,

@@ -110,14 +110,6 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
     diagnostics
 }
 
-/// A placeholder as matched inside quotes, with the `repr` placeholder that replaces it.
-struct ReprReplacement {
-    /// The placeholder as matched inside quotes (`{name}`, `%s`).
-    placeholder: String,
-    /// The `repr` placeholder that replaces the quoted one (`{name!r}`, `%r`).
-    replacement: String,
-}
-
 /// Returns the placeholder as matched inside quotes and its `repr` replacement, or `None` when
 /// the placeholder already sets a conversion or format spec, or is not a bare field.
 ///
@@ -168,18 +160,12 @@ fn repr_replacement(
     }
 }
 
-/// Text around one placeholder, as the prose and quote heuristics read it.
-struct PlaceholderNeighbors {
-    /// Text immediately preceding the placeholder.
-    before: String,
-    /// Text from the start of the (possibly concatenated) string up to the placeholder.
-    full_before: String,
-    /// The part of `full_before` checked for unclosed `{` / `[` delimiters.
-    structure_before: String,
-    /// Text immediately following the placeholder.
-    after: String,
-    /// True when `after` is immediately followed by another placeholder.
-    followed_by_placeholder: bool,
+/// A placeholder as matched inside quotes, with the `repr` placeholder that replaces it.
+struct ReprReplacement {
+    /// The placeholder as matched inside quotes (`{name}`, `%s`).
+    placeholder: String,
+    /// The `repr` placeholder that replaces the quoted one (`{name!r}`, `%r`).
+    replacement: String,
 }
 
 /// Builds the neighbors of `format_string.placeholders[index]`.
@@ -235,15 +221,6 @@ fn placeholder_neighbors(
     }
 }
 
-/// Extracted quote pair surrounding a placeholder, together with the text before the opening
-/// quote and after the closing quote.
-struct MatchedQuotePair<'a> {
-    opening: &'a str,
-    closing: &'a str,
-    prefix_before: &'a str,
-    suffix_after: &'a str,
-}
-
 /// Checks whether a placeholder surrounded by `neighbors` is quote-wrapped in a prose context,
 /// returning the quote-wrapped expression if so.
 fn match_prose_quoted_placeholder(
@@ -271,6 +248,20 @@ fn match_prose_quoted_placeholder(
         open = matched.opening,
         close = matched.closing,
     ))
+}
+
+/// Text around one placeholder, as the prose and quote heuristics read it.
+struct PlaceholderNeighbors {
+    /// Text immediately preceding the placeholder.
+    before: String,
+    /// Text from the start of the (possibly concatenated) string up to the placeholder.
+    full_before: String,
+    /// The part of `full_before` checked for unclosed `{` / `[` delimiters.
+    structure_before: String,
+    /// Text immediately following the placeholder.
+    after: String,
+    /// True when `after` is immediately followed by another placeholder.
+    followed_by_placeholder: bool,
 }
 
 /// Checks whether `before` ends with a single or double quote (unescaped or single-backslash
@@ -319,6 +310,15 @@ fn extract_matching_quote_pair<'a>(
         prefix_before,
         suffix_after,
     })
+}
+
+/// Extracted quote pair surrounding a placeholder, together with the text before the opening
+/// quote and after the closing quote.
+struct MatchedQuotePair<'a> {
+    opening: &'a str,
+    closing: &'a str,
+    prefix_before: &'a str,
+    suffix_after: &'a str,
 }
 
 /// Whitespace escape sequences as they appear in undecoded source text.

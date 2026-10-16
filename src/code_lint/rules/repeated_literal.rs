@@ -132,31 +132,6 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
     check: check_file,
 };
 
-/// The occurrences of one literal value in a file.
-///
-/// Only direct scalar constant initializers (`X = "a"`) count toward `definitions`; composite
-/// constant initializers (`HOSTS = ["a", "b"]`, `pub const RULE: CodeRule = ...`) are skipped by
-/// the AST extractor so a single inline use of the same literal elsewhere in the file is not flagged.
-struct LiteralGroup<'a> {
-    definitions: usize,
-    inline_uses: Vec<AstNode<'a>>,
-}
-
-impl<'a> LiteralGroup<'a> {
-    /// The inline uses to flag: all of them once a constant holds the value, every use after
-    /// the first otherwise. A group without definitions has at least one inline use.
-    fn flagged_uses(&self, min_occurrences: usize) -> &[AstNode<'a>] {
-        let inline_count = self.inline_uses.len();
-        if self.definitions > 0 && self.definitions + inline_count >= min_occurrences {
-            &self.inline_uses
-        } else if self.definitions == 0 && inline_count >= min_occurrences {
-            &self.inline_uses[1..]
-        } else {
-            &[]
-        }
-    }
-}
-
 fn check_file(
     rule: &CodeRule<CountOption>,
     path: &Path,
@@ -200,6 +175,31 @@ fn group_literals(file: &ParsedFile) -> Vec<LiteralGroup<'_>> {
         }
     }
     groups
+}
+
+/// The occurrences of one literal value in a file.
+///
+/// Only direct scalar constant initializers (`X = "a"`) count toward `definitions`; composite
+/// constant initializers (`HOSTS = ["a", "b"]`, `pub const RULE: CodeRule = ...`) are skipped by
+/// the AST extractor so a single inline use of the same literal elsewhere in the file is not flagged.
+struct LiteralGroup<'a> {
+    definitions: usize,
+    inline_uses: Vec<AstNode<'a>>,
+}
+
+impl<'a> LiteralGroup<'a> {
+    /// The inline uses to flag: all of them once a constant holds the value, every use after
+    /// the first otherwise. A group without definitions has at least one inline use.
+    fn flagged_uses(&self, min_occurrences: usize) -> &[AstNode<'a>] {
+        let inline_count = self.inline_uses.len();
+        if self.definitions > 0 && self.definitions + inline_count >= min_occurrences {
+            &self.inline_uses
+        } else if self.definitions == 0 && inline_count >= min_occurrences {
+            &self.inline_uses[1..]
+        } else {
+            &[]
+        }
+    }
 }
 
 #[cfg(test)]

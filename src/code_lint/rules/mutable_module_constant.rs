@@ -128,14 +128,6 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
     diagnostics
 }
 
-/// The mutable collection types of a module constant and the node that names them.
-struct MutableCollections<'tree, 'assignment> {
-    /// The node to report: the annotation or the value.
-    node: &'assignment AstNode<'tree>,
-    /// The mutable collection types `node` names or builds.
-    collection_types: Vec<PythonCollectionType>,
-}
-
 /// The node to report and the mutable collection types of `assignment`: those of its annotation,
 /// or else the collection its value builds.
 fn mutable_collections<'tree, 'assignment>(
@@ -180,6 +172,14 @@ fn mutable_collections<'tree, 'assignment>(
         node: value,
         collection_types: vec![built],
     })
+}
+
+/// The mutable collection types of a module constant and the node that names them.
+struct MutableCollections<'tree, 'assignment> {
+    /// The node to report: the annotation or the value.
+    node: &'assignment AstNode<'tree>,
+    /// The mutable collection types `node` names or builds.
+    collection_types: Vec<PythonCollectionType>,
 }
 
 /// Returns true if `constructed` is called at runtime to build a mutable collection: `list`,

@@ -19,65 +19,6 @@ fn main() {
     }
 }
 
-#[derive(Parser, Debug)]
-#[command(
-    name = "omnicoach",
-    version,
-    about = "Static code analysis and command workflow coach"
-)]
-struct Cli {
-    #[command(subcommand)]
-    subcommand: Option<DomainCommand>,
-
-    /// Output format for diagnostics
-    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Plain)]
-    format: OutputFormat,
-
-    /// Run linter only on files/lines changed in VCS
-    #[arg(long)]
-    diff: bool,
-
-    /// Run linter comparing against a custom revision/commit (implies --diff)
-    #[arg(long)]
-    diff_rev: Option<String>,
-
-    #[command(flatten)]
-    config_overrides: ConfigOverrides,
-
-    #[command(flatten)]
-    discovery: DiscoveryArgs,
-}
-
-#[derive(Subcommand, Debug)]
-enum DomainCommand {
-    /// Inspect source files and directories
-    Code(CodeArgs),
-    /// Validate an intercepted shell command string
-    Command(CommandArgs),
-}
-
-#[derive(Args, Debug)]
-struct CodeArgs {
-    /// Paths to inspect
-    #[arg(default_value = ".")]
-    paths: Vec<PathBuf>,
-
-    /// Run linter only on files/lines changed in VCS
-    #[arg(long)]
-    diff: bool,
-
-    /// Run linter comparing against a custom revision/commit (implies --diff)
-    #[arg(long)]
-    diff_rev: Option<String>,
-}
-
-#[derive(Args, Debug)]
-struct CommandArgs {
-    /// Shell command string to validate
-    #[arg(long, required_unless_present_any = ["list_rules", "list_tags", "explain"])]
-    cmd: Option<String>,
-}
-
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -154,4 +95,63 @@ fn run_command(command: &str, config: &Config, format: OutputFormat) -> anyhow::
         std::process::exit(1);
     }
     Ok(())
+}
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "omnicoach",
+    version,
+    about = "Static code analysis and command workflow coach"
+)]
+struct Cli {
+    #[command(subcommand)]
+    subcommand: Option<DomainCommand>,
+
+    /// Output format for diagnostics
+    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Plain)]
+    format: OutputFormat,
+
+    /// Run linter only on files/lines changed in VCS
+    #[arg(long)]
+    diff: bool,
+
+    /// Run linter comparing against a custom revision/commit (implies --diff)
+    #[arg(long)]
+    diff_rev: Option<String>,
+
+    #[command(flatten)]
+    config_overrides: ConfigOverrides,
+
+    #[command(flatten)]
+    discovery: DiscoveryArgs,
+}
+
+#[derive(Subcommand, Debug)]
+enum DomainCommand {
+    /// Inspect source files and directories
+    Code(CodeArgs),
+    /// Validate an intercepted shell command string
+    Command(CommandArgs),
+}
+
+#[derive(Args, Debug)]
+struct CodeArgs {
+    /// Paths to inspect
+    #[arg(default_value = ".")]
+    paths: Vec<PathBuf>,
+
+    /// Run linter only on files/lines changed in VCS
+    #[arg(long)]
+    diff: bool,
+
+    /// Run linter comparing against a custom revision/commit (implies --diff)
+    #[arg(long)]
+    diff_rev: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct CommandArgs {
+    /// Shell command string to validate
+    #[arg(long, required_unless_present_any = ["list_rules", "list_tags", "explain"])]
+    cmd: Option<String>,
 }

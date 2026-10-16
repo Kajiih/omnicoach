@@ -451,13 +451,6 @@ fn resolve(label: String, location: &Location) -> Result<Selector, ConfigError> 
     }
 }
 
-/// What a selector asks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Verdict {
-    Select,
-    Ignore,
-}
-
 /// Validated `select` and `ignore` sets (`select: None` selects every rule by default).
 struct Plan {
     select: Option<BTreeSet<Selector>>,
@@ -501,6 +494,13 @@ struct Decision {
     verdict: Verdict,
     selector: Selector,
     branch: Vec<Tag>,
+}
+
+/// What a selector asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    Select,
+    Ignore,
 }
 
 #[cfg(test)]

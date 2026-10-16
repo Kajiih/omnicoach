@@ -94,14 +94,6 @@ pub fn detect_vcs_diff(custom_rev: Option<&str>) -> Result<DetectedDiff, DiffErr
     Ok((vcs_type, resolved_rev.to_string(), absolute_diff))
 }
 
-/// A version-controlled repository enclosing the current working directory.
-struct Repository {
-    /// The repository root directory.
-    root: PathBuf,
-    /// The VCS that manages the repository.
-    vcs_type: VcsType,
-}
-
 /// Walks up from the current working directory to locate the repository root
 /// and determine the active VCS type.
 #[must_use]
@@ -125,6 +117,14 @@ fn find_repo_root() -> Option<Repository> {
         }
     }
     None
+}
+
+/// A version-controlled repository enclosing the current working directory.
+struct Repository {
+    /// The repository root directory.
+    root: PathBuf,
+    /// The VCS that manages the repository.
+    vcs_type: VcsType,
 }
 
 /// Jujutsu CLI binary, both spawned and named in errors.
