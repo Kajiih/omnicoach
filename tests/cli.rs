@@ -286,7 +286,7 @@ fn test_self_dogfooding_code_lint() {
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let output = Command::cargo_bin(BIN_NAME)
         .unwrap()
-        .args(["code", "src", "tests", "playground"])
+        .args(["code", "."])
         .current_dir(&manifest_dir)
         .output()
         .expect("failed to execute omnicoach on workspace");
