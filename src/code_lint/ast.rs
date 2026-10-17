@@ -1013,6 +1013,29 @@ pub struct DeclarationScope<'a> {
     pub items: Vec<ScopeItem<'a>>,
 }
 
+/// Splits `declarations` into consecutive segments, starting a new segment whenever `name`
+/// returns a name already declared in the current segment.
+pub(in crate::code_lint::ast) fn split_at_redefinitions<T>(
+    declarations: Vec<T>,
+    name: impl Fn(&T) -> &str,
+) -> Vec<Vec<T>> {
+    let mut segments = Vec::new();
+    let mut current_segment = Vec::new();
+    let mut seen_names = HashSet::new();
+    for declaration in declarations {
+        if !seen_names.insert(name(&declaration).to_owned()) {
+            segments.push(std::mem::take(&mut current_segment));
+            seen_names.clear();
+            seen_names.insert(name(&declaration).to_owned());
+        }
+        current_segment.push(declaration);
+    }
+    if !current_segment.is_empty() {
+        segments.push(current_segment);
+    }
+    segments
+}
+
 /// A misplaced declaration reported by the call-cluster ordering analyzer.
 pub struct CallOrderFinding<'a> {
     /// Identifier AST node of the misplaced declaration.

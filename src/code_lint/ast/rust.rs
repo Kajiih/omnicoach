@@ -6,6 +6,7 @@ use crate::code_lint::ast::{
     QualifiedName, ReturnShape, ScopeItem, ScopeItemKind, ScopePositionalReads, TestFunctionSetup,
     TypeMethod, TypeMethodScope, is_rust_comment_kind, normalize_statement_text,
     parse_float_literal, parse_integer_literal, push_bindings, span_from_rowan_range,
+    split_at_redefinitions,
 };
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast::{
@@ -1784,7 +1785,7 @@ fn build_rust_module_declaration_scopes<'a>(
         return Vec::new();
     }
 
-    let segments = split_rust_module_segments(declarations);
+    let segments = split_at_redefinitions(declarations, |decl| decl.name.as_str());
     let mut scopes = Vec::new();
 
     for (seg_idx, segment) in segments.iter().enumerate() {
@@ -1929,28 +1930,6 @@ fn rust_type_decl<'a>(
         syntax_start,
         item: RustModuleItem::Type(type_item.syntax().clone()),
     })
-}
-
-/// Splits `declarations` into consecutive segments, starting a new segment whenever a name is
-/// redefined.
-fn split_rust_module_segments(
-    declarations: Vec<RustModuleDecl<'_>>,
-) -> Vec<Vec<RustModuleDecl<'_>>> {
-    let mut segments = Vec::new();
-    let mut current_segment = Vec::new();
-    let mut seen_names = HashSet::new();
-    for decl in declarations {
-        if !seen_names.insert(decl.name.clone()) {
-            segments.push(std::mem::take(&mut current_segment));
-            seen_names.clear();
-            seen_names.insert(decl.name.clone());
-        }
-        current_segment.push(decl);
-    }
-    if !current_segment.is_empty() {
-        segments.push(current_segment);
-    }
-    segments
 }
 
 /// Builds the [`ScopeItem`] for `decl`, merging the sibling references collected from its own
