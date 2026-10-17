@@ -383,6 +383,43 @@ fn rule_names(mut predicate: impl FnMut(&RegisteredRule) -> bool) -> HashSet<Rul
         .collect()
 }
 
+/// Validated `select` and `ignore` sets (`select: None` selects every rule by default).
+struct Plan {
+    select: Option<BTreeSet<Selector>>,
+    ignore: BTreeSet<Selector>,
+}
+
+impl Plan {
+    /// Model B: nearest selector per branch, then ignore wins across branches.
+    fn decide(&self, rule: &RegisteredRule) -> RuleStatus {
+        let decisions = rule.branches().into_iter().filter_map(|branch| {
+            let (selector, verdict) = std::iter::once(Selector::Rule(rule.name))
+                .chain(branch.iter().rev().map(|&tag| Selector::Tag(tag)))
+                .find_map(|selector| Some((selector, self.verdict(selector)?)))?;
+            Some(Decision {
+                verdict,
+                selector,
+                branch,
+            })
+        });
+        RuleStatus {
+            selected_by_default: self.select.is_none(),
+            // The first `ignore` decision if any, else the first `select` one.
+            deciding: decisions.min_by_key(|decision| decision.verdict == Verdict::Select),
+        }
+    }
+
+    fn verdict(&self, selector: Selector) -> Option<Verdict> {
+        if self.ignore.contains(&selector) {
+            Some(Verdict::Ignore)
+        } else if self.select.as_ref()?.contains(&selector) {
+            Some(Verdict::Select)
+        } else {
+            None
+        }
+    }
+}
+
 fn parse_plan_with_overrides(
     select: Option<Vec<String>>,
     ignore: Vec<String>,
@@ -448,43 +485,6 @@ fn resolve(label: String, location: &Location) -> Result<Selector, ConfigError> 
             label,
             location,
         }),
-    }
-}
-
-/// Validated `select` and `ignore` sets (`select: None` selects every rule by default).
-struct Plan {
-    select: Option<BTreeSet<Selector>>,
-    ignore: BTreeSet<Selector>,
-}
-
-impl Plan {
-    /// Model B: nearest selector per branch, then ignore wins across branches.
-    fn decide(&self, rule: &RegisteredRule) -> RuleStatus {
-        let decisions = rule.branches().into_iter().filter_map(|branch| {
-            let (selector, verdict) = std::iter::once(Selector::Rule(rule.name))
-                .chain(branch.iter().rev().map(|&tag| Selector::Tag(tag)))
-                .find_map(|selector| Some((selector, self.verdict(selector)?)))?;
-            Some(Decision {
-                verdict,
-                selector,
-                branch,
-            })
-        });
-        RuleStatus {
-            selected_by_default: self.select.is_none(),
-            // The first `ignore` decision if any, else the first `select` one.
-            deciding: decisions.min_by_key(|decision| decision.verdict == Verdict::Select),
-        }
-    }
-
-    fn verdict(&self, selector: Selector) -> Option<Verdict> {
-        if self.ignore.contains(&selector) {
-            Some(Verdict::Ignore)
-        } else if self.select.as_ref()?.contains(&selector) {
-            Some(Verdict::Select)
-        } else {
-            None
-        }
     }
 }
 

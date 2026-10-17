@@ -111,6 +111,20 @@ Because visibility, helper placement, and caller-callee ordering are projections
 | **Stage 2 (`pos > max(Roots(h))`)** | **`uncolocated-helper`** | Once a rooted private helper `h` (`\|Roots(h)\| >= 1`) is below all of its public callers, it must sit in **one of two valid places**:<br>• **Place 1 (Immediately after consumer, `Roots(h) = {p}` only)**: every item between `p` and `h` also has `Roots == {p}` (or is a sibling constructor when `p` is a constructor).<br>• **Place 2 (Trailing helper section at the end of the scope, `\|Roots(h)\| >= 1`)**: `pos(h) > last_pub` (and if `Roots(h) = {p}`, none of `p`'s helpers were placed in Place 1 before `last_pub`). |
 | **Stage 3 (`Private -> Private` Order)** | **`callee-before-caller`** | Among all private callables not flagged by Stage 1 or Stage 2 (`Private -> Private`), a `callee` must not be declared before its `caller` (unless they belong to the same Strongly Connected Component of mutually recursive functions, or in a scope where the caller is unrooted and the callee is rooted). |
 
+### 3.4 Stage 3 Abstraction Edges Between Functions and Types
+
+Stages 1 and 2 count every reference (signature or body) toward root ownership. Stage 3 orders private functions and types from higher to lower abstraction, where `u -> v` requires `pos(u) < pos(v)`:
+
+| Edge | When | Why `u` is higher-level |
+| :--- | :--- | :--- |
+| `Fn -> Fn` | `f` calls `g` | `g` implements part of `f`'s body (stepdown rule). |
+| `Type -> Type` | `T` has a field or variant of type `U` | Whole before part. |
+| `Type -> Fn` | `T`'s `impl` blocks call `g` | `g` implements part of `T`'s behavior. |
+| `Fn -> Type` | `T` is in `f`'s body or in the return type of a function `f` calls, but not in `f`'s signature or its field types | `f` encapsulates `T`: `T` doesn't exist outside `f`. |
+| `Type -> Fn` | `T` is named directly in `f`'s parameter or return types | `T` is the vocabulary of `f`'s contract, so a reader needs it before reading `f`. |
+
+Together, the last two edges place each private type between the function that encapsulates it and the helpers whose signatures use it, for example `check_file -> LocalProtocol -> uninherited_protocols -> is_bound_protocol`.
+
 ---
 
 ## 4. Consequences

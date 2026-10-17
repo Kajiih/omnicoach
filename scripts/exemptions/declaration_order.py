@@ -208,7 +208,7 @@ MUTATIONS = (
         "signature types are not encapsulated callees",
         AST,
         (("|| sig_closure[callee]", "|| false"),),
-        (CALLEE + "signature_type_before_private_fn_exempt",),
+        (CALLEE + "signature_closure_type_not_encapsulated_exempt",),
     ),
     Mutation(
         "reversed main guard comparison",

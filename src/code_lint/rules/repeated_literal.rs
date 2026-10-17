@@ -152,31 +152,6 @@ fn check_file(
     diagnostics
 }
 
-/// Groups the file's non-trivial literals by value, in first-seen order. Rust test code is
-/// left out so a test literal cannot pair with a production one.
-fn group_literals(file: &ParsedFile) -> Vec<LiteralGroup<'_>> {
-    let mut index_by_value: HashMap<LiteralValue, usize> = HashMap::new();
-    let mut groups: Vec<LiteralGroup<'_>> = Vec::new();
-    for occurrence in ast::collect_literal_occurrences(file) {
-        if is_trivial_literal(&occurrence.value) || occurrence.node.is_in_rust_inline_test() {
-            continue;
-        }
-        let index = *index_by_value.entry(occurrence.value).or_insert_with(|| {
-            groups.push(LiteralGroup {
-                definitions: 0,
-                inline_uses: Vec::new(),
-            });
-            groups.len() - 1
-        });
-        let group = &mut groups[index];
-        match occurrence.role {
-            LiteralRole::ConstantDefinition => group.definitions += 1,
-            LiteralRole::Inline => group.inline_uses.push(occurrence.node),
-        }
-    }
-    groups
-}
-
 /// The occurrences of one literal value in a file.
 ///
 /// Only direct scalar constant initializers (`X = "a"`) count toward `definitions`; composite
@@ -200,6 +175,31 @@ impl<'a> LiteralGroup<'a> {
             &[]
         }
     }
+}
+
+/// Groups the file's non-trivial literals by value, in first-seen order. Rust test code is
+/// left out so a test literal cannot pair with a production one.
+fn group_literals(file: &ParsedFile) -> Vec<LiteralGroup<'_>> {
+    let mut index_by_value: HashMap<LiteralValue, usize> = HashMap::new();
+    let mut groups: Vec<LiteralGroup<'_>> = Vec::new();
+    for occurrence in ast::collect_literal_occurrences(file) {
+        if is_trivial_literal(&occurrence.value) || occurrence.node.is_in_rust_inline_test() {
+            continue;
+        }
+        let index = *index_by_value.entry(occurrence.value).or_insert_with(|| {
+            groups.push(LiteralGroup {
+                definitions: 0,
+                inline_uses: Vec::new(),
+            });
+            groups.len() - 1
+        });
+        let group = &mut groups[index];
+        match occurrence.role {
+            LiteralRole::ConstantDefinition => group.definitions += 1,
+            LiteralRole::Inline => group.inline_uses.push(occurrence.node),
+        }
+    }
+    groups
 }
 
 #[cfg(test)]

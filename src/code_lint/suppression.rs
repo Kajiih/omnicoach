@@ -462,6 +462,14 @@ fn starts_with_keyword(text: &str, keyword: &str) -> bool {
     })
 }
 
+/// The `omni:` or `omnicoach:` prefix of a suppression directive.
+struct DirectivePrefix<'a> {
+    /// True for `disable-file`, false for `ignore`.
+    is_file: bool,
+    /// The directive text after the prefix.
+    remainder: &'a str,
+}
+
 /// Parses the `omni:` or `omnicoach:` (`disable-file` / `ignore`) prefix and validates boundary delimiters.
 fn parse_directive_prefix(stripped: &str) -> Option<DirectivePrefix<'_>> {
     let body = DIRECTIVE_NAMESPACES
@@ -484,12 +492,12 @@ fn parse_directive_prefix(stripped: &str) -> Option<DirectivePrefix<'_>> {
     Some(DirectivePrefix { is_file, remainder })
 }
 
-/// The `omni:` or `omnicoach:` prefix of a suppression directive.
-struct DirectivePrefix<'a> {
-    /// True for `disable-file`, false for `ignore`.
-    is_file: bool,
-    /// The directive text after the prefix.
-    remainder: &'a str,
+/// The bracketed rule names `[rule-a, rule-b]` of a directive body.
+struct BracketedRules<'a> {
+    /// The rule names, empty for a blanket directive (no list, an unclosed list or an empty one).
+    rules: Vec<String>,
+    /// The directive body after the closing `]`, or the whole body without a closed list.
+    rest: &'a str,
 }
 
 /// Parses bracketed rule names `[rule-a, rule-b]` from the directive body.
@@ -520,12 +528,42 @@ fn parse_bracketed_rules(remainder_trimmed: &str) -> BracketedRules<'_> {
     )
 }
 
-/// The bracketed rule names `[rule-a, rule-b]` of a directive body.
-struct BracketedRules<'a> {
-    /// The rule names, empty for a blanket directive (no list, an unclosed list or an empty one).
-    rules: Vec<String>,
-    /// The directive body after the closing `]`, or the whole body without a closed list.
-    rest: &'a str,
+/// A parsed omni suppression directive comment.
+#[derive(Debug, Clone)]
+struct ParsedDirective {
+    /// The placement scope of the directive.
+    placement: DirectivePlacement,
+    /// The byte span of the comment in the source file.
+    span: SourceSpan,
+    /// The 1-indexed line and column coordinate where the directive comment resides.
+    coord: LineColumn,
+    /// Rule names targeted by the directive (e.g. `["single-letter-name"]`).
+    target_rules: Vec<String>,
+    /// Whether a reason is given after `--` or in the comment block directly above.
+    is_explained: bool,
+    /// Whether the directive omitted bracketed rule names (`[...]`).
+    is_blanket: bool,
+    /// Counter of violations matched and suppressed for each target rule.
+    matched_count: HashMap<String, usize>,
+}
+
+/// The placement scope of a parsed suppression directive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DirectivePlacement {
+    /// Directive placed on the same line as code (suppresses violations on `line`).
+    SameLine {
+        /// The 1-indexed line number where the directive is placed.
+        line: usize,
+    },
+    /// Directive placed on its own standalone line preceding code (suppresses violations on `target_line..=end_target_line`).
+    PrecedingLine {
+        /// The 1-indexed line number immediately following the directive.
+        target_line: usize,
+        /// The 1-indexed line number of the declaration after any contiguous attributes/decorators (`#[...]`, `@...`).
+        end_target_line: usize,
+    },
+    /// Directive applying to the entire file.
+    File,
 }
 
 /// Resolves whether a directive applies to the whole file, the same line, or the following declaration line(s).
@@ -644,44 +682,6 @@ fn audit_single_directive(
             }
         }
     }
-}
-
-/// A parsed omni suppression directive comment.
-#[derive(Debug, Clone)]
-struct ParsedDirective {
-    /// The placement scope of the directive.
-    placement: DirectivePlacement,
-    /// The byte span of the comment in the source file.
-    span: SourceSpan,
-    /// The 1-indexed line and column coordinate where the directive comment resides.
-    coord: LineColumn,
-    /// Rule names targeted by the directive (e.g. `["single-letter-name"]`).
-    target_rules: Vec<String>,
-    /// Whether a reason is given after `--` or in the comment block directly above.
-    is_explained: bool,
-    /// Whether the directive omitted bracketed rule names (`[...]`).
-    is_blanket: bool,
-    /// Counter of violations matched and suppressed for each target rule.
-    matched_count: HashMap<String, usize>,
-}
-
-/// The placement scope of a parsed suppression directive.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum DirectivePlacement {
-    /// Directive placed on the same line as code (suppresses violations on `line`).
-    SameLine {
-        /// The 1-indexed line number where the directive is placed.
-        line: usize,
-    },
-    /// Directive placed on its own standalone line preceding code (suppresses violations on `target_line..=end_target_line`).
-    PrecedingLine {
-        /// The 1-indexed line number immediately following the directive.
-        target_line: usize,
-        /// The 1-indexed line number of the declaration after any contiguous attributes/decorators (`#[...]`, `@...`).
-        end_target_line: usize,
-    },
-    /// Directive applying to the entire file.
-    File,
 }
 
 #[cfg(test)]

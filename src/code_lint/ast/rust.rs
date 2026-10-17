@@ -1031,6 +1031,14 @@ fn is_simple_path_segment(segment: &ast::PathSegment) -> bool {
         && segment.ret_type().is_none()
 }
 
+/// The declaration of an item, after its leading outer attributes and doc comments.
+struct ItemDeclaration {
+    /// 1-indexed starting line number.
+    line: usize,
+    /// Trimmed source text.
+    text: String,
+}
+
 /// Returns the declaration of `node`, starting after any leading outer attributes, doc comments,
 /// and whitespace.
 fn item_line_and_text(file: &ParsedFile, node: &SyntaxNode) -> ItemDeclaration {
@@ -1050,14 +1058,6 @@ fn item_line_and_text(file: &ParsedFile, node: &SyntaxNode) -> ItemDeclaration {
     let line = file.line_index.line(start_offset);
     let text = file.source[start_offset..end_offset].trim().to_string();
     ItemDeclaration { line, text }
-}
-
-/// The declaration of an item, after its leading outer attributes and doc comments.
-struct ItemDeclaration {
-    /// 1-indexed starting line number.
-    line: usize,
-    /// Trimmed source text.
-    text: String,
 }
 
 fn collect_token_tree_paths(
@@ -1393,6 +1393,12 @@ fn is_literal_exempt_macro(name: &str) -> bool {
     LITERAL_EXEMPT_MACROS.contains(&name)
 }
 
+/// A scalar constant item (`const`, non-`mut` `static`, or `enum` variant).
+struct ScalarConstant {
+    /// The initializer expression node, absent when the item has none (`const N: usize;`).
+    initializer: Option<ast::Expr>,
+}
+
 /// Returns `node` as a scalar constant (`const`, non-`mut` `static`, or `enum` variant).
 fn constant_initializer_expr(node: &SyntaxNode) -> Option<ScalarConstant> {
     if let Some(const_item) = ast::Const::cast(node.clone()) {
@@ -1416,12 +1422,6 @@ fn constant_initializer_expr(node: &SyntaxNode) -> Option<ScalarConstant> {
         });
     }
     None
-}
-
-/// A scalar constant item (`const`, non-`mut` `static`, or `enum` variant).
-struct ScalarConstant {
-    /// The initializer expression node, absent when the item has none (`const N: usize;`).
-    initializer: Option<ast::Expr>,
 }
 
 /// Evaluates an [`ast::Literal`], negative [`ast::PrefixExpr`], or [`ast::LiteralPat`] node
@@ -1838,6 +1838,14 @@ fn build_rust_module_declaration_scopes<'a>(
     scopes
 }
 
+/// The declarations and `impl` blocks directly inside a Rust module item list.
+struct RustModuleContents<'a> {
+    /// Direct `fn`, `struct`, `enum`, `union`, and `trait` declarations, in source order.
+    declarations: Vec<RustModuleDecl<'a>>,
+    /// Every direct `impl` block, keyed by its starting offset.
+    impl_items: Vec<(usize, ast::Impl)>,
+}
+
 /// Collects the direct `fn`, `struct`, `enum`, `union`, and `trait` declarations in `items`,
 /// alongside every `impl` block keyed by its starting offset.
 fn collect_rust_module_decls<'a>(
@@ -1894,12 +1902,12 @@ fn collect_rust_module_decls<'a>(
     }
 }
 
-/// The declarations and `impl` blocks directly inside a Rust module item list.
-struct RustModuleContents<'a> {
-    /// Direct `fn`, `struct`, `enum`, `union`, and `trait` declarations, in source order.
-    declarations: Vec<RustModuleDecl<'a>>,
-    /// Every direct `impl` block, keyed by its starting offset.
-    impl_items: Vec<(usize, ast::Impl)>,
+struct RustModuleDecl<'a> {
+    name_node: AstNode<'a>,
+    name: String,
+    visibility: MethodVisibility,
+    syntax_start: usize,
+    item: RustModuleItem,
 }
 
 fn rust_type_decl<'a>(
@@ -2046,18 +2054,14 @@ fn build_rust_module_scope_item<'a>(
         pinned_before: None,
     }
 }
-
-struct RustModuleDecl<'a> {
-    name_node: AstNode<'a>,
-    name: String,
-    visibility: MethodVisibility,
-    syntax_start: usize,
-    item: RustModuleItem,
-}
-
 enum RustModuleItem {
     Fn(ast::Fn),
     Type(SyntaxNode),
+}
+
+struct RustImplCallees {
+    attached: Vec<Vec<usize>>,
+    external: HashMap<String, Vec<usize>>,
 }
 
 /// Collects sibling module item references inside `impl_items` within `offset_range`, attaching
@@ -2172,11 +2176,6 @@ fn collect_rust_impl_callees(
     }
 
     RustImplCallees { attached, external }
-}
-
-struct RustImplCallees {
-    attached: Vec<Vec<usize>>,
-    external: HashMap<String, Vec<usize>>,
 }
 
 fn impl_trait_name(impl_item: &ast::Impl) -> Option<String> {
@@ -2986,6 +2985,16 @@ fn unwrap_rust_pointer_wrappers(type_node: ast::Type, file: &ParsedFile) -> ast:
     current
 }
 
+/// A path type whose terminal segment has a `<...>` generic argument list (`io::Result<T>`).
+struct GenericPathType {
+    /// The source span of the base path, through its terminal segment's name (`io::Result`).
+    base_span: SourceSpan,
+    /// The base path resolved through the file's imports.
+    base: QualifiedName,
+    /// The type arguments, excluding lifetime and associated-type arguments.
+    arguments: Vec<ast::Type>,
+}
+
 /// Extracts the base and type arguments of an [`ast::PathType`] whose terminal segment has a
 /// `<...>` generic argument list.
 fn extract_path_type_generics(
@@ -3027,16 +3036,6 @@ fn extract_path_type_generics(
         base: base_resolved,
         arguments: type_arguments,
     })
-}
-
-/// A path type whose terminal segment has a `<...>` generic argument list (`io::Result<T>`).
-struct GenericPathType {
-    /// The source span of the base path, through its terminal segment's name (`io::Result`).
-    base_span: SourceSpan,
-    /// The base path resolved through the file's imports.
-    base: QualifiedName,
-    /// The type arguments, excluding lifetime and associated-type arguments.
-    arguments: Vec<ast::Type>,
 }
 
 /// Normalizes a raw type path string by stripping whitespace and any leading `::`.
