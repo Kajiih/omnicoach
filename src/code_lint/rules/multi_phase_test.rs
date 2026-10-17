@@ -35,8 +35,9 @@ pub const RULE: CodeRule = CodeRule {
             summary: "Flags test functions that perform further actions and assertions after an earlier assertion.",
             what_it_does: indoc::indoc! {r"
                 Flags a test function whose top-level statements follow an assert-act-assert
-                pattern: one or more assertions, followed by a non-assertion statement, followed
-                by another assertion.
+                pattern: one or more assertions (including `assert_*` / `_assert_*` calls and calls
+                to same-file assertion helpers), followed by a non-assertion statement, followed by
+                another assertion.
 
                 Call-free local variable projections (`order = result.orders[0]`,
                 `let order = &result.orders[0];`), `pytest` capture readouts
@@ -56,8 +57,8 @@ pub const RULE: CodeRule = CodeRule {
                 - Stateful lifecycle or protocol handshake tests that intentionally step through a
                   sequence of transitions in one test need an `# omni:ignore[multi-phase-test]`
                   suppression with a reason.
-                - Helper calls that perform assertions without an `assert` prefix are classified
-                  as non-assertion statements."}),
+                - Imported helper calls that perform assertions without an `assert_` or `_assert_`
+                  prefix are classified as non-assertion statements."}),
             references: &[Reference {
                 title: "Software Engineering at Google, ch. 12: Structure Tests to Emphasize Behaviors",
                 url: "https://abseil.io/resources/swe-book/html/ch12.html",
@@ -231,6 +232,17 @@ crate::test_utils::rule_test!(
                         order.status = "cancelled"
                         assert order.status == "cancelled"
                 "# => "test_mutate_attribute_between_assertions",
+                act_between_same_file_assertion_helper_calls => r#"
+                    def _verify_cart_len(cart, expected):
+                        assert len(cart.items) == expected
+
+                    def test_cart_transitions():
+                        cart = Cart()
+                        cart.add("book")
+                        _verify_cart_len(cart, 1)
+                        cart.clear()
+                        _verify_cart_len(cart, 0)
+                "# => "test_cart_transitions",
             ],
         },
         Rust => {
@@ -299,6 +311,20 @@ crate::test_utils::rule_test!(
                         assert_eq!(count, 2)
                     }
                 " => "test_tail_assertion",
+                act_between_same_file_assertion_helper_calls => r#"
+                    fn verify_cart_len(cart: &Cart, expected: usize) {
+                        assert_eq!(cart.len(), expected);
+                    }
+
+                    #[test]
+                    fn test_cart_transitions() {
+                        let mut cart = Cart::new();
+                        cart.add("book");
+                        verify_cart_len(&cart, 1);
+                        cart.clear();
+                        verify_cart_len(&cart, 0);
+                    }
+                "# => "test_cart_transitions",
             ],
         }
     }

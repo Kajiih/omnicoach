@@ -41,10 +41,12 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
             summary: "Flags test functions with more assertions than the limit.",
             what_it_does: indoc::indoc! {r"
                 Flags a test function with more assertions than `max-assertions`. Each `assert`
-                statement, `assert*` method call or `pytest.raises` call counts as one in Python,
-                and each `assert*!` or `debug_assert*!` macro call in Rust. In Python,
-                `assert x is not None` and `assert isinstance(x, ...)` do not count when `x` is
-                read in a later statement of the test."},
+                statement, `assert*` / `_assert_*` call, `pytest.raises` / `pytest.warns` call, or
+                call to a same-file assertion helper counts as one in Python, and each `assert*!` /
+                `debug_assert*!` macro call, `assert_*` / `_assert_*` call, or call to a same-file
+                assertion helper counts as one in Rust. In Python, `assert x is not None` and
+                `assert isinstance(x, ...)` do not count when `x` is read in a later statement of
+                the test."},
             why_is_this_bad: indoc::indoc! {r"
                 A test with many assertions usually checks several behaviours at once. It stops at
                 the first failing assertion, so the later ones are never reported, and its name
@@ -54,8 +56,9 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                 (`@pytest.mark.parametrize`, `#[rstest]`), or compare the result against one
                 expected value."},
             known_problems: Some(indoc::indoc! {r"
-                - Assertions in a helper or nested function the test calls are not counted, so
-                  moving checks into one hides them.
+                - Assertions in an imported helper function without an `assert_` or `_assert_`
+                  prefix are not counted, and a call to a same-file assertion helper counts as one
+                  assertion regardless of how many checks its body runs.
                 - An assertion inside a loop counts once, however many times it runs."}),
             references: &[Reference {
                 title: "Software Engineering at Google, ch. 12: Test behaviors, not methods",
@@ -213,6 +216,19 @@ crate::test_utils::rule_test!(
                         assert event.version == 2
                         assert event.committed is True
                 "#,
+                value_returning_setup_helper_with_assert_not_counted => r#"
+                    def _build_ready_client():
+                        client = Client()
+                        assert client.is_ready
+                        return client
+
+                    def test_client_endpoints():
+                        client = _build_ready_client()
+                        assert client.host == "localhost"
+                        assert client.port == 8080
+                        assert client.tls is True
+                        assert client.timeout == 30
+                "#,
             ],
             fail: [
                 assert_statements_exceeding_threshold => r#"
@@ -289,6 +305,30 @@ crate::test_utils::rule_test!(
                         with pytest.warns(UserWarning):
                             pass
                 "# => "test_warns_lifecycle",
+                same_file_assertion_helper_calls_exceeding_threshold => r#"
+                    def _verify_status(item, expected):
+                        assert item.status == expected
+
+                    def test_batch_statuses(items):
+                        _verify_status(items[0], "open")
+                        _verify_status(items[1], "open")
+                        _verify_status(items[2], "closed")
+                        _verify_status(items[3], "closed")
+                        _verify_status(items[4], "archived")
+                "# => "test_batch_statuses",
+                exception_assertion_helper_returning_value_counted => r#"
+                    import pytest
+
+                    def _run_cli_expecting_exit(args: list[str]) -> int:
+                        with pytest.raises(SystemExit) as exc_info:
+                            run_cli(args)
+                        return exc_info.value.code
+
+                    def test_cli_invalid_flags():
+                        assert _run_cli_expecting_exit(["--bad"]) == 2
+                        assert _run_cli_expecting_exit(["--worse"]) == 2
+                        assert _run_cli_expecting_exit(["--empty"]) == 2
+                "# => "test_cli_invalid_flags",
             ],
         },
         Rust => {
@@ -324,6 +364,22 @@ crate::test_utils::rule_test!(
                         assert_eq!(4, 4);
                     }
                 "#,
+                value_returning_setup_helper_with_assert_not_counted => r#"
+                    fn build_ready_client() -> Client {
+                        let client = Client::new();
+                        assert!(client.is_ready());
+                        client
+                    }
+
+                    #[test]
+                    fn test_client_endpoints() {
+                        let client = build_ready_client();
+                        assert_eq!(client.host(), "localhost");
+                        assert_eq!(client.port(), 8080);
+                        assert!(client.tls());
+                        assert_eq!(client.timeout(), 30);
+                    }
+                "#,
             ],
             fail: [
                 attributed_test_function_exceeding_threshold => r#"
@@ -345,6 +401,21 @@ crate::test_utils::rule_test!(
                         assert_eq!(5, 5);
                     }
                 "# => "test_unattributed",
+                same_file_assertion_helper_calls_exceeding_threshold => r#"
+                    fn verify_status(item: &Item, expected: &str) {
+                        assert_eq!(item.status(), expected);
+                    }
+
+                    #[test]
+                    fn test_batch_statuses() {
+                        let items = load_items();
+                        verify_status(&items[0], "open");
+                        verify_status(&items[1], "open");
+                        verify_status(&items[2], "closed");
+                        verify_status(&items[3], "closed");
+                        verify_status(&items[4], "archived");
+                    }
+                "# => "test_batch_statuses",
             ],
         },
     }

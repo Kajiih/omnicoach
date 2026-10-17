@@ -1136,6 +1136,12 @@ pub fn collect_call_cluster_findings(file: &ParsedFile) -> CallClusterFindings<'
     }
 }
 
+/// Returns true if `name` is an assertion helper function or method name (`assert_*` or `_assert_*`).
+#[must_use]
+pub(in crate::code_lint::ast) fn is_assertion_function_name(name: &str) -> bool {
+    name.starts_with("assert_") || name.starts_with("_assert_")
+}
+
 /// Analyzes a single [`DeclarationScope`], resolves the target placement anchor for each finding,
 /// and appends the findings to `out`.
 fn analyze_declaration_scope(scope: &DeclarationScope<'_>, out: &mut CachedCallClusterFindings) {

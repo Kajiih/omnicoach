@@ -68,8 +68,8 @@ pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
             known_problems: Some(indoc::indoc! {r"
                 - Only identical leading statements are matched; setup statements that appear in a
                   different order or use different local variable names are not grouped together.
-                - Helper calls that perform assertions without an `assert` prefix are classified
-                  as setup statements."}),
+                - Imported helper calls that perform assertions without an `assert_` or `_assert_`
+                  prefix are classified as setup statements."}),
             references: &[
                 Reference {
                     title: "Software Engineering at Google, ch. 12: Shared Setup",

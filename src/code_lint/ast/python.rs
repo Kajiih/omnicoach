@@ -459,10 +459,16 @@ pub(super) fn collect_test_function_assertion_counts(
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
-    collect_outer_python_test_functions(&parsed.syntax().body)
+    let module_body = &parsed.syntax().body;
+    let assertion_helpers = collect_python_assertion_helpers(module_body);
+    collect_outer_python_test_functions(module_body)
         .into_iter()
         .map(|func_def| {
-            let count = count_python_assertions_in_slice(&func_def.body, &func_def.body);
+            let count = count_python_assertions_in_slice(
+                &func_def.body,
+                &func_def.body,
+                &assertion_helpers,
+            );
             (
                 AstNode::from_span(file, span_from_ruff_range(func_def.name.range)),
                 func_def.name.to_string(),
@@ -580,9 +586,11 @@ pub(super) fn collect_multi_phase_test_functions(file: &ParsedFile) -> Vec<(AstN
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
-    collect_outer_python_test_functions(&parsed.syntax().body)
+    let module_body = &parsed.syntax().body;
+    let assertion_helpers = collect_python_assertion_helpers(module_body);
+    collect_outer_python_test_functions(module_body)
         .into_iter()
-        .filter(|func_def| is_multi_phase_python_test_body(&func_def.body))
+        .filter(|func_def| is_multi_phase_python_test_body(&func_def.body, &assertion_helpers))
         .map(|func_def| {
             (
                 AstNode::from_span(file, span_from_ruff_range(func_def.name.range)),
@@ -593,7 +601,7 @@ pub(super) fn collect_multi_phase_test_functions(file: &ParsedFile) -> Vec<(AstN
 }
 
 /// Returns true if `body` interleaves a non-assertion statement between two behavioral assertions.
-fn is_multi_phase_python_test_body(body: &[Stmt]) -> bool {
+fn is_multi_phase_python_test_body(body: &[Stmt], assertion_helpers: &HashSet<String>) -> bool {
     let mut seen_assertion = false;
     let mut seen_action_after_assertion = false;
     for statement in body {
@@ -602,7 +610,12 @@ fn is_multi_phase_python_test_body(body: &[Stmt]) -> bool {
         {
             continue;
         }
-        if count_python_assertions_in_slice(std::slice::from_ref(statement), body) > 0 {
+        if count_python_assertions_in_slice(
+            std::slice::from_ref(statement),
+            body,
+            assertion_helpers,
+        ) > 0
+        {
             if seen_action_after_assertion {
                 return true;
             }
@@ -711,14 +724,17 @@ pub(super) fn collect_test_setup_scopes(file: &ParsedFile) -> Vec<Vec<TestFuncti
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
+    let module_body = &parsed.syntax().body;
+    let assertion_helpers = collect_python_assertion_helpers(module_body);
     let mut out = Vec::new();
-    collect_python_test_setup_scope(&parsed.syntax().body, file, &mut out);
+    collect_python_test_setup_scope(module_body, file, &assertion_helpers, &mut out);
     out
 }
 
 fn collect_python_test_setup_scope<'a>(
     statements: &[Stmt],
     file: &'a ParsedFile,
+    assertion_helpers: &HashSet<String>,
     out: &mut Vec<Vec<TestFunctionSetup<'a>>>,
 ) {
     let mut current_segment = Vec::new();
@@ -739,7 +755,11 @@ fn collect_python_test_setup_scope<'a>(
         current_segment.push(TestFunctionSetup {
             name_node: AstNode::from_span(file, span_from_ruff_range(func_def.name.range)),
             name,
-            leading_setup_statements: extract_python_leading_setup_statements(func_def, file),
+            leading_setup_statements: extract_python_leading_setup_statements(
+                func_def,
+                file,
+                assertion_helpers,
+            ),
         });
     }
     if !current_segment.is_empty() {
@@ -747,7 +767,7 @@ fn collect_python_test_setup_scope<'a>(
     }
     for statement in statements {
         if let Stmt::ClassDef(class_def) = statement {
-            collect_python_test_setup_scope(&class_def.body, file, out);
+            collect_python_test_setup_scope(&class_def.body, file, assertion_helpers, out);
         }
     }
 }
@@ -755,6 +775,7 @@ fn collect_python_test_setup_scope<'a>(
 fn extract_python_leading_setup_statements(
     func_def: &StmtFunctionDef,
     file: &ParsedFile,
+    assertion_helpers: &HashSet<String>,
 ) -> Vec<String> {
     let statements = if docstrings::docstring_of(&func_def.body, file).is_some() {
         &func_def.body[1..]
@@ -765,7 +786,11 @@ fn extract_python_leading_setup_statements(
         .iter()
         .filter(|statement| !matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)))
         .take_while(|statement| {
-            count_python_assertions_in_slice(std::slice::from_ref(*statement), &func_def.body) == 0
+            count_python_assertions_in_slice(
+                std::slice::from_ref(*statement),
+                &func_def.body,
+                assertion_helpers,
+            ) == 0
         })
         .map(|statement| {
             let span = span_from_ruff_range(statement.range());
@@ -1097,16 +1122,121 @@ fn collect_outer_python_test_functions(body: &[Stmt]) -> Vec<&StmtFunctionDef> {
     finder.out
 }
 
+/// Collects names of non-test helper functions and methods in `module_body` that perform
+/// behavioral assertions (either directly containing `pytest.raises` / `raises` / `pytest.warns`,
+/// or returning `None` while executing at least one behavioral assertion transitively).
+fn collect_python_assertion_helpers(module_body: &[Stmt]) -> HashSet<String> {
+    let candidates = collect_non_test_python_functions(module_body);
+    let mut helpers = HashSet::new();
+    loop {
+        let mut added = false;
+        for func_def in &candidates {
+            let name = func_def.name.as_str();
+            if helpers.contains(name) {
+                continue;
+            }
+            let is_assertion_helper = python_body_has_exception_assertion(&func_def.body)
+                || (is_unit_python_function(func_def)
+                    && count_python_assertions_in_slice(&func_def.body, &func_def.body, &helpers)
+                        > 0);
+            if is_assertion_helper {
+                helpers.insert(name.to_owned());
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    helpers
+}
+
+/// Collects all non-test `StmtFunctionDef` nodes in `body` (including methods and nested helpers).
+fn collect_non_test_python_functions(body: &[Stmt]) -> Vec<&StmtFunctionDef> {
+    struct NonTestFunctionCollector<'a> {
+        out: Vec<&'a StmtFunctionDef>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for NonTestFunctionCollector<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if let Stmt::FunctionDef(func_def) = statement
+                && !is_test_function_def(func_def)
+            {
+                self.out.push(func_def);
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let mut collector = NonTestFunctionCollector { out: Vec::new() };
+    collector.visit_body(body);
+    collector.out
+}
+
 /// Returns true if a Python `StmtFunctionDef` is a test function (`test` or `test_*`).
 fn is_test_function_def(func_def: &StmtFunctionDef) -> bool {
     let func_name = func_def.name.as_str();
     func_name == "test" || func_name.starts_with("test_")
 }
 
-/// Counts behavioral assertion constructs in `statements`, using `full_body` to resolve narrowing guards.
-fn count_python_assertions_in_slice(statements: &[Stmt], full_body: &[Stmt]) -> usize {
+/// Returns true if `func_def` has no non-`None` return annotation and its body neither returns a
+/// value nor yields.
+fn is_unit_python_function(func_def: &StmtFunctionDef) -> bool {
+    if !func_def
+        .returns
+        .as_deref()
+        .is_none_or(|annotation| matches!(annotation, Expr::NoneLiteral(_)))
+    {
+        return false;
+    }
+    let results = returns::collect_body_results(&func_def.body);
+    !results.returns_value && !results.yields
+}
+
+/// Returns true if `body` (excluding nested functions and classes) contains a call to
+/// `pytest.raises(...)`, `raises(...)`, or `pytest.warns(...)`.
+fn python_body_has_exception_assertion(body: &[Stmt]) -> bool {
+    struct ExceptionAssertionFinder {
+        found: bool,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for ExceptionAssertionFinder {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if self.found || matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
+                return;
+            }
+            walk_stmt(self, statement);
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if self.found {
+                return;
+            }
+            if let Expr::Call(call) = expr
+                && is_python_exception_assertion_call(call)
+            {
+                self.found = true;
+                return;
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut finder = ExceptionAssertionFinder { found: false };
+    finder.visit_body(body);
+    finder.found
+}
+
+/// Counts behavioral assertion constructs in `statements`, using `full_body` to resolve narrowing
+/// guards and `assertion_helpers` to recognize calls to same-file assertion helpers.
+fn count_python_assertions_in_slice(
+    statements: &[Stmt],
+    full_body: &[Stmt],
+    assertion_helpers: &HashSet<String>,
+) -> usize {
     struct AssertionCounter<'a> {
         full_body: &'a [Stmt],
+        assertion_helpers: &'a HashSet<String>,
         count: usize,
     }
 
@@ -1117,6 +1247,7 @@ fn count_python_assertions_in_slice(statements: &[Stmt], full_body: &[Stmt]) -> 
                 Stmt::Assert(assert_statement) => {
                     if !is_narrowing_guard_assert(assert_statement, self.full_body) {
                         self.count += 1;
+                        self.visit_expr(&assert_statement.test);
                     }
                 }
                 _ => walk_stmt(self, statement),
@@ -1125,7 +1256,7 @@ fn count_python_assertions_in_slice(statements: &[Stmt], full_body: &[Stmt]) -> 
 
         fn visit_expr(&mut self, expr: &'a Expr) {
             if let Expr::Call(call) = expr
-                && is_assertion_call_expr(call)
+                && is_assertion_call_expr(call, self.assertion_helpers)
             {
                 self.count += 1;
                 return;
@@ -1136,6 +1267,7 @@ fn count_python_assertions_in_slice(statements: &[Stmt], full_body: &[Stmt]) -> 
 
     let mut counter = AssertionCounter {
         full_body,
+        assertion_helpers,
         count: 0,
     };
     counter.visit_body(statements);
@@ -1242,21 +1374,39 @@ fn body_loads_name_after(
 }
 
 /// Returns true if a Python `ExprCall` is a test assertion call
-/// (`self.assert*()`, `pytest.raises(...)`, `raises(...)`, `pytest.warns(...)`, `self.fail(...)`).
-fn is_assertion_call_expr(call: &ruff_python_ast::ExprCall) -> bool {
+/// (`self.assert*()`, `assert_*()`, `_assert_*()`, `pytest.raises(...)`, `raises(...)`,
+/// `pytest.warns(...)`, `self.fail(...)`, or a same-file assertion helper in `assertion_helpers`).
+fn is_assertion_call_expr(
+    call: &ruff_python_ast::ExprCall,
+    assertion_helpers: &HashSet<String>,
+) -> bool {
+    if is_python_exception_assertion_call(call) {
+        return true;
+    }
+    match call.func.as_ref() {
+        Expr::Name(name) => {
+            let id = name.id.as_str();
+            super::is_assertion_function_name(id) || assertion_helpers.contains(id)
+        }
+        Expr::Attribute(attr) => {
+            let attr_name = attr.attr.as_str();
+            if attr_name.starts_with("assert") || super::is_assertion_function_name(attr_name) {
+                return true;
+            }
+            matches!(attr.value.as_ref(), Expr::Name(obj) if obj.id.as_str() == "self")
+                && (attr_name == "fail" || assertion_helpers.contains(attr_name))
+        }
+        _ => false,
+    }
+}
+
+/// Returns true if `call` is `pytest.raises(...)`, `raises(...)`, or `pytest.warns(...)`.
+fn is_python_exception_assertion_call(call: &ruff_python_ast::ExprCall) -> bool {
     match call.func.as_ref() {
         Expr::Name(name) => name.id.as_str() == PYTEST_RAISES,
         Expr::Attribute(attr) => {
-            let attr_name = attr.attr.as_str();
-            if attr_name.starts_with("assert") {
-                return true;
-            }
-            let Expr::Name(obj) = attr.value.as_ref() else {
-                return false;
-            };
-            let obj_text = obj.id.as_str();
-            (obj_text == "pytest" && (attr_name == PYTEST_RAISES || attr_name == "warns"))
-                || (obj_text == "self" && attr_name == "fail")
+            matches!(attr.value.as_ref(), Expr::Name(obj) if obj.id.as_str() == "pytest")
+                && matches!(attr.attr.as_str(), PYTEST_RAISES | "warns")
         }
         _ => false,
     }

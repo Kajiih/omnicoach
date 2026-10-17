@@ -34,11 +34,7 @@ impl PythonFunctionSignature<'_> {
     /// What the function's own body returns or yields.
     #[must_use]
     pub fn body_results(&self) -> PythonBodyResults {
-        let mut collector = BodyResultCollector {
-            results: PythonBodyResults::default(),
-        };
-        collector.visit_body(&self.definition.body);
-        collector.results
+        collect_body_results(&self.definition.body)
     }
 
     /// What the function returns: read from its return annotation, or, when unannotated, from
@@ -93,6 +89,16 @@ pub(in crate::code_lint::ast) fn collect_function_returns(
             declared_type: signature.return_type_node,
         })
         .collect()
+}
+
+/// Inspects `body` (excluding nested functions, classes, and lambdas) for returned or yielded values.
+#[must_use]
+pub(in crate::code_lint::ast) fn collect_body_results(body: &[Stmt]) -> PythonBodyResults {
+    let mut collector = BodyResultCollector {
+        results: PythonBodyResults::default(),
+    };
+    collector.visit_body(body);
+    collector.results
 }
 
 /// Walks a function's own body for [`PythonBodyResults`].

@@ -285,6 +285,32 @@ CLUSTER = Cluster(
                 "too_many_assertions::pass::nested_function_assertions_not_counted@rust",
             ),
         ),
+        Mutation(
+            label="Python value-returning setup helper with internal assert exempt from assertion-helper classification",
+            path=PYTHON,
+            edits=(
+                (
+                    "                || (is_unit_python_function(func_def)",
+                    "                || ((is_unit_python_function(func_def) || true)",
+                ),
+            ),
+            cases=(
+                "too_many_assertions::pass::value_returning_setup_helper_with_assert_not_counted@python",
+            ),
+        ),
+        Mutation(
+            label="Rust value-returning setup helper with internal assert exempt from assertion-helper classification",
+            path=RUST,
+            edits=(
+                (
+                    "                && is_unit_rust_function(function)",
+                    "                && (is_unit_rust_function(function) || true)",
+                ),
+            ),
+            cases=(
+                "too_many_assertions::pass::value_returning_setup_helper_with_assert_not_counted@rust",
+            ),
+        ),
         # --- logic-in-tests ---
         Mutation(
             label="Python nested function exempt from logic-in-tests",
@@ -381,9 +407,19 @@ CLUSTER = Cluster(
             path=PYTHON,
             edits=(
                 (
-                    "        if count_python_assertions_in_slice(std::slice::from_ref(statement), body) > 0 {\n"
+                    "        if count_python_assertions_in_slice(\n"
+                    "            std::slice::from_ref(statement),\n"
+                    "            body,\n"
+                    "            assertion_helpers,\n"
+                    "        ) > 0\n"
+                    "        {\n"
                     "            if seen_action_after_assertion {",
-                    "        if count_python_assertions_in_slice(std::slice::from_ref(statement), body) > 0 {\n"
+                    "        if count_python_assertions_in_slice(\n"
+                    "            std::slice::from_ref(statement),\n"
+                    "            body,\n"
+                    "            assertion_helpers,\n"
+                    "        ) > 0\n"
+                    "        {\n"
                     "            let _ = seen_action_after_assertion;\n"
                     "            if seen_assertion {",
                 ),
@@ -414,9 +450,9 @@ CLUSTER = Cluster(
             path=RUST,
             edits=(
                 (
-                    "        if count_rust_assertions(&statement_node) > 0 {\n"
+                    "        if count_rust_assertions(&statement_node, assertion_helpers) > 0 {\n"
                     "            if seen_action_after_assertion {",
-                    "        if count_rust_assertions(&statement_node) > 0 {\n"
+                    "        if count_rust_assertions(&statement_node, assertion_helpers) > 0 {\n"
                     "            let _ = seen_action_after_assertion;\n"
                     "            if seen_assertion {",
                 ),
@@ -557,7 +593,11 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "        .take_while(|statement| {\n"
-                    "            count_python_assertions_in_slice(std::slice::from_ref(*statement), &func_def.body) == 0\n"
+                    "            count_python_assertions_in_slice(\n"
+                    "                std::slice::from_ref(*statement),\n"
+                    "                &func_def.body,\n"
+                    "                assertion_helpers,\n"
+                    "            ) == 0\n"
                     "        })",
                     "        .take_while(|_| true)",
                 ),
@@ -571,7 +611,7 @@ CLUSTER = Cluster(
             path=RUST,
             edits=(
                 (
-                    "        .take_while(|statement_node| count_rust_assertions(statement_node) == 0)",
+                    "        .take_while(|statement_node| count_rust_assertions(statement_node, assertion_helpers) == 0)",
                     "        .take_while(|_| true)",
                 ),
             ),

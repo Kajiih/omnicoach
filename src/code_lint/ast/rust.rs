@@ -314,15 +314,18 @@ pub(super) fn collect_test_function_assertion_counts(
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
+    let tree = parsed.tree();
+    let root = tree.syntax();
+    let assertion_helpers = collect_rust_assertion_helpers(root);
     let mut test_functions = Vec::new();
-    collect_outer_test_functions_rec(parsed.tree().syntax(), &mut test_functions);
+    collect_outer_test_functions_rec(root, &mut test_functions);
     test_functions
         .into_iter()
         .filter_map(|function| {
             let name_node = function.name()?;
             let body_node = function.body()?;
             let function_name = name_node.text().to_string();
-            let count = count_rust_assertions(body_node.syntax());
+            let count = count_rust_assertions(body_node.syntax(), &assertion_helpers);
             Some((
                 AstNode::from_span(file, span_from_rowan_range(name_node.syntax().text_range())),
                 function_name,
@@ -395,14 +398,17 @@ pub(super) fn collect_multi_phase_test_functions(file: &ParsedFile) -> Vec<(AstN
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
+    let tree = parsed.tree();
+    let root = tree.syntax();
+    let assertion_helpers = collect_rust_assertion_helpers(root);
     let mut test_functions = Vec::new();
-    collect_outer_test_functions_rec(parsed.tree().syntax(), &mut test_functions);
+    collect_outer_test_functions_rec(root, &mut test_functions);
     test_functions
         .into_iter()
         .filter_map(|function| {
             let name_node = function.name()?;
             let body_node = function.body()?;
-            if !is_multi_phase_rust_test(&body_node) {
+            if !is_multi_phase_rust_test(&body_node, &assertion_helpers) {
                 return None;
             }
             Some((
@@ -413,14 +419,17 @@ pub(super) fn collect_multi_phase_test_functions(file: &ParsedFile) -> Vec<(AstN
         .collect()
 }
 
-fn is_multi_phase_rust_test(body_node: &ast::BlockExpr) -> bool {
+fn is_multi_phase_rust_test(
+    body_node: &ast::BlockExpr,
+    assertion_helpers: &HashSet<String>,
+) -> bool {
     let Some(block_statements) = body_node.stmt_list() else {
         return false;
     };
     let mut seen_assertion = false;
     let mut seen_action_after_assertion = false;
     for statement_node in rust_executable_block_statements(&block_statements) {
-        if count_rust_assertions(&statement_node) > 0 {
+        if count_rust_assertions(&statement_node, assertion_helpers) > 0 {
             if seen_action_after_assertion {
                 return true;
             }
@@ -491,15 +500,17 @@ pub(super) fn collect_test_setup_scopes(file: &ParsedFile) -> Vec<Vec<TestFuncti
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
+    let assertion_helpers = collect_rust_assertion_helpers(parsed.tree().syntax());
     let mut out = Vec::new();
     let root_items: Vec<ast::Item> = parsed.tree().items().collect();
-    collect_rust_test_setup_scope(&root_items, file, &mut out);
+    collect_rust_test_setup_scope(&root_items, file, &assertion_helpers, &mut out);
     out
 }
 
 fn collect_rust_test_setup_scope<'a>(
     items: &[ast::Item],
     file: &'a ParsedFile,
+    assertion_helpers: &HashSet<String>,
     out: &mut Vec<Vec<TestFunctionSetup<'a>>>,
 ) {
     let mut current_segment = Vec::new();
@@ -529,7 +540,11 @@ fn collect_rust_test_setup_scope<'a>(
                 span_from_rowan_range(name_node.syntax().text_range()),
             ),
             name,
-            leading_setup_statements: extract_rust_leading_setup_statements(&body_node, file),
+            leading_setup_statements: extract_rust_leading_setup_statements(
+                &body_node,
+                file,
+                assertion_helpers,
+            ),
         });
     }
     if !current_segment.is_empty() {
@@ -540,7 +555,7 @@ fn collect_rust_test_setup_scope<'a>(
             && let Some(body_items) = module.item_list()
         {
             let module_items: Vec<ast::Item> = body_items.items().collect();
-            collect_rust_test_setup_scope(&module_items, file, out);
+            collect_rust_test_setup_scope(&module_items, file, assertion_helpers, out);
         }
     }
 }
@@ -548,12 +563,13 @@ fn collect_rust_test_setup_scope<'a>(
 fn extract_rust_leading_setup_statements(
     body_node: &ast::BlockExpr,
     file: &ParsedFile,
+    assertion_helpers: &HashSet<String>,
 ) -> Vec<String> {
     let Some(block_statements) = body_node.stmt_list() else {
         return Vec::new();
     };
     rust_executable_block_statements(&block_statements)
-        .take_while(|statement_node| count_rust_assertions(statement_node) == 0)
+        .take_while(|statement_node| count_rust_assertions(statement_node, assertion_helpers) == 0)
         .map(|statement_node| {
             let span = span_from_rowan_range(statement_node.text_range());
             normalize_statement_text(&file.source[span.start..span.end])
@@ -2707,6 +2723,49 @@ fn collect_outer_test_functions_rec(node: &SyntaxNode, out: &mut Vec<ast::Fn>) {
     }
 }
 
+/// Collects names of non-test unit-returning free functions in `root` whose bodies execute at
+/// least one behavioral assertion transitively.
+fn collect_rust_assertion_helpers(root: &SyntaxNode) -> HashSet<String> {
+    let candidates = collect_non_test_unit_rust_functions(root);
+    let mut helpers = HashSet::new();
+    loop {
+        let mut added = false;
+        for (name, body) in &candidates {
+            if helpers.contains(name) {
+                continue;
+            }
+            if count_rust_assertions(body.syntax(), &helpers) > 0 {
+                helpers.insert(name.clone());
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    helpers
+}
+
+/// Collects `(name, body)` pairs for non-test, unit-returning free functions in `root`.
+fn collect_non_test_unit_rust_functions(root: &SyntaxNode) -> Vec<(String, ast::BlockExpr)> {
+    root.descendants()
+        .filter_map(ast::Fn::cast)
+        .filter(|function| {
+            !is_test_function(function)
+                && is_unit_rust_function(function)
+                && !function
+                    .syntax()
+                    .ancestors()
+                    .any(|ancestor| matches!(ancestor.kind(), SyntaxKind::TRAIT | SyntaxKind::IMPL))
+        })
+        .filter_map(|function| {
+            let name = function.name()?.text().trim().to_owned();
+            let body = function.body()?;
+            Some((name, body))
+        })
+        .collect()
+}
+
 /// Returns true if `function` is a test function (`#[test]` / `#[rstest]` or named `test` / `test_*`).
 #[must_use]
 fn is_test_function(function: &ast::Fn) -> bool {
@@ -2733,6 +2792,16 @@ fn attribute_terminal_name(attribute: &ast::Attr) -> Option<ast::NameRef> {
         .path()
         .or_else(|| attribute.syntax().descendants().find_map(ast::Path::cast))?;
     path.segment()?.name_ref()
+}
+
+/// Returns true if `function` has no return type annotation or an explicit `-> ()` unit return type.
+fn is_unit_rust_function(function: &ast::Fn) -> bool {
+    function.ret_type().is_none_or(|ret_type| {
+        matches!(
+            ret_type.ty(),
+            Some(ast::Type::TupleType(tuple)) if tuple.fields().next().is_none()
+        )
+    })
 }
 
 /// Extracts the non-delimiter, non-trivia direct child elements of `token_tree`.
@@ -2785,8 +2854,8 @@ fn rust_executable_block_statements(
         )
 }
 
-/// Recursively counts top-level assertion macro invocations in a Rust test function body.
-fn count_rust_assertions(node: &SyntaxNode) -> usize {
+/// Recursively counts top-level assertion macro and assertion-helper invocations in a Rust test body.
+fn count_rust_assertions(node: &SyntaxNode, assertion_helpers: &HashSet<String>) -> usize {
     if ast::Fn::can_cast(node.kind()) {
         return 0;
     }
@@ -2795,9 +2864,33 @@ fn count_rust_assertions(node: &SyntaxNode) -> usize {
     {
         return 1;
     }
+    if is_rust_assertion_call_node(node, assertion_helpers) {
+        return 1;
+    }
     node.children()
-        .map(|child| count_rust_assertions(&child))
+        .map(|child| count_rust_assertions(&child, assertion_helpers))
         .sum()
+}
+
+/// Returns true if `node` is a Rust function or method call to an `assert_*` / `_assert_*` helper
+/// or an unqualified call to a same-file assertion helper in `assertion_helpers`.
+fn is_rust_assertion_call_node(node: &SyntaxNode, assertion_helpers: &HashSet<String>) -> bool {
+    if let Some(call_expr) = ast::CallExpr::cast(node.clone())
+        && let Some(ast::Expr::PathExpr(path_expr)) = call_expr.expr()
+        && let Some(path) = path_expr.path()
+        && let Some(segment) = path.segment()
+        && let Some(name_ref) = segment.name_ref()
+    {
+        let name = name_ref.text().trim();
+        return super::is_assertion_function_name(name)
+            || (path.qualifier().is_none() && assertion_helpers.contains(name));
+    }
+    if let Some(method_call) = ast::MethodCallExpr::cast(node.clone())
+        && let Some(name_ref) = method_call.name_ref()
+    {
+        return super::is_assertion_function_name(name_ref.text().trim());
+    }
+    false
 }
 
 /// Returns true if `macro_call` invokes an assertion macro (`assert!`, `assert_*!`, `debug_assert!`, `debug_assert_*!`).
