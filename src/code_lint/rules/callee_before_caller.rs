@@ -304,6 +304,19 @@ crate::test_utils::rule_test!(
                         }
                     }
                 "#,
+                signature_type_before_private_fn_exempt => r#"
+                    pub fn parse_config(raw: &str) -> usize {
+                        parse_frame(raw).len
+                    }
+
+                    struct Frame {
+                        len: usize,
+                    }
+
+                    fn parse_frame(raw: &str) -> Frame {
+                        Frame { len: raw.len() }
+                    }
+                "#,
             ],
             fail: [
                 private_callee_before_private_caller_in_module => r#"
@@ -343,11 +356,15 @@ crate::test_utils::rule_test!(
                 "# => "is_delimiter",
                 private_helper_type_before_private_caller => r#"
                     pub fn parse_config(raw: &str) -> usize {
-                        parse_frame(raw).len
+                        decode_section(raw)
                     }
 
                     struct Frame {
                         len: usize,
+                    }
+
+                    fn decode_section(raw: &str) -> usize {
+                        parse_frame(raw).len
                     }
 
                     fn parse_frame(raw: &str) -> Frame {

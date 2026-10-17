@@ -3,9 +3,9 @@
 use crate::code_lint::ast::{
     AstNode, Binding, BindingKind, DeclarationScope, EnclosingFunction, FunctionReturn,
     LiteralOccurrence, LiteralRole, LiteralValue, MethodVisibility, ParsedFile, PositionalRead,
-    QualifiedName, ReturnShape, ScopeItem, ScopePositionalReads, TestFunctionSetup, TypeMethod,
-    TypeMethodScope, is_rust_comment_kind, normalize_statement_text, parse_float_literal,
-    parse_integer_literal, push_bindings, span_from_rowan_range,
+    QualifiedName, ReturnShape, ScopeItem, ScopeItemKind, ScopePositionalReads, TestFunctionSetup,
+    TypeMethod, TypeMethodScope, is_rust_comment_kind, normalize_statement_text,
+    parse_float_literal, parse_integer_literal, push_bindings, span_from_rowan_range,
 };
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast::{
@@ -1955,8 +1955,12 @@ fn build_rust_module_scope_item<'a>(
     external_impl_callees: &HashMap<String, Vec<usize>>,
 ) -> ScopeItem<'a> {
     let mut callees = Vec::new();
-    match &decl.item {
+    let mut param_callees = Vec::new();
+    let mut return_callees = Vec::new();
+    let mut body_callees = Vec::new();
+    let kind = match &decl.item {
         RustModuleItem::Fn(function) => {
+            let generic_names = collect_rust_generic_param_names(function.syntax());
             let local_names = collect_rust_fn_local_names(function);
             collect_rust_module_item_refs(
                 function.syntax(),
@@ -1966,6 +1970,47 @@ fn build_rust_module_scope_item<'a>(
                 &local_names,
                 &mut callees,
             );
+            if let Some(params) = function.param_list() {
+                collect_rust_module_item_refs(
+                    params.syntax(),
+                    item_by_name,
+                    segment_is_type,
+                    external_impl_callees,
+                    &generic_names,
+                    &mut param_callees,
+                );
+            }
+            if let Some(where_clause) = function.where_clause() {
+                collect_rust_module_item_refs(
+                    where_clause.syntax(),
+                    item_by_name,
+                    segment_is_type,
+                    external_impl_callees,
+                    &generic_names,
+                    &mut param_callees,
+                );
+            }
+            if let Some(ret_type) = function.ret_type() {
+                collect_rust_module_item_refs(
+                    ret_type.syntax(),
+                    item_by_name,
+                    segment_is_type,
+                    external_impl_callees,
+                    &generic_names,
+                    &mut return_callees,
+                );
+            }
+            if let Some(body) = function.body() {
+                collect_rust_module_item_refs(
+                    body.syntax(),
+                    item_by_name,
+                    segment_is_type,
+                    external_impl_callees,
+                    &local_names,
+                    &mut body_callees,
+                );
+            }
+            ScopeItemKind::Callable
         }
         RustModuleItem::Type(syntax) => {
             let local_names = collect_rust_generic_param_names(syntax);
@@ -1977,19 +2022,27 @@ fn build_rust_module_scope_item<'a>(
                 &local_names,
                 &mut callees,
             );
+            ScopeItemKind::Type
         }
-    }
+    };
     for &impl_callee in attached_impl_callees {
         if !callees.contains(&impl_callee) {
             callees.push(impl_callee);
         }
+    }
+    if kind == ScopeItemKind::Type {
+        body_callees.clone_from(&callees);
     }
     ScopeItem {
         name_node: decl.name_node,
         name: decl.name.clone(),
         visibility: decl.visibility,
         is_constructor: false,
+        kind,
         callees,
+        param_callees,
+        return_callees,
+        body_callees,
         pinned_before: None,
     }
 }
@@ -2309,12 +2362,17 @@ fn build_rust_impl_declaration_scope<'a>(
                     &mut callees,
                 );
             }
+            let body_callees = callees.clone();
             ScopeItem {
                 name_node: method.name_node,
                 name: method.name.clone(),
                 visibility: method.visibility,
                 is_constructor: method.is_constructor,
+                kind: ScopeItemKind::Callable,
                 callees,
+                param_callees: Vec::new(),
+                return_callees: Vec::new(),
+                body_callees,
                 pinned_before: None,
             }
         })
