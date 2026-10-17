@@ -1677,7 +1677,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fixed_boundary_placement_anchors() {
+    fn test_field_after_method_placement_anchor() {
         let field_file = ParsedFile::new(
             indoc::indoc! {r"
                 class Config:
@@ -1692,14 +1692,17 @@ mod tests {
         let fields = python::collect_fields_after_methods(&field_file);
         assert_eq!(fields.len(), 1);
         assert_eq!(
-            (
-                fields[0].first_method.name.as_str(),
-                fields[0].first_method.line
-            ),
-            ("from_env", 2)
+            fields[0].first_method,
+            PlacementAnchor {
+                name: "from_env".to_string(),
+                line: 2,
+            }
         );
+    }
 
-        let inline_attr_file = ParsedFile::new(
+    #[test]
+    fn test_inline_attribute_annotation_placement_anchor() {
+        let attribute_file = ParsedFile::new(
             indoc::indoc! {r"
                 class Client:
                     @classmethod
@@ -1711,17 +1714,20 @@ mod tests {
             "},
             Language::Python,
         );
-        let attrs = python::collect_instance_attribute_annotations(&inline_attr_file);
-        assert_eq!(attrs.len(), 1);
+        let attributes = python::collect_instance_attribute_annotations(&attribute_file);
+        assert_eq!(attributes.len(), 1);
         assert_eq!(
-            (
-                attrs[0].first_method.name.as_str(),
-                attrs[0].first_method.line
-            ),
-            ("default_port", 2)
+            attributes[0].first_method,
+            PlacementAnchor {
+                name: "default_port".to_string(),
+                line: 2,
+            }
         );
+    }
 
-        let ctor_file = ParsedFile::new(
+    #[test]
+    fn test_type_method_scope_start_line_includes_doc_comment() {
+        let constructor_file = ParsedFile::new(
             indoc::indoc! {r"
                 pub struct Connection {
                     port: u16,
@@ -1740,17 +1746,15 @@ mod tests {
             "},
             Language::Rust,
         );
-        let scopes = collect_type_method_scopes(&ctor_file);
+        let scopes = collect_type_method_scopes(&constructor_file);
         assert_eq!(scopes.len(), 1);
-        assert_eq!(
-            (
-                scopes[0].methods[0].name.as_str(),
-                scopes[0].methods[0].start_line
-            ),
-            ("port", 6)
-        );
+        assert_eq!(scopes[0].methods[0].name, "port");
+        assert_eq!(scopes[0].methods[0].start_line, 6);
+    }
 
-        let assoc_file = ParsedFile::new(
+    #[test]
+    fn test_associated_item_after_method_placement_anchor() {
+        let associated_file = ParsedFile::new(
             indoc::indoc! {r"
                 pub trait Decoder {
                     /// Decodes an input frame.
@@ -1761,16 +1765,19 @@ mod tests {
             "},
             Language::Rust,
         );
-        let assoc_items = rust::collect_associated_items_after_methods(&assoc_file);
-        assert_eq!(assoc_items.len(), 1);
+        let associated_items = rust::collect_associated_items_after_methods(&associated_file);
+        assert_eq!(associated_items.len(), 1);
         assert_eq!(
-            (
-                assoc_items[0].first_fn.name.as_str(),
-                assoc_items[0].first_fn.line
-            ),
-            ("decode", 2)
+            associated_items[0].first_fn,
+            PlacementAnchor {
+                name: "decode".to_string(),
+                line: 2,
+            }
         );
+    }
 
+    #[test]
+    fn test_statement_after_main_guard_line() {
         let guard_file = ParsedFile::new(
             indoc::indoc! {r#"
                 DEFAULT_PORT = 8080
