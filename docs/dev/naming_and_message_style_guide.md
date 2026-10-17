@@ -94,6 +94,8 @@ Templates use a fixed vocabulary so the same thing has the same name in every me
 | `{function}` | A function that is *defined* at the flagged site | `` `{function}` `` |
 | `{class}` | The class, struct, enum, trait, or implemented type at the flagged site | `` `{class}` `` |
 | `{name}` | An identifier being named (variable, parameter, field) | `` `{name}` `` |
+| `{anchor}` | The declaration above or below which the suggestion places the flagged item | `` `{anchor}` `` |
+| `{line}` | A 1-based source line number | bare |
 | `{suffix}`, `{token}` | The offending part of an identifier | `` `{suffix}` `` |
 | `{stem}` | The identifier without its offending suffix | `` `{stem}` `` |
 | `{expression}` | The flagged expression (an access, a literal), as written in the source | `` `{expression}` `` |

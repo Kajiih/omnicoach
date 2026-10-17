@@ -442,12 +442,14 @@ const JUDGEMENT_WORDS: [&str; 5] = ["banned", "forbidden", "discouraged", "illeg
 const ABBREVIATIONS: [&str; 2] = ["e.g.", "i.e."];
 /// The placeholders every template draws from (guide §3); a rule may also use the `snake_case`
 /// of its own count option keys.
-const PLACEHOLDERS: [&str; 22] = [
+const PLACEHOLDERS: [&str; 24] = [
     "callee",
     "caller",
     "function",
     "class",
     "name",
+    "anchor",
+    "line",
     "suffix",
     "token",
     "stem",
