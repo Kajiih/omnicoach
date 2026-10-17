@@ -81,6 +81,7 @@ Every registry (`CODE_RULES`, `SUPPRESSION_AUDITS` or `COMMAND_RULES`) holds rul
 - `unopinionated`: `sleep-in-tests`, `unknown-suppression-rule`.
 - `opinionated`: `mock-in-tests`, `primitive-duration` (`timeout_ms` is standard at config boundaries), `mutable-dataclass` (mutable dataclasses are ordinary Python).
 - Expect most Omni rules to be opinionated. Omni exists to go beyond the default Ruff and Clippy sets.
+- **Combined operational test (`Precision` × `Consensus`)**: a rule is `heuristic` or `opinionated` iff a finding can occur on code that is already the clearest, most robust design (either because the rule uses a syntactic proxy or because the flagged construct is the right tradeoff in that context), which is also when plain `code` reports include the `omni:ignore` footer note; a rule is `exact` and `unopinionated` iff the flagged code is never the right design in any ordinary situation.
 
 ### 2.4 Impacted quality
 

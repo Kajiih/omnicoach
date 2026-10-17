@@ -162,7 +162,8 @@ pub struct RegisteredRule {
     pub options: DeclaredOptions,
     /// The languages the rule analyzes; empty for command rules.
     pub languages: &'static [Language],
-    classification: Classification,
+    /// The rule's declared classification facets.
+    pub classification: Classification,
     derived: Vec<Derived>,
 }
 

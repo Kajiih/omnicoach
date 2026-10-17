@@ -55,7 +55,7 @@ pub struct Example {
 - `--list-tags`: Renders the topic tree as a Markdown table (topic, parent, synonyms, description, and scope note), with children listed under their parent.
 - `--explain <RULE>`: Renders the full Markdown documentation of a rule, including its message templates, configuration keys, external references, and tag paths.
 - **Terminal Plain Markdown Rendering (`D50`)**: Markdown is printed directly as plain text without ANSI escapes, ensuring compatibility across terminal emulators, pagers, and CI logs.
-- **Diagnostics Pointer Footer (`D48`, `DI14`)**: Plain diagnostics output appends a single terminal line: `For details on a rule, run: omnicoach --explain <rule>`.
+- **Diagnostics Pointer Footer (`D48`, `DI14`)**: Plain diagnostics output appends `For details on a rule (including known limitations), run: omnicoach --explain <rule>`, preceded on `code` runs by a note advising `omni:ignore [<rule>] -- <reason>` over working around the linter whenever any reported finding comes from a `heuristic` or `opinionated` rule.
 
 ### 2.3. Active Configuration Status in `explain` (`DI13`)
 

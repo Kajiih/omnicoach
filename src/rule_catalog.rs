@@ -4,8 +4,10 @@ architecture_component!(RuleCatalog);
 
 use strum::IntoEnumIterator as _;
 
+use crate::diagnostic::Diagnostic;
 use crate::rule_declaration::{
-    DeclaredOptions, EnforcementMode, FilterListDefaults, LanguageDefaults, OptionSpec,
+    Consensus, DeclaredOptions, EnforcementMode, FilterListDefaults, LanguageDefaults, OptionSpec,
+    Precision,
 };
 use crate::rule_selection::{
     ConfigError, ConfigOverrides, Facet, RegisteredRule, RuleStatus, UnknownLabel, find_rule,
@@ -57,10 +59,32 @@ impl DiscoveryArgs {
     }
 }
 
+/// The footer printed after plain `code` diagnostics, adding the suppression note when any
+/// reported rule is `heuristic` or `opinionated`.
+#[must_use]
+pub fn code_report_footer(binary: &str, diagnostics: &[Diagnostic]) -> String {
+    let has_heuristic_or_opinionated = diagnostics.iter().any(|diagnostic| {
+        find_rule(diagnostic.rule_name.0).is_ok_and(|rule| {
+            rule.classification.precision == Precision::Heuristic
+                || rule.classification.consensus == Consensus::Opinionated
+        })
+    });
+    let explain = explain_footer(binary);
+    if has_heuristic_or_opinionated {
+        format!(
+            "Note: Some rules use heuristics. When a finding conflicts with the clearest, most \
+             robust design, suppress it with `omni:ignore [<rule>] -- <reason>` rather than \
+             working around the linter and degrading the design.\n{explain}"
+        )
+    } else {
+        explain
+    }
+}
+
 /// The line printed after plain diagnostics, pointing at `--explain`.
 #[must_use]
 pub fn explain_footer(binary: &str) -> String {
-    format!("For details on a rule, run: {binary} --explain <rule>")
+    format!("For details on a rule (including known limitations), run: {binary} --explain <rule>")
 }
 
 /// One Markdown bullet per rule, sorted by name: name, languages (or input) and summary.
@@ -538,5 +562,36 @@ mod tests {
                 rule.name
             );
         }
+    }
+
+    #[rstest]
+    #[case::exact_unopinionated("sleep-in-tests", false)]
+    #[case::exact_opinionated("logic-in-tests", true)]
+    #[case::heuristic_opinionated("multi-phase-test", true)]
+    fn code_report_footer_includes_note_only_for_heuristic_or_opinionated_rules(
+        #[case] rule_name: &'static str,
+        #[case] expects_note: bool,
+    ) {
+        use crate::diagnostic::{
+            LineColumn, RuleName, SourceLocation, SourceSpan, ViolationMessage,
+        };
+
+        let diagnostic = Diagnostic::new(
+            RuleName(rule_name),
+            ViolationMessage::new("Summary.", "Rationale.", "Suggestion."),
+            SourceLocation::file_span(
+                "test.py",
+                SourceSpan::new(0, 1),
+                LineColumn { line: 1, column: 1 },
+            ),
+        );
+        let footer = code_report_footer("omnicoach", &[diagnostic]);
+        assert_eq!(footer.contains("omni:ignore"), expects_note, "{footer}");
+        assert!(
+            footer.ends_with(
+                "For details on a rule (including known limitations), run: omnicoach --explain <rule>"
+            ),
+            "{footer}"
+        );
     }
 }

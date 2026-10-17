@@ -9,7 +9,7 @@ use omni::code_lint::runner::{LintOptions, run_code_lint};
 use omni::command_lint::runner::run_command_lint;
 use omni::config::Config;
 use omni::diagnostic::{OutputFormat, print_diagnostics};
-use omni::rule_catalog::{DiscoveryArgs, explain_footer};
+use omni::rule_catalog::{DiscoveryArgs, code_report_footer, explain_footer};
 use omni::rule_selection::{ConfigOverrides, load_config};
 
 fn main() {
@@ -62,7 +62,10 @@ fn run_code(options: &LintOptions, config: &Config, format: OutputFormat) -> any
     if !report.diagnostics.is_empty() {
         print_diagnostics(&report.diagnostics, format)?;
         if format == OutputFormat::Plain {
-            println!("{}", explain_footer(env!("CARGO_BIN_NAME")));
+            println!(
+                "{}",
+                code_report_footer(env!("CARGO_BIN_NAME"), &report.diagnostics)
+            );
         }
     }
     for unreadable in &report.unreadable_files {
