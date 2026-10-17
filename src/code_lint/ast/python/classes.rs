@@ -10,7 +10,7 @@ use super::{
 };
 use crate::code_lint::ast::{
     DeclarationScope, MethodVisibility, ScopeItem, ScopeItemKind, TypeMethod, TypeMethodScope,
-    span_from_ruff_range,
+    span_from_ruff_range, split_at_redefinitions,
 };
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef};
@@ -913,7 +913,7 @@ fn build_module_declaration_scopes<'a>(
         return Vec::new();
     }
 
-    let segments = split_python_module_segments(grouped);
+    let segments = split_at_redefinitions(grouped, |item| item.name.as_str());
     let mut scopes = Vec::new();
 
     for (seg_idx, segment) in segments.iter().enumerate() {
@@ -1088,29 +1088,6 @@ struct GroupedPythonScopeItem<'a, 'ast> {
     item: PythonScopeItem<'ast>,
 }
 
-/// Splits `grouped` into consecutive segments, starting a new segment whenever a name is
-/// redefined.
-fn split_python_module_segments<'a, 'body>(
-    grouped: Vec<GroupedPythonScopeItem<'a, 'body>>,
-) -> Vec<Vec<GroupedPythonScopeItem<'a, 'body>>> {
-    let mut segments = Vec::new();
-    let mut current_segment = Vec::new();
-    let mut seen_names: HashSet<String> = HashSet::new();
-    for item in grouped {
-        if !seen_names.insert(item.name.clone()) {
-            segments.push(std::mem::take(&mut current_segment));
-            seen_names.clear();
-            seen_names.insert(item.name.clone());
-        }
-        current_segment.push(item);
-    }
-    if !current_segment.is_empty() {
-        segments.push(current_segment);
-    }
-    segments
-}
-
-/// Collects the sibling references of each class in `statements` that is not itself a scope
 /// item (such as a class redefined later in the module), keyed by class name.
 fn collect_external_class_callees<'body>(
     statements: &'body [Stmt],
