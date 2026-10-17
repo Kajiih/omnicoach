@@ -38,9 +38,11 @@ pub const RULE: CodeRule = CodeRule {
                 pattern: one or more assertions, followed by a non-assertion statement, followed
                 by another assertion.
 
-                In Python, `assert x is not None` and `assert isinstance(x, ...)` are treated as
-                type-narrowing guards rather than behavioral assertions when `x` is read in a
-                later statement of the test."},
+                Call-free local variable projections (`order = result.orders[0]`,
+                `let order = &result.orders[0];`), `pytest` capture readouts
+                (`captured = capsys.readouterr()`), and Python `assert x is not None` or
+                `assert isinstance(x, ...)` narrowing guards (when `x` is read later in the test)
+                are treated as part of the assertion phase."},
             why_is_this_bad: indoc::indoc! {r"
                 A test that mutates state, asserts, mutates state again, and asserts a second time
                 is testing a sequence of scenarios inside a single function. When the first phase
@@ -162,6 +164,24 @@ crate::test_utils::rule_test!(
                         assert isinstance(event, OrderCreated)
                         assert event.order_id == 7
                 "#,
+                call_free_projection_binding_between_assertions_exempt => r"
+                    def test_batch_order_fields():
+                        batch = process_batch()
+                        assert len(batch.orders) == 1
+                        order = batch.orders[0]
+                        assert order.price == 10
+                        assert order.size == 5
+                ",
+                capsys_readouterr_after_pytest_raises_exempt => r#"
+                    import pytest
+
+                    def test_cli_invalid_wallet_exits(capsys):
+                        with pytest.raises(SystemExit) as exc_info:
+                            run_cli("--wallet", "invalid")
+                        captured = capsys.readouterr()
+                        assert exc_info.value.code == 1
+                        assert "invalid wallet" in captured.err
+                "#,
                 nested_function_assertions_not_counted => r"
                     def test_with_local_verifier():
                         def check_positive(val):
@@ -204,6 +224,13 @@ crate::test_utils::rule_test!(
                         second = repo.find("b")
                         assert second == "b"
                 "# => "test_two_independent_queries",
+                attribute_mutation_between_assertions => r#"
+                    def test_mutate_attribute_between_assertions():
+                        order = Order(status="open")
+                        assert order.status == "open"
+                        order.status = "cancelled"
+                        assert order.status == "cancelled"
+                "# => "test_mutate_attribute_between_assertions",
             ],
         },
         Rust => {
@@ -230,6 +257,16 @@ crate::test_utils::rule_test!(
                         assert_eq!(1 + 1, 2);
                         struct Marker;
                         assert_eq!(2 + 2, 4);
+                    }
+                ",
+                call_free_projection_binding_between_assertions_exempt => r"
+                    #[test]
+                    fn test_batch_order_fields() {
+                        let batch = process_batch();
+                        assert_eq!(batch.orders.len(), 1);
+                        let order = &batch.orders[0];
+                        assert_eq!(order.price, 10);
+                        assert_eq!(order.size, 5);
                     }
                 ",
             ],
