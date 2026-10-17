@@ -425,11 +425,63 @@ fn is_multi_phase_rust_test(body_node: &ast::BlockExpr) -> bool {
                 return true;
             }
             seen_assertion = true;
-        } else if seen_assertion {
+        } else if seen_assertion && !is_rust_inspection_binding(&statement_node) {
             seen_action_after_assertion = true;
         }
     }
     false
+}
+
+fn is_rust_inspection_binding(statement_node: &SyntaxNode) -> bool {
+    ast::LetStmt::cast(statement_node.clone())
+        .and_then(|let_statement| let_statement.initializer())
+        .is_some_and(|initializer| is_rust_projection_expr(&initializer))
+}
+
+fn is_rust_projection_expr(expr: &ast::Expr) -> bool {
+    match expr {
+        ast::Expr::PathExpr(_) => true,
+        ast::Expr::FieldExpr(field) => field
+            .expr()
+            .is_some_and(|base| is_rust_projection_expr(&base)),
+        ast::Expr::IndexExpr(index) => {
+            index
+                .base()
+                .is_some_and(|base| is_rust_projection_expr(&base))
+                && index
+                    .index()
+                    .is_some_and(|index_expr| !rust_expr_contains_call(&index_expr))
+        }
+        ast::Expr::RefExpr(reference) => reference
+            .expr()
+            .is_some_and(|inner| is_rust_projection_expr(&inner)),
+        ast::Expr::PrefixExpr(prefix) if prefix.op_kind() == Some(ast::UnaryOp::Deref) => prefix
+            .expr()
+            .is_some_and(|inner| is_rust_projection_expr(&inner)),
+        ast::Expr::ParenExpr(paren) => paren
+            .expr()
+            .is_some_and(|inner| is_rust_projection_expr(&inner)),
+        ast::Expr::TupleExpr(tuple) => {
+            let mut has_fields = false;
+            for field in tuple.fields() {
+                has_fields = true;
+                if !is_rust_projection_expr(&field) {
+                    return false;
+                }
+            }
+            has_fields
+        }
+        _ => false,
+    }
+}
+
+fn rust_expr_contains_call(expr: &ast::Expr) -> bool {
+    expr.syntax().descendants().any(|node| {
+        matches!(
+            node.kind(),
+            SyntaxKind::CALL_EXPR | SyntaxKind::METHOD_CALL_EXPR | SyntaxKind::MACRO_EXPR
+        )
+    })
 }
 
 /// Collects Rust test functions grouped by enclosing file root or `mod` scope (segmented on

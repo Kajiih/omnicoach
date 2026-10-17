@@ -105,6 +105,9 @@ Candidates and known-gap follow-ups to prioritize, not commitments.
   - *Unpacked and chained constants* (Python): `A, B = 1, 2` and `A = B = 1` are not recognized as constant definitions; their values count as inline uses.
   - *Typed template placeholders*: constants such as `CALLEE = "callee"` exist only to name a template placeholder once. A typed placeholder (enum or typed key) would remove them.
   - *Multi-diagnostic `rule_test!` cases*: see "Rule test harness".
+- **Test assertion & structure helper-evasion follow-ups** (`multi-phase-test`, `too-many-assertions`, `duplicated-test-setup`, `logic-in-tests`):
+  - *Same-file assertion helpers without an `assert` prefix*: `count_python_assertions_in_slice` and `count_rust_assertions` currently recognize `self.assert*()`, `pytest.raises(...)`, `pytest.warns(...)`, `self.fail(...)`, and Rust `assert*!` / `panic!` / `unreachable!`, so wrapping `pytest.raises` or `assert` inside a helper like `_run_cli_expecting_exit(...)` hides the assertion from `multi-phase-test`, `too-many-assertions`, and `duplicated-test-setup`. Indexing same-file helper functions whose bodies contain assertions (or matching `_expect_*` / `_verify_*` / `_check_*` prefixes) would close this evasion across all three rules.
+  - *Polling spin-loops moved into test helpers*: `logic-in-tests` inspects only `test_*` / `#[test]` bodies so in-file fakes, builders, and context managers can use `if` / `try`. Evaluating a targeted check on non-test helpers in `RuleTarget::TestsOnly` for `while` polling loops (`while not cond: await checkpoint()`) would prevent moving busy-waits out of test bodies into `_wait_*` helpers.
 - **Time-unit literal arithmetic** (extension of `primitive-duration` — tip `#rationale`):
   - *Detection*: `24 * 60 * 60`, `60 * 60`, `86400`, `3600` → `timedelta` / `Duration`.
 - **Import alias conventions** (`import x as y`, `use x as y`):

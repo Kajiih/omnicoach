@@ -607,11 +607,101 @@ fn is_multi_phase_python_test_body(body: &[Stmt]) -> bool {
                 return true;
             }
             seen_assertion = true;
-        } else if seen_assertion {
+        } else if seen_assertion && !is_python_inspection_binding(statement) {
             seen_action_after_assertion = true;
         }
     }
     false
+}
+
+/// Returns true if `statement` binds local names to a call-free projection of existing values or
+/// a `pytest` capture readout (`capsys.readouterr()` / `capfd.readouterr()`).
+fn is_python_inspection_binding(statement: &Stmt) -> bool {
+    match statement {
+        Stmt::Assign(assign) => {
+            !assign.targets.is_empty()
+                && assign.targets.iter().all(is_local_binding_target)
+                && is_python_inspection_expr(&assign.value)
+        }
+        Stmt::AnnAssign(ann_assign) => {
+            is_local_binding_target(&ann_assign.target)
+                && ann_assign
+                    .value
+                    .as_deref()
+                    .is_some_and(is_python_inspection_expr)
+        }
+        _ => false,
+    }
+}
+
+fn is_local_binding_target(target: &Expr) -> bool {
+    match target {
+        Expr::Name(_) => true,
+        Expr::Starred(starred) => is_local_binding_target(&starred.value),
+        Expr::Tuple(tuple) => {
+            !tuple.elts.is_empty() && tuple.elts.iter().all(is_local_binding_target)
+        }
+        Expr::List(list) => !list.elts.is_empty() && list.elts.iter().all(is_local_binding_target),
+        _ => false,
+    }
+}
+
+fn is_python_inspection_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::Name(_) => true,
+        Expr::Attribute(attr) => is_python_inspection_expr(&attr.value),
+        Expr::Subscript(subscript) => {
+            is_python_inspection_expr(&subscript.value)
+                && !python_expr_contains_call(&subscript.slice)
+        }
+        Expr::Tuple(tuple) => {
+            !tuple.elts.is_empty() && tuple.elts.iter().all(is_python_inspection_expr)
+        }
+        Expr::List(list) => {
+            !list.elts.is_empty() && list.elts.iter().all(is_python_inspection_expr)
+        }
+        Expr::Call(call) => is_pytest_readouterr_call(call),
+        _ => false,
+    }
+}
+
+fn python_expr_contains_call(expr: &Expr) -> bool {
+    struct CallFinder {
+        found: bool,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for CallFinder {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if self.found {
+                return;
+            }
+            if matches!(expr, Expr::Call(_)) {
+                self.found = true;
+                return;
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut finder = CallFinder { found: false };
+    finder.visit_expr(expr);
+    finder.found
+}
+
+fn is_pytest_readouterr_call(call: &ruff_python_ast::ExprCall) -> bool {
+    const PYTEST_CAPTURE_FIXTURES: &[&str] = &["capsys", "capfd", "capsysbinary", "capfdbinary"];
+
+    call.arguments.is_empty()
+        && matches!(
+            call.func.as_ref(),
+            Expr::Attribute(attr)
+                if attr.attr.as_str() == "readouterr"
+                    && matches!(
+                        attr.value.as_ref(),
+                        Expr::Name(receiver)
+                            if PYTEST_CAPTURE_FIXTURES.contains(&receiver.id.as_str())
+                    )
+        )
 }
 
 /// Collects Python test functions grouped by enclosing module or class scope (segmented on

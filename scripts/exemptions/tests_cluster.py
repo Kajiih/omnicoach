@@ -281,7 +281,9 @@ CLUSTER = Cluster(
                     "    if false && ast::Fn::can_cast(node.kind()) {\n        return 0;\n    }",
                 ),
             ),
-            cases=("too_many_assertions::pass::nested_function_assertions_not_counted@rust",),
+            cases=(
+                "too_many_assertions::pass::nested_function_assertions_not_counted@rust",
+            ),
         ),
         # --- logic-in-tests ---
         Mutation(
@@ -370,7 +372,9 @@ CLUSTER = Cluster(
                     "        let _ = statement;",
                 ),
             ),
-            cases=("multi_phase_test::pass::narrowing_isinstance_between_assertions_exempt",),
+            cases=(
+                "multi_phase_test::pass::narrowing_isinstance_between_assertions_exempt",
+            ),
         ),
         Mutation(
             label="Python consecutive assertions without intervening action allowed in multi-phase-test",
@@ -387,6 +391,22 @@ CLUSTER = Cluster(
             cases=(
                 "multi_phase_test::pass::single_phase_multiple_assertions_allowed@python",
                 "multi_phase_test::pass::narrowing_isinstance_between_assertions_exempt",
+                "multi_phase_test::pass::call_free_projection_binding_between_assertions_exempt@python",
+                "multi_phase_test::pass::capsys_readouterr_after_pytest_raises_exempt",
+            ),
+        ),
+        Mutation(
+            label="Python call-free projection binding and capsys.readouterr() between assertions exempt in multi-phase-test",
+            path=PYTHON,
+            edits=(
+                (
+                    "        } else if seen_assertion && !is_python_inspection_binding(statement) {",
+                    "        } else if seen_assertion && (is_python_inspection_binding(statement) || true) {",
+                ),
+            ),
+            cases=(
+                "multi_phase_test::pass::call_free_projection_binding_between_assertions_exempt@python",
+                "multi_phase_test::pass::capsys_readouterr_after_pytest_raises_exempt",
             ),
         ),
         Mutation(
@@ -404,6 +424,20 @@ CLUSTER = Cluster(
             cases=(
                 "multi_phase_test::pass::single_phase_multiple_assertions_allowed@rust",
                 "multi_phase_test::pass::local_item_declaration_between_assertions_exempt",
+                "multi_phase_test::pass::call_free_projection_binding_between_assertions_exempt@rust",
+            ),
+        ),
+        Mutation(
+            label="Rust call-free projection binding between assertions exempt in multi-phase-test",
+            path=RUST,
+            edits=(
+                (
+                    "        } else if seen_assertion && !is_rust_inspection_binding(&statement_node) {",
+                    "        } else if seen_assertion && (is_rust_inspection_binding(&statement_node) || true) {",
+                ),
+            ),
+            cases=(
+                "multi_phase_test::pass::call_free_projection_binding_between_assertions_exempt@rust",
             ),
         ),
         Mutation(
@@ -489,7 +523,9 @@ CLUSTER = Cluster(
                     "    let statements = &func_def.body[..];",
                 ),
             ),
-            cases=("duplicated_test_setup::pass::leading_docstring_not_counted_as_setup",),
+            cases=(
+                "duplicated_test_setup::pass::leading_docstring_not_counted_as_setup",
+            ),
         ),
         Mutation(
             label="Python nested function not counted as setup in duplicated-test-setup",
@@ -500,7 +536,9 @@ CLUSTER = Cluster(
                     "        .filter(|statement| !matches!(statement, Stmt::ClassDef(_)))",
                 ),
             ),
-            cases=("duplicated_test_setup::pass::nested_function_not_counted_as_setup",),
+            cases=(
+                "duplicated_test_setup::pass::nested_function_not_counted_as_setup",
+            ),
         ),
         Mutation(
             label="Python nested class not counted as setup in duplicated-test-setup",
@@ -524,7 +562,9 @@ CLUSTER = Cluster(
                     "        .take_while(|_| true)",
                 ),
             ),
-            cases=("duplicated_test_setup::pass::assertions_not_counted_as_setup@python",),
+            cases=(
+                "duplicated_test_setup::pass::assertions_not_counted_as_setup@python",
+            ),
         ),
         Mutation(
             label="Rust assertions not counted as setup in duplicated-test-setup",
@@ -535,7 +575,9 @@ CLUSTER = Cluster(
                     "        .take_while(|_| true)",
                 ),
             ),
-            cases=("duplicated_test_setup::pass::assertions_not_counted_as_setup@rust",),
+            cases=(
+                "duplicated_test_setup::pass::assertions_not_counted_as_setup@rust",
+            ),
         ),
         Mutation(
             label="separate test classes or modules do not pool across scopes in duplicated-test-setup",
@@ -682,14 +724,16 @@ CLUSTER = Cluster(
                     "                    .any(PythonBaseClass::is_structural_marker)",
                 ),
             ),
-            cases=("fake_without_protocol::pass::inherits_collaborator_with_generic_marker",),
+            cases=(
+                "fake_without_protocol::pass::inherits_collaborator_with_generic_marker",
+            ),
         ),
         Mutation(
             label="non-Fake class without base exempt from fake-without-protocol",
             path=CLASSES,
             edits=(
                 (
-                    '    name.trim_start_matches(\'_\')\n        .strip_prefix("Fake")',
+                    "    name.trim_start_matches('_')\n        .strip_prefix(\"Fake\")",
                     "    Some(name.trim_start_matches('_'))",
                 ),
             ),
@@ -711,7 +755,7 @@ CLUSTER = Cluster(
             path=CLASSES,
             edits=(
                 (
-                    '    name.trim_start_matches(\'_\')\n        .strip_prefix("Fake")',
+                    "    name.trim_start_matches('_')\n        .strip_prefix(\"Fake\")",
                     "    name.trim_start_matches('_')\n"
                     "        .to_ascii_lowercase()\n"
                     '        .strip_prefix("fake")\n'
