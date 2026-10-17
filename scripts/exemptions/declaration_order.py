@@ -205,6 +205,12 @@ MUTATIONS = (
         (CALLEE + "macro_field_access_is_not_a_method_call",),
     ),
     Mutation(
+        "signature types are not encapsulated callees",
+        AST,
+        (("|| sig_closure[callee]", "|| false"),),
+        (CALLEE + "signature_type_before_private_fn_exempt",),
+    ),
+    Mutation(
         "reversed main guard comparison",
         PYTHON,
         (("        || (is_dunder_main_literal(left) && is_dunder_name_expr(right))", ""),),
