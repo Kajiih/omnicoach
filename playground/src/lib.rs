@@ -89,14 +89,6 @@ fn execute_buffered_request() -> usize {
     output_guard.len()
 }
 
-fn dispatch_request(request: PlaygroundRequest) -> PlaygroundResponse {
-    match request {
-        PlaygroundRequest::Lint(payload) => run_lint(&payload),
-        PlaygroundRequest::Explain { rule, config } => run_explain(&rule, &config),
-        PlaygroundRequest::Catalog => run_catalog(),
-    }
-}
-
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case")]
 enum PlaygroundRequest {
@@ -111,6 +103,47 @@ enum PlaygroundRequest {
     },
     /// Return the catalog of registered rules for UI discovery.
     Catalog,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum PlaygroundResponse {
+    Lint {
+        ok: bool,
+        language: Option<&'static str>,
+        is_test_path: bool,
+        diagnostics: Vec<Diagnostic>,
+        plain: String,
+    },
+    Explain {
+        ok: bool,
+        rule: String,
+        markdown: String,
+    },
+    Catalog {
+        ok: bool,
+        rules: Vec<CatalogEntry>,
+    },
+    Error {
+        ok: bool,
+        error: String,
+    },
+}
+
+fn dispatch_request(request: PlaygroundRequest) -> PlaygroundResponse {
+    match request {
+        PlaygroundRequest::Lint(payload) => run_lint(&payload),
+        PlaygroundRequest::Explain { rule, config } => run_explain(&rule, &config),
+        PlaygroundRequest::Catalog => run_catalog(),
+    }
+}
+
+#[derive(Deserialize)]
+struct LintPayload {
+    path: String,
+    code: String,
+    #[serde(default)]
+    config: String,
 }
 
 fn run_lint(payload: &LintPayload) -> PlaygroundResponse {
@@ -135,14 +168,6 @@ fn run_lint(payload: &LintPayload) -> PlaygroundResponse {
         diagnostics,
         plain,
     }
-}
-
-#[derive(Deserialize)]
-struct LintPayload {
-    path: String,
-    code: String,
-    #[serde(default)]
-    config: String,
 }
 
 fn run_explain(rule: &str, config: &str) -> PlaygroundResponse {
@@ -183,31 +208,6 @@ fn run_catalog() -> PlaygroundResponse {
 
 fn serialize_response(response: &PlaygroundResponse) -> String {
     serde_json::to_string(response).unwrap_or_else(|_| FALLBACK_SERIALIZATION_ERROR.to_owned())
-}
-
-#[derive(Serialize)]
-#[serde(untagged)]
-enum PlaygroundResponse {
-    Lint {
-        ok: bool,
-        language: Option<&'static str>,
-        is_test_path: bool,
-        diagnostics: Vec<Diagnostic>,
-        plain: String,
-    },
-    Explain {
-        ok: bool,
-        rule: String,
-        markdown: String,
-    },
-    Catalog {
-        ok: bool,
-        rules: Vec<CatalogEntry>,
-    },
-    Error {
-        ok: bool,
-        error: String,
-    },
 }
 
 #[derive(Serialize)]

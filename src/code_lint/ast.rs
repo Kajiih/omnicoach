@@ -1178,6 +1178,8 @@ fn analyze_declaration_scope(scope: &DeclarationScope<'_>, out: &mut CachedCallC
 /// - `Callable -> Callable`, `Type -> Type`, and `Type -> Callable` include all `callees`.
 /// - `Callable -> Type` includes a type `callee` iff `caller` encapsulates `callee` inside its
 ///   body (`EffectiveBody(caller) \ SigClosure(caller)`).
+/// - `Type -> Callable` additionally includes every callable whose parameter or return signature
+///   names the type directly: the type is the vocabulary of that callable's contract.
 fn compute_stage3_callees(callables: &[ScopeItem<'_>]) -> Vec<Vec<usize>> {
     let count = callables.len();
     let mut out = vec![Vec::new(); count];
@@ -1239,6 +1241,19 @@ fn compute_stage3_callees(callables: &[ScopeItem<'_>]) -> Vec<Vec<usize>> {
             }
         }
         out[caller] = edges;
+    }
+    for (callable, item) in callables.iter().enumerate() {
+        if item.kind != ScopeItemKind::Callable {
+            continue;
+        }
+        for &sig_type in item.param_callees.iter().chain(&item.return_callees) {
+            if sig_type < count
+                && callables[sig_type].kind == ScopeItemKind::Type
+                && !out[sig_type].contains(&callable)
+            {
+                out[sig_type].push(callable);
+            }
+        }
     }
     out
 }

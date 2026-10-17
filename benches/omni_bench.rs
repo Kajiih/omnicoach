@@ -442,15 +442,6 @@ const RUST_RULE_FAMILIES: &[RuleFamily] = &[
     },
 ];
 
-fn all_bench_rules_for_language(language: Language) -> Vec<BenchRule> {
-    CODE_RULES
-        .iter()
-        .copied()
-        .filter(|rule| rule.supports_language(language))
-        .map(BenchRule)
-        .collect()
-}
-
 /// Wrapper around `&'static dyn AnyCodeRule` implementing `Display` for `divan` table rows.
 #[derive(Clone, Copy)]
 struct BenchRule(&'static dyn AnyCodeRule);
@@ -459,6 +450,15 @@ impl fmt::Display for BenchRule {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}", self.0.name())
     }
+}
+
+fn all_bench_rules_for_language(language: Language) -> Vec<BenchRule> {
+    CODE_RULES
+        .iter()
+        .copied()
+        .filter(|rule| rule.supports_language(language))
+        .map(BenchRule)
+        .collect()
 }
 
 /// Stage 3 (`linter`): End-to-end single-file linting plus marginal cost of rule families and

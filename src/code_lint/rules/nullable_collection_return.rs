@@ -164,6 +164,16 @@ const FUNCTION: &str = "function";
 const EXPRESSION: &str = "expression";
 const TOKEN: &str = "token";
 
+/// A return annotation that makes a collection type nullable.
+struct NullableCollectionReturn<'a> {
+    /// The function's name.
+    function: String,
+    /// The return annotation.
+    return_type: AstNode<'a>,
+    /// The collection types made nullable, joined with `", "`.
+    collections: String,
+}
+
 /// Python return annotations whose union contains `None` and only collection branches.
 fn python_nullable_collection_returns(file: &ParsedFile) -> Vec<NullableCollectionReturn<'_>> {
     ast::python::extract_function_signatures(file)
@@ -221,16 +231,6 @@ fn rust_nullable_collection_returns(file: &ParsedFile) -> Vec<NullableCollection
             })
         })
         .collect()
-}
-
-/// A return annotation that makes a collection type nullable.
-struct NullableCollectionReturn<'a> {
-    /// The function's name.
-    function: String,
-    /// The return annotation.
-    return_type: AstNode<'a>,
-    /// The collection types made nullable, joined with `", "`.
-    collections: String,
 }
 
 fn extract_rust_nullable_collection_type(return_type_node: &AstNode<'_>) -> Option<String> {

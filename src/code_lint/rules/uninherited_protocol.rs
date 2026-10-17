@@ -169,6 +169,14 @@ fn is_checked_class(class: &PythonClassInfo<'_>) -> bool {
     !(is_interface || has_metaclass_conflict || is_bare_fake)
 }
 
+/// A `Protocol` defined in the file, with the methods an implementation must define.
+struct LocalProtocol {
+    /// Index of the `Protocol` in [`extract_classes`] order.
+    index: usize,
+    /// Its counted methods and those of the in-file classes it extends.
+    methods: HashSet<String>,
+}
+
 /// The `protocols` with at least `min_methods` methods that `classes[index]` defines all of
 /// without inheriting from them, keeping only the most derived of a `Protocol` and its in-file
 /// extensions.
@@ -219,14 +227,6 @@ fn is_bound_protocol(
         .rfind(|other| other.index < index)
         .or_else(|| same_name().find(|other| other.index > index))
         .is_some_and(|bound| bound.index == protocol.index)
-}
-
-/// A `Protocol` defined in the file, with the methods an implementation must define.
-struct LocalProtocol {
-    /// Index of the `Protocol` in [`extract_classes`] order.
-    index: usize,
-    /// Its counted methods and those of the in-file classes it extends.
-    methods: HashSet<String>,
 }
 
 /// Names of the methods defined directly in `class` that count toward a `Protocol` contract:

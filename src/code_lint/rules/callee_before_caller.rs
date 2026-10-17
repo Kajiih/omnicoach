@@ -10,9 +10,9 @@ use crate::rule_declaration::{
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Private callee `{function}` is defined before its private caller `{caller}`.",
-    rationale: "Defining lower-abstraction private helpers above `{caller}` inverts the top-down reading flow.",
-    suggestion: "Move `{function}` below `{caller}` so higher-level callers precede lower-level callees.",
+    summary: "Private `{function}` is defined before the higher-level private `{caller}`.",
+    rationale: "Defining lower-abstraction private declarations above `{caller}` inverts the top-down reading flow.",
+    suggestion: "Move `{function}` below `{caller}` so higher-level declarations precede lower-level ones.",
 };
 
 /// The rule's declaration.
@@ -33,9 +33,11 @@ pub const RULE: CodeRule = CodeRule {
             what_it_does: indoc::indoc! {r"
                 Flags a private function or method declared above a private function that calls
                 it, in a module, Python `class` or Rust inherent `impl` block: `_parse` above
-                `_load` when `_load` calls `_parse`. Calls between public functions and recursive
-                calls are not constrained, and a function already flagged by
-                `private-before-public` or `uncolocated-helper` is not reported again."},
+                `_load` when `_load` calls `_parse`. Private types follow the same top-down order:
+                a type comes after the function that uses it only inside its body, and before
+                every function that names it in its parameter or return types. Calls between
+                public functions and recursive calls are not constrained, and a function already
+                flagged by `private-before-public` or `uncolocated-helper` is not reported again."},
             why_is_this_bad: indoc::indoc! {r"
                 Unlike public entrypoints, a private helper exists solely as an internal
                 decomposition step of its callers. Defining private callees above their private
@@ -304,17 +306,21 @@ crate::test_utils::rule_test!(
                         }
                     }
                 "#,
-                signature_type_before_private_fn_exempt => r#"
+                signature_closure_type_not_encapsulated_exempt => r#"
                     pub fn parse_config(raw: &str) -> usize {
-                        parse_frame(raw).len
+                        parse_frame(raw).header.len
                     }
 
                     struct Frame {
+                        header: Header,
+                    }
+
+                    struct Header {
                         len: usize,
                     }
 
                     fn parse_frame(raw: &str) -> Frame {
-                        Frame { len: raw.len() }
+                        Frame { header: Header { len: raw.len() } }
                     }
                 "#,
             ],
@@ -371,6 +377,41 @@ crate::test_utils::rule_test!(
                         Frame { len: raw.len() }
                     }
                 "# => "Frame",
+                private_fn_before_its_return_type => r#"
+                    pub fn parse_config(raw: &str) -> usize {
+                        decode_section(raw)
+                    }
+
+                    fn decode_section(raw: &str) -> usize {
+                        parse_frame(raw).len
+                    }
+
+                    fn parse_frame(raw: &str) -> Frame {
+                        Frame { len: raw.len() }
+                    }
+
+                    struct Frame {
+                        len: usize,
+                    }
+                "# => "parse_frame",
+                private_fn_before_its_parameter_type => r#"
+                    pub fn parse_config(raw: &str) -> usize {
+                        measure(raw)
+                    }
+
+                    fn measure(raw: &str) -> usize {
+                        let frame = Frame { len: raw.len() };
+                        frame_len(&frame)
+                    }
+
+                    fn frame_len(frame: &Frame) -> usize {
+                        frame.len
+                    }
+
+                    struct Frame {
+                        len: usize,
+                    }
+                "# => "frame_len",
                 cycle_through_public_entrypoint_not_exempt => r#"
                     pub fn evaluate(depth: usize) -> usize {
                         if depth == 0 { 0 } else { step_one(depth) }

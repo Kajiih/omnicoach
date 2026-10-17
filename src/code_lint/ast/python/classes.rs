@@ -969,6 +969,125 @@ fn build_module_declaration_scopes<'a>(
     scopes
 }
 
+/// Builds a [`DeclarationScope`] for direct methods of `class_def`.
+fn build_class_declaration_scope<'a>(
+    class_def: &StmtClassDef,
+    future_annotations: bool,
+    file: &'a ParsedFile,
+) -> Option<DeclarationScope<'a>> {
+    struct ClassMethodCallVisitor<'map, 'local> {
+        class_name: &'map str,
+        method_by_name: &'map HashMap<String, usize>,
+        local_names: &'local HashSet<String>,
+        has_self_param: bool,
+        has_cls_param: bool,
+        callees: &'local mut Vec<usize>,
+    }
+
+    impl SourceOrderVisitor<'_> for ClassMethodCallVisitor<'_, '_> {
+        fn visit_stmt(&mut self, statement: &Stmt) {
+            if matches!(statement, Stmt::ClassDef(_)) {
+                return;
+            }
+            walk_stmt(self, statement);
+        }
+
+        fn visit_expr(&mut self, expr: &Expr) {
+            if let Expr::Attribute(attr) = expr
+                && attr.ctx.is_load()
+                && let Expr::Name(recv) = attr.value.as_ref()
+            {
+                let recv_name = recv.id.as_str();
+                let is_valid_receiver = (recv_name == SELF_RECEIVER
+                    && (self.has_self_param || !self.local_names.contains(SELF_RECEIVER)))
+                    || (recv_name == CLS_RECEIVER
+                        && (self.has_cls_param || !self.local_names.contains(CLS_RECEIVER)))
+                    || (recv_name == self.class_name && !self.local_names.contains(recv_name));
+                if is_valid_receiver
+                    && let Some(&idx) = self.method_by_name.get(attr.attr.id.as_str())
+                    && !self.callees.contains(&idx)
+                {
+                    self.callees.push(idx);
+                }
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let grouped = group_python_scope_items(&class_def.body, true, file);
+    if grouped.len() < 2 {
+        return None;
+    }
+    let method_by_name: HashMap<String, usize> = grouped
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| (item.name.clone(), idx))
+        .collect();
+    let class_name = class_def.name.id.as_str();
+    let first_stmt_indices: Vec<usize> = grouped.iter().map(|item| item.first_stmt_idx).collect();
+
+    let mut items: Vec<ScopeItem<'a>> = grouped
+        .into_iter()
+        .map(|group| {
+            let mut callees = Vec::new();
+            if let PythonScopeItem::Callable(defs) = &group.item {
+                for def in defs {
+                    let local_names = collect_local_bound_names(def, file);
+                    let has_self_param = parameters_shadow_name(&def.parameters, SELF_RECEIVER);
+                    let has_cls_param = parameters_shadow_name(&def.parameters, CLS_RECEIVER);
+                    let mut visitor = ClassMethodCallVisitor {
+                        class_name,
+                        method_by_name: &method_by_name,
+                        local_names: &local_names,
+                        has_self_param,
+                        has_cls_param,
+                        callees: &mut callees,
+                    };
+                    visitor.visit_body(&def.body);
+                }
+            }
+            let body_callees = callees.clone();
+            ScopeItem {
+                name_node: group.name_node,
+                name: group.name,
+                visibility: group.visibility,
+                is_constructor: group.is_constructor,
+                kind: ScopeItemKind::Callable,
+                callees,
+                param_callees: Vec::new(),
+                return_callees: Vec::new(),
+                body_callees,
+                pinned_before: None,
+            }
+        })
+        .collect();
+
+    let is_callable = vec![true; items.len()];
+    let pinned = compute_python_pinned_before(
+        &class_def.body,
+        0..class_def.body.len(),
+        &first_stmt_indices,
+        &method_by_name,
+        &items,
+        &is_callable,
+        future_annotations,
+    );
+    for (item, pin) in items.iter_mut().zip(pinned) {
+        item.pinned_before = pin;
+    }
+
+    Some(DeclarationScope { items })
+}
+
+struct GroupedPythonScopeItem<'a, 'ast> {
+    name_node: AstNode<'a>,
+    name: String,
+    visibility: MethodVisibility,
+    is_constructor: bool,
+    first_stmt_idx: usize,
+    item: PythonScopeItem<'ast>,
+}
+
 /// Splits `grouped` into consecutive segments, starting a new segment whenever a name is
 /// redefined.
 fn split_python_module_segments<'a, 'body>(
@@ -1189,116 +1308,6 @@ impl SourceOrderVisitor<'_> for ModuleRefVisitor<'_, '_> {
         }
         walk_expr(self, expr);
     }
-}
-
-/// Builds a [`DeclarationScope`] for direct methods of `class_def`.
-fn build_class_declaration_scope<'a>(
-    class_def: &StmtClassDef,
-    future_annotations: bool,
-    file: &'a ParsedFile,
-) -> Option<DeclarationScope<'a>> {
-    struct ClassMethodCallVisitor<'map, 'local> {
-        class_name: &'map str,
-        method_by_name: &'map HashMap<String, usize>,
-        local_names: &'local HashSet<String>,
-        has_self_param: bool,
-        has_cls_param: bool,
-        callees: &'local mut Vec<usize>,
-    }
-
-    impl SourceOrderVisitor<'_> for ClassMethodCallVisitor<'_, '_> {
-        fn visit_stmt(&mut self, statement: &Stmt) {
-            if matches!(statement, Stmt::ClassDef(_)) {
-                return;
-            }
-            walk_stmt(self, statement);
-        }
-
-        fn visit_expr(&mut self, expr: &Expr) {
-            if let Expr::Attribute(attr) = expr
-                && attr.ctx.is_load()
-                && let Expr::Name(recv) = attr.value.as_ref()
-            {
-                let recv_name = recv.id.as_str();
-                let is_valid_receiver = (recv_name == SELF_RECEIVER
-                    && (self.has_self_param || !self.local_names.contains(SELF_RECEIVER)))
-                    || (recv_name == CLS_RECEIVER
-                        && (self.has_cls_param || !self.local_names.contains(CLS_RECEIVER)))
-                    || (recv_name == self.class_name && !self.local_names.contains(recv_name));
-                if is_valid_receiver
-                    && let Some(&idx) = self.method_by_name.get(attr.attr.id.as_str())
-                    && !self.callees.contains(&idx)
-                {
-                    self.callees.push(idx);
-                }
-            }
-            walk_expr(self, expr);
-        }
-    }
-
-    let grouped = group_python_scope_items(&class_def.body, true, file);
-    if grouped.len() < 2 {
-        return None;
-    }
-    let method_by_name: HashMap<String, usize> = grouped
-        .iter()
-        .enumerate()
-        .map(|(idx, item)| (item.name.clone(), idx))
-        .collect();
-    let class_name = class_def.name.id.as_str();
-    let first_stmt_indices: Vec<usize> = grouped.iter().map(|item| item.first_stmt_idx).collect();
-
-    let mut items: Vec<ScopeItem<'a>> = grouped
-        .into_iter()
-        .map(|group| {
-            let mut callees = Vec::new();
-            if let PythonScopeItem::Callable(defs) = &group.item {
-                for def in defs {
-                    let local_names = collect_local_bound_names(def, file);
-                    let has_self_param = parameters_shadow_name(&def.parameters, SELF_RECEIVER);
-                    let has_cls_param = parameters_shadow_name(&def.parameters, CLS_RECEIVER);
-                    let mut visitor = ClassMethodCallVisitor {
-                        class_name,
-                        method_by_name: &method_by_name,
-                        local_names: &local_names,
-                        has_self_param,
-                        has_cls_param,
-                        callees: &mut callees,
-                    };
-                    visitor.visit_body(&def.body);
-                }
-            }
-            let body_callees = callees.clone();
-            ScopeItem {
-                name_node: group.name_node,
-                name: group.name,
-                visibility: group.visibility,
-                is_constructor: group.is_constructor,
-                kind: ScopeItemKind::Callable,
-                callees,
-                param_callees: Vec::new(),
-                return_callees: Vec::new(),
-                body_callees,
-                pinned_before: None,
-            }
-        })
-        .collect();
-
-    let is_callable = vec![true; items.len()];
-    let pinned = compute_python_pinned_before(
-        &class_def.body,
-        0..class_def.body.len(),
-        &first_stmt_indices,
-        &method_by_name,
-        &items,
-        &is_callable,
-        future_annotations,
-    );
-    for (item, pin) in items.iter_mut().zip(pinned) {
-        item.pinned_before = pin;
-    }
-
-    Some(DeclarationScope { items })
 }
 
 /// Computes `pinned_before` for each scope item in `items` by walking top-to-bottom runtime
@@ -1620,15 +1629,6 @@ fn group_python_scope_items<'a, 'ast>(
     }
 
     items
-}
-
-struct GroupedPythonScopeItem<'a, 'ast> {
-    name_node: AstNode<'a>,
-    name: String,
-    visibility: MethodVisibility,
-    is_constructor: bool,
-    first_stmt_idx: usize,
-    item: PythonScopeItem<'ast>,
 }
 
 enum PythonScopeItem<'ast> {

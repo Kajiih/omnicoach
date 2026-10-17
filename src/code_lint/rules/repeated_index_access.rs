@@ -149,6 +149,13 @@ fn check_file(
         .collect()
 }
 
+/// Positions read from one receiver in one scope, anchored on its first read.
+struct ReceiverReads<'a> {
+    receiver: String,
+    first_read: AstNode<'a>,
+    positions: BTreeSet<i64>,
+}
+
 /// Groups a scope's reads by receiver in first-seen order, skipping the scope's exempt receivers.
 fn group_reads_by_receiver(scope: ScopePositionalReads<'_>) -> Vec<ReceiverReads<'_>> {
     let mut groups: Vec<ReceiverReads<'_>> = Vec::new();
@@ -171,13 +178,6 @@ fn group_reads_by_receiver(scope: ScopePositionalReads<'_>) -> Vec<ReceiverReads
         }
     }
     groups
-}
-
-/// Positions read from one receiver in one scope, anchored on its first read.
-struct ReceiverReads<'a> {
-    receiver: String,
-    first_read: AstNode<'a>,
-    positions: BTreeSet<i64>,
 }
 
 /// Number of `_` placeholders an unpacking pattern reading `positions` needs, with a free `*_`
