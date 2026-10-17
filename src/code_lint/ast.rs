@@ -966,6 +966,16 @@ pub fn collect_type_method_scopes(file: &ParsedFile) -> Vec<TypeMethodScope<'_>>
     dispatch_lang!(file.lang(), collect_type_method_scopes(file))
 }
 
+/// Whether a [`ScopeItem`] is a callable (`fn` / `def`) or a type definition (`struct`, `enum`,
+/// `union`, `trait`, `class`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeItemKind {
+    /// A function or method definition.
+    Callable,
+    /// A class, struct, enum, union, or trait definition.
+    Type,
+}
+
 /// A function, method, or type definition inside a module, Python `class`, or Rust inherent
 /// `impl` scope.
 #[derive(Clone)]
@@ -974,13 +984,23 @@ pub struct ScopeItem<'a> {
     pub name_node: AstNode<'a>,
     /// Declaration identifier name.
     pub name: String,
+    /// Whether this item is a callable or a type definition.
+    pub kind: ScopeItemKind,
     /// Visibility tier (`Public` vs. `Private`).
     pub visibility: MethodVisibility,
     /// True if this callable is a Tier 0 lifecycle constructor.
     pub is_constructor: bool,
-    /// Indices in the enclosing [`DeclarationScope::items`] slice of sibling items directly
-    /// called or referenced by this item.
+    /// Indices in the enclosing [`DeclarationScope::items`] slice of all sibling items directly
+    /// called or referenced by this item (signature + body).
     pub callees: Vec<usize>,
+    /// Indices of sibling items referenced in this callable's parameter, generic, decorator, or
+    /// `where`-clause signature.
+    pub param_callees: Vec<usize>,
+    /// Indices of sibling items referenced in this callable's return type signature.
+    pub return_callees: Vec<usize>,
+    /// Indices of sibling items referenced in this callable's body (or in a type definition /
+    /// its attached `impl` blocks).
+    pub body_callees: Vec<usize>,
     /// Smallest index in [`DeclarationScope::items`] before which this item must remain due to
     /// top-to-bottom runtime evaluation (e.g. Python import-time or class-definition-time uses).
     pub pinned_before: Option<usize>,
@@ -1009,7 +1029,7 @@ pub struct CallOrderFinding<'a> {
 /// 2. `uncolocated-helper` (private helper after its public callers `pos > max(Roots(h))` that is
 ///    neither in Place 1 immediately after its single consumer nor in Place 2 in the trailing
 ///    private helper section after `last_pub`)
-/// 3. `callee-before-caller` (private callable callee before private caller among remaining items)
+/// 3. `callee-before-caller` (private callee before private caller among remaining items)
 ///
 /// Evaluating all three together guarantees mutual exclusion so a single misplaced declaration
 /// is never double-reported across rules.
@@ -1075,7 +1095,8 @@ fn analyze_declaration_scope(scope: &DeclarationScope<'_>, out: &mut CachedCallC
         }
     }
 
-    let scc_id = compute_tarjan_scc(callables);
+    let stage3_callees = compute_stage3_callees(callables);
+    let scc_id = compute_tarjan_scc(callables, &stage3_callees);
     let roots_of = compute_public_roots(callables, &callers_of);
 
     let last_pub = (0..count)
@@ -1130,13 +1151,11 @@ fn analyze_declaration_scope(scope: &DeclarationScope<'_>, out: &mut CachedCallC
             continue;
         }
         let pinned_before = callables[callee].pinned_before;
-        let last_caller = callers_of[callee]
-            .iter()
-            .copied()
+        let last_caller = ((callee + 1)..count)
             .filter(|&caller| {
-                caller > callee
-                    && !flagged_p1_or_p2[caller]
+                !flagged_p1_or_p2[caller]
                     && callables[caller].visibility == MethodVisibility::Private
+                    && stage3_callees[caller].contains(&callee)
                     && scc_id[caller] != scc_id[callee]
                     && pinned_before.is_none_or(|pin| pin > caller)
                     // Do not let an unrooted private caller pull a rooted helper below its
@@ -1152,6 +1171,76 @@ fn analyze_declaration_scope(scope: &DeclarationScope<'_>, out: &mut CachedCallC
             });
         }
     }
+}
+
+/// Computes the Stage-3 (`callee-before-caller`) downward abstraction edges for each item in
+/// `callables`:
+/// - `Callable -> Callable`, `Type -> Type`, and `Type -> Callable` include all `callees`.
+/// - `Callable -> Type` includes a type `callee` iff `caller` encapsulates `callee` inside its
+///   body (`EffectiveBody(caller) \ SigClosure(caller)`).
+fn compute_stage3_callees(callables: &[ScopeItem<'_>]) -> Vec<Vec<usize>> {
+    let count = callables.len();
+    let mut out = vec![Vec::new(); count];
+    for (caller, item) in callables.iter().enumerate() {
+        if item.kind == ScopeItemKind::Type {
+            out[caller] = item
+                .callees
+                .iter()
+                .copied()
+                .filter(|&callee| callee != caller && callee < count)
+                .collect();
+            continue;
+        }
+
+        let mut sig_closure = vec![false; count];
+        let mut stack: Vec<usize> = item
+            .param_callees
+            .iter()
+            .chain(&item.return_callees)
+            .copied()
+            .filter(|&idx| idx < count && callables[idx].kind == ScopeItemKind::Type)
+            .collect();
+        while let Some(cur) = stack.pop() {
+            if sig_closure[cur] {
+                continue;
+            }
+            sig_closure[cur] = true;
+            for &next in &callables[cur].callees {
+                if next < count && callables[next].kind == ScopeItemKind::Type {
+                    stack.push(next);
+                }
+            }
+        }
+
+        let mut edges = Vec::new();
+        for &callee in &item.callees {
+            if callee == caller || callee >= count {
+                continue;
+            }
+            if callables[callee].kind == ScopeItemKind::Callable {
+                edges.push(callee);
+            }
+        }
+        for callee in 0..count {
+            if callee == caller
+                || callables[callee].kind != ScopeItemKind::Type
+                || sig_closure[callee]
+            {
+                continue;
+            }
+            let in_body = item.body_callees.contains(&callee);
+            let in_inferred_return = item.body_callees.iter().any(|&callee_fn| {
+                callee_fn < count
+                    && callables[callee_fn].kind == ScopeItemKind::Callable
+                    && callables[callee_fn].return_callees.contains(&callee)
+            });
+            if in_body || in_inferred_return {
+                edges.push(callee);
+            }
+        }
+        out[caller] = edges;
+    }
+    out
 }
 
 /// Returns true if a private helper at `pos` (already after all of its `roots_of[pos]`) is
@@ -1214,8 +1303,8 @@ fn compute_public_roots(callables: &[ScopeItem<'_>], callers_of: &[Vec<usize>]) 
 }
 
 /// Computes Strongly Connected Component IDs for `callables` using Tarjan's algorithm over
-/// private-to-private reference edges (stopping at public boundaries).
-fn compute_tarjan_scc(callables: &[ScopeItem<'_>]) -> Vec<usize> {
+/// private-to-private Stage-3 edges (stopping at public boundaries).
+fn compute_tarjan_scc(callables: &[ScopeItem<'_>], stage3_callees: &[Vec<usize>]) -> Vec<usize> {
     struct TarjanState {
         next_index: usize,
         next_scc: usize,
@@ -1227,7 +1316,12 @@ fn compute_tarjan_scc(callables: &[ScopeItem<'_>]) -> Vec<usize> {
     }
 
     impl TarjanState {
-        fn strongconnect(&mut self, node: usize, callables: &[ScopeItem<'_>]) {
+        fn strongconnect(
+            &mut self,
+            node: usize,
+            callables: &[ScopeItem<'_>],
+            stage3_callees: &[Vec<usize>],
+        ) {
             let current_index = self.next_index;
             self.next_index += 1;
             self.indices[node] = Some(current_index);
@@ -1236,14 +1330,14 @@ fn compute_tarjan_scc(callables: &[ScopeItem<'_>]) -> Vec<usize> {
             self.on_stack[node] = true;
 
             if callables[node].visibility == MethodVisibility::Private {
-                for &callee in &callables[node].callees {
+                for &callee in &stage3_callees[node] {
                     if callee >= callables.len()
                         || callables[callee].visibility == MethodVisibility::Public
                     {
                         continue;
                     }
                     if self.indices[callee].is_none() {
-                        self.strongconnect(callee, callables);
+                        self.strongconnect(callee, callables, stage3_callees);
                         self.lowlink[node] = self.lowlink[node].min(self.lowlink[callee]);
                     } else if self.on_stack[callee]
                         && let Some(callee_index) = self.indices[callee]
@@ -1279,7 +1373,7 @@ fn compute_tarjan_scc(callables: &[ScopeItem<'_>]) -> Vec<usize> {
     };
     for node in 0..count {
         if state.indices[node].is_none() {
-            state.strongconnect(node, callables);
+            state.strongconnect(node, callables, stage3_callees);
         }
     }
     state.scc_id

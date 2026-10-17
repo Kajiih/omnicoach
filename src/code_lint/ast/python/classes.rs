@@ -9,7 +9,7 @@ use super::{
     resolved_path_and_terminal_expr,
 };
 use crate::code_lint::ast::{
-    DeclarationScope, MethodVisibility, ScopeItem, TypeMethod, TypeMethodScope,
+    DeclarationScope, MethodVisibility, ScopeItem, ScopeItemKind, TypeMethod, TypeMethodScope,
     span_from_ruff_range,
 };
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
@@ -1032,31 +1032,50 @@ fn build_python_module_scope_item<'a>(
 ) -> ScopeItem<'a> {
     let empty_locals = HashSet::new();
     let mut callees = Vec::new();
-    match &group.item {
+    let mut param_callees = Vec::new();
+    let mut return_callees = Vec::new();
+    let mut body_callees = Vec::new();
+    let kind = match &group.item {
         PythonScopeItem::Callable(defs) => {
             for def in defs {
-                let mut sig_visitor = ModuleRefVisitor {
+                let mut param_visitor = ModuleRefVisitor {
                     fn_by_name: item_by_name,
                     class_callees: external_class_callees,
                     local_names: &empty_locals,
-                    callees: &mut callees,
+                    callees: &mut param_callees,
                 };
                 for dec in &def.decorator_list {
-                    sig_visitor.visit_decorator(dec);
+                    param_visitor.visit_decorator(dec);
                 }
-                sig_visitor.visit_parameters(&def.parameters);
+                param_visitor.visit_parameters(&def.parameters);
                 if let Some(returns) = &def.returns {
-                    sig_visitor.visit_expr(returns);
+                    let mut ret_visitor = ModuleRefVisitor {
+                        fn_by_name: item_by_name,
+                        class_callees: external_class_callees,
+                        local_names: &empty_locals,
+                        callees: &mut return_callees,
+                    };
+                    ret_visitor.visit_expr(returns);
                 }
                 let local_names = collect_local_bound_names(def, file);
                 let mut body_visitor = ModuleRefVisitor {
                     fn_by_name: item_by_name,
                     class_callees: external_class_callees,
                     local_names: &local_names,
-                    callees: &mut callees,
+                    callees: &mut body_callees,
                 };
                 body_visitor.visit_body(&def.body);
             }
+            for &idx in param_callees
+                .iter()
+                .chain(&return_callees)
+                .chain(&body_callees)
+            {
+                if !callees.contains(&idx) {
+                    callees.push(idx);
+                }
+            }
+            ScopeItemKind::Callable
         }
         PythonScopeItem::Type(class_def) => {
             collect_python_class_module_refs(
@@ -1067,14 +1086,20 @@ fn build_python_module_scope_item<'a>(
                 file,
                 &mut callees,
             );
+            body_callees.clone_from(&callees);
+            ScopeItemKind::Type
         }
-    }
+    };
     ScopeItem {
         name_node: group.name_node,
         name: group.name.clone(),
         visibility: group.visibility,
         is_constructor: group.is_constructor,
+        kind,
         callees,
+        param_callees,
+        return_callees,
+        body_callees,
         pinned_before: None,
     }
 }
@@ -1243,12 +1268,17 @@ fn build_class_declaration_scope<'a>(
                     visitor.visit_body(&def.body);
                 }
             }
+            let body_callees = callees.clone();
             ScopeItem {
                 name_node: group.name_node,
                 name: group.name,
                 visibility: group.visibility,
                 is_constructor: group.is_constructor,
+                kind: ScopeItemKind::Callable,
                 callees,
+                param_callees: Vec::new(),
+                return_callees: Vec::new(),
+                body_callees,
                 pinned_before: None,
             }
         })
