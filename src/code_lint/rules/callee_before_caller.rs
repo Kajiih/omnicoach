@@ -12,7 +12,7 @@ use std::path::Path;
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Private `{function}` is defined before the higher-level private `{caller}`.",
     rationale: "Defining lower-abstraction private declarations above `{caller}` inverts the top-down reading flow.",
-    suggestion: "Move `{function}` below `{caller}` so higher-level declarations precede lower-level ones.",
+    suggestion: "Move `{function}` below `{caller}`, for example below `{anchor}` (ends on line {line}).",
 };
 
 /// The rule's declaration.
@@ -126,10 +126,16 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         .callee_before_caller
         .iter()
         .map(|finding| {
+            let line = finding.anchor.line.to_string();
             rule.diagnostic_at_node(
                 path,
                 &finding.name_node,
-                &[("function", &finding.function), ("caller", &finding.caller)],
+                &[
+                    ("function", &finding.function),
+                    ("caller", &finding.caller),
+                    ("anchor", &finding.anchor.name),
+                    ("line", &line),
+                ],
             )
         })
         .collect()

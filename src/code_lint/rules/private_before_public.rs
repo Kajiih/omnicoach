@@ -12,7 +12,7 @@ use std::path::Path;
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Private helper `{function}` is defined before public entrypoint `{caller}`.",
     rationale: "Placing lower-abstraction private helpers above `{caller}` buries the public contract of the scope behind implementation details.",
-    suggestion: "Move `{function}` below `{caller}` (either immediately after `{caller}` if single-use, or into the trailing private helper section).",
+    suggestion: "Move `{function}` below `{caller}`, for example below `{anchor}` (ends on line {line}).",
 };
 
 /// The rule's declaration.
@@ -121,10 +121,16 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         .private_before_public
         .iter()
         .map(|finding| {
+            let line = finding.anchor.line.to_string();
             rule.diagnostic_at_node(
                 path,
                 &finding.name_node,
-                &[("function", &finding.function), ("caller", &finding.caller)],
+                &[
+                    ("function", &finding.function),
+                    ("caller", &finding.caller),
+                    ("anchor", &finding.anchor.name),
+                    ("line", &line),
+                ],
             )
         })
         .collect()

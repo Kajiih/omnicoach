@@ -13,7 +13,7 @@ use std::path::Path;
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Private helper `{function}` is separated from the helper cluster of `{caller}`.",
     rationale: "Stranding `{function}` between unrelated public functions or splitting the helpers of `{caller}` between the inline cluster and the trailing helper section fractures the layout of the scope.",
-    suggestion: "Move `{function}` either immediately below `{caller}` (if single-use) or together with the helpers of `{caller}` into the trailing private helper section after all public functions.",
+    suggestion: "Move `{function}` to the helper cluster of `{caller}` or the end of the scope, for example below `{anchor}` (ends on line {line}).",
 };
 
 /// The rule's declaration.
@@ -153,10 +153,16 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         .uncolocated_helpers
         .iter()
         .map(|finding| {
+            let line = finding.anchor.line.to_string();
             rule.diagnostic_at_node(
                 path,
                 &finding.name_node,
-                &[("function", &finding.function), ("caller", &finding.caller)],
+                &[
+                    ("function", &finding.function),
+                    ("caller", &finding.caller),
+                    ("anchor", &finding.anchor.name),
+                    ("line", &line),
+                ],
             )
         })
         .collect()

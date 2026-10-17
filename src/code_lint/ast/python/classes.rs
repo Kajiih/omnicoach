@@ -1076,6 +1076,7 @@ fn build_class_declaration_scope<'a>(
             ScopeItem {
                 name_node: group.name_node,
                 name: group.name,
+                end_line: group.end_line,
                 visibility: group.visibility,
                 is_constructor: group.is_constructor,
                 kind: ScopeItemKind::Callable,
@@ -1109,6 +1110,7 @@ struct GroupedPythonScopeItem<'a, 'ast> {
     name_node: AstNode<'a>,
     name: String,
     start_line: usize,
+    end_line: usize,
     visibility: MethodVisibility,
     is_constructor: bool,
     first_stmt_idx: usize,
@@ -1216,6 +1218,7 @@ fn build_python_module_scope_item<'a>(
     ScopeItem {
         name_node: group.name_node,
         name: group.name.clone(),
+        end_line: group.end_line,
         visibility: group.visibility,
         is_constructor: group.is_constructor,
         kind,
@@ -1559,6 +1562,7 @@ fn group_python_scope_items<'a, 'ast>(
 ) -> Vec<GroupedPythonScopeItem<'a, 'ast>> {
     struct SeenCallable {
         index: usize,
+        last_stmt_idx: usize,
         has_overload: bool,
         has_non_overload: bool,
     }
@@ -1584,6 +1588,12 @@ fn group_python_scope_items<'a, 'ast>(
                     if is_property_accessor || continues_overload {
                         seen.has_overload |= is_overload;
                         seen.has_non_overload |= !is_overload;
+                        if stmt_idx == seen.last_stmt_idx + 1 {
+                            seen.last_stmt_idx = stmt_idx;
+                            items[seen.index].end_line =
+                                AstNode::from_span(file, span_from_ruff_range(function_def.range))
+                                    .end_line();
+                        }
                         if let PythonScopeItem::Callable(defs) = &mut items[seen.index].item {
                             defs.push(function_def);
                             continue;
@@ -1596,6 +1606,7 @@ fn group_python_scope_items<'a, 'ast>(
                     name.clone(),
                     SeenCallable {
                         index,
+                        last_stmt_idx: stmt_idx,
                         has_overload: is_overload,
                         has_non_overload: !is_overload,
                     },
@@ -1611,6 +1622,7 @@ fn group_python_scope_items<'a, 'ast>(
                     ),
                     name,
                     start_line: def_node.start_line(),
+                    end_line: def_node.end_line(),
                     visibility,
                     is_constructor,
                     first_stmt_idx: stmt_idx,
@@ -1626,6 +1638,7 @@ fn group_python_scope_items<'a, 'ast>(
                     name_node: AstNode::from_span(file, span_from_ruff_range(class_def.name.range)),
                     name,
                     start_line: class_node.start_line(),
+                    end_line: class_node.end_line(),
                     visibility,
                     is_constructor: false,
                     first_stmt_idx: stmt_idx,

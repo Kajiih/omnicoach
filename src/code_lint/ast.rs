@@ -81,6 +81,7 @@ pub(in crate::code_lint::ast) struct CachedCallOrderFinding {
     span: SourceSpan,
     function: String,
     caller: String,
+    anchor: PlacementAnchor,
 }
 
 /// Cached priority-ordered call-cluster findings for a file.
@@ -986,6 +987,9 @@ pub struct ScopeItem<'a> {
     pub name_node: AstNode<'a>,
     /// Declaration identifier name.
     pub name: String,
+    /// 1-based last line of the declaration (including contiguous overloads/accessors or inherent
+    /// `impl` blocks).
+    pub end_line: usize,
     /// Whether this item is a callable or a type definition.
     pub kind: ScopeItemKind,
     /// Visibility tier (`Public` vs. `Private`).
@@ -1039,7 +1043,7 @@ pub(in crate::code_lint::ast) fn split_at_redefinitions<T>(
 }
 
 /// A sibling declaration next to which a misplaced item belongs, along with its 1-based boundary
-/// line number.
+/// line number (its starting line when moving above it, or its ending line when moving below it).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlacementAnchor {
     /// Identifier name of the anchor declaration (`{anchor}`).
@@ -1057,6 +1061,15 @@ impl PlacementAnchor {
             line: declaration_node.start_line(),
         }
     }
+
+    /// Anchor for moving an item immediately below a declaration ending at `end_line`.
+    #[must_use]
+    pub fn after(name: impl Into<String>, end_line: usize) -> Self {
+        Self {
+            name: name.into(),
+            line: end_line,
+        }
+    }
 }
 
 /// A misplaced declaration reported by the call-cluster ordering analyzer.
@@ -1067,6 +1080,8 @@ pub struct CallOrderFinding<'a> {
     pub function: String,
     /// Name of the owning or calling declaration it relates to (`{caller}`).
     pub caller: String,
+    /// Sibling declaration immediately below which `function` belongs.
+    pub anchor: PlacementAnchor,
 }
 
 /// Priority-ordered findings for the three declaration-cluster ordering rules across a file:
@@ -1110,6 +1125,7 @@ pub fn collect_call_cluster_findings(file: &ParsedFile) -> CallClusterFindings<'
                 name_node: AstNode::from_span(file, entry.span),
                 function: entry.function.clone(),
                 caller: entry.caller.clone(),
+                anchor: entry.anchor.clone(),
             })
             .collect()
     };
@@ -1120,9 +1136,166 @@ pub fn collect_call_cluster_findings(file: &ParsedFile) -> CallClusterFindings<'
     }
 }
 
-/// Analyzes a single [`DeclarationScope`] and appends `private-before-public`, `uncolocated-helper`,
-/// and `callee-before-caller` findings to `out`.
+/// Analyzes a single [`DeclarationScope`], resolves the target placement anchor for each finding,
+/// and appends the findings to `out`.
 fn analyze_declaration_scope(scope: &DeclarationScope<'_>, out: &mut CachedCallClusterFindings) {
+    let mut raw = RawScopeFindings::default();
+    collect_raw_scope_findings(scope, &mut raw);
+    if raw.is_empty() {
+        return;
+    }
+    let mut orig_flagged = vec![false; scope.items.len()];
+    for finding in raw.all() {
+        orig_flagged[finding.item_idx] = true;
+    }
+    let to_cached = |finding: &RawScopeFinding| -> CachedCallOrderFinding {
+        let anchor_idx =
+            find_best_anchor(scope, finding.item_idx, finding.caller_idx, &orig_flagged);
+        let item = &scope.items[finding.item_idx];
+        let anchor_item = &scope.items[anchor_idx];
+        CachedCallOrderFinding {
+            span: item.name_node.span(),
+            function: item.name.clone(),
+            caller: scope.items[finding.caller_idx].name.clone(),
+            anchor: PlacementAnchor::after(&anchor_item.name, anchor_item.end_line),
+        }
+    };
+    out.uncolocated_helpers
+        .extend(raw.uncolocated_helpers.iter().map(to_cached));
+    out.private_before_public
+        .extend(raw.private_before_public.iter().map(to_cached));
+    out.callee_before_caller
+        .extend(raw.callee_before_caller.iter().map(to_cached));
+}
+
+/// Finds the index in `scope.items` immediately after which item `from` can be moved to clear its
+/// finding without introducing new findings, preferring the slot closest to `from`.
+fn find_best_anchor(
+    scope: &DeclarationScope<'_>,
+    from: usize,
+    caller_idx: usize,
+    orig_flagged: &[bool],
+) -> usize {
+    let count = scope.items.len();
+    let pinned_before = scope.items[from].pinned_before;
+    (0..count)
+        .filter_map(|after| {
+            if after == from || after + 1 == from || pinned_before.is_some_and(|pin| after >= pin) {
+                return None;
+            }
+            let reordered = reorder_scope_after(scope, from, after);
+            let mut candidate = RawScopeFindings::default();
+            collect_raw_scope_findings(&reordered.scope, &mut candidate);
+            if candidate
+                .all()
+                .any(|finding| reordered.orig_idx_of[finding.item_idx] == from)
+            {
+                return None;
+            }
+            let creates_new_finding = candidate
+                .all()
+                .any(|finding| !orig_flagged[reordered.orig_idx_of[finding.item_idx]]);
+            let new_pos = if from < after { after } else { after + 1 };
+            Some(CandidateSlot {
+                creates_new_finding,
+                distance: new_pos.abs_diff(from),
+                new_pos,
+                after,
+            })
+        })
+        .min()
+        .map_or(caller_idx, |slot| slot.after)
+}
+
+/// Ranking key for a candidate placement slot in [`find_best_anchor`], ordered by:
+/// 1. whether moving the item introduces a new finding elsewhere in the scope,
+/// 2. vertical distance (`|new_pos - from|`),
+/// 3. earlier position in the scope (`new_pos`).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct CandidateSlot {
+    creates_new_finding: bool,
+    distance: usize,
+    new_pos: usize,
+    after: usize,
+}
+
+struct ReorderedScope<'a> {
+    scope: DeclarationScope<'a>,
+    orig_idx_of: Vec<usize>,
+}
+
+/// Returns a copy of `scope` with item `from` moved immediately after item `after`, paired with
+/// the mapping from each reordered item index back to its original index in `scope.items`.
+fn reorder_scope_after<'a>(
+    scope: &DeclarationScope<'a>,
+    from: usize,
+    after: usize,
+) -> ReorderedScope<'a> {
+    let count = scope.items.len();
+    let mut orig_idx_of: Vec<usize> = (0..count).filter(|&idx| idx != from).collect();
+    let new_pos = if from < after { after } else { after + 1 };
+    orig_idx_of.insert(new_pos, from);
+
+    let mut new_idx_of = vec![0; count];
+    for (new_idx, &orig_idx) in orig_idx_of.iter().enumerate() {
+        new_idx_of[orig_idx] = new_idx;
+    }
+
+    let remap =
+        |indices: &[usize]| -> Vec<usize> { indices.iter().map(|&idx| new_idx_of[idx]).collect() };
+    let items = orig_idx_of
+        .iter()
+        .map(|&orig_idx| {
+            let item = &scope.items[orig_idx];
+            ScopeItem {
+                name_node: item.name_node,
+                name: item.name.clone(),
+                end_line: item.end_line,
+                kind: item.kind,
+                visibility: item.visibility,
+                is_constructor: item.is_constructor,
+                callees: remap(&item.callees),
+                param_callees: remap(&item.param_callees),
+                return_callees: remap(&item.return_callees),
+                body_callees: remap(&item.body_callees),
+                pinned_before: item
+                    .pinned_before
+                    .map(|pin| new_idx_of.get(pin).copied().unwrap_or(pin)),
+            }
+        })
+        .collect();
+
+    ReorderedScope {
+        scope: DeclarationScope { items },
+        orig_idx_of,
+    }
+}
+
+/// Index-based call-cluster findings for a single [`DeclarationScope`] before anchor resolution.
+#[derive(Default)]
+struct RawScopeFindings {
+    uncolocated_helpers: Vec<RawScopeFinding>,
+    private_before_public: Vec<RawScopeFinding>,
+    callee_before_caller: Vec<RawScopeFinding>,
+}
+
+impl RawScopeFindings {
+    const fn is_empty(&self) -> bool {
+        self.uncolocated_helpers.is_empty()
+            && self.private_before_public.is_empty()
+            && self.callee_before_caller.is_empty()
+    }
+
+    fn all(&self) -> impl Iterator<Item = &RawScopeFinding> {
+        self.uncolocated_helpers
+            .iter()
+            .chain(&self.private_before_public)
+            .chain(&self.callee_before_caller)
+    }
+}
+
+/// Evaluates the three call-cluster ordering stages on `scope` and appends raw findings to `out`.
+fn collect_raw_scope_findings(scope: &DeclarationScope<'_>, out: &mut RawScopeFindings) {
     let callables = &scope.items;
     let count = callables.len();
     if count < 2 {
@@ -1161,10 +1334,9 @@ fn analyze_declaration_scope(scope: &DeclarationScope<'_>, out: &mut CachedCallC
                 && pinned_before.is_none_or(|pin| pin > last_pub_idx)
                 && pos < last_pub_idx
             {
-                out.private_before_public.push(CachedCallOrderFinding {
-                    span: callables[pos].name_node.span(),
-                    function: callables[pos].name.clone(),
-                    caller: callables[last_pub_idx].name.clone(),
+                out.private_before_public.push(RawScopeFinding {
+                    item_idx: pos,
+                    caller_idx: last_pub_idx,
                 });
                 flagged_p1_or_p2[pos] = true;
             }
@@ -1172,10 +1344,9 @@ fn analyze_declaration_scope(scope: &DeclarationScope<'_>, out: &mut CachedCallC
         };
         if pos < max_root {
             if pinned_before.is_none_or(|pin| pin > max_root) {
-                out.private_before_public.push(CachedCallOrderFinding {
-                    span: callables[pos].name_node.span(),
-                    function: callables[pos].name.clone(),
-                    caller: callables[max_root].name.clone(),
+                out.private_before_public.push(RawScopeFinding {
+                    item_idx: pos,
+                    caller_idx: max_root,
                 });
                 flagged_p1_or_p2[pos] = true;
             }
@@ -1183,10 +1354,9 @@ fn analyze_declaration_scope(scope: &DeclarationScope<'_>, out: &mut CachedCallC
             && !is_valid_helper_placement(callables, &roots_of, pos, last_pub_idx)
             && (roots.len() == 1 || pinned_before.is_none_or(|pin| pin > last_pub_idx))
         {
-            out.uncolocated_helpers.push(CachedCallOrderFinding {
-                span: callables[pos].name_node.span(),
-                function: callables[pos].name.clone(),
-                caller: callables[max_root].name.clone(),
+            out.uncolocated_helpers.push(RawScopeFinding {
+                item_idx: pos,
+                caller_idx: max_root,
             });
             flagged_p1_or_p2[pos] = true;
         }
@@ -1210,13 +1380,18 @@ fn analyze_declaration_scope(scope: &DeclarationScope<'_>, out: &mut CachedCallC
             })
             .max();
         if let Some(caller_idx) = last_caller {
-            out.callee_before_caller.push(CachedCallOrderFinding {
-                span: callables[callee].name_node.span(),
-                function: callables[callee].name.clone(),
-                caller: callables[caller_idx].name.clone(),
+            out.callee_before_caller.push(RawScopeFinding {
+                item_idx: callee,
+                caller_idx,
             });
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct RawScopeFinding {
+    item_idx: usize,
+    caller_idx: usize,
 }
 
 /// Computes the Stage-3 (`callee-before-caller`) downward abstraction edges for each item in
@@ -1610,5 +1785,112 @@ mod tests {
         let after_guard = python::collect_statements_after_main_guard(&guard_file);
         assert_eq!(after_guard.len(), 1);
         assert_eq!(after_guard[0].guard_line, 3);
+    }
+
+    #[rstest::rstest]
+    #[case::uncolocated_place_1(
+        Language::Python,
+        indoc::indoc! {r"
+            def render_header(title: str) -> str:
+                return _format_title(title)
+
+            def render_body(body: str) -> str:
+                return body.strip()
+
+            def _format_title(title: str) -> str:
+                return title.upper()
+
+            def render_footer(footer: str) -> str:
+                return footer.lower()
+        "},
+        ("_format_title", "render_header", "render_header", 2)
+    )]
+    #[case::uncolocated_place_2_split_cluster(
+        Language::Python,
+        indoc::indoc! {r"
+            def build_report(raw: str) -> str:
+                return _parse_section(raw) + _format_section(raw)
+
+            def _parse_section(raw: str) -> str:
+                return raw.strip()
+
+            def build_summary(raw: str) -> str:
+                return raw.lower()
+
+            def _format_section(raw: str) -> str:
+                return raw.upper()
+        "},
+        ("_format_section", "build_report", "_parse_section", 5)
+    )]
+    #[case::uncolocated_shared_helper(
+        Language::Python,
+        indoc::indoc! {r"
+            def export_csv(rows: list[str]) -> str:
+                return _join_lines(rows)
+
+            def export_tsv(rows: list[str]) -> str:
+                return _join_lines(rows)
+
+            def _join_lines(rows: list[str]) -> str:
+                return '\n'.join(rows)
+
+            def export_count(rows: list[str]) -> int:
+                return len(rows)
+        "},
+        ("_join_lines", "export_tsv", "export_count", 11)
+    )]
+    #[case::private_before_public_rust_struct_impl(
+        Language::Rust,
+        indoc::indoc! {r"
+            fn compute_hash(input: &str) -> usize {
+                input.len()
+            }
+
+            pub struct Hasher;
+
+            impl Hasher {
+                pub fn hash(&self, input: &str) -> usize {
+                    compute_hash(input)
+                }
+            }
+        "},
+        ("compute_hash", "Hasher", "Hasher", 11)
+    )]
+    #[case::callee_before_caller_chain(
+        Language::Python,
+        indoc::indoc! {r"
+            def run_pipeline(raw: str) -> str:
+                return _step_one(raw)
+
+            def _step_two(text: str) -> str:
+                return text.lower()
+
+            def _step_one(raw: str) -> str:
+                return _step_two(raw.strip())
+        "},
+        ("_step_two", "_step_one", "_step_one", 8)
+    )]
+    fn test_call_cluster_placement_anchors(
+        #[case] lang: Language,
+        #[case] source: &str,
+        #[case] expected: (&str, &str, &str, usize),
+    ) {
+        let file = ParsedFile::new(source, lang);
+        let findings = collect_call_cluster_findings(&file);
+        let all: Vec<_> = findings
+            .uncolocated_helpers
+            .iter()
+            .chain(&findings.private_before_public)
+            .chain(&findings.callee_before_caller)
+            .map(|finding| {
+                (
+                    finding.function.as_str(),
+                    finding.caller.as_str(),
+                    finding.anchor.name.as_str(),
+                    finding.anchor.line,
+                )
+            })
+            .collect();
+        assert_eq!(all, vec![expected]);
     }
 }

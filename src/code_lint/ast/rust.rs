@@ -1823,8 +1823,13 @@ fn build_rust_module_declaration_scopes<'a>(
             .iter()
             .enumerate()
             .map(|(idx, decl)| {
+                let next_start = segment
+                    .get(idx + 1)
+                    .map_or(seg_end, |next| next.syntax_start);
+                let end_line = rust_decl_end_line(decl, next_start, &impl_items, file);
                 build_rust_module_scope_item(
                     decl,
+                    end_line,
                     &impl_callees.attached[idx],
                     &item_by_name,
                     &segment_is_type,
@@ -1932,10 +1937,48 @@ fn rust_type_decl<'a>(
     })
 }
 
+/// Returns the 1-based ending line of `decl`, extended to cover any contiguous `impl` blocks for
+/// `decl` that appear before the next declaration at `next_start`.
+fn rust_decl_end_line(
+    decl: &RustModuleDecl<'_>,
+    next_start: usize,
+    impl_items: &[(usize, ast::Impl)],
+    file: &ParsedFile,
+) -> usize {
+    let (syntax, is_type) = match &decl.item {
+        RustModuleItem::Fn(function) => (function.syntax(), false),
+        RustModuleItem::Type(syntax) => (syntax, true),
+    };
+    let mut end_line =
+        AstNode::from_span(file, span_from_rowan_range(syntax.text_range())).end_line();
+    if !is_type {
+        return end_line;
+    }
+    for (start, impl_item) in impl_items {
+        if !(decl.syntax_start..next_start).contains(start) {
+            continue;
+        }
+        let matches_decl = impl_self_type_name(impl_item, &file.source)
+            .as_deref()
+            .is_some_and(|name| name == decl.name)
+            || impl_trait_name(impl_item)
+                .as_deref()
+                .is_some_and(|name| name == decl.name);
+        if matches_decl {
+            let impl_end =
+                AstNode::from_span(file, span_from_rowan_range(impl_item.syntax().text_range()))
+                    .end_line();
+            end_line = end_line.max(impl_end);
+        }
+    }
+    end_line
+}
+
 /// Builds the [`ScopeItem`] for `decl`, merging the sibling references collected from its own
 /// syntax with `attached_impl_callees` from its same-module `impl` blocks.
 fn build_rust_module_scope_item<'a>(
     decl: &RustModuleDecl<'a>,
+    end_line: usize,
     attached_impl_callees: &[usize],
     item_by_name: &HashMap<&str, usize>,
     segment_is_type: &[bool],
@@ -2022,6 +2065,7 @@ fn build_rust_module_scope_item<'a>(
     }
     ScopeItem {
         name_node: decl.name_node,
+        end_line,
         name: decl.name.clone(),
         visibility: decl.visibility,
         is_constructor: false,
@@ -2341,8 +2385,12 @@ fn build_rust_impl_declaration_scope<'a>(
                 );
             }
             let body_callees = callees.clone();
+            let end_line =
+                AstNode::from_span(file, span_from_rowan_range(function.syntax().text_range()))
+                    .end_line();
             ScopeItem {
                 name_node: method.name_node,
+                end_line,
                 name: method.name.clone(),
                 visibility: method.visibility,
                 is_constructor: method.is_constructor,
