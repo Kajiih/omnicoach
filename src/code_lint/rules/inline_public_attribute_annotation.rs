@@ -13,7 +13,7 @@ use std::path::Path;
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Public attribute `self.{name}` of `{class}` is annotated inline in `{function}` with `{expression}`.",
     rationale: "Inline attribute annotations inside methods are omitted from `{class}.__annotations__` at runtime and hide the class's public data contract inside method bodies.",
-    suggestion: "Move `{name}: {expression}` to the body of `{class}` and keep only the unannotated `self.{name}` assignment in `{function}`.",
+    suggestion: "Move `{name}: {expression}` to the body of `{class}` above `{anchor}` (starts on line {line}) and keep only the unannotated `self.{name}` assignment in `{function}`.",
 };
 
 /// The rule's declaration.
@@ -98,6 +98,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                 && !attribute.is_bare_final()
         })
         .map(|attribute| {
+            let line = attribute.first_method.line.to_string();
             rule.diagnostic_at_node(
                 path,
                 &attribute.assignment_node,
@@ -106,6 +107,8 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                     ("class", &attribute.class_name),
                     ("function", &attribute.method_name),
                     ("expression", &attribute.annotation.text()),
+                    ("anchor", &attribute.first_method.name),
+                    ("line", &line),
                 ],
             )
         })

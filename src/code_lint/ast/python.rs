@@ -302,10 +302,20 @@ fn collect_module_assignments_in_stmts<'a>(
     }
 }
 
+/// A top-level Python statement appearing after the `if __name__ == "__main__":` guard block.
+pub struct PythonStatementAfterMainGuard<'a> {
+    /// AST node of the trailing statement.
+    pub node: AstNode<'a>,
+    /// 1-based starting line of the `if __name__ == "__main__":` guard block.
+    pub guard_line: usize,
+}
+
 /// Collects top-level module statements that appear after an `if __name__ == "__main__":`
 /// guard block.
 #[must_use]
-pub fn collect_statements_after_main_guard(file: &ParsedFile) -> Vec<AstNode<'_>> {
+pub fn collect_statements_after_main_guard(
+    file: &ParsedFile,
+) -> Vec<PythonStatementAfterMainGuard<'_>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
@@ -313,10 +323,15 @@ pub fn collect_statements_after_main_guard(file: &ParsedFile) -> Vec<AstNode<'_>
     let Some(guard_index) = body.iter().position(is_main_guard_statement) else {
         return Vec::new();
     };
+    let guard_line =
+        AstNode::from_span(file, span_from_ruff_range(body[guard_index].range())).start_line();
     body[guard_index + 1..]
         .iter()
         .filter(|statement| !is_main_guard_statement(statement))
-        .map(|statement| AstNode::from_span(file, span_from_ruff_range(statement.range())))
+        .map(|statement| PythonStatementAfterMainGuard {
+            node: AstNode::from_span(file, span_from_ruff_range(statement.range())),
+            guard_line,
+        })
         .collect()
 }
 
@@ -2098,13 +2113,25 @@ mod tests {
             EXTRA = 1
         "#};
         let file = ParsedFile::new(source, Language::Python);
-        let fields: Vec<(String, String, String)> = collect_fields_after_methods(&file)
+        let fields: Vec<(
+            String,
+            String,
+            String,
+            crate::code_lint::ast::PlacementAnchor,
+        )> = collect_fields_after_methods(&file)
             .into_iter()
-            .map(|field| (field.class_name, field.name, field.node.text().into_owned()))
+            .map(|field| {
+                (
+                    field.class_name,
+                    field.name,
+                    field.node.text().into_owned(),
+                    field.first_method,
+                )
+            })
             .collect();
-        let trailing: Vec<String> = collect_statements_after_main_guard(&file)
+        let trailing: Vec<(String, usize)> = collect_statements_after_main_guard(&file)
             .into_iter()
-            .map(|node| node.text().into_owned())
+            .map(|item| (item.node.text().into_owned(), item.guard_line))
             .collect();
         assert_eq!(
             fields,
@@ -2112,9 +2139,13 @@ mod tests {
                 "Config".to_owned(),
                 "retries".to_owned(),
                 "retries: int = 3".to_owned(),
+                crate::code_lint::ast::PlacementAnchor {
+                    name: "reset".to_owned(),
+                    line: 4,
+                },
             )]
         );
-        assert_eq!(trailing, vec!["EXTRA = 1".to_owned()]);
+        assert_eq!(trailing, vec![("EXTRA = 1".to_owned(), 10)]);
     }
 
     /// `(style, preceding_text, literals, [(field, conversion, format_spec)])`.

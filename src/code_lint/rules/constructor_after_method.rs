@@ -1,6 +1,6 @@
 //! Flags class and inherent `impl` constructors defined after regular methods.
 
-use crate::code_lint::ast::{self, ParsedFile, TypeMethod, TypeMethodScope};
+use crate::code_lint::ast::{self, ParsedFile, PlacementAnchor, TypeMethod, TypeMethodScope};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -13,8 +13,8 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Constructor `{function}` of `{class}` is defined after a non-constructor method.",
     rationale: "Burying initialization logic below regular methods forces readers to scan the body of `{class}` to find how instances are constructed.",
     suggestion: {
-        Python => "Move `{function}` to the top of `{class}`, before any regular methods.",
-        Rust => "Move `{function}` to the top of the `impl {class}` block, before any non-constructor methods.",
+        Python => "Move `{function}` to the top of `{class}`, above `{anchor}` (starts on line {line}).",
+        Rust => "Move `{function}` to the top of the `impl {class}` block, above `{anchor}` (starts on line {line}).",
     },
 };
 
@@ -124,26 +124,53 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
     ast::collect_type_method_scopes(file)
         .iter()
         .flat_map(constructors_after_methods)
-        .map(|(type_name, method)| {
+        .map(|misplaced| {
+            let line = misplaced.anchor.line.to_string();
             rule.diagnostic_at_node(
                 path,
-                &method.name_node,
-                &[("function", &method.name), ("class", type_name)],
+                &misplaced.constructor.name_node,
+                &[
+                    ("function", &misplaced.constructor.name),
+                    ("class", misplaced.type_name),
+                    ("anchor", &misplaced.anchor.name),
+                    ("line", &line),
+                ],
             )
         })
         .collect()
 }
 
-/// Returns every constructor in `scope` that appears after at least one non-constructor method.
-fn constructors_after_methods<'a>(
-    scope: &'a TypeMethodScope<'a>,
-) -> Vec<(&'a str, &'a TypeMethod<'a>)> {
+struct MisplacedConstructor<'a> {
+    type_name: &'a str,
+    constructor: &'a TypeMethod<'a>,
+    anchor: PlacementAnchor,
+}
+
+/// Returns every constructor in `scope` that appears after at least one non-constructor method,
+/// paired with the first non-constructor method as its placement anchor.
+fn constructors_after_methods<'a>(scope: &'a TypeMethodScope<'a>) -> Vec<MisplacedConstructor<'a>> {
+    let Some(first_non_constructor) = scope
+        .methods
+        .iter()
+        .find(|method| !method.is_constructor)
+        .or_else(|| scope.methods.first())
+    else {
+        return Vec::new();
+    };
+    let anchor = PlacementAnchor {
+        name: first_non_constructor.name.clone(),
+        line: first_non_constructor.start_line,
+    };
     let mut seen_non_constructor = false;
     let mut misplaced = Vec::new();
     for method in &scope.methods {
         if method.is_constructor {
             if seen_non_constructor {
-                misplaced.push((scope.type_name.as_str(), method));
+                misplaced.push(MisplacedConstructor {
+                    type_name: scope.type_name.as_str(),
+                    constructor: method,
+                    anchor: anchor.clone(),
+                });
             }
         } else {
             seen_non_constructor = true;

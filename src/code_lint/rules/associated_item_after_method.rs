@@ -13,7 +13,7 @@ use std::path::Path;
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Associated item `{name}` of `{class}` is declared after a `fn` item.",
     rationale: "Placing associated types or constants after `fn` items hides the type-level parameters and constants that method signatures in `{class}` depend on.",
-    suggestion: "Move `{name}` to the top of the `{class}` `trait` or `impl` block, before any `fn` items.",
+    suggestion: "Move `{name}` to the top of the `{class}` `trait` or `impl` block, above `{anchor}` (starts on line {line}).",
 };
 
 /// The rule's declaration.
@@ -78,10 +78,16 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
     collect_associated_items_after_methods(file)
         .into_iter()
         .map(|item| {
+            let line = item.first_fn.line.to_string();
             rule.diagnostic_at_node(
                 path,
                 &item.name_node,
-                &[("name", &item.name), ("class", &item.container_name)],
+                &[
+                    ("name", &item.name),
+                    ("class", &item.container_name),
+                    ("anchor", &item.first_fn.name),
+                    ("line", &line),
+                ],
             )
         })
         .collect()

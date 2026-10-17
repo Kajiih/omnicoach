@@ -9,8 +9,8 @@ use super::{
     resolved_path_and_terminal_expr,
 };
 use crate::code_lint::ast::{
-    DeclarationScope, MethodVisibility, ScopeItem, ScopeItemKind, TypeMethod, TypeMethodScope,
-    span_from_ruff_range, split_at_redefinitions,
+    DeclarationScope, MethodVisibility, PlacementAnchor, ScopeItem, ScopeItemKind, TypeMethod,
+    TypeMethodScope, span_from_ruff_range, split_at_redefinitions,
 };
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef};
@@ -615,6 +615,8 @@ pub struct PythonInstanceAttributeAnnotation<'a> {
     pub is_in_field_synthesizing_class: bool,
     /// Name of the enclosing instance method.
     pub method_name: String,
+    /// First method in the enclosing class body, directly above which the attribute annotation belongs.
+    pub first_method: PlacementAnchor,
     /// Attribute identifier, without `"self."`.
     pub name: String,
     /// Type annotation AST node (`int` or `Final[int]`).
@@ -652,11 +654,20 @@ pub fn collect_instance_attribute_annotations(
     impl<'a> SourceOrderVisitor<'a> for InstanceAttrVisitor<'a> {
         fn visit_stmt(&mut self, statement: &'a Stmt) {
             if let Stmt::ClassDef(class_def) = statement {
+                let direct_methods = direct_function_definitions(&class_def.body);
+                let Some(first) = direct_methods.first() else {
+                    walk_stmt(self, statement);
+                    return;
+                };
                 let class_name = class_def.name.id.to_string();
                 let is_in_field_synthesizing_class =
                     is_field_synthesizing_class(class_def, self.file);
+                let first_method = PlacementAnchor::before(
+                    first.name.id.as_str(),
+                    AstNode::from_span(self.file, span_from_ruff_range(first.range)),
+                );
 
-                for function_def in direct_function_definitions(&class_def.body) {
+                for function_def in direct_methods {
                     if method_receiver_name_ast(function_def, false, self.file).is_some() {
                         let method_name = function_def.name.id.to_string();
                         for (ann_assign, attribute_name, type_expr) in
@@ -666,6 +677,7 @@ pub fn collect_instance_attribute_annotations(
                                 class_name: class_name.clone(),
                                 is_in_field_synthesizing_class,
                                 method_name: method_name.clone(),
+                                first_method: first_method.clone(),
                                 name: attribute_name,
                                 annotation: AstNode::from_span(
                                     self.file,
@@ -780,6 +792,7 @@ fn collect_class_methods<'a>(
         .map(|callable| TypeMethod {
             name_node: callable.name_node,
             name: callable.name,
+            start_line: callable.start_line,
             visibility: callable.visibility,
             is_constructor: callable.is_constructor,
         })
@@ -831,6 +844,8 @@ pub struct PythonFieldAfterMethod<'a> {
     pub class_name: String,
     /// Attribute identifier name.
     pub name: String,
+    /// First method in the enclosing class body, directly above which the attribute belongs.
+    pub first_method: PlacementAnchor,
     /// The full `Stmt::AnnAssign` AST node.
     pub node: AstNode<'a>,
 }
@@ -848,17 +863,28 @@ pub fn collect_fields_after_methods(file: &ParsedFile) -> Vec<PythonFieldAfterMe
         fn visit_stmt(&mut self, statement: &'a Stmt) {
             if let Stmt::ClassDef(class_def) = statement {
                 let class_name = class_def.name.id.to_string();
-                let mut seen_method = false;
+                let mut first_method: Option<PlacementAnchor> = None;
                 for child in &class_def.body {
                     match child {
-                        Stmt::FunctionDef(_) => {
-                            seen_method = true;
+                        Stmt::FunctionDef(func_def) => {
+                            first_method.get_or_insert_with(|| {
+                                PlacementAnchor::before(
+                                    func_def.name.id.as_str(),
+                                    AstNode::from_span(
+                                        self.file,
+                                        span_from_ruff_range(func_def.range),
+                                    ),
+                                )
+                            });
                         }
-                        Stmt::AnnAssign(ann) if seen_method => {
-                            if let Expr::Name(target) = ann.target.as_ref() {
+                        Stmt::AnnAssign(ann) => {
+                            if let Some(first_method) = &first_method
+                                && let Expr::Name(target) = ann.target.as_ref()
+                            {
                                 self.out.push(PythonFieldAfterMethod {
                                     class_name: class_name.clone(),
                                     name: target.id.to_string(),
+                                    first_method: first_method.clone(),
                                     node: AstNode::from_span(
                                         self.file,
                                         span_from_ruff_range(ann.range),
@@ -1082,6 +1108,7 @@ fn build_class_declaration_scope<'a>(
 struct GroupedPythonScopeItem<'a, 'ast> {
     name_node: AstNode<'a>,
     name: String,
+    start_line: usize,
     visibility: MethodVisibility,
     is_constructor: bool,
     first_stmt_idx: usize,
@@ -1576,12 +1603,14 @@ fn group_python_scope_items<'a, 'ast>(
                 let visibility = python_method_visibility(&name);
                 let is_constructor =
                     is_class_scope && PYTHON_CONSTRUCTOR_NAMES.contains(&name.as_str());
+                let def_node = AstNode::from_span(file, span_from_ruff_range(function_def.range));
                 items.push(GroupedPythonScopeItem {
                     name_node: AstNode::from_span(
                         file,
                         span_from_ruff_range(function_def.name.range),
                     ),
                     name,
+                    start_line: def_node.start_line(),
                     visibility,
                     is_constructor,
                     first_stmt_idx: stmt_idx,
@@ -1592,9 +1621,11 @@ fn group_python_scope_items<'a, 'ast>(
                 let name = class_def.name.id.to_string();
                 seen_by_name.remove(&name);
                 let visibility = python_method_visibility(&name);
+                let class_node = AstNode::from_span(file, span_from_ruff_range(class_def.range));
                 items.push(GroupedPythonScopeItem {
                     name_node: AstNode::from_span(file, span_from_ruff_range(class_def.name.range)),
                     name,
+                    start_line: class_node.start_line(),
                     visibility,
                     is_constructor: false,
                     first_stmt_idx: stmt_idx,

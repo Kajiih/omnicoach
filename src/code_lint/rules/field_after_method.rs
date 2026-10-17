@@ -13,7 +13,7 @@ use std::path::Path;
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Attribute `{name}` of `{class}` is declared after a method definition.",
     rationale: "Declaring class or instance attributes after methods scatters the data layout of `{class}` across its body and obscures the synthesized `__init__` parameter order in `@dataclass`, `attrs`, and `NamedTuple` classes.",
-    suggestion: "Move the `{name}` attribute declaration to the top of `{class}`, before any method definitions.",
+    suggestion: "Move the `{name}` attribute declaration to the top of `{class}`, above `{anchor}` (starts on line {line}).",
 };
 
 /// The rule's declaration.
@@ -87,10 +87,16 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
     collect_fields_after_methods(file)
         .into_iter()
         .map(|field| {
+            let line = field.first_method.line.to_string();
             rule.diagnostic_at_node(
                 path,
                 &field.node,
-                &[("name", &field.name), ("class", &field.class_name)],
+                &[
+                    ("name", &field.name),
+                    ("class", &field.class_name),
+                    ("anchor", &field.first_method.name),
+                    ("line", &line),
+                ],
             )
         })
         .collect()
