@@ -354,6 +354,19 @@ crate::test_utils::rule_test!(
                         Frame { len: raw.len() }
                     }
                 "# => "Frame",
+                cycle_through_public_entrypoint_not_exempt => r#"
+                    pub fn evaluate(depth: usize) -> usize {
+                        if depth == 0 { 0 } else { step_one(depth) }
+                    }
+
+                    fn step_two(depth: usize) -> usize {
+                        evaluate(depth - 1)
+                    }
+
+                    fn step_one(depth: usize) -> usize {
+                        step_two(depth)
+                    }
+                "# => "step_two",
             ],
         },
     }

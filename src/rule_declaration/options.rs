@@ -579,6 +579,18 @@ fn language_override<T: Copy>(entries: &[(Language, T)], language: Language) -> 
         .find_map(|&(target_lang, value)| (target_lang == language).then_some(value))
 }
 
+/// The tables that apply to a file in `language`, most specific first: the language table,
+/// then the rule table.
+fn layers(
+    overrides: Option<&RuleOverrides>,
+    language: Language,
+) -> impl Iterator<Item = &OptionValues> {
+    overrides
+        .and_then(move |overrides| overrides.for_language(language))
+        .into_iter()
+        .chain(overrides.map(|overrides| &overrides.global))
+}
+
 /// The validated values of one `[rules.<name>]` table or one of its language tables.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct OptionValues {
@@ -660,18 +672,6 @@ impl ListOverride {
             items.remove(item);
         }
     }
-}
-
-/// The tables that apply to a file in `language`, most specific first: the language table,
-/// then the rule table.
-fn layers(
-    overrides: Option<&RuleOverrides>,
-    language: Language,
-) -> impl Iterator<Item = &OptionValues> {
-    overrides
-        .and_then(move |overrides| overrides.for_language(language))
-        .into_iter()
-        .chain(overrides.map(|overrides| &overrides.global))
 }
 
 fn language_named(key: &str) -> Option<Language> {
