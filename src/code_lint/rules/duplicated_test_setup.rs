@@ -28,8 +28,8 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Test `{function}` duplicates {count} leading setup statements with {duplicates}.",
     rationale: "Repeating the same arrange statements across sibling tests obscures which inputs differ in each scenario and requires updating every copy when construction changes.",
     suggestion: {
-        Python => "Extract the shared setup into a helper function or `@pytest.fixture` and pass only the scenario-specific inputs in each test.",
-        Rust => "Extract the shared setup into a helper function and pass only the scenario-specific inputs in each test.",
+        Python => "Extract shared immutable values into module constants, or extract mutable setup into a helper function or `@pytest.fixture` and pass only the scenario-specific inputs in each test.",
+        Rust => "Extract shared immutable values into `const` items, or extract mutable setup into a helper function and pass only the scenario-specific inputs in each test.",
     },
 };
 
@@ -62,8 +62,9 @@ pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
                 have to compare lines character by character to see what actually differs between
                 scenarios, and any constructor or schema change breaks every copy at once.
 
-                Extract a creation helper or fixture with sensible defaults so each test passes
-                only the values relevant to the behavior it verifies."},
+                Extract shared immutable values into module constants, or extract a creation helper
+                or fixture with sensible defaults so each test passes only the values relevant to
+                the behavior it verifies."},
             known_problems: Some(indoc::indoc! {r"
                 - Only identical leading statements are matched; setup statements that appear in a
                   different order or use different local variable names are not grouped together.
