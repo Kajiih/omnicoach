@@ -941,6 +941,8 @@ pub struct TypeMethod<'a> {
     pub name_node: AstNode<'a>,
     /// Method identifier name.
     pub name: String,
+    /// 1-based first line of the method declaration (including decorators or attributes).
+    pub start_line: usize,
     /// Visibility tier (`Public` vs. `Private`).
     pub visibility: MethodVisibility,
     /// True if this method is a lifecycle constructor in Python (`__prepare__`,
@@ -1036,6 +1038,27 @@ pub(in crate::code_lint::ast) fn split_at_redefinitions<T>(
     segments
 }
 
+/// A sibling declaration next to which a misplaced item belongs, along with its 1-based boundary
+/// line number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlacementAnchor {
+    /// Identifier name of the anchor declaration (`{anchor}`).
+    pub name: String,
+    /// 1-based boundary line number of the anchor declaration (`{line}`).
+    pub line: usize,
+}
+
+impl PlacementAnchor {
+    /// Anchor for moving an item directly above `declaration_node` (records `start_line()`).
+    #[must_use]
+    pub fn before(name: impl Into<String>, declaration_node: AstNode<'_>) -> Self {
+        Self {
+            name: name.into(),
+            line: declaration_node.start_line(),
+        }
+    }
+}
+
 /// A misplaced declaration reported by the call-cluster ordering analyzer.
 pub struct CallOrderFinding<'a> {
     /// Identifier AST node of the misplaced declaration.
@@ -1097,8 +1120,8 @@ pub fn collect_call_cluster_findings(file: &ParsedFile) -> CallClusterFindings<'
     }
 }
 
-/// Analyzes a single [`DeclarationScope`] and appends `private-before-public`,
-/// `uncolocated-helper`, and `callee-before-caller` findings to `out`.
+/// Analyzes a single [`DeclarationScope`] and appends `private-before-public`, `uncolocated-helper`,
+/// and `callee-before-caller` findings to `out`.
 fn analyze_declaration_scope(scope: &DeclarationScope<'_>, out: &mut CachedCallClusterFindings) {
     let callables = &scope.items;
     let count = callables.len();
@@ -1476,5 +1499,116 @@ mod tests {
             })
             .collect();
         assert_eq!(argument_texts, vec![vec![expected_argument.to_owned()]]);
+    }
+
+    #[test]
+    fn test_fixed_boundary_placement_anchors() {
+        let field_file = ParsedFile::new(
+            indoc::indoc! {r"
+                class Config:
+                    @classmethod
+                    def from_env(cls) -> 'Config':
+                        return cls()
+
+                    retries: int = 3
+            "},
+            Language::Python,
+        );
+        let fields = python::collect_fields_after_methods(&field_file);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(
+            (
+                fields[0].first_method.name.as_str(),
+                fields[0].first_method.line
+            ),
+            ("from_env", 2)
+        );
+
+        let inline_attr_file = ParsedFile::new(
+            indoc::indoc! {r"
+                class Client:
+                    @classmethod
+                    def default_port(cls) -> int:
+                        return 80
+
+                    def __init__(self, host: str) -> None:
+                        self.host: str = host
+            "},
+            Language::Python,
+        );
+        let attrs = python::collect_instance_attribute_annotations(&inline_attr_file);
+        assert_eq!(attrs.len(), 1);
+        assert_eq!(
+            (
+                attrs[0].first_method.name.as_str(),
+                attrs[0].first_method.line
+            ),
+            ("default_port", 2)
+        );
+
+        let ctor_file = ParsedFile::new(
+            indoc::indoc! {r"
+                pub struct Connection {
+                    port: u16,
+                }
+
+                impl Connection {
+                    /// Returns the configured port.
+                    pub fn port(&self) -> u16 {
+                        self.port
+                    }
+
+                    pub fn new(port: u16) -> Self {
+                        Self { port }
+                    }
+                }
+            "},
+            Language::Rust,
+        );
+        let scopes = collect_type_method_scopes(&ctor_file);
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(
+            (
+                scopes[0].methods[0].name.as_str(),
+                scopes[0].methods[0].start_line
+            ),
+            ("port", 6)
+        );
+
+        let assoc_file = ParsedFile::new(
+            indoc::indoc! {r"
+                pub trait Decoder {
+                    /// Decodes an input frame.
+                    fn decode(&self, input: &str) -> Self::Output;
+
+                    type Output;
+                }
+            "},
+            Language::Rust,
+        );
+        let assoc_items = rust::collect_associated_items_after_methods(&assoc_file);
+        assert_eq!(assoc_items.len(), 1);
+        assert_eq!(
+            (
+                assoc_items[0].first_fn.name.as_str(),
+                assoc_items[0].first_fn.line
+            ),
+            ("decode", 2)
+        );
+
+        let guard_file = ParsedFile::new(
+            indoc::indoc! {r#"
+                DEFAULT_PORT = 8080
+
+                if __name__ == "__main__":
+                    print(DEFAULT_PORT)
+
+                EXTRA = 1
+            "#},
+            Language::Python,
+        );
+        let after_guard = python::collect_statements_after_main_guard(&guard_file);
+        assert_eq!(after_guard.len(), 1);
+        assert_eq!(after_guard[0].guard_line, 3);
     }
 }

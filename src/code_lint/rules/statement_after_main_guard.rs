@@ -13,7 +13,7 @@ use std::path::Path;
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Top-level statement appears after the `if __name__ == \"__main__\":` guard.",
     rationale: "Code inside the `__main__` block executes before any declarations below it are bound, so calling a function or referencing a binding defined below the guard raises `NameError` at runtime when the module is run as a script.",
-    suggestion: "Move all module-level definitions above the `if __name__ == \"__main__\":` block, or move script-only cleanup inside the guard.",
+    suggestion: "Move all module-level definitions above the `if __name__ == \"__main__\":` block (starts on line {line}), or move script-only cleanup inside the guard.",
 };
 
 /// The rule's declaration.
@@ -81,7 +81,10 @@ pub const RULE: CodeRule = CodeRule {
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     collect_statements_after_main_guard(file)
         .iter()
-        .map(|node| rule.diagnostic_at_node(path, node, &[]))
+        .map(|item| {
+            let line = item.guard_line.to_string();
+            rule.diagnostic_at_node(path, &item.node, &[("line", &line)])
+        })
         .collect()
 }
 

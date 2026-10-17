@@ -2,9 +2,9 @@
 
 use crate::code_lint::ast::{
     AstNode, Binding, BindingKind, DeclarationScope, EnclosingFunction, FunctionReturn,
-    LiteralOccurrence, LiteralRole, LiteralValue, MethodVisibility, ParsedFile, PositionalRead,
-    QualifiedName, ReturnShape, ScopeItem, ScopeItemKind, ScopePositionalReads, TestFunctionSetup,
-    TypeMethod, TypeMethodScope, is_rust_comment_kind, normalize_statement_text,
+    LiteralOccurrence, LiteralRole, LiteralValue, MethodVisibility, ParsedFile, PlacementAnchor,
+    PositionalRead, QualifiedName, ReturnShape, ScopeItem, ScopeItemKind, ScopePositionalReads,
+    TestFunctionSetup, TypeMethod, TypeMethodScope, is_rust_comment_kind, normalize_statement_text,
     parse_float_literal, parse_integer_literal, push_bindings, span_from_rowan_range,
     split_at_redefinitions,
 };
@@ -2448,6 +2448,9 @@ pub struct RustAssociatedItemAfterMethod<'a> {
     pub name: String,
     /// Identifier AST node of the associated `type` or `const` item.
     pub name_node: AstNode<'a>,
+    /// First `fn` item in the enclosing `impl` or `trait` block, directly above which the
+    /// associated item belongs.
+    pub first_fn: PlacementAnchor,
 }
 
 /// Collects associated `type` and `const` items declared after `fn` items inside Rust `impl`
@@ -2494,21 +2497,31 @@ fn collect_misplaced_assoc_items<'a>(
     file: &'a ParsedFile,
     out: &mut Vec<RustAssociatedItemAfterMethod<'a>>,
 ) {
-    let mut seen_fn = false;
+    let mut first_fn: Option<PlacementAnchor> = None;
     for assoc_item in associated_items.assoc_items() {
         if file.is_in_rust_inline_test(assoc_item.syntax().text_range().start().into()) {
             continue;
         }
         let misplaced_name = match assoc_item {
-            ast::AssocItem::Fn(_) => {
-                seen_fn = true;
+            ast::AssocItem::Fn(fn_item) => {
+                if first_fn.is_none()
+                    && let Some(fn_name) = fn_item.name()
+                {
+                    first_fn = Some(PlacementAnchor::before(
+                        fn_name.text().trim(),
+                        AstNode::from_span(
+                            file,
+                            span_from_rowan_range(fn_item.syntax().text_range()),
+                        ),
+                    ));
+                }
                 None
             }
-            ast::AssocItem::TypeAlias(type_alias) if seen_fn => type_alias.name(),
-            ast::AssocItem::Const(const_item) if seen_fn => const_item.name(),
+            ast::AssocItem::TypeAlias(type_alias) if first_fn.is_some() => type_alias.name(),
+            ast::AssocItem::Const(const_item) if first_fn.is_some() => const_item.name(),
             _ => None,
         };
-        if let Some(name_node) = misplaced_name {
+        if let (Some(name_node), Some(first_fn)) = (misplaced_name, &first_fn) {
             out.push(RustAssociatedItemAfterMethod {
                 container_name: container_name.to_owned(),
                 name: name_node.text().trim().to_owned(),
@@ -2516,6 +2529,7 @@ fn collect_misplaced_assoc_items<'a>(
                     file,
                     span_from_rowan_range(name_node.syntax().text_range()),
                 ),
+                first_fn: first_fn.clone(),
             });
         }
     }
@@ -2807,12 +2821,16 @@ fn collect_rust_impl_methods<'a>(
             && !has_self
             && is_rust_constructor_name(&name)
             && returns_self_type(&function, type_name);
+        let start_line =
+            AstNode::from_span(file, span_from_rowan_range(function.syntax().text_range()))
+                .start_line();
         methods.push((
             TypeMethod {
                 name_node: AstNode::from_span(
                     file,
                     span_from_rowan_range(name_node.syntax().text_range()),
                 ),
+                start_line,
                 name,
                 visibility,
                 is_constructor,
@@ -3444,29 +3462,47 @@ mod tests {
             }
         "};
         let file = ParsedFile::rust(source);
-        let items: Vec<(String, String, String)> = collect_associated_items_after_methods(&file)
-            .into_iter()
-            .map(|item| {
-                (
-                    item.container_name,
-                    item.name,
-                    item.name_node.text().into_owned(),
-                )
-            })
-            .collect();
+        let items: Vec<(String, String, String, PlacementAnchor)> =
+            collect_associated_items_after_methods(&file)
+                .into_iter()
+                .map(|item| {
+                    (
+                        item.container_name,
+                        item.name,
+                        item.name_node.text().into_owned(),
+                        item.first_fn,
+                    )
+                })
+                .collect();
         assert_eq!(
             items,
             vec![
-                ("Codec".to_owned(), "Output".to_owned(), "Output".to_owned()),
+                (
+                    "Codec".to_owned(),
+                    "Output".to_owned(),
+                    "Output".to_owned(),
+                    PlacementAnchor {
+                        name: "decode".to_owned(),
+                        line: 3,
+                    },
+                ),
                 (
                     "Codec".to_owned(),
                     "VERSION".to_owned(),
-                    "VERSION".to_owned()
+                    "VERSION".to_owned(),
+                    PlacementAnchor {
+                        name: "decode".to_owned(),
+                        line: 3,
+                    },
                 ),
                 (
                     "JsonCodec".to_owned(),
                     "Output".to_owned(),
-                    "Output".to_owned()
+                    "Output".to_owned(),
+                    PlacementAnchor {
+                        name: "decode".to_owned(),
+                        line: 10,
+                    },
                 ),
             ]
         );
