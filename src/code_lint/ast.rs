@@ -1213,7 +1213,8 @@ fn compute_public_roots(callables: &[ScopeItem<'_>], callers_of: &[Vec<usize>]) 
     roots_of
 }
 
-/// Computes Strongly Connected Component IDs for `callables` using Tarjan's algorithm.
+/// Computes Strongly Connected Component IDs for `callables` using Tarjan's algorithm over
+/// private-to-private reference edges (stopping at public boundaries).
 fn compute_tarjan_scc(callables: &[ScopeItem<'_>]) -> Vec<usize> {
     struct TarjanState {
         next_index: usize,
@@ -1234,17 +1235,21 @@ fn compute_tarjan_scc(callables: &[ScopeItem<'_>]) -> Vec<usize> {
             self.stack.push(node);
             self.on_stack[node] = true;
 
-            for &callee in &callables[node].callees {
-                if callee >= callables.len() {
-                    continue;
-                }
-                if self.indices[callee].is_none() {
-                    self.strongconnect(callee, callables);
-                    self.lowlink[node] = self.lowlink[node].min(self.lowlink[callee]);
-                } else if self.on_stack[callee]
-                    && let Some(callee_index) = self.indices[callee]
-                {
-                    self.lowlink[node] = self.lowlink[node].min(callee_index);
+            if callables[node].visibility == MethodVisibility::Private {
+                for &callee in &callables[node].callees {
+                    if callee >= callables.len()
+                        || callables[callee].visibility == MethodVisibility::Public
+                    {
+                        continue;
+                    }
+                    if self.indices[callee].is_none() {
+                        self.strongconnect(callee, callables);
+                        self.lowlink[node] = self.lowlink[node].min(self.lowlink[callee]);
+                    } else if self.on_stack[callee]
+                        && let Some(callee_index) = self.indices[callee]
+                    {
+                        self.lowlink[node] = self.lowlink[node].min(callee_index);
+                    }
                 }
             }
 
