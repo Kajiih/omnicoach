@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from .model import AST, CLASSES, INLINE_TEST_ALWAYS_FALSE, PYTHON, RUST, Cluster, Mutation, Unmutated
+from .model import (
+    AST,
+    CALL_CLUSTERS,
+    CLASSES,
+    INLINE_TEST_ALWAYS_FALSE,
+    PYTHON,
+    RUST,
+    Cluster,
+    Mutation,
+    Unmutated,
+)
 
 CONSTRUCTOR_RULE = "src/code_lint/rules/constructor_after_method.rs"
 
@@ -18,8 +28,16 @@ MUTATIONS = (
     Mutation(
         "constructors grouped at the top",
         CONSTRUCTOR_RULE,
-        (("            if seen_non_constructor {", "            if std::mem::replace(&mut seen_non_constructor, true) {"),),
-        (CONSTRUCTOR + "constructors_before_methods", CONSTRUCTOR + "constructors_at_top_of_inherent_impl"),
+        (
+            (
+                "            if seen_non_constructor {",
+                "            if std::mem::replace(&mut seen_non_constructor, true) {",
+            ),
+        ),
+        (
+            CONSTRUCTOR + "constructors_before_methods",
+            CONSTRUCTOR + "constructors_at_top_of_inherent_impl",
+        ),
     ),
     Mutation(
         "overloads and property accessors grouped",
@@ -61,7 +79,7 @@ MUTATIONS = (
     ),
     Mutation(
         "helper right after its only caller",
-        AST,
+        CALL_CLUSTERS,
         (
             (
                 "let is_just_after_owner = ((owner + 1)..pos).all(in_owner_cluster);",
@@ -72,31 +90,36 @@ MUTATIONS = (
     ),
     Mutation(
         "shared helper in the trailing section",
-        AST,
+        CALL_CLUSTERS,
         (("return pos > last_pub_idx;", "return false;"),),
         (UNCOLOCATED + "shared_helper_in_trailing_section_allowed",),
     ),
     Mutation(
         "single-caller helper in the trailing section",
-        AST,
-        (("let is_at_scope_end =\n        pos > last_pub_idx &&", "let is_at_scope_end =\n        false &&"),),
+        CALL_CLUSTERS,
+        (
+            (
+                "let is_at_scope_end =\n        pos > last_pub_idx &&",
+                "let is_at_scope_end =\n        false &&",
+            ),
+        ),
         (UNCOLOCATED + "all_private_helpers_at_end_of_scope",),
     ),
     Mutation(
         "second constructor keeps the trailing section valid",
-        AST,
+        CALL_CLUSTERS,
         (("all(|mid| roots_of[mid] != *roots)", "all(|mid| !in_owner_cluster(mid))"),),
         (UNCOLOCATED + "second_constructor_keeps_trailing_section_valid",),
     ),
     Mutation(
         "constructor helper after the constructor cluster",
-        AST,
+        CALL_CLUSTERS,
         (("|| (callables[owner].is_constructor", "|| (false"),),
         (UNCOLOCATED + "constructor_helper_after_constructor_cluster_allowed",),
     ),
     Mutation(
         "caller walk stops at public functions",
-        AST,
+        CALL_CLUSTERS,
         (
             (
                 "pub_roots.push(caller);\n",
@@ -107,7 +130,7 @@ MUTATIONS = (
     ),
     Mutation(
         "unreached private function left to private-before-public",
-        AST,
+        CALL_CLUSTERS,
         (
             (
                 "&& pos < last_pub_idx\n            {\n                out.private_before_public.push(",
@@ -133,10 +156,16 @@ MUTATIONS = (
     ),
     Mutation(
         "helper below its only caller, before the next public function",
-        AST,
-        (("        if pos < max_root {", "        if last_pub.is_some_and(|last| pos < last) {"),),
+        CALL_CLUSTERS,
         (
-            PRIVATE_FIRST + "colocated_exclusive_helpers_between_public_entrypoints_allowed",
+            (
+                "        if pos < max_root {",
+                "        if last_pub.is_some_and(|last| pos < last) {",
+            ),
+        ),
+        (
+            PRIVATE_FIRST
+            + "colocated_exclusive_helpers_between_public_entrypoints_allowed",
             PRIVATE_FIRST + "colocated_exclusive_helper_between_public_methods_allowed",
         ),
     ),
@@ -159,8 +188,13 @@ MUTATIONS = (
     ),
     Mutation(
         "Python runtime evaluation pinning",
-        AST,
-        (("let pinned_before = callables[pos].pinned_before;", "let pinned_before: Option<usize> = None;"),),
+        CALL_CLUSTERS,
+        (
+            (
+                "let pinned_before = callables[pos].pinned_before;",
+                "let pinned_before: Option<usize> = None;",
+            ),
+        ),
         (
             PRIVATE_FIRST + "import_time_pinned_helper_exempt",
             PRIVATE_FIRST + "decorator_pinned_helper_exempt",
@@ -170,19 +204,19 @@ MUTATIONS = (
     ),
     Mutation(
         "mutual recursion",
-        AST,
+        CALL_CLUSTERS,
         (("&& scc_id[caller] != scc_id[callee]", ""),),
         (CALLEE + "mutual_recursion_exempt",),
     ),
     Mutation(
         "functions flagged by an earlier stage",
-        AST,
+        CALL_CLUSTERS,
         (("if flagged_p1_or_p2[callee] || callables[callee]", "if callables[callee]"),),
         (CALLEE + "function_flagged_by_earlier_stage_not_reported_again",),
     ),
     Mutation(
         "calls involving a public function",
-        AST,
+        CALL_CLUSTERS,
         (
             (
                 "if flagged_p1_or_p2[callee] || callables[callee].visibility == MethodVisibility::Public {",
@@ -195,7 +229,12 @@ MUTATIONS = (
     Mutation(
         "Rust trait impl blocks",
         RUST,
-        (("&& impl_item.trait_().is_none()\n            && let Some(scope)", "&& let Some(scope)"),),
+        (
+            (
+                "&& impl_item.trait_().is_none()\n            && let Some(scope)",
+                "&& let Some(scope)",
+            ),
+        ),
         (CALLEE + "trait_impl_exempt",),
     ),
     Mutation(
@@ -206,14 +245,19 @@ MUTATIONS = (
     ),
     Mutation(
         "signature types are not encapsulated callees",
-        AST,
+        CALL_CLUSTERS,
         (("|| sig_closure[callee]", "|| false"),),
         (CALLEE + "signature_closure_type_not_encapsulated_exempt",),
     ),
     Mutation(
         "reversed main guard comparison",
         PYTHON,
-        (("        || (is_dunder_main_literal(left) && is_dunder_name_expr(right))", ""),),
+        (
+            (
+                "        || (is_dunder_main_literal(left) && is_dunder_name_expr(right))",
+                "",
+            ),
+        ),
         (MAIN_GUARD + "fail::reversed_main_guard_comparison",),
     ),
     Mutation(

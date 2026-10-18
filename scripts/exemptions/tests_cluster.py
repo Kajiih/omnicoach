@@ -6,12 +6,13 @@
 from __future__ import annotations
 
 from .model import (
-    AST,
     CALLS,
     CLASSES,
     DUPLICATED_TEST_SETUP,
     FAKE_WITHOUT_PROTOCOL,
+    PY_CALLS,
     PYTHON,
+    RS_CALLS,
     RUST,
     SLEEP_IN_TESTS,
     TOO_MANY_ASSERTIONS,
@@ -701,7 +702,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python for-loop iterator expression exempt from yield-loop-in-tests",
-            path=AST,
+            path=PY_CALLS,
             edits=(
                 (
                     "                    self.visit_expr(&for_stmt.iter);\n"
@@ -714,7 +715,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python for-loop else clause exempt from yield-loop-in-tests",
-            path=AST,
+            path=PY_CALLS,
             edits=(
                 (
                     "                    self.visit_body(&for_stmt.body);\n"
@@ -728,7 +729,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python while-loop else clause exempt from yield-loop-in-tests",
-            path=AST,
+            path=PY_CALLS,
             edits=(
                 (
                     "                    self.visit_body(&while_stmt.body);\n"
@@ -742,7 +743,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python nested function inside loop exempt from yield-loop-in-tests",
-            path=AST,
+            path=PY_CALLS,
             edits=(
                 (
                     "            if matches!(statement, Stmt::FunctionDef(_)) {\n"
@@ -757,7 +758,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python lambda inside loop exempt from yield-loop-in-tests",
-            path=AST,
+            path=PY_CALLS,
             edits=(
                 (
                     "                Expr::Lambda(_) => {\n"
@@ -773,7 +774,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust for-loop iterable expression exempt from yield-loop-in-tests",
-            path=AST,
+            path=RS_CALLS,
             edits=(
                 (
                     "        if let Some(for_expr) = ast::ForExpr::cast(ancestor)\n"
@@ -788,7 +789,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust nested function inside loop exempt from yield-loop-in-tests",
-            path=AST,
+            path=RS_CALLS,
             edits=(
                 (
                     "        if ast::Fn::can_cast(ancestor.kind()) || ast::ClosureExpr::can_cast(ancestor.kind()) {",
@@ -801,7 +802,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust closure inside loop exempt from yield-loop-in-tests",
-            path=AST,
+            path=RS_CALLS,
             edits=(
                 (
                     "        if ast::Fn::can_cast(ancestor.kind()) || ast::ClosureExpr::can_cast(ancestor.kind()) {",

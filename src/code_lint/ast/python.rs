@@ -1,6 +1,7 @@
 //! AST helper predicates and structural extractors for Python.
 
 mod annotations;
+mod calls;
 mod classes;
 mod complexity;
 mod docstrings;
@@ -19,6 +20,7 @@ pub use self::annotations::{
     PythonReturnTypeBranch, PythonReturnTypeUnion, collect_collection_types, collection_display,
     collection_type, generator_yield_type, return_type_union,
 };
+pub(super) use self::calls::collect_call_candidates;
 pub use self::classes::{
     PythonAnnotatedAttribute, PythonAttributeDefinition, PythonBaseClass, PythonClassInfo,
     PythonFieldAfterMethod, PythonInheritedDocstring, PythonInstanceAttributeAnnotation,

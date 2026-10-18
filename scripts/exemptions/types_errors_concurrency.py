@@ -5,10 +5,10 @@
 from __future__ import annotations
 
 from .model import (
-    AST,
     CALLS,
     CLASSES,
     ERROR_LOG_IN_EXCEPT,
+    PY_CALLS,
     PYTHON,
     SUPPRESSED_EXCEPTION,
     Cluster,
@@ -199,7 +199,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="`else` and `finally` clauses of `try` statement excluded from `in_except_clause`",
-            path=AST,
+            path=PY_CALLS,
             edits=(
                 (
                     "            if matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {\n"
@@ -217,7 +217,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="nested function definition inside `except` resets `in_except_clause`",
-            path=AST,
+            path=PY_CALLS,
             edits=(
                 (
                     "            if matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {\n"
@@ -232,7 +232,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="lambda expression inside `except` resets `in_except_clause`",
-            path=AST,
+            path=PY_CALLS,
             edits=(
                 (
                     "                Expr::Lambda(_) => {\n"

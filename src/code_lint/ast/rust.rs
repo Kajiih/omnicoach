@@ -1,5 +1,9 @@
 //! AST helper predicates and structural extractors for Rust (`ra_ap_syntax`).
 
+mod calls;
+
+pub(super) use self::calls::collect_call_candidates;
+
 use crate::code_lint::ast::{
     AstCallCandidate, AstNode, Binding, BindingKind, DeclarationScope, EnclosingFunction,
     FunctionReturn, LiteralOccurrence, LiteralRole, LiteralValue, MethodVisibility, ParsedFile,

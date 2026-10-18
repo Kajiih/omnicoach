@@ -5,10 +5,13 @@ from __future__ import annotations
 from typing import NamedTuple
 
 AST = "src/code_lint/ast.rs"
+CALL_CLUSTERS = "src/code_lint/ast/call_clusters.rs"
 POLICY = "src/code_lint/policy.rs"
 RUST = "src/code_lint/ast/rust.rs"
+RS_CALLS = "src/code_lint/ast/rust/calls.rs"
 PYTHON = "src/code_lint/ast/python.rs"
 ANNOTATIONS = "src/code_lint/ast/python/annotations.rs"
+PY_CALLS = "src/code_lint/ast/python/calls.rs"
 CLASSES = "src/code_lint/ast/python/classes.rs"
 DOCSTRINGS = "src/code_lint/ast/python/docstrings.rs"
 FORMAT_STRINGS = "src/code_lint/ast/python/format_strings.rs"
