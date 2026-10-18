@@ -264,6 +264,7 @@ fn build_rust_module_scope_item<'a>(
     external_impl_callees: &HashMap<String, Vec<usize>>,
 ) -> ScopeItem<'a> {
     let mut callees = Vec::new();
+    let mut definition_callees = Vec::new();
     let mut param_callees = Vec::new();
     let mut return_callees = Vec::new();
     let mut body_callees = Vec::new();
@@ -331,6 +332,7 @@ fn build_rust_module_scope_item<'a>(
                 &local_names,
                 &mut callees,
             );
+            definition_callees.clone_from(&callees);
             ScopeItemKind::Type
         }
     };
@@ -347,6 +349,7 @@ fn build_rust_module_scope_item<'a>(
         is_constructor: false,
         kind,
         callees,
+        definition_callees,
         param_callees,
         return_callees,
         body_callees,
@@ -591,6 +594,7 @@ fn build_rust_impl_declaration_scope<'a>(
                 is_constructor: method.is_constructor,
                 kind: ScopeItemKind::Callable,
                 callees,
+                definition_callees: Vec::new(),
                 param_callees: Vec::new(),
                 return_callees: Vec::new(),
                 body_callees,

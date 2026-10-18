@@ -6,7 +6,9 @@ use super::names::{
 };
 use super::tree::extract_macro_arguments;
 use super::trivia::is_rust_comment_kind;
-use crate::code_lint::ast::{AstNode, ParsedFile, span_from_rowan_range};
+use crate::code_lint::ast::{
+    AstNode, ParsedFile, ResolvedName, resolve_name, span_from_rowan_range,
+};
 use ra_ap_syntax::ast::{
     self, HasAttrs as _, HasGenericArgs as _, HasModuleItem as _, HasName as _, HasVisibility as _,
 };
@@ -53,6 +55,9 @@ pub struct VisibleUseDeclaration {
 pub struct RustFileSummary {
     /// Arguments of all `architecture_component!(...)` macro invocations in production code.
     pub architecture_components: Vec<String>,
+    /// `(component_name, declared_dependencies)` entries from `define_architecture! { ... }` macro
+    /// invocations in production code.
+    pub defined_architecture: Vec<(String, Vec<String>)>,
     /// Top-level external `mod <name>;` declarations (`mod foo;`, `pub mod foo;`).
     pub external_mods: Vec<ExternalModDeclaration>,
     /// `(line, item_text)` of top-level production items that are neither external `mod` declarations
@@ -65,7 +70,7 @@ pub struct RustFileSummary {
     /// Visible `use` declarations (`pub use`, `pub(crate) use`, etc.) excluding `pub(crate) use <local_macro>;`.
     pub visible_uses: Vec<VisibleUseDeclaration>,
     /// All module/item paths referenced in production code (`use` trees, inline qualified paths,
-    /// and `::`-qualified paths inside macro `token_tree` arguments).
+    /// `use`-imported path usages, and `::`-qualified paths inside macro `token_tree` arguments).
     pub referenced_paths: Vec<RustPathReference>,
 }
 
@@ -166,7 +171,8 @@ fn summarize_rust_node(
             file,
             span_from_rowan_range(macro_call.syntax().text_range()),
         );
-        if macro_call_terminal_name(&macro_call) == "architecture_component" {
+        let terminal_name = macro_call_terminal_name(&macro_call);
+        if terminal_name == "architecture_component" {
             let component_argument: String = extract_macro_arguments(&macro_ast_node)
                 .into_iter()
                 .map(|argument| argument.text().into_owned())
@@ -174,6 +180,9 @@ fn summarize_rust_node(
             summary.architecture_components.push(component_argument);
         }
         if let Some(token_tree) = macro_call.token_tree() {
+            if terminal_name == "define_architecture" {
+                collect_defined_architecture(&token_tree, &mut summary.defined_architecture);
+            }
             let statement_text = item_line_and_text(file, node).text;
             collect_token_tree_paths(
                 &token_tree,
@@ -184,11 +193,26 @@ fn summarize_rust_node(
         }
     }
 
-    if let Some(path) = ast::Path::cast(node.clone())
-        && has_pure_qualifiers(&path)
-    {
-        summarize_qualified_path(&path, file, defined_macros, summary);
-        return;
+    if let Some(path) = ast::Path::cast(node.clone()) {
+        if has_pure_qualifiers(&path) {
+            summarize_qualified_path(&path, file, defined_macros, summary);
+            return;
+        }
+        if path.qualifier().is_none()
+            && path.parent_path().is_none()
+            && let Some(segment) = path.segment()
+            && let Some(name_ref) = segment.name_ref()
+        {
+            let ident = name_ref.text();
+            let trimmed = ident.trim();
+            if let ResolvedName::Imported(imported) = resolve_name(file, trimmed) {
+                summary.referenced_paths.push(RustPathReference {
+                    line: file.line_index.line(start_offset),
+                    raw_path: imported,
+                    statement_text: trimmed.to_string(),
+                });
+            }
+        }
     }
 
     for child in node.children() {
@@ -296,9 +320,14 @@ fn summarize_qualified_path(
         let start_offset: usize = path.syntax().text_range().start().into();
         let end_offset: usize = name_ref.syntax().text_range().end().into();
         let slice_text = file.source[start_offset..end_offset].trim();
+        let compact = compact_path_text(slice_text);
+        let raw_path = match resolve_name(file, &compact) {
+            ResolvedName::Imported(imported) => imported,
+            ResolvedName::Local | ResolvedName::Unbound => compact,
+        };
         summary.referenced_paths.push(RustPathReference {
             line: file.line_index.line(start_offset),
-            raw_path: compact_path_text(slice_text),
+            raw_path,
             statement_text: slice_text.to_string(),
         });
         if let Some(generic_args) = segment.generic_arg_list() {
@@ -366,6 +395,34 @@ fn item_line_and_text(file: &ParsedFile, node: &SyntaxNode) -> ItemDeclaration {
     let line = file.line_index.line(start_offset);
     let text = file.source[start_offset..end_offset].trim().to_string();
     ItemDeclaration { line, text }
+}
+
+fn collect_defined_architecture(token_tree: &ast::TokenTree, out: &mut Vec<(String, Vec<String>)>) {
+    let mut last_ident: Option<String> = None;
+    for element in token_tree.syntax().children_with_tokens() {
+        match element {
+            SyntaxElement::Token(token) => match token.kind() {
+                SyntaxKind::IDENT => last_ident = Some(token.text().to_string()),
+                SyntaxKind::POUND => last_ident = None,
+                _ => {}
+            },
+            SyntaxElement::Node(node) if node.kind() == SyntaxKind::TOKEN_TREE => {
+                let starts_with_bracket = node
+                    .first_token()
+                    .is_some_and(|tok| tok.kind() == SyntaxKind::L_BRACK);
+                if starts_with_bracket && let Some(name) = last_ident.take() {
+                    let declared_dependencies = node
+                        .children_with_tokens()
+                        .filter_map(SyntaxElement::into_token)
+                        .filter(|tok| tok.kind() == SyntaxKind::IDENT)
+                        .map(|tok| tok.text().to_string())
+                        .collect();
+                    out.push((name, declared_dependencies));
+                }
+            }
+            SyntaxElement::Node(_) => {}
+        }
+    }
 }
 
 fn collect_token_tree_paths(

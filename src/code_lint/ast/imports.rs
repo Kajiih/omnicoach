@@ -22,6 +22,8 @@ pub enum ResolvedName {
 pub(in crate::code_lint::ast) struct ImportMap {
     /// Bound name to canonical path (`c` to `a.b` for `import a.b as c`).
     pub(in crate::code_lint::ast) imports: HashMap<String, String>,
+    /// `(line, canonical_path)` of every Python `import` / `from … import` binding.
+    pub(in crate::code_lint::ast) import_lines: Vec<(usize, String)>,
     /// Names defined in the file, which shadow imports.
     pub(in crate::code_lint::ast) locals: HashSet<String>,
 }
@@ -62,6 +64,15 @@ pub fn resolve_name(file: &ParsedFile, name: &str) -> ResolvedName {
     })
 }
 
+/// Returns `(line, canonical_path)` for every file-level `import` / `from … import` in `file`.
+#[must_use]
+pub(in crate::code_lint::ast) fn import_lines(file: &ParsedFile) -> &[(usize, String)] {
+    &file
+        .imports
+        .get_or_init(|| dispatch_lang!(file.lang(), collect_import_map(file)))
+        .import_lines
+}
+
 /// The separator between the segments of a path in `lang` (`.` or `::`).
 pub(super) const fn path_separator(lang: Language) -> &'static str {
     match lang {
@@ -79,7 +90,6 @@ fn is_identifier(text: &str) -> bool {
         .is_some_and(|first| first == '_' || first.is_alphabetic())
         && characters.all(|character| character == '_' || character.is_alphanumeric())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

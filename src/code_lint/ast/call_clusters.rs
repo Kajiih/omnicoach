@@ -64,7 +64,7 @@ pub struct TypeMethodScope<'a> {
 /// Whether a [`ScopeItem`] is a callable (`fn` / `def`) or a type definition (`struct`, `enum`,
 /// `union`, `trait`, `class`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::code_lint::ast) enum ScopeItemKind {
+pub enum ScopeItemKind {
     /// A function or method definition.
     Callable,
     /// A class, struct, enum, union, or trait definition.
@@ -101,6 +101,10 @@ pub(in crate::code_lint::ast) struct ScopeItem<'a> {
     /// Indices of sibling items referenced in this callable's body (or in a type definition /
     /// its attached `impl` blocks).
     pub(in crate::code_lint::ast) body_callees: Vec<usize>,
+    /// For a type, indices of sibling items referenced by its own definition (fields,
+    /// variants, bases, class-level statements), excluding its methods and `impl` blocks.
+    /// Empty for callables.
+    pub(in crate::code_lint::ast) definition_callees: Vec<usize>,
     /// Smallest index in [`DeclarationScope::items`] before which this item must remain due to
     /// top-to-bottom runtime evaluation (e.g. Python import-time or class-definition-time uses).
     pub(in crate::code_lint::ast) pinned_before: Option<usize>,
@@ -108,7 +112,7 @@ pub(in crate::code_lint::ast) struct ScopeItem<'a> {
 
 /// Which syntactic container a [`DeclarationScope`] covers.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::code_lint::ast) enum DeclarationScopeKind {
+pub enum DeclarationScopeKind {
     /// Top-level items of a module (or of an inline Rust `mod`).
     Module,
     /// Direct methods of a Python `class`.
@@ -251,7 +255,7 @@ pub struct CallClusterFindings<'a> {
 
 /// Analyzes a single [`DeclarationScope`], resolves the target placement anchor for each finding,
 /// and appends the findings to `out`.
-pub(super) fn analyze_declaration_scope(
+pub(in crate::code_lint::ast) fn analyze_declaration_scope(
     scope: &DeclarationScope<'_>,
     out: &mut CachedCallClusterFindings,
 ) {
@@ -375,6 +379,7 @@ fn reorder_scope_after<'a>(
                 param_callees: remap(&item.param_callees),
                 return_callees: remap(&item.return_callees),
                 body_callees: remap(&item.body_callees),
+                definition_callees: remap(&item.definition_callees),
                 pinned_before: item
                     .pinned_before
                     .map(|pin| new_idx_of.get(pin).copied().unwrap_or(pin)),
@@ -514,6 +519,47 @@ struct RawScopeFinding {
     caller_idx: usize,
 }
 
+/// Returns true if a private helper at `pos` (already after all of its `roots_of[pos]`) is
+/// either immediately after its single consumer or in the trailing helper section after
+/// `last_pub_idx`.
+fn is_valid_helper_placement(
+    callables: &[ScopeItem<'_>],
+    roots_of: &[Vec<usize>],
+    pos: usize,
+    last_pub_idx: usize,
+) -> bool {
+    let roots = &roots_of[pos];
+    if roots.len() != 1 {
+        return pos > last_pub_idx;
+    }
+    let owner = roots[0];
+    let in_owner_cluster = |idx: usize| -> bool {
+        roots_of[idx] == *roots
+            || (callables[owner].is_constructor
+                && (callables[idx].is_constructor
+                    || (roots_of[idx].len() == 1 && callables[roots_of[idx][0]].is_constructor)))
+    };
+    let is_just_after_owner = ((owner + 1)..pos).all(in_owner_cluster);
+    let is_at_scope_end =
+        pos > last_pub_idx && ((owner + 1)..last_pub_idx).all(|mid| roots_of[mid] != *roots);
+    is_just_after_owner || is_at_scope_end
+}
+
+/// Computes Strongly Connected Component IDs for `callables` using Tarjan's algorithm over
+/// private-to-private Stage-3 edges (stopping at public boundaries).
+fn compute_tarjan_scc(callables: &[ScopeItem<'_>], stage3_callees: &[Vec<usize>]) -> Vec<usize> {
+    let count = callables.len();
+    compute_tarjan_sccs(count, |node, visit| {
+        if callables[node].visibility == MethodVisibility::Private {
+            for &callee in &stage3_callees[node] {
+                if callee < count && callables[callee].visibility == MethodVisibility::Private {
+                    visit(callee);
+                }
+            }
+        }
+    })
+}
+
 /// Computes the Stage-3 (`callee-before-caller`) downward abstraction edges for each item in
 /// `callables`:
 /// - `Callable -> Callable`, `Type -> Type`, and `Type -> Callable` include all `callees`.
@@ -521,7 +567,9 @@ struct RawScopeFinding {
 ///   body (`EffectiveBody(caller) \ SigClosure(caller)`).
 /// - `Type -> Callable` additionally includes every callable whose parameter or return signature
 ///   names the type directly: the type is the vocabulary of that callable's contract.
-fn compute_stage3_callees(callables: &[ScopeItem<'_>]) -> Vec<Vec<usize>> {
+pub(in crate::code_lint::ast) fn compute_stage3_callees(
+    callables: &[ScopeItem<'_>],
+) -> Vec<Vec<usize>> {
     let count = callables.len();
     let mut out = vec![Vec::new(); count];
     for (caller, item) in callables.iter().enumerate() {
@@ -599,35 +647,12 @@ fn compute_stage3_callees(callables: &[ScopeItem<'_>]) -> Vec<Vec<usize>> {
     out
 }
 
-/// Returns true if a private helper at `pos` (already after all of its `roots_of[pos]`) is
-/// either immediately after its single consumer or in the trailing helper section after
-/// `last_pub_idx`.
-fn is_valid_helper_placement(
-    callables: &[ScopeItem<'_>],
-    roots_of: &[Vec<usize>],
-    pos: usize,
-    last_pub_idx: usize,
-) -> bool {
-    let roots = &roots_of[pos];
-    if roots.len() != 1 {
-        return pos > last_pub_idx;
-    }
-    let owner = roots[0];
-    let in_owner_cluster = |idx: usize| -> bool {
-        roots_of[idx] == *roots
-            || (callables[owner].is_constructor
-                && (callables[idx].is_constructor
-                    || (roots_of[idx].len() == 1 && callables[roots_of[idx][0]].is_constructor)))
-    };
-    let is_just_after_owner = ((owner + 1)..pos).all(in_owner_cluster);
-    let is_at_scope_end =
-        pos > last_pub_idx && ((owner + 1)..last_pub_idx).all(|mid| roots_of[mid] != *roots);
-    is_just_after_owner || is_at_scope_end
-}
-
 /// Computes `Roots(f)` for each item in `callables`: the sorted indices of public entrypoints
 /// that reach `f` through private reference paths (stopping at public boundaries).
-fn compute_public_roots(callables: &[ScopeItem<'_>], callers_of: &[Vec<usize>]) -> Vec<Vec<usize>> {
+pub(in crate::code_lint::ast) fn compute_public_roots(
+    callables: &[ScopeItem<'_>],
+    callers_of: &[Vec<usize>],
+) -> Vec<Vec<usize>> {
     let count = callables.len();
     let mut roots_of = vec![Vec::new(); count];
     for idx in 0..count {
@@ -658,9 +683,12 @@ fn compute_public_roots(callables: &[ScopeItem<'_>], callers_of: &[Vec<usize>]) 
     roots_of
 }
 
-/// Computes Strongly Connected Component IDs for `callables` using Tarjan's algorithm over
-/// private-to-private Stage-3 edges (stopping at public boundaries).
-fn compute_tarjan_scc(callables: &[ScopeItem<'_>], stage3_callees: &[Vec<usize>]) -> Vec<usize> {
+/// Computes Strongly Connected Component IDs for `0..count` using Tarjan's algorithm over the
+/// directed edges yielded by `for_each_neighbor`.
+pub(in crate::code_lint::ast) fn compute_tarjan_sccs(
+    count: usize,
+    mut for_each_neighbor: impl FnMut(usize, &mut dyn FnMut(usize)),
+) -> Vec<usize> {
     struct TarjanState {
         next_index: usize,
         next_scc: usize,
@@ -675,8 +703,7 @@ fn compute_tarjan_scc(callables: &[ScopeItem<'_>], stage3_callees: &[Vec<usize>]
         fn strongconnect(
             &mut self,
             node: usize,
-            callables: &[ScopeItem<'_>],
-            stage3_callees: &[Vec<usize>],
+            for_each_neighbor: &mut impl FnMut(usize, &mut dyn FnMut(usize)),
         ) {
             let current_index = self.next_index;
             self.next_index += 1;
@@ -685,21 +712,19 @@ fn compute_tarjan_scc(callables: &[ScopeItem<'_>], stage3_callees: &[Vec<usize>]
             self.stack.push(node);
             self.on_stack[node] = true;
 
-            if callables[node].visibility == MethodVisibility::Private {
-                for &callee in &stage3_callees[node] {
-                    if callee >= callables.len()
-                        || callables[callee].visibility == MethodVisibility::Public
-                    {
-                        continue;
-                    }
-                    if self.indices[callee].is_none() {
-                        self.strongconnect(callee, callables, stage3_callees);
-                        self.lowlink[node] = self.lowlink[node].min(self.lowlink[callee]);
-                    } else if self.on_stack[callee]
-                        && let Some(callee_index) = self.indices[callee]
-                    {
-                        self.lowlink[node] = self.lowlink[node].min(callee_index);
-                    }
+            let mut neighbors = Vec::new();
+            for_each_neighbor(node, &mut |neighbor| neighbors.push(neighbor));
+            for callee in neighbors {
+                if callee >= self.indices.len() {
+                    continue;
+                }
+                if self.indices[callee].is_none() {
+                    self.strongconnect(callee, for_each_neighbor);
+                    self.lowlink[node] = self.lowlink[node].min(self.lowlink[callee]);
+                } else if self.on_stack[callee]
+                    && let Some(callee_index) = self.indices[callee]
+                {
+                    self.lowlink[node] = self.lowlink[node].min(callee_index);
                 }
             }
 
@@ -717,7 +742,6 @@ fn compute_tarjan_scc(callables: &[ScopeItem<'_>], stage3_callees: &[Vec<usize>]
         }
     }
 
-    let count = callables.len();
     let mut state = TarjanState {
         next_index: 0,
         next_scc: 0,
@@ -729,7 +753,7 @@ fn compute_tarjan_scc(callables: &[ScopeItem<'_>], stage3_callees: &[Vec<usize>]
     };
     for node in 0..count {
         if state.indices[node].is_none() {
-            state.strongconnect(node, callables, stage3_callees);
+            state.strongconnect(node, &mut for_each_neighbor);
         }
     }
     state.scc_id

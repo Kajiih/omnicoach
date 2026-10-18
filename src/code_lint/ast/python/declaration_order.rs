@@ -328,6 +328,7 @@ fn build_class_declaration_scope<'a>(
                 is_constructor: group.is_constructor,
                 kind: ScopeItemKind::Callable,
                 callees,
+                definition_callees: Vec::new(),
                 param_callees: Vec::new(),
                 return_callees: Vec::new(),
                 body_callees,
@@ -367,6 +368,7 @@ struct GroupedPythonScopeItem<'a, 'ast> {
     item: PythonScopeItem<'ast>,
 }
 
+/// Collects sibling module item indices referenced inside each class that is not itself a scope
 /// item (such as a class redefined later in the module), keyed by class name.
 fn collect_external_class_callees<'body>(
     statements: &'body [Stmt],
@@ -407,6 +409,7 @@ fn build_python_module_scope_item<'a>(
 ) -> ScopeItem<'a> {
     let empty_locals = HashSet::new();
     let mut callees = Vec::new();
+    let mut definition_callees = Vec::new();
     let mut param_callees = Vec::new();
     let mut return_callees = Vec::new();
     let mut body_callees = Vec::new();
@@ -452,6 +455,13 @@ fn build_python_module_scope_item<'a>(
             ScopeItemKind::Callable
         }
         PythonScopeItem::Type(class_def) => {
+            collect_python_class_definition_refs(
+                class_def,
+                item_by_name,
+                external_class_callees,
+                &empty_locals,
+                &mut definition_callees,
+            );
             collect_python_class_module_refs(
                 class_def,
                 item_by_name,
@@ -473,6 +483,7 @@ fn build_python_module_scope_item<'a>(
         is_constructor: group.is_constructor,
         kind,
         callees,
+        definition_callees,
         param_callees,
         return_callees,
         body_callees,
@@ -488,18 +499,13 @@ fn collect_python_class_module_refs<'map>(
     file: &ParsedFile,
     callees: &mut Vec<usize>,
 ) {
-    let mut header_visitor = ModuleRefVisitor {
-        fn_by_name: item_by_name,
-        class_callees: external_class_callees,
-        local_names: empty_locals,
+    collect_python_class_definition_refs(
+        class_def,
+        item_by_name,
+        external_class_callees,
+        empty_locals,
         callees,
-    };
-    for dec in &class_def.decorator_list {
-        header_visitor.visit_decorator(dec);
-    }
-    if let Some(args) = &class_def.arguments {
-        header_visitor.visit_arguments(args);
-    }
+    );
     for class_statement in &class_def.body {
         if let Stmt::FunctionDef(method_def) = class_statement {
             let mut sig_visitor = ModuleRefVisitor {
@@ -523,7 +529,33 @@ fn collect_python_class_module_refs<'map>(
                 callees,
             };
             body_visitor.visit_body(&method_def.body);
-        } else {
+        }
+    }
+}
+
+/// Collects sibling module item references in the class header (decorators, bases) and non-method
+/// class-body statements (such as field annotations).
+fn collect_python_class_definition_refs<'map>(
+    class_def: &StmtClassDef,
+    item_by_name: &'map HashMap<String, usize>,
+    external_class_callees: &'map HashMap<&'map str, Vec<usize>>,
+    empty_locals: &HashSet<String>,
+    callees: &mut Vec<usize>,
+) {
+    let mut header_visitor = ModuleRefVisitor {
+        fn_by_name: item_by_name,
+        class_callees: external_class_callees,
+        local_names: empty_locals,
+        callees,
+    };
+    for dec in &class_def.decorator_list {
+        header_visitor.visit_decorator(dec);
+    }
+    if let Some(args) = &class_def.arguments {
+        header_visitor.visit_arguments(args);
+    }
+    for class_statement in &class_def.body {
+        if !matches!(class_statement, Stmt::FunctionDef(_)) {
             let mut stmt_visitor = ModuleRefVisitor {
                 fn_by_name: item_by_name,
                 class_callees: external_class_callees,

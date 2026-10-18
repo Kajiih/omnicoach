@@ -61,6 +61,7 @@ pub use self::functions::{
 pub(super) use self::literals::collect_literal_occurrences;
 pub use self::logging::{PythonLoggerCall, collect_logger_calls};
 pub(super) use self::multiline_strings::find_unwrapped_multiline_strings;
+pub use self::names::collect_path_references;
 pub use self::parameter_usage::{
     ParameterCollectionCapability, ParameterUsage, summarize_parameter_usages,
 };

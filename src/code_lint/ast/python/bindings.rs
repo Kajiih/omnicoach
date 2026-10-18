@@ -79,7 +79,7 @@ pub(in crate::code_lint::ast) fn collect_bindings(file: &ParsedFile) -> Vec<Bind
 pub(in crate::code_lint::ast) fn collect_import_map(file: &ParsedFile) -> ImportMap {
     let mut map = ImportMap::default();
     if let Some(parsed) = file.py_module() {
-        collect_python_import_bindings(&parsed.syntax().body, &mut map);
+        collect_python_import_bindings(&parsed.syntax().body, &file.line_index, &mut map);
     }
     map
 }
@@ -441,12 +441,18 @@ fn collect_module_assignments_in_stmts<'a>(
 }
 
 /// Records the imports and definitions of a Python module body or top-level block `body`.
-fn collect_python_import_bindings(body: &[Stmt], map: &mut ImportMap) {
+fn collect_python_import_bindings(
+    body: &[Stmt],
+    line_index: &crate::diagnostic::LineIndex,
+    map: &mut ImportMap,
+) {
     for statement in body {
         match statement {
             Stmt::Import(import) => {
+                let line = line_index.line(import.range.start().into());
                 for alias in &import.names {
                     let module = alias.name.as_str();
+                    map.import_lines.push((line, module.to_owned()));
                     if let Some(asname) = &alias.asname {
                         map.imports.insert(asname.to_string(), module.to_owned());
                     } else {
@@ -456,6 +462,7 @@ fn collect_python_import_bindings(body: &[Stmt], map: &mut ImportMap) {
                 }
             }
             Stmt::ImportFrom(import_from) => {
+                let line = line_index.line(import_from.range.start().into());
                 let dots = ".".repeat(import_from.level as usize);
                 let module = import_from
                     .module
@@ -472,6 +479,7 @@ fn collect_python_import_bindings(body: &[Stmt], map: &mut ImportMap) {
                         format!("{module}.{name}")
                     };
                     let bound = alias.asname.as_ref().unwrap_or(&alias.name);
+                    map.import_lines.push((line, path.clone()));
                     map.imports.insert(bound.to_string(), path);
                 }
             }
@@ -482,21 +490,21 @@ fn collect_python_import_bindings(body: &[Stmt], map: &mut ImportMap) {
                 map.locals.insert(class.name.to_string());
             }
             Stmt::If(if_statement) => {
-                collect_python_import_bindings(&if_statement.body, map);
+                collect_python_import_bindings(&if_statement.body, line_index, map);
                 for clause in &if_statement.elif_else_clauses {
-                    collect_python_import_bindings(&clause.body, map);
+                    collect_python_import_bindings(&clause.body, line_index, map);
                 }
             }
             Stmt::Try(try_statement) => {
-                collect_python_import_bindings(&try_statement.body, map);
+                collect_python_import_bindings(&try_statement.body, line_index, map);
                 for ExceptHandler::ExceptHandler(handler) in &try_statement.handlers {
-                    collect_python_import_bindings(&handler.body, map);
+                    collect_python_import_bindings(&handler.body, line_index, map);
                 }
-                collect_python_import_bindings(&try_statement.orelse, map);
-                collect_python_import_bindings(&try_statement.finalbody, map);
+                collect_python_import_bindings(&try_statement.orelse, line_index, map);
+                collect_python_import_bindings(&try_statement.finalbody, line_index, map);
             }
             Stmt::With(with_statement) => {
-                collect_python_import_bindings(&with_statement.body, map);
+                collect_python_import_bindings(&with_statement.body, line_index, map);
             }
             _ => {}
         }

@@ -24,15 +24,17 @@ mod call_clusters;
 mod imports;
 pub mod python;
 pub mod rust;
+pub mod scope_facts;
 mod test_analysis;
 
 pub(in crate::code_lint::ast) use self::call_clusters::{
-    CachedCallClusterFindings, CachedCallOrderFinding, DeclarationScope, DeclarationScopeKind,
-    ScopeItem, ScopeItemKind, extend_unique, push_unique, split_at_redefinitions,
+    CachedCallClusterFindings, CachedCallOrderFinding, DeclarationScope, ScopeItem,
+    analyze_declaration_scope, compute_public_roots, compute_stage3_callees, compute_tarjan_sccs,
+    extend_unique, push_unique, split_at_redefinitions,
 };
 pub use self::call_clusters::{
-    CallClusterFindings, CallOrderFinding, MemberAfterMethod, MethodVisibility, PlacementAnchor,
-    TypeMethod, TypeMethodScope,
+    CallClusterFindings, CallOrderFinding, DeclarationScopeKind, MemberAfterMethod,
+    MethodVisibility, PlacementAnchor, ScopeItemKind, TypeMethod, TypeMethodScope,
 };
 pub use self::test_analysis::{
     AssertionCheck, MultiPhaseTest, TestAssertionCount, TestFunctionSetup, TestLogicConstruct,
@@ -42,8 +44,8 @@ pub(in crate::code_lint::ast) use self::test_analysis::{
     TestStatementRole, has_multi_phase_interleaving, is_assertion_function_name,
     normalize_statement_text, resolve_assertion_helpers,
 };
-pub(in crate::code_lint::ast) use imports::ImportMap;
 use imports::path_separator;
+pub(in crate::code_lint::ast) use imports::{ImportMap, import_lines};
 pub use imports::{ResolvedName, resolve_name};
 
 use crate::diagnostic::{Language, LineColumn, LineIndex, SourceLocation, SourceSpan};
@@ -716,14 +718,6 @@ pub fn is_predicate_name(name: &str) -> bool {
             })
 }
 
-/// Collects all module and class/inherent-`impl` [`DeclarationScope`]s in `file`.
-#[must_use]
-pub(in crate::code_lint::ast) fn collect_declaration_scopes(
-    file: &ParsedFile,
-) -> Vec<DeclarationScope<'_>> {
-    dispatch_lang!(file.lang(), collect_declaration_scopes(file))
-}
-
 /// Collects each Python `class` and Rust inherent `impl` block in `file` with its direct methods
 /// in source order.
 #[must_use]
@@ -769,7 +763,7 @@ pub fn collect_call_cluster_findings(file: &ParsedFile) -> CallClusterFindings<'
         let scopes = collect_declaration_scopes(file);
         let mut out = CachedCallClusterFindings::default();
         for scope in &scopes {
-            call_clusters::analyze_declaration_scope(scope, &mut out);
+            analyze_declaration_scope(scope, &mut out);
         }
         out
     });
@@ -789,6 +783,14 @@ pub fn collect_call_cluster_findings(file: &ParsedFile) -> CallClusterFindings<'
         private_before_public: materialize(&cached.private_before_public),
         callee_before_caller: materialize(&cached.callee_before_caller),
     }
+}
+
+/// Collects all module and class/`impl` [`DeclarationScope`]s in `file`.
+#[must_use]
+pub(in crate::code_lint::ast) fn collect_declaration_scopes(
+    file: &ParsedFile,
+) -> Vec<DeclarationScope<'_>> {
+    dispatch_lang!(file.lang(), collect_declaration_scopes(file))
 }
 
 /// Resolves the 1-indexed inclusive header line range of the innermost statement enclosing `span`.
@@ -824,7 +826,6 @@ pub fn decorator_and_attribute_end_lines(
     );
     end_lines
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
