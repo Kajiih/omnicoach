@@ -408,3 +408,84 @@ fn test_cli_select_and_ignore_override_toml_and_explain() {
         "{explain_output}"
     );
 }
+
+#[test]
+fn test_graph_single_file_and_no_signatures() {
+    let source = indoc! {r"
+        pub fn run(limit: usize) -> usize {
+            helper(limit)
+        }
+
+        fn helper(value: usize) -> usize {
+            value + 1
+        }
+    "};
+    let temp_dir = create_temp_file("sample.rs", source);
+    let default_output = run_cli(&["graph", "sample.rs"], Some(temp_dir.path()));
+    let compact_output = run_cli(
+        &["graph", "--no-signatures", "sample.rs"],
+        Some(temp_dir.path()),
+    );
+
+    assert!(
+        default_output.contains("[ALPHA — experimental, under active investigation & design;"),
+        "{default_output}"
+    );
+    assert!(
+        default_output.contains("pub fn run(limit: usize) -> usize"),
+        "{default_output}"
+    );
+    assert!(
+        compact_output.contains("- [L1] pub fn run (sample.rs:1..3, roots=[run])"),
+        "{compact_output}"
+    );
+}
+
+#[test]
+fn test_graph_project_depth_levels_and_declared_components() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let src_dir = temp_dir.path().join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+    fs::write(
+        temp_dir.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(
+        src_dir.join("architecture.rs"),
+        indoc! {r"
+            define_architecture! {
+                Api => [Core],
+                Core => [],
+            }
+        "},
+    )
+    .unwrap();
+    fs::write(
+        src_dir.join("api.rs"),
+        "use crate::core::compute;\npub fn serve() -> usize {\n    compute()\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        src_dir.join("core.rs"),
+        "pub fn compute() -> usize {\n    helper()\n}\nfn helper() -> usize {\n    1\n}\n",
+    )
+    .unwrap();
+
+    let module_output = run_cli(&["graph", "--depth", "module", "."], Some(temp_dir.path()));
+    let public_output = run_cli(&["graph", "--depth", "public", "."], Some(temp_dir.path()));
+
+    assert!(
+        module_output.contains("## Component [L1] Api (depends_on=[Core])"),
+        "{module_output}"
+    );
+    assert!(
+        module_output.contains("## Component [L0] Core (depends_on=[])"),
+        "{module_output}"
+    );
+    assert!(
+        public_output.contains("pub fn compute() -> usize"),
+        "{public_output}"
+    );
+    assert!(!public_output.contains("fn helper()"), "{public_output}");
+}

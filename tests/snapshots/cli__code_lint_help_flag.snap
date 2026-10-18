@@ -1,5 +1,6 @@
 ---
 source: tests/cli.rs
+assertion_line: 97
 expression: output
 ---
 --- exit code ---
@@ -12,6 +13,8 @@ Usage: omnicoach [OPTIONS] [COMMAND]
 Commands:
   code     Inspect source files and directories
   command  Validate an intercepted shell command string
+  graph    [ALPHA — experimental, under active investigation & design; format may change at any
+           time] Generate a multi-level abstraction graph for files or directories
   help     Print this message or the help of the given subcommand(s)
 
 Options:

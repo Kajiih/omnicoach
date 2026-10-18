@@ -4,7 +4,10 @@ omni::architecture_component!(Bin);
 
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use omni::code_lint::graph::{
+    GraphOptions, OutputFormat as GraphOutputFormat, ProjectDepth, generate_graph,
+};
 use omni::code_lint::runner::{LintOptions, run_code_lint};
 use omni::command_lint::runner::run_command_lint;
 use omni::config::Config;
@@ -52,6 +55,29 @@ fn run() -> anyhow::Result<()> {
                 unreachable!("clap requires --cmd unless a discovery flag is given");
             };
             run_command(&command, &config, cli.format)
+        }
+        Some(DomainCommand::Graph(args)) => {
+            let options = GraphOptions {
+                paths: args.paths,
+                depth: match args.depth {
+                    GraphDepthArg::Module => ProjectDepth::ModuleOnly,
+                    GraphDepthArg::Public => ProjectDepth::PublicSurface,
+                    GraphDepthArg::Full => ProjectDepth::Full,
+                },
+                format: if args.no_signatures {
+                    GraphOutputFormat::CompactBi
+                } else {
+                    GraphOutputFormat::AnnotatedStubs
+                },
+            };
+            let output = generate_graph(&options, &config)?;
+            if let Err(error) =
+                std::io::Write::write_all(&mut std::io::stdout().lock(), output.as_bytes())
+                && error.kind() != std::io::ErrorKind::BrokenPipe
+            {
+                return Err(error.into());
+            }
+            Ok(())
         }
     }
 }
@@ -135,6 +161,9 @@ enum DomainCommand {
     Code(CodeArgs),
     /// Validate an intercepted shell command string
     Command(CommandArgs),
+    /// [ALPHA — experimental, under active investigation & design; format may change at any time]
+    /// Generate a multi-level abstraction graph for files or directories
+    Graph(GraphArgs),
 }
 
 #[derive(Args, Debug)]
@@ -157,4 +186,30 @@ struct CommandArgs {
     /// Shell command string to validate
     #[arg(long, required_unless_present_any = ["list_rules", "list_tags", "explain"])]
     cmd: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct GraphArgs {
+    /// Paths to inspect
+    #[arg(default_value = ".")]
+    paths: Vec<PathBuf>,
+
+    /// Hierarchy depth for project graphs (`module`, `public`, or `full`)
+    #[arg(long, value_enum, default_value_t = GraphDepthArg::Full)]
+    depth: GraphDepthArg,
+
+    /// Omit language signatures and emit compact bidirectional nodes (`F2` instead of `F3`)
+    #[arg(long)]
+    no_signatures: bool,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum GraphDepthArg {
+    /// Component and module headers only (`Component -> Module`)
+    Module,
+    /// Component, module, and public surface declarations (`Component -> Module -> pub items`)
+    Public,
+    /// Full ownership clusters, private helpers, and type methods (`Component -> Module -> Owner -> items`)
+    #[default]
+    Full,
 }
