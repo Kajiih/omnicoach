@@ -117,11 +117,11 @@ pub const RULE: CodeRule = CodeRule {
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     ast::collect_test_logic_constructs(file)
         .into_iter()
-        .map(|(node, func_name, construct)| {
+        .map(|item| {
             rule.diagnostic_at_node(
                 path,
-                &node,
-                &[("function", &func_name), ("construct", construct)],
+                &item.node,
+                &[("function", &item.test_name), ("construct", item.construct)],
             )
         })
         .collect()

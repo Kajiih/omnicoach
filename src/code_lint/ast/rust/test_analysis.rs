@@ -6,8 +6,10 @@ use super::{
     macro_call_terminal_name, resolve_preceding_macro_path, syntax_node,
 };
 use crate::code_lint::ast::{
-    AstCallCandidate, AstNode, ParsedFile, TestFunctionSetup, TestToTestCall,
-    normalize_statement_text, span_from_rowan_range, split_at_redefinitions,
+    AssertionCheck, AstCallCandidate, AstNode, MultiPhaseTest, ParsedFile, TestAssertionCount,
+    TestFunctionSetup, TestLogicConstruct, TestStatementRole, TestToTestCall,
+    has_multi_phase_interleaving, normalize_statement_text, resolve_assertion_helpers,
+    span_from_rowan_range, split_at_redefinitions,
 };
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast::{self, HasAttrs as _, HasModuleItem as _, HasName as _};
@@ -64,20 +66,11 @@ fn is_conditional_test_attribute(attribute: &ast::Attr) -> bool {
             .is_some_and(|ident| ident.text() == TEST_IDENTIFIER)
 }
 
-/// Extracts the terminal macro identifier from a Rust `macro_invocation` node (e.g. `assert` from `std::assert!`).
-#[must_use]
-pub fn macro_terminal_name<'tree>(macro_node: &AstNode<'tree>) -> std::borrow::Cow<'tree, str> {
-    cast_at_span::<ast::MacroCall>(macro_node)
-        .map_or(std::borrow::Cow::Borrowed(""), |macro_call| {
-            std::borrow::Cow::Owned(macro_call_terminal_name(&macro_call))
-        })
-}
-
-/// Collects all outermost Rust test functions together with their `(name_node, func_name, assertion_count)`.
+/// Collects all outermost Rust test functions together with their identifier node, name, and assertion count.
 #[must_use]
 pub(in crate::code_lint::ast) fn collect_test_function_assertion_counts(
     file: &ParsedFile,
-) -> Vec<(AstNode<'_>, String, usize)> {
+) -> Vec<TestAssertionCount<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -91,13 +84,16 @@ pub(in crate::code_lint::ast) fn collect_test_function_assertion_counts(
         .filter_map(|function| {
             let name_node = function.name()?;
             let body_node = function.body()?;
-            let function_name = name_node.text().to_string();
+            let name = name_node.text().to_string();
             let count = count_rust_assertions(body_node.syntax(), &assertion_helpers);
-            Some((
-                AstNode::from_span(file, span_from_rowan_range(name_node.syntax().text_range())),
-                function_name,
+            Some(TestAssertionCount {
+                name_node: AstNode::from_span(
+                    file,
+                    span_from_rowan_range(name_node.syntax().text_range()),
+                ),
+                name,
                 count,
-            ))
+            })
         })
         .collect()
 }
@@ -106,7 +102,7 @@ pub(in crate::code_lint::ast) fn collect_test_function_assertion_counts(
 #[must_use]
 pub(in crate::code_lint::ast) fn collect_test_logic_constructs(
     file: &ParsedFile,
-) -> Vec<(AstNode<'_>, String, &'static str)> {
+) -> Vec<TestLogicConstruct<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -130,7 +126,7 @@ fn collect_rust_test_logic_rec<'a>(
     node: &SyntaxNode,
     file: &'a ParsedFile,
     func_name: &str,
-    out: &mut Vec<(AstNode<'a>, String, &'static str)>,
+    out: &mut Vec<TestLogicConstruct<'a>>,
 ) {
     if (ast::Item::can_cast(node.kind()) && !ast::MacroCall::can_cast(node.kind()))
         || ast::ClosureExpr::can_cast(node.kind())
@@ -146,11 +142,11 @@ fn collect_rust_test_logic_rec<'a>(
         _ => None,
     };
     if let Some(description) = construct {
-        out.push((
-            AstNode::from_span(file, span_from_rowan_range(node.text_range())),
-            func_name.to_string(),
-            description,
-        ));
+        out.push(TestLogicConstruct {
+            node: AstNode::from_span(file, span_from_rowan_range(node.text_range())),
+            test_name: func_name.to_string(),
+            construct: description,
+        });
         return;
     }
     for child in node.children() {
@@ -163,7 +159,7 @@ fn collect_rust_test_logic_rec<'a>(
 #[must_use]
 pub(in crate::code_lint::ast) fn collect_multi_phase_test_functions(
     file: &ParsedFile,
-) -> Vec<(AstNode<'_>, String)> {
+) -> Vec<MultiPhaseTest<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -180,10 +176,13 @@ pub(in crate::code_lint::ast) fn collect_multi_phase_test_functions(
             if !is_multi_phase_rust_test(&body_node, &assertion_helpers) {
                 return None;
             }
-            Some((
-                AstNode::from_span(file, span_from_rowan_range(name_node.syntax().text_range())),
-                name_node.text().to_string(),
-            ))
+            Some(MultiPhaseTest {
+                name_node: AstNode::from_span(
+                    file,
+                    span_from_rowan_range(name_node.syntax().text_range()),
+                ),
+                name: name_node.text().to_string(),
+            })
         })
         .collect()
 }
@@ -195,19 +194,17 @@ fn is_multi_phase_rust_test(
     let Some(block_statements) = body_node.stmt_list() else {
         return false;
     };
-    let mut seen_assertion = false;
-    let mut seen_action_after_assertion = false;
-    for statement_node in rust_executable_block_statements(&block_statements) {
-        if count_rust_assertions(&statement_node, assertion_helpers) > 0 {
-            if seen_action_after_assertion {
-                return true;
+    has_multi_phase_interleaving(rust_executable_block_statements(&block_statements).map(
+        |statement_node| {
+            if count_rust_assertions(&statement_node, assertion_helpers) > 0 {
+                TestStatementRole::Assertion
+            } else if is_rust_inspection_binding(&statement_node) {
+                TestStatementRole::InspectionOrGuard
+            } else {
+                TestStatementRole::Action
             }
-            seen_assertion = true;
-        } else if seen_assertion && !is_rust_inspection_binding(&statement_node) {
-            seen_action_after_assertion = true;
-        }
-    }
-    false
+        },
+    ))
 }
 
 fn is_rust_inspection_binding(statement_node: &SyntaxNode) -> bool {
@@ -228,7 +225,7 @@ fn is_rust_projection_expr(expr: &ast::Expr) -> bool {
                 .is_some_and(|base| is_rust_projection_expr(&base))
                 && index
                     .index()
-                    .is_some_and(|index_expr| !rust_expr_contains_call(&index_expr))
+                    .is_some_and(|index_expr| !super::expr_contains_call(&index_expr))
         }
         ast::Expr::RefExpr(reference) => reference
             .expr()
@@ -251,15 +248,6 @@ fn is_rust_projection_expr(expr: &ast::Expr) -> bool {
         }
         _ => false,
     }
-}
-
-fn rust_expr_contains_call(expr: &ast::Expr) -> bool {
-    expr.syntax().descendants().any(|node| {
-        matches!(
-            node.kind(),
-            SyntaxKind::CALL_EXPR | SyntaxKind::METHOD_CALL_EXPR | SyntaxKind::MACRO_EXPR
-        )
-    })
 }
 
 /// Collects Rust test functions grouped by enclosing file root or `mod` scope (segmented on
@@ -339,9 +327,11 @@ fn extract_rust_leading_setup_statements(
         .collect()
 }
 
-/// Collects all `macro_invocation` nodes in `file`.
+/// Collects all Rust assertion macro invocations in `file` with their condition-packing properties.
 #[must_use]
-pub fn collect_macro_invocations(file: &ParsedFile) -> Vec<AstNode<'_>> {
+pub(in crate::code_lint::ast) fn collect_assertion_checks(
+    file: &ParsedFile,
+) -> Vec<AssertionCheck<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -350,21 +340,38 @@ pub fn collect_macro_invocations(file: &ParsedFile) -> Vec<AstNode<'_>> {
         .syntax()
         .descendants()
         .filter_map(ast::MacroCall::cast)
+        .filter(is_assertion_macro)
         .map(|macro_call| {
-            AstNode::from_span(
-                file,
-                span_from_rowan_range(macro_call.syntax().text_range()),
-            )
+            let callee = macro_call_terminal_name(&macro_call);
+            let is_bool_assert = is_boolean_assertion_macro_name(&callee);
+            let is_comparison_assert = is_comparison_assertion_macro_name(&callee);
+            let argument_trees = if is_comparison_assert {
+                macro_argument_token_trees(&macro_call)
+            } else {
+                Vec::new()
+            };
+            AssertionCheck {
+                node: AstNode::from_span(
+                    file,
+                    span_from_rowan_range(macro_call.syntax().text_range()),
+                ),
+                has_top_level_logical_and: is_bool_assert && has_top_level_logical_and(&macro_call),
+                has_boolean_literal_comparison: argument_trees
+                    .iter()
+                    .any(is_boolean_literal_collection),
+                has_composite_collection_comparison: argument_trees
+                    .iter()
+                    .filter(|tree| is_multi_element_collection(tree))
+                    .count()
+                    >= 2,
+                callee,
+            }
         })
         .collect()
 }
 
-/// Returns true if a Rust `macro_invocation`'s `token_tree` contains a top-level `&&` logical operator.
-#[must_use]
-pub fn has_top_level_logical_and(macro_node: &AstNode<'_>) -> bool {
-    let Some(macro_call) = cast_at_span::<ast::MacroCall>(macro_node) else {
-        return false;
-    };
+/// Returns true if a Rust `MacroCall`'s `token_tree` contains a top-level `&&` logical operator.
+fn has_top_level_logical_and(macro_call: &ast::MacroCall) -> bool {
     let Some(token_tree) = macro_call.token_tree() else {
         return false;
     };
@@ -392,9 +399,88 @@ fn token_tree_has_direct_logical_and(token_tree: &ast::TokenTree) -> bool {
     })
 }
 
+/// Extracts the child `TokenTree` arguments inside a Rust `MacroCall`'s `token_tree`.
+fn macro_argument_token_trees(macro_call: &ast::MacroCall) -> Vec<ast::TokenTree> {
+    let Some(token_tree) = macro_call.token_tree() else {
+        return Vec::new();
+    };
+    meaningful_token_tree_elements(&token_tree)
+        .into_iter()
+        .filter_map(|element| element.into_node().and_then(ast::TokenTree::cast))
+        .collect()
+}
+
+/// Returns true if `token_tree` is a standalone Rust macro argument `token_tree` (tuple, array, or
+/// `vec![...]`) consisting solely of `>= 2` boolean literals (`true` / `false`).
+fn is_boolean_literal_collection(token_tree: &ast::TokenTree) -> bool {
+    if !is_standalone_collection_token_tree(token_tree) {
+        return false;
+    }
+    let items = meaningful_token_tree_elements(token_tree);
+    items.len() >= 2
+        && items.iter().all(|item| {
+            matches!(
+                item,
+                SyntaxElement::Token(token)
+                    if matches!(token.kind(), SyntaxKind::TRUE_KW | SyntaxKind::FALSE_KW)
+            )
+        })
+}
+
+/// Returns true if `token_tree` is a standalone Rust tuple, array, or `vec![...]` macro argument
+/// `token_tree` containing `>= 2` comma-separated elements (such as `(a, b)` or `[a, b]`).
+fn is_multi_element_collection(token_tree: &ast::TokenTree) -> bool {
+    if !is_standalone_collection_token_tree(token_tree) {
+        return false;
+    }
+    let has_comma = token_tree
+        .syntax()
+        .children_with_tokens()
+        .any(|element| matches!(element, SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMA));
+    has_comma && meaningful_token_tree_elements(token_tree).len() >= 2
+}
+
+/// Returns true if `token_tree` is a standalone tuple, array, or `vec![...]` macro argument (not a
+/// call argument list `foo(a, b)` or postfix receiver `(a, b).0`).
+fn is_standalone_collection_token_tree(token_tree: &ast::TokenTree) -> bool {
+    let Some(last_token) = token_tree.syntax().last_token() else {
+        return false;
+    };
+    let Some(following) = std::iter::successors(last_token.next_token(), SyntaxToken::next_token)
+        .find(|candidate| !candidate.kind().is_trivia())
+    else {
+        return false;
+    };
+    if !matches!(
+        following.kind(),
+        SyntaxKind::COMMA | SyntaxKind::R_PAREN | SyntaxKind::R_BRACK | SyntaxKind::R_CURLY
+    ) {
+        return false;
+    }
+    if resolve_preceding_macro_path(token_tree.syntax()).is_some_and(|path| path.terminal == "vec")
+    {
+        return true;
+    }
+    let Some(first_token) = token_tree.syntax().first_token() else {
+        return false;
+    };
+    let Some(preceding) = std::iter::successors(first_token.prev_token(), SyntaxToken::prev_token)
+        .find(|candidate| {
+            !candidate.kind().is_trivia()
+                && !matches!(candidate.kind(), SyntaxKind::AMP | SyntaxKind::MUT_KW)
+        })
+    else {
+        return false;
+    };
+    matches!(
+        preceding.kind(),
+        SyntaxKind::L_PAREN | SyntaxKind::L_BRACK | SyntaxKind::L_CURLY | SyntaxKind::COMMA
+    )
+}
+
 /// Extracts the argument nodes inside a Rust `macro_invocation`'s `token_tree`.
 #[must_use]
-pub fn extract_macro_arguments<'a>(macro_node: &AstNode<'a>) -> Vec<AstNode<'a>> {
+pub(super) fn extract_macro_arguments<'a>(macro_node: &AstNode<'a>) -> Vec<AstNode<'a>> {
     let Some(macro_call) = cast_at_span::<ast::MacroCall>(macro_node) else {
         return Vec::new();
     };
@@ -407,38 +493,6 @@ pub fn extract_macro_arguments<'a>(macro_node: &AstNode<'a>) -> Vec<AstNode<'a>>
             AstNode::from_span(macro_node.file, span_from_rowan_range(element.text_range()))
         })
         .collect()
-}
-
-/// Returns true if `node` is a standalone Rust macro argument `token_tree` (tuple, array, or
-/// `vec![...]`) consisting solely of `>= 2` boolean literals (`true` / `false`).
-#[must_use]
-pub fn is_boolean_literal_collection(node: &AstNode<'_>) -> bool {
-    let Some(token_tree) = standalone_collection_token_tree(node) else {
-        return false;
-    };
-    let items = meaningful_token_tree_elements(&token_tree);
-    items.len() >= 2
-        && items.iter().all(|item| {
-            matches!(
-                item,
-                SyntaxElement::Token(token)
-                    if matches!(token.kind(), SyntaxKind::TRUE_KW | SyntaxKind::FALSE_KW)
-            )
-        })
-}
-
-/// Returns true if `node` is a standalone Rust tuple, array, or `vec![...]` macro argument
-/// `token_tree` containing `>= 2` comma-separated elements (such as `(a, b)` or `[a, b]`).
-#[must_use]
-pub fn is_multi_element_collection(node: &AstNode<'_>) -> bool {
-    let Some(token_tree) = standalone_collection_token_tree(node) else {
-        return false;
-    };
-    let has_comma = token_tree
-        .syntax()
-        .children_with_tokens()
-        .any(|element| matches!(element, SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMA));
-    has_comma && meaningful_token_tree_elements(&token_tree).len() >= 2
 }
 
 /// Collects calls in a Rust test file where a function calls a `#[test]` function defined in the
@@ -565,43 +619,6 @@ fn target_rust_module_span(node: &AstNode<'_>, super_count: usize) -> Option<Sou
     })
 }
 
-/// If `node` is a standalone tuple, array, or `vec![...]` `token_tree` macro argument (not a call
-/// argument list `foo(a, b)` or postfix receiver `(a, b).0`), returns its [`ast::TokenTree`].
-fn standalone_collection_token_tree(node: &AstNode<'_>) -> Option<ast::TokenTree> {
-    let token_tree = cast_at_span::<ast::TokenTree>(node)?;
-    if span_from_rowan_range(token_tree.syntax().text_range()) != node.span() {
-        return None;
-    }
-    let following = std::iter::successors(
-        token_tree.syntax().last_token()?.next_token(),
-        SyntaxToken::next_token,
-    )
-    .find(|candidate| !candidate.kind().is_trivia())?;
-    if !matches!(
-        following.kind(),
-        SyntaxKind::COMMA | SyntaxKind::R_PAREN | SyntaxKind::R_BRACK | SyntaxKind::R_CURLY
-    ) {
-        return None;
-    }
-    if resolve_preceding_macro_path(token_tree.syntax()).is_some_and(|path| path.terminal == "vec")
-    {
-        return Some(token_tree);
-    }
-    let preceding = std::iter::successors(
-        token_tree.syntax().first_token()?.prev_token(),
-        SyntaxToken::prev_token,
-    )
-    .find(|candidate| {
-        !candidate.kind().is_trivia()
-            && !matches!(candidate.kind(), SyntaxKind::AMP | SyntaxKind::MUT_KW)
-    })?;
-    matches!(
-        preceding.kind(),
-        SyntaxKind::L_PAREN | SyntaxKind::L_BRACK | SyntaxKind::L_CURLY | SyntaxKind::COMMA
-    )
-    .then_some(token_tree)
-}
-
 fn collect_outer_test_functions_rec(node: &SyntaxNode, out: &mut Vec<ast::Fn>) {
     if let Some(function) = ast::Fn::cast(node.clone()) {
         if is_test_function(&function) {
@@ -618,23 +635,11 @@ fn collect_outer_test_functions_rec(node: &SyntaxNode, out: &mut Vec<ast::Fn>) {
 /// least one behavioral assertion transitively.
 fn collect_rust_assertion_helpers(root: &SyntaxNode) -> HashSet<String> {
     let candidates = collect_non_test_unit_rust_functions(root);
-    let mut helpers = HashSet::new();
-    loop {
-        let mut added = false;
-        for (name, body) in &candidates {
-            if helpers.contains(name) {
-                continue;
-            }
-            if count_rust_assertions(body.syntax(), &helpers) > 0 {
-                helpers.insert(name.clone());
-                added = true;
-            }
-        }
-        if !added {
-            break;
-        }
-    }
-    helpers
+    resolve_assertion_helpers(
+        &candidates,
+        |(name, _)| name.as_str(),
+        |(_, body), helpers| count_rust_assertions(body.syntax(), helpers) > 0,
+    )
 }
 
 /// Collects `(name, body)` pairs for non-test, unit-returning free functions in `root`.
@@ -786,8 +791,15 @@ fn is_rust_assertion_call_node(node: &SyntaxNode, assertion_helpers: &HashSet<St
 #[must_use]
 fn is_assertion_macro(macro_call: &ast::MacroCall) -> bool {
     let terminal = macro_call_terminal_name(macro_call);
-    terminal == "assert"
-        || terminal.starts_with("assert_")
-        || terminal == "debug_assert"
-        || terminal.starts_with("debug_assert_")
+    is_boolean_assertion_macro_name(&terminal) || is_comparison_assertion_macro_name(&terminal)
+}
+
+#[must_use]
+fn is_boolean_assertion_macro_name(name: &str) -> bool {
+    matches!(name, "assert" | "debug_assert")
+}
+
+#[must_use]
+fn is_comparison_assertion_macro_name(name: &str) -> bool {
+    name.starts_with("assert_") || name.starts_with("debug_assert_")
 }

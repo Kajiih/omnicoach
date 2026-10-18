@@ -15,6 +15,7 @@ from .model import (
     RS_CALLS,
     RS_TESTS,
     SLEEP_IN_TESTS,
+    TEST_ANALYSIS,
     TOO_MANY_ASSERTIONS,
     YIELD_LOOP_IN_TESTS,
     Cluster,
@@ -228,8 +229,8 @@ CLUSTER = Cluster(
             path=TOO_MANY_ASSERTIONS,
             edits=(
                 (
-                    "        .filter(|(_, _, assertion_count)| *assertion_count > max_allowed)",
-                    "        .filter(|(_, _, assertion_count)| *assertion_count >= max_allowed)",
+                    "        .filter(|test_fn| test_fn.count > max_allowed)",
+                    "        .filter(|test_fn| test_fn.count >= max_allowed)",
                 ),
             ),
             cases=(
@@ -399,7 +400,7 @@ CLUSTER = Cluster(
                     "        if let Stmt::Assert(assert_statement) = statement\n"
                     "            && is_narrowing_guard_assert(assert_statement, body)\n"
                     "        {\n"
-                    "            continue;\n"
+                    "            return TestStatementRole::InspectionOrGuard;\n"
                     "        }",
                     "        let _ = statement;",
                 ),
@@ -409,25 +410,15 @@ CLUSTER = Cluster(
             ),
         ),
         Mutation(
-            label="Python consecutive assertions without intervening action allowed in multi-phase-test",
-            path=PY_TESTS,
+            label="consecutive assertions without intervening action allowed in multi-phase-test",
+            path=TEST_ANALYSIS,
             edits=(
                 (
-                    "        if count_python_assertions_in_slice(\n"
-                    "            std::slice::from_ref(statement),\n"
-                    "            body,\n"
-                    "            assertion_helpers,\n"
-                    "        ) > 0\n"
-                    "        {\n"
-                    "            if seen_action_after_assertion {",
-                    "        if count_python_assertions_in_slice(\n"
-                    "            std::slice::from_ref(statement),\n"
-                    "            body,\n"
-                    "            assertion_helpers,\n"
-                    "        ) > 0\n"
-                    "        {\n"
-                    "            let _ = seen_action_after_assertion;\n"
-                    "            if seen_assertion {",
+                    "            TestStatementRole::Assertion => {\n"
+                    "                if seen_action_after_assertion {",
+                    "            TestStatementRole::Assertion => {\n"
+                    "                let _ = seen_action_after_assertion;\n"
+                    "                if seen_assertion {",
                 ),
             ),
             cases=(
@@ -435,6 +426,9 @@ CLUSTER = Cluster(
                 "multi_phase_test::pass::narrowing_isinstance_between_assertions_exempt",
                 "multi_phase_test::pass::call_free_projection_binding_between_assertions_exempt@python",
                 "multi_phase_test::pass::capsys_readouterr_after_pytest_raises_exempt",
+                "multi_phase_test::pass::single_phase_multiple_assertions_allowed@rust",
+                "multi_phase_test::pass::local_item_declaration_between_assertions_exempt",
+                "multi_phase_test::pass::call_free_projection_binding_between_assertions_exempt@rust",
             ),
         ),
         Mutation(
@@ -442,8 +436,10 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "        } else if seen_assertion && !is_python_inspection_binding(statement) {",
-                    "        } else if seen_assertion && (is_python_inspection_binding(statement) || true) {",
+                    "        } else if is_python_inspection_binding(statement) {\n"
+                    "            TestStatementRole::InspectionOrGuard",
+                    "        } else if is_python_inspection_binding(statement) && false {\n"
+                    "            TestStatementRole::InspectionOrGuard",
                 ),
             ),
             cases=(
@@ -452,30 +448,14 @@ CLUSTER = Cluster(
             ),
         ),
         Mutation(
-            label="Rust consecutive assertions without intervening action allowed in multi-phase-test",
-            path=RS_TESTS,
-            edits=(
-                (
-                    "        if count_rust_assertions(&statement_node, assertion_helpers) > 0 {\n"
-                    "            if seen_action_after_assertion {",
-                    "        if count_rust_assertions(&statement_node, assertion_helpers) > 0 {\n"
-                    "            let _ = seen_action_after_assertion;\n"
-                    "            if seen_assertion {",
-                ),
-            ),
-            cases=(
-                "multi_phase_test::pass::single_phase_multiple_assertions_allowed@rust",
-                "multi_phase_test::pass::local_item_declaration_between_assertions_exempt",
-                "multi_phase_test::pass::call_free_projection_binding_between_assertions_exempt@rust",
-            ),
-        ),
-        Mutation(
             label="Rust call-free projection binding between assertions exempt in multi-phase-test",
             path=RS_TESTS,
             edits=(
                 (
-                    "        } else if seen_assertion && !is_rust_inspection_binding(&statement_node) {",
-                    "        } else if seen_assertion && (is_rust_inspection_binding(&statement_node) || true) {",
+                    "            } else if is_rust_inspection_binding(&statement_node) {\n"
+                    "                TestStatementRole::InspectionOrGuard",
+                    "            } else if is_rust_inspection_binding(&statement_node) && false {\n"
+                    "                TestStatementRole::InspectionOrGuard",
                 ),
             ),
             cases=(

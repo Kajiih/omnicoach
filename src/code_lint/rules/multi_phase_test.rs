@@ -126,8 +126,8 @@ pub const RULE: CodeRule = CodeRule {
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     ast::collect_multi_phase_test_functions(file)
         .into_iter()
-        .map(|(name_node, func_name)| {
-            rule.diagnostic_at_node(path, &name_node, &[("function", &func_name)])
+        .map(|test_fn| {
+            rule.diagnostic_at_node(path, &test_fn.name_node, &[("function", &test_fn.name)])
         })
         .collect()
 }

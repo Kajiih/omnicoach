@@ -118,11 +118,5 @@ fn is_stable_receiver(receiver: &ast::Expr) -> bool {
         ast::Expr::FieldExpr(_) => true,
         _ => false,
     };
-    is_name_or_field
-        && !receiver.syntax().descendants().any(|descendant| {
-            matches!(
-                descendant.kind(),
-                SyntaxKind::CALL_EXPR | SyntaxKind::METHOD_CALL_EXPR
-            )
-        })
+    is_name_or_field && !super::expr_contains_call(receiver)
 }

@@ -25,6 +25,7 @@ mod imports;
 pub mod python;
 pub mod rust;
 pub mod statements;
+mod test_analysis;
 
 pub(in crate::code_lint::ast) use self::call_clusters::{
     CachedCallClusterFindings, CachedCallOrderFinding, split_at_redefinitions,
@@ -32,6 +33,14 @@ pub(in crate::code_lint::ast) use self::call_clusters::{
 pub use self::call_clusters::{
     CallClusterFindings, CallOrderFinding, DeclarationScope, MethodVisibility, PlacementAnchor,
     ScopeItem, ScopeItemKind, TypeMethod, TypeMethodScope,
+};
+pub use self::test_analysis::{
+    AssertionCheck, MultiPhaseTest, TestAssertionCount, TestFunctionSetup, TestLogicConstruct,
+    TestToTestCall,
+};
+pub(in crate::code_lint::ast) use self::test_analysis::{
+    TestStatementRole, has_multi_phase_interleaving, is_assertion_function_name,
+    normalize_statement_text, resolve_assertion_helpers,
 };
 pub use imports::{ResolvedName, resolve_name};
 
@@ -563,36 +572,28 @@ pub fn collect_bindings(file: &ParsedFile) -> Vec<Binding<'_>> {
 
 /// Collects all outermost test functions in `file` along with their identifier node, name, and assertion count.
 #[must_use]
-pub fn collect_test_function_assertion_counts(
-    file: &ParsedFile,
-) -> Vec<(AstNode<'_>, String, usize)> {
+pub fn collect_test_function_assertion_counts(file: &ParsedFile) -> Vec<TestAssertionCount<'_>> {
     dispatch_lang!(file.lang(), collect_test_function_assertion_counts(file))
 }
 
-/// Collects control-flow and conditional constructs directly inside outermost test functions in `file`,
-/// returning `(construct_node, test_function_name, construct_description)`.
+/// Collects control-flow and conditional constructs directly inside outermost test functions in `file`.
 #[must_use]
-pub fn collect_test_logic_constructs(
-    file: &ParsedFile,
-) -> Vec<(AstNode<'_>, String, &'static str)> {
+pub fn collect_test_logic_constructs(file: &ParsedFile) -> Vec<TestLogicConstruct<'_>> {
     dispatch_lang!(file.lang(), collect_test_logic_constructs(file))
 }
 
 /// Collects outermost test functions in `file` that interleave non-assertion statements between
-/// behavioral assertions, returning `(function_name_node, test_function_name)`.
+/// behavioral assertions.
 #[must_use]
-pub fn collect_multi_phase_test_functions(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
+pub fn collect_multi_phase_test_functions(file: &ParsedFile) -> Vec<MultiPhaseTest<'_>> {
     dispatch_lang!(file.lang(), collect_multi_phase_test_functions(file))
 }
 
-/// A test function and its normalized leading non-assertion setup statements.
-pub struct TestFunctionSetup<'a> {
-    /// Identifier AST node of the test function declaration.
-    pub name_node: AstNode<'a>,
-    /// Name of the test function.
-    pub name: String,
-    /// Normalized source text of each leading non-assertion setup statement, in source order.
-    pub leading_setup_statements: Vec<String>,
+/// Collects all Python `assert` statements and Rust assertion macro invocations in `file`
+/// with their condition-packing properties.
+#[must_use]
+pub fn collect_assertion_checks(file: &ParsedFile) -> Vec<AssertionCheck<'_>> {
+    dispatch_lang!(file.lang(), collect_assertion_checks(file))
 }
 
 /// Collects test functions grouped by enclosing module, class, or `mod` scope (segmented on
@@ -602,31 +603,10 @@ pub fn collect_test_setup_scopes(file: &ParsedFile) -> Vec<Vec<TestFunctionSetup
     dispatch_lang!(file.lang(), collect_test_setup_scopes(file))
 }
 
-/// A call inside a test file to another test function defined in the same file.
-pub struct TestToTestCall<'a> {
-    /// The call expression node.
-    pub node: AstNode<'a>,
-    /// The name of the enclosing function making the call.
-    pub caller: String,
-    /// The source callee text as written (`test_login`, `self.test_login`).
-    pub callee: String,
-}
-
 /// Collects calls in `file` where a function calls a test function defined in the same file.
 #[must_use]
 pub fn collect_test_to_test_calls(file: &ParsedFile) -> Vec<TestToTestCall<'_>> {
     dispatch_lang!(file.lang(), collect_test_to_test_calls(file))
-}
-
-/// Normalizes a statement's source slice by trimming each line and joining with `\n`.
-pub(in crate::code_lint::ast) fn normalize_statement_text(raw: &str) -> String {
-    raw.lines().map(str::trim).collect::<Vec<_>>().join("\n")
-}
-
-/// Returns true if `name` is an assertion helper function or method name (`assert_*` or `_assert_*`).
-#[must_use]
-pub(in crate::code_lint::ast) fn is_assertion_function_name(name: &str) -> bool {
-    name.starts_with("assert_") || name.starts_with("_assert_")
 }
 
 /// Finds all multiline string literals in `file` that are not docstrings/doc-attributes/snapshots

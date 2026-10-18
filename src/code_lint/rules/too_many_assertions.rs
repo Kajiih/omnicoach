@@ -135,15 +135,15 @@ fn check_file(
 ) -> Vec<Diagnostic> {
     ast::collect_test_function_assertion_counts(file)
         .into_iter()
-        .filter(|(_, _, assertion_count)| *assertion_count > max_allowed)
-        .map(|(name_node, func_name, assertion_count)| {
-            let formatted_count = assertion_count.to_string();
+        .filter(|test_fn| test_fn.count > max_allowed)
+        .map(|test_fn| {
+            let formatted_count = test_fn.count.to_string();
             let formatted_max = max_allowed.to_string();
             rule.diagnostic_at_node(
                 path,
-                &name_node,
+                &test_fn.name_node,
                 &[
-                    ("function", &func_name),
+                    ("function", &test_fn.name),
                     ("count", &formatted_count),
                     ("max_assertions", &formatted_max),
                 ],

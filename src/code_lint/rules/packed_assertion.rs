@@ -1,6 +1,6 @@
 //! Flags compound boolean conditions (`&&`, `and`) and boolean tuple equality packing in test assertions.
 
-use crate::code_lint::ast::{self, AstNode, ParsedFile};
+use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -107,112 +107,37 @@ const BOOLEAN_COLLECTION_COMPARISON: &str = "a comparison against a collection o
 const COMPOSITE_COLLECTION_COMPARISON: &str = "a composite collection comparison";
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    match file.lang() {
-        Language::Rust => ast::rust::collect_macro_invocations(file)
-            .iter()
-            .filter_map(|node| check_rust_assertion_macro(rule, node, path))
-            .collect(),
-        Language::Python => ast::python::collect_assert_statements(file)
-            .iter()
-            .filter_map(|assert_statement| {
-                check_python_assert_statement(rule, assert_statement, path)
-            })
-            .collect(),
-    }
+    ast::collect_assertion_checks(file)
+        .iter()
+        .filter_map(|check| check_assertion(rule, check, file.lang(), path))
+        .collect()
 }
 
-/// Evaluates a single Rust assertion macro invocation node for packed conditions.
-fn check_rust_assertion_macro(
+/// Evaluates a single assertion check for packed conditions.
+fn check_assertion(
     rule: &CodeRule,
-    macro_node: &AstNode<'_>,
+    check: &ast::AssertionCheck<'_>,
+    lang: Language,
     path: &Path,
 ) -> Option<Diagnostic> {
-    let macro_name = ast::rust::macro_terminal_name(macro_node);
-
-    // 1. Compound boolean condition: assert!(a && b)
-    if (macro_name == "assert" || macro_name == "debug_assert")
-        && ast::rust::has_top_level_logical_and(macro_node)
-    {
-        return Some(rule.diagnostic_at_node(
-            path,
-            macro_node,
-            &[
-                (CONSTRUCT, "a compound `&&` condition"),
-                (CALLEE, &macro_name),
-            ],
-        ));
-    }
-
-    // 2. Boolean or composite tuple/array equality packing: assert_eq!((a, b), (1, 2))
-    if macro_name.starts_with("assert_") || macro_name.starts_with("debug_assert_") {
-        let arguments = ast::rust::extract_macro_arguments(macro_node);
-        if arguments
-            .iter()
-            .any(ast::rust::is_boolean_literal_collection)
-        {
-            return Some(rule.diagnostic_at_node(
-                path,
-                macro_node,
-                &[
-                    (CONSTRUCT, BOOLEAN_COLLECTION_COMPARISON),
-                    (CALLEE, &macro_name),
-                ],
-            ));
+    let construct = if check.has_top_level_logical_and {
+        match lang {
+            Language::Python => "a compound `and` condition",
+            Language::Rust => "a compound `&&` condition",
         }
-        if arguments
-            .iter()
-            .filter(|argument| ast::rust::is_multi_element_collection(argument))
-            .count()
-            >= 2
-        {
-            return Some(rule.diagnostic_at_node(
-                path,
-                macro_node,
-                &[
-                    (CONSTRUCT, COMPOSITE_COLLECTION_COMPARISON),
-                    (CALLEE, &macro_name),
-                ],
-            ));
-        }
-    }
+    } else if check.has_boolean_literal_comparison {
+        BOOLEAN_COLLECTION_COMPARISON
+    } else if check.has_composite_collection_comparison {
+        COMPOSITE_COLLECTION_COMPARISON
+    } else {
+        return None;
+    };
 
-    None
-}
-
-/// Evaluates a single Python `assert` statement for packed conditions.
-fn check_python_assert_statement(
-    rule: &CodeRule,
-    assert_statement: &ast::python::PythonAssert<'_>,
-    path: &Path,
-) -> Option<Diagnostic> {
-    // 1. Compound boolean condition: assert a and b
-    if assert_statement.has_top_level_logical_and {
-        return Some(rule.diagnostic_at_node(
-            path,
-            &assert_statement.node,
-            &[(CONSTRUCT, "a compound `and` condition")],
-        ));
-    }
-
-    // 2. Boolean tuple/list equality: assert flags == (True, True)
-    if assert_statement.has_boolean_literal_comparison {
-        return Some(rule.diagnostic_at_node(
-            path,
-            &assert_statement.node,
-            &[(CONSTRUCT, BOOLEAN_COLLECTION_COMPARISON)],
-        ));
-    }
-
-    // 3. Composite collection comparison: assert (a, b) == (1, 2)
-    if assert_statement.has_composite_collection_comparison {
-        return Some(rule.diagnostic_at_node(
-            path,
-            &assert_statement.node,
-            &[(CONSTRUCT, COMPOSITE_COLLECTION_COMPARISON)],
-        ));
-    }
-
-    None
+    Some(rule.diagnostic_at_node(
+        path,
+        &check.node,
+        &[(CONSTRUCT, construct), (CALLEE, &check.callee)],
+    ))
 }
 
 #[cfg(test)]

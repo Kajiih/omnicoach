@@ -27,14 +27,12 @@ pub use self::functions::{
 pub(super) use self::literals::collect_literal_occurrences;
 pub(super) use self::positional_reads::collect_positional_reads;
 pub(super) use self::strings::find_unwrapped_multiline_strings;
-pub use self::test_analysis::{
-    collect_inline_test_ranges, collect_macro_invocations, extract_macro_arguments,
-    has_top_level_logical_and, is_boolean_literal_collection, is_multi_element_collection,
-    macro_terminal_name,
-};
+pub use self::test_analysis::collect_inline_test_ranges;
+use self::test_analysis::extract_macro_arguments;
 pub(super) use self::test_analysis::{
-    collect_multi_phase_test_functions, collect_test_function_assertion_counts,
-    collect_test_logic_constructs, collect_test_setup_scopes, collect_test_to_test_calls,
+    collect_assertion_checks, collect_multi_phase_test_functions,
+    collect_test_function_assertion_counts, collect_test_logic_constructs,
+    collect_test_setup_scopes, collect_test_to_test_calls,
 };
 
 use crate::code_lint::ast::{
@@ -51,6 +49,16 @@ const SELF_TYPE_KEYWORD: &str = "Self";
 const SUPER_KEYWORD: &str = "super";
 /// Identifier `"test"` used in `#[test]`, `#[cfg(test)]`, and `test_*` functions.
 const TEST_IDENTIFIER: &str = "test";
+
+/// Returns true if `expr` contains a function call, method call, or macro invocation.
+pub(super) fn expr_contains_call(expr: &ast::Expr) -> bool {
+    expr.syntax().descendants().any(|node| {
+        matches!(
+            node.kind(),
+            SyntaxKind::CALL_EXPR | SyntaxKind::METHOD_CALL_EXPR | SyntaxKind::MACRO_EXPR
+        )
+    })
+}
 
 /// Casts the syntax node at `node.span()` (or an exact-range wrapper ancestor) to `T`.
 fn cast_at_span<T: ra_ap_syntax::AstNode>(node: &AstNode<'_>) -> Option<T> {

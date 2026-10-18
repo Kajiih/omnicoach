@@ -3,9 +3,11 @@
 use super::classes::SELF_RECEIVER;
 use super::{docstrings, returns, scopes};
 use crate::code_lint::ast::{
-    AstCallCandidate, AstNode, EnclosingFunction, ParsedFile, TestFunctionSetup, TestToTestCall,
-    collect_call_candidates, is_assertion_function_name, normalize_statement_text,
-    span_from_ruff_range, split_at_redefinitions,
+    AssertionCheck, AstCallCandidate, AstNode, EnclosingFunction, MultiPhaseTest, ParsedFile,
+    TestAssertionCount, TestFunctionSetup, TestLogicConstruct, TestStatementRole, TestToTestCall,
+    collect_call_candidates, has_multi_phase_interleaving, is_assertion_function_name,
+    normalize_statement_text, resolve_assertion_helpers, span_from_ruff_range,
+    split_at_redefinitions,
 };
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
@@ -16,37 +18,26 @@ use std::collections::{HashMap, HashSet};
 const PYTEST_RAISES: &str = "raises";
 const ISINSTANCE_NAME: &str = "isinstance";
 
-/// A Python `assert` statement with the facts about its condition that packing checks need.
-pub struct PythonAssert<'a> {
-    /// The `assert` statement node.
-    pub node: AstNode<'a>,
-    /// True if the condition has a top-level `and` boolean operator.
-    pub has_top_level_logical_and: bool,
-    /// True if the condition is a comparison with an operand that is a tuple or list of two or
-    /// more boolean literals.
-    pub has_boolean_literal_comparison: bool,
-    /// True if the condition compares two or more multi-element collection literals (`tuple`,
-    /// `list`, `set`, or `dict`).
-    pub has_composite_collection_comparison: bool,
-}
-
-/// Collects all Python `Stmt::Assert` nodes in `file`.
+/// Collects all Python `Stmt::Assert` nodes in `file` with their condition-packing properties.
 #[must_use]
-pub fn collect_assert_statements(file: &ParsedFile) -> Vec<PythonAssert<'_>> {
+pub(in crate::code_lint::ast) fn collect_assertion_checks(
+    file: &ParsedFile,
+) -> Vec<AssertionCheck<'_>> {
     struct AssertCollector<'a> {
         file: &'a ParsedFile,
-        out: Vec<PythonAssert<'a>>,
+        out: Vec<AssertionCheck<'a>>,
     }
 
     impl<'a> SourceOrderVisitor<'a> for AssertCollector<'a> {
         fn visit_stmt(&mut self, statement: &'a Stmt) {
             if let Stmt::Assert(assert_statement) = statement {
                 let test = assert_statement.test.as_ref();
-                self.out.push(PythonAssert {
+                self.out.push(AssertionCheck {
                     node: AstNode::from_span(
                         self.file,
                         span_from_ruff_range(assert_statement.range()),
                     ),
+                    callee: String::new(),
                     has_top_level_logical_and: matches!(
                         test,
                         Expr::BoolOp(bool_op) if bool_op.op == ruff_python_ast::BoolOp::And
@@ -111,7 +102,7 @@ const fn is_multi_element_collection_expr(expr: &Expr) -> bool {
 #[must_use]
 pub(in crate::code_lint::ast) fn collect_test_function_assertion_counts(
     file: &ParsedFile,
-) -> Vec<(AstNode<'_>, String, usize)> {
+) -> Vec<TestAssertionCount<'_>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
@@ -125,11 +116,11 @@ pub(in crate::code_lint::ast) fn collect_test_function_assertion_counts(
                 &func_def.body,
                 &assertion_helpers,
             );
-            (
-                AstNode::from_span(file, span_from_ruff_range(func_def.name.range)),
-                func_def.name.to_string(),
+            TestAssertionCount {
+                name_node: AstNode::from_span(file, span_from_ruff_range(func_def.name.range)),
+                name: func_def.name.to_string(),
                 count,
-            )
+            }
         })
         .collect()
 }
@@ -138,11 +129,11 @@ pub(in crate::code_lint::ast) fn collect_test_function_assertion_counts(
 #[must_use]
 pub(in crate::code_lint::ast) fn collect_test_logic_constructs(
     file: &ParsedFile,
-) -> Vec<(AstNode<'_>, String, &'static str)> {
+) -> Vec<TestLogicConstruct<'_>> {
     struct TestLogicCollector<'a> {
         file: &'a ParsedFile,
         func_name: &'a str,
-        out: Vec<(AstNode<'a>, String, &'static str)>,
+        out: Vec<TestLogicConstruct<'a>>,
     }
 
     impl<'a> SourceOrderVisitor<'a> for TestLogicCollector<'a> {
@@ -157,11 +148,11 @@ pub(in crate::code_lint::ast) fn collect_test_logic_constructs(
                 _ => None,
             };
             if let Some(description) = construct {
-                self.out.push((
-                    AstNode::from_span(self.file, span_from_ruff_range(statement.range())),
-                    self.func_name.to_string(),
-                    description,
-                ));
+                self.out.push(TestLogicConstruct {
+                    node: AstNode::from_span(self.file, span_from_ruff_range(statement.range())),
+                    test_name: self.func_name.to_string(),
+                    construct: description,
+                });
                 return;
             }
             walk_stmt(self, statement);
@@ -208,11 +199,11 @@ pub(in crate::code_lint::ast) fn collect_test_logic_constructs(
                 _ => None,
             };
             if let Some(description) = construct {
-                self.out.push((
-                    AstNode::from_span(self.file, span_from_ruff_range(expr.range())),
-                    self.func_name.to_string(),
-                    description,
-                ));
+                self.out.push(TestLogicConstruct {
+                    node: AstNode::from_span(self.file, span_from_ruff_range(expr.range())),
+                    test_name: self.func_name.to_string(),
+                    construct: description,
+                });
                 return;
             }
             walk_expr(self, expr);
@@ -240,7 +231,7 @@ pub(in crate::code_lint::ast) fn collect_test_logic_constructs(
 #[must_use]
 pub(in crate::code_lint::ast) fn collect_multi_phase_test_functions(
     file: &ParsedFile,
-) -> Vec<(AstNode<'_>, String)> {
+) -> Vec<MultiPhaseTest<'_>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
@@ -249,24 +240,20 @@ pub(in crate::code_lint::ast) fn collect_multi_phase_test_functions(
     collect_outer_python_test_functions(module_body)
         .into_iter()
         .filter(|func_def| is_multi_phase_python_test_body(&func_def.body, &assertion_helpers))
-        .map(|func_def| {
-            (
-                AstNode::from_span(file, span_from_ruff_range(func_def.name.range)),
-                func_def.name.to_string(),
-            )
+        .map(|func_def| MultiPhaseTest {
+            name_node: AstNode::from_span(file, span_from_ruff_range(func_def.name.range)),
+            name: func_def.name.to_string(),
         })
         .collect()
 }
 
 /// Returns true if `body` interleaves a non-assertion statement between two behavioral assertions.
 fn is_multi_phase_python_test_body(body: &[Stmt], assertion_helpers: &HashSet<String>) -> bool {
-    let mut seen_assertion = false;
-    let mut seen_action_after_assertion = false;
-    for statement in body {
+    has_multi_phase_interleaving(body.iter().map(|statement| {
         if let Stmt::Assert(assert_statement) = statement
             && is_narrowing_guard_assert(assert_statement, body)
         {
-            continue;
+            return TestStatementRole::InspectionOrGuard;
         }
         if count_python_assertions_in_slice(
             std::slice::from_ref(statement),
@@ -274,15 +261,13 @@ fn is_multi_phase_python_test_body(body: &[Stmt], assertion_helpers: &HashSet<St
             assertion_helpers,
         ) > 0
         {
-            if seen_action_after_assertion {
-                return true;
-            }
-            seen_assertion = true;
-        } else if seen_assertion && !is_python_inspection_binding(statement) {
-            seen_action_after_assertion = true;
+            TestStatementRole::Assertion
+        } else if is_python_inspection_binding(statement) {
+            TestStatementRole::InspectionOrGuard
+        } else {
+            TestStatementRole::Action
         }
-    }
-    false
+    }))
 }
 
 /// Returns true if `statement` binds local names to a call-free projection of existing values or
@@ -323,7 +308,7 @@ fn is_python_inspection_expr(expr: &Expr) -> bool {
         Expr::Attribute(attr) => is_python_inspection_expr(&attr.value),
         Expr::Subscript(subscript) => {
             is_python_inspection_expr(&subscript.value)
-                && !python_expr_contains_call(&subscript.slice)
+                && !super::expr_contains_call(&subscript.slice)
         }
         Expr::Tuple(tuple) => {
             !tuple.elts.is_empty() && tuple.elts.iter().all(is_python_inspection_expr)
@@ -334,29 +319,6 @@ fn is_python_inspection_expr(expr: &Expr) -> bool {
         Expr::Call(call) => is_pytest_readouterr_call(call),
         _ => false,
     }
-}
-
-fn python_expr_contains_call(expr: &Expr) -> bool {
-    struct CallFinder {
-        found: bool,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for CallFinder {
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if self.found {
-                return;
-            }
-            if matches!(expr, Expr::Call(_)) {
-                self.found = true;
-                return;
-            }
-            walk_expr(self, expr);
-        }
-    }
-
-    let mut finder = CallFinder { found: false };
-    finder.visit_expr(expr);
-    finder.found
 }
 
 fn is_pytest_readouterr_call(call: &ruff_python_ast::ExprCall) -> bool {
@@ -642,28 +604,16 @@ fn collect_outer_python_test_functions(body: &[Stmt]) -> Vec<&StmtFunctionDef> {
 /// or returning `None` while executing at least one behavioral assertion transitively).
 fn collect_python_assertion_helpers(module_body: &[Stmt]) -> HashSet<String> {
     let candidates = collect_non_test_python_functions(module_body);
-    let mut helpers = HashSet::new();
-    loop {
-        let mut added = false;
-        for func_def in &candidates {
-            let name = func_def.name.as_str();
-            if helpers.contains(name) {
-                continue;
-            }
-            let is_assertion_helper = python_body_has_exception_assertion(&func_def.body)
+    resolve_assertion_helpers(
+        &candidates,
+        |func_def| func_def.name.as_str(),
+        |func_def, helpers| {
+            python_body_has_exception_assertion(&func_def.body)
                 || (is_unit_python_function(func_def)
-                    && count_python_assertions_in_slice(&func_def.body, &func_def.body, &helpers)
-                        > 0);
-            if is_assertion_helper {
-                helpers.insert(name.to_owned());
-                added = true;
-            }
-        }
-        if !added {
-            break;
-        }
-    }
-    helpers
+                    && count_python_assertions_in_slice(&func_def.body, &func_def.body, helpers)
+                        > 0)
+        },
+    )
 }
 
 /// Collects all non-test `StmtFunctionDef` nodes in `body` (including methods and nested helpers).

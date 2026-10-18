@@ -55,10 +55,10 @@ pub use self::returns::PythonBodyResults;
 pub(super) use self::returns::collect_function_returns;
 pub(super) use self::scopes::collect_bindings;
 pub(super) use self::strings::find_unwrapped_multiline_strings;
-pub use self::test_analysis::{PythonAssert, collect_assert_statements};
 pub(super) use self::test_analysis::{
-    collect_multi_phase_test_functions, collect_test_function_assertion_counts,
-    collect_test_logic_constructs, collect_test_setup_scopes, collect_test_to_test_calls,
+    collect_assertion_checks, collect_multi_phase_test_functions,
+    collect_test_function_assertion_counts, collect_test_logic_constructs,
+    collect_test_setup_scopes, collect_test_to_test_calls,
 };
 
 use self::annotations::{has_final_annotation_expr, is_bare_final_annotation_expr};
@@ -506,6 +506,30 @@ const MUTATING_METHODS: &[&str] = &[
     "difference_update",
     "symmetric_difference_update",
 ];
+
+/// Returns true if `expr` contains any call expression (`Expr::Call`).
+pub(super) fn expr_contains_call(expr: &Expr) -> bool {
+    struct CallDetector {
+        found: bool,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for CallDetector {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if self.found {
+                return;
+            }
+            if matches!(expr, Expr::Call(_)) {
+                self.found = true;
+                return;
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut detector = CallDetector { found: false };
+    detector.visit_expr(expr);
+    detector.found
+}
 
 /// If `expr` mutates a collection receiver in place (`receiver.append(...)`, `receiver[k] = v`,
 /// `del receiver[k]`), returns that `receiver` expression.

@@ -171,31 +171,7 @@ fn is_stable_receiver_expr(receiver: &Expr) -> bool {
     matches!(
         receiver,
         Expr::Name(_) | Expr::Attribute(_) | Expr::Subscript(_)
-    ) && !expr_contains_call(receiver)
-}
-
-/// Returns true if `expr` contains any call expression (`Expr::Call`).
-fn expr_contains_call(expr: &Expr) -> bool {
-    struct CallDetector {
-        found: bool,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for CallDetector {
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if self.found {
-                return;
-            }
-            if matches!(expr, Expr::Call(_)) {
-                self.found = true;
-                return;
-            }
-            walk_expr(self, expr);
-        }
-    }
-
-    let mut detector = CallDetector { found: false };
-    detector.visit_expr(expr);
-    detector.found
+    ) && !super::expr_contains_call(receiver)
 }
 
 #[cfg(test)]
