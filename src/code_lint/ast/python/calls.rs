@@ -1,8 +1,9 @@
-//! Python call-expression candidate extraction (`ruff_python_ast`).
+//! Python call-expression and environment-subscript extraction (`ruff_python_ast`).
 
-use super::EnclosingFunctionTracker;
+use super::find_expr_at_span;
 use crate::code_lint::ast::{
-    CachedCallCandidate, CallSiteContext, ParsedFile, span_from_ruff_range,
+    AstNode, CachedCallCandidate, CallSiteContext, EnclosingFunction, ParsedFile,
+    span_from_ruff_range, with_innermost_function,
 };
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{
@@ -11,6 +12,38 @@ use ruff_python_ast::visitor::source_order::{
 use ruff_python_ast::{ExceptHandler, Expr, Stmt, WithItem};
 use ruff_text_size::Ranged as _;
 use std::sync::Arc;
+
+const ENVIRON_NAME: &str = "environ";
+
+/// A Python subscript reading the `os.environ` (or bare `environ`) mapping.
+pub struct PythonEnvironSubscript<'a> {
+    /// The whole subscript (`os.environ["HOST"]`).
+    pub node: AstNode<'a>,
+    /// The mapping expression being indexed (`os.environ` or `environ`).
+    pub mapping: AstNode<'a>,
+    /// The functions enclosing the subscript, innermost first (see
+    /// [`CallSiteContext::enclosing_functions`](crate::code_lint::ast::CallSiteContext::enclosing_functions)).
+    pub enclosing_functions: Arc<[EnclosingFunction]>,
+}
+
+/// The callee of `call` if it is a `call` node, without the type arguments of a generic
+/// instantiation (`list[str]()` has callee `list`).
+#[must_use]
+pub fn call_callee<'a>(call: &AstNode<'a>) -> Option<AstNode<'a>> {
+    let Expr::Call(call_expr) = find_expr_at_span(call.file.py_module()?.syntax(), call.span())?
+    else {
+        return None;
+    };
+    let callee = if let Expr::Subscript(subscript) = call_expr.func.as_ref() {
+        subscript.value.as_ref()
+    } else {
+        call_expr.func.as_ref()
+    };
+    Some(AstNode::from_span(
+        call.file,
+        span_from_ruff_range(callee.range()),
+    ))
+}
 
 /// Collects all direct call expressions in a Python file using `ruff_python_ast`.
 #[must_use]
@@ -124,6 +157,48 @@ pub(in crate::code_lint::ast) fn collect_call_candidates(
     visitor.out
 }
 
+/// Collects all Python subscript expressions indexing into `os.environ` or `environ`.
+#[must_use]
+pub fn collect_environ_subscripts(file: &ParsedFile) -> Vec<PythonEnvironSubscript<'_>> {
+    struct EnvironSubscriptCollector<'a> {
+        file: &'a ParsedFile,
+        enclosing_functions: EnclosingFunctionTracker,
+        out: Vec<PythonEnvironSubscript<'a>>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for EnvironSubscriptCollector<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            let outer_functions = self.enclosing_functions.enter(statement);
+            walk_stmt(self, statement);
+            self.enclosing_functions.exit(outer_functions);
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Subscript(sub) = expr
+                && is_environ_mapping_expr(&sub.value)
+            {
+                self.out.push(PythonEnvironSubscript {
+                    node: AstNode::from_span(self.file, span_from_ruff_range(sub.range())),
+                    mapping: AstNode::from_span(self.file, span_from_ruff_range(sub.value.range())),
+                    enclosing_functions: Arc::clone(&self.enclosing_functions.functions),
+                });
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut collector = EnvironSubscriptCollector {
+        file,
+        enclosing_functions: EnclosingFunctionTracker::default(),
+        out: Vec::new(),
+    };
+    collector.visit_body(&parsed.syntax().body);
+    collector.out
+}
+
 /// Builds a [`CachedCallCandidate`] for a Python call expression.
 fn build_python_call_candidate(
     source: &str,
@@ -165,6 +240,72 @@ fn build_python_call_candidate(
         argument_spans,
         context,
     }
+}
+
+/// Returns true if `value` is Python's `os.environ` or bare `environ`.
+fn is_environ_mapping_expr(value: &Expr) -> bool {
+    match value {
+        Expr::Name(name) => name.id.as_str() == ENVIRON_NAME,
+        Expr::Attribute(attr) => {
+            attr.attr.as_str() == ENVIRON_NAME
+                && matches!(attr.value.as_ref(), Expr::Name(obj) if obj.id.as_str() == "os")
+        }
+        _ => false,
+    }
+}
+
+/// Tracks the functions enclosing the statement visited by a source-order walk.
+#[derive(Default)]
+struct EnclosingFunctionTracker {
+    /// Number of statements enclosing the visited statement.
+    depth: usize,
+    /// Name of the top-level `class` statement being entered, when visiting its direct body.
+    enclosing_class: Option<String>,
+    /// The enclosing functions, innermost first.
+    functions: Arc<[EnclosingFunction]>,
+}
+
+impl EnclosingFunctionTracker {
+    /// Enters `statement`, which encloses everything visited until the matching [`Self::exit`].
+    /// Returns the outer state to pass to [`Self::exit`].
+    fn enter(&mut self, statement: &Stmt) -> EnclosingFunctionState {
+        let state = EnclosingFunctionState {
+            functions: Arc::clone(&self.functions),
+            enclosing_class: self.enclosing_class.clone(),
+        };
+        match statement {
+            Stmt::FunctionDef(func_def) => {
+                let function = EnclosingFunction {
+                    name: func_def.name.to_string(),
+                    name_span: span_from_ruff_range(func_def.name.range),
+                    is_top_level: self.depth == 0,
+                    enclosing_class: self.enclosing_class.take(),
+                };
+                self.functions = with_innermost_function(function, &state.functions);
+            }
+            Stmt::ClassDef(class_def) => {
+                self.enclosing_class = (self.depth == 0).then(|| class_def.name.to_string());
+            }
+            _ => {
+                self.enclosing_class = None;
+            }
+        }
+        self.depth += 1;
+        state
+    }
+
+    /// Leaves the statement entered by the [`Self::enter`] call that returned `state`.
+    fn exit(&mut self, state: EnclosingFunctionState) {
+        self.depth -= 1;
+        self.functions = state.functions;
+        self.enclosing_class = state.enclosing_class;
+    }
+}
+
+/// Saved state of an [`EnclosingFunctionTracker`] before entering a statement.
+struct EnclosingFunctionState {
+    functions: Arc<[EnclosingFunction]>,
+    enclosing_class: Option<String>,
 }
 
 #[cfg(test)]

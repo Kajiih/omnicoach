@@ -9,7 +9,9 @@ from .model import (
     MUTABLE_MODULE_CONSTANT,
     NULLABLE_COLLECTION_RETURN,
     PARAMETER_USAGE,
+    PY_LITERALS,
     PYTHON,
+    RETURNS,
     RS_FUNCTIONS,
     Cluster,
     Mutation,
@@ -278,7 +280,7 @@ CLUSTER = Cluster(
         # --- Local return-value mutation exemptions (mutable-collection-return) ---
         Mutation(
             label="chained call mutation exempts function in mutable-collection-return",
-            path=PYTHON,
+            path=RETURNS,
             edits=(
                 (
                     "                if let Some(callee_name) = called_terminal_name_expr(receiver, self.source) {\n"
@@ -293,7 +295,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="assigned variable mutation exempts function in mutable-collection-return",
-            path=PYTHON,
+            path=RETURNS,
             edits=(
                 (
                     "                    Stmt::Assign(assign) => {\n"
@@ -311,7 +313,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="walrus binding mutation exempts function in mutable-collection-return",
-            path=PYTHON,
+            path=RETURNS,
             edits=(
                 (
                     "                if let Expr::Named(named) = expr {\n"
@@ -488,7 +490,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="class-body assignments not collected by collect_module_assignments",
-            path=PYTHON,
+            path=PY_LITERALS,
             edits=(
                 (
                     "            Stmt::With(with_statement) => {\n"
@@ -506,7 +508,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="function-body assignments not collected by collect_module_assignments",
-            path=PYTHON,
+            path=PY_LITERALS,
             edits=(
                 (
                     "            Stmt::With(with_statement) => {\n"
@@ -524,7 +526,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="attribute target not collected by collect_module_assignments",
-            path=PYTHON,
+            path=PY_LITERALS,
             edits=(
                 (
                     "            Stmt::AnnAssign(ann) => {\n"
@@ -548,7 +550,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="unpacking target not collected by collect_module_assignments",
-            path=PYTHON,
+            path=PY_LITERALS,
             edits=(
                 (
                     "            Stmt::Assign(assign) => {\n"
@@ -612,7 +614,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="PEP 695 type statement not collected by collect_module_assignments",
-            path=PYTHON,
+            path=PY_LITERALS,
             edits=(
                 (
                     "            Stmt::With(with_statement) => {\n"

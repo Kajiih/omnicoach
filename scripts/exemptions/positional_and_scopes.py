@@ -9,7 +9,7 @@ from .model import (
     FUNCTIONS,
     IDENTICAL_POSITIONAL_TYPES,
     POSITIONAL_READS,
-    PYTHON,
+    PY_CALLS,
     REPEATED_INDEX_ACCESS,
     RS_POSITIONAL_READS,
     Cluster,
@@ -186,7 +186,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python subscript on non-environ name exempt from environment-variable-in-function",
-            path=PYTHON,
+            path=PY_CALLS,
             edits=(
                 (
                     "        Expr::Name(name) => name.id.as_str() == ENVIRON_NAME,",
@@ -197,7 +197,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python `.environ` subscript on non-`os` receiver exempt from environment-variable-in-function",
-            path=PYTHON,
+            path=PY_CALLS,
             edits=(
                 (
                     '                && matches!(attr.value.as_ref(), Expr::Name(obj) if obj.id.as_str() == "os")',

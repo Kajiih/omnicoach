@@ -7,7 +7,6 @@ from .model import (
     CALL_CLUSTERS,
     INLINE_TEST_ALWAYS_FALSE,
     PY_DECL_ORDER,
-    PYTHON,
     RS_DECL_ORDER,
     Cluster,
     Mutation,
@@ -251,7 +250,7 @@ MUTATIONS = (
     ),
     Mutation(
         "reversed main guard comparison",
-        PYTHON,
+        PY_DECL_ORDER,
         (
             (
                 "        || (is_dunder_main_literal(left) && is_dunder_name_expr(right))",
@@ -262,13 +261,13 @@ MUTATIONS = (
     ),
     Mutation(
         "non-guard comparisons on __name__",
-        PYTHON,
+        PY_DECL_ORDER,
         (("[ruff_python_ast::CmpOp::Eq]", "[_]"),),
         (MAIN_GUARD + "pass::non_main_name_comparisons_exempt",),
     ),
     Mutation(
         "subsequent main guards",
-        PYTHON,
+        PY_DECL_ORDER,
         ((".filter(|statement| !is_main_guard_statement(statement))", ""),),
         (MAIN_GUARD + "pass::subsequent_main_guard_exempt",),
     ),

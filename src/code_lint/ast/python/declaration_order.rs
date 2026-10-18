@@ -10,6 +10,7 @@ use crate::code_lint::ast::{
 };
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtClassDef, StmtFunctionDef};
+use ruff_text_size::Ranged as _;
 use std::collections::{HashMap, HashSet};
 
 const PYTHON_CONSTRUCTOR_NAMES: &[&str] = &[
@@ -21,6 +22,14 @@ const PYTHON_CONSTRUCTOR_NAMES: &[&str] = &[
     "__attrs_pre_init__",
     "__attrs_post_init__",
 ];
+
+/// A top-level Python statement appearing after the `if __name__ == "__main__":` guard block.
+pub struct PythonStatementAfterMainGuard<'a> {
+    /// AST node of the trailing statement.
+    pub node: AstNode<'a>,
+    /// 1-based starting line of the `if __name__ == "__main__":` guard block.
+    pub guard_line: usize,
+}
 
 /// Collects all module and `class` [`DeclarationScope`]s in a Python `file`.
 #[must_use]
@@ -121,6 +130,31 @@ pub(in crate::code_lint::ast) fn collect_members_after_methods(
     };
     visitor.visit_body(&parsed.syntax().body);
     visitor.out
+}
+
+/// Collects top-level module statements that appear after an `if __name__ == "__main__":`
+/// guard block.
+#[must_use]
+pub fn collect_statements_after_main_guard(
+    file: &ParsedFile,
+) -> Vec<PythonStatementAfterMainGuard<'_>> {
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let body = &parsed.syntax().body;
+    let Some(guard_index) = body.iter().position(is_main_guard_statement) else {
+        return Vec::new();
+    };
+    let guard_line =
+        AstNode::from_span(file, span_from_ruff_range(body[guard_index].range())).start_line();
+    body[guard_index + 1..]
+        .iter()
+        .filter(|statement| !is_main_guard_statement(statement))
+        .map(|statement| PythonStatementAfterMainGuard {
+            node: AstNode::from_span(file, span_from_ruff_range(statement.range())),
+            guard_line,
+        })
+        .collect()
 }
 
 /// Returns true if `module_body` contains `from __future__ import annotations`.
@@ -798,11 +832,35 @@ fn python_method_visibility(name: &str) -> MethodVisibility {
     }
 }
 
+/// Returns true if `statement` is `if __name__ == "__main__":` or `if "__main__" == __name__:`.
+fn is_main_guard_statement(statement: &Stmt) -> bool {
+    let Stmt::If(if_statement) = statement else {
+        return false;
+    };
+    let Expr::Compare(compare) = if_statement.test.as_ref() else {
+        return false;
+    };
+    let ([ruff_python_ast::CmpOp::Eq], [left, right]) = (&*compare.ops, &*compare.operands) else {
+        return false;
+    };
+    (is_dunder_name_expr(left) && is_dunder_main_literal(right))
+        || (is_dunder_main_literal(left) && is_dunder_name_expr(right))
+}
+
+/// Returns true if `expr` is the identifier `__name__`.
+fn is_dunder_name_expr(expr: &Expr) -> bool {
+    matches!(expr, Expr::Name(name) if name.id.as_str() == "__name__")
+}
+
+/// Returns true if `expr` is a string literal with value `"__main__"`.
+fn is_dunder_main_literal(expr: &Expr) -> bool {
+    matches!(expr, Expr::StringLiteral(literal) if literal.value.to_str() == "__main__")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::code_lint::ast::collect_type_method_scopes;
-    use crate::code_lint::ast::python::collect_statements_after_main_guard;
     use crate::diagnostic::Language;
 
     #[test]

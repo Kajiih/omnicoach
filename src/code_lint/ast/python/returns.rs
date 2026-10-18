@@ -5,9 +5,12 @@
 
 use super::annotations::{PythonReturnTypeUnion, positional_tuple_return_arity, return_type_union};
 use super::functions::{PythonFunctionSignature, extract_function_signatures};
+use super::{in_place_mutated_receiver_expr, resolve_path_and_terminal_expr};
 use crate::code_lint::ast::{FunctionReturn, ParsedFile, ReturnShape};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt};
+use ruff_text_size::Ranged as _;
+use std::collections::{HashMap, HashSet};
 
 /// What a function's own body returns or yields, nested functions, classes and lambdas excluded.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -101,6 +104,115 @@ pub(super) fn collect_body_results(body: &[Stmt]) -> PythonBodyResults {
     collector.results
 }
 
+/// Collects function or method names whose return values are mutated in place in `file`.
+///
+/// Matches direct call mutations (`fn().append(...)`, `fn()[0] = 1`) and local bindings
+/// (`buf = fn(); buf.append(...)`, `(buf := fn())`). A binding only counts in the function
+/// (or module) scope that assigns it. Callees are matched by name only, so a mutated
+/// `obj.get()` result also exempts an unrelated function named `get`.
+#[must_use]
+pub fn collect_locally_mutated_return_functions(file: &ParsedFile) -> &HashSet<String> {
+    file.locally_mutated_return_functions.get_or_init(|| {
+        // A binding is keyed by its enclosing function (`None` at module level) and its name.
+        type ScopedName = (Option<usize>, String);
+
+        struct MutatedReturnVisitor<'a> {
+            source: &'a str,
+            enclosing_function: Option<usize>,
+            mutated_functions: HashSet<String>,
+            bindings_to_callee: HashMap<ScopedName, String>,
+            mutated_identifiers: HashSet<ScopedName>,
+        }
+
+        impl MutatedReturnVisitor<'_> {
+            fn record_binding(&mut self, target: &Expr, value: &Expr) {
+                if let Expr::Name(name) = target
+                    && let Some(callee_name) = called_terminal_name_expr(value, self.source)
+                {
+                    let scoped_name = (self.enclosing_function, name.id.to_string());
+                    self.bindings_to_callee.insert(scoped_name, callee_name);
+                }
+            }
+
+            fn record_mutated_receiver(&mut self, receiver: &Expr) {
+                if let Some(callee_name) = called_terminal_name_expr(receiver, self.source) {
+                    self.mutated_functions.insert(callee_name);
+                } else if let Expr::Name(name) = receiver {
+                    self.mutated_identifiers
+                        .insert((self.enclosing_function, name.id.to_string()));
+                }
+            }
+        }
+
+        impl<'a> SourceOrderVisitor<'a> for MutatedReturnVisitor<'a> {
+            fn visit_stmt(&mut self, statement: &'a Stmt) {
+                match statement {
+                    Stmt::FunctionDef(func) => {
+                        for dec in &func.decorator_list {
+                            self.visit_decorator(dec);
+                        }
+                        self.visit_parameters(&func.parameters);
+                        if let Some(returns) = &func.returns {
+                            self.visit_annotation(returns);
+                        }
+                        let prev_func = self.enclosing_function;
+                        self.enclosing_function = Some(func.range().start().to_usize());
+                        self.visit_body(&func.body);
+                        self.enclosing_function = prev_func;
+                    }
+                    Stmt::Assign(assign) => {
+                        if let [target] = assign.targets.as_slice() {
+                            self.record_binding(target, &assign.value);
+                        }
+                        walk_stmt(self, statement);
+                    }
+                    Stmt::AnnAssign(ann) => {
+                        if let Some(value) = &ann.value {
+                            self.record_binding(&ann.target, value);
+                        }
+                        walk_stmt(self, statement);
+                    }
+                    Stmt::AugAssign(aug) => {
+                        self.record_mutated_receiver(&aug.target);
+                        walk_stmt(self, statement);
+                    }
+                    _ => walk_stmt(self, statement),
+                }
+            }
+
+            fn visit_expr(&mut self, expr: &'a Expr) {
+                if let Expr::Named(named) = expr {
+                    self.record_binding(&named.target, &named.value);
+                }
+                if let Some(receiver) = in_place_mutated_receiver_expr(expr) {
+                    self.record_mutated_receiver(receiver);
+                }
+                walk_expr(self, expr);
+            }
+        }
+
+        let Some(parsed) = file.py_module() else {
+            return HashSet::new();
+        };
+        let mut visitor = MutatedReturnVisitor {
+            source: &file.source,
+            enclosing_function: None,
+            mutated_functions: HashSet::new(),
+            bindings_to_callee: HashMap::new(),
+            mutated_identifiers: HashSet::new(),
+        };
+        visitor.visit_body(&parsed.syntax().body);
+
+        for scoped_name in &visitor.mutated_identifiers {
+            if let Some(callee_name) = visitor.bindings_to_callee.get(scoped_name) {
+                visitor.mutated_functions.insert(callee_name.clone());
+            }
+        }
+
+        visitor.mutated_functions
+    })
+}
+
 /// Walks a function's own body for [`PythonBodyResults`].
 struct BodyResultCollector {
     results: PythonBodyResults,
@@ -147,6 +259,15 @@ impl<'a> SourceOrderVisitor<'a> for BodyResultCollector {
         }
         walk_expr(self, expr);
     }
+}
+
+/// Extracts the terminal function/method name if `expr` is a `call` expression.
+fn called_terminal_name_expr(expr: &Expr, source: &str) -> Option<String> {
+    let Expr::Call(call) = expr else {
+        return None;
+    };
+    let terminal = resolve_path_and_terminal_expr(&call.func, source).terminal;
+    (!terminal.is_empty()).then_some(terminal)
 }
 
 #[cfg(test)]
@@ -204,5 +325,22 @@ mod tests {
         #[case] expected: ReturnShape,
     ) {
         assert_eq!(first_shape(source), expected);
+    }
+
+    #[rstest]
+    #[case::direct_call_mutation("make().append(1)", &["make"])]
+    #[case::assigned_then_mutated("def use():\n    items = make()\n    items.append(1)", &["make"])]
+    #[case::walrus_then_mutated("def use():\n    if (items := make()):\n        items.append(1)", &["make"])]
+    #[case::subscript_write("def use():\n    items = make()\n    items[0] = 1", &["make"])]
+    #[case::read_only_use("def use():\n    items = make()\n    return len(items)", &[])]
+    #[case::binding_in_other_function("def a():\n    items = make()\ndef b():\n    items.append(1)", &[])]
+    fn test_collect_locally_mutated_return_functions(
+        #[case] usage: &str,
+        #[case] expected: &[&str],
+    ) {
+        let source = format!("def make():\n    return []\n{usage}");
+        let file = ParsedFile::new(&source, Language::Python);
+        let expected: HashSet<String> = expected.iter().map(|name| (*name).to_string()).collect();
+        assert_eq!(*collect_locally_mutated_return_functions(&file), expected);
     }
 }
