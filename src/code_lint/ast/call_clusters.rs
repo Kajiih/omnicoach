@@ -64,7 +64,7 @@ pub struct TypeMethodScope<'a> {
 /// Whether a [`ScopeItem`] is a callable (`fn` / `def`) or a type definition (`struct`, `enum`,
 /// `union`, `trait`, `class`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScopeItemKind {
+pub(in crate::code_lint::ast) enum ScopeItemKind {
     /// A function or method definition.
     Callable,
     /// A class, struct, enum, union, or trait definition.
@@ -74,41 +74,62 @@ pub enum ScopeItemKind {
 /// A function, method, or type definition inside a module, Python `class`, or Rust inherent
 /// `impl` scope.
 #[derive(Clone)]
-pub struct ScopeItem<'a> {
+pub(in crate::code_lint::ast) struct ScopeItem<'a> {
     /// Identifier AST node of the declaration.
-    pub name_node: AstNode<'a>,
+    pub(in crate::code_lint::ast) name_node: AstNode<'a>,
     /// Declaration identifier name.
-    pub name: String,
+    pub(in crate::code_lint::ast) name: String,
+    /// 1-based first line of the declaration (including decorators or attributes).
+    pub(in crate::code_lint::ast) start_line: usize,
     /// 1-based last line of the declaration (including contiguous overloads/accessors or inherent
     /// `impl` blocks).
-    pub end_line: usize,
+    pub(in crate::code_lint::ast) end_line: usize,
     /// Whether this item is a callable or a type definition.
-    pub kind: ScopeItemKind,
+    pub(in crate::code_lint::ast) kind: ScopeItemKind,
     /// Visibility tier (`Public` vs. `Private`).
-    pub visibility: MethodVisibility,
+    pub(in crate::code_lint::ast) visibility: MethodVisibility,
     /// True if this callable is a Tier 0 lifecycle constructor.
-    pub is_constructor: bool,
+    pub(in crate::code_lint::ast) is_constructor: bool,
     /// Indices in the enclosing [`DeclarationScope::items`] slice of all sibling items directly
     /// called or referenced by this item (signature + body).
-    pub callees: Vec<usize>,
+    pub(in crate::code_lint::ast) callees: Vec<usize>,
     /// Indices of sibling items referenced in this callable's parameter, generic, decorator, or
     /// `where`-clause signature.
-    pub param_callees: Vec<usize>,
+    pub(in crate::code_lint::ast) param_callees: Vec<usize>,
     /// Indices of sibling items referenced in this callable's return type signature.
-    pub return_callees: Vec<usize>,
+    pub(in crate::code_lint::ast) return_callees: Vec<usize>,
     /// Indices of sibling items referenced in this callable's body (or in a type definition /
     /// its attached `impl` blocks).
-    pub body_callees: Vec<usize>,
+    pub(in crate::code_lint::ast) body_callees: Vec<usize>,
     /// Smallest index in [`DeclarationScope::items`] before which this item must remain due to
     /// top-to-bottom runtime evaluation (e.g. Python import-time or class-definition-time uses).
-    pub pinned_before: Option<usize>,
+    pub(in crate::code_lint::ast) pinned_before: Option<usize>,
+}
+
+/// Which syntactic container a [`DeclarationScope`] covers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::code_lint::ast) enum DeclarationScopeKind {
+    /// Top-level items of a module (or of an inline Rust `mod`).
+    Module,
+    /// Direct methods of a Python `class`.
+    Class {
+        /// The class name.
+        name: String,
+    },
+    /// Direct methods of a Rust inherent `impl`.
+    Impl {
+        /// The self type name.
+        type_name: String,
+    },
 }
 
 /// A module, Python `class`, or Rust inherent `impl` scope with its direct declarations in
 /// source order and their intra-scope reference edges.
-pub struct DeclarationScope<'a> {
+pub(in crate::code_lint::ast) struct DeclarationScope<'a> {
+    /// Which container this scope covers.
+    pub(in crate::code_lint::ast) kind: DeclarationScopeKind,
     /// Direct declarations in source order.
-    pub items: Vec<ScopeItem<'a>>,
+    pub(in crate::code_lint::ast) items: Vec<ScopeItem<'a>>,
 }
 
 /// Splits `declarations` into consecutive segments, starting a new segment whenever `name`
@@ -132,6 +153,23 @@ pub(in crate::code_lint::ast) fn split_at_redefinitions<T>(
         segments.push(current_segment);
     }
     segments
+}
+
+/// Appends `item` to `vec` if it is not already present.
+pub(in crate::code_lint::ast) fn push_unique<T: PartialEq>(vec: &mut Vec<T>, item: T) {
+    if !vec.contains(&item) {
+        vec.push(item);
+    }
+}
+
+/// Appends each element of `items` to `vec` if it is not already present.
+pub(in crate::code_lint::ast) fn extend_unique<T: PartialEq>(
+    vec: &mut Vec<T>,
+    items: impl IntoIterator<Item = T>,
+) {
+    for item in items {
+        push_unique(vec, item);
+    }
 }
 
 /// A sibling declaration next to which a misplaced item belongs, along with its 1-based boundary
@@ -162,6 +200,20 @@ impl PlacementAnchor {
             line: end_line,
         }
     }
+}
+
+/// A non-method member (a type-annotated Python class/instance attribute or a Rust associated
+/// `type` / `const` item) declared after a method definition in the same `class`, `impl`, or
+/// `trait` body.
+pub struct MemberAfterMethod<'a> {
+    /// Name of the enclosing Python `class` or Rust `impl` self-type / `trait`.
+    pub container_name: String,
+    /// Member identifier name.
+    pub name: String,
+    /// First method in the enclosing container, directly above which the member belongs.
+    pub first_method: PlacementAnchor,
+    /// Diagnostic target AST node (full `Stmt::AnnAssign` in Python; identifier in Rust).
+    pub node: AstNode<'a>,
 }
 
 /// A misplaced declaration reported by the call-cluster ordering analyzer.
@@ -314,6 +366,7 @@ fn reorder_scope_after<'a>(
             ScopeItem {
                 name_node: item.name_node,
                 name: item.name.clone(),
+                start_line: item.start_line,
                 end_line: item.end_line,
                 kind: item.kind,
                 visibility: item.visibility,
@@ -330,7 +383,10 @@ fn reorder_scope_after<'a>(
         .collect();
 
     ReorderedScope {
-        scope: DeclarationScope { items },
+        scope: DeclarationScope {
+            kind: scope.kind.clone(),
+            items,
+        },
         orig_idx_of,
     }
 }

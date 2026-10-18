@@ -28,11 +28,12 @@ pub mod statements;
 mod test_analysis;
 
 pub(in crate::code_lint::ast) use self::call_clusters::{
-    CachedCallClusterFindings, CachedCallOrderFinding, split_at_redefinitions,
+    CachedCallClusterFindings, CachedCallOrderFinding, DeclarationScope, DeclarationScopeKind,
+    ScopeItem, ScopeItemKind, extend_unique, push_unique, split_at_redefinitions,
 };
 pub use self::call_clusters::{
-    CallClusterFindings, CallOrderFinding, DeclarationScope, MethodVisibility, PlacementAnchor,
-    ScopeItem, ScopeItemKind, TypeMethod, TypeMethodScope,
+    CallClusterFindings, CallOrderFinding, MemberAfterMethod, MethodVisibility, PlacementAnchor,
+    TypeMethod, TypeMethodScope,
 };
 pub use self::test_analysis::{
     AssertionCheck, MultiPhaseTest, TestAssertionCount, TestFunctionSetup, TestLogicConstruct,
@@ -733,11 +734,48 @@ pub fn is_predicate_name(name: &str) -> bool {
             })
 }
 
+/// Collects all module and class/inherent-`impl` [`DeclarationScope`]s in `file`.
+#[must_use]
+pub(in crate::code_lint::ast) fn collect_declaration_scopes(
+    file: &ParsedFile,
+) -> Vec<DeclarationScope<'_>> {
+    dispatch_lang!(file.lang(), collect_declaration_scopes(file))
+}
+
 /// Collects each Python `class` and Rust inherent `impl` block in `file` with its direct methods
 /// in source order.
 #[must_use]
 pub fn collect_type_method_scopes(file: &ParsedFile) -> Vec<TypeMethodScope<'_>> {
-    dispatch_lang!(file.lang(), collect_type_method_scopes(file))
+    collect_declaration_scopes(file)
+        .into_iter()
+        .filter_map(|scope| {
+            let type_name = match scope.kind {
+                DeclarationScopeKind::Class { name }
+                | DeclarationScopeKind::Impl { type_name: name } => name,
+                DeclarationScopeKind::Module => return None,
+            };
+            let methods = scope
+                .items
+                .into_iter()
+                .map(|item| TypeMethod {
+                    name_node: item.name_node,
+                    name: item.name,
+                    start_line: item.start_line,
+                    visibility: item.visibility,
+                    is_constructor: item.is_constructor,
+                })
+                .collect();
+            Some(TypeMethodScope { type_name, methods })
+        })
+        .collect()
+}
+
+/// Collects non-method members (type-annotated Python class/instance attributes or Rust
+/// associated `type` / `const` items) declared after a method in the same `class`, `impl`, or
+/// `trait` body.
+#[must_use]
+pub fn collect_members_after_methods(file: &ParsedFile) -> Vec<MemberAfterMethod<'_>> {
+    dispatch_lang!(file.lang(), collect_members_after_methods(file))
 }
 
 /// Computes and memoizes the declaration-cluster ordering findings (`private-before-public`,
@@ -746,7 +784,7 @@ pub fn collect_type_method_scopes(file: &ParsedFile) -> Vec<TypeMethodScope<'_>>
 #[must_use]
 pub fn collect_call_cluster_findings(file: &ParsedFile) -> CallClusterFindings<'_> {
     let cached = file.call_cluster_findings.get_or_init(|| {
-        let scopes = dispatch_lang!(file.lang(), collect_declaration_scopes(file));
+        let scopes = collect_declaration_scopes(file);
         let mut out = CachedCallClusterFindings::default();
         for scope in &scopes {
             call_clusters::analyze_declaration_scope(scope, &mut out);
@@ -845,7 +883,7 @@ mod tests {
             "},
             Language::Python,
         );
-        let fields = python::collect_fields_after_methods(&field_file);
+        let fields = collect_members_after_methods(&field_file);
         assert_eq!(fields.len(), 1);
         assert_eq!(
             fields[0].first_method,
@@ -921,10 +959,10 @@ mod tests {
             "},
             Language::Rust,
         );
-        let associated_items = rust::collect_associated_items_after_methods(&associated_file);
+        let associated_items = collect_members_after_methods(&associated_file);
         assert_eq!(associated_items.len(), 1);
         assert_eq!(
-            associated_items[0].first_fn,
+            associated_items[0].first_method,
             PlacementAnchor {
                 name: "decode".to_string(),
                 line: 2,

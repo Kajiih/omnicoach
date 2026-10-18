@@ -30,8 +30,9 @@ pub use self::classes::{
     is_fake_class_name, local_ancestors, local_base_classes,
 };
 pub use self::complexity::PythonComplexityMetric;
-pub use self::declaration_order::{PythonFieldAfterMethod, collect_fields_after_methods};
-pub(super) use self::declaration_order::{collect_declaration_scopes, collect_type_method_scopes};
+pub(super) use self::declaration_order::{
+    collect_declaration_scopes, collect_members_after_methods,
+};
 pub use self::docstrings::{
     DocstringEntry, DocstringLine, DocstringSection, DocstringSectionKind, DocstringTypedLine,
     PythonDocstring, is_clause_end, is_clause_start, leading_verb, none_words,

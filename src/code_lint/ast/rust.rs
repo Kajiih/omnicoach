@@ -12,10 +12,9 @@ mod test_analysis;
 
 pub(super) use self::bindings::collect_bindings;
 pub(super) use self::calls::collect_call_candidates;
-pub use self::declaration_order::{
-    RustAssociatedItemAfterMethod, collect_associated_items_after_methods,
+pub(super) use self::declaration_order::{
+    collect_declaration_scopes, collect_members_after_methods,
 };
-pub(super) use self::declaration_order::{collect_declaration_scopes, collect_type_method_scopes};
 pub use self::file_summary::{
     ExternalModDeclaration, RustFileSummary, RustPathReference, VisibleUseDeclaration,
     summarize_rust_file,

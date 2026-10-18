@@ -2,50 +2,15 @@
 
 use super::{SELF_KEYWORD, SELF_TYPE_KEYWORD, previous_non_trivia_token};
 use crate::code_lint::ast::{
-    AstNode, DeclarationScope, MethodVisibility, ParsedFile, PlacementAnchor, ScopeItem,
-    ScopeItemKind, TypeMethod, TypeMethodScope, span_from_rowan_range, split_at_redefinitions,
+    AstNode, DeclarationScope, DeclarationScopeKind, MemberAfterMethod, MethodVisibility,
+    ParsedFile, PlacementAnchor, ScopeItem, ScopeItemKind, TypeMethod, extend_unique, push_unique,
+    span_from_rowan_range, split_at_redefinitions,
 };
 use ra_ap_syntax::ast::{
     self, HasGenericParams as _, HasModuleItem as _, HasName as _, HasVisibility as _,
 };
 use ra_ap_syntax::{AstNode as _, SyntaxKind, SyntaxNode, SyntaxToken};
 use std::collections::{HashMap, HashSet};
-
-/// Collects each Rust inherent `impl` block in `file` with its direct non-test `fn` items in
-/// source order.
-#[must_use]
-pub(in crate::code_lint::ast) fn collect_type_method_scopes(
-    file: &ParsedFile,
-) -> Vec<TypeMethodScope<'_>> {
-    let Some(parsed) = file.rs_parsed() else {
-        return Vec::new();
-    };
-    let mut scopes = Vec::new();
-    for impl_item in parsed
-        .tree()
-        .syntax()
-        .descendants()
-        .filter_map(ast::Impl::cast)
-    {
-        if impl_item.trait_().is_some()
-            || file.is_in_rust_inline_test(impl_item.syntax().text_range().start().into())
-        {
-            continue;
-        }
-        let Some(type_name) = impl_self_type_name(&impl_item, &file.source) else {
-            continue;
-        };
-        let Some(associated_items) = impl_item.assoc_item_list() else {
-            continue;
-        };
-        let methods = collect_rust_impl_methods(&associated_items, &type_name, file)
-            .into_iter()
-            .map(|(method, _)| method)
-            .collect();
-        scopes.push(TypeMethodScope { type_name, methods });
-    }
-    scopes
-}
 
 /// Collects all module and inherent `impl` [`DeclarationScope`]s in a Rust `file`.
 #[must_use]
@@ -87,7 +52,7 @@ fn build_rust_module_declaration_scopes<'a>(
         declarations,
         impl_items,
     } = collect_rust_module_decls(items, file);
-    if declarations.len() < 2 {
+    if declarations.is_empty() {
         return Vec::new();
     }
 
@@ -95,7 +60,7 @@ fn build_rust_module_declaration_scopes<'a>(
     let mut scopes = Vec::new();
 
     for (seg_idx, segment) in segments.iter().enumerate() {
-        if segment.len() < 2 {
+        if segment.is_empty() {
             continue;
         }
         let seg_start = if seg_idx == 0 {
@@ -144,7 +109,10 @@ fn build_rust_module_declaration_scopes<'a>(
             })
             .collect();
 
-        scopes.push(DeclarationScope { items });
+        scopes.push(DeclarationScope {
+            kind: DeclarationScopeKind::Module,
+            items,
+        });
     }
 
     scopes
@@ -186,6 +154,7 @@ fn collect_rust_module_decls<'a>(
                             span_from_rowan_range(name_node.syntax().text_range()),
                         ),
                         name,
+                        start_line: file.line_index.line(syntax_start),
                         visibility,
                         syntax_start,
                         item: RustModuleItem::Fn(function.clone()),
@@ -217,6 +186,7 @@ fn collect_rust_module_decls<'a>(
 struct RustModuleDecl<'a> {
     name_node: AstNode<'a>,
     name: String,
+    start_line: usize,
     visibility: MethodVisibility,
     syntax_start: usize,
     item: RustModuleItem,
@@ -237,6 +207,7 @@ fn rust_type_decl<'a>(
     Some(RustModuleDecl {
         name_node: AstNode::from_span(file, span_from_rowan_range(name_node.syntax().text_range())),
         name,
+        start_line: file.line_index.line(syntax_start),
         visibility: method_visibility,
         syntax_start,
         item: RustModuleItem::Type(type_item.syntax().clone()),
@@ -361,16 +332,13 @@ fn build_rust_module_scope_item<'a>(
             ScopeItemKind::Type
         }
     };
-    for &impl_callee in attached_impl_callees {
-        if !callees.contains(&impl_callee) {
-            callees.push(impl_callee);
-        }
-    }
+    extend_unique(&mut callees, attached_impl_callees.iter().copied());
     if kind == ScopeItemKind::Type {
         body_callees.clone_from(&callees);
     }
     ScopeItem {
         name_node: decl.name_node,
+        start_line: decl.start_line,
         end_line,
         name: decl.name.clone(),
         visibility: decl.visibility,
@@ -480,28 +448,18 @@ fn collect_rust_impl_callees(
         }
         if let Some(self_name) = impl_self_type_name(impl_item, &file.source) {
             if let Some(&self_idx) = item_by_name.get(self_name.as_str()) {
-                for &idx in &callees {
-                    if !attached[self_idx].contains(&idx) {
-                        attached[self_idx].push(idx);
-                    }
-                }
+                extend_unique(&mut attached[self_idx], callees.iter().copied());
             } else {
-                let entry = external.entry(self_name).or_default();
-                for &idx in &callees {
-                    if !entry.contains(&idx) {
-                        entry.push(idx);
-                    }
-                }
+                extend_unique(
+                    external.entry(self_name).or_default(),
+                    callees.iter().copied(),
+                );
             }
         }
         if let Some(trait_name) = impl_trait_name(impl_item)
             && let Some(&trait_idx) = item_by_name.get(trait_name.as_str())
         {
-            for &idx in &callees {
-                if !attached[trait_idx].contains(&idx) {
-                    attached[trait_idx].push(idx);
-                }
-            }
+            extend_unique(&mut attached[trait_idx], callees.iter().copied());
         }
     }
 
@@ -548,16 +506,11 @@ fn collect_rust_module_item_refs(
                 if !local_names.contains(name)
                     && let Some(&idx) = item_by_name.get(name)
                     && (path.parent_path().is_none() || segment_is_type[idx])
-                    && !out.contains(&idx)
                 {
-                    out.push(idx);
+                    push_unique(out, idx);
                 }
                 if let Some(bridged) = impl_callees.get(name) {
-                    for &idx in bridged {
-                        if !out.contains(&idx) {
-                            out.push(idx);
-                        }
-                    }
+                    extend_unique(out, bridged.iter().copied());
                 }
             }
         } else if node.kind() == SyntaxKind::TOKEN_TREE {
@@ -570,11 +523,7 @@ fn collect_rust_module_item_refs(
                 }
                 let name = token.text();
                 if let Some(bridged) = impl_callees.get(name) {
-                    for &idx in bridged {
-                        if !out.contains(&idx) {
-                            out.push(idx);
-                        }
-                    }
+                    extend_unique(out, bridged.iter().copied());
                 }
                 if let Some(&idx) = item_by_name.get(name)
                     && !local_names.contains(name)
@@ -583,8 +532,8 @@ fn collect_rust_module_item_refs(
                         previous_non_trivia_token(&token).is_some_and(|prev| {
                             matches!(prev.kind(), SyntaxKind::DOT | SyntaxKind::COLON2)
                         });
-                    if !preceded_by_dot_or_colon && !out.contains(&idx) {
-                        out.push(idx);
+                    if !preceded_by_dot_or_colon {
+                        push_unique(out, idx);
                     }
                 }
             }
@@ -605,7 +554,7 @@ fn build_rust_impl_declaration_scope<'a>(
     let associated_items = impl_item.assoc_item_list()?;
 
     let methods = collect_rust_impl_methods(&associated_items, &type_name, file);
-    if methods.len() < 2 {
+    if methods.is_empty() {
         return None;
     }
 
@@ -633,6 +582,7 @@ fn build_rust_impl_declaration_scope<'a>(
                     .end_line();
             ScopeItem {
                 name_node: method.name_node,
+                start_line: method.start_line,
                 end_line,
                 name: method.name.clone(),
                 visibility: method.visibility,
@@ -647,7 +597,8 @@ fn build_rust_impl_declaration_scope<'a>(
         })
         .collect();
 
-    Some(DeclarationScope { items })
+    let kind = DeclarationScopeKind::Impl { type_name };
+    Some(DeclarationScope { kind, items })
 }
 
 /// Collects indices of sibling `impl` methods in `method_by_name` called via `self.method()`,
@@ -671,9 +622,8 @@ fn collect_rust_impl_method_refs(
                 .is_some_and(|receiver| receiver.syntax().text() == SELF_KEYWORD)
                 && let Some(name_ref) = method_call.name_ref()
                 && let Some(&idx) = method_by_name.get(name_ref.text().trim())
-                && !out.contains(&idx)
             {
-                out.push(idx);
+                push_unique(out, idx);
             }
         } else if let Some(path_expr) = ast::PathExpr::cast(node.clone())
             && let Some(path) = path_expr.path()
@@ -686,9 +636,8 @@ fn collect_rust_impl_method_refs(
                 && let Some(segment) = path.segment()
                 && let Some(name_ref) = segment.name_ref()
                 && let Some(&idx) = method_by_name.get(name_ref.text().trim())
-                && !out.contains(&idx)
             {
-                out.push(idx);
+                push_unique(out, idx);
             }
         } else if node.kind() == SyntaxKind::TOKEN_TREE {
             for element in node.descendants_with_tokens() {
@@ -709,8 +658,8 @@ fn collect_rust_impl_method_refs(
                         && is_followed_by_open_paren(&token))
                         || (sep.kind() == SyntaxKind::COLON2
                             && (recv.text() == SELF_TYPE_KEYWORD || recv.text() == type_name));
-                    if is_self_call && !out.contains(&idx) {
-                        out.push(idx);
+                    if is_self_call {
+                        push_unique(out, idx);
                     }
                 }
             }
@@ -730,26 +679,84 @@ fn is_followed_by_open_paren(token: &SyntaxToken) -> bool {
         .is_some_and(|next| next.kind() == SyntaxKind::L_PAREN)
 }
 
-/// An associated `type` or `const` item declared after a `fn` item inside a Rust `impl` or
-/// `trait` block.
-pub struct RustAssociatedItemAfterMethod<'a> {
-    /// Name of the enclosing `impl` self-type or `trait`.
-    pub container_name: String,
-    /// Associated item identifier name.
-    pub name: String,
-    /// Identifier AST node of the associated `type` or `const` item.
-    pub name_node: AstNode<'a>,
-    /// First `fn` item in the enclosing `impl` or `trait` block, directly above which the
-    /// associated item belongs.
-    pub first_fn: PlacementAnchor,
+/// Collects direct non-test `fn` items of a Rust inherent `impl` block along with their
+/// [`TypeMethod`] metadata in source order.
+fn collect_rust_impl_methods<'a>(
+    associated_items: &ast::AssocItemList,
+    type_name: &str,
+    file: &'a ParsedFile,
+) -> Vec<(TypeMethod<'a>, ast::Fn)> {
+    let mut methods = Vec::new();
+    for assoc_item in associated_items.assoc_items() {
+        let ast::AssocItem::Fn(function) = assoc_item else {
+            continue;
+        };
+        if file.is_in_rust_inline_test(function.syntax().text_range().start().into()) {
+            continue;
+        }
+        let Some(name_node) = function.name() else {
+            continue;
+        };
+        let name = name_node.text().trim().to_owned();
+        let is_exported = function.visibility().is_some();
+        let visibility = if is_exported {
+            MethodVisibility::Public
+        } else {
+            MethodVisibility::Private
+        };
+        let has_self = function
+            .param_list()
+            .is_some_and(|params| params.self_param().is_some());
+        let is_constructor = is_exported
+            && !has_self
+            && is_rust_constructor_name(&name)
+            && returns_self_type(&function, type_name);
+        let start_line =
+            AstNode::from_span(file, span_from_rowan_range(function.syntax().text_range()))
+                .start_line();
+        methods.push((
+            TypeMethod {
+                name_node: AstNode::from_span(
+                    file,
+                    span_from_rowan_range(name_node.syntax().text_range()),
+                ),
+                start_line,
+                name,
+                visibility,
+                is_constructor,
+            },
+            function,
+        ));
+    }
+    methods
+}
+
+/// Returns true if `name` is a standard Rust constructor identifier (`new`, `try_new`, `new_*`,
+/// or `try_new_*`).
+fn is_rust_constructor_name(name: &str) -> bool {
+    matches!(name, "new" | "try_new") || name.starts_with("new_") || name.starts_with("try_new_")
+}
+
+/// Returns true if `function` has a return type that references `Self` or `type_name`.
+fn returns_self_type(function: &ast::Fn, type_name: &str) -> bool {
+    function.ret_type().is_some_and(|ret_type| {
+        ret_type
+            .syntax()
+            .descendants_with_tokens()
+            .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+            .any(|token| {
+                token.kind() == SyntaxKind::SELF_TYPE_KW
+                    || (token.kind() == SyntaxKind::IDENT && token.text() == type_name)
+            })
+    })
 }
 
 /// Collects associated `type` and `const` items declared after `fn` items inside Rust `impl`
 /// (inherent or trait) and `trait` blocks across `file`.
 #[must_use]
-pub fn collect_associated_items_after_methods(
+pub(in crate::code_lint::ast) fn collect_members_after_methods(
     file: &ParsedFile,
-) -> Vec<RustAssociatedItemAfterMethod<'_>> {
+) -> Vec<MemberAfterMethod<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -786,7 +793,7 @@ fn collect_misplaced_assoc_items<'a>(
     associated_items: &ast::AssocItemList,
     container_name: &str,
     file: &'a ParsedFile,
-    out: &mut Vec<RustAssociatedItemAfterMethod<'a>>,
+    out: &mut Vec<MemberAfterMethod<'a>>,
 ) {
     let mut first_fn: Option<PlacementAnchor> = None;
     for assoc_item in associated_items.assoc_items() {
@@ -812,15 +819,15 @@ fn collect_misplaced_assoc_items<'a>(
             ast::AssocItem::Const(const_item) if first_fn.is_some() => const_item.name(),
             _ => None,
         };
-        if let (Some(name_node), Some(first_fn)) = (misplaced_name, &first_fn) {
-            out.push(RustAssociatedItemAfterMethod {
+        if let (Some(name_node), Some(first_method)) = (misplaced_name, &first_fn) {
+            out.push(MemberAfterMethod {
                 container_name: container_name.to_owned(),
                 name: name_node.text().trim().to_owned(),
-                name_node: AstNode::from_span(
+                first_method: first_method.clone(),
+                node: AstNode::from_span(
                     file,
                     span_from_rowan_range(name_node.syntax().text_range()),
                 ),
-                first_fn: first_fn.clone(),
             });
         }
     }
@@ -905,81 +912,10 @@ fn impl_self_type_name(impl_item: &ast::Impl, source: &str) -> Option<String> {
     Some(source[span.start..span.end].trim().to_owned())
 }
 
-/// Collects direct non-test `fn` items of a Rust inherent `impl` block along with their
-/// [`TypeMethod`] metadata in source order.
-fn collect_rust_impl_methods<'a>(
-    associated_items: &ast::AssocItemList,
-    type_name: &str,
-    file: &'a ParsedFile,
-) -> Vec<(TypeMethod<'a>, ast::Fn)> {
-    let mut methods = Vec::new();
-    for assoc_item in associated_items.assoc_items() {
-        let ast::AssocItem::Fn(function) = assoc_item else {
-            continue;
-        };
-        if file.is_in_rust_inline_test(function.syntax().text_range().start().into()) {
-            continue;
-        }
-        let Some(name_node) = function.name() else {
-            continue;
-        };
-        let name = name_node.text().trim().to_owned();
-        let is_exported = function.visibility().is_some();
-        let visibility = if is_exported {
-            MethodVisibility::Public
-        } else {
-            MethodVisibility::Private
-        };
-        let has_self = function
-            .param_list()
-            .is_some_and(|params| params.self_param().is_some());
-        let is_constructor = is_exported
-            && !has_self
-            && is_rust_constructor_name(&name)
-            && returns_self_type(&function, type_name);
-        let start_line =
-            AstNode::from_span(file, span_from_rowan_range(function.syntax().text_range()))
-                .start_line();
-        methods.push((
-            TypeMethod {
-                name_node: AstNode::from_span(
-                    file,
-                    span_from_rowan_range(name_node.syntax().text_range()),
-                ),
-                start_line,
-                name,
-                visibility,
-                is_constructor,
-            },
-            function,
-        ));
-    }
-    methods
-}
-
-/// Returns true if `name` is a standard Rust constructor identifier (`new`, `try_new`, `new_*`,
-/// or `try_new_*`).
-fn is_rust_constructor_name(name: &str) -> bool {
-    matches!(name, "new" | "try_new") || name.starts_with("new_") || name.starts_with("try_new_")
-}
-
-/// Returns true if `function` has a return type that references `Self` or `type_name`.
-fn returns_self_type(function: &ast::Fn, type_name: &str) -> bool {
-    function.ret_type().is_some_and(|ret_type| {
-        ret_type
-            .syntax()
-            .descendants_with_tokens()
-            .filter_map(ra_ap_syntax::NodeOrToken::into_token)
-            .any(|token| {
-                token.kind() == SyntaxKind::SELF_TYPE_KW
-                    || (token.kind() == SyntaxKind::IDENT && token.text() == type_name)
-            })
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::code_lint::ast::collect_type_method_scopes;
 
     #[test]
     fn test_collect_type_method_scopes_rust() {
@@ -1031,7 +967,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_associated_items_after_methods_rust() {
+    fn test_collect_members_after_methods_rust() {
         let source = indoc::indoc! {r"
             trait Codec {
                 type Input;
@@ -1048,14 +984,14 @@ mod tests {
         "};
         let file = ParsedFile::rust(source);
         let items: Vec<(String, String, String, PlacementAnchor)> =
-            collect_associated_items_after_methods(&file)
+            collect_members_after_methods(&file)
                 .into_iter()
                 .map(|item| {
                     (
                         item.container_name,
                         item.name,
-                        item.name_node.text().into_owned(),
-                        item.first_fn,
+                        item.node.text().into_owned(),
+                        item.first_method,
                     )
                 })
                 .collect();

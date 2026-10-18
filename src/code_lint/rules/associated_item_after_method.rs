@@ -1,7 +1,6 @@
 //! Flags Rust associated `type` and `const` items declared after `fn` items in an `impl` or `trait` block.
 
-use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::ast::rust::collect_associated_items_after_methods;
+use crate::code_lint::ast::{ParsedFile, collect_members_after_methods};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -75,17 +74,17 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    collect_associated_items_after_methods(file)
+    collect_members_after_methods(file)
         .into_iter()
         .map(|item| {
-            let line = item.first_fn.line.to_string();
+            let line = item.first_method.line.to_string();
             rule.diagnostic_at_node(
                 path,
-                &item.name_node,
+                &item.node,
                 &[
                     ("name", &item.name),
                     ("class", &item.container_name),
-                    ("anchor", &item.first_fn.name),
+                    ("anchor", &item.first_method.name),
                     ("line", &line),
                 ],
             )

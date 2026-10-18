@@ -4,8 +4,9 @@ use super::classes::{CLS_RECEIVER, OVERLOAD_DECORATOR_PATHS, SELF_RECEIVER};
 use super::scopes::{collect_local_bound_names, parameters_shadow_name};
 use super::{AstNode, ParsedFile, extract_decorators_from_slice};
 use crate::code_lint::ast::{
-    DeclarationScope, MethodVisibility, PlacementAnchor, ScopeItem, ScopeItemKind, TypeMethod,
-    TypeMethodScope, span_from_ruff_range, split_at_redefinitions,
+    DeclarationScope, DeclarationScopeKind, MemberAfterMethod, MethodVisibility, PlacementAnchor,
+    ScopeItem, ScopeItemKind, extend_unique, push_unique, span_from_ruff_range,
+    split_at_redefinitions,
 };
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtClassDef, StmtFunctionDef};
@@ -20,57 +21,6 @@ const PYTHON_CONSTRUCTOR_NAMES: &[&str] = &[
     "__attrs_pre_init__",
     "__attrs_post_init__",
 ];
-
-/// Collects each Python `class` definition in `file` with its direct methods in source order.
-#[must_use]
-pub(in crate::code_lint::ast) fn collect_type_method_scopes(
-    file: &ParsedFile,
-) -> Vec<TypeMethodScope<'_>> {
-    struct ClassMethodVisitor<'a> {
-        file: &'a ParsedFile,
-        scopes: Vec<TypeMethodScope<'a>>,
-    }
-
-    impl<'a> SourceOrderVisitor<'a> for ClassMethodVisitor<'a> {
-        fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if let Stmt::ClassDef(class_def) = statement {
-                self.scopes.push(TypeMethodScope {
-                    type_name: class_def.name.id.to_string(),
-                    methods: collect_class_methods(class_def, self.file),
-                });
-            }
-            walk_stmt(self, statement);
-        }
-    }
-
-    let Some(parsed) = file.py_module() else {
-        return Vec::new();
-    };
-    let mut visitor = ClassMethodVisitor {
-        file,
-        scopes: Vec::new(),
-    };
-    visitor.visit_body(&parsed.syntax().body);
-    visitor.scopes
-}
-
-/// Collects the direct methods of `class_def` in source order, grouping `@overload` signatures
-/// and `@<prop>.setter` / `@<prop>.deleter` accessors with their first definition.
-fn collect_class_methods<'a>(
-    class_def: &StmtClassDef,
-    file: &'a ParsedFile,
-) -> Vec<TypeMethod<'a>> {
-    group_python_scope_items(&class_def.body, true, file)
-        .into_iter()
-        .map(|callable| TypeMethod {
-            name_node: callable.name_node,
-            name: callable.name,
-            start_line: callable.start_line,
-            visibility: callable.visibility,
-            is_constructor: callable.is_constructor,
-        })
-        .collect()
-}
 
 /// Collects all module and `class` [`DeclarationScope`]s in a Python `file`.
 #[must_use]
@@ -110,26 +60,15 @@ pub(in crate::code_lint::ast) fn collect_declaration_scopes(
     collector.scopes
 }
 
-/// A type-annotated class or instance attribute (`name: Type` or `name: Type = value`) declared
-/// after a method definition in a Python class body.
-pub struct PythonFieldAfterMethod<'a> {
-    /// Name of the enclosing class.
-    pub class_name: String,
-    /// Attribute identifier name.
-    pub name: String,
-    /// First method in the enclosing class body, directly above which the attribute belongs.
-    pub first_method: PlacementAnchor,
-    /// The full `Stmt::AnnAssign` AST node.
-    pub node: AstNode<'a>,
-}
-
 /// Collects type-annotated class-body attribute declarations (`Stmt::AnnAssign` with an
 /// identifier target) that appear after at least one direct method definition in the same class.
 #[must_use]
-pub fn collect_fields_after_methods(file: &ParsedFile) -> Vec<PythonFieldAfterMethod<'_>> {
+pub(in crate::code_lint::ast) fn collect_members_after_methods(
+    file: &ParsedFile,
+) -> Vec<MemberAfterMethod<'_>> {
     struct FieldAfterMethodVisitor<'a> {
         file: &'a ParsedFile,
-        out: Vec<PythonFieldAfterMethod<'a>>,
+        out: Vec<MemberAfterMethod<'a>>,
     }
 
     impl<'a> SourceOrderVisitor<'a> for FieldAfterMethodVisitor<'a> {
@@ -154,8 +93,8 @@ pub fn collect_fields_after_methods(file: &ParsedFile) -> Vec<PythonFieldAfterMe
                             if let Some(first_method) = &first_method
                                 && let Expr::Name(target) = ann.target.as_ref()
                             {
-                                self.out.push(PythonFieldAfterMethod {
-                                    class_name: class_name.clone(),
+                                self.out.push(MemberAfterMethod {
+                                    container_name: class_name.clone(),
                                     name: target.id.to_string(),
                                     first_method: first_method.clone(),
                                     node: AstNode::from_span(
@@ -208,7 +147,7 @@ fn build_module_declaration_scopes<'a>(
     file: &'a ParsedFile,
 ) -> Vec<DeclarationScope<'a>> {
     let grouped = group_python_scope_items(module_body, false, file);
-    if grouped.len() < 2 {
+    if grouped.is_empty() {
         return Vec::new();
     }
 
@@ -216,7 +155,7 @@ fn build_module_declaration_scopes<'a>(
     let mut scopes = Vec::new();
 
     for (seg_idx, segment) in segments.iter().enumerate() {
-        if segment.len() < 2 {
+        if segment.is_empty() {
             continue;
         }
         let seg_start = if seg_idx == 0 {
@@ -262,7 +201,10 @@ fn build_module_declaration_scopes<'a>(
             item.pinned_before = pin;
         }
 
-        scopes.push(DeclarationScope { items });
+        scopes.push(DeclarationScope {
+            kind: DeclarationScopeKind::Module,
+            items,
+        });
     }
 
     scopes
@@ -304,9 +246,8 @@ fn build_class_declaration_scope<'a>(
                     || (recv_name == self.class_name && !self.local_names.contains(recv_name));
                 if is_valid_receiver
                     && let Some(&idx) = self.method_by_name.get(attr.attr.id.as_str())
-                    && !self.callees.contains(&idx)
                 {
-                    self.callees.push(idx);
+                    push_unique(self.callees, idx);
                 }
             }
             walk_expr(self, expr);
@@ -314,7 +255,7 @@ fn build_class_declaration_scope<'a>(
     }
 
     let grouped = group_python_scope_items(&class_def.body, true, file);
-    if grouped.len() < 2 {
+    if grouped.is_empty() {
         return None;
     }
     let method_by_name: HashMap<String, usize> = grouped
@@ -332,23 +273,22 @@ fn build_class_declaration_scope<'a>(
             if let PythonScopeItem::Callable(defs) = &group.item {
                 for def in defs {
                     let local_names = collect_local_bound_names(def, file);
-                    let has_self_param = parameters_shadow_name(&def.parameters, SELF_RECEIVER);
-                    let has_cls_param = parameters_shadow_name(&def.parameters, CLS_RECEIVER);
-                    let mut visitor = ClassMethodCallVisitor {
+                    ClassMethodCallVisitor {
                         class_name,
                         method_by_name: &method_by_name,
                         local_names: &local_names,
-                        has_self_param,
-                        has_cls_param,
+                        has_self_param: parameters_shadow_name(&def.parameters, SELF_RECEIVER),
+                        has_cls_param: parameters_shadow_name(&def.parameters, CLS_RECEIVER),
                         callees: &mut callees,
-                    };
-                    visitor.visit_body(&def.body);
+                    }
+                    .visit_body(&def.body);
                 }
             }
             let body_callees = callees.clone();
             ScopeItem {
                 name_node: group.name_node,
                 name: group.name,
+                start_line: group.start_line,
                 end_line: group.end_line,
                 visibility: group.visibility,
                 is_constructor: group.is_constructor,
@@ -376,7 +316,10 @@ fn build_class_declaration_scope<'a>(
         item.pinned_before = pin;
     }
 
-    Some(DeclarationScope { items })
+    let kind = DeclarationScopeKind::Class {
+        name: class_name.to_owned(),
+    };
+    Some(DeclarationScope { kind, items })
 }
 
 struct GroupedPythonScopeItem<'a, 'ast> {
@@ -464,15 +407,14 @@ fn build_python_module_scope_item<'a>(
                 };
                 body_visitor.visit_body(&def.body);
             }
-            for &idx in param_callees
-                .iter()
-                .chain(&return_callees)
-                .chain(&body_callees)
-            {
-                if !callees.contains(&idx) {
-                    callees.push(idx);
-                }
-            }
+            extend_unique(
+                &mut callees,
+                param_callees
+                    .iter()
+                    .chain(&return_callees)
+                    .chain(&body_callees)
+                    .copied(),
+            );
             ScopeItemKind::Callable
         }
         PythonScopeItem::Type(class_def) => {
@@ -491,6 +433,7 @@ fn build_python_module_scope_item<'a>(
     ScopeItem {
         name_node: group.name_node,
         name: group.name.clone(),
+        start_line: group.start_line,
         end_line: group.end_line,
         visibility: group.visibility,
         is_constructor: group.is_constructor,
@@ -572,17 +515,11 @@ impl SourceOrderVisitor<'_> for ModuleRefVisitor<'_, '_> {
         {
             let ident = name.id.as_str();
             if !self.local_names.contains(ident) {
-                if let Some(&idx) = self.fn_by_name.get(ident)
-                    && !self.callees.contains(&idx)
-                {
-                    self.callees.push(idx);
+                if let Some(&idx) = self.fn_by_name.get(ident) {
+                    push_unique(self.callees, idx);
                 }
                 if let Some(bridged) = self.class_callees.get(ident) {
-                    for &idx in bridged {
-                        if !self.callees.contains(&idx) {
-                            self.callees.push(idx);
-                        }
-                    }
+                    extend_unique(self.callees, bridged.iter().copied());
                 }
             }
         }
@@ -738,9 +675,8 @@ impl SourceOrderVisitor<'_> for ImmediateRefVisitor<'_, '_> {
         if let Expr::Name(name) = expr
             && name.ctx.is_load()
             && let Some(&idx) = self.item_by_name.get(name.id.as_str())
-            && !self.refs.contains(&idx)
         {
-            self.refs.push(idx);
+            push_unique(self.refs, idx);
         }
         walk_expr(self, expr);
     }
@@ -865,6 +801,7 @@ fn python_method_visibility(name: &str) -> MethodVisibility {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::code_lint::ast::collect_type_method_scopes;
     use crate::code_lint::ast::python::collect_statements_after_main_guard;
     use crate::diagnostic::Language;
 
@@ -933,7 +870,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_fields_after_methods_and_statements_after_main_guard() {
+    fn test_collect_members_after_methods_and_statements_after_main_guard() {
         let source = indoc::indoc! {r#"
             class Config:
                 host: str
@@ -951,11 +888,11 @@ mod tests {
         "#};
         let file = ParsedFile::new(source, Language::Python);
         let fields: Vec<(String, String, String, PlacementAnchor)> =
-            collect_fields_after_methods(&file)
+            collect_members_after_methods(&file)
                 .into_iter()
                 .map(|field| {
                     (
-                        field.class_name,
+                        field.container_name,
                         field.name,
                         field.node.text().into_owned(),
                         field.first_method,
