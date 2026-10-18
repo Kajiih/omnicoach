@@ -20,6 +20,8 @@ pub struct CallMatch<'a> {
     pub is_with_context_manager: bool,
     /// See [`ast::AstCallCandidate::is_in_except_clause`].
     pub is_in_except_clause: bool,
+    /// See [`ast::AstCallCandidate::is_in_loop`].
+    pub is_in_loop: bool,
     /// See [`ast::AstCallCandidate::enclosing_functions`].
     pub enclosing_functions: Arc<[EnclosingFunction]>,
 }
@@ -108,6 +110,7 @@ pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
                 arguments: candidate.arguments,
                 is_with_context_manager: candidate.is_with_context_manager,
                 is_in_except_clause: candidate.is_in_except_clause,
+                is_in_loop: candidate.is_in_loop,
                 enclosing_functions: candidate.enclosing_functions,
             });
         }

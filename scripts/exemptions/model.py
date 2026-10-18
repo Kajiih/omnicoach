@@ -27,11 +27,15 @@ BARE_MULTILINE_STRING = "src/code_lint/rules/bare_multiline_string.rs"
 CONCRETE_COLLECTION_ATTRIBUTE = "src/code_lint/rules/concrete_collection_attribute.rs"
 CONCRETE_COLLECTION_PARAMETER = "src/code_lint/rules/concrete_collection_parameter.rs"
 DUPLICATED_TEST_SETUP = "src/code_lint/rules/duplicated_test_setup.rs"
-ENVIRONMENT_VARIABLE_IN_FUNCTION = "src/code_lint/rules/environment_variable_in_function.rs"
+ENVIRONMENT_VARIABLE_IN_FUNCTION = (
+    "src/code_lint/rules/environment_variable_in_function.rs"
+)
 ERROR_LOG_IN_EXCEPT = "src/code_lint/rules/error_log_in_except.rs"
 FAKE_WITHOUT_PROTOCOL = "src/code_lint/rules/fake_without_protocol.rs"
 IDENTICAL_POSITIONAL_TYPES = "src/code_lint/rules/identical_positional_types.rs"
-INLINE_PUBLIC_ATTRIBUTE_ANNOTATION = "src/code_lint/rules/inline_public_attribute_annotation.rs"
+INLINE_PUBLIC_ATTRIBUTE_ANNOTATION = (
+    "src/code_lint/rules/inline_public_attribute_annotation.rs"
+)
 MUTABLE_COLLECTION_ATTRIBUTE = "src/code_lint/rules/mutable_collection_attribute.rs"
 MUTABLE_COLLECTION_PARAMETER = "src/code_lint/rules/mutable_collection_parameter.rs"
 MUTABLE_COLLECTION_RETURN = "src/code_lint/rules/mutable_collection_return.rs"
@@ -48,6 +52,7 @@ SUPPRESSED_EXCEPTION = "src/code_lint/rules/suppressed_exception.rs"
 TOO_MANY_ASSERTIONS = "src/code_lint/rules/too_many_assertions.rs"
 TYPE_SUFFIXED_NAME = "src/code_lint/rules/type_suffixed_name.rs"
 UNMATCHED_LOGGER = "src/code_lint/rules/unmatched_logger_placeholder.rs"
+YIELD_LOOP_IN_TESTS = "src/code_lint/rules/yield_loop_in_tests.rs"
 
 INLINE_TEST_ALWAYS_FALSE = (
     (

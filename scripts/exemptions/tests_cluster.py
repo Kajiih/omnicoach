@@ -1,10 +1,11 @@
 """Exemption mutations for Batch 5: Tests (`packed-assertion`, `too-many-assertions`,
-`sleep-in-tests`, `zero-sleep-in-tests`, `mock-in-tests`, `mock-call-assertion`,
-`fake-without-protocol`)."""
+`sleep-in-tests`, `zero-sleep-in-tests`, `yield-loop-in-tests`, `mock-in-tests`,
+`mock-call-assertion`, `fake-without-protocol`)."""
 
 from __future__ import annotations
 
 from .model import (
+    AST,
     CALLS,
     CLASSES,
     DUPLICATED_TEST_SETUP,
@@ -13,6 +14,7 @@ from .model import (
     RUST,
     SLEEP_IN_TESTS,
     TOO_MANY_ASSERTIONS,
+    YIELD_LOOP_IN_TESTS,
     Cluster,
     Mutation,
     Unmutated,
@@ -27,6 +29,7 @@ CLUSTER = Cluster(
         "duplicated_test_setup",
         "sleep_in_tests",
         "zero_sleep_in_tests",
+        "yield_loop_in_tests",
         "mock_in_tests",
         "mock_call_assertion",
         "fake_without_protocol",
@@ -678,6 +681,132 @@ CLUSTER = Cluster(
                 ),
             ),
             cases=("zero_sleep_in_tests::pass::multi_arg_sleep",),
+        ),
+        # --- yield-loop-in-tests ---
+        Mutation(
+            label="yield outside a loop excluded from yield-loop-in-tests",
+            path=YIELD_LOOP_IN_TESTS,
+            edits=(
+                (
+                    "    rule.check_banned_calls_where(path, file, banned, |call_match| call_match.is_in_loop)",
+                    "    rule.check_banned_calls_where(path, file, banned, |_| true)",
+                ),
+            ),
+            cases=(
+                "yield_loop_in_tests::pass::single_checkpoint_outside_loop",
+                "yield_loop_in_tests::pass::single_yield_now_outside_loop",
+            ),
+        ),
+        Mutation(
+            label="Python for-loop iterator expression exempt from yield-loop-in-tests",
+            path=AST,
+            edits=(
+                (
+                    "                    self.visit_expr(&for_stmt.iter);\n"
+                    "                    self.in_loop = true;",
+                    "                    self.in_loop = true;\n"
+                    "                    self.visit_expr(&for_stmt.iter);",
+                ),
+            ),
+            cases=("yield_loop_in_tests::pass::for_loop_iter_expression_exempt",),
+        ),
+        Mutation(
+            label="Python for-loop else clause exempt from yield-loop-in-tests",
+            path=AST,
+            edits=(
+                (
+                    "                    self.visit_body(&for_stmt.body);\n"
+                    "                    self.in_loop = enclosing_loop;\n"
+                    "                    self.visit_body(&for_stmt.orelse);",
+                    "                    self.visit_body(&for_stmt.body);\n"
+                    "                    self.visit_body(&for_stmt.orelse);",
+                ),
+            ),
+            cases=("yield_loop_in_tests::pass::for_loop_else_clause_exempt",),
+        ),
+        Mutation(
+            label="Python while-loop else clause exempt from yield-loop-in-tests",
+            path=AST,
+            edits=(
+                (
+                    "                    self.visit_body(&while_stmt.body);\n"
+                    "                    self.in_loop = enclosing_loop;\n"
+                    "                    self.visit_body(&while_stmt.orelse);",
+                    "                    self.visit_body(&while_stmt.body);\n"
+                    "                    self.visit_body(&while_stmt.orelse);",
+                ),
+            ),
+            cases=("yield_loop_in_tests::pass::while_loop_else_clause_exempt",),
+        ),
+        Mutation(
+            label="Python nested function inside loop exempt from yield-loop-in-tests",
+            path=AST,
+            edits=(
+                (
+                    "            if matches!(statement, Stmt::FunctionDef(_)) {\n"
+                    "                self.in_loop = false;\n"
+                    "            }",
+                    "",
+                ),
+            ),
+            cases=(
+                "yield_loop_in_tests::pass::nested_function_inside_loop_exempt@python",
+            ),
+        ),
+        Mutation(
+            label="Python lambda inside loop exempt from yield-loop-in-tests",
+            path=AST,
+            edits=(
+                (
+                    "                Expr::Lambda(_) => {\n"
+                    "                    self.in_except_clause = false;\n"
+                    "                    self.in_loop = false;\n"
+                    "                }",
+                    "                Expr::Lambda(_) => {\n"
+                    "                    self.in_except_clause = false;\n"
+                    "                }",
+                ),
+            ),
+            cases=("yield_loop_in_tests::pass::lambda_inside_loop_exempt",),
+        ),
+        Mutation(
+            label="Rust for-loop iterable expression exempt from yield-loop-in-tests",
+            path=AST,
+            edits=(
+                (
+                    "        if let Some(for_expr) = ast::ForExpr::cast(ancestor)\n"
+                    "            && for_expr\n"
+                    "                .loop_body()\n"
+                    "                .is_some_and(|body| body.syntax().text_range().contains_range(range))\n"
+                    "        {",
+                    "        if ast::ForExpr::can_cast(ancestor.kind()) {",
+                ),
+            ),
+            cases=("yield_loop_in_tests::pass::for_loop_iterable_expression_exempt",),
+        ),
+        Mutation(
+            label="Rust nested function inside loop exempt from yield-loop-in-tests",
+            path=AST,
+            edits=(
+                (
+                    "        if ast::Fn::can_cast(ancestor.kind()) || ast::ClosureExpr::can_cast(ancestor.kind()) {",
+                    "        if ast::ClosureExpr::can_cast(ancestor.kind()) {",
+                ),
+            ),
+            cases=(
+                "yield_loop_in_tests::pass::nested_function_inside_loop_exempt@rust",
+            ),
+        ),
+        Mutation(
+            label="Rust closure inside loop exempt from yield-loop-in-tests",
+            path=AST,
+            edits=(
+                (
+                    "        if ast::Fn::can_cast(ancestor.kind()) || ast::ClosureExpr::can_cast(ancestor.kind()) {",
+                    "        if ast::Fn::can_cast(ancestor.kind()) {",
+                ),
+            ),
+            cases=("yield_loop_in_tests::pass::closure_inside_loop_exempt",),
         ),
         # --- semantic/calls.rs (sleep-in-tests, mock-in-tests, mock-call-assertion) ---
         Mutation(

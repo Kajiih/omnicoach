@@ -84,7 +84,9 @@ CLUSTER = Cluster(
                     "        } else if let Some((_, method_name)) = trimmed.split_once('.') {",
                 ),
             ),
-            cases=("error_log_in_except::pass::logger_instance_error_not_in_banned_calls",),
+            cases=(
+                "error_log_in_except::pass::logger_instance_error_not_in_banned_calls",
+            ),
         ),
         # --- mutable-dataclass & unslotted-dataclass ---
         Mutation(
@@ -224,12 +226,24 @@ CLUSTER = Cluster(
                     "",
                 ),
             ),
-            cases=("error_log_in_except::pass::logging_error_in_nested_function_inside_except",),
+            cases=(
+                "error_log_in_except::pass::logging_error_in_nested_function_inside_except",
+            ),
         ),
         Mutation(
             label="lambda expression inside `except` resets `in_except_clause`",
             path=AST,
-            edits=(("                Expr::Lambda(_) => self.in_except_clause = false,\n", ""),),
+            edits=(
+                (
+                    "                Expr::Lambda(_) => {\n"
+                    "                    self.in_except_clause = false;\n"
+                    "                    self.in_loop = false;\n"
+                    "                }",
+                    "                Expr::Lambda(_) => {\n"
+                    "                    self.in_loop = false;\n"
+                    "                }",
+                ),
+            ),
             cases=("error_log_in_except::pass::logging_error_in_lambda_inside_except",),
         ),
     ),

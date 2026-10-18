@@ -62,12 +62,14 @@ pub mod unmatched_logger_placeholder;
 pub mod unslotted_dataclass;
 pub mod unstructured_task;
 pub mod verb_led_returns_section;
+pub mod yield_loop_in_tests;
 
 /// Every registered code rule.
 pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &unstructured_task::RULE,
     &sleep_in_tests::SLEEP_IN_TESTS,
     &sleep_in_tests::ZERO_SLEEP_IN_TESTS,
+    &yield_loop_in_tests::RULE,
     &too_many_assertions::RULE,
     &packed_assertion::RULE,
     &logic_in_tests::RULE,

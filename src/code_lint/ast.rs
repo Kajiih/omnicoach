@@ -72,6 +72,7 @@ pub(in crate::code_lint::ast) struct CachedCallCandidate {
     argument_spans: Vec<SourceSpan>,
     is_with_context_manager: bool,
     is_in_except_clause: bool,
+    is_in_loop: bool,
     enclosing_functions: Arc<[EnclosingFunction]>,
 }
 
@@ -365,6 +366,9 @@ pub struct AstCallCandidate<'a> {
     /// True if the call is inside a Python `except` handler without an intervening `def`,
     /// `class`, or `lambda` boundary. Always false in Rust.
     pub is_in_except_clause: bool,
+    /// True if the call is inside the condition or body of a `for`, `while`, or `loop`
+    /// statement without an intervening function, lambda, or closure boundary.
+    pub is_in_loop: bool,
     /// The functions enclosing the call, innermost first. A Python function encloses its
     /// decorators, parameters, and body; lambdas and Rust closures are not functions.
     pub enclosing_functions: Arc<[EnclosingFunction]>,
@@ -392,6 +396,7 @@ pub fn collect_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> {
                 .collect(),
             is_with_context_manager: entry.is_with_context_manager,
             is_in_except_clause: entry.is_in_except_clause,
+            is_in_loop: entry.is_in_loop,
             enclosing_functions: Arc::clone(&entry.enclosing_functions),
         })
         .collect()
@@ -402,7 +407,7 @@ fn collect_python_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate>
     use ruff_python_ast::visitor::source_order::{
         SourceOrderVisitor, walk_except_handler, walk_expr, walk_stmt, walk_with_item,
     };
-    use ruff_python_ast::{ExceptHandler, Expr, ExprCall, Stmt, WithItem};
+    use ruff_python_ast::{ExceptHandler, Expr, Stmt, WithItem};
 
     struct CallVisitor<'a> {
         file: &'a ParsedFile,
@@ -410,31 +415,72 @@ fn collect_python_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate>
         with_item_context_span: Option<SourceSpan>,
         /// True while inside an `except` handler of the current function scope.
         in_except_clause: bool,
+        /// True while inside the condition or body of a `for` or `while` loop of the current scope.
+        in_loop: bool,
         enclosing_functions: python::EnclosingFunctionTracker,
         out: Vec<CachedCallCandidate>,
     }
 
     impl<'a> SourceOrderVisitor<'a> for CallVisitor<'a> {
         fn visit_stmt(&mut self, statement: &'a Stmt) {
-            let enclosing = self.in_except_clause;
+            let enclosing_except = self.in_except_clause;
+            let enclosing_loop = self.in_loop;
             if matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
                 self.in_except_clause = false;
             }
+            if matches!(statement, Stmt::FunctionDef(_)) {
+                self.in_loop = false;
+            }
             let outer_functions = self.enclosing_functions.enter(statement);
-            walk_stmt(self, statement);
+            match statement {
+                Stmt::For(for_stmt) => {
+                    self.visit_expr(&for_stmt.target);
+                    self.visit_expr(&for_stmt.iter);
+                    self.in_loop = true;
+                    self.visit_body(&for_stmt.body);
+                    self.in_loop = enclosing_loop;
+                    self.visit_body(&for_stmt.orelse);
+                }
+                Stmt::While(while_stmt) => {
+                    self.in_loop = true;
+                    self.visit_expr(&while_stmt.test);
+                    self.visit_body(&while_stmt.body);
+                    self.in_loop = enclosing_loop;
+                    self.visit_body(&while_stmt.orelse);
+                }
+                _ => walk_stmt(self, statement),
+            }
             self.enclosing_functions.exit(outer_functions);
-            self.in_except_clause = enclosing;
+            self.in_except_clause = enclosing_except;
+            self.in_loop = enclosing_loop;
         }
 
         fn visit_expr(&mut self, expr: &'a Expr) {
-            let enclosing = self.in_except_clause;
+            let enclosing_except = self.in_except_clause;
+            let enclosing_loop = self.in_loop;
             match expr {
-                Expr::Call(call) => self.record_call(call),
-                Expr::Lambda(_) => self.in_except_clause = false,
+                Expr::Call(call) => {
+                    let span = span_from_ruff_range(call.range());
+                    let is_with_context_manager = self.with_item_context_span == Some(span);
+                    self.out.push(build_python_call_candidate(
+                        &self.file.source,
+                        call,
+                        span,
+                        is_with_context_manager,
+                        self.in_except_clause,
+                        self.in_loop,
+                        &self.enclosing_functions.functions,
+                    ));
+                }
+                Expr::Lambda(_) => {
+                    self.in_except_clause = false;
+                    self.in_loop = false;
+                }
                 _ => {}
             }
             walk_expr(self, expr);
-            self.in_except_clause = enclosing;
+            self.in_except_clause = enclosing_except;
+            self.in_loop = enclosing_loop;
         }
 
         fn visit_with_item(&mut self, with_item: &'a WithItem) {
@@ -453,49 +499,6 @@ fn collect_python_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate>
         }
     }
 
-    impl CallVisitor<'_> {
-        fn record_call(&mut self, call: &ExprCall) {
-            let span = span_from_ruff_range(call.range());
-            let func_span = span_from_ruff_range(call.func.range());
-            let callee = self.file.source[func_span.start..func_span.end].to_string();
-            let (method_name, receiver_call_callee) =
-                if let Expr::Attribute(attr) = call.func.as_ref() {
-                    let receiver_callee = if let Expr::Call(inner_call) = attr.value.as_ref() {
-                        let inner_span = span_from_ruff_range(inner_call.func.range());
-                        Some(self.file.source[inner_span.start..inner_span.end].to_string())
-                    } else {
-                        None
-                    };
-                    (Some(attr.attr.to_string()), receiver_callee)
-                } else {
-                    (None, None)
-                };
-            let mut argument_spans: Vec<SourceSpan> = call
-                .arguments
-                .args
-                .iter()
-                .map(|arg| span_from_ruff_range(arg.range()))
-                .chain(
-                    call.arguments
-                        .keywords
-                        .iter()
-                        .map(|kw| span_from_ruff_range(kw.range())),
-                )
-                .collect();
-            argument_spans.sort_by_key(|span| (span.start, span.end));
-            self.out.push(CachedCallCandidate {
-                span,
-                callee,
-                method_name,
-                receiver_call_callee,
-                argument_spans,
-                is_with_context_manager: self.with_item_context_span == Some(span),
-                is_in_except_clause: self.in_except_clause,
-                enclosing_functions: Arc::clone(&self.enclosing_functions.functions),
-            });
-        }
-    }
-
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
@@ -503,11 +506,63 @@ fn collect_python_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate>
         file,
         with_item_context_span: None,
         in_except_clause: false,
+        in_loop: false,
         enclosing_functions: python::EnclosingFunctionTracker::default(),
         out: Vec::new(),
     };
     visitor.visit_body(&parsed.syntax().body);
     visitor.out
+}
+
+/// Builds a [`CachedCallCandidate`] for a Python call expression.
+fn build_python_call_candidate(
+    source: &str,
+    call: &ruff_python_ast::ExprCall,
+    span: SourceSpan,
+    is_with_context_manager: bool,
+    is_in_except_clause: bool,
+    is_in_loop: bool,
+    enclosing_functions: &Arc<[EnclosingFunction]>,
+) -> CachedCallCandidate {
+    use ruff_python_ast::Expr;
+
+    let func_span = span_from_ruff_range(call.func.range());
+    let callee = source[func_span.start..func_span.end].to_string();
+    let (method_name, receiver_call_callee) = if let Expr::Attribute(attr) = call.func.as_ref() {
+        let receiver_callee = if let Expr::Call(inner_call) = attr.value.as_ref() {
+            let inner_span = span_from_ruff_range(inner_call.func.range());
+            Some(source[inner_span.start..inner_span.end].to_string())
+        } else {
+            None
+        };
+        (Some(attr.attr.to_string()), receiver_callee)
+    } else {
+        (None, None)
+    };
+    let mut argument_spans: Vec<SourceSpan> = call
+        .arguments
+        .args
+        .iter()
+        .map(|arg| span_from_ruff_range(arg.range()))
+        .chain(
+            call.arguments
+                .keywords
+                .iter()
+                .map(|kw| span_from_ruff_range(kw.range())),
+        )
+        .collect();
+    argument_spans.sort_by_key(|span| (span.start, span.end));
+    CachedCallCandidate {
+        span,
+        callee,
+        method_name,
+        receiver_call_callee,
+        argument_spans,
+        is_with_context_manager,
+        is_in_except_clause,
+        is_in_loop,
+        enclosing_functions: Arc::clone(enclosing_functions),
+    }
 }
 
 /// Collects all direct call and method-call expressions in a Rust file using `ra_ap_syntax`.
@@ -556,6 +611,7 @@ fn collect_rust_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate> {
                 argument_spans,
                 is_with_context_manager: false,
                 is_in_except_clause: false,
+                is_in_loop: is_in_rust_loop(call.syntax()),
                 enclosing_functions: Arc::clone(&enclosing_functions),
             });
         } else if let Some(method_call) = ast::MethodCallExpr::cast(syntax_node) {
@@ -582,11 +638,36 @@ fn collect_rust_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate> {
                 argument_spans,
                 is_with_context_manager: false,
                 is_in_except_clause: false,
+                is_in_loop: is_in_rust_loop(method_call.syntax()),
                 enclosing_functions: Arc::clone(&enclosing_functions),
             });
         }
     }
     out
+}
+
+/// Returns true if `node` lies inside a Rust `loop`, `while`, or `for` body without an intervening
+/// `fn` or closure boundary.
+fn is_in_rust_loop(node: &ra_ap_syntax::SyntaxNode) -> bool {
+    use ra_ap_syntax::ast::{self, HasLoopBody as _};
+
+    let range = node.text_range();
+    for ancestor in node.ancestors().skip(1) {
+        if ast::Fn::can_cast(ancestor.kind()) || ast::ClosureExpr::can_cast(ancestor.kind()) {
+            return false;
+        }
+        if ast::LoopExpr::can_cast(ancestor.kind()) || ast::WhileExpr::can_cast(ancestor.kind()) {
+            return true;
+        }
+        if let Some(for_expr) = ast::ForExpr::cast(ancestor)
+            && for_expr
+                .loop_body()
+                .is_some_and(|body| body.syntax().text_range().contains_range(range))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Extracts the callee string of a Rust call or method-call expression.

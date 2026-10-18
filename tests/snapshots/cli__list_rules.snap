@@ -70,6 +70,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `unstructured-task` (python): Flags asyncio tasks spawned outside a task group.
 - `unused-suppression` (python, rust): Flags suppression directives that suppress no finding.
 - `verb-led-returns-section` (python): Flags docstring `Returns:` and `Yields:` sections that start with the verb `Returns` or `Yields`.
+- `yield-loop-in-tests` (python, rust): Flags scheduler-yield and spin-wait calls inside loops in tests.
 - `zero-sleep-in-tests` (python, rust): Flags zero-duration sleeps used to yield in tests.
 
 --- stderr ---
