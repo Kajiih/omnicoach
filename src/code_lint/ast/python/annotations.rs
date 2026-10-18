@@ -782,7 +782,9 @@ fn is_std_type_constructor_prefix(path: &str, terminal: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::code_lint::ast::python::extract_function_signatures;
+    use crate::code_lint::ast::python::{
+        call_callee, collect_module_assignments, extract_function_signatures,
+    };
     use crate::diagnostic::Language;
     use rstest::rstest;
 
@@ -817,5 +819,281 @@ mod tests {
                 .as_deref(),
             expected
         );
+    }
+
+    #[rstest]
+    #[case::a1_bare_concrete("def f(x: list, y: dict, z: typing.List) -> None: pass", &[&["list"][..], &["dict"][..], &["typing.List"][..]])]
+    #[case::a2_pep585_generic("def f(x: list[int], y: dict[str, int], z: set[str]) -> None: pass", &[&["list"][..], &["dict"][..], &["set"][..]])]
+    #[case::a3_pep484_qualified_and_unqualified("def f(x: typing.List[int], y: typing.Dict[str, int], z: typing.Set[str], w: Set[str]) -> None: pass", &[&["typing.List"][..], &["typing.Dict"][..], &["typing.Set"][..], &["Set"][..]])]
+    #[case::a4_pep604_union("def f(x: list[int] | None, y: int | list[str] | set[int]) -> None: pass", &[&["list"][..], &["list", "set"][..]])]
+    #[case::a5_qualified_pep604_union("def f(x: typing.List[int] | None) -> None: pass", &[&["typing.List"][..]])]
+    #[case::a6_optional_and_union("def f(x: Optional[list[int]], y: Union[list[int], str, None]) -> None: pass", &[&["list"][..], &["list"][..]])]
+    #[case::a7_qualified_optional_and_union("def f(x: typing.Optional[typing.Dict[str, int]], y: typing.Union[list[int], None]) -> None: pass", &[&["typing.Dict"][..], &["list"][..]])]
+    #[case::a8_annotated_unwraps_first_arg("def f(x: Annotated[list[int], 'meta'], y: typing.Annotated[set[str], Doc('x')]) -> None: pass", &[&["list"][..], &["set"][..]])]
+    #[case::a9_annotated_ignores_metadata("def f(x: Annotated[Sequence[int], list]) -> None: pass", &[&[][..]])]
+    #[case::a10_qualifiers("def f(x: ClassVar[list[str]], y: Final[dict[str, int]], z: Required[set[str]]) -> None: pass", &[&["list"][..], &["dict"][..], &["set"][..]])]
+    #[case::a11_covariant_single_and_tuple_containers("def f(a: Sequence[list[int]], b: Collection[set[str]], c: Awaitable[list[int]], d: tuple[str, dict[str, int]], e: tuple[list[int], ...]) -> None: pass", &[&["list"][..], &["set"][..], &["list"][..], &["dict"][..], &["list"][..]])]
+    #[case::a12_mapping_covariant_value("def f(x: Mapping[str, list[int]]) -> None: pass", &[&["list"][..]])]
+    #[case::a13_callable_covariant_return("def f(cb: Callable[[int], list[str]]) -> None: pass", &[&["list"][..]])]
+    #[case::a14_callable_contravariant_param_ignored("def f(cb: Callable[[list[int]], None]) -> None: pass", &[&[][..]])]
+    #[case::a15_invariant_mutable_outer_ignored("def f(x: MutableMapping[str, list[int]], y: MutableSequence[list[int]]) -> None: pass", &[&[][..], &[][..]])]
+    #[case::a16_unknown_generic_ignored("def f(x: CustomBox[list[int]]) -> None: pass", &[&[][..]])]
+    #[case::a17_abstract_collections_pass("def f(a: Sequence[int], b: Mapping[str, int], c: AbstractSet[str], d: collections.abc.Set[str]) -> None: pass", &[&[][..], &[][..], &[][..], &[][..]])]
+    #[case::a17b_unaliased_collections_abc_set_import("from collections.abc import Set\ndef f(a: Set[str], b: typing.Set[str]) -> None: pass", &[&[][..], &["typing.Set"][..]])]
+    #[case::a18_immutable_builtins_pass("def f(a: tuple[int, ...], b: frozenset[str], c: bytes, d: str) -> None: pass", &[&[][..], &[][..], &[][..], &[][..]])]
+    #[case::a19_invariant_concrete_outer_not_recursed("def f(x: list[set[str]], y: dict[str, list[int]]) -> None: pass", &[&["list"][..], &["dict"][..]])]
+    #[case::a20_typed_dict_qualifiers("def f(x: NotRequired[list[int]], y: ReadOnly[dict[str, int]]) -> None: pass", &[&["list"][..], &["dict"][..]])]
+    #[case::a21_generator_yield_and_return_positions("def f(a: Generator[list[int], set[str], dict[str, int]], b: Coroutine[None, set[str], list[int]], c: AsyncGenerator[list[int], set[str]]) -> None: pass", &[&["list", "dict"][..], &["list"][..], &["list"][..]])]
+    #[case::a22_iterator_and_abstract_set_covariant("def f(a: Iterable[list[int]], b: Iterator[dict[str, int]], c: AbstractSet[frozenset[int]]) -> None: pass", &[&["list"][..], &["dict"][..], &[][..]])]
+    #[case::a23_qualified_covariant_outer("def f(x: collections.abc.Sequence[list[int]], y: typing.Mapping[str, set[str]]) -> None: pass", &[&["list"][..], &["set"][..]])]
+    fn test_collect_collection_types_concrete_mutable_matrix_a(
+        #[case] source: &str,
+        #[case] expected_per_param: &[&[&str]],
+    ) {
+        let file = ParsedFile::new(source, Language::Python);
+        let sigs = extract_function_signatures(&file);
+        let actual: Vec<Vec<String>> = sigs[0]
+            .parameters
+            .iter()
+            .map(|parameter| {
+                let type_node = parameter.type_node.as_ref().expect("param should be typed");
+                collect_collection_types(type_node, AnnotationTraversalDepth::CovariantPositions)
+                    .into_iter()
+                    .filter(|collection_type| {
+                        collection_type.kind == CollectionKind::ConcreteMutable
+                    })
+                    .map(|collection_type| collection_type.path)
+                    .collect()
+            })
+            .collect();
+        let expected: Vec<Vec<String>> = expected_per_param
+            .iter()
+            .map(|slice| {
+                slice
+                    .iter()
+                    .map(|expected_name| (*expected_name).to_string())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(actual, expected);
+    }
+
+    /// Collects the top-level collection types of the annotation of the first parameter of the
+    /// first function in `source`, as `(path, kind, shape)`.
+    fn top_level_collection_types(source: &str) -> Vec<(String, CollectionKind, CollectionShape)> {
+        let file = ParsedFile::new(source, Language::Python);
+        let sigs = extract_function_signatures(&file);
+        let type_node = sigs[0].parameters[0]
+            .type_node
+            .as_ref()
+            .expect("param should be typed");
+        collect_collection_types(type_node, AnnotationTraversalDepth::TransparentWrappersOnly)
+            .into_iter()
+            .map(|collection_type| {
+                (
+                    collection_type.path,
+                    collection_type.kind,
+                    collection_type.shape,
+                )
+            })
+            .collect()
+    }
+
+    #[rstest]
+    #[case::list(
+        "def f(x: list[int]): pass",
+        "list",
+        CollectionKind::ConcreteMutable,
+        CollectionShape::Sequence
+    )]
+    #[case::typing_dict(
+        "def f(x: typing.Dict[str, int]): pass",
+        "typing.Dict",
+        CollectionKind::ConcreteMutable,
+        CollectionShape::Mapping
+    )]
+    #[case::unqualified_set(
+        "def f(x: Set[int]): pass",
+        "Set",
+        CollectionKind::ConcreteMutable,
+        CollectionShape::Set
+    )]
+    #[case::deque(
+        "def f(x: collections.deque[int]): pass",
+        "collections.deque",
+        CollectionKind::ConcreteMutable,
+        CollectionShape::Sequence
+    )]
+    #[case::counter(
+        "def f(x: collections.Counter[str]): pass",
+        "collections.Counter",
+        CollectionKind::ConcreteMutable,
+        CollectionShape::Mapping
+    )]
+    #[case::mutable_sequence(
+        "def f(x: MutableSequence[int]): pass",
+        "MutableSequence",
+        CollectionKind::AbstractMutable,
+        CollectionShape::Sequence
+    )]
+    #[case::mutable_mapping(
+        "def f(x: collections.abc.MutableMapping[str, int]): pass",
+        "collections.abc.MutableMapping",
+        CollectionKind::AbstractMutable,
+        CollectionShape::Mapping
+    )]
+    #[case::mutable_set(
+        "def f(x: typing.MutableSet[int] | None): pass",
+        "typing.MutableSet",
+        CollectionKind::AbstractMutable,
+        CollectionShape::Set
+    )]
+    #[case::sequence(
+        "def f(x: Optional[collections.abc.Sequence[int]]): pass",
+        "collections.abc.Sequence",
+        CollectionKind::AbstractReadOnly,
+        CollectionShape::Sequence
+    )]
+    #[case::mapping(
+        "def f(x: Mapping[str, Sequence[int]]): pass",
+        "Mapping",
+        CollectionKind::AbstractReadOnly,
+        CollectionShape::Mapping
+    )]
+    #[case::abc_set(
+        "def f(x: collections.abc.Set[int]): pass",
+        "collections.abc.Set",
+        CollectionKind::AbstractReadOnly,
+        CollectionShape::Set
+    )]
+    #[case::imported_abc_set(
+        "from collections.abc import Set\ndef f(x: Set[int]): pass",
+        "Set",
+        CollectionKind::AbstractReadOnly,
+        CollectionShape::Set
+    )]
+    #[case::collection(
+        "def f(x: typing.Collection[int]): pass",
+        "typing.Collection",
+        CollectionKind::AbstractReadOnly,
+        CollectionShape::Iterable
+    )]
+    #[case::iterable(
+        "def f(x: Iterable[int]): pass",
+        "Iterable",
+        CollectionKind::AbstractReadOnly,
+        CollectionShape::Iterable
+    )]
+    #[case::tuple(
+        "def f(x: tuple[int, ...]): pass",
+        "tuple",
+        CollectionKind::Immutable,
+        CollectionShape::Sequence
+    )]
+    #[case::frozenset(
+        "def f(x: frozenset[int]): pass",
+        "frozenset",
+        CollectionKind::Immutable,
+        CollectionShape::Set
+    )]
+    fn test_collection_type_taxonomy(
+        #[case] source: &str,
+        #[case] path: &str,
+        #[case] kind: CollectionKind,
+        #[case] shape: CollectionShape,
+    ) {
+        assert_eq!(
+            top_level_collection_types(source),
+            [(path.to_string(), kind, shape)]
+        );
+    }
+
+    #[rstest]
+    #[case::nested_not_collected("def f(x: Sequence[MutableSequence[int]]): pass", &["Sequence"])]
+    #[case::unknown_module_ignored("def f(x: mylib.MutableSequence[int]): pass", &[])]
+    #[case::union_in_order("def f(x: dict[str, int] | list[int] | dict[str, str]): pass", &["dict", "list"])]
+    fn test_collect_top_level_collection_types(#[case] source: &str, #[case] expected: &[&str]) {
+        let paths: Vec<String> = top_level_collection_types(source)
+            .into_iter()
+            .map(|(path, _, _)| path)
+            .collect();
+        assert_eq!(paths, expected);
+    }
+
+    #[rstest]
+    #[case::list_display("[1]", Some(("list", CollectionShape::Sequence)))]
+    #[case::set_comprehension("{x for x in y}", Some(("set", CollectionShape::Set)))]
+    #[case::empty_dict_display("{}", Some(("dict", CollectionShape::Mapping)))]
+    #[case::generic_constructor_call("list[str]()", Some(("list", CollectionShape::Sequence)))]
+    #[case::qualified_constructor_call(
+        "collections.Counter()",
+        Some(("collections.Counter", CollectionShape::Mapping))
+    )]
+    #[case::tuple_display("(1, 2)", None)]
+    #[case::unknown_call("make()", None)]
+    fn test_collection_display_and_call_callee_type(
+        #[case] value: &str,
+        #[case] expected: Option<(&str, CollectionShape)>,
+    ) {
+        let file = ParsedFile::new(&format!("VALUE = {value}"), Language::Python);
+        let assignments = collect_module_assignments(&file);
+        let value = assignments[0].value.as_ref().expect("value");
+        let built = collection_display(value)
+            .or_else(|| call_callee(value).and_then(|callee| collection_type(&callee)));
+        assert_eq!(
+            built
+                .as_ref()
+                .map(|collection| (collection.path.as_str(), collection.shape)),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::simple_union("def f() -> str | int: pass", false, &["str", "int"])]
+    #[case::optional_shorthand("def f() -> Optional[list[int]]: pass", true, &["list[int]"])]
+    #[case::pep604_none("def f() -> Sequence[str] | None: pass", true, &["Sequence[str]"])]
+    #[case::none_first("def f() -> None | set[int]: pass", true, &["set[int]"])]
+    #[case::multiple_branches_with_none("def f() -> list[int] | set[str] | None: pass", true, &["list[int]", "set[str]"])]
+    #[case::awaitable_coroutine_envelopes(
+        "def f() -> Awaitable[Coroutine[Any, Any, Mapping[str, int] | None]]: pass",
+        true,
+        &["Mapping[str, int]"]
+    )]
+    #[case::annotated_wrapper("def f() -> Annotated[tuple[int, ...] | None, 'meta']: pass", true, &["tuple[int, ...]"])]
+    fn test_return_type_union(
+        #[case] source: &str,
+        #[case] expected_has_none: bool,
+        #[case] expected_branches: &[&str],
+    ) {
+        let file = ParsedFile::new(source, Language::Python);
+        let signatures = extract_function_signatures(&file);
+        let return_type_node = signatures[0]
+            .return_type_node
+            .as_ref()
+            .expect("function should have return annotation");
+        let union = return_type_union(return_type_node);
+        let branches: Vec<_> = union
+            .branches
+            .iter()
+            .map(|branch| branch.node.text())
+            .collect();
+        assert_eq!(union.has_none, expected_has_none);
+        assert_eq!(branches, expected_branches);
+    }
+
+    #[test]
+    fn test_return_type_branch_generic_type() {
+        let file = ParsedFile::new("def f() -> tuple[int, ...]: pass", Language::Python);
+        let signatures = extract_function_signatures(&file);
+        let return_type_node = signatures[0].return_type_node.as_ref().unwrap();
+        let union = return_type_union(return_type_node);
+        let branch = &union.branches[0];
+        let collection = branch.collection.as_ref().expect("collection type");
+        let args = branch.type_arguments.as_ref().expect("generic type");
+        assert_eq!(collection.name, "tuple");
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0].text(), "int");
+        assert_eq!(args[1].text(), "...");
     }
 }

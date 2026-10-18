@@ -1157,4 +1157,208 @@ mod tests {
         let file = ParsedFile::new(source, Language::Python);
         assert_eq!(local_ancestors(&extract_classes(&file), 3), [1, 0, 2]);
     }
+
+    #[test]
+    fn test_extract_classes_bases_metadata() {
+        let source = indoc::indoc! {r"
+            class FakeService(abc.ABC, Protocol):
+                pass
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        let classes = extract_classes(&file);
+        let cls = &classes[0];
+        let base_names: Vec<&str> = cls.bases.iter().map(|base| base.name.as_str()).collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(cls.name, "FakeService");
+        assert_eq!(base_names, vec!["abc.ABC", "Protocol"]);
+    }
+
+    #[test]
+    fn test_extract_classes_dataclass() {
+        let source = indoc::indoc! {r"
+            @dataclass(frozen=True)
+            class Config:
+                pass
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        let classes = extract_classes(&file);
+
+        let cls = &classes[0];
+        assert_eq!(cls.name, "Config");
+        assert_eq!(cls.decorators[0].terminal_name, "dataclass");
+        assert!(!cls.is_dataclass_missing_arg("frozen"));
+        assert!(cls.is_dataclass_missing_arg("slots"));
+    }
+
+    #[rstest::rstest]
+    #[case::class_level("class C:\n    items: list[int]", &[("items", false, false)])]
+    #[case::private_included("class C:\n    _items: list[int]", &[("_items", false, false)])]
+    #[case::init_attribute("class C:\n    def __init__(self):\n        self.items: list[int] = []", &[("items", false, false)])]
+    #[case::self_mutation("class C:\n    items: list[int]\n    def add(self):\n        self.items.append(1)", &[("items", true, false)])]
+    #[case::cls_mutation("class C:\n    items: list[int]\n    @classmethod\n    def add(cls):\n        cls.items.append(1)", &[("items", true, false)])]
+    #[case::class_name_mutation("class C:\n    items: list[int]\n    def add(self):\n        C.items.append(1)", &[("items", true, false)])]
+    #[case::subscript_delete("class C:\n    items: list[int]\n    def pop(self):\n        del self.items[0]", &[("items", true, false)])]
+    #[case::protocol_member("class P(Protocol):\n    items: list[int]", &[("items", false, true)])]
+    fn test_collect_class_attributes(
+        #[case] source: &str,
+        #[case] expected: &[(&str, bool, bool)],
+    ) {
+        let file = ParsedFile::new(source, Language::Python);
+        let actual: Vec<(String, bool, bool)> = collect_class_attributes(&file)
+            .into_iter()
+            .map(|attribute| {
+                (
+                    attribute.name,
+                    attribute.is_mutated_in_class,
+                    attribute.is_in_protocol_or_abc,
+                )
+            })
+            .collect();
+        let expected: Vec<(String, bool, bool)> = expected
+            .iter()
+            .map(|(name, mutated, in_protocol)| ((*name).to_string(), *mutated, *in_protocol))
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_extract_classes_ignores_comments_and_keywords_in_superclasses() {
+        let source = indoc::indoc! {r"
+            class FakeClient(
+                # Not a base class
+                metaclass=ABCMeta,
+            ):
+                pass
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        let classes = extract_classes(&file);
+        assert_eq!(classes.len(), 1);
+        assert!(classes[0].bases.is_empty());
+    }
+
+    #[test]
+    fn test_python_base_class_is_structural_marker() {
+        let source = indoc::indoc! {r"
+            class C(
+                HttpClient,
+                object,
+                Generic[T],
+                Protocol,
+                typing_extensions.Generic[T],
+                typing_extensions.Protocol,
+                ABC,
+                abc.ABC,
+                Repository[T],
+                **kwargs,
+            ):
+                pass
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        let classes = extract_classes(&file);
+        let summary: Vec<(&str, bool)> = classes[0]
+            .bases
+            .iter()
+            .map(|base| (base.name.as_str(), base.is_structural_marker()))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("HttpClient", false),
+                ("object", true),
+                ("Generic[T]", true),
+                ("Protocol", true),
+                ("typing_extensions.Generic[T]", true),
+                ("typing_extensions.Protocol", true),
+                ("ABC", true),
+                ("abc.ABC", true),
+                ("Repository[T]", false),
+            ]
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::init_and_method(
+        "class C:\n    def __init__(self):\n        self.x: int = 1\n    async def reset(self):\n        if True:\n            self.y: str",
+        &[("C", "__init__", "x", "int"), ("C", "reset", "y", "str")]
+    )]
+    #[case::private_collected_unannotated_skipped(
+        "class C:\n    def __init__(self):\n        self._p: int = 1\n        self.pub = 2",
+        &[("C", "__init__", "_p", "int")]
+    )]
+    #[case::staticmethod_classmethod_and_nested_func_skipped(
+        "class C:\n    @staticmethod\n    def sm(self):\n        self.a: int = 1\n    @classmethod\n    def cm(cls):\n        cls.b: int = 2\n    def run(self):\n        def inner(self):\n            self.c: int = 3",
+        &[]
+    )]
+    fn test_collect_instance_attribute_annotations(
+        #[case] source: &str,
+        #[case] expected: &[(&str, &str, &str, &str)],
+    ) {
+        let file = ParsedFile::new(source, Language::Python);
+        let actual: Vec<(String, String, String, String)> =
+            collect_instance_attribute_annotations(&file)
+                .into_iter()
+                .map(|attribute| {
+                    (
+                        attribute.class_name,
+                        attribute.method_name,
+                        attribute.name,
+                        attribute.annotation.text().into_owned(),
+                    )
+                })
+                .collect();
+        let expected: Vec<(String, String, String, String)> = expected
+            .iter()
+            .map(|(class_name, method_name, name, annotation)| {
+                (
+                    (*class_name).to_string(),
+                    (*method_name).to_string(),
+                    (*name).to_string(),
+                    (*annotation).to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::bare_final(
+        "class C:\n    def __init__(self):\n        self.a: Final = 1",
+        (true, false)
+    )]
+    #[case::qualified_bare_final(
+        "class C:\n    def __init__(self):\n        self.a: typing.Final = 1",
+        (true, false)
+    )]
+    #[case::annotated_bare_final(
+        "class C:\n    def __init__(self):\n        self.a: Annotated[Final, 'm'] = 1",
+        (true, false)
+    )]
+    #[case::parameterized_final(
+        "class C:\n    def __init__(self):\n        self.a: Final[int] = 1",
+        (false, false)
+    )]
+    #[case::dataclass(
+        "@dataclass\nclass C:\n    def __post_init__(self):\n        self.a: int = 1",
+        (false, true)
+    )]
+    #[case::pydantic_model(
+        "class C(BaseModel):\n    def model_post_init(self, context):\n        self.a: int = 1",
+        (false, true)
+    )]
+    fn test_instance_attribute_annotation_facts(
+        #[case] source: &str,
+        #[case] expected: (bool, bool),
+    ) {
+        let file = ParsedFile::new(source, Language::Python);
+        let actual: Vec<(bool, bool)> = collect_instance_attribute_annotations(&file)
+            .iter()
+            .map(|attribute| {
+                (
+                    attribute.is_bare_final(),
+                    attribute.is_in_field_synthesizing_class,
+                )
+            })
+            .collect();
+        assert_eq!(actual, [expected]);
+    }
 }

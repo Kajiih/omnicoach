@@ -11,7 +11,7 @@ from .model import (
     DUPLICATED_TEST_SETUP,
     FAKE_WITHOUT_PROTOCOL,
     PY_CALLS,
-    PYTHON,
+    PY_TESTS,
     RS_CALLS,
     RUST,
     SLEEP_IN_TESTS,
@@ -41,7 +41,7 @@ CLUSTER = Cluster(
         # --- packed-assertion ---
         Mutation(
             label="Python disjunctive `or` condition exempt from packed-assertion",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "                    has_top_level_logical_and: matches!(\n"
@@ -66,7 +66,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python `and` inside function call argument exempt from packed-assertion",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "                    has_top_level_logical_and: matches!(\n"
@@ -91,7 +91,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python single-element boolean tuple exempt from packed-assertion",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "    elements.len() >= 2\n"
@@ -119,7 +119,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python non-boolean tuple/list equality exempt from packed-assertion",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "    elements.len() >= 2\n"
@@ -136,7 +136,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python single-value collection comparison exempt from packed-assertion",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "                                .filter(|operand| is_multi_element_collection_expr(operand))\n"
@@ -192,7 +192,7 @@ CLUSTER = Cluster(
         # --- too-many-assertions, logic-in-tests & multi-phase-test ---
         Mutation(
             label="Python non-test helper function exempt from test-function rules",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "            if let Stmt::FunctionDef(func_def) = statement {\n"
@@ -239,7 +239,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python nested function assertions not counted toward enclosing test",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}",
@@ -253,7 +253,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python nested class assertions not counted toward enclosing test",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}",
@@ -264,7 +264,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python type-narrowing guard assertions exempt from assertion counting",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "    narrowed_variable_name(assert_statement)\n"
@@ -293,7 +293,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python value-returning setup helper with internal assert exempt from assertion-helper classification",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "                || (is_unit_python_function(func_def)",
@@ -320,7 +320,7 @@ CLUSTER = Cluster(
         # --- logic-in-tests ---
         Mutation(
             label="Python nested function exempt from logic-in-tests",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,",
@@ -331,7 +331,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python nested class exempt from logic-in-tests",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,",
@@ -342,7 +342,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python lambda callback exempt from logic-in-tests",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "                Expr::Lambda(_) => return,",
@@ -353,7 +353,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python unfiltered comprehensions exempt from logic-in-tests",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "                Expr::ListComp(comp)\n"
@@ -393,7 +393,7 @@ CLUSTER = Cluster(
         # --- multi-phase-test ---
         Mutation(
             label="Python narrowing guard between assertions not treated as action in multi-phase-test",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "        if let Stmt::Assert(assert_statement) = statement\n"
@@ -410,7 +410,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python consecutive assertions without intervening action allowed in multi-phase-test",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "        if count_python_assertions_in_slice(\n"
@@ -439,7 +439,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python call-free projection binding and capsys.readouterr() between assertions exempt in multi-phase-test",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "        } else if seen_assertion && !is_python_inspection_binding(statement) {",
@@ -532,7 +532,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python non-test helper function exempt from duplicated-test-setup",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "        if !is_test_function_def(func_def) {\n            continue;\n        }",
@@ -554,7 +554,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python leading docstring not counted as setup in duplicated-test-setup",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "    let statements = if docstrings::docstring_of(&func_def.body, file).is_some() {\n"
@@ -571,7 +571,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python nested function not counted as setup in duplicated-test-setup",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "        .filter(|statement| !matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)))",
@@ -584,7 +584,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python nested class not counted as setup in duplicated-test-setup",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "        .filter(|statement| !matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)))",
@@ -595,7 +595,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python assertions not counted as setup in duplicated-test-setup",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "        .take_while(|statement| {\n"
@@ -814,7 +814,7 @@ CLUSTER = Cluster(
         # --- test-calls-test ---
         Mutation(
             label="Python non-test helper function exempt from test-calls-test",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "            Stmt::FunctionDef(func_def) if is_test_function_def(func_def) => {",
@@ -825,7 +825,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python module-level call outside function exempt from test-calls-test",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "        let Some(caller_fn) = candidate.enclosing_functions.first() else {\n"
@@ -844,7 +844,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python method call on collaborator exempt from test-calls-test",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "            .map(|_| PythonTestTarget::Class { class_name, method })\n"
@@ -865,7 +865,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python non-Test* class methods exempt from test-calls-test",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "            Stmt::ClassDef(class_def) if is_test_class_def(class_def) => {",
@@ -876,7 +876,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python local binding shadowing test name exempt from test-calls-test",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "        (module_tests.contains(callee) && !is_local).then_some(PythonTestTarget::Module(callee))",
@@ -887,7 +887,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python recursive self-call exempt from test-calls-test",
-            path=PYTHON,
+            path=PY_TESTS,
             edits=(
                 (
                     "        if is_recursive_python_test_call(&candidate, caller_fn, &target) {\n"

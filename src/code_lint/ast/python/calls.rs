@@ -173,3 +173,23 @@ fn build_python_call_candidate(
         enclosing_functions: Arc::clone(enclosing_functions),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Language;
+
+    #[test]
+    fn test_call_candidate_is_with_context_manager() {
+        let source = indoc::indoc! {r"
+            with suppress(FileNotFoundError):
+                pass
+            x = suppress(KeyError)
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        let calls = collect_call_candidates(&file);
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].is_with_context_manager);
+        assert!(!calls[1].is_with_context_manager);
+    }
+}

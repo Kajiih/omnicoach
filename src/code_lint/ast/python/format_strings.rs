@@ -576,3 +576,145 @@ fn is_python_identifier(name: &str) -> bool {
         && characters.all(|character| character == '_' || character.is_alphanumeric())
         && !first.is_ascii_digit()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Language;
+
+    #[rstest::rstest]
+    #[case::simple("Order {order_id} filled", Some(&["order_id"][..]))]
+    #[case::compound_attribute("Order {order.id} filled", Some(&["order"][..]))]
+    #[case::compound_subscript("Order {order[id]} filled", Some(&["order"][..]))]
+    #[case::conversion_and_spec("Order {order_id!r} {amount:.2f}", Some(&["order_id", "amount"][..]))]
+    #[case::positional_empty_and_numbered("Order {} and {0} and {0.id} and {1[key]}", Some(&[][..]))]
+    #[case::escaped_double_braces("Literal {{order_id}} value {}", Some(&[][..]))]
+    #[case::triple_braces_captures_inner("Literal {{{order_id}}}", Some(&["order_id"][..]))]
+    #[case::nested_format_spec("Value {:>{width}}", Some(&["width"][..]))]
+    #[case::non_identifier_braces("Payload {\"order_id\": 1} and {a, b}", Some(&[][..]))]
+    #[case::unclosed_opening_brace("Malformed {order_id in input", None)]
+    #[case::unmatched_closing_brace("Malformed {order_id} stray }", None)]
+    fn test_named_format_field_roots(#[case] message: &str, #[case] expected: Option<&[&str]>) {
+        let expected = expected.map(|roots| roots.iter().map(|root| (*root).to_owned()).collect());
+        assert_eq!(named_format_field_roots(message), expected);
+    }
+
+    /// `(style, preceding_text, literals, [(field, conversion, format_spec)])`.
+    type FormatStringSummary = (
+        PythonFormatStyle,
+        String,
+        Vec<String>,
+        Vec<(String, Option<String>, Option<String>)>,
+    );
+
+    fn summarize_format_strings(python_code: &str) -> Vec<FormatStringSummary> {
+        let file = ParsedFile::new(python_code, Language::Python);
+        collect_format_strings(&file)
+            .into_iter()
+            .map(|format_string| {
+                let placeholders = format_string
+                    .placeholders
+                    .into_iter()
+                    .map(|placeholder| {
+                        (
+                            placeholder.field,
+                            placeholder.conversion,
+                            placeholder.format_spec,
+                        )
+                    })
+                    .collect();
+                (
+                    format_string.style,
+                    format_string.preceding_text,
+                    format_string.literals,
+                    placeholders,
+                )
+            })
+            .collect()
+    }
+
+    fn owned(texts: &[&str]) -> Vec<String> {
+        texts.iter().map(|text| (*text).to_owned()).collect()
+    }
+
+    fn field(
+        name: &str,
+        conversion: Option<&str>,
+        format_spec: Option<&str>,
+    ) -> (String, Option<String>, Option<String>) {
+        (
+            name.to_owned(),
+            conversion.map(str::to_owned),
+            format_spec.map(str::to_owned),
+        )
+    }
+
+    #[test]
+    fn test_collect_format_strings_splits_fstrings() {
+        assert_eq!(
+            summarize_format_strings(r#"message = f"Copied '{ source !r:>8}' {count=}""#),
+            vec![(
+                PythonFormatStyle::FString,
+                String::new(),
+                owned(&["Copied '", "' ", ""]),
+                vec![
+                    field("source", Some("r"), Some(">8")),
+                    field("count", None, None)
+                ],
+            )]
+        );
+    }
+
+    #[test]
+    fn test_collect_format_strings_splits_str_format_templates() {
+        assert_eq!(
+            summarize_format_strings(
+                r#"message = "Copied '{}' to '{target.name!s}' {{raw}}".format(a, target=b)"#
+            ),
+            vec![(
+                PythonFormatStyle::StrFormat,
+                String::new(),
+                owned(&["Copied '", "' to '", "' {{raw}}"]),
+                vec![field("", None, None), field("target.name", Some("s"), None)],
+            )]
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::percent_operator(r#"message = "Got %s, %(key)5.2f and 100%%" % values"#)]
+    #[case::logger_with_arguments(r#"logger.info("Got %s, %(key)5.2f and 100%%", values)"#)]
+    fn test_collect_format_strings_splits_printf_templates(#[case] python_code: &str) {
+        assert_eq!(
+            summarize_format_strings(python_code),
+            vec![(
+                PythonFormatStyle::Printf,
+                String::new(),
+                owned(&["Got ", ", ", " and 100%%"]),
+                vec![
+                    field("", Some("s"), None),
+                    field("key", Some("f"), Some("5.2"))
+                ],
+            )]
+        );
+    }
+
+    #[test]
+    fn test_collect_format_strings_reads_concatenated_prefix() {
+        let summaries = summarize_format_strings("message = (\"Load \" f\"'{name}'\")");
+        let (style, preceding_text, ..) = &summaries[0];
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(*style, PythonFormatStyle::FString);
+        assert_eq!(preceding_text.as_str(), "Load ");
+    }
+
+    #[test]
+    fn test_collect_format_strings_skips_unformatted_raw_and_byte_strings() {
+        let source = indoc::indoc! {r#"
+            plain = "Invalid '{name}' or '%s'"
+            raw = r"Invalid '{name}'".format(name=value)
+            byte = b"Invalid '%s'" % value
+            no_arguments = logger.info("Literal '%s'")
+        "#};
+        assert_eq!(summarize_format_strings(source), vec![]);
+    }
+}

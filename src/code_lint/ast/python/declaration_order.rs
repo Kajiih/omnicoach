@@ -861,3 +861,123 @@ fn python_method_visibility(name: &str) -> MethodVisibility {
         MethodVisibility::Private
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::code_lint::ast::python::collect_statements_after_main_guard;
+    use crate::diagnostic::Language;
+
+    #[test]
+    fn test_collect_type_method_scopes_python() {
+        use crate::code_lint::ast::MethodVisibility::{Private, Public};
+
+        let source = indoc::indoc! {r"
+            class Service:
+                @overload
+                def __init__(self, port: int) -> None: ...
+                @overload
+                def __init__(self, port: str) -> None: ...
+                def __init__(self, port: int | str) -> None:
+                    pass
+
+                @property
+                def _token(self) -> str:
+                    return 'x'
+
+                @_token.setter
+                def _token(self, value: str) -> None:
+                    pass
+
+                def execute(self) -> None:
+                    pass
+
+                def __repr__(self) -> str:
+                    return 'Service'
+
+                def __secret(self) -> None:
+                    pass
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        let scopes = collect_type_method_scopes(&file);
+        let summary: Vec<_> = scopes
+            .iter()
+            .map(|scope| {
+                let methods: Vec<_> = scope
+                    .methods
+                    .iter()
+                    .map(|method| {
+                        (
+                            method.name.as_str(),
+                            method.visibility,
+                            method.is_constructor,
+                        )
+                    })
+                    .collect();
+                (scope.type_name.as_str(), methods)
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![(
+                "Service",
+                vec![
+                    ("__init__", Public, true),
+                    ("_token", Private, false),
+                    ("execute", Public, false),
+                    ("__repr__", Public, false),
+                    ("__secret", Private, false),
+                ],
+            )]
+        );
+    }
+
+    #[test]
+    fn test_collect_fields_after_methods_and_statements_after_main_guard() {
+        let source = indoc::indoc! {r#"
+            class Config:
+                host: str
+
+                def reset(self) -> None:
+                    pass
+
+                __repr__ = reset
+                retries: int = 3
+
+            if __name__ == "__main__":
+                pass
+
+            EXTRA = 1
+        "#};
+        let file = ParsedFile::new(source, Language::Python);
+        let fields: Vec<(String, String, String, PlacementAnchor)> =
+            collect_fields_after_methods(&file)
+                .into_iter()
+                .map(|field| {
+                    (
+                        field.class_name,
+                        field.name,
+                        field.node.text().into_owned(),
+                        field.first_method,
+                    )
+                })
+                .collect();
+        let trailing: Vec<(String, usize)> = collect_statements_after_main_guard(&file)
+            .into_iter()
+            .map(|item| (item.node.text().into_owned(), item.guard_line))
+            .collect();
+        assert_eq!(
+            fields,
+            vec![(
+                "Config".to_owned(),
+                "retries".to_owned(),
+                "retries: int = 3".to_owned(),
+                PlacementAnchor {
+                    name: "reset".to_owned(),
+                    line: 4,
+                },
+            )]
+        );
+        assert_eq!(trailing, vec![("EXTRA = 1".to_owned(), 10)]);
+    }
+}

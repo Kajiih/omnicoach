@@ -584,3 +584,84 @@ fn extract_from_match_pattern<'a>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Language;
+
+    #[test]
+    fn test_collect_bindings_python() {
+        let source = indoc::indoc! {r"
+            import os
+            import os.path
+            import numpy as np
+            from sys import stderr as err
+            from os import path
+            import sys, re
+            from os import * # wildcard
+            c = 2
+            d, e = 3, 4
+            for x in range(10): pass
+            [y for y in range(10)]
+            def foo(b: int = 1):
+                pass
+            try:
+                pass
+            except Exception as g:
+                pass
+            (v := 1)
+            class MyClass:
+                def my_method(self):
+                    pass
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        let bindings = collect_bindings(&file);
+        let names: Vec<String> = bindings
+            .iter()
+            .map(|binding| binding.node.text().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "os",
+                "os",
+                "np",
+                "err",
+                "path",
+                "sys",
+                "re",
+                "c",
+                "d",
+                "e",
+                "x",
+                "y",
+                "foo",
+                "b",
+                "g",
+                "v",
+                "MyClass",
+                "my_method",
+                "self",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_collect_bindings_python_match_case() {
+        let source = indoc::indoc! {r"
+            match val:
+                case Point(x, y=z):
+                    pass
+                case [a, b]:
+                    pass
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        let bindings = collect_bindings(&file);
+        let names: Vec<String> = bindings
+            .iter()
+            .map(|binding| binding.node.text().to_string())
+            .collect();
+        assert_eq!(names, vec!["x", "z", "a", "b"]);
+    }
+}

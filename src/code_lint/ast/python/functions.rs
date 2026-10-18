@@ -634,3 +634,101 @@ fn is_exempt_dunder_method(func_name: &str) -> bool {
         && func_name.len() > 4
         && !matches!(func_name, INIT_METHOD | NEW_METHOD | "__call__")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Language;
+
+    #[rstest::rstest]
+    #[case::other_decorator("@pytest.mark.parametrize(\"x\", [1, 2])", false)]
+    #[case::bare_override("@override", true)]
+    #[case::qualified_override("@typing_extensions.override", true)]
+    fn test_has_override_decorator(#[case] decorator: &str, #[case] expected: bool) {
+        let source = format!("{decorator}\ndef foo():\n    pass\n");
+        let file = ParsedFile::new(&source, Language::Python);
+        let parsed = file.py_module().expect("source should parse");
+        let Some(Stmt::FunctionDef(func_def)) = parsed.syntax().body.first() else {
+            unreachable!("source should start with a function definition");
+        };
+        assert_eq!(
+            has_override_decorator(&func_def.decorator_list, &file),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_extract_parameters_metadata() {
+        use PythonParameterKind::{KeywordOnly, Positional, Receiver, VarKeyword};
+
+        let source = indoc::indoc! {r"
+            def handler(self, a: int, b: str = 'hello', *, c: bool, **kwargs):
+                pass
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        let signatures = extract_function_signatures(&file);
+        let actual: Vec<(&str, PythonParameterKind, Option<&str>)> = signatures[0]
+            .parameters
+            .iter()
+            .map(|param| (param.name.as_str(), param.kind, param.type_text.as_deref()))
+            .collect();
+
+        assert_eq!(
+            actual,
+            vec![
+                ("self", Receiver, None),
+                ("a", Positional, Some("int")),
+                ("b", Positional, Some("str")),
+                ("c", KeywordOnly, Some("bool")),
+                ("kwargs", VarKeyword, None),
+            ]
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::ellipsis_stub("def f(x: list[int]) -> None: ...", true)]
+    #[case::pass_stub("def f(x: list[int]) -> None:\n    pass", true)]
+    #[case::docstring_and_ellipsis(
+        "def f(x: list[int]) -> None:\n    \"\"\"Doc.\"\"\"\n    ...",
+        true
+    )]
+    #[case::raise_not_implemented_bare(
+        "def f(x: list[int]) -> None:\n    raise NotImplementedError",
+        true
+    )]
+    #[case::raise_not_implemented_call(
+        "def f(x: list[int]) -> None:\n    raise NotImplementedError('todo')",
+        true
+    )]
+    #[case::real_body("def f(x: list[int]) -> int:\n    return len(x)", false)]
+    #[case::raise_from_not_implemented_cause(
+        "def f(x: list[int]) -> None:\n    raise ValueError() from NotImplementedError",
+        false
+    )]
+    fn test_has_stub_body(#[case] source: &str, #[case] expected: bool) {
+        let file = ParsedFile::new(source, Language::Python);
+        let sigs = extract_function_signatures(&file);
+        assert_eq!(sigs[0].has_stub_body, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::protocol_class(
+        "class P(Protocol):\n    def f(self, x: list[int]) -> None: pass",
+        true
+    )]
+    #[case::generic_protocol_class(
+        "class P(typing.Protocol[T]):\n    def f(self, x: list[int]) -> None: pass",
+        true
+    )]
+    #[case::abc_class("class A(abc.ABC):\n    def f(self, x: list[int]) -> None: pass", true)]
+    #[case::abc_meta_class(
+        "class A(metaclass=abc.ABCMeta):\n    def f(self, x: list[int]) -> None: pass",
+        true
+    )]
+    #[case::regular_class("class C:\n    def f(self, x: list[int]) -> None: pass", false)]
+    fn test_is_in_protocol_or_abc_class(#[case] source: &str, #[case] expected: bool) {
+        let file = ParsedFile::new(source, Language::Python);
+        let sigs = extract_function_signatures(&file);
+        assert_eq!(sigs[0].is_exempt_from_signature_rules(), expected);
+    }
+}

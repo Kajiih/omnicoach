@@ -139,3 +139,60 @@ fn is_logger_receiver(receiver: &Expr) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Language;
+
+    #[test]
+    fn test_collect_logger_calls_reads_callee_message_and_arguments() {
+        let source = indoc::indoc! {r#"
+            logger.info("Order {order_id} filled", order_id)
+            self.log.error("Peer " "{peer.id} failed", **extra)
+            logging.log(20, f"User {user_id}", user_id=1)
+            print("not a logger", value)
+        "#};
+        let file = ParsedFile::new(source, Language::Python);
+        let calls: Vec<_> = collect_logger_calls(&file)
+            .into_iter()
+            .map(|call| {
+                let mut keyword_names: Vec<String> = call.keyword_names.into_iter().collect();
+                keyword_names.sort();
+                (
+                    call.callee,
+                    call.message,
+                    call.has_trailing_positional_args,
+                    call.has_keyword_splat,
+                    keyword_names,
+                )
+            })
+            .collect();
+        assert_eq!(
+            calls,
+            vec![
+                (
+                    "logger.info".to_owned(),
+                    Some("Order {order_id} filled".to_owned()),
+                    true,
+                    false,
+                    vec![],
+                ),
+                (
+                    "self.log.error".to_owned(),
+                    Some("Peer {peer.id} failed".to_owned()),
+                    false,
+                    true,
+                    vec![],
+                ),
+                (
+                    "logging.log".to_owned(),
+                    None,
+                    false,
+                    false,
+                    vec!["user_id".to_owned()]
+                ),
+            ]
+        );
+    }
+}
