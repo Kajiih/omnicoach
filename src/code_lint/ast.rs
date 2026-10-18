@@ -86,6 +86,24 @@ pub(in crate::code_lint::ast) struct QualifiedName {
     pub(in crate::code_lint::ast) terminal: String,
 }
 
+/// Syntactic context surrounding a call expression, shared across [`AstCallCandidate`] and
+/// [`crate::code_lint::semantic::calls::CallMatch`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CallSiteContext {
+    /// True if the call is the context-manager expression of a Python `with` item (`with
+    /// suppress(KeyError):`). Always false in Rust.
+    pub is_with_context_manager: bool,
+    /// True if the call is inside a Python `except` handler without an intervening `def`,
+    /// `class`, or `lambda` boundary. Always false in Rust.
+    pub is_in_except_clause: bool,
+    /// True if the call is inside the condition or body of a `for`, `while`, or `loop`
+    /// statement without an intervening function, lambda, or closure boundary.
+    pub is_in_loop: bool,
+    /// The functions enclosing the call, innermost first. A Python function encloses its
+    /// decorators, parameters, and body; lambdas and Rust closures are not functions.
+    pub enclosing_functions: Arc<[EnclosingFunction]>,
+}
+
 /// Cached call expression metadata without lifetime ties to `ParsedFile`.
 pub(in crate::code_lint::ast) struct CachedCallCandidate {
     pub(in crate::code_lint::ast) span: SourceSpan,
@@ -93,10 +111,15 @@ pub(in crate::code_lint::ast) struct CachedCallCandidate {
     pub(in crate::code_lint::ast) method_name: Option<String>,
     pub(in crate::code_lint::ast) receiver_call_callee: Option<String>,
     pub(in crate::code_lint::ast) argument_spans: Vec<SourceSpan>,
-    pub(in crate::code_lint::ast) is_with_context_manager: bool,
-    pub(in crate::code_lint::ast) is_in_except_clause: bool,
-    pub(in crate::code_lint::ast) is_in_loop: bool,
-    pub(in crate::code_lint::ast) enclosing_functions: Arc<[EnclosingFunction]>,
+    pub(in crate::code_lint::ast) context: CallSiteContext,
+}
+
+impl std::ops::Deref for CachedCallCandidate {
+    type Target = CallSiteContext;
+
+    fn deref(&self) -> &Self::Target {
+        &self.context
+    }
 }
 
 /// Dedicated language-specific parsed syntax tree.
@@ -366,18 +389,16 @@ pub struct AstCallCandidate<'a> {
     pub receiver_call_callee: Option<String>,
     /// Semantic argument nodes passed to the call.
     pub arguments: Vec<AstNode<'a>>,
-    /// True if the call is the context-manager expression of a Python `with` item (`with
-    /// suppress(KeyError):`). Always false in Rust.
-    pub is_with_context_manager: bool,
-    /// True if the call is inside a Python `except` handler without an intervening `def`,
-    /// `class`, or `lambda` boundary. Always false in Rust.
-    pub is_in_except_clause: bool,
-    /// True if the call is inside the condition or body of a `for`, `while`, or `loop`
-    /// statement without an intervening function, lambda, or closure boundary.
-    pub is_in_loop: bool,
-    /// The functions enclosing the call, innermost first. A Python function encloses its
-    /// decorators, parameters, and body; lambdas and Rust closures are not functions.
-    pub enclosing_functions: Arc<[EnclosingFunction]>,
+    /// Syntactic context surrounding the call expression.
+    pub context: CallSiteContext,
+}
+
+impl std::ops::Deref for AstCallCandidate<'_> {
+    type Target = CallSiteContext;
+
+    fn deref(&self) -> &Self::Target {
+        &self.context
+    }
 }
 
 /// Collects all direct call expressions in `file` along with their callee text, optional method
@@ -399,10 +420,7 @@ pub fn collect_call_candidates(file: &ParsedFile) -> Vec<AstCallCandidate<'_>> {
                 .iter()
                 .map(|&span| AstNode::from_span(file, span))
                 .collect(),
-            is_with_context_manager: entry.is_with_context_manager,
-            is_in_except_clause: entry.is_in_except_clause,
-            is_in_loop: entry.is_in_loop,
-            enclosing_functions: Arc::clone(&entry.enclosing_functions),
+            context: entry.context.clone(),
         })
         .collect()
 }

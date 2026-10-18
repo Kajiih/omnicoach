@@ -2,7 +2,7 @@
 
 use super::bindings::named_function;
 use crate::code_lint::ast::{
-    CachedCallCandidate, EnclosingFunction, ParsedFile, span_from_rowan_range,
+    CachedCallCandidate, CallSiteContext, EnclosingFunction, ParsedFile, span_from_rowan_range,
     with_innermost_function,
 };
 use ra_ap_syntax::AstNode as _;
@@ -55,10 +55,12 @@ pub(in crate::code_lint::ast) fn collect_call_candidates(
                 method_name: None,
                 receiver_call_callee: None,
                 argument_spans,
-                is_with_context_manager: false,
-                is_in_except_clause: false,
-                is_in_loop: is_in_rust_loop(call.syntax()),
-                enclosing_functions: Arc::clone(&enclosing_functions),
+                context: CallSiteContext {
+                    is_with_context_manager: false,
+                    is_in_except_clause: false,
+                    is_in_loop: is_in_rust_loop(call.syntax()),
+                    enclosing_functions: Arc::clone(&enclosing_functions),
+                },
             });
         } else if let Some(method_call) = ast::MethodCallExpr::cast(syntax_node) {
             let (Some(receiver), Some(name_ref)) = (method_call.receiver(), method_call.name_ref())
@@ -82,10 +84,12 @@ pub(in crate::code_lint::ast) fn collect_call_candidates(
                 method_name,
                 receiver_call_callee,
                 argument_spans,
-                is_with_context_manager: false,
-                is_in_except_clause: false,
-                is_in_loop: is_in_rust_loop(method_call.syntax()),
-                enclosing_functions: Arc::clone(&enclosing_functions),
+                context: CallSiteContext {
+                    is_with_context_manager: false,
+                    is_in_except_clause: false,
+                    is_in_loop: is_in_rust_loop(method_call.syntax()),
+                    enclosing_functions: Arc::clone(&enclosing_functions),
+                },
             });
         }
     }

@@ -429,7 +429,7 @@ pub struct PythonEnvironSubscript<'a> {
     /// The mapping expression being indexed (`os.environ` or `environ`).
     pub mapping: AstNode<'a>,
     /// The functions enclosing the subscript, innermost first (see
-    /// [`AstCallCandidate::enclosing_functions`](crate::code_lint::ast::AstCallCandidate::enclosing_functions)).
+    /// [`CallSiteContext::enclosing_functions`](crate::code_lint::ast::CallSiteContext::enclosing_functions)).
     pub enclosing_functions: Arc<[EnclosingFunction]>,
 }
 

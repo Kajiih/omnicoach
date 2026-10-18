@@ -2,9 +2,13 @@
 
 use super::EnclosingFunctionTracker;
 use crate::code_lint::ast::{
-    CachedCallCandidate, EnclosingFunction, ParsedFile, span_from_ruff_range,
+    CachedCallCandidate, CallSiteContext, ParsedFile, span_from_ruff_range,
 };
 use crate::diagnostic::SourceSpan;
+use ruff_python_ast::visitor::source_order::{
+    SourceOrderVisitor, walk_except_handler, walk_expr, walk_stmt, walk_with_item,
+};
+use ruff_python_ast::{ExceptHandler, Expr, Stmt, WithItem};
 use ruff_text_size::Ranged as _;
 use std::sync::Arc;
 
@@ -13,11 +17,6 @@ use std::sync::Arc;
 pub(in crate::code_lint::ast) fn collect_call_candidates(
     file: &ParsedFile,
 ) -> Vec<CachedCallCandidate> {
-    use ruff_python_ast::visitor::source_order::{
-        SourceOrderVisitor, walk_except_handler, walk_expr, walk_stmt, walk_with_item,
-    };
-    use ruff_python_ast::{ExceptHandler, Expr, Stmt, WithItem};
-
     struct CallVisitor<'a> {
         file: &'a ParsedFile,
         /// Span of the context-manager expression of the `with` item being visited.
@@ -75,10 +74,12 @@ pub(in crate::code_lint::ast) fn collect_call_candidates(
                         &self.file.source,
                         call,
                         span,
-                        is_with_context_manager,
-                        self.in_except_clause,
-                        self.in_loop,
-                        &self.enclosing_functions.functions,
+                        CallSiteContext {
+                            is_with_context_manager,
+                            is_in_except_clause: self.in_except_clause,
+                            is_in_loop: self.in_loop,
+                            enclosing_functions: Arc::clone(&self.enclosing_functions.functions),
+                        },
                     ));
                 }
                 Expr::Lambda(_) => {
@@ -128,13 +129,8 @@ fn build_python_call_candidate(
     source: &str,
     call: &ruff_python_ast::ExprCall,
     span: SourceSpan,
-    is_with_context_manager: bool,
-    is_in_except_clause: bool,
-    is_in_loop: bool,
-    enclosing_functions: &Arc<[EnclosingFunction]>,
+    context: CallSiteContext,
 ) -> CachedCallCandidate {
-    use ruff_python_ast::Expr;
-
     let func_span = span_from_ruff_range(call.func.range());
     let callee = source[func_span.start..func_span.end].to_string();
     let (method_name, receiver_call_callee) = if let Expr::Attribute(attr) = call.func.as_ref() {
@@ -167,10 +163,7 @@ fn build_python_call_candidate(
         method_name,
         receiver_call_callee,
         argument_spans,
-        is_with_context_manager,
-        is_in_except_clause,
-        is_in_loop,
-        enclosing_functions: Arc::clone(enclosing_functions),
+        context,
     }
 }
 
