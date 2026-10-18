@@ -13,7 +13,7 @@
 
 ### 0. Triage (lead, before spawning workers)
 
-1. **Redundancy gate.** For each candidate, list the Ruff / Clippy / Mypy / Pyright / Pylint rules that already cover it. In the legacy custom lints batch, 4 of 10 candidates and 3 sub-checks were fully covered. A dropped candidate still gets `01_understand.md` and `02_references.md`, ending with the exact `pyproject.toml` / `Cargo.toml` configuration that replaces it, plus a *Not pursued* entry in [ROADMAP.md](../../ROADMAP.md) linking that file.
+1. **Redundancy gate.** For each candidate, list the Ruff / Clippy / Mypy / Pyright / Pylint rules that already cover it. In the legacy custom lints batch, 4 of 10 candidates and 3 sub-checks were fully covered. A dropped candidate still gets `01_understand.md` and `02_references.md`, ending with the exact `pyproject.toml` / `Cargo.toml` configuration that replaces it, plus an entry in [not_pursued_rules.md](not_pursued_rules.md) linking that file.
 2. **Language scope.** Decide per rule which languages apply, and record why the others do not ([rule_design_guide.md](rule_design_guide.md)). Workers ported Python rules and never asked; the Rust question came up only after shipping.
 3. **Shared-helper inventory.** Before workers start, list the structural facts several candidates will need (logger-call detection, string literal text, format-placeholder parsing, local bindings, union flattening, collection type names) and grep `src/code_lint/ast/` and `src/code_lint/semantic/` for existing helpers. Assign each new shared fact to one owner (the lead or one worker). Without this step, parallel workers each wrote their own logger matcher, format-field parser and literal extractor in `ast/python.rs`.
 
