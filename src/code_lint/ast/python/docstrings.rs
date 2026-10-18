@@ -6,10 +6,12 @@ use crate::diagnostic::SourceSpan;
 use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::Ranged as _;
 use std::collections::HashSet;
+use std::ops::Range;
 
 const QUOTE_CHARS: &[char] = &['"', '\''];
 const RESULT_SUMMARY_VERBS: &[&str] = &["return", "returns", "yield", "yields"];
 const OPTIONAL_MARKER: &str = "optional";
+const NONE: &str = "None";
 
 /// The docstring of a Python module, class, or function: the string literal that is the first
 /// statement of its body.
@@ -71,6 +73,18 @@ impl PythonDocstring<'_> {
             .lines()
             .map(str::trim)
             .find(|line| !line.is_empty())
+    }
+
+    /// The first non-blank line, with its 0-based line index and without surrounding whitespace.
+    #[must_use]
+    pub fn summary_line(&self) -> Option<DocstringLine> {
+        self.text.lines().enumerate().find_map(|(index, line)| {
+            let trimmed = line.trim();
+            (!trimmed.is_empty()).then(|| DocstringLine {
+                index,
+                text: trimmed.to_owned(),
+            })
+        })
     }
 
     /// The first paragraph (the lines up to the first blank line after the summary), joined by
@@ -312,8 +326,8 @@ impl DocstringLine {
     /// type `bool` and description `True if ready.`.
     ///
     /// The prefix is the text before the first `:` when it is non-empty, has no whitespace
-    /// outside brackets (`dict[str, int]` qualifies, `Note that` does not), and the colon is
-    /// followed by whitespace or the end of the line.
+    /// outside brackets except around `|` (`dict[str, int]` and `User | None` qualify, `Note
+    /// that` does not), and the colon is followed by whitespace or the end of the line.
     #[must_use]
     pub fn split_type_prefix(&self) -> Option<DocstringTypedLine<'_>> {
         let mut depth = 0_usize;
@@ -330,7 +344,13 @@ impl DocstringLine {
                         description: rest.trim_start(),
                     });
                 }
-                _ if depth == 0 && character.is_whitespace() => return None,
+                _ if depth == 0 && character.is_whitespace() => {
+                    let is_around_pipe = self.text[..offset].trim_end().ends_with('|')
+                        || self.text[offset..].trim_start().starts_with('|');
+                    if !is_around_pipe {
+                        return None;
+                    }
+                }
                 _ => {}
             }
         }
@@ -394,6 +414,53 @@ pub struct DocstringSection {
     pub entries: Vec<DocstringEntry>,
 }
 
+impl DocstringSection {
+    /// The prose of the section body after any leading Napoleon type prefix on the first line,
+    /// joined by single spaces.
+    #[must_use]
+    pub fn description(&self) -> Option<String> {
+        let opening_text = self.opening_description_text()?;
+        let mut parts = Vec::with_capacity(self.body.len());
+        if !opening_text.is_empty() {
+            parts.push(opening_text);
+        }
+        parts.extend(self.body[1..].iter().map(|line| line.text.as_str()));
+        Some(parts.join(" "))
+    }
+
+    /// The 0-based docstring line index containing byte `offset` in [`Self::description`].
+    #[must_use]
+    pub fn line_at_description_offset(&self, offset: usize) -> Option<usize> {
+        let opening_line = self.body.first()?;
+        let opening_text = self.opening_description_text()?;
+        let mut cursor = if opening_text.is_empty() {
+            0
+        } else {
+            if offset <= opening_text.len() {
+                return Some(opening_line.index);
+            }
+            opening_text.len() + 1
+        };
+        for line in &self.body[1..] {
+            let end = cursor + line.text.len();
+            if offset <= end {
+                return Some(line.index);
+            }
+            cursor = end + 1;
+        }
+        Some(opening_line.index)
+    }
+
+    /// The prose of the first body line after any leading Napoleon `type:` prefix.
+    fn opening_description_text(&self) -> Option<&str> {
+        let opening_line = self.body.first()?;
+        let text = opening_line
+            .split_type_prefix()
+            .map_or(opening_line.text.as_str(), |typed| typed.description);
+        Some(text)
+    }
+}
+
 /// Parses the Google-style sections of docstring `text`.
 ///
 /// A section starts at a line that is only a recognized header followed by a colon, and ends at
@@ -443,6 +510,95 @@ pub fn parse_google_sections(text: &str) -> Vec<DocstringSection> {
         });
     }
     sections
+}
+
+/// Returns the opening word of `text` if it is in `verbs` (case-insensitive) and is not a
+/// `noun_stems` + `noun_followers` noun phrase (`Return code of …` or `Return-code …`).
+#[must_use]
+pub fn leading_verb<'a>(
+    text: &'a str,
+    verbs: &[&str],
+    noun_stems: &[&str],
+    noun_followers: &[&str],
+) -> Option<&'a str> {
+    let word = leading_word(text);
+    let lowercase = word.to_ascii_lowercase();
+    if !verbs.contains(&lowercase.as_str()) {
+        return None;
+    }
+    let after_first = text[word.len()..]
+        .trim_start_matches(|character: char| character.is_whitespace() || character == '-');
+    let next_word = leading_word(after_first).to_ascii_lowercase();
+    let is_noun_phrase =
+        noun_stems.contains(&lowercase.as_str()) && noun_followers.contains(&next_word.as_str());
+    (!is_noun_phrase).then_some(word)
+}
+
+/// Byte ranges of the nullability markers in `description`: a word `None` (optionally
+/// backticked, then optionally followed by `)`) at a clause end, with its leading words from
+/// `leads`.
+#[must_use]
+pub fn nullability_markers(description: &str, leads: &[&str]) -> Vec<Range<usize>> {
+    none_words(description)
+        .filter_map(|word| {
+            let after = &description[word.end..];
+            if !is_clause_end(after.strip_prefix(')').unwrap_or(after)) {
+                return None;
+            }
+            let before = description[..word.start].trim_end();
+            let lowercase = before.to_ascii_lowercase();
+            let lead = leads.iter().find(|lead| {
+                lowercase.strip_suffix(**lead).is_some_and(|preceding| {
+                    !lead.starts_with(char::is_alphabetic) || !preceding.ends_with(is_word_char)
+                })
+            })?;
+            Some(before.len() - lead.len()..word.end)
+        })
+        .collect()
+}
+
+/// `text` with all characters whose byte offset falls inside any range in `ranges` removed.
+#[must_use]
+pub fn without_byte_ranges(text: &str, ranges: &[Range<usize>]) -> String {
+    text.char_indices()
+        .filter(|(offset, _)| !ranges.iter().any(|range| range.contains(offset)))
+        .map(|(_, character)| character)
+        .collect()
+}
+
+/// Byte ranges of each whole word `None` in `text`, including enclosing backticks.
+pub fn none_words(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
+    text.match_indices(NONE).filter_map(move |(start, _)| {
+        let end = start + NONE.len();
+        let (before, after) = (&text[..start], &text[end..]);
+        if before.ends_with(is_word_char) || after.starts_with(is_word_char) {
+            return None;
+        }
+        let is_backticked = before.ends_with('`') && after.starts_with('`');
+        Some(if is_backticked {
+            start - 1..end + 1
+        } else {
+            start..end
+        })
+    })
+}
+
+/// Returns true if `before`, the text before a match, is empty or ends with a `.` or `;` and
+/// whitespace.
+#[must_use]
+pub fn is_clause_start(before: &str) -> bool {
+    let trimmed = before.trim_end();
+    trimmed.is_empty() || (trimmed.len() < before.len() && trimmed.ends_with(['.', ';']))
+}
+
+/// Returns true if `after`, the text after a match, is empty or starts with a `.` or `;`
+/// followed by whitespace or the end.
+#[must_use]
+pub fn is_clause_end(after: &str) -> bool {
+    after.is_empty()
+        || after
+            .strip_prefix(['.', ';'])
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
 }
 
 /// A recognized Google-style section header line.
@@ -544,6 +700,19 @@ fn indentation(line: &str) -> usize {
     line.chars()
         .take_while(|character| character.is_whitespace())
         .count()
+}
+
+/// The run of alphanumeric characters at the start of `text` (empty if it starts otherwise).
+fn leading_word(text: &str) -> &str {
+    let end = text
+        .find(|character: char| !character.is_alphanumeric())
+        .unwrap_or(text.len());
+    &text[..end]
+}
+
+/// Returns true if `character` can be part of an identifier-like word.
+fn is_word_char(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
 }
 
 #[cfg(test)]

@@ -54,6 +54,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `specific-collection-parameter` (python): Flags Python function parameters annotated with `Sequence` or `Collection` when the body only uses `Collection` or `Iterable` operations.
 - `statement-after-main-guard` (python): Flags top-level Python statements placed after the `if __name__ == "__main__":` guard.
 - `suppressed-exception` (python): Flags `contextlib.suppress` blocks.
+- `test-calls-test` (python, rust): Flags functions in test files that call another test function.
 - `too-many-assertions` (python, rust): Flags test functions with more assertions than the limit.
 - `type-cast` (python): Flags `typing.cast` calls in Python source files.
 - `type-suffixed-name` (python, rust): Flags names that end with a type suffix such as `_list` or `_str`.
@@ -61,6 +62,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `undocumented-nontrivial-function` (python): Requires a docstring on functions with many statements or a high cognitive complexity.
 - `undocumented-public-attribute` (python): Requires detailed Python class docstrings to list every public attribute under `Attributes:`.
 - `unexplained-optional-argument` (python): Flags docstring argument and attribute descriptions that call a value optional or nullable without saying what `None` or omission does.
+- `unexplained-optional-return` (python): Flags docstring `Returns:` and `Yields:` sections that say `or None` or `can be None` without stating when `None` is returned.
 - `unexplained-parameter` (python): Requires an `Args:` section when a nontrivial function has an optional, boolean, callable or variadic parameter.
 - `unexplained-return` (python): Requires a `Returns:` section when a nontrivial function has an optional, boolean, union or unannotated result.
 - `uninherited-protocol` (python): Flags Python classes that implement every method of an in-file Protocol without inheriting from it.
@@ -69,6 +71,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `unslotted-dataclass` (python): Requires Python dataclasses to declare `slots=True`.
 - `unstructured-task` (python): Flags asyncio tasks spawned outside a task group.
 - `unused-suppression` (python, rust): Flags suppression directives that suppress no finding.
+- `verb-led-property-docstring` (python): Flags `@property` getter docstrings whose summary opens with a verb such as `Returns` or `Gets`.
 - `verb-led-returns-section` (python): Flags docstring `Returns:` and `Yields:` sections that start with the verb `Returns` or `Yields`.
 - `yield-loop-in-tests` (python, rust): Flags scheduler-yield and spin-wait calls inside loops in tests.
 - `zero-sleep-in-tests` (python, rust): Flags zero-duration sleeps used to yield in tests.

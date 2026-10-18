@@ -30,7 +30,8 @@ pub(super) use self::classes::{collect_declaration_scopes, collect_type_method_s
 pub use self::complexity::PythonComplexityMetric;
 pub use self::docstrings::{
     DocstringEntry, DocstringLine, DocstringSection, DocstringSectionKind, DocstringTypedLine,
-    PythonDocstring, normalize_docstring_text, parse_google_sections,
+    PythonDocstring, is_clause_end, is_clause_start, leading_verb, none_words,
+    normalize_docstring_text, nullability_markers, parse_google_sections, without_byte_ranges,
 };
 pub use self::format_strings::{
     PythonFormatPlaceholder, PythonFormatString, PythonFormatStyle, collect_format_strings,
@@ -60,12 +61,15 @@ use self::literals::is_constant_name;
 use self::logging::extract_logger_call;
 use self::strings::{TemplateParts, fstring_segments_and_interpolations, static_string_text};
 use crate::code_lint::ast::{
-    AstNode, EnclosingFunction, ParsedFile, QualifiedName, ResolvedName, TestFunctionSetup,
-    normalize_statement_text, resolve_name, span_from_ruff_range, with_innermost_function,
+    AstCallCandidate, AstNode, EnclosingFunction, ParsedFile, QualifiedName, ResolvedName,
+    TestFunctionSetup, TestToTestCall, normalize_statement_text, resolve_name,
+    span_from_ruff_range, with_innermost_function,
 };
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Decorator, ExceptHandler, Expr, ModModule, Stmt, StmtFunctionDef};
+use ruff_python_ast::{
+    Decorator, ExceptHandler, Expr, ModModule, Stmt, StmtClassDef, StmtFunctionDef,
+};
 use ruff_text_size::Ranged as _;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -799,38 +803,219 @@ fn extract_python_leading_setup_statements(
         .collect()
 }
 
+/// Collects calls in a Python test file where a function calls a test function defined in the same
+/// file.
+#[must_use]
+pub(super) fn collect_test_to_test_calls(file: &ParsedFile) -> Vec<TestToTestCall<'_>> {
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let module_body = &parsed.syntax().body;
+    let function_locals = collect_python_function_locals_by_name_span(module_body, file);
+    let mut module_tests = HashSet::new();
+    let mut class_tests: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for statement in module_body {
+        match statement {
+            Stmt::FunctionDef(func_def) if is_test_function_def(func_def) => {
+                module_tests.insert(func_def.name.as_str());
+            }
+            Stmt::ClassDef(class_def) if is_test_class_def(class_def) => {
+                let methods: HashSet<&str> = class_def
+                    .body
+                    .iter()
+                    .filter_map(|stmt| match stmt {
+                        Stmt::FunctionDef(method_def) if is_test_function_def(method_def) => {
+                            Some(method_def.name.as_str())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                class_tests
+                    .entry(class_def.name.as_str())
+                    .or_default()
+                    .extend(methods);
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for candidate in super::collect_call_candidates(file) {
+        let Some(caller_fn) = candidate.enclosing_functions.first() else {
+            continue;
+        };
+        let Some(target) =
+            resolve_called_python_test(&candidate, &module_tests, &class_tests, &function_locals)
+        else {
+            continue;
+        };
+        if is_recursive_python_test_call(&candidate, caller_fn, &target) {
+            continue;
+        }
+        out.push(TestToTestCall {
+            node: candidate.node,
+            caller: caller_fn.name.clone(),
+            callee: candidate.callee,
+        });
+    }
+    out
+}
+
+/// A Python test function or method target in the same file.
+#[derive(PartialEq, Eq)]
+enum PythonTestTarget<'a> {
+    /// A module-level `def test_*` function.
+    Module(&'a str),
+    /// A `def test_*` method on a test class (`Test*` or `*TestCase`).
+    Class {
+        class_name: &'a str,
+        method: &'a str,
+    },
+}
+
+/// Resolves `candidate` to a declared Python test function or test method in the same file, if any.
+fn resolve_called_python_test<'a>(
+    candidate: &'a AstCallCandidate<'_>,
+    module_tests: &HashSet<&'a str>,
+    class_tests: &HashMap<&'a str, HashSet<&'a str>>,
+    function_locals: &HashMap<SourceSpan, HashSet<String>>,
+) -> Option<PythonTestTarget<'a>> {
+    if !candidate.callee.contains('.') {
+        let callee = candidate.callee.as_str();
+        let is_local = candidate.enclosing_functions.iter().any(|func| {
+            function_locals
+                .get(&func.name_span)
+                .is_some_and(|locals| locals.contains(callee))
+        });
+        (module_tests.contains(callee) && !is_local).then_some(PythonTestTarget::Module(callee))
+    } else if let Some(method) = candidate
+        .callee
+        .strip_prefix("self.")
+        .or_else(|| candidate.callee.strip_prefix("cls."))
+    {
+        let class_name = candidate
+            .enclosing_functions
+            .iter()
+            .find_map(|func| func.enclosing_class.as_deref())?;
+        class_tests
+            .get(class_name)
+            .filter(|methods| methods.contains(method))
+            .map(|_| PythonTestTarget::Class { class_name, method })
+    } else {
+        None
+    }
+}
+
+/// Returns true if `candidate` is a recursive self-call to the enclosing test function or method.
+fn is_recursive_python_test_call(
+    candidate: &AstCallCandidate<'_>,
+    caller_fn: &EnclosingFunction,
+    target: &PythonTestTarget<'_>,
+) -> bool {
+    match *target {
+        PythonTestTarget::Module(callee) => {
+            caller_fn.enclosing_class.is_none() && caller_fn.name == callee
+        }
+        PythonTestTarget::Class { class_name, method } => candidate
+            .enclosing_functions
+            .iter()
+            .any(|func| func.enclosing_class.as_deref() == Some(class_name) && func.name == method),
+    }
+}
+
+/// Collects local bound names for each `StmtFunctionDef` in `body` indexed by its declared name span.
+fn collect_python_function_locals_by_name_span(
+    body: &[Stmt],
+    file: &ParsedFile,
+) -> HashMap<SourceSpan, HashSet<String>> {
+    struct FunctionLocalsCollector<'a> {
+        file: &'a ParsedFile,
+        out: HashMap<SourceSpan, HashSet<String>>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for FunctionLocalsCollector<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            if let Stmt::FunctionDef(func_def) = statement {
+                self.out.insert(
+                    span_from_ruff_range(func_def.name.range),
+                    scopes::collect_local_bound_names(func_def, self.file),
+                );
+            }
+            walk_stmt(self, statement);
+        }
+    }
+
+    let mut collector = FunctionLocalsCollector {
+        file,
+        out: HashMap::new(),
+    };
+    collector.visit_body(body);
+    collector.out
+}
+
+/// Returns true if a Python `StmtClassDef` is a test class (`Test*` or inheriting `*TestCase`).
+fn is_test_class_def(class_def: &StmtClassDef) -> bool {
+    class_def.name.as_str().starts_with("Test")
+        || class_def.bases().iter().any(|base| {
+            let base_name = match base {
+                Expr::Name(name) => Some(name.id.as_str()),
+                Expr::Attribute(attr) => Some(attr.attr.as_str()),
+                _ => None,
+            };
+            base_name.is_some_and(|name| name.ends_with("TestCase"))
+        })
+}
+
+/// Saved state of an [`EnclosingFunctionTracker`] before entering a statement.
+pub(in crate::code_lint::ast) struct EnclosingFunctionState {
+    functions: Arc<[EnclosingFunction]>,
+    enclosing_class: Option<String>,
+}
+
 /// Tracks the functions enclosing the statement visited by a source-order walk.
 #[derive(Default)]
 pub(in crate::code_lint::ast) struct EnclosingFunctionTracker {
     /// Number of statements enclosing the visited statement.
     depth: usize,
+    /// Name of the top-level `class` statement being entered, when visiting its direct body.
+    enclosing_class: Option<String>,
     /// The enclosing functions, innermost first.
     pub(in crate::code_lint::ast) functions: Arc<[EnclosingFunction]>,
 }
 
 impl EnclosingFunctionTracker {
     /// Enters `statement`, which encloses everything visited until the matching [`Self::exit`].
-    /// Returns the outer functions to pass to it.
-    pub(in crate::code_lint::ast) fn enter(
-        &mut self,
-        statement: &Stmt,
-    ) -> Arc<[EnclosingFunction]> {
-        let outer = Arc::clone(&self.functions);
-        if let Stmt::FunctionDef(func_def) = statement {
-            let function = EnclosingFunction {
-                name: func_def.name.to_string(),
-                is_top_level: self.depth == 0,
-            };
-            self.functions = with_innermost_function(function, &outer);
+    /// Returns the outer state to pass to [`Self::exit`].
+    pub(in crate::code_lint::ast) fn enter(&mut self, statement: &Stmt) -> EnclosingFunctionState {
+        let state = EnclosingFunctionState {
+            functions: Arc::clone(&self.functions),
+            enclosing_class: self.enclosing_class.clone(),
+        };
+        match statement {
+            Stmt::FunctionDef(func_def) => {
+                let function = EnclosingFunction {
+                    name: func_def.name.to_string(),
+                    name_span: span_from_ruff_range(func_def.name.range),
+                    is_top_level: self.depth == 0,
+                    enclosing_class: self.enclosing_class.take(),
+                };
+                self.functions = with_innermost_function(function, &state.functions);
+            }
+            Stmt::ClassDef(class_def) => {
+                self.enclosing_class = (self.depth == 0).then(|| class_def.name.to_string());
+            }
+            _ => {
+                self.enclosing_class = None;
+            }
         }
         self.depth += 1;
-        outer
+        state
     }
 
-    /// Leaves the statement entered by the [`Self::enter`] call that returned `outer`.
-    pub(in crate::code_lint::ast) fn exit(&mut self, outer: Arc<[EnclosingFunction]>) {
+    /// Leaves the statement entered by the [`Self::enter`] call that returned `state`.
+    pub(in crate::code_lint::ast) fn exit(&mut self, state: EnclosingFunctionState) {
         self.depth -= 1;
-        self.functions = outer;
+        self.functions = state.functions;
+        self.enclosing_class = state.enclosing_class;
     }
 }
 

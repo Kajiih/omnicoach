@@ -72,13 +72,13 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 | Consensus | `opinionated` | Ordinary correct-enough code: many codebases, including monorepo at scale, write `Returns: Returns …` and accept it. |
 | Impacted quality | `maintainability` | No runtime mechanism; the cost is documentation readability. |
 
-## 7. Related candidate (not implemented here): `@property` docstrings that start with a verb
+## 7. Related rule (now implemented as `verb-led-property-docstring`): `@property` docstrings that start with a verb
 
-For [ROADMAP.md](../../../ROADMAP.md), to be added by the lead if accepted (Q4):
+Implemented in `src/code_lint/rules/verb_led_property_docstring.rs`:
 
-- **Pattern**: the summary line of a `@property` / `functools.cached_property` getter starts with `Returns`, `Return`, `Gets`, `Get`, `Retrieves` or `Fetches` (`"""Returns the Bigtable path."""`).
+- **Pattern**: the summary line of a `@property` / `functools.cached_property` getter starts with `Returns`, `Return`, `Gets`, `Get`, `Retrieves`, `Retrieve`, `Fetches`, `Fetch`, `Computes`, or `Calculates` (`"""Returns the Bigtable path."""`). Bare `Compute` and `Calculate` are excluded because `"Compute"` is a common noun adjunct (`"""Compute units allocated to the task."""`), while `"Return"`, `"Returns"`, and `"Get"` followed by noun-compound followers (`code`, `value`, `type`, `status`, `address`, `path`, `rate`, `request`, `on`, `of`, `from`) are exempt (`"""Return code of the finished process."""`, `"""Returns on invested capital."""`).
 - **Fix**: an attribute-style noun phrase (`"""The Bigtable path."""`).
-- **Backing**: Google §3.8.3 lines 2081–2084, quoted in [02_references.md](02_references.md) §1. No external rule: Ruff `D401` explicitly lets properties use "a non-imperative summary line" but flags nothing.
+- **Backing**: Google Python Style Guide §3.8.3 (Functions and Methods), quoted in [02_references.md](02_references.md) §1. No external rule: Ruff `D401` explicitly lets properties use "a non-imperative summary line" (`lint.pydocstyle.property-decorators`) and disables `D401` altogether under `convention = "google"`.
 - **Interaction**: a property with a `Returns:` section that starts with `Returns` would get both findings on different lines; pydoclint `DOC201` already notes that properties need no `Returns:` section.
 
 ## 8. Helper API

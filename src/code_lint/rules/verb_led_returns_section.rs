@@ -4,7 +4,7 @@
 //! section counts; the summary line (Google allows a `Returns …` summary) and other sections are
 //! not read.
 
-use crate::code_lint::ast::python::{DocstringLine, DocstringSectionKind};
+use crate::code_lint::ast::python::{DocstringLine, DocstringSectionKind, leading_verb};
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
@@ -130,23 +130,7 @@ fn opening_verb(line: &DocstringLine) -> Option<&str> {
     let text = line
         .split_type_prefix()
         .map_or(line.text.as_str(), |typed| typed.description);
-    let word = leading_word(text);
-    let lowercase = word.to_ascii_lowercase();
-    if !SECTION_VERBS.contains(&lowercase.as_str()) {
-        return None;
-    }
-    let next_word = leading_word(text[word.len()..].trim_start()).to_ascii_lowercase();
-    let is_noun_phrase =
-        NOUN_STEMS.contains(&lowercase.as_str()) && NOUN_FOLLOWERS.contains(&next_word.as_str());
-    (!is_noun_phrase).then_some(word)
-}
-
-/// The run of alphanumeric characters at the start of `text` (empty if it starts otherwise).
-fn leading_word(text: &str) -> &str {
-    let end = text
-        .find(|character: char| !character.is_alphanumeric())
-        .unwrap_or(text.len());
-    &text[..end]
+    leading_verb(text, SECTION_VERBS, NOUN_STEMS, NOUN_FOLLOWERS)
 }
 
 #[cfg(test)]

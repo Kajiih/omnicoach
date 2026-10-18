@@ -133,7 +133,7 @@ Matching is plain string scanning over the joined description: `regex` is not a 
 | Neighbor | Relation |
 | :--- | :--- |
 | `redundant_type_docstring` | Disjoint: it owns the type slot, this rule owns the description plus a bare `(optional)` slot (D7). `Optional[int] count.` at the start of a description is flagged here as an omission marker; it is type text in the description, which that rule does not read [U: its `03_design.md` is not written yet]. |
-| `redundant_returns_docstring` | Disjoint while Q3 stays "no". |
+| `unexplained-optional-return` | Disjoint: `unexplained-optional-argument` owns `Args:` and `Attributes:`, while `unexplained-optional-return` owns `Returns:` and `Yields:`. |
 | pydoclint `check-arg-defaults` | No conflict: it governs `default=` in the type slot only. |
 | Ruff D417 | Complementary: D417 requires an entry; this rule judges its wording. |
 
@@ -152,7 +152,7 @@ Matching is plain string scanning over the joined description: `regex` is not a 
 
 - **Rust analogue** (not planned): in rustdoc `# Arguments` / `# Parameters` lists, flag "Optional …" on an `Option<T>` parameter that does not say what `None` does. Weak: no standard section, and `Option` parameters are rare in idiomatic public APIs.
 - **Unexplained `None` default** (if Q1 is "later"): a trigger without markers, keyed on `= None`.
-- **`Returns:` "or None"** (if Q3 is "later").
+- **`Returns:` "or None"** (Q3): now implemented as `unexplained-optional-return` in `src/code_lint/rules/unexplained_optional_return.rs`. Inspects `DocstringSectionKind::Returns` (excluding `Yields:` because generators yield items and return `None` only on `StopIteration`), strips an optional Napoleon `type:` prefix on the first line, locates trailing nullability markers (`or None`, `| None`, `can be None`, `may be None`) via the shared `nullability_markers` helper, and requires either an inline condition after `None` (`or None if no user matches`, `or None on cache eviction`) or a separate `None` mention in the remainder of the `Returns:` section (`If no user matches, returns None.`), reporting on the exact line of the marker via `DocstringSection::line_at_description_offset`.
 
 ## 8. Draft `RuleDoc`
 

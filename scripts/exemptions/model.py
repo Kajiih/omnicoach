@@ -49,9 +49,12 @@ SINGLE_LETTER_NAME = "src/code_lint/rules/single_letter_name.rs"
 SLEEP_IN_TESTS = "src/code_lint/rules/sleep_in_tests.rs"
 SPECIFIC_COLLECTION_PARAMETER = "src/code_lint/rules/specific_collection_parameter.rs"
 SUPPRESSED_EXCEPTION = "src/code_lint/rules/suppressed_exception.rs"
+TEST_CALLS_TEST = "src/code_lint/rules/test_calls_test.rs"
 TOO_MANY_ASSERTIONS = "src/code_lint/rules/too_many_assertions.rs"
 TYPE_SUFFIXED_NAME = "src/code_lint/rules/type_suffixed_name.rs"
+UNEXPLAINED_OPTIONAL_RETURN = "src/code_lint/rules/unexplained_optional_return.rs"
 UNMATCHED_LOGGER = "src/code_lint/rules/unmatched_logger_placeholder.rs"
+VERB_LED_PROPERTY_DOCSTRING = "src/code_lint/rules/verb_led_property_docstring.rs"
 YIELD_LOOP_IN_TESTS = "src/code_lint/rules/yield_loop_in_tests.rs"
 
 INLINE_TEST_ALWAYS_FALSE = (

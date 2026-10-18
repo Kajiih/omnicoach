@@ -48,6 +48,7 @@ pub mod sleep_in_tests;
 pub mod specific_collection_parameter;
 pub mod statement_after_main_guard;
 pub mod suppressed_exception;
+pub mod test_calls_test;
 pub mod too_many_assertions;
 pub mod type_cast;
 pub mod type_suffixed_name;
@@ -55,12 +56,14 @@ pub mod uncolocated_helper;
 pub mod undocumented_nontrivial_function;
 pub mod undocumented_public_attribute;
 pub mod unexplained_optional_argument;
+pub mod unexplained_optional_return;
 pub mod unexplained_parameter;
 pub mod unexplained_return;
 pub mod uninherited_protocol;
 pub mod unmatched_logger_placeholder;
 pub mod unslotted_dataclass;
 pub mod unstructured_task;
+pub mod verb_led_property_docstring;
 pub mod verb_led_returns_section;
 pub mod yield_loop_in_tests;
 
@@ -75,6 +78,7 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &logic_in_tests::RULE,
     &multi_phase_test::RULE,
     &duplicated_test_setup::RULE,
+    &test_calls_test::RULE,
     &mock_in_tests::RULE,
     &mock_call_assertion::RULE,
     &fake_without_protocol::RULE,
@@ -115,9 +119,11 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &unmatched_logger_placeholder::RULE,
     &quote_wrapped_placeholder::RULE,
     &verb_led_returns_section::RULE,
+    &verb_led_property_docstring::RULE,
     &undocumented_public_attribute::RULE,
     &annotated_type_in_docstring::RULE,
     &unexplained_optional_argument::RULE,
+    &unexplained_optional_return::RULE,
     &deferral_docstring::RULE,
     &copied_base_docstring::RULE,
     &partial_override_docstring::RULE,

@@ -14,7 +14,7 @@ const BANNED: ListOption = ListOption {
     kind: ListKind::Deny,
     doc: "Scheduler-yield and spin-wait calls flagged when called inside a loop in tests.",
     default: FilterListDefaults {
-        base: &["checkpoint", "yield_now", "spin_loop"],
+        base: &["checkpoint", "yield_now", "spin_loop", "sched_yield"],
         extend: &[
             (
                 Language::Python,
@@ -26,6 +26,7 @@ const BANNED: ListOption = ListOption {
                     "trio.lowlevel.checkpoint_if_cancelled",
                     "trio.lowlevel.cancel_shielded_checkpoint",
                     "trio.testing.wait_all_tasks_blocked",
+                    "os.sched_yield",
                 ],
             ),
             (
@@ -36,6 +37,8 @@ const BANNED: ListOption = ListOption {
                     "async_std::task::yield_now",
                     "futures_lite::future::yield_now",
                     "smol::future::yield_now",
+                    "std::thread::yield_now",
+                    "thread::yield_now",
                     "hint::spin_loop",
                     "std::hint::spin_loop",
                     "core::hint::spin_loop",
@@ -72,9 +75,9 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
             summary: "Flags scheduler-yield and spin-wait calls inside loops in tests.",
             what_it_does: indoc::indoc! {r"
                 Flags a call from the `banned` list, such as `anyio.lowlevel.checkpoint()`,
-                `trio.lowlevel.checkpoint()`, `tokio::task::yield_now()` or `std::hint::spin_loop()`,
-                when it lies inside the condition or body of a `for`, `while` or `loop` statement in a
-                test file.
+                `trio.lowlevel.checkpoint()`, `os.sched_yield()`, `tokio::task::yield_now()`,
+                `std::thread::yield_now()` or `std::hint::spin_loop()`, when it lies inside the
+                condition or body of a `for`, `while` or `loop` statement in a test file.
 
                 A single yield outside a loop is not flagged. Calls in a `for` loop's iterator
                 expression, in a Python loop's `else` clause, or inside a nested function,
@@ -93,6 +96,14 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 A yield inside a helper function that is itself called in a loop is only flagged when
                 the loop lives inside the helper."}),
             references: &[
+                Reference {
+                    title: "Martin Fowler: Eradicating Non-Determinism in Tests",
+                    url: "https://martinfowler.com/articles/nonDeterminism.html",
+                },
+                Reference {
+                    title: "Software Engineering at Google, ch. 14: Larger Tests",
+                    url: "https://abseil.io/resources/swe-book/html/ch14.html",
+                },
                 Reference {
                     title: "tokio::task::yield_now",
                     url: "https://docs.rs/tokio/latest/tokio/task/fn.yield_now.html",
@@ -252,6 +263,13 @@ crate::test_utils::rule_test!(RULE, {
                     while not is_ready():
                         await checkpoint()
             " => "checkpoint()",
+            os_sched_yield_in_loop => r"
+                import os
+
+                def wait_for_thread(worker):
+                    while not worker.is_done():
+                        os.sched_yield()
+            " => "os.sched_yield()",
         ],
     },
     Rust => {
@@ -312,6 +330,13 @@ crate::test_utils::rule_test!(RULE, {
                     }
                 }
             " => "std::hint::spin_loop()",
+            std_thread_yield_now_in_loop => r"
+                fn wait_for_thread(flag: &AtomicBool) {
+                    while !flag.load(Ordering::Acquire) {
+                        std::thread::yield_now();
+                    }
+                }
+            " => "std::thread::yield_now()",
             unqualified_yield_now_in_while_loop => r"
                 async fn wait_for_state() {
                     while !is_ready() {

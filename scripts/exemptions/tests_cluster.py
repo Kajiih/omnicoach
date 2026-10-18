@@ -1,4 +1,5 @@
 """Exemption mutations for Batch 5: Tests (`packed-assertion`, `too-many-assertions`,
+`logic-in-tests`, `multi-phase-test`, `duplicated-test-setup`, `test-calls-test`,
 `sleep-in-tests`, `zero-sleep-in-tests`, `yield-loop-in-tests`, `mock-in-tests`,
 `mock-call-assertion`, `fake-without-protocol`)."""
 
@@ -27,6 +28,7 @@ CLUSTER = Cluster(
         "logic_in_tests",
         "multi_phase_test",
         "duplicated_test_setup",
+        "test_calls_test",
         "sleep_in_tests",
         "zero_sleep_in_tests",
         "yield_loop_in_tests",
@@ -808,6 +810,173 @@ CLUSTER = Cluster(
             ),
             cases=("yield_loop_in_tests::pass::closure_inside_loop_exempt",),
         ),
+        # --- test-calls-test ---
+        Mutation(
+            label="Python non-test helper function exempt from test-calls-test",
+            path=PYTHON,
+            edits=(
+                (
+                    "            Stmt::FunctionDef(func_def) if is_test_function_def(func_def) => {",
+                    "            Stmt::FunctionDef(func_def) => {",
+                ),
+            ),
+            cases=("test_calls_test::pass::shared_non_test_helper",),
+        ),
+        Mutation(
+            label="Python module-level call outside function exempt from test-calls-test",
+            path=PYTHON,
+            edits=(
+                (
+                    "        let Some(caller_fn) = candidate.enclosing_functions.first() else {\n"
+                    "            continue;\n"
+                    "        };",
+                    "        let default_fn = EnclosingFunction {\n"
+                    "            name: String::new(),\n"
+                    "            name_span: SourceSpan::new(0, 0),\n"
+                    "            is_top_level: true,\n"
+                    "            enclosing_class: None,\n"
+                    "        };\n"
+                    "        let caller_fn = candidate.enclosing_functions.first().unwrap_or(&default_fn);",
+                ),
+            ),
+            cases=("test_calls_test::pass::module_level_call_outside_function_exempt",),
+        ),
+        Mutation(
+            label="Python method call on collaborator exempt from test-calls-test",
+            path=PYTHON,
+            edits=(
+                (
+                    "            .map(|_| PythonTestTarget::Class { class_name, method })\n"
+                    "    } else {\n"
+                    "        None\n"
+                    "    }",
+                    "            .map(|_| PythonTestTarget::Class { class_name, method })\n"
+                    "    } else {\n"
+                    "        candidate\n"
+                    "            .method_name\n"
+                    "            .as_deref()\n"
+                    "            .filter(|method| module_tests.contains(method))\n"
+                    "            .map(PythonTestTarget::Module)\n"
+                    "    }",
+                ),
+            ),
+            cases=("test_calls_test::pass::method_named_test_on_collaborator_exempt",),
+        ),
+        Mutation(
+            label="Python non-Test* class methods exempt from test-calls-test",
+            path=PYTHON,
+            edits=(
+                (
+                    "            Stmt::ClassDef(class_def) if is_test_class_def(class_def) => {",
+                    "            Stmt::ClassDef(class_def) => {",
+                ),
+            ),
+            cases=("test_calls_test::pass::method_on_non_test_class_exempt",),
+        ),
+        Mutation(
+            label="Python local binding shadowing test name exempt from test-calls-test",
+            path=PYTHON,
+            edits=(
+                (
+                    "        (module_tests.contains(callee) && !is_local).then_some(PythonTestTarget::Module(callee))",
+                    "        module_tests.contains(callee).then_some(PythonTestTarget::Module(callee))",
+                ),
+            ),
+            cases=("test_calls_test::pass::parameter_named_test_callable_exempt",),
+        ),
+        Mutation(
+            label="Python recursive self-call exempt from test-calls-test",
+            path=PYTHON,
+            edits=(
+                (
+                    "        if is_recursive_python_test_call(&candidate, caller_fn, &target) {\n"
+                    "            continue;\n"
+                    "        }",
+                    "        if false {\n            continue;\n        }",
+                ),
+            ),
+            cases=("test_calls_test::pass::recursive_self_call_exempt@python",),
+        ),
+        Mutation(
+            label="Rust helper without #[test] attribute exempt from test-calls-test",
+            path=RUST,
+            edits=(
+                (
+                    "        if has_test_attribute(&fn_decl) {",
+                    "        if true {",
+                ),
+            ),
+            cases=(
+                "test_calls_test::pass::shared_helper_without_test_attribute",
+                "test_calls_test::pass::helper_named_test_prefix_without_test_attribute_exempt",
+            ),
+        ),
+        Mutation(
+            label="Rust method call on struct exempt from test-calls-test",
+            path=RUST,
+            edits=(
+                (
+                    "    if candidate.method_name.is_some() {\n        return None;\n    }",
+                    "    if let Some(method) = candidate.method_name.as_deref() {\n"
+                    "        return Some(LocalRustCallee {\n"
+                    "            super_count: 0,\n"
+                    "            name: method,\n"
+                    "        });\n"
+                    "    }",
+                ),
+            ),
+            cases=("test_calls_test::pass::method_named_test_on_struct_exempt",),
+        ),
+        Mutation(
+            label="Rust associated function on type exempt from test-calls-test",
+            path=RUST,
+            edits=(
+                (
+                    "            .all(|segment| matches!(*segment, SELF_KEYWORD | SUPER_KEYWORD))",
+                    "            .all(|segment| !segment.is_empty())",
+                ),
+            ),
+            cases=("test_calls_test::pass::associated_function_on_type_exempt",),
+        ),
+        Mutation(
+            label="Rust local binding shadowing test name exempt from test-calls-test",
+            path=RUST,
+            edits=(
+                (
+                    "        if !is_test_target || is_local {",
+                    "        if !is_test_target {",
+                ),
+            ),
+            cases=("test_calls_test::pass::parameter_callable_exempt",),
+        ),
+        Mutation(
+            label="Rust recursive self-call exempt from test-calls-test",
+            path=RUST,
+            edits=(
+                (
+                    "        if super_count == 0 && callee_name == caller_fn.name {\n"
+                    "            continue;\n"
+                    "        }",
+                    "        if false {\n            continue;\n        }",
+                ),
+            ),
+            cases=("test_calls_test::pass::recursive_self_call_exempt@rust",),
+        ),
+        Mutation(
+            label="Rust helper in sibling module not matched against #[test] in another module",
+            path=RUST,
+            edits=(
+                (
+                    "            let module_span = enclosing_rust_module_span(fn_decl.syntax());",
+                    "            let module_span = SourceSpan::new(0, 0);",
+                ),
+                (
+                    "        let Some(target_module) = target_rust_module_span(&candidate.node, super_count) else {",
+                    "        let Some(target_module) = Some(SourceSpan::new(0, 0)) else {",
+                ),
+            ),
+            cases=("test_calls_test::pass::helper_in_sibling_module_exempt",),
+        ),
         # --- semantic/calls.rs (sleep-in-tests, mock-in-tests, mock-call-assertion) ---
         Mutation(
             label="method calls on unbound receivers not matched against bare literal callees",
@@ -817,10 +986,13 @@ CLUSTER = Cluster(
                     "                ResolvedName::Unbound => literal_callees.contains(candidate.callee.as_str()),",
                     "                ResolvedName::Unbound => {\n"
                     "                    literal_callees.contains(candidate.callee.as_str())\n"
-                    "                        || candidate\n"
-                    "                            .method_name\n"
-                    "                            .as_deref()\n"
-                    "                            .is_some_and(|method| literal_callees.contains(method))\n"
+                    "                        || candidate.method_name.as_deref().is_some_and(|method| {\n"
+                    "                            literal_callees.iter().any(|entry| {\n"
+                    "                                *entry == method\n"
+                    '                                    || entry.ends_with(&format!(".{method}"))\n'
+                    '                                    || entry.ends_with(&format!("::{method}"))\n'
+                    "                            })\n"
+                    "                        })\n"
                     "                }",
                 ),
             ),

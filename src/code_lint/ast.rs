@@ -39,9 +39,15 @@ use std::sync::{Arc, OnceLock};
 pub struct EnclosingFunction {
     /// The function's name.
     pub name: String,
+    /// Byte span of the function's declared name identifier.
+    pub name_span: SourceSpan,
     /// True if the function is defined at file scope: a statement of the Python module body or
     /// an item of the Rust source file (not nested in a class, `impl`, `mod`, or block).
     pub is_top_level: bool,
+    /// Name of the immediately enclosing top-level Python `class`, if this function is a direct
+    /// method of that class. `None` for module-level functions, nested functions, methods of
+    /// nested classes, and all Rust functions.
+    pub enclosing_class: Option<String>,
 }
 
 /// Returns `outer` (innermost first) with `function` prepended as the new innermost function.
@@ -891,6 +897,22 @@ pub struct TestFunctionSetup<'a> {
 #[must_use]
 pub fn collect_test_setup_scopes(file: &ParsedFile) -> Vec<Vec<TestFunctionSetup<'_>>> {
     dispatch_lang!(file.lang(), collect_test_setup_scopes(file))
+}
+
+/// A call inside a test file to another test function defined in the same file.
+pub struct TestToTestCall<'a> {
+    /// The call expression node.
+    pub node: AstNode<'a>,
+    /// The name of the enclosing function making the call.
+    pub caller: String,
+    /// The source callee text as written (`test_login`, `self.test_login`).
+    pub callee: String,
+}
+
+/// Collects calls in `file` where a function calls a test function defined in the same file.
+#[must_use]
+pub fn collect_test_to_test_calls(file: &ParsedFile) -> Vec<TestToTestCall<'_>> {
+    dispatch_lang!(file.lang(), collect_test_to_test_calls(file))
 }
 
 /// Normalizes a statement's source slice by trimming each line and joining with `\n`.

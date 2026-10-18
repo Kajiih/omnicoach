@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-from .model import CLASSES, DOCSTRINGS, FUNCTIONS, Cluster, Mutation, Unmutated
+from .model import (
+    CLASSES,
+    DOCSTRINGS,
+    FUNCTIONS,
+    UNEXPLAINED_OPTIONAL_RETURN,
+    VERB_LED_PROPERTY_DOCSTRING,
+    Cluster,
+    Mutation,
+    Unmutated,
+)
 
 VERB_LED_RETURNS_SECTION = "src/code_lint/rules/verb_led_returns_section.rs"
 UNDOCUMENTED_PUBLIC_ATTRIBUTE = "src/code_lint/rules/undocumented_public_attribute.rs"
@@ -11,7 +20,9 @@ UNEXPLAINED_OPTIONAL_ARGUMENT = "src/code_lint/rules/unexplained_optional_argume
 DEFERRAL_DOCSTRING = "src/code_lint/rules/deferral_docstring.rs"
 COPIED_BASE_DOCSTRING = "src/code_lint/rules/copied_base_docstring.rs"
 PARTIAL_OVERRIDE_DOCSTRING = "src/code_lint/rules/partial_override_docstring.rs"
-UNDOCUMENTED_NONTRIVIAL_FUNCTION = "src/code_lint/rules/undocumented_nontrivial_function.rs"
+UNDOCUMENTED_NONTRIVIAL_FUNCTION = (
+    "src/code_lint/rules/undocumented_nontrivial_function.rs"
+)
 UNEXPLAINED_PARAMETER = "src/code_lint/rules/unexplained_parameter.rs"
 
 CHECK_EVERY_FUNCTION = (
@@ -20,14 +31,18 @@ CHECK_EVERY_FUNCTION = (
         "        for method in ast::python::extract_function_signatures(file) {",
     ),
 )
-DROP_OVERRIDE_CHECK = (("            if !method.has_override_decorator() {", "            if false {"),)
+DROP_OVERRIDE_CHECK = (
+    ("            if !method.has_override_decorator() {", "            if false {"),
+)
 
 CLUSTER = Cluster(
     rules=(
         "verb_led_returns_section",
+        "verb_led_property_docstring",
         "undocumented_public_attribute",
         "annotated_type_in_docstring",
         "unexplained_optional_argument",
+        "unexplained_optional_return",
         "deferral_docstring",
         "copied_base_docstring",
         "partial_override_docstring",
@@ -36,27 +51,33 @@ CLUSTER = Cluster(
     ),
     mutations=(
         Mutation(
-            label="bare Return/Yield + noun read as a noun phrase (verb-led-returns-section)",
-            path=VERB_LED_RETURNS_SECTION,
+            label="bare Return/Yield/Get + noun read as a noun phrase (verb-led-returns-section, verb-led-property-docstring)",
+            path=DOCSTRINGS,
             edits=(
                 (
                     "    let is_noun_phrase =\n"
-                    "        NOUN_STEMS.contains(&lowercase.as_str()) && NOUN_FOLLOWERS.contains(&next_word.as_str());",
-                    "    let _ = (NOUN_STEMS, NOUN_FOLLOWERS, next_word);\n    let is_noun_phrase = false;",
+                    "        noun_stems.contains(&lowercase.as_str()) && noun_followers.contains(&next_word.as_str());",
+                    "    let _ = (noun_stems, noun_followers, next_word);\n    let is_noun_phrase = false;",
                 ),
             ),
-            cases=("verb_led_returns_section::pass::return_noun_phrase_exempt",),
+            cases=(
+                "verb_led_returns_section::pass::return_noun_phrase_exempt",
+                "verb_led_property_docstring::pass::return_noun_phrase_exempt",
+            ),
         ),
         Mutation(
-            label="whole-word match of the opening verb (verb-led-returns-section)",
-            path=VERB_LED_RETURNS_SECTION,
+            label="whole-word match of the opening verb (verb-led-returns-section, verb-led-property-docstring)",
+            path=DOCSTRINGS,
             edits=(
                 (
-                    "    if !SECTION_VERBS.contains(&lowercase.as_str()) {",
-                    "    if !SECTION_VERBS.iter().any(|verb| lowercase.starts_with(verb)) {",
+                    "    if !verbs.contains(&lowercase.as_str()) {",
+                    "    if !verbs.iter().any(|verb| lowercase.starts_with(verb)) {",
                 ),
             ),
-            cases=("verb_led_returns_section::pass::longer_word_starting_with_verb_exempt",),
+            cases=(
+                "verb_led_returns_section::pass::longer_word_starting_with_verb_exempt",
+                "verb_led_property_docstring::pass::longer_word_starting_with_verb_exempt",
+            ),
         ),
         Mutation(
             label="only the first body line is read (verb-led-returns-section)",
@@ -70,19 +91,22 @@ CLUSTER = Cluster(
             cases=("verb_led_returns_section::pass::only_first_body_line_checked",),
         ),
         Mutation(
-            label="only the first word of the opening line is read (verb-led-returns-section)",
-            path=VERB_LED_RETURNS_SECTION,
+            label="only the first word of the opening line is read (verb-led-returns-section, verb-led-property-docstring)",
+            path=DOCSTRINGS,
             edits=(
                 (
                     "    let word = leading_word(text);",
                     "    let word = text\n"
                     "        .split_whitespace()\n"
                     "        .map(leading_word)\n"
-                    "        .find(|candidate| SECTION_VERBS.contains(&candidate.to_ascii_lowercase().as_str()))\n"
+                    "        .find(|candidate| verbs.contains(&candidate.to_ascii_lowercase().as_str()))\n"
                     "        .unwrap_or_default();",
                 ),
             ),
-            cases=("verb_led_returns_section::pass::only_first_word_checked",),
+            cases=(
+                "verb_led_returns_section::pass::only_first_word_checked",
+                "verb_led_property_docstring::pass::only_first_word_checked",
+            ),
         ),
         Mutation(
             label="only Returns/Yields sections are read (verb-led-returns-section)",
@@ -96,21 +120,54 @@ CLUSTER = Cluster(
             cases=("verb_led_returns_section::pass::other_sections_not_checked",),
         ),
         Mutation(
+            label="only @property getters are checked (verb-led-property-docstring)",
+            path=VERB_LED_PROPERTY_DOCSTRING,
+            edits=(
+                ("        if !signature.is_property_getter() {", "        if false {"),
+            ),
+            cases=(
+                "verb_led_property_docstring::pass::regular_method_with_returns_exempt",
+                "verb_led_property_docstring::pass::property_accessors_exempt",
+            ),
+        ),
+        Mutation(
+            label="property setters and deleters are not property getters (verb-led-property-docstring)",
+            path=FUNCTIONS,
+            edits=(
+                (
+                    "            .any(|decorator| decorator.matches_any(PROPERTY_DECORATOR_PATHS))",
+                    "            .any(|_| true)",
+                ),
+            ),
+            cases=("verb_led_property_docstring::pass::property_accessors_exempt",),
+        ),
+        Mutation(
             label="summary-only class docstring (undocumented-public-attribute)",
             path=UNDOCUMENTED_PUBLIC_ATTRIBUTE,
-            edits=(("docstring.non_blank_line_count() <= 1 ||", "docstring.non_blank_line_count() < 1 ||"),),
-            cases=("undocumented_public_attribute::pass::summary_only_docstring_exempt",),
+            edits=(
+                (
+                    "docstring.non_blank_line_count() <= 1 ||",
+                    "docstring.non_blank_line_count() < 1 ||",
+                ),
+            ),
+            cases=(
+                "undocumented_public_attribute::pass::summary_only_docstring_exempt",
+            ),
         ),
         Mutation(
             label="`_`-prefixed names (undocumented-public-attribute)",
             path=UNDOCUMENTED_PUBLIC_ATTRIBUTE,
             edits=(("name.starts_with('_')", "name.starts_with('#')"),),
-            cases=("undocumented_public_attribute::pass::underscore_prefixed_names_exempt",),
+            cases=(
+                "undocumented_public_attribute::pass::underscore_prefixed_names_exempt",
+            ),
         ),
         Mutation(
             label="names bound by `def` in the class body (undocumented-public-attribute)",
             path=UNDOCUMENTED_PUBLIC_ATTRIBUTE,
-            edits=(("|| class.defines_function(name)", '|| class.defines_function("")'),),
+            edits=(
+                ("|| class.defines_function(name)", '|| class.defines_function("")'),
+            ),
             cases=("undocumented_public_attribute::pass::names_defined_by_def_exempt",),
         ),
         Mutation(
@@ -128,8 +185,15 @@ CLUSTER = Cluster(
         Mutation(
             label="`dataclasses.InitVar` pseudo-fields (undocumented-public-attribute)",
             path=UNDOCUMENTED_PUBLIC_ATTRIBUTE,
-            edits=(("|| definition.is_init_var\n", "|| (definition.is_init_var && name.is_empty())\n"),),
-            cases=("undocumented_public_attribute::pass::init_var_pseudo_field_exempt",),
+            edits=(
+                (
+                    "|| definition.is_init_var\n",
+                    "|| (definition.is_init_var && name.is_empty())\n",
+                ),
+            ),
+            cases=(
+                "undocumented_public_attribute::pass::init_var_pseudo_field_exempt",
+            ),
         ),
         Mutation(
             label="initializer nested scopes not entered (PythonClassInfo::attribute_definitions)",
@@ -143,7 +207,9 @@ CLUSTER = Cluster(
                     "                    self.out\n",
                 ),
             ),
-            cases=("undocumented_public_attribute::pass::nested_scope_assignments_exempt",),
+            cases=(
+                "undocumented_public_attribute::pass::nested_scope_assignments_exempt",
+            ),
         ),
         Mutation(
             label="only initializer methods read (PythonClassInfo::attribute_definitions)",
@@ -154,7 +220,9 @@ CLUSTER = Cluster(
                     "if !INITIALIZER_METHODS.is_empty()",
                 ),
             ),
-            cases=("undocumented_public_attribute::pass::other_method_assignments_exempt",),
+            cases=(
+                "undocumented_public_attribute::pass::other_method_assignments_exempt",
+            ),
         ),
         Mutation(
             label="unannotated parameters (annotated-type-in-docstring)",
@@ -176,7 +244,9 @@ CLUSTER = Cluster(
                     ".filter(|entry| !annotated.is_empty() || entry.name.is_empty())",
                 ),
             ),
-            cases=("annotated_type_in_docstring::pass::entry_naming_no_parameter_exempt",),
+            cases=(
+                "annotated_type_in_docstring::pass::entry_naming_no_parameter_exempt",
+            ),
         ),
         Mutation(
             label="`(optional)` alone has no type (annotated-type-in-docstring)",
@@ -187,7 +257,9 @@ CLUSTER = Cluster(
                     "(!lowercase.is_empty() && !is_default_note)",
                 ),
             ),
-            cases=("annotated_type_in_docstring::pass::parenthetical_without_type_exempt",),
+            cases=(
+                "annotated_type_in_docstring::pass::parenthetical_without_type_exempt",
+            ),
         ),
         Mutation(
             label="`(default …)` alone has no type (annotated-type-in-docstring)",
@@ -198,7 +270,9 @@ CLUSTER = Cluster(
                     "(lowercase != OPTIONAL_MARKER && (!is_default_note || !lowercase.is_empty()))",
                 ),
             ),
-            cases=("annotated_type_in_docstring::pass::parenthetical_without_type_exempt",),
+            cases=(
+                "annotated_type_in_docstring::pass::parenthetical_without_type_exempt",
+            ),
         ),
         Mutation(
             label="unannotated attributes (annotated-type-in-docstring)",
@@ -220,7 +294,9 @@ CLUSTER = Cluster(
                     "!without_whitespace(annotation).is_empty() || prefix_text.is_empty()",
                 ),
             ),
-            cases=("annotated_type_in_docstring::pass::differing_returns_prefix_exempt",),
+            cases=(
+                "annotated_type_in_docstring::pass::differing_returns_prefix_exempt",
+            ),
         ),
         Mutation(
             label="Returns/Yields without a return annotation (annotated-type-in-docstring)",
@@ -231,7 +307,9 @@ CLUSTER = Cluster(
                     "let repeats_annotation = annotations.is_empty()\n        || annotations\n",
                 ),
             ),
-            cases=("annotated_type_in_docstring::pass::returns_without_annotation_exempt",),
+            cases=(
+                "annotated_type_in_docstring::pass::returns_without_annotation_exempt",
+            ),
         ),
         Mutation(
             label="class Args entries read `__init__` annotations only (annotated-type-in-docstring)",
@@ -242,18 +320,23 @@ CLUSTER = Cluster(
                     "|_| annotated_attributes.clone(),",
                 ),
             ),
-            cases=("annotated_type_in_docstring::pass::unannotated_constructor_parameter_exempt",),
+            cases=(
+                "annotated_type_in_docstring::pass::unannotated_constructor_parameter_exempt",
+            ),
         ),
         Mutation(
-            label="nullability marker only at a clause end (unexplained-optional-argument)",
-            path=UNEXPLAINED_OPTIONAL_ARGUMENT,
+            label="nullability marker only at a clause end (unexplained-optional-argument, unexplained-optional-return)",
+            path=DOCSTRINGS,
             edits=(
                 (
                     "            if !is_clause_end(after.strip_prefix(')').unwrap_or(after)) {",
                     "            if false {",
                 ),
             ),
-            cases=("unexplained_optional_argument::pass::none_not_at_clause_end_exempt",),
+            cases=(
+                "unexplained_optional_argument::pass::none_not_at_clause_end_exempt",
+                "unexplained_optional_return::pass::none_not_at_clause_end_exempt",
+            ),
         ),
         Mutation(
             label="explained by `None` outside the marker (unexplained-optional-argument)",
@@ -270,23 +353,63 @@ CLUSTER = Cluster(
                     "            .any(|_| false)",
                 ),
             ),
-            cases=("unexplained_optional_argument::pass::explained_by_omission_phrase_exempt",),
+            cases=(
+                "unexplained_optional_argument::pass::explained_by_omission_phrase_exempt",
+            ),
         ),
         Mutation(
-            label="`None` is case-sensitive (unexplained-optional-argument)",
-            path=UNEXPLAINED_OPTIONAL_ARGUMENT,
+            label="`None` is case-sensitive (unexplained-optional-argument, unexplained-optional-return)",
+            path=DOCSTRINGS,
             edits=(
                 (
                     "    text.match_indices(NONE).filter_map(",
                     "    text.to_ascii_lowercase()\n"
-                    "        .match_indices(\"none\")\n"
+                    '        .match_indices("none")\n'
                     "        .map(|(start, _)| (start, ()))\n"
                     "        .collect::<Vec<_>>()\n"
                     "        .into_iter()\n"
                     "        .filter_map(",
                 ),
             ),
-            cases=("unexplained_optional_argument::pass::lowercase_none_exempt",),
+            cases=(
+                "unexplained_optional_argument::pass::lowercase_none_exempt",
+                "unexplained_optional_return::pass::lowercase_none_exempt",
+            ),
+        ),
+        Mutation(
+            label="explained by `None` outside the marker (unexplained-optional-return)",
+            path=UNEXPLAINED_OPTIONAL_RETURN,
+            edits=(
+                (
+                    "    none_words(&unmarked)\n        .next()\n        .is_none()\n",
+                    "    true\n",
+                ),
+            ),
+            cases=("unexplained_optional_return::pass::explained_by_none_exempt",),
+        ),
+        Mutation(
+            label="Napoleon nullable type prefix stripped before matching (unexplained-optional-return)",
+            path=DOCSTRINGS,
+            edits=(
+                (
+                    "            .map_or(opening_line.text.as_str(), |typed| typed.description);",
+                    "            .map_or(opening_line.text.as_str(), |typed| typed.type_text);",
+                ),
+            ),
+            cases=(
+                "unexplained_optional_return::pass::napoleon_nullable_type_prefix_exempt",
+            ),
+        ),
+        Mutation(
+            label="only Returns/Yields sections are read (unexplained-optional-return)",
+            path=UNEXPLAINED_OPTIONAL_RETURN,
+            edits=(
+                (
+                    "                DocstringSectionKind::Returns | DocstringSectionKind::Yields\n",
+                    "                _\n",
+                ),
+            ),
+            cases=("unexplained_optional_return::pass::other_sections_not_checked",),
         ),
         Mutation(
             label="a lone `optional` must start a clause (unexplained-optional-argument)",
@@ -297,12 +420,16 @@ CLUSTER = Cluster(
                     "        } else if is_clause_end(after) {",
                 ),
             ),
-            cases=("unexplained_optional_argument::pass::optional_not_first_word_exempt",),
+            cases=(
+                "unexplained_optional_argument::pass::optional_not_first_word_exempt",
+            ),
         ),
         Mutation(
             label="leading `Optional` must not run into a letter (unexplained-optional-argument)",
             path=UNEXPLAINED_OPTIONAL_ARGUMENT,
-            edits=(("    if after.starts_with(char::is_alphabetic) {", "    if false {"),),
+            edits=(
+                ("    if after.starts_with(char::is_alphabetic) {", "    if false {"),
+            ),
             cases=("unexplained_optional_argument::pass::optionally_exempt",),
         ),
         Mutation(
@@ -314,7 +441,9 @@ CLUSTER = Cluster(
                     ".filter(|slot| slot.to_ascii_lowercase().contains(OPTIONAL_MARKER))",
                 ),
             ),
-            cases=("unexplained_optional_argument::pass::napoleon_optional_type_slot_exempt",),
+            cases=(
+                "unexplained_optional_argument::pass::napoleon_optional_type_slot_exempt",
+            ),
         ),
         Mutation(
             label="only Args and Attributes sections are read (unexplained-optional-argument)",
@@ -325,8 +454,15 @@ CLUSTER = Cluster(
         Mutation(
             label="omission marker with a non-None default (unexplained-optional-argument)",
             path=UNEXPLAINED_OPTIONAL_ARGUMENT,
-            edits=(("    let type_slot_marker = if has_value_default {", "    let type_slot_marker = if false {"),),
-            cases=("unexplained_optional_argument::pass::omission_marker_with_value_default_exempt",),
+            edits=(
+                (
+                    "    let type_slot_marker = if has_value_default {",
+                    "    let type_slot_marker = if false {",
+                ),
+            ),
+            cases=(
+                "unexplained_optional_argument::pass::omission_marker_with_value_default_exempt",
+            ),
         ),
         Mutation(
             label="class Args entries matched with `__init__` (unexplained-optional-argument)",
@@ -340,12 +476,19 @@ CLUSTER = Cluster(
                     "            .filter(|_| false)",
                 ),
             ),
-            cases=("unexplained_optional_argument::pass::constructor_value_default_exempt",),
+            cases=(
+                "unexplained_optional_argument::pass::constructor_value_default_exempt",
+            ),
         ),
         Mutation(
             label="whole-docstring phrase match (deferral-docstring E7)",
             path=DEFERRAL_DOCSTRING,
-            edits=(("        None => text == phrase,", "        None => text.starts_with(phrase),"),),
+            edits=(
+                (
+                    "        None => text == phrase,",
+                    "        None => text.starts_with(phrase),",
+                ),
+            ),
             cases=("deferral_docstring::pass::phrase_followed_by_text_exempt",),
         ),
         Mutation(
@@ -431,7 +574,9 @@ CLUSTER = Cluster(
                     "                .position(|candidate| candidate.name == name)",
                 ),
             ),
-            cases=("copied_base_docstring::pass::base_bound_to_last_earlier_definition",),
+            cases=(
+                "copied_base_docstring::pass::base_bound_to_last_earlier_definition",
+            ),
         ),
         Mutation(
             label="bases resolve only to classes defined before the subclass (override docstrings E6)",
@@ -508,7 +653,9 @@ CLUSTER = Cluster(
                     "        .filter(|section| CONTRACT_SECTIONS.iter().any(|(_, header)| *header == section.header))\n",
                 ),
             ),
-            cases=("partial_override_docstring::pass::other_header_of_same_kind_exempt",),
+            cases=(
+                "partial_override_docstring::pass::other_header_of_same_kind_exempt",
+            ),
         ),
         Mutation(
             label="Returns and Yields sections satisfy each other (partial-override-docstring E13)",
@@ -530,9 +677,7 @@ CLUSTER = Cluster(
                     "        self.has_result_section()",
                 ),
             ),
-            cases=(
-                "partial_override_docstring::pass::result_verb_summary_exempt",
-            ),
+            cases=("partial_override_docstring::pass::result_verb_summary_exempt",),
         ),
         Mutation(
             label="a copy of the inherited summary is left to copied-base-docstring (partial-override-docstring E15)",
@@ -548,7 +693,12 @@ CLUSTER = Cluster(
         Mutation(
             label="a NotImplementedError-only Raises section is not required (partial-override-docstring E16)",
             path=PARTIAL_OVERRIDE_DOCSTRING,
-            edits=(("        .filter(|section| !is_abstract_raises(section))", "        .filter(|_| true)"),),
+            edits=(
+                (
+                    "        .filter(|section| !is_abstract_raises(section))",
+                    "        .filter(|_| true)",
+                ),
+            ),
             cases=("partial_override_docstring::pass::abstract_raises_exempt",),
         ),
         Mutation(
@@ -560,7 +710,12 @@ CLUSTER = Cluster(
         Mutation(
             label="constructors of a documented class (undocumented-nontrivial-function)",
             path=UNDOCUMENTED_NONTRIVIAL_FUNCTION,
-            edits=(("                && !signature.is_documented_by_enclosing_class()\n", ""),),
+            edits=(
+                (
+                    "                && !signature.is_documented_by_enclosing_class()\n",
+                    "",
+                ),
+            ),
             cases=(
                 "undocumented_nontrivial_function::pass::constructor_of_documented_class_exempt",
             ),
@@ -583,8 +738,8 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "                    decorator.matches_any(OVERRIDE_DECORATOR_PATHS)\n"
-                    "                        || decorator.is_attribute_named(&[SETTER_ATTRIBUTE, \"deleter\"])",
-                    "                    decorator.is_attribute_named(&[SETTER_ATTRIBUTE, \"deleter\"])",
+                    '                        || decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])',
+                    '                    decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])',
                 ),
             ),
             cases=("undocumented_nontrivial_function::pass::override_method_exempt",),
@@ -594,11 +749,13 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "                        || decorator.is_attribute_named(&[SETTER_ATTRIBUTE, \"deleter\"])",
+                    '                        || decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])',
                     "",
                 ),
             ),
-            cases=("undocumented_nontrivial_function::pass::property_accessors_exempt",),
+            cases=(
+                "undocumented_nontrivial_function::pass::property_accessors_exempt",
+            ),
         ),
         Mutation(
             label="undocumented functions left to undocumented-nontrivial-function (unexplained-parameter)",
@@ -616,7 +773,12 @@ CLUSTER = Cluster(
         Mutation(
             label="nested functions are not checked (unexplained-parameter)",
             path=UNEXPLAINED_PARAMETER,
-            edits=(("            !signature.is_nested()\n                && ", "            "),),
+            edits=(
+                (
+                    "            !signature.is_nested()\n                && ",
+                    "            ",
+                ),
+            ),
             cases=("unexplained_parameter::pass::nested_function_exempt",),
         ),
         Mutation(
@@ -640,7 +802,9 @@ CLUSTER = Cluster(
                     "                    parameter.is_non_obvious()",
                 ),
             ),
-            cases=("unexplained_parameter::pass::underscore_prefixed_parameter_exempt",),
+            cases=(
+                "unexplained_parameter::pass::underscore_prefixed_parameter_exempt",
+            ),
         ),
         Mutation(
             label="unchanged constructor parameter documented in class Attributes (unexplained-parameter)",
@@ -651,7 +815,9 @@ CLUSTER = Cluster(
                     "",
                 ),
             ),
-            cases=("unexplained_parameter::pass::unchanged_constructor_attribute_exempt",),
+            cases=(
+                "unexplained_parameter::pass::unchanged_constructor_attribute_exempt",
+            ),
         ),
         Mutation(
             label="class Args section satisfies constructor (unexplained-parameter)",
@@ -662,7 +828,9 @@ CLUSTER = Cluster(
                     "",
                 ),
             ),
-            cases=("unexplained_parameter::pass::class_args_section_satisfies_constructor_exempt",),
+            cases=(
+                "unexplained_parameter::pass::class_args_section_satisfies_constructor_exempt",
+            ),
         ),
     ),
     unmutated=(
@@ -677,6 +845,14 @@ CLUSTER = Cluster(
             cases=("verb_led_returns_section::pass::summary_line_not_checked",),
         ),
         Unmutated(
+            label="positive layouts (verb-led-property-docstring)",
+            reason="No exemption: property docstring that opens with a noun phrase, and an undocumented property.",
+            cases=(
+                "verb_led_property_docstring::pass::noun_phrase_property_docstring",
+                "verb_led_property_docstring::pass::undocumented_property_exempt",
+            ),
+        ),
+        Unmutated(
             label="positive layouts (undocumented-public-attribute)",
             reason="No exemption: Google layout with every attribute, stored arguments included, listed.",
             cases=("undocumented_public_attribute::pass::every_attribute_listed",),
@@ -684,12 +860,16 @@ CLUSTER = Cluster(
         Unmutated(
             label="positive layouts (annotated-type-in-docstring)",
             reason="No exemption: untyped entries and sections under annotations.",
-            cases=("annotated_type_in_docstring::pass::untyped_entries_under_annotations",),
+            cases=(
+                "annotated_type_in_docstring::pass::untyped_entries_under_annotations",
+            ),
         ),
         Unmutated(
             label="constructs the rule never visits (annotated-type-in-docstring)",
             reason="A continuation line is not an entry: `parse_google_sections` only splits entry lines.",
-            cases=("annotated_type_in_docstring::pass::parenthetical_in_continuation_line",),
+            cases=(
+                "annotated_type_in_docstring::pass::parenthetical_in_continuation_line",
+            ),
         ),
         Unmutated(
             label="positive layouts (unexplained-optional-argument)",
@@ -706,6 +886,11 @@ CLUSTER = Cluster(
                 "unexplained_optional_argument::pass::module_docstring_not_checked",
                 "unexplained_optional_argument::pass::continuation_line_with_colon_not_an_entry",
             ),
+        ),
+        Unmutated(
+            label="positive layouts (unexplained-optional-return)",
+            reason="No exemption: `Returns:` section without a nullability marker.",
+            cases=("unexplained_optional_return::pass::unmarked_returns_section",),
         ),
         Unmutated(
             label="positive layouts (override docstrings)",
@@ -751,4 +936,3 @@ CLUSTER = Cluster(
         ),
     ),
 )
-

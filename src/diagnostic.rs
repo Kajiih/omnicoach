@@ -328,7 +328,9 @@ impl Serialize for LocationContext {
 }
 
 /// A byte range span (start, end) inside a source file.
-#[derive(Debug, Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
 pub struct SourceSpan {
     /// Start byte offset (inclusive).
     pub start: usize,

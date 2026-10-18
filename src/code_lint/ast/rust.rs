@@ -1,12 +1,12 @@
 //! AST helper predicates and structural extractors for Rust (`ra_ap_syntax`).
 
 use crate::code_lint::ast::{
-    AstNode, Binding, BindingKind, DeclarationScope, EnclosingFunction, FunctionReturn,
-    LiteralOccurrence, LiteralRole, LiteralValue, MethodVisibility, ParsedFile, PlacementAnchor,
-    PositionalRead, QualifiedName, ReturnShape, ScopeItem, ScopeItemKind, ScopePositionalReads,
-    TestFunctionSetup, TypeMethod, TypeMethodScope, is_rust_comment_kind, normalize_statement_text,
-    parse_float_literal, parse_integer_literal, push_bindings, span_from_rowan_range,
-    split_at_redefinitions,
+    AstCallCandidate, AstNode, Binding, BindingKind, DeclarationScope, EnclosingFunction,
+    FunctionReturn, LiteralOccurrence, LiteralRole, LiteralValue, MethodVisibility, ParsedFile,
+    PlacementAnchor, PositionalRead, QualifiedName, ReturnShape, ScopeItem, ScopeItemKind,
+    ScopePositionalReads, TestFunctionSetup, TestToTestCall, TypeMethod, TypeMethodScope,
+    is_rust_comment_kind, normalize_statement_text, parse_float_literal, parse_integer_literal,
+    push_bindings, span_from_rowan_range, split_at_redefinitions,
 };
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast::{
@@ -22,6 +22,8 @@ use std::collections::{HashMap, HashSet};
 const SELF_KEYWORD: &str = "self";
 /// Self-type keyword `"Self"` in Rust paths and `impl` blocks.
 const SELF_TYPE_KEYWORD: &str = "Self";
+/// Keyword identifier `"super"` in Rust module paths.
+const SUPER_KEYWORD: &str = "super";
 /// Identifier `"test"` used in `#[test]`, `#[cfg(test)]`, and `test_*` functions.
 const TEST_IDENTIFIER: &str = "test";
 /// Rust 32-bit float literal suffix.
@@ -49,9 +51,11 @@ pub(super) fn named_function(node: &SyntaxNode) -> Option<EnclosingFunction> {
     let name = ast::Fn::cast(node.clone())?.name()?;
     Some(EnclosingFunction {
         name: name.text().to_string(),
+        name_span: span_from_rowan_range(name.syntax().text_range()),
         is_top_level: node
             .parent()
             .is_some_and(|parent| ast::SourceFile::can_cast(parent.kind())),
+        enclosing_class: None,
     })
 }
 
@@ -2280,70 +2284,6 @@ fn impl_trait_name(impl_item: &ast::Impl) -> Option<String> {
     None
 }
 
-/// Collects generic parameter, local parameter, pattern, and nested-item names bound inside
-/// `function` (without descending into nested module or `impl` items).
-fn collect_rust_fn_local_names(function: &ast::Fn) -> HashSet<String> {
-    let mut names = collect_rust_generic_param_names(function.syntax());
-    if let Some(params) = function.param_list() {
-        for pat in params
-            .syntax()
-            .descendants()
-            .filter_map(ast::IdentPat::cast)
-        {
-            if let Some(name) = pat.name() {
-                names.insert(name.text().trim().to_owned());
-            }
-        }
-    }
-    if let Some(body) = function.body() {
-        let mut stack = vec![body.syntax().clone()];
-        while let Some(node) = stack.pop() {
-            if ast::Item::can_cast(node.kind()) {
-                for child in node.children() {
-                    if let Some(name) = ast::Name::cast(child) {
-                        names.insert(name.text().trim().to_owned());
-                        break;
-                    }
-                }
-                continue;
-            }
-            if let Some(ident_pat) = ast::IdentPat::cast(node.clone())
-                && let Some(name) = ident_pat.name()
-            {
-                names.insert(name.text().trim().to_owned());
-            }
-            for child in node.children() {
-                stack.push(child);
-            }
-        }
-    }
-    names
-}
-
-fn collect_rust_generic_param_names(node: &SyntaxNode) -> HashSet<String> {
-    let mut names = HashSet::new();
-    for child in node.children() {
-        if let Some(generic_params) = ast::GenericParamList::cast(child) {
-            for param in generic_params.generic_params() {
-                match param {
-                    ast::GenericParam::TypeParam(type_param) => {
-                        if let Some(name) = type_param.name() {
-                            names.insert(name.text().trim().to_owned());
-                        }
-                    }
-                    ast::GenericParam::ConstParam(const_param) => {
-                        if let Some(name) = const_param.name() {
-                            names.insert(name.text().trim().to_owned());
-                        }
-                    }
-                    ast::GenericParam::LifetimeParam(_) => {}
-                }
-            }
-        }
-    }
-    names
-}
-
 /// Collects indices of sibling module items in `item_by_name` referenced inside `root`
 /// (including bridged calls via `impl_callees` and macro token trees).
 fn collect_rust_module_item_refs(
@@ -2651,6 +2591,192 @@ fn collect_misplaced_assoc_items<'a>(
     }
 }
 
+/// Collects calls in a Rust test file where a function calls a `#[test]` function defined in the
+/// same file.
+#[must_use]
+pub(super) fn collect_test_to_test_calls(file: &ParsedFile) -> Vec<TestToTestCall<'_>> {
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
+    let mut test_functions: HashMap<SourceSpan, HashSet<String>> = HashMap::new();
+    let mut function_locals: HashMap<SourceSpan, HashSet<String>> = HashMap::new();
+    for fn_decl in parsed
+        .tree()
+        .syntax()
+        .descendants()
+        .filter_map(ast::Fn::cast)
+    {
+        let Some(name_node) = fn_decl.name() else {
+            continue;
+        };
+        let name_span = span_from_rowan_range(name_node.syntax().text_range());
+        function_locals.insert(name_span, collect_rust_fn_local_names(&fn_decl));
+        if has_test_attribute(&fn_decl) {
+            let module_span = enclosing_rust_module_span(fn_decl.syntax());
+            test_functions
+                .entry(module_span)
+                .or_default()
+                .insert(name_node.text().trim().to_owned());
+        }
+    }
+    let mut out = Vec::new();
+    for candidate in super::collect_call_candidates(file) {
+        let Some(caller_fn) = candidate.enclosing_functions.first() else {
+            continue;
+        };
+        let Some(LocalRustCallee {
+            super_count,
+            name: callee_name,
+        }) = local_rust_callee(&candidate)
+        else {
+            continue;
+        };
+        let is_local = super_count == 0
+            && candidate.enclosing_functions.iter().any(|func| {
+                function_locals
+                    .get(&func.name_span)
+                    .is_some_and(|locals| locals.contains(callee_name))
+            });
+        let Some(target_module) = target_rust_module_span(&candidate.node, super_count) else {
+            continue;
+        };
+        let is_test_target = test_functions
+            .get(&target_module)
+            .is_some_and(|names| names.contains(callee_name));
+        if !is_test_target || is_local {
+            continue;
+        }
+        if super_count == 0 && callee_name == caller_fn.name {
+            continue;
+        }
+        out.push(TestToTestCall {
+            node: candidate.node,
+            caller: caller_fn.name.clone(),
+            callee: candidate.callee,
+        });
+    }
+    out
+}
+
+/// Relative module depth (`super::` count) and terminal function name of a local Rust call.
+struct LocalRustCallee<'a> {
+    super_count: usize,
+    name: &'a str,
+}
+
+/// Extracts `LocalRustCallee` from a Rust call candidate when the call is not a method call and
+/// any leading `::` path segments are relative module qualifiers (`self` or `super`).
+fn local_rust_callee<'a>(candidate: &'a AstCallCandidate<'_>) -> Option<LocalRustCallee<'a>> {
+    if candidate.method_name.is_some() {
+        return None;
+    }
+    let mut segments = candidate.callee.rsplit("::");
+    let terminal = segments.next()?.trim();
+    let prefix: Vec<&str> = segments.map(str::trim).collect();
+    if terminal.is_empty()
+        || !prefix
+            .iter()
+            .all(|segment| matches!(*segment, SELF_KEYWORD | SUPER_KEYWORD))
+    {
+        return None;
+    }
+    let super_count = prefix
+        .iter()
+        .filter(|&&segment| segment == SUPER_KEYWORD)
+        .count();
+    Some(LocalRustCallee {
+        super_count,
+        name: terminal,
+    })
+}
+
+/// Returns the byte span of the innermost `mod` enclosing `node`, or `0..0` at the file root.
+fn enclosing_rust_module_span(node: &SyntaxNode) -> SourceSpan {
+    node.ancestors()
+        .find_map(ast::Module::cast)
+        .map_or(SourceSpan::new(0, 0), |module| {
+            span_from_rowan_range(module.syntax().text_range())
+        })
+}
+
+/// Resolves the target `mod` span (`0..0` for the file root) reached by stepping up `super_count`
+/// enclosing `mod` items from `node`.
+fn target_rust_module_span(node: &AstNode<'_>, super_count: usize) -> Option<SourceSpan> {
+    let syntax = syntax_node(node)?;
+    let modules: Vec<ast::Module> = syntax.ancestors().filter_map(ast::Module::cast).collect();
+    (super_count <= modules.len()).then(|| {
+        modules
+            .get(super_count)
+            .map_or(SourceSpan::new(0, 0), |module| {
+                span_from_rowan_range(module.syntax().text_range())
+            })
+    })
+}
+
+/// Collects generic parameter, local parameter, pattern, and nested-item names bound inside
+/// `function` (without descending into nested module or `impl` items).
+fn collect_rust_fn_local_names(function: &ast::Fn) -> HashSet<String> {
+    let mut names = collect_rust_generic_param_names(function.syntax());
+    if let Some(params) = function.param_list() {
+        for pat in params
+            .syntax()
+            .descendants()
+            .filter_map(ast::IdentPat::cast)
+        {
+            if let Some(name) = pat.name() {
+                names.insert(name.text().trim().to_owned());
+            }
+        }
+    }
+    if let Some(body) = function.body() {
+        let mut stack = vec![body.syntax().clone()];
+        while let Some(node) = stack.pop() {
+            if ast::Item::can_cast(node.kind()) {
+                for child in node.children() {
+                    if let Some(name) = ast::Name::cast(child) {
+                        names.insert(name.text().trim().to_owned());
+                        break;
+                    }
+                }
+                continue;
+            }
+            if let Some(ident_pat) = ast::IdentPat::cast(node.clone())
+                && let Some(name) = ident_pat.name()
+            {
+                names.insert(name.text().trim().to_owned());
+            }
+            for child in node.children() {
+                stack.push(child);
+            }
+        }
+    }
+    names
+}
+
+fn collect_rust_generic_param_names(node: &SyntaxNode) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for child in node.children() {
+        if let Some(generic_params) = ast::GenericParamList::cast(child) {
+            for param in generic_params.generic_params() {
+                match param {
+                    ast::GenericParam::TypeParam(type_param) => {
+                        if let Some(name) = type_param.name() {
+                            names.insert(name.text().trim().to_owned());
+                        }
+                    }
+                    ast::GenericParam::ConstParam(const_param) => {
+                        if let Some(name) = const_param.name() {
+                            names.insert(name.text().trim().to_owned());
+                        }
+                    }
+                    ast::GenericParam::LifetimeParam(_) => {}
+                }
+            }
+        }
+    }
+    names
+}
+
 /// If `node` is a standalone tuple, array, or `vec![...]` `token_tree` macro argument (not a call
 /// argument list `foo(a, b)` or postfix receiver `(a, b).0`), returns its [`ast::TokenTree`].
 fn standalone_collection_token_tree(node: &AstNode<'_>) -> Option<ast::TokenTree> {
@@ -2773,10 +2899,16 @@ fn is_test_function(function: &ast::Fn) -> bool {
         let function_name = name_node.text();
         function_name == TEST_IDENTIFIER || function_name.starts_with("test_")
     });
-    let has_test_attr = function
+    is_named_test || has_test_attribute(function)
+}
+
+/// Returns true if `function` carries an outer test attribute (`#[test]`, `#[tokio::test]`,
+/// `#[rstest]`, `#[test_case(...)]`).
+#[must_use]
+fn has_test_attribute(function: &ast::Fn) -> bool {
+    function
         .attrs()
-        .any(|attribute| attribute.kind() == ast::AttrKind::Outer && is_test_attribute(&attribute));
-    is_named_test || has_test_attr
+        .any(|attribute| attribute.kind() == ast::AttrKind::Outer && is_test_attribute(&attribute))
 }
 
 /// Returns true if `attribute` is a Rust test attribute (`#[test]`, `#[tokio::test]`, `#[rstest]`, `#[test_case(...)]`).

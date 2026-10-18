@@ -7,7 +7,8 @@
 //! parameter whose default is not `None`.
 
 use crate::code_lint::ast::python::{
-    DocstringEntry, DocstringSectionKind, PythonDocstring, PythonParameterInfo,
+    DocstringEntry, DocstringSectionKind, PythonDocstring, PythonParameterInfo, is_clause_end,
+    is_clause_start, none_words, nullability_markers, without_byte_ranges,
 };
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
@@ -204,7 +205,7 @@ fn check_docstring(
 /// explain what `None` or omission does. Omission markers are ignored when `has_value_default`.
 fn unexplained_marker(entry: &DocstringEntry, has_value_default: bool) -> Option<String> {
     let description = entry.description.as_str();
-    let mut markers = nullability_markers(description);
+    let mut markers = nullability_markers(description, NULLABILITY_LEADS);
     let type_slot_marker = if has_value_default {
         None
     } else {
@@ -217,11 +218,7 @@ fn unexplained_marker(entry: &DocstringEntry, has_value_default: bool) -> Option
             .first()
             .map(|marker| description[marker.clone()].to_owned())
     })?;
-    let unmarked: String = description
-        .char_indices()
-        .filter(|(offset, _)| !markers.iter().any(|marker| marker.contains(offset)))
-        .map(|(_, character)| character)
-        .collect();
+    let unmarked = without_byte_ranges(description, &markers);
     (!is_explained(&unmarked)).then_some(phrase)
 }
 
@@ -257,28 +254,6 @@ fn leading_optional(lowercase: &str) -> Option<Range<usize>> {
     Some(0..lowercase.len() - after.len() + usize::from(is_closed))
 }
 
-/// Byte ranges of the nullability markers in `description`: a word `None` (optionally
-/// backticked, then optionally followed by `)`) at a clause end, with its leading words from
-/// [`NULLABILITY_LEADS`].
-fn nullability_markers(description: &str) -> Vec<Range<usize>> {
-    none_words(description)
-        .filter_map(|word| {
-            let after = &description[word.end..];
-            if !is_clause_end(after.strip_prefix(')').unwrap_or(after)) {
-                return None;
-            }
-            let before = description[..word.start].trim_end();
-            let lowercase = before.to_ascii_lowercase();
-            let lead = NULLABILITY_LEADS.iter().find(|lead| {
-                lowercase.strip_suffix(**lead).is_some_and(|preceding| {
-                    !lead.starts_with(char::is_alphabetic) || !preceding.ends_with(is_word_char)
-                })
-            })?;
-            Some(before.len() - lead.len()..word.end)
-        })
-        .collect()
-}
-
 /// Returns true if `text` mentions `None` or says what an omitted value does.
 fn is_explained(text: &str) -> bool {
     let lowercase = text.to_ascii_lowercase();
@@ -286,44 +261,6 @@ fn is_explained(text: &str) -> bool {
         || OMISSION_PHRASES
             .iter()
             .any(|phrase| lowercase.contains(phrase))
-}
-
-/// Byte ranges of each whole word `None` in `text`, including enclosing backticks.
-fn none_words(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
-    text.match_indices(NONE).filter_map(move |(start, _)| {
-        let end = start + NONE.len();
-        let (before, after) = (&text[..start], &text[end..]);
-        if before.ends_with(is_word_char) || after.starts_with(is_word_char) {
-            return None;
-        }
-        let is_backticked = before.ends_with('`') && after.starts_with('`');
-        Some(if is_backticked {
-            start - 1..end + 1
-        } else {
-            start..end
-        })
-    })
-}
-
-/// Returns true if `before`, the text before a match, is empty or ends with a `.` or `;` and
-/// whitespace.
-fn is_clause_start(before: &str) -> bool {
-    let trimmed = before.trim_end();
-    trimmed.is_empty() || (trimmed.len() < before.len() && trimmed.ends_with(['.', ';']))
-}
-
-/// Returns true if `after`, the text after a match, is empty or starts with a `.` or `;`
-/// followed by whitespace or the end.
-fn is_clause_end(after: &str) -> bool {
-    after.is_empty()
-        || after
-            .strip_prefix(['.', ';'])
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
-}
-
-/// Returns true if `character` can be part of an identifier-like word.
-fn is_word_char(character: char) -> bool {
-    character.is_alphanumeric() || character == '_'
 }
 
 #[cfg(test)]
