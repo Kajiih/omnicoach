@@ -23,24 +23,26 @@ const COW_TYPE_NAME: &str = "Cow";
 /// The Rust boolean primitive.
 const BOOL_TYPE_NAME: &str = "bool";
 
-/// A Rust function or method item.
-#[derive(Clone)]
-pub struct RustFunction<'a> {
-    /// Function identifier name.
-    pub name: String,
-    /// Function identifier AST node.
-    pub name_node: AstNode<'a>,
-    /// Function item AST node.
-    pub node: AstNode<'a>,
-    /// Declared return type annotation node, if present (`-> T`).
-    pub return_type: Option<AstNode<'a>>,
-    /// True if the function is inside a `trait` declaration or an `impl Trait for Type` block.
-    pub is_trait_or_trait_impl: bool,
+/// The payload `T` of an optional return type, as classified by [`nullable_return_payload`].
+pub enum NullableReturnPayload {
+    /// A slice or unsized array type (`[T]`), with its source text.
+    Slice(String),
+    /// A generic path type (`std::vec::Vec<T>`).
+    Generic {
+        /// Source text of the base path (`std::vec::Vec`).
+        base: String,
+        /// The base path with whitespace and any leading `::` removed.
+        path: String,
+        /// The last segment of the base path (`Vec`).
+        terminal: String,
+    },
 }
 
-/// Collects all function and method definitions in `file`, in source order.
-#[must_use]
-pub fn collect_functions(file: &ParsedFile) -> Vec<RustFunction<'_>> {
+/// See [`crate::code_lint::ast::collect_function_returns`]: trait items, trait implementations and
+/// inline tests are skipped.
+pub(in crate::code_lint::ast) fn collect_function_returns(
+    file: &ParsedFile,
+) -> Vec<FunctionReturn<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -51,24 +53,26 @@ pub fn collect_functions(file: &ParsedFile) -> Vec<RustFunction<'_>> {
         .descendants()
         .filter_map(ast::Fn::cast)
     {
+        let node = AstNode::from_span(file, span_from_rowan_range(function.syntax().text_range()));
+        let is_trait_or_trait_impl = is_trait_or_trait_impl_function(&function);
+        if is_trait_or_trait_impl || node.is_in_rust_inline_test() {
+            continue;
+        }
         let Some(name_node) = function.name() else {
             continue;
         };
-        let return_type = function
-            .ret_type()
-            .and_then(|ret| ret.ty())
-            .map(|type_node| {
-                AstNode::from_span(file, span_from_rowan_range(type_node.syntax().text_range()))
-            });
-        out.push(RustFunction {
+        let return_type = function.ret_type().and_then(|ret| ret.ty());
+        let declared_type = return_type.as_ref().map(|type_node| {
+            AstNode::from_span(file, span_from_rowan_range(type_node.syntax().text_range()))
+        });
+        out.push(FunctionReturn {
             name: name_node.text().trim().to_owned(),
             name_node: AstNode::from_span(
                 file,
                 span_from_rowan_range(name_node.syntax().text_range()),
             ),
-            return_type,
-            is_trait_or_trait_impl: is_trait_or_trait_impl_function(&function),
-            node: AstNode::from_span(file, span_from_rowan_range(function.syntax().text_range())),
+            declared_type,
+            shape: return_shape(return_type, file),
         });
     }
     out
@@ -89,70 +93,29 @@ fn is_trait_or_trait_impl_function(function: &ast::Fn) -> bool {
         || ast::Impl::cast(enclosing_item).is_some_and(|impl_item| impl_item.trait_().is_some())
 }
 
-/// The payload `T` of an optional return type, as classified by [`nullable_return_payload`].
-pub enum NullableReturnPayload {
-    /// A slice or unsized array type (`[T]`), with its source text.
-    Slice(String),
-    /// A generic path type (`std::vec::Vec<T>`).
-    Generic {
-        /// Source text of the base path (`std::vec::Vec`).
-        base: String,
-        /// The base path with whitespace and any leading `::` removed.
-        path: String,
-        /// The last segment of the base path (`Vec`).
-        terminal: String,
-    },
-}
-
-impl RustFunction<'_> {
-    /// What the function returns, read from its return type; see [`ReturnShape`].
-    #[must_use]
-    pub fn return_shape(&self) -> ReturnShape {
-        let Some(return_type) = &self.return_type else {
+/// What the function returns, read from its return type; see [`ReturnShape`].
+fn return_shape(return_type: Option<ast::Type>, file: &ParsedFile) -> ReturnShape {
+    let Some(type_node) = return_type else {
+        return ReturnShape::Unit;
+    };
+    let success = unwrap_rust_return_envelope(type_node, file);
+    match &success {
+        ast::Type::TupleType(tuple) if tuple.fields().next().is_none() => {
             return ReturnShape::Unit;
-        };
-        let file = return_type.file;
-        let Some(type_node) = cast_at_span::<ast::Type>(return_type) else {
-            return ReturnShape::Other;
-        };
-        let success = unwrap_rust_return_envelope(type_node, file);
-        match &success {
-            ast::Type::TupleType(tuple) if tuple.fields().next().is_none() => {
-                return ReturnShape::Unit;
-            }
-            ast::Type::PathType(path_type) if path_type.syntax().text() == BOOL_TYPE_NAME => {
-                return ReturnShape::Boolean;
-            }
-            _ => {}
         }
-        let value = option_payload(&success, file).unwrap_or(success);
-        match unwrap_rust_pointer_wrappers(value, file) {
-            ast::Type::TupleType(tuple) => match tuple.fields().count() {
-                arity @ 2.. => ReturnShape::PositionalTuple { arity },
-                _ => ReturnShape::Other,
-            },
-            _ => ReturnShape::Other,
+        ast::Type::PathType(path_type) if path_type.syntax().text() == BOOL_TYPE_NAME => {
+            return ReturnShape::Boolean;
         }
+        _ => {}
     }
-}
-
-/// See [`crate::code_lint::ast::collect_function_returns`]: trait items, trait implementations and
-/// inline tests are skipped.
-pub(in crate::code_lint::ast) fn collect_function_returns(
-    file: &ParsedFile,
-) -> Vec<FunctionReturn<'_>> {
-    collect_functions(file)
-        .into_iter()
-        .filter(|function| {
-            !function.is_trait_or_trait_impl && !function.node.is_in_rust_inline_test()
-        })
-        .map(|function| FunctionReturn {
-            shape: function.return_shape(),
-            name: function.name,
-            name_node: function.name_node,
-            declared_type: function.return_type,
-        })
-        .collect()
+    let value = option_payload(&success, file).unwrap_or(success);
+    match unwrap_rust_pointer_wrappers(value, file) {
+        ast::Type::TupleType(tuple) => match tuple.fields().count() {
+            arity @ 2.. => ReturnShape::PositionalTuple { arity },
+            _ => ReturnShape::Other,
+        },
+        _ => ReturnShape::Other,
+    }
 }
 
 /// Classifies the payload `T` of `return_type` if it is `Option<T>`.
@@ -398,7 +361,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_collect_functions_rust() {
+    fn test_collect_function_returns_rust() {
         let source = indoc::indoc! {r"
             fn free_fn() -> Option<u32> { None }
             trait T {
@@ -412,26 +375,23 @@ mod tests {
             }
         "};
         let file = ParsedFile::rust(source);
-        let functions = collect_functions(&file);
+        let functions = collect_function_returns(&file);
         let actual: Vec<_> = functions
             .iter()
             .map(|func| {
                 (
                     func.name.as_str(),
-                    func.return_type
+                    func.declared_type
                         .as_ref()
                         .map(|ret_type| ret_type.text().to_string()),
-                    func.is_trait_or_trait_impl,
                 )
             })
             .collect();
         assert_eq!(
             actual,
             &[
-                ("free_fn", Some("Option<u32>".to_owned()), false),
-                ("trait_fn", None, true),
-                ("trait_fn", None, true),
-                ("inherent_method", Some("Vec<u8>".to_owned()), false),
+                ("free_fn", Some("Option<u32>".to_owned())),
+                ("inherent_method", Some("Vec<u8>".to_owned())),
             ]
         );
     }
@@ -451,8 +411,8 @@ mod tests {
         #[case] expected_unwrapped: &str,
     ) {
         let file = ParsedFile::rust(source);
-        let functions = collect_functions(&file);
-        let return_type = cast_at_span::<ast::Type>(functions[0].return_type.as_ref().unwrap())
+        let functions = collect_function_returns(&file);
+        let return_type = cast_at_span::<ast::Type>(functions[0].declared_type.as_ref().unwrap())
             .expect("return type");
         let unwrapped_envelope = unwrap_rust_return_envelope(return_type, &file);
         let payload = option_payload(&unwrapped_envelope, &file).expect("option payload");

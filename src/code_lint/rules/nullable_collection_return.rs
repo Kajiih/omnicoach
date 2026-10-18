@@ -139,23 +139,24 @@ const RUST_COLLECTION_TYPES: &[&str] = &[
 ];
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    let findings = match file.lang() {
-        Language::Python => python_nullable_collection_returns(file),
-        Language::Rust => rust_nullable_collection_returns(file),
-    };
-    findings
-        .iter()
-        .map(|finding| {
-            let expression = finding.return_type.text();
-            rule.diagnostic_at_node(
+    ast::collect_function_returns(file)
+        .into_iter()
+        .filter_map(|function| {
+            let return_type = function.declared_type?;
+            let collections = match file.lang() {
+                Language::Python => extract_python_nullable_collection_type(&return_type)?,
+                Language::Rust => extract_rust_nullable_collection_type(&return_type)?,
+            };
+            let expression = return_type.text();
+            Some(rule.diagnostic_at_node(
                 path,
-                &finding.return_type,
+                &return_type,
                 &[
-                    (FUNCTION, &finding.function),
+                    (FUNCTION, &function.name),
                     (EXPRESSION, expression.as_ref()),
-                    (TOKEN, &finding.collections),
+                    (TOKEN, &collections),
                 ],
-            )
+            ))
         })
         .collect()
 }
@@ -164,41 +165,21 @@ const FUNCTION: &str = "function";
 const EXPRESSION: &str = "expression";
 const TOKEN: &str = "token";
 
-/// A return annotation that makes a collection type nullable.
-struct NullableCollectionReturn<'a> {
-    /// The function's name.
-    function: String,
-    /// The return annotation.
-    return_type: AstNode<'a>,
-    /// The collection types made nullable, joined with `", "`.
-    collections: String,
-}
-
-/// Python return annotations whose union contains `None` and only collection branches.
-fn python_nullable_collection_returns(file: &ParsedFile) -> Vec<NullableCollectionReturn<'_>> {
-    ast::python::extract_function_signatures(file)
-        .into_iter()
-        .filter(|signature| !signature.is_exempt_from_signature_rules())
-        .filter_map(|signature| {
-            let return_type = signature.return_type_node?;
-            let union = ast::python::return_type_union(&return_type);
-            if !union.has_none {
-                return None;
-            }
-            let mut collection_types = Vec::new();
-            for branch in &union.branches {
-                let type_name = python_collection_branch_type(branch)?;
-                if !collection_types.contains(&type_name) {
-                    collection_types.push(type_name);
-                }
-            }
-            (!collection_types.is_empty()).then(|| NullableCollectionReturn {
-                function: signature.name,
-                return_type,
-                collections: collection_types.join(", "),
-            })
-        })
-        .collect()
+/// Extracts the comma-joined collection types from a Python return annotation whose union contains
+/// `None` and only collection branches.
+fn extract_python_nullable_collection_type(return_type: &AstNode<'_>) -> Option<String> {
+    let union = ast::python::return_type_union(return_type);
+    if !union.has_none {
+        return None;
+    }
+    let mut collection_types = Vec::new();
+    for branch in &union.branches {
+        let type_name = python_collection_branch_type(branch)?;
+        if !collection_types.contains(&type_name) {
+            collection_types.push(type_name);
+        }
+    }
+    (!collection_types.is_empty()).then(|| collection_types.join(", "))
 }
 
 fn python_collection_branch_type(branch: &PythonReturnTypeBranch<'_>) -> Option<String> {
@@ -212,25 +193,6 @@ fn python_collection_branch_type(branch: &PythonReturnTypeBranch<'_>) -> Option<
         }
     }
     Some(collection.path.clone())
-}
-
-/// Rust return types that wrap a collection in `Option`, outside tests, traits and trait impls.
-fn rust_nullable_collection_returns(file: &ParsedFile) -> Vec<NullableCollectionReturn<'_>> {
-    ast::rust::collect_functions(file)
-        .into_iter()
-        .filter(|function| {
-            !function.node.is_in_rust_inline_test() && !function.is_trait_or_trait_impl
-        })
-        .filter_map(|function| {
-            let return_type = function.return_type?;
-            let collections = extract_rust_nullable_collection_type(&return_type)?;
-            Some(NullableCollectionReturn {
-                function: function.name,
-                return_type,
-                collections,
-            })
-        })
-        .collect()
 }
 
 fn extract_rust_nullable_collection_type(return_type_node: &AstNode<'_>) -> Option<String> {

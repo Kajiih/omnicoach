@@ -20,9 +20,7 @@ pub use self::file_summary::{
     summarize_rust_file,
 };
 pub(super) use self::functions::collect_function_returns;
-pub use self::functions::{
-    NullableReturnPayload, RustFunction, collect_functions, nullable_return_payload,
-};
+pub use self::functions::{NullableReturnPayload, nullable_return_payload};
 pub(super) use self::literals::collect_literal_occurrences;
 pub(super) use self::positional_reads::collect_positional_reads;
 pub(super) use self::strings::find_unwrapped_multiline_strings;

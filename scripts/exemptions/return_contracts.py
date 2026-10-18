@@ -45,8 +45,8 @@ CLUSTER = Cluster(
             path=RS_FUNCTIONS,
             edits=(
                 (
-                    "!function.is_trait_or_trait_impl && !function.node.is_in_rust_inline_test()",
-                    "!function.node.is_in_rust_inline_test()",
+                    "if is_trait_or_trait_impl || node.is_in_rust_inline_test() {",
+                    "if node.is_in_rust_inline_test() {",
                 ),
             ),
             cases=(
@@ -59,8 +59,8 @@ CLUSTER = Cluster(
             path=RS_FUNCTIONS,
             edits=(
                 (
-                    "!function.is_trait_or_trait_impl && !function.node.is_in_rust_inline_test()",
-                    "!function.is_trait_or_trait_impl",
+                    "if is_trait_or_trait_impl || node.is_in_rust_inline_test() {",
+                    "if is_trait_or_trait_impl {",
                 ),
             ),
             cases=(

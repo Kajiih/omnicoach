@@ -403,8 +403,8 @@ CLUSTER = Cluster(
             path=NULLABLE_COLLECTION_RETURN,
             edits=(
                 (
-                    "                let type_name = python_collection_branch_type(branch)?;",
-                    "                let Some(type_name) = python_collection_branch_type(branch) else { continue; };",
+                    "        let type_name = python_collection_branch_type(branch)?;",
+                    "        let Some(type_name) = python_collection_branch_type(branch) else { continue; };",
                 ),
             ),
             cases=(
