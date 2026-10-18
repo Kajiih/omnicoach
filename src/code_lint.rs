@@ -2,6 +2,7 @@
 
 pub mod ast;
 pub mod contract;
+pub mod graph;
 pub mod policy;
 pub mod rules;
 pub mod runner;

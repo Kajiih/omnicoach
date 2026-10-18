@@ -120,6 +120,8 @@ define_architecture! {
     CodeLintRules       => [CodeLintContract, CodeLintPolicy, RuleDeclaration],
     /// Static code linting multi-file orchestration runner (`code_lint::runner`).
     CodeLintRunner      => [CodeLintRules, CodeLintSuppression, Diff],
+    /// Alpha / experimental multi-level abstraction graph model, builder, and text renderers (`code_lint::graph`).
+    CodeLintGraph       => [CodeLintAst, Config, Diagnostic],
 
     // --- Command Safety Domain (`command_lint`) ---
     /// The jj client: repository state queries for command rules (`command_lint::vcs`).
@@ -143,5 +145,5 @@ define_architecture! {
     /// The `rule_test!` harness and snapshot fixtures (`test_utils`).
     TestUtils           => [CodeLintContract, CodeLintPolicy, CommandLintContract],
     /// CLI entrypoints (`bin::*`).
-    Bin                 => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog],
+    Bin                 => [CodeLintRunner, CodeLintGraph, CommandLintRunner, RuleSelection, RuleCatalog],
 }
