@@ -10,7 +10,7 @@ from .model import (
     NULLABLE_COLLECTION_RETURN,
     PARAMETER_USAGE,
     PYTHON,
-    RUST,
+    RS_FUNCTIONS,
     Cluster,
     Mutation,
     Unmutated,
@@ -126,7 +126,9 @@ CLUSTER = Cluster(
                     "            _ => walk_stmt(self, statement),",
                 ),
             ),
-            cases=("mutable_collection_parameter::pass::augmented_assignment_on_parameter",),
+            cases=(
+                "mutable_collection_parameter::pass::augmented_assignment_on_parameter",
+            ),
         ),
         Mutation(
             label="passing parameter to unknown function marks it as escaping",
@@ -206,7 +208,9 @@ CLUSTER = Cluster(
                     "",
                 ),
             ),
-            cases=("mutable_collection_parameter::pass::mutated_inside_nested_closure",),
+            cases=(
+                "mutable_collection_parameter::pass::mutated_inside_nested_closure",
+            ),
         ),
         Mutation(
             label="nested function default evaluated in enclosing scope before shadowing",
@@ -218,7 +222,9 @@ CLUSTER = Cluster(
                     "",
                 ),
             ),
-            cases=("mutable_collection_parameter::pass::shadowing_nested_def_default_captures_parameter",),
+            cases=(
+                "mutable_collection_parameter::pass::shadowing_nested_def_default_captures_parameter",
+            ),
         ),
         Mutation(
             label="ellipsis stub body exempt from parameter usage rules",
@@ -263,7 +269,9 @@ CLUSTER = Cluster(
                     "        Stmt::Raise(_) => false,",
                 ),
             ),
-            cases=("mutable_collection_parameter::pass::raise_not_implemented_stub_body_exempt",),
+            cases=(
+                "mutable_collection_parameter::pass::raise_not_implemented_stub_body_exempt",
+            ),
         ),
         # Protocol/ABC, signature-decorator and data-model dunder exemptions are shared with
         # batch 2: their cases are listed in the matching mutations of `collection_types_1`.
@@ -297,7 +305,9 @@ CLUSTER = Cluster(
                     "                    Stmt::Assign(_) => walk_stmt(self, statement),",
                 ),
             ),
-            cases=("mutable_collection_return::pass::locally_mutated_via_assigned_variable",),
+            cases=(
+                "mutable_collection_return::pass::locally_mutated_via_assigned_variable",
+            ),
         ),
         Mutation(
             label="walrus binding mutation exempts function in mutable-collection-return",
@@ -310,7 +320,9 @@ CLUSTER = Cluster(
                     "",
                 ),
             ),
-            cases=("mutable_collection_return::pass::locally_mutated_via_walrus_binding",),
+            cases=(
+                "mutable_collection_return::pass::locally_mutated_via_walrus_binding",
+            ),
         ),
         Mutation(
             label="mutable-collection-return and mutable-collection-attribute only unwrap transparent wrappers",
@@ -352,7 +364,9 @@ CLUSTER = Cluster(
                     "if false",
                 ),
             ),
-            cases=("mutable_collection_attribute::pass::private_mutable_attributes_exempt",),
+            cases=(
+                "mutable_collection_attribute::pass::private_mutable_attributes_exempt",
+            ),
         ),
         Mutation(
             label="TypedDict keys exempt from mutable-collection-attribute",
@@ -378,7 +392,9 @@ CLUSTER = Cluster(
                     "",
                 ),
             ),
-            cases=("nullable_collection_return::pass::fixed_length_record_tuple_nullable",),
+            cases=(
+                "nullable_collection_return::pass::fixed_length_record_tuple_nullable",
+            ),
         ),
         Mutation(
             label="union mixing collection and non-collection type exempt from nullable-collection-return",
@@ -389,11 +405,13 @@ CLUSTER = Cluster(
                     "                let Some(type_name) = python_collection_branch_type(branch) else { continue; };",
                 ),
             ),
-            cases=("nullable_collection_return::pass::mixed_collection_with_non_collection_union_exempt",),
+            cases=(
+                "nullable_collection_return::pass::mixed_collection_with_non_collection_union_exempt",
+            ),
         ),
         Mutation(
             label="Rust trait declaration exempt from nullable-collection-return",
-            path=RUST,
+            path=RS_FUNCTIONS,
             edits=(
                 (
                     "    ast::Trait::can_cast(enclosing_item.kind())\n"
@@ -405,7 +423,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust trait impl exempt from nullable-collection-return",
-            path=RUST,
+            path=RS_FUNCTIONS,
             edits=(
                 (
                     "    ast::Trait::can_cast(enclosing_item.kind())\n"
@@ -417,8 +435,13 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust locally defined type shadowing a collection name exempt from nullable-collection-return",
-            path=RUST,
-            edits=(("        super::ResolvedName::Local => return None,", "        super::ResolvedName::Local => normalized,"),),
+            path=RS_FUNCTIONS,
+            edits=(
+                (
+                    "        super::ResolvedName::Local => return None,",
+                    "        super::ResolvedName::Local => normalized,",
+                ),
+            ),
             cases=("nullable_collection_return::pass::locally_shadowed_vec_exempt",),
         ),
         # --- Module constant exemptions (mutable-module-constant) ---
@@ -459,7 +482,9 @@ CLUSTER = Cluster(
                     "        if is_dunder {",
                 ),
             ),
-            cases=("mutable_module_constant::pass::lowercase_module_state_not_flagged",),
+            cases=(
+                "mutable_module_constant::pass::lowercase_module_state_not_flagged",
+            ),
         ),
         Mutation(
             label="class-body assignments not collected by collect_module_assignments",
@@ -616,20 +641,24 @@ CLUSTER = Cluster(
         Mutation(
             label="from collections.abc import Set exempts unqualified Set in mutable-module-constant",
             path=PYTHON,
-            edits=((
-                "        ResolvedName::Imported(resolved) => {\n"
-                "            let terminal = resolved\n"
-                "                .rsplit_once('.')\n"
-                "                .map_or(resolved.as_str(), |(_, terminal)| terminal)\n"
-                "                .to_owned();\n"
-                "            Some(QualifiedName {\n"
-                "                path: resolved,\n"
-                "                terminal,\n"
-                "            })\n"
-                "        }",
-                "        ResolvedName::Imported(_) => Some(name),",
-            ),),
-            cases=("mutable_module_constant::pass::collections_abc_set_import_exempts_set_annotation",),
+            edits=(
+                (
+                    "        ResolvedName::Imported(resolved) => {\n"
+                    "            let terminal = resolved\n"
+                    "                .rsplit_once('.')\n"
+                    "                .map_or(resolved.as_str(), |(_, terminal)| terminal)\n"
+                    "                .to_owned();\n"
+                    "            Some(QualifiedName {\n"
+                    "                path: resolved,\n"
+                    "                terminal,\n"
+                    "            })\n"
+                    "        }",
+                    "        ResolvedName::Imported(_) => Some(name),",
+                ),
+            ),
+            cases=(
+                "mutable_module_constant::pass::collections_abc_set_import_exempts_set_annotation",
+            ),
         ),
     ),
     unmutated=(

@@ -11,7 +11,7 @@ from .model import (
     POSITIONAL_READS,
     PYTHON,
     REPEATED_INDEX_ACCESS,
-    RUST,
+    RS_POSITIONAL_READS,
     Cluster,
     Mutation,
     Unmutated,
@@ -204,7 +204,9 @@ CLUSTER = Cluster(
                     "",
                 ),
             ),
-            cases=("environment_variable_in_function::pass::non_os_environ_subscript_allowed",),
+            cases=(
+                "environment_variable_in_function::pass::non_os_environ_subscript_allowed",
+            ),
         ),
         # --- identical-positional-types ---
         Mutation(
@@ -260,7 +262,9 @@ CLUSTER = Cluster(
                     "        let kind = if is_first_param && name == SELF_PARAMETER {",
                 ),
             ),
-            cases=("identical_positional_types::pass::classmethod_cls_excluded_below_min",),
+            cases=(
+                "identical_positional_types::pass::classmethod_cls_excluded_below_min",
+            ),
         ),
         Mutation(
             label="`**kwargs` variadic parameter excluded from identical-positional-types",
@@ -287,8 +291,8 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "        if let Some(ref type_annotation) = param.type_text {",
-                    '        let fallback = String::new();\n'
-                    '        let type_annotation = param.type_text.as_ref().unwrap_or(&fallback);\n'
+                    "        let fallback = String::new();\n"
+                    "        let type_annotation = param.type_text.as_ref().unwrap_or(&fallback);\n"
                     "        {",
                 ),
             ),
@@ -349,7 +353,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust call receiver excluded from repeated-index-access",
-            path=RUST,
+            path=RS_POSITIONAL_READS,
             edits=(
                 (
                     "    } else if is_stable_receiver(&receiver)",
@@ -455,7 +459,12 @@ CLUSTER = Cluster(
         Mutation(
             label="Python `for` loop iteration exempts receiver from repeated-index-access",
             path=POSITIONAL_READS,
-            edits=(("                self.record_exempt_receiver(&for_statement.iter);\n", ""),),
+            edits=(
+                (
+                    "                self.record_exempt_receiver(&for_statement.iter);\n",
+                    "",
+                ),
+            ),
             cases=("repeated_index_access::pass::iterated_exempts_receiver",),
         ),
         Mutation(
@@ -506,7 +515,9 @@ CLUSTER = Cluster(
                     "                }",
                 ),
             ),
-            cases=("repeated_index_access::pass::default_arguments_in_enclosing_scope",),
+            cases=(
+                "repeated_index_access::pass::default_arguments_in_enclosing_scope",
+            ),
         ),
         Mutation(
             label="Python positional reads scoped per function in repeated-index-access",
@@ -547,7 +558,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust tuple field assignment exempts receiver from repeated-index-access",
-            path=RUST,
+            path=RS_POSITIONAL_READS,
             edits=(
                 (
                     "                if !matches!(bin_expr.op_kind(), Some(ast::BinaryOp::Assignment { .. })) {\n"
@@ -560,7 +571,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust mutable borrow of tuple field exempts receiver from repeated-index-access",
-            path=RUST,
+            path=RS_POSITIONAL_READS,
             edits=(
                 (
                     "            SyntaxKind::REF_EXPR => {\n"
@@ -574,7 +585,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust destructuring swap assignment exempts receiver from repeated-index-access",
-            path=RUST,
+            path=RS_POSITIONAL_READS,
             edits=(
                 (
                     "            SyntaxKind::TUPLE_EXPR | SyntaxKind::PAREN_EXPR => place = parent,\n",
@@ -585,7 +596,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust items outside functions ignored in repeated-index-access",
-            path=RUST,
+            path=RS_POSITIONAL_READS,
             edits=(
                 (
                     "    let mut out = Vec::new();\n"
@@ -602,7 +613,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust positional reads scoped per function in repeated-index-access",
-            path=RUST,
+            path=RS_POSITIONAL_READS,
             edits=(
                 (
                     "    if ast::Fn::can_cast(node.kind()) {\n"

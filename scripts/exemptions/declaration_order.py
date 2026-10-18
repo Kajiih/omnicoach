@@ -8,7 +8,7 @@ from .model import (
     INLINE_TEST_ALWAYS_FALSE,
     PY_DECL_ORDER,
     PYTHON,
-    RUST,
+    RS_DECL_ORDER,
     Cluster,
     Mutation,
     Unmutated,
@@ -50,19 +50,19 @@ MUTATIONS = (
     ),
     Mutation(
         "private Rust new is not a constructor",
-        RUST,
+        RS_DECL_ORDER,
         (("let is_constructor = is_exported\n", "let is_constructor = true\n"),),
         (CONSTRUCTOR + "private_new_fn_exempt",),
     ),
     Mutation(
         "Rust new with self is not a constructor",
-        RUST,
+        RS_DECL_ORDER,
         (("&& !has_self\n", "\n"),),
         (CONSTRUCTOR + "self_receiver_new_method_exempt",),
     ),
     Mutation(
         "Rust new not returning Self is not a constructor",
-        RUST,
+        RS_DECL_ORDER,
         (("&& returns_self_type(&function, type_name);", ";"),),
         (CONSTRUCTOR + "new_fn_not_returning_self_exempt",),
     ),
@@ -150,7 +150,7 @@ MUTATIONS = (
     ),
     Mutation(
         "Rust local bindings are not references",
-        RUST,
+        RS_DECL_ORDER,
         (("if !local_names.contains(name)\n", "if true\n"),),
         (CALLEE + "local_binding_shadowing_exempt@rust",),
     ),
@@ -177,7 +177,7 @@ MUTATIONS = (
     ),
     Mutation(
         "Rust restricted visibility is public",
-        RUST,
+        RS_DECL_ORDER,
         (
             (
                 "let is_exported = function.visibility().is_some();",
@@ -228,7 +228,7 @@ MUTATIONS = (
     ),
     Mutation(
         "Rust trait impl blocks",
-        RUST,
+        RS_DECL_ORDER,
         (
             (
                 "&& impl_item.trait_().is_none()\n            && let Some(scope)",
@@ -239,7 +239,7 @@ MUTATIONS = (
     ),
     Mutation(
         "Rust self.field inside a macro",
-        RUST,
+        RS_DECL_ORDER,
         (("&& is_followed_by_open_paren(&token))", ")"),),
         (CALLEE + "macro_field_access_is_not_a_method_call",),
     ),

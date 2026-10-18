@@ -13,7 +13,7 @@ from .model import (
     PY_CALLS,
     PY_TESTS,
     RS_CALLS,
-    RUST,
+    RS_TESTS,
     SLEEP_IN_TESTS,
     TOO_MANY_ASSERTIONS,
     YIELD_LOOP_IN_TESTS,
@@ -55,7 +55,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust disjunctive `||` condition exempt from packed-assertion",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "                if first.kind() == SyntaxKind::AMP && second.kind() == SyntaxKind::AMP",
@@ -80,7 +80,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust `&&` inside function call argument exempt from packed-assertion",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "    if token_tree_has_direct_logical_and(&token_tree) {",
@@ -108,7 +108,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust single-element boolean tuple exempt from packed-assertion",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "    items.len() >= 2\n        && items.iter().all(|item| {",
@@ -155,7 +155,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust non-boolean tuple/array equality exempt from packed-assertion",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "    items.len() >= 2\n"
@@ -177,7 +177,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust function-call argument list exempt from packed-assertion collection check",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "    matches!(\n"
@@ -210,7 +210,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust non-test helper function exempt from test-function rules",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "        if is_test_function(&function) {",
@@ -280,7 +280,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust nested fn assertions not counted toward enclosing test",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "    if ast::Fn::can_cast(node.kind()) {\n        return 0;\n    }",
@@ -306,7 +306,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust value-returning setup helper with internal assert exempt from assertion-helper classification",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "                && is_unit_rust_function(function)",
@@ -368,7 +368,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust nested fn item exempt from logic-in-tests",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "    if (ast::Item::can_cast(node.kind()) && !ast::MacroCall::can_cast(node.kind()))\n"
@@ -380,7 +380,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust closure callback exempt from logic-in-tests",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "    if (ast::Item::can_cast(node.kind()) && !ast::MacroCall::can_cast(node.kind()))\n"
@@ -453,7 +453,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust consecutive assertions without intervening action allowed in multi-phase-test",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "        if count_rust_assertions(&statement_node, assertion_helpers) > 0 {\n"
@@ -471,7 +471,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust call-free projection binding between assertions exempt in multi-phase-test",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "        } else if seen_assertion && !is_rust_inspection_binding(&statement_node) {",
@@ -484,7 +484,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust local item declaration exempt from multi-phase-test and duplicated-test-setup",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "        .filter(|statement| {\n"
@@ -543,7 +543,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust non-test helper function exempt from duplicated-test-setup",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "        if !is_test_function(function) {\n            continue;\n        }",
@@ -614,7 +614,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust assertions not counted as setup in duplicated-test-setup",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "        .take_while(|statement_node| count_rust_assertions(statement_node, assertion_helpers) == 0)",
@@ -900,7 +900,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust helper without #[test] attribute exempt from test-calls-test",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "        if has_test_attribute(&fn_decl) {",
@@ -914,7 +914,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust method call on struct exempt from test-calls-test",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "    if candidate.method_name.is_some() {\n        return None;\n    }",
@@ -930,7 +930,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust associated function on type exempt from test-calls-test",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "            .all(|segment| matches!(*segment, SELF_KEYWORD | SUPER_KEYWORD))",
@@ -941,7 +941,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust local binding shadowing test name exempt from test-calls-test",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "        if !is_test_target || is_local {",
@@ -952,7 +952,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust recursive self-call exempt from test-calls-test",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "        if super_count == 0 && callee_name == caller_fn.name {\n"
@@ -965,7 +965,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust helper in sibling module not matched against #[test] in another module",
-            path=RUST,
+            path=RS_TESTS,
             edits=(
                 (
                     "            let module_span = enclosing_rust_module_span(fn_decl.syntax());",

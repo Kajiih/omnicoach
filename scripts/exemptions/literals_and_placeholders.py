@@ -12,7 +12,8 @@ from .model import (
     PY_LITERALS,
     QUOTE_WRAPPED,
     REPEATED_LITERAL,
-    RUST,
+    RS_LITERALS,
+    RS_STRINGS,
     STRINGS,
     UNMATCHED_LOGGER,
     Cluster,
@@ -32,7 +33,12 @@ CLUSTER = Cluster(
         Mutation(
             label="Python standalone string statements (docstrings) exempt from bare-multiline-string",
             path=STRINGS,
-            edits=(("let is_docstring = self.docstring_expr_span == Some(span);", "let is_docstring = false;"),),
+            edits=(
+                (
+                    "let is_docstring = self.docstring_expr_span == Some(span);",
+                    "let is_docstring = false;",
+                ),
+            ),
             cases=(
                 "bare_multiline_string::pass::module_docstring_exempt",
                 "bare_multiline_string::pass::function_docstring_exempt",
@@ -47,7 +53,9 @@ CLUSTER = Cluster(
         Mutation(
             label="Python single-quoted strings with line breaks exempt from bare-multiline-string",
             path=STRINGS,
-            edits=(("if is_triple_quoted", "let _ = is_triple_quoted;\n        if true"),),
+            edits=(
+                ("if is_triple_quoted", "let _ = is_triple_quoted;\n        if true"),
+            ),
             cases=(
                 "bare_multiline_string::pass::backslash_continuation_allowed@python",
                 "bare_multiline_string::pass::fstring_multiline_interpolation_allowed",
@@ -55,25 +63,25 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust allowed indoc macro exempt from bare-multiline-string",
-            path=RUST,
+            path=RS_STRINGS,
             edits=(("&& !is_enclosed_in_macro(token, &is_allowed_wrapper)", ""),),
             cases=("bare_multiline_string::pass::indoc_macro_allowed",),
         ),
         Mutation(
             label="Rust backslash line continuation exempt from bare-multiline-string",
-            path=RUST,
+            path=RS_STRINGS,
             edits=(("lines.any(|line| !line.trim_end().ends_with('\\\\'))", "true"),),
             cases=("bare_multiline_string::pass::backslash_continuation_allowed@rust",),
         ),
         Mutation(
             label="Rust insta inline snapshot exempt from bare-multiline-string",
-            path=RUST,
+            path=RS_STRINGS,
             edits=(("&& !is_insta_inline_snapshot(token)", ""),),
             cases=("bare_multiline_string::pass::insta_inline_snapshot_exempt",),
         ),
         Mutation(
             label="Rust doc attribute exempt from bare-multiline-string",
-            path=RUST,
+            path=RS_STRINGS,
             edits=(("&& !is_enclosed_in_doc_attribute(token)", ""),),
             cases=("bare_multiline_string::pass::doc_attribute_exempt",),
         ),
@@ -95,7 +103,12 @@ CLUSTER = Cluster(
         Mutation(
             label="trivial integer literals (-1..=2) exempt from repeated-literal",
             path=POLICY,
-            edits=(("LiteralValue::Int(value) => (-1..=2).contains(value),", "LiteralValue::Int(_) => false,"),),
+            edits=(
+                (
+                    "LiteralValue::Int(value) => (-1..=2).contains(value),",
+                    "LiteralValue::Int(_) => false,",
+                ),
+            ),
             cases=("repeated_literal::pass::trivial_integers",),
         ),
         Mutation(
@@ -135,19 +148,28 @@ CLUSTER = Cluster(
         Mutation(
             label="Python composite constant initializer not walked as inline literals",
             path=PY_LITERALS,
-            edits=(("self.record_constant_rhs(&assign.value);", "walk_stmt(self, statement);"),),
-            cases=("repeated_literal::pass::composite_constant_does_not_pair_with_single_use@python",),
+            edits=(
+                (
+                    "self.record_constant_rhs(&assign.value);",
+                    "walk_stmt(self, statement);",
+                ),
+            ),
+            cases=(
+                "repeated_literal::pass::composite_constant_does_not_pair_with_single_use@python",
+            ),
         ),
         Mutation(
             label="Rust composite constant initializer not walked as inline literals",
-            path=RUST,
+            path=RS_LITERALS,
             edits=(
                 (
                     "if let Some(ScalarConstant { initializer }) = constant_initializer_expr(node) {",
                     "if let Some(ScalarConstant { initializer }) = None::<ScalarConstant> {",
                 ),
             ),
-            cases=("repeated_literal::pass::composite_constant_does_not_pair_with_single_use@rust",),
+            cases=(
+                "repeated_literal::pass::composite_constant_does_not_pair_with_single_use@rust",
+            ),
         ),
         Mutation(
             label="Python str and bytes literal values kept distinct",
@@ -166,7 +188,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust str and bytes literal values kept distinct",
-            path=RUST,
+            path=RS_LITERALS,
             edits=(
                 (
                     "return Some(LiteralValue::Bytes(\n"
@@ -227,7 +249,12 @@ CLUSTER = Cluster(
         Mutation(
             label="Python type-name first argument in cast/TypeVar/etc. exempt from repeated-literal",
             path=PY_LITERALS,
-            edits=(("if TYPE_NAME_FIRST_ARGUMENT_CALLS.contains(&terminal.as_str()) {", "if false {"),),
+            edits=(
+                (
+                    "if TYPE_NAME_FIRST_ARGUMENT_CALLS.contains(&terminal.as_str()) {",
+                    "if false {",
+                ),
+            ),
             cases=("repeated_literal::pass::repeated_type_names_in_cast",),
         ),
         Mutation(
@@ -253,13 +280,13 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust attributes exempt from repeated-literal",
-            path=RUST,
+            path=RS_LITERALS,
             edits=(("if ast::Attr::can_cast(kind) {\n        return;\n    }", ""),),
             cases=("repeated_literal::pass::repeated_attribute_arguments",),
         ),
         Mutation(
             label="Rust formatting, assertion, and logging macros exempt from repeated-literal",
-            path=RUST,
+            path=RS_LITERALS,
             edits=(
                 (
                     "fn is_literal_exempt_macro(name: &str) -> bool {\n    LITERAL_EXEMPT_MACROS.contains(&name)\n}",
@@ -274,15 +301,27 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust negative numbers in macro token_trees skipped by repeated-literal",
-            path=RUST,
-            edits=(("let is_signed_number = follows_minus && is_number;", "let _ = follows_minus;\n                    let is_signed_number = false;"),),
+            path=RS_LITERALS,
+            edits=(
+                (
+                    "let is_signed_number = follows_minus && is_number;",
+                    "let _ = follows_minus;\n                    let is_signed_number = false;",
+                ),
+            ),
             cases=("repeated_literal::pass::known_gap_negative_numbers_in_macros",),
         ),
         Mutation(
             label="Rust tuple field indices in macro token_trees skipped by repeated-literal",
-            path=RUST,
-            edits=(("let is_tuple_field = follows_dot && is_number;", "let _ = follows_dot;\n                    let is_tuple_field = false;"),),
-            cases=("repeated_literal::pass::tuple_field_positions_in_macros_are_not_literals",),
+            path=RS_LITERALS,
+            edits=(
+                (
+                    "let is_tuple_field = follows_dot && is_number;",
+                    "let _ = follows_dot;\n                    let is_tuple_field = false;",
+                ),
+            ),
+            cases=(
+                "repeated_literal::pass::tuple_field_positions_in_macros_are_not_literals",
+            ),
         ),
         # --- quote-wrapped-placeholder ---
         Mutation(
@@ -429,7 +468,9 @@ CLUSTER = Cluster(
                     "PythonFormatStyle::StrFormat => (placeholder.conversion.is_none()",
                 ),
             ),
-            cases=("quote_wrapped_placeholder::pass::str_format_with_format_specifier",),
+            cases=(
+                "quote_wrapped_placeholder::pass::str_format_with_format_specifier",
+            ),
         ),
         Mutation(
             label="left prose boundary requires space or '(' before opening quote",
@@ -504,13 +545,17 @@ CLUSTER = Cluster(
                     "let _ = second_char;\n            true",
                 ),
             ),
-            cases=("quote_wrapped_placeholder::pass::file_extension_after_closing_quote",),
+            cases=(
+                "quote_wrapped_placeholder::pass::file_extension_after_closing_quote",
+            ),
         ),
         Mutation(
             label="right prose boundary rejects punctuation immediately followed by another placeholder (':{port}')",
             path=QUOTE_WRAPPED,
             edits=((".map_or(!followed_by_placeholder,", ".map_or(true,"),),
-            cases=("quote_wrapped_placeholder::pass::colon_before_placeholder_after_closing_quote",),
+            cases=(
+                "quote_wrapped_placeholder::pass::colon_before_placeholder_after_closing_quote",
+            ),
         ),
         Mutation(
             label="mismatched opening and closing quotes rejected",
@@ -533,7 +578,9 @@ CLUSTER = Cluster(
                     "let Some(first) = characters.next() else {\n        return true;\n    };",
                 ),
             ),
-            cases=("unmatched_logger_placeholder::pass::positional_empty_braces_with_positional_arg",),
+            cases=(
+                "unmatched_logger_placeholder::pass::positional_empty_braces_with_positional_arg",
+            ),
         ),
         Mutation(
             label="digit-starting field roots ('0', '0.id', '0[sku]') excluded by is_python_identifier",
@@ -568,7 +615,9 @@ CLUSTER = Cluster(
         Mutation(
             label="named placeholder matched by keyword argument exempt from unmatched-logger-placeholder",
             path=UNMATCHED_LOGGER,
-            edits=((".find(|root| !call.keyword_names.contains(root))?;", ".next()?;"),),
+            edits=(
+                (".find(|root| !call.keyword_names.contains(root))?;", ".next()?;"),
+            ),
             cases=(
                 "unmatched_logger_placeholder::pass::named_placeholder_with_matching_keyword_arg",
                 "unmatched_logger_placeholder::pass::named_compound_attribute_with_matching_keyword_arg",
@@ -600,10 +649,12 @@ CLUSTER = Cluster(
                     "        } else if rest.starts_with('}') {\n"
                     "            return None;\n"
                     "        }",
-                    'if rest.starts_with("{{") || rest.starts_with(\'}\') {\n            cursor += 1;\n        }',
+                    "if rest.starts_with(\"{{\") || rest.starts_with('}') {\n            cursor += 1;\n        }",
                 ),
             ),
-            cases=("unmatched_logger_placeholder::pass::escaped_double_braces_with_positional_arg",),
+            cases=(
+                "unmatched_logger_placeholder::pass::escaped_double_braces_with_positional_arg",
+            ),
         ),
         Mutation(
             label="logger calls with **kwargs splat exempt from unmatched-logger-placeholder",
@@ -614,19 +665,26 @@ CLUSTER = Cluster(
                     ".filter(|call| call.has_trailing_positional_args)",
                 ),
             ),
-            cases=("unmatched_logger_placeholder::pass::dictionary_splat_kwargs_exempt",),
+            cases=(
+                "unmatched_logger_placeholder::pass::dictionary_splat_kwargs_exempt",
+            ),
         ),
         Mutation(
             label="non-identifier braces (JSON/set literals) rejected by extract_valid_field_root",
             path=FORMAT_STRINGS,
             edits=(
-                ("if !valid_root {\n        return None;\n    }", "let _ = valid_root;"),
+                (
+                    "if !valid_root {\n        return None;\n    }",
+                    "let _ = valid_root;",
+                ),
                 (
                     ".filter(|root| is_python_identifier(root))",
                     ".filter(|root| !root.is_empty() && !root.chars().all(|c| c.is_ascii_digit()))",
                 ),
             ),
-            cases=("unmatched_logger_placeholder::pass::non_identifier_braces_json_or_set_with_positional_arg",),
+            cases=(
+                "unmatched_logger_placeholder::pass::non_identifier_braces_json_or_set_with_positional_arg",
+            ),
         ),
         Mutation(
             label="unclosed '{' brace aborts named_format_field_roots",
@@ -637,18 +695,32 @@ CLUSTER = Cluster(
                     "let (delimiter_index, delimiter_char) = delimiter.unwrap_or((message.len(), '}'));",
                 ),
             ),
-            cases=("unmatched_logger_placeholder::pass::malformed_unclosed_brace_ignored",),
+            cases=(
+                "unmatched_logger_placeholder::pass::malformed_unclosed_brace_ignored",
+            ),
         ),
         Mutation(
             label="logger.log inspects second positional argument as message",
             path=LOGGING,
-            edits=(('let message_index = usize::from(method == "log");', "let message_index = 0;"),),
-            cases=("unmatched_logger_placeholder::pass::logger_log_level_first_arg_with_valid_message",),
+            edits=(
+                (
+                    'let message_index = usize::from(method == "log");',
+                    "let message_index = 0;",
+                ),
+            ),
+            cases=(
+                "unmatched_logger_placeholder::pass::logger_log_level_first_arg_with_valid_message",
+            ),
         ),
         Mutation(
             label="non-logger receivers ignored by extract_logger_call",
             path=LOGGING,
-            edits=(("if !is_logger_receiver(&function.value) {\n        return None;\n    }", ""),),
+            edits=(
+                (
+                    "if !is_logger_receiver(&function.value) {\n        return None;\n    }",
+                    "",
+                ),
+            ),
             cases=("unmatched_logger_placeholder::pass::non_logger_call_ignored",),
         ),
         Mutation(
@@ -660,7 +732,9 @@ CLUSTER = Cluster(
                     "message: Some(file.source[usize::from(message_expr.range().start())..usize::from(message_expr.range().end())].to_owned()),",
                 ),
             ),
-            cases=("unmatched_logger_placeholder::pass::unicode_named_character_escape_not_flagged",),
+            cases=(
+                "unmatched_logger_placeholder::pass::unicode_named_character_escape_not_flagged",
+            ),
         ),
     ),
     unmutated=(

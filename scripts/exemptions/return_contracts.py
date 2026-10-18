@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .model import AST, ANNOTATIONS, RETURNS, RUST, Cluster, Mutation, Unmutated
+from .model import ANNOTATIONS, AST, RETURNS, RS_FUNCTIONS, Cluster, Mutation, Unmutated
 
 UNEXPLAINED_RETURN = "src/code_lint/rules/unexplained_return.rs"
 
@@ -22,12 +22,19 @@ CLUSTER = Cluster(
                     "(!arguments.is_empty()).then_some(arguments.len())",
                 ),
             ),
-            cases=("positional_tuple_return::pass::variadic_or_single_element_tuple_exempt",),
+            cases=(
+                "positional_tuple_return::pass::variadic_or_single_element_tuple_exempt",
+            ),
         ),
         Mutation(
             label="imposed Python signatures are not collected (E2)",
             path=RETURNS,
-            edits=((".filter(|signature| !signature.is_exempt_from_signature_rules())", ".filter(|_| true)"),),
+            edits=(
+                (
+                    ".filter(|signature| !signature.is_exempt_from_signature_rules())",
+                    ".filter(|_| true)",
+                ),
+            ),
             cases=(
                 "positional_tuple_return::pass::imposed_signature_exempt",
                 "non_boolean_predicate::pass::imposed_signature_exempt",
@@ -35,7 +42,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust trait items and trait implementations are not collected (E3)",
-            path=RUST,
+            path=RS_FUNCTIONS,
             edits=(
                 (
                     "!function.is_trait_or_trait_impl && !function.node.is_in_rust_inline_test()",
@@ -49,7 +56,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust inline tests are not collected (E4)",
-            path=RUST,
+            path=RS_FUNCTIONS,
             edits=(
                 (
                     "!function.is_trait_or_trait_impl && !function.node.is_in_rust_inline_test()",
@@ -65,7 +72,10 @@ CLUSTER = Cluster(
             label="tuple displays in nested scopes do not count (E5)",
             path=RETURNS,
             edits=(
-                ("            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,\n", ""),
+                (
+                    "            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,\n",
+                    "",
+                ),
                 ("            Expr::Lambda(_) => return,\n", ""),
             ),
             cases=("positional_tuple_return::pass::nested_scope_tuple_display_exempt",),
@@ -73,7 +83,9 @@ CLUSTER = Cluster(
         Mutation(
             label="a starred tuple display has no fixed length (E5)",
             path=RETURNS,
-            edits=(("            && !tuple.elts.iter().any(Expr::is_starred_expr)\n", ""),),
+            edits=(
+                ("            && !tuple.elts.iter().any(Expr::is_starred_expr)\n", ""),
+            ),
             cases=("positional_tuple_return::pass::starred_tuple_display_exempt",),
         ),
         Mutation(
@@ -100,7 +112,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust `Result<bool, E>` / `Poll<bool>` are booleans (E9)",
-            path=RUST,
+            path=RS_FUNCTIONS,
             edits=(
                 (
                     "let success = unwrap_rust_return_envelope(type_node, file);",
@@ -111,7 +123,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="aliases whose last segment ends in `Result` are results (E9)",
-            path=RUST,
+            path=RS_FUNCTIONS,
             edits=(
                 (
                     'let is_result_or_poll = base_terminal.ends_with("Result")',
@@ -140,13 +152,23 @@ CLUSTER = Cluster(
         Mutation(
             label="below both gate thresholds (unexplained-return E11)",
             path=UNEXPLAINED_RETURN,
-            edits=(("                && signature.is_nontrivial(min_statements, min_cognitive_complexity)\n", ""),),
+            edits=(
+                (
+                    "                && signature.is_nontrivial(min_statements, min_cognitive_complexity)\n",
+                    "",
+                ),
+            ),
             cases=("unexplained_return::pass::below_gate_exempt",),
         ),
         Mutation(
             label="undocumented functions are left to undocumented-nontrivial-function (unexplained-return E12)",
             path=UNEXPLAINED_RETURN,
-            edits=(("signature.docstring().is_some_and(", "signature.docstring().is_none_or("),),
+            edits=(
+                (
+                    "signature.docstring().is_some_and(",
+                    "signature.docstring().is_none_or(",
+                ),
+            ),
             cases=("unexplained_return::pass::undocumented_function_exempt",),
         ),
         Mutation(
@@ -179,19 +201,31 @@ CLUSTER = Cluster(
         Mutation(
             label="an unannotated function without a value return is obvious (unexplained-return E16)",
             path=UNEXPLAINED_RETURN,
-            edits=(("return results.returns_value || results.yields;", "return true;"),),
+            edits=(
+                ("return results.returns_value || results.yields;", "return true;"),
+            ),
             cases=("unexplained_return::pass::unannotated_without_value_exempt",),
         ),
         Mutation(
             label="nested functions are not checked (unexplained-return E17)",
             path=UNEXPLAINED_RETURN,
-            edits=(("            !signature.is_nested()\n                && ", "            "),),
+            edits=(
+                (
+                    "            !signature.is_nested()\n                && ",
+                    "            ",
+                ),
+            ),
             cases=("unexplained_return::pass::nested_function_exempt",),
         ),
         Mutation(
             label="docstring-exempt methods are not checked (unexplained-return E17)",
             path=UNEXPLAINED_RETURN,
-            edits=(("                && !signature.is_exempt_from_docstring_rules()\n", ""),),
+            edits=(
+                (
+                    "                && !signature.is_exempt_from_docstring_rules()\n",
+                    "",
+                ),
+            ),
             cases=("unexplained_return::pass::docstring_exempt_method_exempt",),
         ),
         Mutation(

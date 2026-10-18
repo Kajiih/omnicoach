@@ -6,7 +6,7 @@ from __future__ import annotations
 from .model import (
     ABBREVIATED_NAME,
     BINDINGS,
-    RUST,
+    RS_BINDINGS,
     SCOPES,
     SINGLE_LETTER_NAME,
     TYPE_SUFFIXED_NAME,
@@ -93,7 +93,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust use statement classified as BindingKind::Import",
-            path=RUST,
+            path=RS_BINDINGS,
             edits=(
                 (
                     "    if let Some(use_item) = ast::Use::cast(node.clone()) {\n"
@@ -150,7 +150,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust trait impl associated type classified as BindingKind::ContractMember",
-            path=RUST,
+            path=RS_BINDINGS,
             edits=(
                 (
                     "        SyntaxKind::FN | SyntaxKind::TYPE_ALIAS | SyntaxKind::CONST",
@@ -161,7 +161,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust trait impl method classified as BindingKind::ContractMember",
-            path=RUST,
+            path=RS_BINDINGS,
             edits=(
                 (
                     "        SyntaxKind::FN | SyntaxKind::TYPE_ALIAS | SyntaxKind::CONST",
@@ -172,7 +172,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust trait impl const classified as BindingKind::ContractMember",
-            path=RUST,
+            path=RS_BINDINGS,
             edits=(
                 (
                     "        SyntaxKind::FN | SyntaxKind::TYPE_ALIAS | SyntaxKind::CONST",
@@ -265,7 +265,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust struct definition classified as BindingKind::StructuralDefinition",
-            path=RUST,
+            path=RS_BINDINGS,
             edits=(
                 (
                     "        SyntaxKind::STRUCT\n"
@@ -286,7 +286,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust fn definition classified as BindingKind::StructuralDefinition",
-            path=RUST,
+            path=RS_BINDINGS,
             edits=(
                 (
                     "        SyntaxKind::STRUCT\n"
