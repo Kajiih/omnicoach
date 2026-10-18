@@ -4,6 +4,7 @@ mod annotations;
 mod calls;
 mod classes;
 mod complexity;
+mod declaration_order;
 mod docstrings;
 mod format_strings;
 mod functions;
@@ -23,13 +24,13 @@ pub use self::annotations::{
 pub(super) use self::calls::collect_call_candidates;
 pub use self::classes::{
     PythonAnnotatedAttribute, PythonAttributeDefinition, PythonBaseClass, PythonClassInfo,
-    PythonFieldAfterMethod, PythonInheritedDocstring, PythonInstanceAttributeAnnotation,
-    collect_class_attributes, collect_fields_after_methods, collect_instance_attribute_annotations,
-    extract_classes, inherited_method_docstring, is_fake_class_name, local_ancestors,
-    local_base_classes,
+    PythonInheritedDocstring, PythonInstanceAttributeAnnotation, collect_class_attributes,
+    collect_instance_attribute_annotations, extract_classes, inherited_method_docstring,
+    is_fake_class_name, local_ancestors, local_base_classes,
 };
-pub(super) use self::classes::{collect_declaration_scopes, collect_type_method_scopes};
 pub use self::complexity::PythonComplexityMetric;
+pub use self::declaration_order::{PythonFieldAfterMethod, collect_fields_after_methods};
+pub(super) use self::declaration_order::{collect_declaration_scopes, collect_type_method_scopes};
 pub use self::docstrings::{
     DocstringEntry, DocstringLine, DocstringSection, DocstringSectionKind, DocstringTypedLine,
     PythonDocstring, is_clause_end, is_clause_start, leading_verb, none_words,

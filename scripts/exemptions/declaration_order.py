@@ -5,8 +5,8 @@ from __future__ import annotations
 from .model import (
     AST,
     CALL_CLUSTERS,
-    CLASSES,
     INLINE_TEST_ALWAYS_FALSE,
+    PY_DECL_ORDER,
     PYTHON,
     RUST,
     Cluster,
@@ -41,7 +41,7 @@ MUTATIONS = (
     ),
     Mutation(
         "overloads and property accessors grouped",
-        CLASSES,
+        PY_DECL_ORDER,
         (("if is_property_accessor || continues_overload {", "if false {"),),
         (
             CONSTRUCTOR + "overloaded_init_grouped_at_first_declaration_exempt",
@@ -141,7 +141,7 @@ MUTATIONS = (
     ),
     Mutation(
         "Python local bindings are not references",
-        CLASSES,
+        PY_DECL_ORDER,
         (("if !self.local_names.contains(ident) {", "if true {"),),
         (
             UNCOLOCATED + "class_method_local_binding_does_not_bridge_module_helper",
@@ -171,7 +171,7 @@ MUTATIONS = (
     ),
     Mutation(
         "Python dunder methods are public",
-        CLASSES,
+        PY_DECL_ORDER,
         (("if is_dunder || !name.starts_with('_')", "if !name.starts_with('_')"),),
         (PRIVATE_FIRST + "dunder_method_is_public",),
     ),
