@@ -103,7 +103,7 @@ def _shared_1() -> None:    # Place 2: 2-user helper below its callers _a_step_1
 
 ### 3.3 The Three Disjoint Call-Cluster Rules
 
-Because visibility, helper placement, and caller-callee ordering are projections of one structural order over the call graph, they are computed by **one shared call-cluster analyzer** in [src/code_lint/ast.rs](../src/code_lint/ast.rs) and evaluated in three mutually exclusive stages (so a single misplaced function is never reported twice):
+Because visibility, helper placement, and caller-callee ordering are projections of one structural order over the call graph, they are computed by **one shared call-cluster analyzer** in [call_clusters.rs](../../../src/code_lint/ast/call_clusters.rs) and evaluated in three mutually exclusive stages (so a single misplaced function is never reported twice):
 
 | Stage | Rule Name | Invariant Enforced |
 | :--- | :--- | :--- |

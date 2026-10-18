@@ -101,9 +101,9 @@ pub struct PythonClassInfo<'a> {
     /// The class docstring, if the class body starts with one.
     pub docstring: Option<PythonDocstring<'a>>,
     /// Parsed decorators on this class definition.
-    pub(super) decorators: Vec<DecoratorInfo>,
+    decorators: Vec<DecoratorInfo>,
     /// The parsed definition, for analyses of the body.
-    pub(super) definition: &'a StmtClassDef,
+    definition: &'a StmtClassDef,
 }
 
 impl<'a> PythonClassInfo<'a> {
@@ -574,14 +574,8 @@ fn record_mutated_class_receiver(receiver: &Expr, class_name: &str, out: &mut Ha
     }
 }
 
-/// Returns true if a Python `StmtClassDef` inherits from `Protocol` or `ABC` or declares
-/// `metaclass=ABCMeta`.
-pub(super) fn is_protocol_or_abc_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
-    is_protocol_class(class_def, file) || is_abc_class(class_def, file)
-}
-
 /// Returns true if a Python `StmtClassDef` inherits from `TypedDict`.
-pub(super) fn is_typed_dict_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
+fn is_typed_dict_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
     resolved_base_class_paths(class_def, file)
         .iter()
         .any(|path| {
@@ -590,6 +584,12 @@ pub(super) fn is_typed_dict_class(class_def: &StmtClassDef, file: &ParsedFile) -
                 "TypedDict" | "typing.TypedDict" | "typing_extensions.TypedDict"
             )
         })
+}
+
+/// Returns true if a Python `StmtClassDef` inherits from `Protocol` or `ABC` or declares
+/// `metaclass=ABCMeta`.
+pub(super) fn is_protocol_or_abc_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
+    is_protocol_class(class_def, file) || is_abc_class(class_def, file)
 }
 
 /// A Python instance attribute annotated inline (`self.<name>: <type>`) inside an instance method.

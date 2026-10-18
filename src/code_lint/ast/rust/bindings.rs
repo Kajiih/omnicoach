@@ -10,7 +10,7 @@ use ra_ap_syntax::{AstNode as _, SyntaxKind, SyntaxNode};
 
 /// Returns `node` as an [`EnclosingFunction`] if it is a named function or method item; top level
 /// if it is an item of the source file.
-pub(in crate::code_lint::ast) fn named_function(node: &SyntaxNode) -> Option<EnclosingFunction> {
+pub(super) fn named_function(node: &SyntaxNode) -> Option<EnclosingFunction> {
     let name = ast::Fn::cast(node.clone())?.name()?;
     Some(EnclosingFunction {
         name: name.text().to_string(),

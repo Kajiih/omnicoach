@@ -1,10 +1,11 @@
 //! Python test-function and assertion extractors.
 
+use super::classes::SELF_RECEIVER;
 use super::{docstrings, returns, scopes};
 use crate::code_lint::ast::{
     AstCallCandidate, AstNode, EnclosingFunction, ParsedFile, TestFunctionSetup, TestToTestCall,
     collect_call_candidates, is_assertion_function_name, normalize_statement_text,
-    span_from_ruff_range,
+    span_from_ruff_range, split_at_redefinitions,
 };
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
@@ -396,8 +397,7 @@ fn collect_python_test_setup_scope<'a>(
     assertion_helpers: &HashSet<String>,
     out: &mut Vec<Vec<TestFunctionSetup<'a>>>,
 ) {
-    let mut current_segment = Vec::new();
-    let mut seen_names = HashSet::new();
+    let mut setups = Vec::new();
     for statement in statements {
         let Stmt::FunctionDef(func_def) = statement else {
             continue;
@@ -405,15 +405,9 @@ fn collect_python_test_setup_scope<'a>(
         if !is_test_function_def(func_def) {
             continue;
         }
-        let name = func_def.name.to_string();
-        if !seen_names.insert(name.clone()) {
-            out.push(std::mem::take(&mut current_segment));
-            seen_names.clear();
-            seen_names.insert(name.clone());
-        }
-        current_segment.push(TestFunctionSetup {
+        setups.push(TestFunctionSetup {
             name_node: AstNode::from_span(file, span_from_ruff_range(func_def.name.range)),
-            name,
+            name: func_def.name.to_string(),
             leading_setup_statements: extract_python_leading_setup_statements(
                 func_def,
                 file,
@@ -421,9 +415,7 @@ fn collect_python_test_setup_scope<'a>(
             ),
         });
     }
-    if !current_segment.is_empty() {
-        out.push(current_segment);
-    }
+    out.extend(split_at_redefinitions(setups, |setup| &setup.name));
     for statement in statements {
         if let Stmt::ClassDef(class_def) = statement {
             collect_python_test_setup_scope(&class_def.body, file, assertion_helpers, out);
@@ -916,7 +908,7 @@ fn is_assertion_call_expr(
             if attr_name.starts_with("assert") || is_assertion_function_name(attr_name) {
                 return true;
             }
-            matches!(attr.value.as_ref(), Expr::Name(obj) if obj.id.as_str() == "self")
+            matches!(attr.value.as_ref(), Expr::Name(obj) if obj.id.as_str() == SELF_RECEIVER)
                 && (attr_name == "fail" || assertion_helpers.contains(attr_name))
         }
         _ => false,

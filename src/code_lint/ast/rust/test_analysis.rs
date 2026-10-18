@@ -7,7 +7,7 @@ use super::{
 };
 use crate::code_lint::ast::{
     AstCallCandidate, AstNode, ParsedFile, TestFunctionSetup, TestToTestCall,
-    normalize_statement_text, span_from_rowan_range,
+    normalize_statement_text, span_from_rowan_range, split_at_redefinitions,
 };
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast::{self, HasAttrs as _, HasModuleItem as _, HasName as _};
@@ -284,8 +284,7 @@ fn collect_rust_test_setup_scope<'a>(
     assertion_helpers: &HashSet<String>,
     out: &mut Vec<Vec<TestFunctionSetup<'a>>>,
 ) {
-    let mut current_segment = Vec::new();
-    let mut seen_names = HashSet::new();
+    let mut setups = Vec::new();
     for item in items {
         let ast::Item::Fn(function) = item else {
             continue;
@@ -299,18 +298,12 @@ fn collect_rust_test_setup_scope<'a>(
         let Some(body_node) = function.body() else {
             continue;
         };
-        let name = name_node.text().trim().to_owned();
-        if !seen_names.insert(name.clone()) {
-            out.push(std::mem::take(&mut current_segment));
-            seen_names.clear();
-            seen_names.insert(name.clone());
-        }
-        current_segment.push(TestFunctionSetup {
+        setups.push(TestFunctionSetup {
             name_node: AstNode::from_span(
                 file,
                 span_from_rowan_range(name_node.syntax().text_range()),
             ),
-            name,
+            name: name_node.text().trim().to_owned(),
             leading_setup_statements: extract_rust_leading_setup_statements(
                 &body_node,
                 file,
@@ -318,9 +311,7 @@ fn collect_rust_test_setup_scope<'a>(
             ),
         });
     }
-    if !current_segment.is_empty() {
-        out.push(current_segment);
-    }
+    out.extend(split_at_redefinitions(setups, |setup| &setup.name));
     for item in items {
         if let ast::Item::Module(module) = item
             && let Some(body_items) = module.item_list()

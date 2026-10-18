@@ -369,26 +369,26 @@ fn is_dunder_main_literal(expr: &Expr) -> bool {
 }
 
 /// Saved state of an [`EnclosingFunctionTracker`] before entering a statement.
-pub(in crate::code_lint::ast) struct EnclosingFunctionState {
+pub(super) struct EnclosingFunctionState {
     functions: Arc<[EnclosingFunction]>,
     enclosing_class: Option<String>,
 }
 
 /// Tracks the functions enclosing the statement visited by a source-order walk.
 #[derive(Default)]
-pub(in crate::code_lint::ast) struct EnclosingFunctionTracker {
+pub(super) struct EnclosingFunctionTracker {
     /// Number of statements enclosing the visited statement.
     depth: usize,
     /// Name of the top-level `class` statement being entered, when visiting its direct body.
     enclosing_class: Option<String>,
     /// The enclosing functions, innermost first.
-    pub(in crate::code_lint::ast) functions: Arc<[EnclosingFunction]>,
+    pub(super) functions: Arc<[EnclosingFunction]>,
 }
 
 impl EnclosingFunctionTracker {
     /// Enters `statement`, which encloses everything visited until the matching [`Self::exit`].
     /// Returns the outer state to pass to [`Self::exit`].
-    pub(in crate::code_lint::ast) fn enter(&mut self, statement: &Stmt) -> EnclosingFunctionState {
+    pub(super) fn enter(&mut self, statement: &Stmt) -> EnclosingFunctionState {
         let state = EnclosingFunctionState {
             functions: Arc::clone(&self.functions),
             enclosing_class: self.enclosing_class.clone(),
@@ -415,7 +415,7 @@ impl EnclosingFunctionTracker {
     }
 
     /// Leaves the statement entered by the [`Self::enter`] call that returned `state`.
-    pub(in crate::code_lint::ast) fn exit(&mut self, state: EnclosingFunctionState) {
+    pub(super) fn exit(&mut self, state: EnclosingFunctionState) {
         self.depth -= 1;
         self.functions = state.functions;
         self.enclosing_class = state.enclosing_class;

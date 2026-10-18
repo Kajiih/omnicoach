@@ -1,6 +1,6 @@
 //! Rust call and method-call candidate extraction (`ra_ap_syntax`).
 
-use super::named_function;
+use super::bindings::named_function;
 use crate::code_lint::ast::{
     CachedCallCandidate, EnclosingFunction, ParsedFile, span_from_rowan_range,
     with_innermost_function,

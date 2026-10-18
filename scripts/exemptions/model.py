@@ -7,7 +7,6 @@ from typing import NamedTuple
 AST = "src/code_lint/ast.rs"
 CALL_CLUSTERS = "src/code_lint/ast/call_clusters.rs"
 POLICY = "src/code_lint/policy.rs"
-RUST = "src/code_lint/ast/rust.rs"
 RS_BINDINGS = "src/code_lint/ast/rust/bindings.rs"
 RS_CALLS = "src/code_lint/ast/rust/calls.rs"
 RS_DECL_ORDER = "src/code_lint/ast/rust/declaration_order.rs"

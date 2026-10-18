@@ -10,7 +10,7 @@ mod positional_reads;
 mod strings;
 mod test_analysis;
 
-pub(super) use self::bindings::{collect_bindings, named_function};
+pub(super) use self::bindings::collect_bindings;
 pub(super) use self::calls::collect_call_candidates;
 pub use self::declaration_order::{
     RustAssociatedItemAfterMethod, collect_associated_items_after_methods,

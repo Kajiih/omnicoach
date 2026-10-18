@@ -93,7 +93,7 @@ pub(in crate::code_lint::ast) fn collect_function_returns(
 
 /// Inspects `body` (excluding nested functions, classes, and lambdas) for returned or yielded values.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_body_results(body: &[Stmt]) -> PythonBodyResults {
+pub(super) fn collect_body_results(body: &[Stmt]) -> PythonBodyResults {
     let mut collector = BodyResultCollector {
         results: PythonBodyResults::default(),
     };
