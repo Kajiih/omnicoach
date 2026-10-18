@@ -240,7 +240,7 @@ impl SuppressionTracker {
         }
 
         let comment_index = CommentIndex::from_file(file);
-        let decorator_end_lines = ast::statements::decorator_and_attribute_end_lines(file);
+        let decorator_end_lines = ast::decorator_and_attribute_end_lines(file);
         let mut tracker = Self::default();
         for comment_node in ast::collect_comment_nodes(file) {
             let text = comment_node.text();

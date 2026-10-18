@@ -57,6 +57,39 @@ pub(super) fn expr_contains_call(expr: &ast::Expr) -> bool {
     })
 }
 
+/// Resolves the 1-indexed inclusive header line range of the innermost Rust statement enclosing `span`.
+pub(super) fn enclosing_statement_header_range(
+    file: &crate::code_lint::ast::ParsedFile,
+    span: crate::diagnostic::SourceSpan,
+) -> Option<std::ops::RangeInclusive<usize>> {
+    let start_node = syntax_node_at_span(file, span)?;
+    let statement = start_node.ancestors().find(|candidate| {
+        candidate
+            .parent()
+            .is_some_and(|parent| is_rust_statement_container(parent.kind()))
+    })?;
+    Some(rust_header_line_range(file, &statement))
+}
+
+/// Records `(start_offset, end_offset)` for every Rust attribute in `file`.
+pub(super) fn record_decorator_and_attribute_spans(
+    file: &crate::code_lint::ast::ParsedFile,
+    record: &mut impl FnMut(usize, usize),
+) {
+    let Some(parsed) = file.rs_parsed() else {
+        return;
+    };
+    for attribute in parsed
+        .tree()
+        .syntax()
+        .descendants()
+        .filter_map(ast::Attr::cast)
+    {
+        let range = attribute.syntax().text_range();
+        record(usize::from(range.start()), usize::from(range.end()));
+    }
+}
+
 /// Casts the syntax node at `node.span()` (or an exact-range wrapper ancestor) to `T`.
 fn cast_at_span<T: ra_ap_syntax::AstNode>(node: &AstNode<'_>) -> Option<T> {
     let inner = syntax_node(node)?;
@@ -69,8 +102,15 @@ fn cast_at_span<T: ra_ap_syntax::AstNode>(node: &AstNode<'_>) -> Option<T> {
 
 /// Resolves the deepest [`SyntaxNode`] in `node`'s file covering `node.span()`.
 fn syntax_node(node: &AstNode<'_>) -> Option<SyntaxNode> {
-    let parsed = node.file.rs_parsed()?;
-    let span = node.span();
+    syntax_node_at_span(node.file, node.span())
+}
+
+/// Resolves the deepest [`SyntaxNode`] in `file` covering `span`.
+fn syntax_node_at_span(
+    file: &crate::code_lint::ast::ParsedFile,
+    span: crate::diagnostic::SourceSpan,
+) -> Option<SyntaxNode> {
+    let parsed = file.rs_parsed()?;
     let start_offset = u32::try_from(span.start).ok()?;
     let end_offset = u32::try_from(span.end).ok()?;
     let range = ra_ap_syntax::TextRange::new(start_offset.into(), end_offset.into());
@@ -78,6 +118,76 @@ fn syntax_node(node: &AstNode<'_>) -> Option<SyntaxNode> {
         SyntaxElement::Node(found) => Some(found),
         SyntaxElement::Token(token) => token.parent(),
     }
+}
+
+/// Returns true for Rust `SyntaxKind`s that hold statements or items as direct children.
+const fn is_rust_statement_container(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::SOURCE_FILE
+            | SyntaxKind::STMT_LIST
+            | SyntaxKind::ASSOC_ITEM_LIST
+            | SyntaxKind::ITEM_LIST
+            | SyntaxKind::EXTERN_ITEM_LIST
+    )
+}
+
+/// Computes the 1-indexed inclusive header line range of a Rust `statement` node.
+///
+/// Leading whitespace and non-doc comments attached inside `statement` are skipped when
+/// determining the header start line so that outer doc comments (`///`, `/** */`) and `#[...]`
+/// outer attributes start the header and preceding `//` explanation comments are recognized
+/// above it.
+fn rust_header_line_range(
+    file: &crate::code_lint::ast::ParsedFile,
+    statement: &SyntaxNode,
+) -> std::ops::RangeInclusive<usize> {
+    let fallback_start = usize::from(statement.text_range().start());
+    let start_offset = statement
+        .descendants_with_tokens()
+        .filter_map(SyntaxElement::into_token)
+        .find(|token| !is_rust_non_doc_trivia(token))
+        .map_or(fallback_start, |token| {
+            usize::from(token.text_range().start())
+        });
+    let start_line = file.line_index.line(start_offset);
+    let mut header_end_line = start_line;
+
+    for child in statement.children_with_tokens() {
+        if is_rust_body_container(child.kind()) {
+            return start_line..=header_end_line;
+        }
+        if !is_rust_trivia(child.kind()) {
+            header_end_line = file.line_index.line(usize::from(child.text_range().end()));
+        }
+    }
+
+    start_line..=header_end_line
+}
+
+/// Returns true for Rust `SyntaxKind`s that form the braced body of a compound statement or item.
+const fn is_rust_body_container(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::BLOCK_EXPR
+            | SyntaxKind::STMT_LIST
+            | SyntaxKind::ASSOC_ITEM_LIST
+            | SyntaxKind::ITEM_LIST
+            | SyntaxKind::EXTERN_ITEM_LIST
+    )
+}
+
+/// Returns true if `token` is whitespace or a non-doc Rust comment (`//`, `/* */`).
+fn is_rust_non_doc_trivia(token: &SyntaxToken) -> bool {
+    matches!(token.kind(), SyntaxKind::WHITESPACE)
+        || (crate::code_lint::ast::is_rust_comment_kind(token.kind())
+            && !crate::code_lint::ast::is_rust_doc_comment(token.text()))
+}
+
+/// Returns true if `kind` is a Rust comment (`//`, `/* */`, `///`, `//!`, `/** */`, `/*! */`)
+/// or whitespace token.
+const fn is_rust_trivia(kind: SyntaxKind) -> bool {
+    matches!(kind, SyntaxKind::WHITESPACE) || crate::code_lint::ast::is_rust_comment_kind(kind)
 }
 
 /// Extracts the terminal identifier of an attribute's path (e.g. `"test"` for `#[tokio::test]`).

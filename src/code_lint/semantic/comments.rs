@@ -4,7 +4,7 @@
 //! stripping standard linter/tooling directive prefixes, and verifying that sensitive
 //! operations (such as exception suppression) are accompanied by substantive explanation comments.
 
-use crate::code_lint::ast::{self, AstNode, ParsedFile, statements};
+use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use crate::diagnostic::Language;
 use std::collections::HashMap;
 
@@ -62,7 +62,7 @@ impl<'a> CommentIndex<'a> {
             return true;
         }
 
-        let Some(header_lines) = statements::enclosing_statement_header_range(file, span) else {
+        let Some(header_lines) = ast::enclosing_statement_header_range(file, span) else {
             return false;
         };
 
