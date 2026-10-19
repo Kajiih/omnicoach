@@ -301,12 +301,11 @@ pub(super) fn resolved_path_and_terminal_expr(
     }
 }
 
-/// Resolves the 1-indexed inclusive header line range of the innermost Python statement
-/// enclosing `span`.
-pub(super) fn enclosing_statement_header_range(
+/// Resolves the byte span of the header of the innermost Python statement enclosing `span`.
+pub(super) fn enclosing_statement_header_span(
     file: &ParsedFile,
     span: SourceSpan,
-) -> Option<std::ops::RangeInclusive<usize>> {
+) -> Option<SourceSpan> {
     use ruff_python_ast::token::TokenKind;
 
     struct StatementFinder<'a> {
@@ -336,11 +335,11 @@ pub(super) fn enclosing_statement_header_range(
     let statement = finder.found?;
 
     let statement_range = statement.range();
-    let start_line = file.line_index.line(statement_range.start().to_usize());
-    let end_line = python_statement_body_start(statement).map_or_else(
-        || file.line_index.line(statement_range.end().to_usize()),
+    let start_offset = statement_range.start().to_usize();
+    let end_offset = python_statement_body_start(statement).map_or_else(
+        || statement_range.end().to_usize(),
         |body_start| {
-            let header_end_offset = parsed
+            parsed
                 .tokens()
                 .iter()
                 .rfind(|token| {
@@ -355,26 +354,22 @@ pub(super) fn enclosing_statement_header_range(
                                 | TokenKind::Dedent
                         )
                 })
-                .map_or_else(
-                    || statement_range.start().to_usize(),
-                    |token| token.range().end().to_usize(),
-                );
-            file.line_index.line(header_end_offset)
+                .map_or(start_offset, |token| token.range().end().to_usize())
         },
     );
-    Some(start_line..=end_line)
+    Some(SourceSpan::new(start_offset, end_offset))
 }
 
-/// Records `(start_offset, end_offset)` for every Python decorator in `file`.
+/// Records the byte span of every Python decorator in `file`.
 pub(super) fn record_decorator_and_attribute_spans(
     file: &ParsedFile,
-    record: &mut impl FnMut(usize, usize),
+    record: &mut impl FnMut(SourceSpan),
 ) {
     struct DecoratorVisitor<Record> {
         record: Record,
     }
 
-    impl<'a, Record: FnMut(usize, usize)> SourceOrderVisitor<'a> for DecoratorVisitor<Record> {
+    impl<'a, Record: FnMut(SourceSpan)> SourceOrderVisitor<'a> for DecoratorVisitor<Record> {
         fn visit_stmt(&mut self, statement: &'a Stmt) {
             let decorators = match statement {
                 Stmt::FunctionDef(function) => function.decorator_list.as_slice(),
@@ -382,10 +377,7 @@ pub(super) fn record_decorator_and_attribute_spans(
                 _ => &[],
             };
             for decorator in decorators {
-                (self.record)(
-                    decorator.range().start().to_usize(),
-                    decorator.range().end().to_usize(),
-                );
+                (self.record)(span_from_ruff_range(decorator.range()));
             }
             walk_stmt(self, statement);
         }

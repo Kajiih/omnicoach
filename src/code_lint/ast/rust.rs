@@ -33,8 +33,10 @@ pub(super) use self::test_analysis::{
 };
 
 use crate::code_lint::ast::{
-    AstNode, QualifiedName, ResolvedName, is_assertion_function_name, resolve_name,
+    AstNode, ParsedFile, QualifiedName, ResolvedName, is_assertion_function_name, resolve_name,
+    span_from_rowan_range,
 };
+use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast;
 use ra_ap_syntax::{AstNode as _, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
@@ -57,24 +59,24 @@ pub(super) fn expr_contains_call(expr: &ast::Expr) -> bool {
     })
 }
 
-/// Resolves the 1-indexed inclusive header line range of the innermost Rust statement enclosing `span`.
-pub(super) fn enclosing_statement_header_range(
-    file: &crate::code_lint::ast::ParsedFile,
-    span: crate::diagnostic::SourceSpan,
-) -> Option<std::ops::RangeInclusive<usize>> {
+/// Resolves the byte span of the header of the innermost Rust statement enclosing `span`.
+pub(super) fn enclosing_statement_header_span(
+    file: &ParsedFile,
+    span: SourceSpan,
+) -> Option<SourceSpan> {
     let start_node = syntax_node_at_span(file, span)?;
     let statement = start_node.ancestors().find(|candidate| {
         candidate
             .parent()
             .is_some_and(|parent| is_rust_statement_container(parent.kind()))
     })?;
-    Some(rust_header_line_range(file, &statement))
+    Some(rust_header_span(&statement))
 }
 
-/// Records `(start_offset, end_offset)` for every Rust attribute in `file`.
+/// Records the byte span of every Rust attribute in `file`.
 pub(super) fn record_decorator_and_attribute_spans(
-    file: &crate::code_lint::ast::ParsedFile,
-    record: &mut impl FnMut(usize, usize),
+    file: &ParsedFile,
+    record: &mut impl FnMut(SourceSpan),
 ) {
     let Some(parsed) = file.rs_parsed() else {
         return;
@@ -85,8 +87,7 @@ pub(super) fn record_decorator_and_attribute_spans(
         .descendants()
         .filter_map(ast::Attr::cast)
     {
-        let range = attribute.syntax().text_range();
-        record(usize::from(range.start()), usize::from(range.end()));
+        record(span_from_rowan_range(attribute.syntax().text_range()));
     }
 }
 
@@ -106,10 +107,7 @@ fn syntax_node(node: &AstNode<'_>) -> Option<SyntaxNode> {
 }
 
 /// Resolves the deepest [`SyntaxNode`] in `file` covering `span`.
-fn syntax_node_at_span(
-    file: &crate::code_lint::ast::ParsedFile,
-    span: crate::diagnostic::SourceSpan,
-) -> Option<SyntaxNode> {
+fn syntax_node_at_span(file: &ParsedFile, span: SourceSpan) -> Option<SyntaxNode> {
     let parsed = file.rs_parsed()?;
     let start_offset = u32::try_from(span.start).ok()?;
     let end_offset = u32::try_from(span.end).ok()?;
@@ -132,16 +130,13 @@ const fn is_rust_statement_container(kind: SyntaxKind) -> bool {
     )
 }
 
-/// Computes the 1-indexed inclusive header line range of a Rust `statement` node.
+/// Computes the byte span of a Rust `statement` node's header.
 ///
 /// Leading whitespace and non-doc comments attached inside `statement` are skipped when
-/// determining the header start line so that outer doc comments (`///`, `/** */`) and `#[...]`
+/// determining the header start so that outer doc comments (`///`, `/** */`) and `#[...]`
 /// outer attributes start the header and preceding `//` explanation comments are recognized
 /// above it.
-fn rust_header_line_range(
-    file: &crate::code_lint::ast::ParsedFile,
-    statement: &SyntaxNode,
-) -> std::ops::RangeInclusive<usize> {
+fn rust_header_span(statement: &SyntaxNode) -> SourceSpan {
     let fallback_start = usize::from(statement.text_range().start());
     let start_offset = statement
         .descendants_with_tokens()
@@ -150,19 +145,18 @@ fn rust_header_line_range(
         .map_or(fallback_start, |token| {
             usize::from(token.text_range().start())
         });
-    let start_line = file.line_index.line(start_offset);
-    let mut header_end_line = start_line;
+    let mut header_end_offset = start_offset;
 
     for child in statement.children_with_tokens() {
         if is_rust_body_container(child.kind()) {
-            return start_line..=header_end_line;
+            break;
         }
         if !is_rust_trivia(child.kind()) {
-            header_end_line = file.line_index.line(usize::from(child.text_range().end()));
+            header_end_offset = usize::from(child.text_range().end());
         }
     }
 
-    start_line..=header_end_line
+    SourceSpan::new(start_offset, header_end_offset)
 }
 
 /// Returns true for Rust `SyntaxKind`s that form the braced body of a compound statement or item.

@@ -814,7 +814,8 @@ pub fn enclosing_statement_header_range(
     file: &ParsedFile,
     span: SourceSpan,
 ) -> Option<std::ops::RangeInclusive<usize>> {
-    dispatch_lang!(file.lang(), enclosing_statement_header_range(file, span))
+    let header = dispatch_lang!(file.lang(), enclosing_statement_header_span(file, span))?;
+    Some(file.line_index.line(header.start)..=file.line_index.line(header.end))
 }
 
 /// Maps each line where a decorator or attribute begins to the last line it spans.
@@ -826,9 +827,9 @@ pub fn decorator_and_attribute_end_lines(
     file: &ParsedFile,
 ) -> std::collections::HashMap<usize, usize> {
     let mut end_lines = std::collections::HashMap::new();
-    let mut record = |start: usize, end: usize| {
-        let start_line = file.line_index.line(start);
-        let end_line = file.line_index.line(end);
+    let mut record = |span: SourceSpan| {
+        let start_line = file.line_index.line(span.start);
+        let end_line = file.line_index.line(span.end);
         end_lines
             .entry(start_line)
             .and_modify(|longest: &mut usize| *longest = (*longest).max(end_line))
