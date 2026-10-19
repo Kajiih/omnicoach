@@ -19,10 +19,7 @@ pub(in crate::code_lint::ast) fn enclosing_statement_header_span(
 
     impl<'a> SourceOrderVisitor<'a> for StatementFinder<'a> {
         fn visit_stmt(&mut self, statement: &'a Stmt) {
-            let statement_span = span_from_ruff_range(statement.range());
-            if !(statement_span.start <= self.target_span.start
-                && self.target_span.end <= statement_span.end)
-            {
+            if !span_from_ruff_range(statement.range()).contains(self.target_span) {
                 return;
             }
             self.found = Some(statement);

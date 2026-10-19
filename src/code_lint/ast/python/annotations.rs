@@ -1,7 +1,7 @@
 //! Python type annotation unwrapping, constructor resolution, union flattening, and collection type vocabularies.
 
 use super::names::written_name;
-use super::tree::find_expr_at_span;
+use super::tree::find_expr;
 use crate::code_lint::ast::{AstNode, ParsedFile, QualifiedName, span_from_ruff_range};
 use ruff_python_ast::{Expr, Operator};
 use ruff_text_size::Ranged as _;
@@ -250,10 +250,7 @@ pub fn collect_collection_types(
     type_node: &AstNode<'_>,
     depth: AnnotationTraversalDepth,
 ) -> Vec<PythonCollectionType> {
-    let Some(parsed) = type_node.file.py_module() else {
-        return Vec::new();
-    };
-    let Some(expr) = find_expr_at_span(parsed.syntax(), type_node.span()) else {
+    let Some(expr) = find_expr(type_node) else {
         return Vec::new();
     };
     let mut collection_types = Vec::new();
@@ -363,7 +360,7 @@ fn push_collection_type(expr: &Expr, file: &ParsedFile, out: &mut Vec<PythonColl
 /// Names are resolved through the file's imports as in [`collect_collection_types`].
 #[must_use]
 pub fn collection_type(expression: &AstNode<'_>) -> Option<PythonCollectionType> {
-    let expr = find_expr_at_span(expression.file.py_module()?.syntax(), expression.span())?;
+    let expr = find_expr(expression)?;
     collection_type_expr(expr, expression.file)
 }
 
@@ -371,7 +368,7 @@ pub fn collection_type(expression: &AstNode<'_>) -> Option<PythonCollectionType>
 /// (`[...]`, `{a, b}`, `{k: v}`) or comprehension.
 #[must_use]
 pub fn collection_display(expression: &AstNode<'_>) -> Option<PythonCollectionType> {
-    let expr = find_expr_at_span(expression.file.py_module()?.syntax(), expression.span())?;
+    let expr = find_expr(expression)?;
     let (name, shape) = match expr {
         Expr::List(_) | Expr::ListComp(_) => (LIST_CONSTRUCTOR, CollectionShape::Sequence),
         Expr::Set(_) | Expr::SetComp(_) => (SET_CONSTRUCTOR, CollectionShape::Set),
@@ -489,13 +486,7 @@ impl PythonReturnTypeBranch<'_> {
 /// after unwrapping outer async and metadata envelopes (`Awaitable`, `Coroutine`, `Annotated`).
 #[must_use]
 pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnTypeUnion<'a> {
-    let Some(parsed) = return_type_node.file.py_module() else {
-        return PythonReturnTypeUnion {
-            has_none: false,
-            branches: Vec::new(),
-        };
-    };
-    let Some(expr) = find_expr_at_span(parsed.syntax(), return_type_node.span()) else {
+    let Some(expr) = find_expr(return_type_node) else {
         return PythonReturnTypeUnion {
             has_none: false,
             branches: Vec::new(),
@@ -544,7 +535,7 @@ const GENERATOR_TYPES: &[&str] = &[
 #[must_use]
 pub fn generator_yield_type<'a>(return_type_node: &AstNode<'a>) -> Option<AstNode<'a>> {
     let file = return_type_node.file;
-    let expr = find_expr_at_span(file.py_module()?.syntax(), return_type_node.span())?;
+    let expr = find_expr(return_type_node)?;
     let GenericType {
         base: base_node,
         arguments: type_args,
@@ -568,10 +559,7 @@ pub fn generator_yield_type<'a>(return_type_node: &AstNode<'a>) -> Option<AstNod
 #[must_use]
 pub fn is_non_obvious_parameter_type(type_node: &AstNode<'_>) -> bool {
     let file = type_node.file;
-    let Some(parsed) = file.py_module() else {
-        return false;
-    };
-    let Some(expr) = find_expr_at_span(parsed.syntax(), type_node.span()) else {
+    let Some(expr) = find_expr(type_node) else {
         return false;
     };
     let mut has_none = false;

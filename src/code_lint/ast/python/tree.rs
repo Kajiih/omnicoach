@@ -1,13 +1,13 @@
 //! Navigating the Python syntax tree: finding nodes by span and direct child definitions.
 
-use crate::code_lint::ast::span_from_ruff_range;
+use crate::code_lint::ast::{AstNode, span_from_ruff_range};
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, ModModule, Stmt, StmtFunctionDef};
+use ruff_python_ast::{Expr, Stmt, StmtFunctionDef};
 use ruff_text_size::Ranged as _;
 
-/// Finds the `Expr` node in `module` whose byte span equals `target_span`.
-pub(super) fn find_expr_at_span(module: &ModModule, target_span: SourceSpan) -> Option<&Expr> {
+/// Finds the `Expr` node in `node.file` whose byte span equals `node.span()`.
+pub(super) fn find_expr<'a>(node: &AstNode<'a>) -> Option<&'a Expr> {
     struct ExprFinder<'a> {
         target_span: SourceSpan,
         found: Option<&'a Expr>,
@@ -15,10 +15,8 @@ pub(super) fn find_expr_at_span(module: &ModModule, target_span: SourceSpan) -> 
 
     impl<'a> SourceOrderVisitor<'a> for ExprFinder<'a> {
         fn visit_stmt(&mut self, statement: &'a Stmt) {
-            let span = span_from_ruff_range(statement.range());
             if self.found.is_none()
-                && span.start <= self.target_span.start
-                && self.target_span.end <= span.end
+                && span_from_ruff_range(statement.range()).contains(self.target_span)
             {
                 walk_stmt(self, statement);
             }
@@ -29,7 +27,7 @@ pub(super) fn find_expr_at_span(module: &ModModule, target_span: SourceSpan) -> 
                 return;
             }
             let span = span_from_ruff_range(expr.range());
-            if !(span.start <= self.target_span.start && self.target_span.end <= span.end) {
+            if !span.contains(self.target_span) {
                 return;
             }
             if span == self.target_span {
@@ -40,11 +38,12 @@ pub(super) fn find_expr_at_span(module: &ModModule, target_span: SourceSpan) -> 
         }
     }
 
+    let parsed = node.file.py_module()?;
     let mut finder = ExprFinder {
-        target_span,
+        target_span: node.span(),
         found: None,
     };
-    finder.visit_body(&module.body);
+    finder.visit_body(&parsed.syntax().body);
     finder.found
 }
 

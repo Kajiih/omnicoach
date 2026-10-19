@@ -353,6 +353,12 @@ impl SourceSpan {
             end: range.end,
         }
     }
+
+    /// Returns true if `self` encloses `other` (`self.start <= other.start && other.end <= self.end`).
+    #[must_use]
+    pub const fn contains(self, other: Self) -> bool {
+        self.start <= other.start && other.end <= self.end
+    }
 }
 
 // TODO: Should we use line-index of the line/column?

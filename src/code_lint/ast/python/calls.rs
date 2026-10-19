@@ -1,6 +1,6 @@
 //! Python call-expression and environment-subscript extraction (`ruff_python_ast`).
 
-use super::tree::find_expr_at_span;
+use super::tree::find_expr;
 use crate::code_lint::ast::{
     AstNode, CachedCallCandidate, CallSiteContext, EnclosingFunction, ParsedFile,
     span_from_ruff_range, with_innermost_function,
@@ -30,8 +30,7 @@ pub struct PythonEnvironSubscript<'a> {
 /// instantiation (`list[str]()` has callee `list`).
 #[must_use]
 pub fn call_callee<'a>(call: &AstNode<'a>) -> Option<AstNode<'a>> {
-    let Expr::Call(call_expr) = find_expr_at_span(call.file.py_module()?.syntax(), call.span())?
-    else {
+    let Expr::Call(call_expr) = find_expr(call)? else {
         return None;
     };
     let callee = if let Expr::Subscript(subscript) = call_expr.func.as_ref() {

@@ -8,10 +8,11 @@ use ruff_text_size::Ranged as _;
 pub(super) fn written_name(expr: &Expr, source: &str) -> QualifiedName {
     let span = span_from_ruff_range(expr.range());
     let path = source[span.start..span.end].to_string();
-    let terminal = if let Expr::Attribute(attr) = expr {
-        attr.attr.to_string()
-    } else {
-        path.rsplit('.').next().unwrap_or("").to_string()
-    };
-    QualifiedName { path, terminal }
+    match expr {
+        Expr::Attribute(attr) => QualifiedName {
+            path,
+            terminal: attr.attr.to_string(),
+        },
+        _ => QualifiedName::from_path(path, "."),
+    }
 }
