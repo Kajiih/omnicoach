@@ -5,8 +5,9 @@
 
 use super::{
     AbstractionGraph, DeclarationKind, DeclarationNode, EdgeReason, GroupKind, GroupNode, NodeId,
-    NodeVisibility, ReferenceKind, ReflexionStatus,
+    ReflexionStatus,
 };
+use crate::code_lint::ast::{FindingFact, RelationKind, Visibility};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
@@ -258,29 +259,19 @@ fn write_decl(
     let roots = owner_names.join(", ");
     let edge_prefix = match format {
         OutputFormat::AnnotatedStubs => {
-            let cyc_tag = if decl.recursion_group > 0 {
-                format!(" cyc={}", decl.recursion_group)
-            } else {
-                String::new()
-            };
             let sig_text = decl.signature.as_deref().unwrap_or(decl.name.as_str());
             let _ = writeln!(
                 out,
-                "{indent}// [L{} {visibility_tag} {kind_tag}{ctor_tag} {} {span}{cyc_tag} roots=[{roots}]]",
+                "{indent}// [L{} {visibility_tag} {kind_tag}{ctor_tag} {} {span} roots=[{roots}]]",
                 decl.level, decl.name
             );
             let _ = writeln!(out, "{indent}{sig_text}");
             format!("{indent}//   ")
         }
         OutputFormat::CompactBi => {
-            let cyc_tag = if decl.recursion_group > 0 {
-                format!(", cyc={}", decl.recursion_group)
-            } else {
-                String::new()
-            };
             let _ = writeln!(
                 out,
-                "{indent}- [L{}] {visibility_tag} {kind_tag}{ctor_tag} {} ({span}{cyc_tag}, roots=[{roots}])",
+                "{indent}- [L{}] {visibility_tag} {kind_tag}{ctor_tag} {} ({span}, roots=[{roots}])",
                 decl.level, decl.name
             );
             "  ".repeat(depth + 1)
@@ -293,12 +284,18 @@ fn write_decl(
         let _ = writeln!(out, "{edge_prefix}<- {}", ins.join(", "));
     }
     for finding in &decl.findings {
-        let _ = writeln!(
-            out,
-            "{edge_prefix}! [{}] related={}",
-            finding.rule, finding.related
-        );
+        let _ = writeln!(out, "{edge_prefix}! {}", format_finding(finding));
     }
+}
+
+fn format_finding(finding: &FindingFact) -> String {
+    let reason = finding.reason.map_or_else(String::new, |reason| {
+        format!(" reason={}", format_short_reason(EdgeReason::from(reason)))
+    });
+    format!(
+        "[{}] related={}{reason} anchor={}:{}",
+        finding.rule, finding.related, finding.anchor.name, finding.anchor.line
+    )
 }
 
 fn format_declared_dependencies(declared: Option<&[String]>) -> String {
@@ -338,20 +335,20 @@ const fn format_short_reason(reason: EdgeReason) -> &'static str {
     }
 }
 
-const fn format_short_ref_kind(kind: ReferenceKind) -> &'static str {
+const fn format_short_ref_kind(kind: RelationKind) -> &'static str {
     match kind {
-        ReferenceKind::Parameter => "ref:param",
-        ReferenceKind::Return => "ref:ret",
-        ReferenceKind::Body => "ref:body",
-        ReferenceKind::Composition => "ref:comp",
-        ReferenceKind::Behavior => "ref:behav",
+        RelationKind::Parameter => "ref:param",
+        RelationKind::Return => "ref:ret",
+        RelationKind::Body => "ref:body",
+        RelationKind::Composition => "ref:comp",
+        RelationKind::Behavior => "ref:behav",
     }
 }
 
-const fn format_short_visibility(visibility: NodeVisibility) -> &'static str {
+const fn format_short_visibility(visibility: Visibility) -> &'static str {
     match visibility {
-        NodeVisibility::Public => "pub",
-        NodeVisibility::Private => "priv",
+        Visibility::Public => "pub",
+        Visibility::Private => "priv",
     }
 }
 
@@ -435,8 +432,9 @@ const fn format_reflexion_status(status: ReflexionStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::code_lint::ast::{OrderingReason, PlacementAnchor};
     use crate::code_lint::graph::{
-        GraphParts, NodeFinding, OrderingEdge, ReferenceEdge, SourceLocation, SummaryEdge,
+        GraphParts, OrderingEdge, ReferenceEdge, SourceLocation, SummaryEdge,
     };
 
     fn fixture_graph() -> AbstractionGraph {
@@ -446,7 +444,7 @@ mod tests {
             signature: Some("pub fn entry(x: usize) -> bool".to_owned()),
             scope_id: 0,
             kind: DeclarationKind::Callable,
-            visibility: NodeVisibility::Public,
+            visibility: Visibility::Public,
             is_constructor: false,
             location: SourceLocation {
                 file: "src/fixture.rs".to_owned(),
@@ -465,7 +463,7 @@ mod tests {
             signature: Some("fn helper(x: usize) -> bool".to_owned()),
             scope_id: 0,
             kind: DeclarationKind::Callable,
-            visibility: NodeVisibility::Private,
+            visibility: Visibility::Private,
             is_constructor: false,
             location: SourceLocation {
                 file: "src/fixture.rs".to_owned(),
@@ -476,9 +474,14 @@ mod tests {
             owners: vec![NodeId::new("s0:i0:entry")],
             recursion_group: 0,
             level: 0,
-            findings: vec![NodeFinding {
-                rule: "callee-before-caller".to_owned(),
+            findings: vec![FindingFact {
+                rule: "callee-before-caller",
                 related: "entry".to_owned(),
+                reason: Some(OrderingReason::Call),
+                anchor: PlacementAnchor {
+                    name: "entry".to_owned(),
+                    line: 18,
+                },
             }],
         };
         let owner_group = GroupNode {
@@ -503,7 +506,7 @@ mod tests {
             reference_edges: vec![ReferenceEdge {
                 source: NodeId::new("s0:i0:entry"),
                 target: NodeId::new("s0:i1:helper"),
-                kind: ReferenceKind::Body,
+                kind: RelationKind::Body,
             }],
             summary_edges: Vec::<SummaryEdge>::new(),
         })

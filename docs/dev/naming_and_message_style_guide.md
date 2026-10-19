@@ -91,6 +91,7 @@ Templates use a fixed vocabulary so the same thing has the same name in every me
 | :--- | :--- | :--- |
 | `{callee}` | The function, method or macro that was called | `` `{callee}()` `` or `` `{callee}!` `` |
 | `{caller}` | A function or method that calls (or is expected to precede) `{function}` in the same scope | `` `{caller}` `` |
+| `{relation}` | Why `{caller}` reads before `{function}` (`` `Config` contains it in its definition ``), with its own backticks | bare |
 | `{function}` | A function that is *defined* at the flagged site | `` `{function}` `` |
 | `{class}` | The class, struct, enum, trait, or implemented type at the flagged site | `` `{class}` `` |
 | `{name}` | An identifier being named (variable, parameter, field) | `` `{name}` `` |

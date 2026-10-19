@@ -4,6 +4,7 @@
 //! sees an invalid graph, and knows nothing about `omnicoach` internals or external viewers (D19,
 //! D21).
 
+use crate::code_lint::ast::{FindingFact, OrderingReason, RelationKind, Visibility};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -55,24 +56,6 @@ pub enum DeclarationKind {
     Type,
 }
 
-/// Visibility of a declaration within its scope.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum NodeVisibility {
-    /// Exported from the scope.
-    Public,
-    /// Internal to the scope.
-    Private,
-}
-
-/// A lint finding attached to a declaration node.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NodeFinding {
-    /// Name of the ordering lint rule.
-    pub rule: String,
-    /// Name of the related declaration mentioned by the finding.
-    pub related: String,
-}
-
 /// A leaf node representing one source declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeclarationNode {
@@ -87,7 +70,7 @@ pub struct DeclarationNode {
     /// Callable, method, or type.
     pub kind: DeclarationKind,
     /// Public or private.
-    pub visibility: NodeVisibility,
+    pub visibility: Visibility,
     /// Whether this callable is a constructor (`new`, `__init__`, etc.).
     pub is_constructor: bool,
     /// File, line, and column of the declaration name.
@@ -99,7 +82,7 @@ pub struct DeclarationNode {
     /// Lakos abstraction level within `scope_id` (0 = leaf).
     pub level: usize,
     /// Lint findings reported on this declaration.
-    pub findings: Vec<NodeFinding>,
+    pub findings: Vec<FindingFact>,
 }
 
 /// Semantic role of a container group in the containment tree.
@@ -174,6 +157,18 @@ pub enum EdgeReason {
     CrossModule,
 }
 
+impl From<OrderingReason> for EdgeReason {
+    fn from(reason: OrderingReason) -> Self {
+        match reason {
+            OrderingReason::Call => Self::Call,
+            OrderingReason::Containment => Self::Containment,
+            OrderingReason::ImplBehavior => Self::ImplBehavior,
+            OrderingReason::Encapsulation => Self::Encapsulation,
+            OrderingReason::SignatureContract => Self::SignatureContract,
+        }
+    }
+}
+
 /// Status of a component-to-component summary edge under Murphy et al.'s Reflexion Model (D30).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ReflexionStatus {
@@ -198,21 +193,6 @@ pub struct OrderingEdge {
     pub reason: EdgeReason,
 }
 
-/// Where a raw syntactic reference appears.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ReferenceKind {
-    /// In a callable's parameters, generics, decorators, or `where` clause.
-    Parameter,
-    /// In a callable's return annotation.
-    Return,
-    /// In a callable's body.
-    Body,
-    /// In a type's own definition (fields, variants, bases, class-level statements).
-    Composition,
-    /// In a type's methods or attached `impl` blocks.
-    Behavior,
-}
-
 /// A raw syntactic reference from `source` to `target`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ReferenceEdge {
@@ -221,7 +201,7 @@ pub struct ReferenceEdge {
     /// Referenced declaration ID.
     pub target: NodeId,
     /// Syntactic site of the reference.
-    pub kind: ReferenceKind,
+    pub kind: RelationKind,
 }
 
 /// Aggregated relation between two container groups in the folded overview (CP3, CUJ4, D30).
@@ -531,7 +511,7 @@ fn validate_ownership_groups(
                 }
                 for child_id in &group.children {
                     if let Some(decl) = decl_by_id.get(child_id)
-                        && decl.visibility == NodeVisibility::Private
+                        && decl.visibility == Visibility::Private
                     {
                         if decl.owners.len() >= 2 {
                             return Err(ModelError::SharedItemInSingleOwner {
@@ -652,7 +632,7 @@ mod tests {
 
     fn sample_declaration(
         id: &str,
-        visibility: NodeVisibility,
+        visibility: Visibility,
         owners: &[&str],
         level: usize,
         recursion_group: usize,
@@ -680,8 +660,8 @@ mod tests {
 
     #[test]
     fn rejects_duplicate_node_identifier() {
-        let first = sample_declaration("dup", NodeVisibility::Public, &["dup"], 0, 0);
-        let second = sample_declaration("dup", NodeVisibility::Private, &["dup"], 0, 1);
+        let first = sample_declaration("dup", Visibility::Public, &["dup"], 0, 0);
+        let second = sample_declaration("dup", Visibility::Private, &["dup"], 0, 1);
 
         let result = AbstractionGraph::new(GraphParts {
             title: "test".to_owned(),
@@ -697,7 +677,7 @@ mod tests {
 
     #[test]
     fn rejects_relation_with_missing_endpoint() {
-        let entry = sample_declaration("entry", NodeVisibility::Public, &["entry"], 1, 0);
+        let entry = sample_declaration("entry", Visibility::Public, &["entry"], 1, 0);
         let edge = OrderingEdge {
             higher: NodeId::new("entry"),
             lower: NodeId::new("ghost"),
@@ -721,8 +701,8 @@ mod tests {
 
     #[test]
     fn rejects_item_placed_in_two_groups() {
-        let pub_a = sample_declaration("pub_a", NodeVisibility::Public, &["pub_a"], 1, 0);
-        let helper = sample_declaration("helper", NodeVisibility::Private, &["pub_a"], 0, 1);
+        let pub_a = sample_declaration("pub_a", Visibility::Public, &["pub_a"], 1, 0);
+        let helper = sample_declaration("helper", Visibility::Private, &["pub_a"], 0, 1);
         let group_one = GroupNode {
             id: NodeId::new("g1"),
             label: "g1".to_owned(),
@@ -788,10 +768,9 @@ mod tests {
 
     #[test]
     fn rejects_shared_item_inside_single_owner_group() {
-        let pub_a = sample_declaration("pub_a", NodeVisibility::Public, &["pub_a"], 1, 0);
-        let pub_b = sample_declaration("pub_b", NodeVisibility::Public, &["pub_b"], 1, 1);
-        let shared =
-            sample_declaration("shared", NodeVisibility::Private, &["pub_a", "pub_b"], 0, 2);
+        let pub_a = sample_declaration("pub_a", Visibility::Public, &["pub_a"], 1, 0);
+        let pub_b = sample_declaration("pub_b", Visibility::Public, &["pub_b"], 1, 1);
+        let shared = sample_declaration("shared", Visibility::Private, &["pub_a", "pub_b"], 0, 2);
         let owner_group = GroupNode {
             id: NodeId::new("owner:pub_a"),
             label: "pub_a".to_owned(),
@@ -823,9 +802,9 @@ mod tests {
 
     #[test]
     fn rejects_private_item_inside_wrong_owner_group() {
-        let pub_a = sample_declaration("pub_a", NodeVisibility::Public, &["pub_a"], 1, 0);
-        let pub_b = sample_declaration("pub_b", NodeVisibility::Public, &["pub_b"], 1, 1);
-        let helper_b = sample_declaration("helper_b", NodeVisibility::Private, &["pub_b"], 0, 2);
+        let pub_a = sample_declaration("pub_a", Visibility::Public, &["pub_a"], 1, 0);
+        let pub_b = sample_declaration("pub_b", Visibility::Public, &["pub_b"], 1, 1);
+        let helper_b = sample_declaration("helper_b", Visibility::Private, &["pub_b"], 0, 2);
         let owner_a = GroupNode {
             id: NodeId::new("owner:pub_a"),
             label: "pub_a".to_owned(),
@@ -857,8 +836,8 @@ mod tests {
 
     #[test]
     fn rejects_upward_ordering_relation_outside_recursion_group() {
-        let low = sample_declaration("low", NodeVisibility::Public, &["low"], 0, 0);
-        let high = sample_declaration("high", NodeVisibility::Private, &["low"], 2, 1);
+        let low = sample_declaration("low", Visibility::Public, &["low"], 0, 0);
+        let high = sample_declaration("high", Visibility::Private, &["low"], 2, 1);
         let upward_edge = OrderingEdge {
             higher: NodeId::new("low"),
             lower: NodeId::new("high"),

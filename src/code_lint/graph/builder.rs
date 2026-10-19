@@ -3,12 +3,12 @@
 
 use super::{
     AbstractionGraph, DeclarationKind, DeclarationNode, EdgeReason, GraphParts, GroupKind,
-    GroupNode, ModelError, ModuleFact, NodeFinding, NodeId, NodeVisibility, OrderingEdge,
-    ProjectFacts, ReferenceEdge, ReferenceKind, ReflexionStatus, SourceLocation, SummaryEdge,
+    GroupNode, ModelError, ModuleFact, NodeId, OrderingEdge, ProjectFacts, ReferenceEdge,
+    ReflexionStatus, SourceLocation, SummaryEdge,
 };
 use crate::code_lint::ast::{
-    DeclarationScopeKind, ItemFacts, OrderingReason, RelationKind, ScopeFacts, ScopeItemKind,
-    Visibility,
+    DeclarationScopeKind, ItemFacts, RelationKind, ScopeFacts, ScopeItemKind, Visibility, levels,
+    strongly_connected_components,
 };
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
@@ -144,7 +144,7 @@ fn extract_public_surface_module(
     let mut kept_old_to_new = BTreeMap::new();
     let mut pub_decls = Vec::new();
     for decl in module_graph.declarations() {
-        if decl.visibility == NodeVisibility::Public && decl.kind != DeclarationKind::Method {
+        if decl.visibility == Visibility::Public && decl.kind != DeclarationKind::Method {
             let new_id = prefix_node_id(&prefix, &decl.id);
             kept_old_to_new.insert(decl.id.clone(), new_id.clone());
             acc.decl_by_mod_and_name.insert(
@@ -380,7 +380,7 @@ fn append_cross_module_decl_edges(project: &ProjectFacts, acc: &mut AccumulatedP
             acc.reference_edges.push(ReferenceEdge {
                 source: source_id.clone(),
                 target: target_id.clone(),
-                kind: ReferenceKind::Body,
+                kind: RelationKind::Body,
             });
             acc.ordering_edges.push(OrderingEdge {
                 higher: source_id.clone(),
@@ -878,7 +878,7 @@ fn extract_scope_items(
         .map(|edge| OrderingEdge {
             higher: item_ids[edge.higher].clone(),
             lower: item_ids[edge.lower].clone(),
-            reason: map_edge_reason(edge.reason),
+            reason: EdgeReason::from(edge.reason),
         })
         .collect();
     ordering_edges.sort();
@@ -889,7 +889,7 @@ fn extract_scope_items(
         .map(|rel| ReferenceEdge {
             source: item_ids[rel.source].clone(),
             target: item_ids[rel.target].clone(),
-            kind: map_reference_kind(rel.kind),
+            kind: rel.kind,
         })
         .collect();
     reference_edges.sort();
@@ -909,12 +909,11 @@ fn build_declaration_node(
     scope_item_ids: &[NodeId],
     member_prefix: Option<TypeMemberPrefix<'_>>,
 ) -> DeclarationNode {
-    let mut mapped_owners: Vec<NodeId> = item
-        .roots
+    let mapped_owners: Vec<NodeId> = item
+        .unit_owners
         .iter()
-        .map(|&root_idx| scope_item_ids[root_idx].clone())
+        .map(|&unit_idx| scope_item_ids[unit_idx].clone())
         .collect();
-    mapped_owners.sort();
     let (name, kind, owners) = if let Some(prefix) = member_prefix {
         let method_owners = if mapped_owners.is_empty() {
             prefix.owners.to_vec()
@@ -942,10 +941,7 @@ fn build_declaration_node(
         signature: item.signature.clone(),
         scope_id: scope_index,
         kind,
-        visibility: match item.visibility {
-            Visibility::Public => NodeVisibility::Public,
-            Visibility::Private => NodeVisibility::Private,
-        },
+        visibility: item.visibility,
         is_constructor: item.is_constructor,
         location: SourceLocation {
             file: file_path.to_owned(),
@@ -956,52 +952,29 @@ fn build_declaration_node(
         owners,
         recursion_group: item.recursion_group,
         level: item.level,
-        findings: item
-            .findings
-            .iter()
-            .map(|finding| NodeFinding {
-                rule: finding.rule.to_owned(),
-                related: finding.related.clone(),
-            })
-            .collect(),
+        findings: item.findings.clone(),
     }
 }
 
 fn sort_declarations(declarations: &mut [DeclarationNode]) {
     declarations.sort_by(|left, right| {
         (
+            Reverse(left.is_constructor),
+            Reverse(left.visibility == Visibility::Public),
             Reverse(left.level),
             left.location.line,
             left.location.column,
             &left.id,
         )
             .cmp(&(
+                Reverse(right.is_constructor),
+                Reverse(right.visibility == Visibility::Public),
                 Reverse(right.level),
                 right.location.line,
                 right.location.column,
                 &right.id,
             ))
     });
-}
-
-const fn map_edge_reason(reason: OrderingReason) -> EdgeReason {
-    match reason {
-        OrderingReason::Call => EdgeReason::Call,
-        OrderingReason::Containment => EdgeReason::Containment,
-        OrderingReason::ImplBehavior => EdgeReason::ImplBehavior,
-        OrderingReason::Encapsulation => EdgeReason::Encapsulation,
-        OrderingReason::SignatureContract => EdgeReason::SignatureContract,
-    }
-}
-
-const fn map_reference_kind(kind: RelationKind) -> ReferenceKind {
-    match kind {
-        RelationKind::Parameter => ReferenceKind::Parameter,
-        RelationKind::Return => ReferenceKind::Return,
-        RelationKind::Body => ReferenceKind::Body,
-        RelationKind::Composition => ReferenceKind::Composition,
-        RelationKind::Behavior => ReferenceKind::Behavior,
-    }
 }
 
 struct BuiltGroups {
@@ -1070,17 +1043,12 @@ fn collect_single_owner_groups(
     top_groups: &mut Vec<GroupNode>,
     nested_groups: &mut Vec<GroupNode>,
 ) {
-    for pub_decl in primary_declarations
-        .iter()
-        .filter(|decl| decl.visibility == NodeVisibility::Public)
-    {
+    for pub_decl in primary_declarations.iter().filter(|decl| {
+        decl.visibility == Visibility::Public && decl.owners.as_slice() == [decl.id.clone()]
+    }) {
         let members: Vec<DeclarationNode> = primary_declarations
             .iter()
-            .filter(|decl| {
-                decl.id == pub_decl.id
-                    || (decl.visibility == NodeVisibility::Private
-                        && decl.owners.as_slice() == [pub_decl.id.clone()])
-            })
+            .filter(|decl| decl.owners.as_slice() == [pub_decl.id.clone()])
             .cloned()
             .collect();
         let group_id = NodeId::new(format!("owner:{}", pub_decl.id));
@@ -1114,7 +1082,7 @@ fn collect_shared_and_unowned_groups(
     let mut unowned_members = Vec::new();
     for decl in primary_declarations
         .iter()
-        .filter(|decl| decl.visibility == NodeVisibility::Private)
+        .filter(|decl| decl.visibility == Visibility::Private)
     {
         if decl.owners.len() >= 2 {
             shared_buckets
@@ -1329,74 +1297,25 @@ fn compute_scc_and_levels(
     node_ids: &[NodeId],
     edges: &[(NodeId, NodeId)],
 ) -> BTreeMap<NodeId, (usize, usize)> {
-    let count = node_ids.len();
     let index_by_id: BTreeMap<&NodeId, usize> = node_ids
         .iter()
         .enumerate()
         .map(|(idx, id)| (id, idx))
         .collect();
-    let mut reach = vec![vec![false; count]; count];
-    for (idx, row) in reach.iter_mut().enumerate() {
-        row[idx] = true;
-    }
-    let mut edge_indices = Vec::new();
+    let mut successors = vec![Vec::new(); node_ids.len()];
     for (higher, lower) in edges {
         if let (Some(&higher_idx), Some(&lower_idx)) =
             (index_by_id.get(higher), index_by_id.get(lower))
         {
-            reach[higher_idx][lower_idx] = true;
-            edge_indices.push((higher_idx, lower_idx));
+            successors[higher_idx].push(lower_idx);
         }
     }
-    for pivot in 0..count {
-        let pivot_row = reach[pivot].clone();
-        for row_from in &mut reach {
-            if !row_from[pivot] {
-                continue;
-            }
-            for (cell_to, &pivot_to) in row_from.iter_mut().zip(&pivot_row) {
-                if pivot_to {
-                    *cell_to = true;
-                }
-            }
-        }
-    }
-
-    let mut scc_of = vec![usize::MAX; count];
-    let mut scc_count = 0;
-    for outer_idx in 0..count {
-        if scc_of[outer_idx] != usize::MAX {
-            continue;
-        }
-        let scc_id = scc_count;
-        scc_count += 1;
-        for (inner_idx, slot) in scc_of.iter_mut().enumerate().skip(outer_idx) {
-            if reach[outer_idx][inner_idx] && reach[inner_idx][outer_idx] {
-                *slot = scc_id;
-            }
-        }
-    }
-
-    let mut scc_levels = vec![0usize; scc_count];
-    for _ in 0..scc_count {
-        let mut changed = false;
-        for &(higher_idx, lower_idx) in &edge_indices {
-            let higher_scc = scc_of[higher_idx];
-            let lower_scc = scc_of[lower_idx];
-            if higher_scc != lower_scc && scc_levels[higher_scc] <= scc_levels[lower_scc] {
-                scc_levels[higher_scc] = scc_levels[lower_scc] + 1;
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-
+    let component = strongly_connected_components(&successors);
+    let level = levels(&successors, &component);
     node_ids
         .iter()
         .enumerate()
-        .map(|(idx, id)| (id.clone(), (scc_of[idx], scc_levels[scc_of[idx]])))
+        .map(|(idx, id)| (id.clone(), (component[idx], level[idx])))
         .collect()
 }
 
@@ -1405,7 +1324,7 @@ mod tests {
     use super::super::{ComponentFact, CrossModuleRefFact};
     use super::*;
     use crate::code_lint::ast::{
-        FindingFact, OrderingEdge as OrderingFact, OrderingReason, Ownership, PlacementAnchor,
+        FindingFact, OrderingEdge as AstOrderingEdge, OrderingReason, Ownership, PlacementAnchor,
         RelationFact,
     };
 
@@ -1533,22 +1452,23 @@ mod tests {
         recursion_group: usize,
         level: usize,
     ) -> ItemFacts {
+        let ownership = match roots {
+            [] => Ownership::Unowned,
+            [only] => Ownership::Owner(*only),
+            _ => Ownership::Shared,
+        };
         ItemFacts {
             name: name.to_owned(),
             kind,
             visibility,
             is_constructor: false,
             line,
-            end_line: None,
+            end_line: Some(line),
             column: 1,
             signature: None,
             roots: roots.to_vec(),
+            ownership,
             unit_owners: roots.to_vec(),
-            ownership: match roots {
-                [] => Ownership::Unowned,
-                [only] => Ownership::Owner(*only),
-                _ => Ownership::Shared,
-            },
             recursion_group,
             level,
             findings: Vec::new(),
@@ -1563,8 +1483,8 @@ mod tests {
         }
     }
 
-    const fn sample_ord(higher: usize, lower: usize, reason: OrderingReason) -> OrderingFact {
-        OrderingFact {
+    const fn sample_ord(higher: usize, lower: usize, reason: OrderingReason) -> AstOrderingEdge {
+        AstOrderingEdge {
             higher,
             lower,
             reason,

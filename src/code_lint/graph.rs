@@ -14,8 +14,8 @@ mod render;
 pub use self::builder::{ProjectDepth, build_file_graph, build_project_graph};
 pub use self::model::{
     AbstractionGraph, DeclarationKind, DeclarationNode, EdgeReason, GraphParts, GroupKind,
-    GroupNode, ModelError, NodeFinding, NodeId, NodeVisibility, OrderingEdge, ReferenceEdge,
-    ReferenceKind, ReflexionStatus, SourceLocation, SummaryEdge,
+    GroupNode, ModelError, NodeId, OrderingEdge, ReferenceEdge, ReflexionStatus, SourceLocation,
+    SummaryEdge,
 };
 pub use self::project_facts::{
     ComponentFact, CrossModuleRefFact, ModuleFact, ProjectFacts, collect_project_facts_from_sources,

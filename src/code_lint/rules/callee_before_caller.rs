@@ -1,6 +1,6 @@
 //! Flags private functions and methods defined before their private callers.
 
-use crate::code_lint::ast::{self, CallClusterRule, ParsedFile};
+use crate::code_lint::ast::{self, CallClusterRule, OrderingReason, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -10,7 +10,7 @@ use crate::rule_declaration::{
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Private `{function}` is defined before the higher-level private `{caller}`.",
+    summary: "Private `{function}` is defined before the higher-level private `{caller}`: {relation}.",
     rationale: "Defining lower-abstraction private declarations above `{caller}` inverts the top-down reading flow.",
     suggestion: "Move `{function}` below `{caller}`, for example below `{anchor}` (ends on line {line}).",
 };
@@ -126,18 +126,31 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         .iter()
         .map(|finding| {
             let line = finding.anchor.line.to_string();
+            let relation = relation(finding.reason, &finding.related);
             rule.diagnostic_at_node(
                 path,
                 &finding.name_node,
                 &[
                     ("function", &finding.item),
                     ("caller", &finding.related),
+                    ("relation", &relation),
                     ("anchor", &finding.anchor.name),
                     ("line", &line),
                 ],
             )
         })
         .collect()
+}
+
+/// Explains why `caller` reads before the misplaced declaration.
+fn relation(reason: Option<OrderingReason>, caller: &str) -> String {
+    match reason {
+        Some(OrderingReason::Call) | None => format!("`{caller}` calls it"),
+        Some(OrderingReason::Containment) => format!("`{caller}` contains it in its definition"),
+        Some(OrderingReason::ImplBehavior) => format!("the methods of `{caller}` use it"),
+        Some(OrderingReason::Encapsulation) => format!("`{caller}` uses it only inside its body"),
+        Some(OrderingReason::SignatureContract) => format!("its signature names `{caller}`"),
+    }
 }
 
 #[cfg(test)]
