@@ -17,7 +17,7 @@ const FLOAT_SUFFIX_64: &str = "f64";
 
 /// Macros whose literal arguments the language or API requires as written: format strings,
 /// assertion and logging messages, and compile-time inputs. Matched on the last path segment.
-const LITERAL_EXEMPT_MACROS: &[&str] = &[
+const LITERAL_REQUIRED_MACROS: &[&str] = &[
     "format",
     "print",
     "println",
@@ -75,13 +75,13 @@ fn collect_literal_occurrences_rec<'a>(
         return;
     }
     if let Some(macro_call) = ast::MacroCall::cast(node.clone())
-        && is_literal_exempt_macro(&macro_call_terminal_name(&macro_call))
+        && is_literal_required_macro(&macro_call_terminal_name(&macro_call))
     {
         return;
     }
     if kind == SyntaxKind::TOKEN_TREE {
         if resolve_preceding_macro_path(node)
-            .is_some_and(|macro_path| is_literal_exempt_macro(&macro_path.terminal))
+            .is_some_and(|macro_path| is_literal_required_macro(&macro_path.terminal))
         {
             return;
         }
@@ -152,9 +152,9 @@ fn collect_literal_occurrences_rec<'a>(
     }
 }
 
-/// Returns true if `name` (a macro's last path segment) is in [`LITERAL_EXEMPT_MACROS`].
-fn is_literal_exempt_macro(name: &str) -> bool {
-    LITERAL_EXEMPT_MACROS.contains(&name)
+/// Returns true if `name` (a macro's last path segment) is in [`LITERAL_REQUIRED_MACROS`].
+fn is_literal_required_macro(name: &str) -> bool {
+    LITERAL_REQUIRED_MACROS.contains(&name)
 }
 
 /// A scalar constant item (`const`, non-`mut` `static`, or `enum` variant).
@@ -345,8 +345,8 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_literal_occurrences_rust_skips_every_exempt_macro() {
-        let collected: Vec<&str> = LITERAL_EXEMPT_MACROS
+    fn test_collect_literal_occurrences_rust_skips_every_literal_required_macro() {
+        let collected: Vec<&str> = LITERAL_REQUIRED_MACROS
             .iter()
             .copied()
             .filter(|name| {

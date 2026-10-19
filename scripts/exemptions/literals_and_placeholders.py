@@ -288,8 +288,8 @@ CLUSTER = Cluster(
             path=RS_LITERALS,
             edits=(
                 (
-                    "fn is_literal_exempt_macro(name: &str) -> bool {\n    LITERAL_EXEMPT_MACROS.contains(&name)\n}",
-                    "fn is_literal_exempt_macro(_name: &str) -> bool {\n    false\n}",
+                    "fn is_literal_required_macro(name: &str) -> bool {\n    LITERAL_REQUIRED_MACROS.contains(&name)\n}",
+                    "fn is_literal_required_macro(_name: &str) -> bool {\n    false\n}",
                 ),
             ),
             cases=(
