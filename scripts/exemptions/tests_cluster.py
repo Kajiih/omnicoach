@@ -7,9 +7,9 @@ from __future__ import annotations
 
 from .model import (
     CALLS,
-    CLASSES,
     DUPLICATED_TEST_SETUP,
     FAKE_WITHOUT_PROTOCOL,
+    POLICY,
     PY_CALLS,
     PY_TESTS,
     RS_CALLS,
@@ -1049,7 +1049,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="non-Fake class without base exempt from fake-without-protocol",
-            path=CLASSES,
+            path=POLICY,
             edits=(
                 (
                     "    name.trim_start_matches('_')\n        .strip_prefix(\"Fake\")",
@@ -1060,7 +1060,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="word starting with Fake followed by lowercase letter exempt from fake-without-protocol",
-            path=CLASSES,
+            path=POLICY,
             edits=(
                 (
                     "        .is_some_and(|rest| !rest.starts_with(|character: char| character.is_ascii_lowercase()))",
@@ -1071,7 +1071,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="lowercase fake_ prefix exempt from fake-without-protocol",
-            path=CLASSES,
+            path=POLICY,
             edits=(
                 (
                     "    name.trim_start_matches('_')\n        .strip_prefix(\"Fake\")",

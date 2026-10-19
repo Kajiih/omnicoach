@@ -1,5 +1,4 @@
-//! Lint policy shared by several consumers: the suggestions code rules make from AST facts, and
-//! the literals `repeated-literal` and the `rule_test!` harness treat as not worth naming.
+//! Lint policy shared across rules and the test harness (`CodeLintPolicy`).
 //!
 //! Boundary: `code_lint::ast` (`CodeLintAst`) exposes only rule-agnostic language facts (including
 //! standard-library collection taxonomy and syntax positions where the language or API requires a
@@ -10,6 +9,15 @@ architecture_component!(CodeLintPolicy);
 
 use crate::code_lint::ast::LiteralValue;
 use crate::code_lint::ast::python::{CollectionShape, PythonCollectionType};
+
+/// Returns true if `name` starts with the word `Fake` after any leading `_`: `Fake` alone or
+/// followed by anything but a lowercase letter, so `Faker` and `Fakeable` do not match.
+#[must_use]
+pub fn is_fake_class_name(name: &str) -> bool {
+    name.trim_start_matches('_')
+        .strip_prefix("Fake")
+        .is_some_and(|rest| !rest.starts_with(|character: char| character.is_ascii_lowercase()))
+}
 
 /// True for literal values not worth naming.
 ///

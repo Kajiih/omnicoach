@@ -244,15 +244,6 @@ pub fn local_ancestors(classes: &[PythonClassInfo<'_>], index: usize) -> Vec<usi
     ancestors
 }
 
-/// Returns true if `name` starts with the word `Fake` after any leading `_`: `Fake` alone or
-/// followed by anything but a lowercase letter, so `Faker` and `Fakeable` do not match.
-#[must_use]
-pub fn is_fake_class_name(name: &str) -> bool {
-    name.trim_start_matches('_')
-        .strip_prefix("Fake")
-        .is_some_and(|rest| !rest.starts_with(|character: char| character.is_ascii_lowercase()))
-}
-
 /// A method docstring inherited from an in-file ancestor class.
 pub struct PythonInheritedDocstring<'c, 'a> {
     /// The ancestor class whose method declares the docstring.

@@ -7,9 +7,10 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    PythonBaseClass, PythonClassInfo, extract_classes, is_fake_class_name, local_ancestors,
+    PythonBaseClass, PythonClassInfo, extract_classes, local_ancestors,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
+use crate::code_lint::policy::is_fake_class_name;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality,

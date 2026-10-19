@@ -26,7 +26,7 @@ To place an item, state its contract in one sentence (inputs, output, meaning). 
 | Item | Contract | Owner | Not |
 |---|---|---|---|
 | `is_protocol_or_abc_class` | the `class` statement inherits `Protocol`/`ABC` or declares `metaclass=ABCMeta` | class declarations | `names` (a dependency); `functions` (a caller) |
-| `direct_function_definitions` | the `FunctionDef` statements that are immediate children of a body | syntax-tree navigation | `scopes`, `classes`, `functions` (callers) |
+| `direct_function_definitions` | the `FunctionDef` statements that are immediate children of a body | syntax-tree navigation | `bindings`, `classes`, `functions` (callers) |
 | `has_override_decorator` | the function overrides a base method | functions | decorators (the mechanism) |
 | `fstring_segments_and_interpolations` | an f-string split into literal text and replacement fields | format strings | string literals in general |
 | `attribute_terminal_name` (Rust) | the terminal name of an attribute's path | Rust attributes | `names` (a dependency) |

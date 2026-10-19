@@ -5,8 +5,9 @@
 //! FakeFoo` is separate from `struct FakeFoo` and `rustc` enforces trait contracts nominally.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::ast::python::{PythonBaseClass, extract_classes, is_fake_class_name};
+use crate::code_lint::ast::python::{PythonBaseClass, extract_classes};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
+use crate::code_lint::policy::is_fake_class_name;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
