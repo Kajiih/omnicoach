@@ -623,8 +623,9 @@ CLUSTER = Cluster(
             path=ANNOTATIONS,
             edits=(
                 (
-                    "    resolved_path_and_terminal_expr(unwrapped, file)\n",
-                    "    Some(super::names::resolve_path_and_terminal_expr(unwrapped, &file.source))\n",
+                    "    written_name(unwrapped, &file.source)\n"
+                    "        .resolve(file)\n",
+                    "    Some(written_name(unwrapped, &file.source))\n",
                 ),
             ),
             cases=(
@@ -757,7 +758,7 @@ CLUSTER = Cluster(
                     "        || class_def\n"
                     "            .bases()\n"
                     "            .iter()\n"
-                    "            .map(|base| super::names::resolve_path_and_terminal_expr(base, &file.source).path)\n"
+                    "            .map(|base| written_name(base, &file.source).path)\n"
                     "            .any(|path| {\n"
                     "                matches!(\n"
                     "                    path.as_str(),\n"

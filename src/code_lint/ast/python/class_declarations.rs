@@ -2,7 +2,7 @@
 
 use super::decorators::{DecoratorInfo, extract_decorators_from_slice};
 use super::docstrings::{PythonDocstring, docstring_of};
-use super::names::resolved_path_and_terminal_expr;
+use super::names::written_name;
 use crate::code_lint::ast::{AstNode, ParsedFile, span_from_ruff_range};
 use ruff_python_ast::{Expr, StmtClassDef};
 use ruff_text_size::Ranged as _;
@@ -240,7 +240,8 @@ fn is_abc_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
             .arg
             .as_ref()
             .is_some_and(|arg| arg.id == "metaclass")
-            && resolved_path_and_terminal_expr(&keyword.value, file)
+            && written_name(&keyword.value, &file.source)
+                .resolve(file)
                 .is_some_and(|name| matches!(name.path.as_str(), "ABCMeta" | "abc.ABCMeta"))
     });
     has_abc_metaclass
@@ -267,5 +268,7 @@ fn resolved_base_class_path(base: &Expr, file: &ParsedFile) -> Option<String> {
     } else {
         base
     };
-    resolved_path_and_terminal_expr(base_expr, file).map(|name| name.path)
+    written_name(base_expr, &file.source)
+        .resolve(file)
+        .map(|name| name.path)
 }

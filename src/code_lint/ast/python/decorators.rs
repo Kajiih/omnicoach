@@ -1,8 +1,8 @@
 //! Python decorators: expressions applied to a definition, resolved through imports, with
 //! arguments.
 
-use super::names::{resolve_path_and_terminal_expr, resolved_path_and_terminal_expr};
-use crate::code_lint::ast::{ParsedFile, QualifiedName};
+use super::names::written_name;
+use crate::code_lint::ast::ParsedFile;
 use ruff_python_ast::{Decorator, Expr};
 
 /// Structured metadata for a Python decorator.
@@ -62,13 +62,11 @@ pub(super) fn extract_decorators_from_slice(
             (&decorator.expression, Vec::new())
         };
 
-        let QualifiedName { path, terminal } =
-            resolve_path_and_terminal_expr(target_expr, &file.source);
-        let resolved_path =
-            resolved_path_and_terminal_expr(target_expr, file).map(|name| name.path);
+        let written = written_name(target_expr, &file.source);
+        let resolved_path = written.clone().resolve(file).map(|name| name.path);
         out.push(DecoratorInfo {
-            path,
-            terminal_name: terminal,
+            path: written.path,
+            terminal_name: written.terminal,
             resolved_path,
             keyword_args,
         });

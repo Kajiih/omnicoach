@@ -3,7 +3,7 @@
 use super::class_declarations::{PythonClassDeclaration, is_protocol_or_abc_class};
 use super::decorators::{DecoratorInfo, extract_decorators_from_slice};
 use super::docstrings::{PythonDocstring, docstring_of};
-use super::names::resolve_path_and_terminal_expr;
+use super::names::written_name;
 use crate::code_lint::ast::{AstNode, ParsedFile, span_from_ruff_range};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
 use ruff_python_ast::{
@@ -403,8 +403,7 @@ fn is_stub_statement(statement: &Stmt, source: &str) -> bool {
                 && raise_statement.exc.as_deref().is_some_and(|exc| match exc {
                     Expr::Name(name) => name.id == NOT_IMPLEMENTED_ERROR,
                     Expr::Call(call) => {
-                        resolve_path_and_terminal_expr(&call.func, source).terminal
-                            == NOT_IMPLEMENTED_ERROR
+                        written_name(&call.func, source).terminal == NOT_IMPLEMENTED_ERROR
                     }
                     _ => false,
                 })

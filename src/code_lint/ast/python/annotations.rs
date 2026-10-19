@@ -1,6 +1,6 @@
 //! Python type annotation unwrapping, constructor resolution, union flattening, and collection type vocabularies.
 
-use super::names::resolved_path_and_terminal_expr;
+use super::names::written_name;
 use super::tree::find_expr_at_span;
 use crate::code_lint::ast::{AstNode, ParsedFile, QualifiedName, span_from_ruff_range};
 use ruff_python_ast::{Expr, Operator};
@@ -221,7 +221,8 @@ pub(super) fn has_final_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> 
     let unwrapped = unwrap_annotated_expr(type_expr, file);
     let candidate =
         extract_generic_base_and_args(unwrapped).map_or(unwrapped, |generic| generic.base);
-    resolved_path_and_terminal_expr(candidate, file)
+    written_name(candidate, &file.source)
+        .resolve(file)
         .is_some_and(|name| is_std_type_constructor(&name.path, &name.terminal, &[TYPE_FINAL]))
 }
 
@@ -233,7 +234,8 @@ pub(super) fn is_bare_final_annotation_expr(type_expr: &Expr, file: &ParsedFile)
     if matches!(unwrapped, Expr::Subscript(_)) {
         return false;
     }
-    resolved_path_and_terminal_expr(unwrapped, file)
+    written_name(unwrapped, &file.source)
+        .resolve(file)
         .is_some_and(|name| is_std_type_constructor(&name.path, &name.terminal, &[TYPE_FINAL]))
 }
 
@@ -284,7 +286,7 @@ fn collect_collection_types_expr(
             let Some(QualifiedName {
                 path: base_path,
                 terminal: base_terminal,
-            }) = resolved_path_and_terminal_expr(base_node, file)
+            }) = written_name(base_node, &file.source).resolve(file)
             else {
                 return;
             };
@@ -517,7 +519,7 @@ pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnType
                     collection: collection_type_expr(constructor, file),
                     type_arguments: generic
                         .map(|generic| generic.arguments.into_iter().map(node_of).collect()),
-                    constructor: resolved_path_and_terminal_expr(constructor, file),
+                    constructor: written_name(constructor, &file.source).resolve(file),
                 }
             })
             .collect(),
@@ -550,7 +552,7 @@ pub fn generator_yield_type<'a>(return_type_node: &AstNode<'a>) -> Option<AstNod
     let QualifiedName {
         path: base_path,
         terminal: base_terminal,
-    } = resolved_path_and_terminal_expr(base_node, file)?;
+    } = written_name(base_node, &file.source).resolve(file)?;
     if !is_std_type_constructor(&base_path, &base_terminal, GENERATOR_TYPES) {
         return None;
     }
@@ -599,7 +601,7 @@ fn unwrap_return_envelope_expr<'a>(mut current: &'a Expr, file: &ParsedFile) -> 
         && let Some(QualifiedName {
             path: base_path,
             terminal: base_terminal,
-        }) = resolved_path_and_terminal_expr(base_node, file)
+        }) = written_name(base_node, &file.source).resolve(file)
     {
         if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_ANNOTATED, "Awaitable"])
             && let Some(&first_arg) = type_args.first()
@@ -646,7 +648,7 @@ fn collect_union_branches_expr<'a>(
             let Some(QualifiedName {
                 path: base_path,
                 terminal: base_terminal,
-            }) = resolved_path_and_terminal_expr(base_node, file)
+            }) = written_name(base_node, &file.source).resolve(file)
             else {
                 branches.push(expr);
                 return;
@@ -682,13 +684,15 @@ fn collect_union_branches_expr<'a>(
 /// subscripted), resolved through the file's imports.
 fn is_bool_or_callable_type_expr(expr: &Expr, file: &ParsedFile) -> bool {
     let base = extract_generic_base_and_args(expr).map_or(expr, |generic| generic.base);
-    resolved_path_and_terminal_expr(base, file).is_some_and(|name| {
-        is_std_type_constructor(
-            &name.path,
-            &name.terminal,
-            &[BOOL_CONSTRUCTOR, TYPE_CALLABLE],
-        )
-    })
+    written_name(base, &file.source)
+        .resolve(file)
+        .is_some_and(|name| {
+            is_std_type_constructor(
+                &name.path,
+                &name.terminal,
+                &[BOOL_CONSTRUCTOR, TYPE_CALLABLE],
+            )
+        })
 }
 
 /// Unwraps outer `Annotated[T, ...]` wrappers from `type_expr`.
@@ -700,7 +704,7 @@ fn unwrap_annotated_expr<'a>(mut current: &'a Expr, file: &ParsedFile) -> &'a Ex
         && let Some(QualifiedName {
             path: base_path,
             terminal: base_terminal,
-        }) = resolved_path_and_terminal_expr(base_node, file)
+        }) = written_name(base_node, &file.source).resolve(file)
         && is_std_type_constructor(&base_path, &base_terminal, &[TYPE_ANNOTATED])
         && let Some(&first_arg) = type_args.first()
     {
@@ -717,7 +721,7 @@ fn collection_type_expr(expr: &Expr, file: &ParsedFile) -> Option<PythonCollecti
     let QualifiedName {
         path: resolved_path,
         terminal: name,
-    } = resolved_path_and_terminal_expr(expr, file)?;
+    } = written_name(expr, &file.source).resolve(file)?;
     let kind = collection_kind(&resolved_path, &name)?;
     let shape = collection_shape(&name);
     let span = span_from_ruff_range(expr.range());

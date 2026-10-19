@@ -239,8 +239,7 @@ CLUSTER = Cluster(
             path=PY_LITERALS,
             edits=(
                 (
-                    "if resolve_path_and_terminal_expr(&sub.value, &self.file.source).terminal\n"
-                    '                    == "Literal" =>',
+                    'if written_name(&sub.value, &self.file.source).terminal == "Literal" =>',
                     "if false =>",
                 ),
             ),
@@ -728,7 +727,7 @@ CLUSTER = Cluster(
             path=LOGGING,
             edits=(
                 (
-                    "message: static_string_text(message_expr),",
+                    "message: static_message_text(message_expr),",
                     "message: Some(file.source[usize::from(message_expr.range().start())..usize::from(message_expr.range().end())].to_owned()),",
                 ),
             ),
@@ -766,7 +765,7 @@ CLUSTER = Cluster(
         ),
         Unmutated(
             label="f-string logger message and positional format spec without nested braces",
-            reason="static_string_text only inspects Expr::StringLiteral; '{:.2f}' has an empty root and no nested '{...}' in its spec",
+            reason="static_message_text only inspects Expr::StringLiteral; '{:.2f}' has an empty root and no nested '{...}' in its spec",
             cases=(
                 "unmatched_logger_placeholder::pass::f_string_message_not_flagged",
                 "unmatched_logger_placeholder::pass::positional_with_format_spec",

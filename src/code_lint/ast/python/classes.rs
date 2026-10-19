@@ -12,7 +12,7 @@ use super::functions::{
     CLS_RECEIVER, OVERLOAD_DECORATOR_PATHS, PythonFunctionSignature, SELF_RECEIVER,
     function_signature, method_receiver_name_ast,
 };
-use super::names::resolved_path_and_terminal_expr;
+use super::names::written_name;
 use super::tree::direct_function_definitions;
 use crate::code_lint::ast::{AstNode, ParsedFile, PlacementAnchor, span_from_ruff_range};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
@@ -767,7 +767,8 @@ fn is_init_var_annotation(annotation: &Expr, file: &ParsedFile) -> bool {
     } else {
         annotation
     };
-    resolved_path_and_terminal_expr(base, file)
+    written_name(base, &file.source)
+        .resolve(file)
         .is_some_and(|name| INIT_VAR_PATHS.contains(&name.path.as_str()))
 }
 

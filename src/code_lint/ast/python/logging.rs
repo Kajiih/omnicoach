@@ -120,7 +120,7 @@ pub(super) fn extract_logger_call<'a>(
     Some(PythonLoggerCall {
         node: AstNode::from_span(file, span_from_ruff_range(call.range())),
         callee: file.source[func_span.start..func_span.end].to_owned(),
-        message: static_string_text(message_expr),
+        message: static_message_text(message_expr),
         has_trailing_positional_args: call.arguments.args.len() > message_index + 1,
         has_keyword_splat,
         keyword_names,
@@ -129,9 +129,10 @@ pub(super) fn extract_logger_call<'a>(
     })
 }
 
-/// Extracts the decoded text of a plain string literal or an implicit concatenation of plain
-/// string literals, excluding f-strings and byte strings.
-fn static_string_text(expr: &Expr) -> Option<String> {
+/// Extracts the decoded text of a logger message when `expr` is a non-empty plain string literal
+/// or implicit concatenation of plain string literals (f-strings, byte strings, and `""` yield
+/// `None`, since an empty string has no message to format).
+fn static_message_text(expr: &Expr) -> Option<String> {
     let Expr::StringLiteral(string_literal) = expr else {
         return None;
     };

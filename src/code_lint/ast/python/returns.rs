@@ -6,7 +6,7 @@
 use super::annotations::{PythonReturnTypeUnion, positional_tuple_return_arity, return_type_union};
 use super::effects::in_place_mutated_receiver_expr;
 use super::functions::{PythonFunctionSignature, extract_function_signatures};
-use super::names::resolve_path_and_terminal_expr;
+use super::names::written_name;
 use crate::code_lint::ast::{FunctionReturn, ParsedFile, ReturnShape};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt};
@@ -267,7 +267,7 @@ fn called_terminal_name_expr(expr: &Expr, source: &str) -> Option<String> {
     let Expr::Call(call) = expr else {
         return None;
     };
-    let terminal = resolve_path_and_terminal_expr(&call.func, source).terminal;
+    let terminal = written_name(&call.func, source).terminal;
     (!terminal.is_empty()).then_some(terminal)
 }
 

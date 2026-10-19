@@ -1,7 +1,7 @@
 //! Python literal occurrences and module-level constant assignments.
 
 use super::annotations::has_final_annotation_expr;
-use super::names::resolve_path_and_terminal_expr;
+use super::names::written_name;
 use crate::code_lint::ast::{
     AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, parse_float_literal,
     parse_integer_literal, span_from_ruff_range,
@@ -217,14 +217,12 @@ impl<'a> SourceOrderVisitor<'a> for LiteralOccurrenceCollector<'a> {
     fn visit_expr(&mut self, expr: &'a Expr) {
         match expr {
             Expr::Subscript(sub)
-                if resolve_path_and_terminal_expr(&sub.value, &self.file.source).terminal
-                    == "Literal" =>
+                if written_name(&sub.value, &self.file.source).terminal == "Literal" =>
             {
                 return;
             }
             Expr::Call(call) => {
-                let terminal =
-                    resolve_path_and_terminal_expr(&call.func, &self.file.source).terminal;
+                let terminal = written_name(&call.func, &self.file.source).terminal;
                 if TYPE_NAME_FIRST_ARGUMENT_CALLS.contains(&terminal.as_str()) {
                     self.visit_expr(&call.func);
                     if call.arguments.args.is_empty() {

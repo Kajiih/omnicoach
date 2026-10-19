@@ -1,6 +1,6 @@
 //! Multiline string literal analysis for Python (`ruff_python_ast`).
 
-use super::names::resolve_path_and_terminal_expr;
+use super::names::written_name;
 use crate::code_lint::ast::{AstNode, ParsedFile, span_from_ruff_range};
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
@@ -99,7 +99,7 @@ impl<'a, F: Fn(&str) -> bool> SourceOrderVisitor<'a> for UnwrappedMultilineFinde
                 self.allowed_call_depth = prev_depth;
             }
             Expr::Call(call) => {
-                let path = resolve_path_and_terminal_expr(&call.func, &self.file.source).path;
+                let path = written_name(&call.func, &self.file.source).path;
                 let is_allowed = (self.is_allowed_wrapper)(&path);
                 if is_allowed {
                     self.allowed_call_depth += 1;
