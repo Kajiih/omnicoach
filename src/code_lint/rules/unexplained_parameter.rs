@@ -169,10 +169,11 @@ fn check_file(
             let constructor_class = signature
                 .is_constructor()
                 .then(|| signature.enclosing_class())
-                .flatten();
+                .flatten()
+                .map(PythonClassInfo::from_declaration);
             let class_docstring = constructor_class
                 .as_ref()
-                .and_then(|class| class.docstring.as_ref());
+                .and_then(|class| class.declaration().docstring.as_ref());
             if own_docstring.is_none() && class_docstring.is_none() {
                 return None;
             }

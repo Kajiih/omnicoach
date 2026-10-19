@@ -1,8 +1,12 @@
-//! Python class definitions, base-class classification, and class/instance attribute walkers.
+//! Python class model: class members, hierarchy, and class/instance attribute walkers.
 
 use super::annotations::is_bare_final_annotation_expr;
-use super::decorators::{DecoratorInfo, extract_decorators_from_slice};
-use super::docstrings::{DocstringSectionKind, PythonDocstring, docstring_of};
+use super::class_declarations::{
+    PythonClassDeclaration, is_field_synthesizing_class, is_protocol_or_abc_class,
+    is_typed_dict_class,
+};
+use super::decorators::extract_decorators_from_slice;
+use super::docstrings::{DocstringSectionKind, PythonDocstring};
 use super::effects::in_place_mutated_receiver_expr;
 use super::functions::{
     CLS_RECEIVER, OVERLOAD_DECORATOR_PATHS, PythonFunctionSignature, SELF_RECEIVER,
@@ -16,26 +20,6 @@ use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef};
 use ruff_text_size::Ranged as _;
 use std::collections::HashSet;
 
-const DATACLASS_DECORATOR_PATHS: &[&str] = &["dataclass", "dataclasses.dataclass"];
-const PROTOCOL_PATHS: &[&str] = &["Protocol", "typing.Protocol", "typing_extensions.Protocol"];
-const ABC_PATHS: &[&str] = &["ABC", "abc.ABC"];
-const NAMED_TUPLE_PATHS: &[&str] = &[
-    "NamedTuple",
-    "typing.NamedTuple",
-    "typing_extensions.NamedTuple",
-];
-const STRUCTURAL_MARKER_PATHS: &[&str] = &[
-    "object",
-    "builtins.object",
-    "Generic",
-    "typing.Generic",
-    "typing_extensions.Generic",
-    "Protocol",
-    "typing.Protocol",
-    "typing_extensions.Protocol",
-    "ABC",
-    "abc.ABC",
-];
 const INIT_METHOD: &str = "__init__";
 /// Methods whose `self.<name>` assignments create instance attributes.
 const INITIALIZER_METHODS: &[&str] = &[
@@ -44,109 +28,45 @@ const INITIALIZER_METHODS: &[&str] = &[
     "__attrs_post_init__",
     "model_post_init",
 ];
-const ENUM_BASE_PATHS: &[&str] = &[
-    "Enum",
-    "IntEnum",
-    "StrEnum",
-    "Flag",
-    "IntFlag",
-    "ReprEnum",
-    "enum.Enum",
-    "enum.IntEnum",
-    "enum.StrEnum",
-    "enum.Flag",
-    "enum.IntFlag",
-    "enum.ReprEnum",
-];
 const INIT_VAR_PATHS: &[&str] = &["InitVar", "dataclasses.InitVar"];
 
-/// Represents a base class expression in a Python class definition.
-#[derive(Clone)]
-pub struct PythonBaseClass {
-    /// Base class identifier or dotted path text (e.g. `"Protocol"`, `"abc.ABC"`).
-    pub name: String,
-    /// Canonical path of the unsubscripted base class resolved through
-    /// [`crate::code_lint::ast::resolve_name`], or `None` when the first segment is defined in the
-    /// file.
-    resolved_path: Option<String>,
-}
-
-impl PythonBaseClass {
-    /// Base class name with any generic type argument subscript (`[...]`) stripped.
-    #[must_use]
-    pub fn unsubscripted_name(&self) -> &str {
-        self.name
-            .split_once('[')
-            .map_or(self.name.as_str(), |(base, _)| base.trim())
-    }
-
-    /// Returns true if this base class is a structural marker rather than a supertype:
-    /// `object`, `Generic`, `Protocol`, or `ABC` itself (optionally subscripted, qualified, or
-    /// imported under an alias).
-    #[must_use]
-    pub fn is_structural_marker(&self) -> bool {
-        self.resolved_path
-            .as_deref()
-            .is_some_and(|path| STRUCTURAL_MARKER_PATHS.contains(&path))
-    }
-}
-
-/// Structured representation of a Python class definition.
+/// Structured representation of a Python class definition: its declaration plus its members and
+/// hierarchy queries.
 #[derive(Clone)]
 pub struct PythonClassInfo<'a> {
-    /// Class name identifier text.
-    pub name: String,
-    /// Class name AST node.
-    pub name_node: AstNode<'a>,
-    /// Base classes from `class Foo(Base1, Base2):`.
-    pub bases: Vec<PythonBaseClass>,
-    /// The class docstring, if the class body starts with one.
-    pub docstring: Option<PythonDocstring<'a>>,
-    /// Parsed decorators on this class definition.
-    decorators: Vec<DecoratorInfo>,
-    /// The parsed definition, for analyses of the body.
-    definition: &'a StmtClassDef,
+    declaration: PythonClassDeclaration<'a>,
 }
 
 impl<'a> PythonClassInfo<'a> {
     /// Builds [`PythonClassInfo`] from a parsed `class` statement.
     pub(super) fn from_ast(class_def: &'a StmtClassDef, file: &'a ParsedFile) -> Self {
-        let bases = class_def
-            .bases()
-            .iter()
-            .map(|base| {
-                let base_span = span_from_ruff_range(base.range());
-                PythonBaseClass {
-                    name: file.source[base_span.start..base_span.end].to_string(),
-                    resolved_path: resolved_base_class_path(base, file),
-                }
-            })
-            .collect();
-        let decorators = extract_decorators_from_slice(&class_def.decorator_list, file);
-        Self {
-            name: class_def.name.id.to_string(),
-            name_node: AstNode::from_span(file, span_from_ruff_range(class_def.name.range)),
-            bases,
-            docstring: docstring_of(&class_def.body, file),
-            decorators,
-            definition: class_def,
-        }
+        Self::from_declaration(PythonClassDeclaration::from_ast(class_def, file))
+    }
+
+    /// Wraps a [`PythonClassDeclaration`] as a full [`PythonClassInfo`].
+    #[must_use]
+    pub const fn from_declaration(declaration: PythonClassDeclaration<'a>) -> Self {
+        Self { declaration }
+    }
+
+    /// The class's declaration header, base classes, decorators, and docstring.
+    #[must_use]
+    pub const fn declaration(&self) -> &PythonClassDeclaration<'a> {
+        &self.declaration
     }
 
     /// The functions defined directly in the class body (not nested deeper), in source order.
     #[must_use]
     pub fn methods(&self) -> Vec<PythonFunctionSignature<'a>> {
-        let file = self.name_node.file;
-        self.definition
+        let file = self.declaration.name_node.file;
+        let definition = self.declaration.definition;
+        definition
             .body
             .iter()
             .filter_map(|statement| match statement {
-                Stmt::FunctionDef(func_def) => Some(function_signature(
-                    func_def,
-                    file,
-                    Some(self.definition),
-                    None,
-                )),
+                Stmt::FunctionDef(func_def) => {
+                    Some(function_signature(func_def, file, Some(definition), None))
+                }
                 _ => None,
             })
             .collect()
@@ -156,7 +76,7 @@ impl<'a> PythonClassInfo<'a> {
     /// one when it is redefined.
     #[must_use]
     pub fn constructor(&self) -> Option<PythonFunctionSignature<'a>> {
-        let file = self.name_node.file;
+        let file = self.declaration.name_node.file;
         self.methods().into_iter().rfind(|method| {
             method.name == INIT_METHOD
                 && !extract_decorators_from_slice(&method.definition.decorator_list, file)
@@ -171,17 +91,17 @@ impl<'a> PythonClassInfo<'a> {
     /// including multiple and tuple-unpacking targets) and of `<receiver>.x = …` /
     /// `<receiver>.x: T = …` assignments directly in an instance initializer (`__init__`,
     /// `__post_init__`, `__attrs_post_init__`, `model_post_init`), where the receiver is the
-    /// method's `self` parameter. Nested functions, lambdas and classes are not entered, and
+    /// method's `self` parameter. Nested functions, lambdas and classes are not read, and
     /// other methods are not read. Private and dunder names are included.
     #[must_use]
     pub fn attribute_definitions(&self) -> Vec<PythonAttributeDefinition<'a>> {
-        let file = self.name_node.file;
+        let file = self.declaration.name_node.file;
         let mut collector = AttributeCollector {
             file,
             seen: HashSet::new(),
             definitions: Vec::new(),
         };
-        for statement in &self.definition.body {
+        for statement in &self.declaration.definition.body {
             match statement {
                 Stmt::Assign(assign) => {
                     for target in &assign.targets {
@@ -211,51 +131,9 @@ impl PythonClassInfo<'_> {
     /// `name`.
     #[must_use]
     pub fn defines_function(&self, name: &str) -> bool {
-        direct_function_definitions(&self.definition.body)
+        direct_function_definitions(&self.declaration.definition.body)
             .iter()
             .any(|function_def| function_def.name.id == name)
-    }
-
-    /// Returns true if a direct base class resolves to an `enum` base (`Enum`, `IntEnum`,
-    /// `StrEnum`, `Flag`, `IntFlag`, `ReprEnum`). Subclasses of a project enum are not
-    /// recognized.
-    #[must_use]
-    pub fn is_enum(&self) -> bool {
-        resolved_base_class_paths(self.definition, self.name_node.file)
-            .iter()
-            .any(|path| ENUM_BASE_PATHS.contains(&path.as_str()))
-    }
-
-    /// Returns true if a direct base class resolves to `typing.Protocol` or
-    /// `typing_extensions.Protocol` (optionally subscripted), making the class a `Protocol`
-    /// rather than an implementation of one.
-    #[must_use]
-    pub fn is_protocol(&self) -> bool {
-        is_protocol_class(self.definition, self.name_node.file)
-    }
-
-    /// Returns true if a direct base class resolves to `abc.ABC` or the class declares
-    /// `metaclass=ABCMeta`.
-    #[must_use]
-    pub fn is_abc(&self) -> bool {
-        is_abc_class(self.definition, self.name_node.file)
-    }
-
-    /// Returns true if a direct base class resolves to `typing.NamedTuple` or
-    /// `typing_extensions.NamedTuple`.
-    #[must_use]
-    pub fn is_named_tuple(&self) -> bool {
-        resolved_base_class_paths(self.definition, self.name_node.file)
-            .iter()
-            .any(|path| NAMED_TUPLE_PATHS.contains(&path.as_str()))
-    }
-
-    /// Returns true if the class carries a `@dataclass` or `@dataclasses.dataclass` decorator
-    /// that does not pass the keyword argument `key`.
-    #[must_use]
-    pub fn is_dataclass_missing_arg(&self, key: &str) -> bool {
-        self.dataclass_decorator()
-            .is_some_and(|decorator| !decorator.has_arg(key))
     }
 
     /// Names of parameters of [`Self::constructor`] that are stored unchanged on `self`
@@ -265,9 +143,11 @@ impl PythonClassInfo<'_> {
         let Some(constructor) = self.constructor() else {
             return HashSet::new();
         };
-        let Some(receiver) =
-            method_receiver_name_ast(constructor.definition, false, self.name_node.file)
-        else {
+        let Some(receiver) = method_receiver_name_ast(
+            constructor.definition,
+            false,
+            self.declaration.name_node.file,
+        ) else {
             return HashSet::new();
         };
         let parameter_names: HashSet<&str> = constructor
@@ -283,7 +163,7 @@ impl PythonClassInfo<'_> {
     /// docstring.
     #[must_use]
     pub fn documented_unchanged_constructor_parameters(&self) -> HashSet<String> {
-        let Some(docstring) = &self.docstring else {
+        let Some(docstring) = &self.declaration.docstring else {
             return HashSet::new();
         };
         let documented = docstring.section_entry_names(DocstringSectionKind::Attributes);
@@ -291,14 +171,6 @@ impl PythonClassInfo<'_> {
             .into_iter()
             .filter(|name| documented.contains(name))
             .collect()
-    }
-
-    /// The `@dataclass` or `@dataclasses.dataclass` decorator, resolved through the file's
-    /// imports, if the class carries one.
-    fn dataclass_decorator(&self) -> Option<&DecoratorInfo> {
-        self.decorators
-            .iter()
-            .find(|decorator| decorator.matches_any(DATACLASS_DECORATOR_PATHS))
     }
 }
 
@@ -340,13 +212,14 @@ pub fn extract_classes(file: &ParsedFile) -> Vec<PythonClassInfo<'_>> {
 #[must_use]
 pub fn local_base_classes(classes: &[PythonClassInfo<'_>], index: usize) -> Vec<usize> {
     classes[index]
+        .declaration()
         .bases
         .iter()
         .filter_map(|base| {
             let name = base.unsubscripted_name();
             classes[..index]
                 .iter()
-                .rposition(|candidate| candidate.name == name)
+                .rposition(|candidate| candidate.declaration().name == name)
         })
         .collect()
 }
@@ -576,24 +449,6 @@ fn record_mutated_class_receiver(receiver: &Expr, class_name: &str, out: &mut Ha
     }
 }
 
-/// Returns true if a Python `StmtClassDef` inherits from `TypedDict`.
-fn is_typed_dict_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
-    resolved_base_class_paths(class_def, file)
-        .iter()
-        .any(|path| {
-            matches!(
-                path.as_str(),
-                "TypedDict" | "typing.TypedDict" | "typing_extensions.TypedDict"
-            )
-        })
-}
-
-/// Returns true if a Python `StmtClassDef` inherits from `Protocol` or `ABC` or declares
-/// `metaclass=ABCMeta`.
-pub(super) fn is_protocol_or_abc_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
-    is_protocol_class(class_def, file) || is_abc_class(class_def, file)
-}
-
 /// A Python instance attribute annotated inline (`self.<name>: <type>`) inside an instance method.
 #[derive(Clone)]
 pub struct PythonInstanceAttributeAnnotation<'a> {
@@ -695,90 +550,6 @@ pub fn collect_instance_attribute_annotations(
     };
     visitor.visit_body(&parsed.syntax().body);
     visitor.out
-}
-
-const FIELD_SYNTHESIZING_DECORATOR_PATHS: &[&str] = &[
-    "dataclass",
-    "dataclasses.dataclass",
-    "pydantic.dataclasses.dataclass",
-    "define",
-    "frozen",
-    "mutable",
-    "s",
-    "attrs",
-    "attr.define",
-    "attr.frozen",
-    "attr.mutable",
-    "attr.s",
-    "attr.attrs",
-    "attr.dataclass",
-    "attrs.define",
-    "attrs.frozen",
-    "attrs.mutable",
-    "attrs.s",
-    "attrs.attrs",
-    "attrs.dataclass",
-];
-
-/// Returns true if `class_def` synthesizes constructor fields from class-body annotations
-/// (`@dataclass`, `attrs` decorators, or Pydantic `BaseModel` subclasses).
-fn is_field_synthesizing_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
-    let has_field_decorator = extract_decorators_from_slice(&class_def.decorator_list, file)
-        .iter()
-        .any(|decorator| decorator.matches_any(FIELD_SYNTHESIZING_DECORATOR_PATHS));
-    has_field_decorator
-        || resolved_base_class_paths(class_def, file)
-            .iter()
-            .any(|path| {
-                matches!(
-                    path.as_str(),
-                    "BaseModel" | "pydantic.BaseModel" | "pydantic.main.BaseModel"
-                )
-            })
-}
-
-/// Returns true if a Python `StmtClassDef` inherits from `Protocol`.
-fn is_protocol_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
-    resolved_base_class_paths(class_def, file)
-        .iter()
-        .any(|path| PROTOCOL_PATHS.contains(&path.as_str()))
-}
-
-/// Returns true if a Python `StmtClassDef` inherits from `ABC` or declares `metaclass=ABCMeta`.
-fn is_abc_class(class_def: &StmtClassDef, file: &ParsedFile) -> bool {
-    let has_abc_metaclass = class_def.keywords().iter().any(|keyword| {
-        keyword
-            .arg
-            .as_ref()
-            .is_some_and(|arg| arg.id == "metaclass")
-            && resolved_path_and_terminal_expr(&keyword.value, file)
-                .is_some_and(|name| matches!(name.path.as_str(), "ABCMeta" | "abc.ABCMeta"))
-    });
-    has_abc_metaclass
-        || resolved_base_class_paths(class_def, file)
-            .iter()
-            .any(|path| ABC_PATHS.contains(&path.as_str()))
-}
-
-/// Returns the import-resolved paths of each positional base class of a Python `StmtClassDef`,
-/// excluding base classes defined in the file.
-fn resolved_base_class_paths(class_def: &StmtClassDef, file: &ParsedFile) -> Vec<String> {
-    class_def
-        .bases()
-        .iter()
-        .filter_map(|base| resolved_base_class_path(base, file))
-        .collect()
-}
-
-/// Resolves the canonical path of a base class expression `base`, unwrapping generic subscripts
-/// (`Protocol[T]` yields `"typing.Protocol"` when imported from `typing`).
-fn resolved_base_class_path(base: &Expr, file: &ParsedFile) -> Option<String> {
-    let base_expr = if let Expr::Subscript(subscript) = base {
-        subscript.value.as_ref()
-    } else {
-        base
-    };
-    resolved_path_and_terminal_expr(base_expr, file).map(|name| name.path)
 }
 
 /// Walks statements inside a method body (without entering nested functions, classes, or lambdas)
@@ -1125,8 +896,8 @@ mod tests {
         let file = ParsedFile::new(source, Language::Python);
         let enum_names: Vec<String> = extract_classes(&file)
             .into_iter()
-            .filter(PythonClassInfo::is_enum)
-            .map(|class| class.name)
+            .filter(|class| class.declaration().is_enum())
+            .map(|class| class.declaration().name.clone())
             .collect();
         assert_eq!(enum_names, ["A", "B"]);
     }
@@ -1165,10 +936,10 @@ mod tests {
         "};
         let file = ParsedFile::new(source, Language::Python);
         let classes = extract_classes(&file);
-        let cls = &classes[0];
-        let base_names: Vec<&str> = cls.bases.iter().map(|base| base.name.as_str()).collect();
+        let decl = classes[0].declaration();
+        let base_names: Vec<&str> = decl.bases.iter().map(|base| base.name.as_str()).collect();
         assert_eq!(classes.len(), 1);
-        assert_eq!(cls.name, "FakeService");
+        assert_eq!(decl.name, "FakeService");
         assert_eq!(base_names, vec!["abc.ABC", "Protocol"]);
     }
 
@@ -1182,11 +953,11 @@ mod tests {
         let file = ParsedFile::new(source, Language::Python);
         let classes = extract_classes(&file);
 
-        let cls = &classes[0];
-        assert_eq!(cls.name, "Config");
-        assert_eq!(cls.decorators[0].terminal_name, "dataclass");
-        assert!(!cls.is_dataclass_missing_arg("frozen"));
-        assert!(cls.is_dataclass_missing_arg("slots"));
+        let decl = classes[0].declaration();
+        assert_eq!(decl.name, "Config");
+        assert_eq!(decl.decorators[0].terminal_name, "dataclass");
+        assert!(!decl.is_dataclass_missing_arg("frozen"));
+        assert!(decl.is_dataclass_missing_arg("slots"));
     }
 
     #[rstest::rstest]
@@ -1232,7 +1003,7 @@ mod tests {
         let file = ParsedFile::new(source, Language::Python);
         let classes = extract_classes(&file);
         assert_eq!(classes.len(), 1);
-        assert!(classes[0].bases.is_empty());
+        assert!(classes[0].declaration().bases.is_empty());
     }
 
     #[test]
@@ -1255,6 +1026,7 @@ mod tests {
         let file = ParsedFile::new(source, Language::Python);
         let classes = extract_classes(&file);
         let summary: Vec<(&str, bool)> = classes[0]
+            .declaration()
             .bases
             .iter()
             .map(|base| (base.name.as_str(), base.is_structural_marker()))

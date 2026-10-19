@@ -128,7 +128,7 @@ fn check_file(
 ) -> Vec<Diagnostic> {
     let classes = extract_classes(file);
     let protocols: Vec<LocalProtocol> = (0..classes.len())
-        .filter(|&protocol_index| classes[protocol_index].is_protocol())
+        .filter(|&protocol_index| classes[protocol_index].declaration().is_protocol())
         .map(|protocol_index| LocalProtocol {
             index: protocol_index,
             methods: std::iter::once(protocol_index)
@@ -142,13 +142,14 @@ fn check_file(
         if !is_checked_class(class) {
             continue;
         }
+        let decl = class.declaration();
         for protocol in uninherited_protocols(&classes, &protocols, index, min_methods) {
             diagnostics.push(rule.diagnostic_at_node(
                 path,
-                &class.name_node,
+                &decl.name_node,
                 &[
-                    ("class", &class.name),
-                    ("name", &classes[protocol.index].name),
+                    ("class", &decl.name),
+                    ("name", &classes[protocol.index].declaration().name),
                 ],
             ));
         }
@@ -159,13 +160,11 @@ fn check_file(
 /// Returns true if `class` is a concrete class that can inherit from a `Protocol`, and is not a
 /// bare `Fake*` class left to `fake-without-protocol`.
 fn is_checked_class(class: &PythonClassInfo<'_>) -> bool {
-    let is_interface = class.is_protocol() || class.is_abc();
-    let has_metaclass_conflict = class.is_enum() || class.is_named_tuple();
-    let is_bare_fake = is_fake_class_name(&class.name)
-        && class
-            .bases
-            .iter()
-            .all(PythonBaseClass::is_structural_marker);
+    let decl = class.declaration();
+    let is_interface = decl.is_protocol() || decl.is_abc();
+    let has_metaclass_conflict = decl.is_enum() || decl.is_named_tuple();
+    let is_bare_fake = is_fake_class_name(&decl.name)
+        && decl.bases.iter().all(PythonBaseClass::is_structural_marker);
     !(is_interface || has_metaclass_conflict || is_bare_fake)
 }
 
@@ -192,14 +191,16 @@ fn uninherited_protocols<'p>(
     let defined = counted_methods(&classes[index]);
     let ancestor_names: HashSet<&str> = local_ancestors(classes, index)
         .into_iter()
-        .map(|ancestor| classes[ancestor].name.as_str())
+        .map(|ancestor| classes[ancestor].declaration().name.as_str())
         .collect();
     let mut matched: Vec<&LocalProtocol> = protocols
         .iter()
         .filter(|protocol| is_bound_protocol(classes, protocols, protocol, index))
         .filter(|protocol| protocol.methods.len() >= min_methods)
         .filter(|protocol| protocol.methods.is_subset(&defined))
-        .filter(|protocol| !ancestor_names.contains(classes[protocol.index].name.as_str()))
+        .filter(|protocol| {
+            !ancestor_names.contains(classes[protocol.index].declaration().name.as_str())
+        })
         .collect();
     let extended: HashSet<usize> = matched
         .iter()
@@ -217,11 +218,11 @@ fn is_bound_protocol(
     protocol: &LocalProtocol,
     index: usize,
 ) -> bool {
-    let name = &classes[protocol.index].name;
+    let name = &classes[protocol.index].declaration().name;
     let same_name = || {
         protocols
             .iter()
-            .filter(|other| classes[other.index].name == *name)
+            .filter(|other| classes[other.index].declaration().name == *name)
     };
     same_name()
         .rfind(|other| other.index < index)

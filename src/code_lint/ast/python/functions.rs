@@ -1,6 +1,6 @@
 //! Python function signatures, parameter extraction, method receivers, and direct scope definitions.
 
-use super::classes::{PythonClassInfo, is_protocol_or_abc_class};
+use super::class_declarations::{PythonClassDeclaration, is_protocol_or_abc_class};
 use super::decorators::{DecoratorInfo, extract_decorators_from_slice};
 use super::docstrings::{PythonDocstring, docstring_of};
 use super::names::resolve_path_and_terminal_expr;
@@ -213,9 +213,9 @@ impl<'a> PythonFunctionSignature<'a> {
     /// The class whose body directly contains this function (when that `class` is its nearest
     /// enclosing `def` or `class`), or `None` for module-level and nested functions.
     #[must_use]
-    pub fn enclosing_class(&self) -> Option<PythonClassInfo<'a>> {
+    pub fn enclosing_class(&self) -> Option<PythonClassDeclaration<'a>> {
         self.enclosing_class
-            .map(|class_def| PythonClassInfo::from_ast(class_def, self.name_node.file))
+            .map(|class_def| PythonClassDeclaration::from_ast(class_def, self.name_node.file))
     }
 }
 

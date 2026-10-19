@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .model import CLASSES, Cluster, Mutation, Unmutated
+from .model import CLASS_DECLARATIONS, Cluster, Mutation, Unmutated
 
 UNINHERITED_PROTOCOL = "src/code_lint/rules/uninherited_protocol.rs"
 
@@ -14,7 +14,9 @@ CLUSTER = Cluster(
             path=UNINHERITED_PROTOCOL,
             edits=(
                 (
-                    "        .filter(|protocol| !ancestor_names.contains(classes[protocol.index].name.as_str()))\n",
+                    "        .filter(|protocol| {\n"
+                    "            !ancestor_names.contains(classes[protocol.index].declaration().name.as_str())\n"
+                    "        })\n",
                     "",
                 ),
             ),
@@ -37,25 +39,27 @@ CLUSTER = Cluster(
         Mutation(
             label="Protocol classes are not checked (E2a)",
             path=UNINHERITED_PROTOCOL,
-            edits=(("class.is_protocol() || class.is_abc()", "class.is_abc()"),),
+            edits=(("decl.is_protocol() || decl.is_abc()", "decl.is_abc()"),),
             cases=("uninherited_protocol::pass::protocol_redeclaring_methods",),
         ),
         Mutation(
             label="ABC classes are not checked (E2b)",
             path=UNINHERITED_PROTOCOL,
-            edits=(("class.is_protocol() || class.is_abc()", "class.is_protocol()"),),
+            edits=(("decl.is_protocol() || decl.is_abc()", "decl.is_protocol()"),),
             cases=("uninherited_protocol::pass::abc_declaring_methods",),
         ),
         Mutation(
             label="Enum classes are not checked (E3a)",
             path=UNINHERITED_PROTOCOL,
-            edits=(("class.is_enum() || class.is_named_tuple()", "class.is_named_tuple()"),),
+            edits=(
+                ("decl.is_enum() || decl.is_named_tuple()", "decl.is_named_tuple()"),
+            ),
             cases=("uninherited_protocol::pass::enum_defining_methods",),
         ),
         Mutation(
             label="NamedTuple classes are not checked (E3c)",
             path=UNINHERITED_PROTOCOL,
-            edits=(("class.is_enum() || class.is_named_tuple()", "class.is_enum()"),),
+            edits=(("decl.is_enum() || decl.is_named_tuple()", "decl.is_enum()"),),
             cases=("uninherited_protocol::pass::named_tuple_defining_methods",),
         ),
         Mutation(
@@ -72,13 +76,25 @@ CLUSTER = Cluster(
         Mutation(
             label="private and dunder methods are not counted (E5)",
             path=UNINHERITED_PROTOCOL,
-            edits=((".filter(|method| !method.name.starts_with('_'))", ".filter(|_| true)"),),
-            cases=("uninherited_protocol::pass::underscore_prefixed_methods_not_counted",),
+            edits=(
+                (
+                    ".filter(|method| !method.name.starts_with('_'))",
+                    ".filter(|_| true)",
+                ),
+            ),
+            cases=(
+                "uninherited_protocol::pass::underscore_prefixed_methods_not_counted",
+            ),
         ),
         Mutation(
             label="property accessors are not counted, on the Protocol or the class (E6)",
             path=UNINHERITED_PROTOCOL,
-            edits=((".filter(|method| !properties.contains(method.name.as_str()))", ".filter(|_| true)"),),
+            edits=(
+                (
+                    ".filter(|method| !properties.contains(method.name.as_str()))",
+                    ".filter(|_| true)",
+                ),
+            ),
             cases=(
                 "uninherited_protocol::pass::protocol_property_not_counted",
                 "uninherited_protocol::pass::property_not_counted_as_implementation",
@@ -86,14 +102,24 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="a base named `Protocol` outside `typing` is not a Protocol (E7)",
-            path=CLASSES,
-            edits=((".any(|path| PROTOCOL_PATHS.contains(&path.as_str()))", '.any(|path| path.ends_with("Protocol"))'),),
+            path=CLASS_DECLARATIONS,
+            edits=(
+                (
+                    ".any(|path| PROTOCOL_PATHS.contains(&path.as_str()))",
+                    '.any(|path| path.ends_with("Protocol"))',
+                ),
+            ),
             cases=("uninherited_protocol::pass::non_typing_protocol_base",),
         ),
         Mutation(
             label="a Protocol extended by another matched Protocol is not reported (E8)",
             path=UNINHERITED_PROTOCOL,
-            edits=(("    matched.retain(|protocol| !extended.contains(&protocol.index));\n", ""),),
+            edits=(
+                (
+                    "    matched.retain(|protocol| !extended.contains(&protocol.index));\n",
+                    "",
+                ),
+            ),
             cases=("uninherited_protocol::fail::most_derived_protocol_reported",),
         ),
         Mutation(
@@ -101,11 +127,13 @@ CLUSTER = Cluster(
             path=UNINHERITED_PROTOCOL,
             edits=(
                 (
-                    "let is_bare_fake = is_fake_class_name(&class.name)",
-                    "let is_bare_fake = false && is_fake_class_name(&class.name)",
+                    "let is_bare_fake = is_fake_class_name(&decl.name)",
+                    "let is_bare_fake = false && is_fake_class_name(&decl.name)",
                 ),
             ),
-            cases=("uninherited_protocol::pass::bare_fake_left_to_fake_without_protocol",),
+            cases=(
+                "uninherited_protocol::pass::bare_fake_left_to_fake_without_protocol",
+            ),
         ),
     ),
     unmutated=(

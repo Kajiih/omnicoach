@@ -191,13 +191,14 @@ fn check_file(
 fn base_references(classes: &[PythonClassInfo<'_>], index: usize) -> Vec<String> {
     let ancestors = ast::python::local_ancestors(classes, index);
     let names = classes[index]
+        .declaration()
         .bases
         .iter()
         .map(PythonBaseClass::unsubscripted_name)
         .chain(
             ancestors
                 .iter()
-                .map(|&ancestor| classes[ancestor].name.as_str()),
+                .map(|&ancestor| classes[ancestor].declaration().name.as_str()),
         );
     let mut references = Vec::new();
     for name in names {

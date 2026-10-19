@@ -95,13 +95,14 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
     extract_classes(file)
         .into_iter()
         .filter(|class| {
-            is_fake_class_name(&class.name)
-                && class
-                    .bases
-                    .iter()
-                    .all(PythonBaseClass::is_structural_marker)
+            let decl = class.declaration();
+            is_fake_class_name(&decl.name)
+                && decl.bases.iter().all(PythonBaseClass::is_structural_marker)
         })
-        .map(|class| rule.diagnostic_at_node(path, &class.name_node, &[("class", &class.name)]))
+        .map(|class| {
+            let decl = class.declaration();
+            rule.diagnostic_at_node(path, &decl.name_node, &[("class", &decl.name)])
+        })
         .collect()
 }
 

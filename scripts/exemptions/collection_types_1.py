@@ -5,6 +5,7 @@ from __future__ import annotations
 from .model import (
     ANNOTATIONS,
     AST,
+    CLASS_DECLARATIONS,
     CLASSES,
     CONCRETE_COLLECTION_ATTRIBUTE,
     CONCRETE_COLLECTION_PARAMETER,
@@ -368,7 +369,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Protocol class methods and attributes exempt from collection rules",
-            path=CLASSES,
+            path=CLASS_DECLARATIONS,
             edits=(
                 (
                     "    is_protocol_class(class_def, file) || is_abc_class(class_def, file)",
@@ -388,7 +389,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="ABC class methods and attributes exempt from collection rules",
-            path=CLASSES,
+            path=CLASS_DECLARATIONS,
             edits=(
                 (
                     "    is_protocol_class(class_def, file) || is_abc_class(class_def, file)",
@@ -707,7 +708,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="@dataclass classes exempt from inline-public-attribute-annotation",
-            path=CLASSES,
+            path=CLASS_DECLARATIONS,
             edits=(('    "dataclass",\n    "dataclasses.dataclass",\n', ""),),
             cases=(
                 "inline_public_attribute_annotation::pass::dataclass_post_init_inline_annotation_exempt",
@@ -715,7 +716,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="attrs @define classes exempt from inline-public-attribute-annotation",
-            path=CLASSES,
+            path=CLASS_DECLARATIONS,
             edits=(('    "attrs.define",\n', ""),),
             cases=(
                 "inline_public_attribute_annotation::pass::attrs_define_inline_annotation_exempt",
@@ -723,7 +724,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Pydantic BaseModel subclasses exempt from inline-public-attribute-annotation",
-            path=CLASSES,
+            path=CLASS_DECLARATIONS,
             edits=(
                 (
                     "\n"
@@ -744,7 +745,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="aliased Pydantic BaseModel subclasses exempt from inline-public-attribute-annotation",
-            path=CLASSES,
+            path=CLASS_DECLARATIONS,
             edits=(
                 (
                     "        || resolved_base_class_paths(class_def, file)\n"

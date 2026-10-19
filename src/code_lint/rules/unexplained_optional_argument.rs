@@ -150,7 +150,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         }
     }
     for class in ast::python::extract_classes(file) {
-        let Some(docstring) = &class.docstring else {
+        let Some(docstring) = &class.declaration().docstring else {
             continue;
         };
         let constructor_parameters = class

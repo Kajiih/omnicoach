@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from .model import (
     CALLS,
-    CLASSES,
+    CLASS_DECLARATIONS,
     DECORATORS,
     ERROR_LOG_IN_EXCEPT,
     PY_CALLS,
@@ -91,7 +91,7 @@ CLUSTER = Cluster(
         # --- mutable-dataclass & unslotted-dataclass ---
         Mutation(
             label="dataclass passing required keyword argument exempt from mutable-dataclass and unslotted-dataclass",
-            path=CLASSES,
+            path=CLASS_DECLARATIONS,
             edits=(
                 (
                     "        self.dataclass_decorator()\n"
@@ -123,7 +123,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="undecorated class exempt from mutable-dataclass and unslotted-dataclass",
-            path=CLASSES,
+            path=CLASS_DECLARATIONS,
             edits=(
                 (
                     "        self.dataclass_decorator()\n"
@@ -139,7 +139,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="class with non-dataclass decorator exempt from mutable-dataclass and unslotted-dataclass",
-            path=CLASSES,
+            path=CLASS_DECLARATIONS,
             edits=(
                 (
                     "        self.decorators\n"
@@ -155,7 +155,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="non-stdlib `dataclass` decorator exempt from mutable-dataclass and unslotted-dataclass",
-            path=CLASSES,
+            path=CLASS_DECLARATIONS,
             edits=(
                 (
                     ".find(|decorator| decorator.matches_any(DATACLASS_DECORATOR_PATHS))",

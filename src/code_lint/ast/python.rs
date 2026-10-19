@@ -3,6 +3,7 @@
 mod annotations;
 mod bindings;
 mod calls;
+mod class_declarations;
 mod classes;
 mod complexity;
 mod declaration_order;
@@ -31,9 +32,10 @@ pub use self::annotations::{
 pub(super) use self::bindings::collect_bindings;
 pub(super) use self::calls::collect_call_candidates;
 pub use self::calls::{PythonEnvironSubscript, call_callee, collect_environ_subscripts};
+pub use self::class_declarations::{PythonBaseClass, PythonClassDeclaration};
 pub use self::classes::{
-    PythonAnnotatedAttribute, PythonAttributeDefinition, PythonBaseClass, PythonClassInfo,
-    PythonInheritedDocstring, PythonInstanceAttributeAnnotation, collect_class_attributes,
+    PythonAnnotatedAttribute, PythonAttributeDefinition, PythonClassInfo, PythonInheritedDocstring,
+    PythonInstanceAttributeAnnotation, collect_class_attributes,
     collect_instance_attribute_annotations, extract_classes, inherited_method_docstring,
     is_fake_class_name, local_ancestors, local_base_classes,
 };
