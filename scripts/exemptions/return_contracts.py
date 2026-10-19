@@ -247,7 +247,7 @@ CLUSTER = Cluster(
         Unmutated(
             label="1-tuples and `()` are not positional tuples (Rust, E1)",
             reason=(
-                "Guarded twice: `RustFunction::return_shape` only reports tuples of two or more elements, and"
+                "Guarded twice: `return_shape` only reports tuples of two or more elements, and"
                 " `min-elements` rejects shorter ones, so no single edit flags them."
             ),
             cases=("positional_tuple_return::pass::short_tuple_exempt",),

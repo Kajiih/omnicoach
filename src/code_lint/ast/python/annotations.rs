@@ -557,7 +557,7 @@ pub fn generator_yield_type<'a>(return_type_node: &AstNode<'a>) -> Option<AstNod
 /// Returns true if `type_node` (flattened across `|`, `Union[...]`, `Optional[...]` and
 /// `Annotated[T, ...]`) includes `None`, `bool` or `Callable`.
 #[must_use]
-pub fn is_non_obvious_parameter_type(type_node: &AstNode<'_>) -> bool {
+pub fn includes_none_bool_or_callable(type_node: &AstNode<'_>) -> bool {
     let file = type_node.file;
     let Some(expr) = find_expr(type_node) else {
         return false;
@@ -774,10 +774,10 @@ fn is_std_type_constructor_prefix(path: &str, terminal: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::calls::call_callee;
+    use super::super::functions::extract_function_signatures;
+    use super::super::literals::collect_module_assignments;
     use super::*;
-    use crate::code_lint::ast::python::{
-        call_callee, collect_module_assignments, extract_function_signatures,
-    };
     use crate::diagnostic::Language;
     use rstest::rstest;
 
