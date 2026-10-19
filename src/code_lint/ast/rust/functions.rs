@@ -305,21 +305,7 @@ fn extract_path_type_generics(
     let base_end: usize = name_ref.syntax().text_range().end().into();
     let base_span = SourceSpan::new(base_start, base_end);
     let normalized = normalize_type_path_text(&file.source[base_start..base_end])?;
-    let base_resolved = match super::resolve_name(file, &normalized.path) {
-        super::ResolvedName::Imported(resolved) => {
-            let resolved_terminal = resolved
-                .rsplit("::")
-                .next()
-                .unwrap_or(resolved.as_str())
-                .to_owned();
-            QualifiedName {
-                path: resolved,
-                terminal: resolved_terminal,
-            }
-        }
-        super::ResolvedName::Local => return None,
-        super::ResolvedName::Unbound => normalized,
-    };
+    let base_resolved = normalized.resolve(file)?;
     let type_arguments = generic_args
         .generic_args()
         .filter_map(|generic_arg| match generic_arg {
@@ -345,15 +331,7 @@ fn normalize_type_path_text(raw_text: &str) -> Option<QualifiedName> {
         .strip_prefix("::")
         .unwrap_or(compact.as_str())
         .to_owned();
-    let terminal = normalized
-        .rsplit("::")
-        .next()
-        .unwrap_or(normalized.as_str())
-        .to_owned();
-    Some(QualifiedName {
-        path: normalized,
-        terminal,
-    })
+    Some(QualifiedName::from_path(normalized, "::"))
 }
 
 #[cfg(test)]

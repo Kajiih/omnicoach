@@ -45,10 +45,7 @@ pub(in crate::code_lint::ast) struct ImportMap {
 /// plain identifier (`foo()`, `x[0]`, a Rust method callee `a.b`) is [`ResolvedName::Unbound`].
 #[must_use]
 pub fn resolve_name(file: &ParsedFile, name: &str) -> ResolvedName {
-    let separator = match file.lang() {
-        Language::Python => ".",
-        Language::Rust => "::",
-    };
+    let separator = path_separator(file.lang());
     let (head, rest) = name
         .split_once(separator)
         .map_or((name, None), |(head, rest)| (head, Some(rest)));
@@ -64,6 +61,14 @@ pub fn resolve_name(file: &ParsedFile, name: &str) -> ResolvedName {
             rest.map_or_else(|| path.clone(), |rest| format!("{path}{separator}{rest}")),
         )
     })
+}
+
+/// The separator between the segments of a path in `lang` (`.` or `::`).
+pub(super) const fn path_separator(lang: Language) -> &'static str {
+    match lang {
+        Language::Python => ".",
+        Language::Rust => "::",
+    }
 }
 
 /// Returns true if `text` is a non-empty identifier (`[A-Za-z_][A-Za-z0-9_]*`, Unicode letters

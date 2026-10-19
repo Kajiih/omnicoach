@@ -42,6 +42,7 @@ pub(in crate::code_lint::ast) use self::test_analysis::{
     TestStatementRole, has_multi_phase_interleaving, is_assertion_function_name,
     normalize_statement_text, resolve_assertion_helpers,
 };
+use imports::path_separator;
 pub use imports::{ResolvedName, resolve_name};
 
 use crate::diagnostic::{Language, LineColumn, LineIndex, SourceLocation, SourceSpan};
@@ -84,6 +85,30 @@ pub(in crate::code_lint::ast) struct QualifiedName {
     pub(in crate::code_lint::ast) path: String,
     /// The last segment of `path`.
     pub(in crate::code_lint::ast) terminal: String,
+}
+
+impl QualifiedName {
+    /// Builds a name whose terminal is the part of `path` after its last `separator`.
+    pub(in crate::code_lint::ast) fn from_path(path: String, separator: &str) -> Self {
+        let terminal = path
+            .rsplit_once(separator)
+            .map_or(path.as_str(), |(_, terminal)| terminal)
+            .to_owned();
+        Self { path, terminal }
+    }
+
+    /// Resolves `path` through the imports of `file` (`t.List` after `import typing as t` is
+    /// `typing.List` with terminal `List`), or `None` if it names a definition of `file`
+    /// (see [`resolve_name`]).
+    pub(in crate::code_lint::ast) fn resolve(self, file: &ParsedFile) -> Option<Self> {
+        match resolve_name(file, &self.path) {
+            ResolvedName::Imported(resolved) => {
+                Some(Self::from_path(resolved, path_separator(file.lang())))
+            }
+            ResolvedName::Local => None,
+            ResolvedName::Unbound => Some(self),
+        }
+    }
 }
 
 /// Syntactic context surrounding a call expression, shared across [`AstCallCandidate`] and

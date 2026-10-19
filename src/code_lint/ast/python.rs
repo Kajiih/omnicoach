@@ -67,9 +67,7 @@ pub(super) use self::test_analysis::{
     collect_test_setup_scopes, collect_test_to_test_calls,
 };
 
-use crate::code_lint::ast::{
-    AstNode, ParsedFile, QualifiedName, ResolvedName, resolve_name, span_from_ruff_range,
-};
+use crate::code_lint::ast::{AstNode, ParsedFile, QualifiedName, span_from_ruff_range};
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Decorator, Expr, ModModule, Stmt};
@@ -272,26 +270,12 @@ pub(super) fn resolve_path_and_terminal_expr(expr: &Expr, source: &str) -> Quali
 
 /// The name that `expr` names, resolved through the imports of `file`
 /// (`t.List` after `import typing as t` is `typing.List` with terminal `List`), or `None`
-/// if it names a definition of `file` (see [`resolve_name`]).
+/// if it names a definition of `file` (see [`QualifiedName::resolve`]).
 pub(super) fn resolved_path_and_terminal_expr(
     expr: &Expr,
     file: &ParsedFile,
 ) -> Option<QualifiedName> {
-    let name = resolve_path_and_terminal_expr(expr, &file.source);
-    match resolve_name(file, &name.path) {
-        ResolvedName::Imported(resolved) => {
-            let terminal = resolved
-                .rsplit_once('.')
-                .map_or(resolved.as_str(), |(_, terminal)| terminal)
-                .to_owned();
-            Some(QualifiedName {
-                path: resolved,
-                terminal,
-            })
-        }
-        ResolvedName::Local => None,
-        ResolvedName::Unbound => Some(name),
-    }
+    resolve_path_and_terminal_expr(expr, &file.source).resolve(file)
 }
 
 /// Resolves the byte span of the header of the innermost Python statement enclosing `span`.

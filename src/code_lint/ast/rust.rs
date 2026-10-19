@@ -32,8 +32,7 @@ pub(super) use self::test_analysis::{
 };
 
 use crate::code_lint::ast::{
-    AstNode, ParsedFile, QualifiedName, ResolvedName, is_assertion_function_name, resolve_name,
-    span_from_rowan_range,
+    AstNode, ParsedFile, QualifiedName, is_assertion_function_name, span_from_rowan_range,
 };
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast;

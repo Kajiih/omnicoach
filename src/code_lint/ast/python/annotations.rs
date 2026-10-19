@@ -239,7 +239,7 @@ pub(super) fn is_bare_final_annotation_expr(type_expr: &Expr, file: &ParsedFile)
 /// Collects the standard-library collection types in `type_node` according to `depth`, in
 /// source order and deduplicated by path.
 ///
-/// Names are resolved through the file's imports (see [`super::resolve_name`]), so
+/// Names are resolved through the file's imports (see [`crate::code_lint::ast::resolve_name`]), so
 /// `from collections.abc import Set` makes `Set` the abstract `collections.abc.Set` rather than
 /// the concrete `typing.Set`, and a locally defined `class Set` is not a collection type.
 #[must_use]

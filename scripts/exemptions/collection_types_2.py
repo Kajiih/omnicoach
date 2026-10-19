@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from .model import (
     ANNOTATIONS,
+    AST,
     FUNCTIONS,
     MUTABLE_COLLECTION_ATTRIBUTE,
     MUTABLE_MODULE_CONSTANT,
     NULLABLE_COLLECTION_RETURN,
     PARAMETER_USAGE,
     PY_LITERALS,
-    PYTHON,
     RETURNS,
     RS_FUNCTIONS,
     Cluster,
@@ -437,11 +437,11 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust locally defined type shadowing a collection name exempt from nullable-collection-return",
-            path=RS_FUNCTIONS,
+            path=AST,
             edits=(
                 (
-                    "        super::ResolvedName::Local => return None,",
-                    "        super::ResolvedName::Local => normalized,",
+                    "            ResolvedName::Local => None,",
+                    "            ResolvedName::Local => Some(self),",
                 ),
             ),
             cases=("nullable_collection_return::pass::locally_shadowed_vec_exempt",),
@@ -642,20 +642,13 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="from collections.abc import Set exempts unqualified Set in mutable-module-constant",
-            path=PYTHON,
+            path=AST,
             edits=(
                 (
-                    "        ResolvedName::Imported(resolved) => {\n"
-                    "            let terminal = resolved\n"
-                    "                .rsplit_once('.')\n"
-                    "                .map_or(resolved.as_str(), |(_, terminal)| terminal)\n"
-                    "                .to_owned();\n"
-                    "            Some(QualifiedName {\n"
-                    "                path: resolved,\n"
-                    "                terminal,\n"
-                    "            })\n"
-                    "        }",
-                    "        ResolvedName::Imported(_) => Some(name),",
+                    "            ResolvedName::Imported(resolved) => {\n"
+                    "                Some(Self::from_path(resolved, path_separator(file.lang())))\n"
+                    "            }",
+                    "            ResolvedName::Imported(_) => Some(self),",
                 ),
             ),
             cases=(

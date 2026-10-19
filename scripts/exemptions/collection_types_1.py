@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from .model import (
     ANNOTATIONS,
+    AST,
     CLASSES,
     CONCRETE_COLLECTION_ATTRIBUTE,
     CONCRETE_COLLECTION_PARAMETER,
     FUNCTIONS,
     INLINE_PUBLIC_ATTRIBUTE_ANNOTATION,
     PARAMETER_USAGE,
-    PYTHON,
     SPECIFIC_COLLECTION_PARAMETER,
     Cluster,
     Mutation,
@@ -83,7 +83,9 @@ CLUSTER = Cluster(
                     "    } else {\n        CollectionKind::ConcreteMutable\n    };",
                 ),
             ),
-            cases=("concrete_collection_parameter::pass::non_collection_builtin_types",),
+            cases=(
+                "concrete_collection_parameter::pass::non_collection_builtin_types",
+            ),
         ),
         Mutation(
             label="collections.abc.Set distinguished from typing.Set in concrete-collection-*",
@@ -124,7 +126,9 @@ CLUSTER = Cluster(
                     "            }",
                 ),
             ),
-            cases=("concrete_collection_parameter::pass::annotated_metadata_with_list_ignored",),
+            cases=(
+                "concrete_collection_parameter::pass::annotated_metadata_with_list_ignored",
+            ),
         ),
         Mutation(
             label="contravariant Callable parameter list ignored by collect_collection_types",
@@ -152,20 +156,22 @@ CLUSTER = Cluster(
                     "                    }",
                 ),
             ),
-            cases=("concrete_collection_parameter::pass::callable_contravariant_parameter_ignored",),
+            cases=(
+                "concrete_collection_parameter::pass::callable_contravariant_parameter_ignored",
+            ),
         ),
         Mutation(
             label="invariant mutable outer containers not traversed covariantly",
             path=ANNOTATIONS,
             edits=(
                 (
-                    "                    \"AsyncGenerator\" => {\n"
+                    '                    "AsyncGenerator" => {\n'
                     "                        if let Some(yield_arg) = type_args.first() {\n"
                     "                            collect_collection_types_expr(yield_arg, file, depth, out);\n"
                     "                        }\n"
                     "                    }\n"
                     "                    _ => {}",
-                    "                    \"AsyncGenerator\" => {\n"
+                    '                    "AsyncGenerator" => {\n'
                     "                        if let Some(yield_arg) = type_args.first() {\n"
                     "                            collect_collection_types_expr(yield_arg, file, depth, out);\n"
                     "                        }\n"
@@ -177,7 +183,9 @@ CLUSTER = Cluster(
                     "                    }",
                 ),
             ),
-            cases=("concrete_collection_parameter::pass::invariant_mutable_outer_container_ignored",),
+            cases=(
+                "concrete_collection_parameter::pass::invariant_mutable_outer_container_ignored",
+            ),
         ),
         Mutation(
             label="unknown custom generics not traversed covariantly",
@@ -191,13 +199,13 @@ CLUSTER = Cluster(
                     "            if depth == AnnotationTraversalDepth::CovariantPositions {",
                 ),
                 (
-                    "                    \"AsyncGenerator\" => {\n"
+                    '                    "AsyncGenerator" => {\n'
                     "                        if let Some(yield_arg) = type_args.first() {\n"
                     "                            collect_collection_types_expr(yield_arg, file, depth, out);\n"
                     "                        }\n"
                     "                    }\n"
                     "                    _ => {}",
-                    "                    \"AsyncGenerator\" => {\n"
+                    '                    "AsyncGenerator" => {\n'
                     "                        if let Some(yield_arg) = type_args.first() {\n"
                     "                            collect_collection_types_expr(yield_arg, file, depth, out);\n"
                     "                        }\n"
@@ -209,25 +217,44 @@ CLUSTER = Cluster(
                     "                    }",
                 ),
             ),
-            cases=("concrete_collection_parameter::pass::unknown_custom_generic_ignored",),
+            cases=(
+                "concrete_collection_parameter::pass::unknown_custom_generic_ignored",
+            ),
         ),
         Mutation(
             label="local class definition shadowing typing name exempt from collection classification",
-            path=PYTHON,
-            edits=(("        ResolvedName::Local => None,", "        ResolvedName::Local => Some(name),"),),
-            cases=("concrete_collection_parameter::pass::local_class_shadows_typing_name",),
+            path=AST,
+            edits=(
+                (
+                    "            ResolvedName::Local => None,",
+                    "            ResolvedName::Local => Some(self),",
+                ),
+            ),
+            cases=(
+                "concrete_collection_parameter::pass::local_class_shadows_typing_name",
+            ),
         ),
         # --- Signature, parameter, decorator, and class exemptions ---
         Mutation(
             label="variadic *args parameter exempt from concrete-collection-parameter",
             path=FUNCTIONS,
-            edits=(("PythonParameterKind::VarPositional,", "PythonParameterKind::Positional,"),),
+            edits=(
+                (
+                    "PythonParameterKind::VarPositional,",
+                    "PythonParameterKind::Positional,",
+                ),
+            ),
             cases=("concrete_collection_parameter::pass::variadic_args_exempt",),
         ),
         Mutation(
             label="variadic **kwargs parameter exempt from concrete-collection-parameter",
             path=FUNCTIONS,
-            edits=(("PythonParameterKind::VarKeyword,", "PythonParameterKind::Positional,"),),
+            edits=(
+                (
+                    "PythonParameterKind::VarKeyword,",
+                    "PythonParameterKind::Positional,",
+                ),
+            ),
             cases=("concrete_collection_parameter::pass::variadic_kwargs_exempt",),
         ),
         Mutation(
@@ -244,7 +271,12 @@ CLUSTER = Cluster(
         Mutation(
             label="@override decorator exempt from Python signature rules",
             path=FUNCTIONS,
-            edits=(('    "override",\n    "typing.override",\n    "typing_extensions.override",\n', ""),),
+            edits=(
+                (
+                    '    "override",\n    "typing.override",\n    "typing_extensions.override",\n',
+                    "",
+                ),
+            ),
             cases=(
                 "concrete_collection_parameter::pass::override_exempt",
                 "concrete_collection_return::pass::override_exempt",
@@ -258,7 +290,12 @@ CLUSTER = Cluster(
         Mutation(
             label="@overload decorator exempt from Python signature rules",
             path=FUNCTIONS,
-            edits=(('    "overload",\n    "typing.overload",\n    "typing_extensions.overload",\n', ""),),
+            edits=(
+                (
+                    '    "overload",\n    "typing.overload",\n    "typing_extensions.overload",\n',
+                    "",
+                ),
+            ),
             cases=(
                 "concrete_collection_parameter::pass::overload_exempt",
                 "concrete_collection_return::pass::overload_exempt",
@@ -284,7 +321,12 @@ CLUSTER = Cluster(
         Mutation(
             label="@pytest.fixture decorator exempt from Python signature rules",
             path=FUNCTIONS,
-            edits=(('    "fixture",\n    "pytest.fixture",\n    "pytest_asyncio.fixture",\n', ""),),
+            edits=(
+                (
+                    '    "fixture",\n    "pytest.fixture",\n    "pytest_asyncio.fixture",\n',
+                    "",
+                ),
+            ),
             cases=(
                 "concrete_collection_parameter::pass::pytest_fixture_exempt",
                 "nullable_collection_return::pass::pytest_fixture_exempt",
@@ -376,8 +418,15 @@ CLUSTER = Cluster(
         Mutation(
             label="len() call requires Collection capability in specific-collection-parameter",
             path=PARAMETER_USAGE,
-            edits=(("BUILTIN_LEN => Some(UseRole::Sized),", "BUILTIN_LEN => Some(UseRole::Identity),"),),
-            cases=("specific_collection_parameter::pass::collection_parameter_with_len",),
+            edits=(
+                (
+                    "BUILTIN_LEN => Some(UseRole::Sized),",
+                    "BUILTIN_LEN => Some(UseRole::Identity),",
+                ),
+            ),
+            cases=(
+                "specific_collection_parameter::pass::collection_parameter_with_len",
+            ),
         ),
         Mutation(
             label="`in` membership test requires Collection capability in specific-collection-parameter",
@@ -390,7 +439,9 @@ CLUSTER = Cluster(
                     "                UseRole::Identity",
                 ),
             ),
-            cases=("specific_collection_parameter::pass::collection_parameter_with_membership",),
+            cases=(
+                "specific_collection_parameter::pass::collection_parameter_with_membership",
+            ),
         ),
         Mutation(
             label="truthiness check requires Collection capability in specific-collection-parameter",
@@ -401,7 +452,9 @@ CLUSTER = Cluster(
                     "UseRole::Sized => usage.needs_collection = true,\n            UseRole::Truthiness => {}",
                 ),
             ),
-            cases=("specific_collection_parameter::pass::collection_parameter_with_truthiness_check",),
+            cases=(
+                "specific_collection_parameter::pass::collection_parameter_with_truthiness_check",
+            ),
         ),
         Mutation(
             label="multiple iteration passes require Collection capability in specific-collection-parameter",
@@ -416,7 +469,9 @@ CLUSTER = Cluster(
                     "        } else if self.iteration_count >= 1 {",
                 ),
             ),
-            cases=("specific_collection_parameter::pass::collection_parameter_with_multiple_passes",),
+            cases=(
+                "specific_collection_parameter::pass::collection_parameter_with_multiple_passes",
+            ),
         ),
         Mutation(
             label="reversed() call requires Sequence capability in specific-collection-parameter",
@@ -447,7 +502,9 @@ CLUSTER = Cluster(
                     "            }",
                 ),
             ),
-            cases=("specific_collection_parameter::pass::count_method_requires_sequence",),
+            cases=(
+                "specific_collection_parameter::pass::count_method_requires_sequence",
+            ),
         ),
         Mutation(
             label=".index() method call requires Sequence capability in specific-collection-parameter",
@@ -465,7 +522,9 @@ CLUSTER = Cluster(
                     "            }",
                 ),
             ),
-            cases=("specific_collection_parameter::pass::index_method_requires_sequence",),
+            cases=(
+                "specific_collection_parameter::pass::index_method_requires_sequence",
+            ),
         ),
         Mutation(
             label="subscript indexing requires Sequence capability in specific-collection-parameter",
@@ -515,7 +574,9 @@ CLUSTER = Cluster(
                     'ParameterCollectionCapability::Unused | ParameterCollectionCapability::Iterable => "collections.abc.Iterable",',
                 ),
             ),
-            cases=("specific_collection_parameter::pass::unused_parameter_not_flagged",),
+            cases=(
+                "specific_collection_parameter::pass::unused_parameter_not_flagged",
+            ),
         ),
         # --- inline-public-attribute-annotation ---
         Mutation(
@@ -527,7 +588,9 @@ CLUSTER = Cluster(
                     "true",
                 ),
             ),
-            cases=("inline_public_attribute_annotation::pass::inline_private_attribute_annotations_exempt",),
+            cases=(
+                "inline_public_attribute_annotation::pass::inline_private_attribute_annotations_exempt",
+            ),
         ),
         Mutation(
             label="bare Final inline annotation exempt from inline-public-attribute-annotation",
@@ -549,7 +612,9 @@ CLUSTER = Cluster(
                     "    let unwrapped = type_expr;",
                 ),
             ),
-            cases=("inline_public_attribute_annotation::pass::annotated_wrapped_bare_final_exempt",),
+            cases=(
+                "inline_public_attribute_annotation::pass::annotated_wrapped_bare_final_exempt",
+            ),
         ),
         Mutation(
             label="aliased bare Final inline annotation exempt from inline-public-attribute-annotation",
@@ -560,18 +625,30 @@ CLUSTER = Cluster(
                     "    Some(super::resolve_path_and_terminal_expr(unwrapped, &file.source))\n",
                 ),
             ),
-            cases=("inline_public_attribute_annotation::pass::aliased_bare_final_inline_annotation_exempt",),
+            cases=(
+                "inline_public_attribute_annotation::pass::aliased_bare_final_inline_annotation_exempt",
+            ),
         ),
         Mutation(
             label="@staticmethod methods exempt from inline-public-attribute-annotation",
             path=FUNCTIONS,
-            edits=(('decorator.matches_any(&["staticmethod", "builtins.staticmethod"])', "false"),),
+            edits=(
+                (
+                    'decorator.matches_any(&["staticmethod", "builtins.staticmethod"])',
+                    "false",
+                ),
+            ),
             cases=("inline_public_attribute_annotation::pass::staticmethod_exempt",),
         ),
         Mutation(
             label="@classmethod methods exempt from inline-public-attribute-annotation",
             path=FUNCTIONS,
-            edits=(('decorator.matches_any(&["classmethod", "builtins.classmethod"])', "false"),),
+            edits=(
+                (
+                    'decorator.matches_any(&["classmethod", "builtins.classmethod"])',
+                    "false",
+                ),
+            ),
             cases=("inline_public_attribute_annotation::pass::classmethod_exempt",),
         ),
         Mutation(
@@ -585,7 +662,9 @@ CLUSTER = Cluster(
                     "",
                 ),
             ),
-            cases=("inline_public_attribute_annotation::pass::cls_first_parameter_method_exempt",),
+            cases=(
+                "inline_public_attribute_annotation::pass::cls_first_parameter_method_exempt",
+            ),
         ),
         Mutation(
             label="methods whose first parameter is not a positional receiver exempt from inline-public-attribute-annotation",
@@ -598,13 +677,17 @@ CLUSTER = Cluster(
                     "",
                 ),
             ),
-            cases=("inline_public_attribute_annotation::pass::keyword_only_self_parameter_method_exempt",),
+            cases=(
+                "inline_public_attribute_annotation::pass::keyword_only_self_parameter_method_exempt",
+            ),
         ),
         Mutation(
             label="annotated attributes on objects other than self exempt from inline-public-attribute-annotation",
             path=CLASSES,
             edits=(("&& object.id == SELF_RECEIVER", ""),),
-            cases=("inline_public_attribute_annotation::pass::other_object_attribute_annotation_exempt",),
+            cases=(
+                "inline_public_attribute_annotation::pass::other_object_attribute_annotation_exempt",
+            ),
         ),
         Mutation(
             label="nested functions inside methods not entered by collect_self_annotated_assignments",
@@ -617,19 +700,25 @@ CLUSTER = Cluster(
                     "                Stmt::AnnAssign(ann) => {",
                 ),
             ),
-            cases=("inline_public_attribute_annotation::pass::nested_function_inside_method_not_entered",),
+            cases=(
+                "inline_public_attribute_annotation::pass::nested_function_inside_method_not_entered",
+            ),
         ),
         Mutation(
             label="@dataclass classes exempt from inline-public-attribute-annotation",
             path=CLASSES,
             edits=(('    "dataclass",\n    "dataclasses.dataclass",\n', ""),),
-            cases=("inline_public_attribute_annotation::pass::dataclass_post_init_inline_annotation_exempt",),
+            cases=(
+                "inline_public_attribute_annotation::pass::dataclass_post_init_inline_annotation_exempt",
+            ),
         ),
         Mutation(
             label="attrs @define classes exempt from inline-public-attribute-annotation",
             path=CLASSES,
             edits=(('    "attrs.define",\n', ""),),
-            cases=("inline_public_attribute_annotation::pass::attrs_define_inline_annotation_exempt",),
+            cases=(
+                "inline_public_attribute_annotation::pass::attrs_define_inline_annotation_exempt",
+            ),
         ),
         Mutation(
             label="Pydantic BaseModel subclasses exempt from inline-public-attribute-annotation",
@@ -648,7 +737,9 @@ CLUSTER = Cluster(
                     "",
                 ),
             ),
-            cases=("inline_public_attribute_annotation::pass::pydantic_base_model_inline_annotation_exempt",),
+            cases=(
+                "inline_public_attribute_annotation::pass::pydantic_base_model_inline_annotation_exempt",
+            ),
         ),
         Mutation(
             label="aliased Pydantic BaseModel subclasses exempt from inline-public-attribute-annotation",
@@ -671,7 +762,9 @@ CLUSTER = Cluster(
                     '                    "BaseModel" | "pydantic.BaseModel" | "pydantic.main.BaseModel"',
                 ),
             ),
-            cases=("inline_public_attribute_annotation::pass::aliased_pydantic_base_model_inline_annotation_exempt",),
+            cases=(
+                "inline_public_attribute_annotation::pass::aliased_pydantic_base_model_inline_annotation_exempt",
+            ),
         ),
     ),
     unmutated=(
