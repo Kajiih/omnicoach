@@ -103,9 +103,9 @@ pub struct PythonFunctionSignature<'a> {
     pub parameters: Vec<PythonParameterInfo<'a>>,
     /// Return type annotation AST node (`-> <type>`), if present.
     pub return_type_node: Option<AstNode<'a>>,
-    /// True if the function is decorated with an exempt signature decorator
-    /// ([`has_exempt_signature_decorator`]).
-    pub(super) has_exempt_signature_decorator: bool,
+    /// True if the function is decorated with a decorator that imposes its signature
+    /// ([`has_imposed_signature_decorator`]).
+    pub(super) has_imposed_signature_decorator: bool,
     /// True if the body is a stub ([`is_stub_body`]).
     pub(super) has_stub_body: bool,
     /// The `class` whose body contains this function when it is the nearest enclosing `def` or
@@ -124,7 +124,7 @@ impl PythonFunctionSignature<'_> {
     /// `@<property>.setter`.
     #[must_use]
     pub fn has_imposed_signature(&self) -> bool {
-        is_exempt_dunder_method(&self.name) || self.has_exempt_signature_decorator
+        is_data_model_dunder(&self.name) || self.has_imposed_signature_decorator
     }
 
     /// Returns true if the function is decorated with `@override` (`typing.override` or
@@ -159,13 +159,20 @@ impl PythonFunctionSignature<'_> {
             })
     }
 
-    /// Returns true if the function is documented elsewhere, so docstring rules skip it: a
-    /// data-model dunder method other than `__init__`, `__new__`, and `__call__` (documented by
-    /// the data model), an `@override` method (documented on the base method), or a
-    /// `@<property>.setter` / `@<property>.deleter` accessor (documented on the getter).
+    /// Returns true if the function body is a stub consisting only of an optional docstring
+    /// and `...`, `pass`, or `raise NotImplementedError`.
     #[must_use]
-    pub fn is_exempt_from_docstring_rules(&self) -> bool {
-        is_exempt_dunder_method(&self.name)
+    pub const fn has_stub_body(&self) -> bool {
+        self.has_stub_body
+    }
+
+    /// Returns true if the function is documented elsewhere: a data-model dunder method other
+    /// than `__init__`, `__new__`, and `__call__` (documented by the Python data model), an
+    /// `@override` method (documented on the base method), or a `@<property>.setter` /
+    /// `@<property>.deleter` accessor (documented on the getter).
+    #[must_use]
+    pub fn is_documented_elsewhere(&self) -> bool {
+        is_data_model_dunder(&self.name)
             || extract_decorators_from_slice(&self.definition.decorator_list, self.name_node.file)
                 .iter()
                 .any(|decorator| {
@@ -209,7 +216,7 @@ const PROPERTY_DECORATOR_PATHS: &[&str] = &[
 ];
 const OVERRIDE_DECORATOR_PATHS: &[&str] =
     &["override", "typing.override", "typing_extensions.override"];
-const EXEMPT_SIGNATURE_DECORATOR_PATHS: &[&str] = &[
+const IMPOSED_SIGNATURE_DECORATOR_PATHS: &[&str] = &[
     "override",
     "typing.override",
     "typing_extensions.override",
@@ -322,7 +329,7 @@ pub(super) fn function_signature<'a>(
             .returns
             .as_ref()
             .map(|ret| AstNode::from_span(file, span_from_ruff_range(ret.range()))),
-        has_exempt_signature_decorator: has_exempt_signature_decorator(&decorators),
+        has_imposed_signature_decorator: has_imposed_signature_decorator(&decorators),
         has_stub_body: is_stub_body(&func_def.body, &file.source),
         enclosing_class,
         enclosing_function,
@@ -334,9 +341,9 @@ pub(super) fn function_signature<'a>(
 /// `@fixture` (`@pytest.fixture`), `@<function>.register` (`functools.singledispatch`
 /// implementations, which dispatch on their annotations), or `@<property>.setter` (whose value
 /// type mirrors the getter's return type).
-fn has_exempt_signature_decorator(decorators: &[DecoratorInfo]) -> bool {
+fn has_imposed_signature_decorator(decorators: &[DecoratorInfo]) -> bool {
     decorators.iter().any(|decorator| {
-        decorator.matches_any(EXEMPT_SIGNATURE_DECORATOR_PATHS)
+        decorator.matches_any(IMPOSED_SIGNATURE_DECORATOR_PATHS)
             || decorator.is_attribute_named(&["register", SETTER_ATTRIBUTE])
     })
 }
@@ -590,7 +597,7 @@ pub fn find_nested_classes(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
 /// Returns true if `func_name` is a Python Data Model dunder method with a fixed signature
 /// (all `__*__` methods except constructors `__init__` and `__new__`, and `__call__`, whose
 /// signature is designed by the class author).
-fn is_exempt_dunder_method(func_name: &str) -> bool {
+fn is_data_model_dunder(func_name: &str) -> bool {
     func_name.starts_with("__")
         && func_name.ends_with("__")
         && func_name.len() > 4

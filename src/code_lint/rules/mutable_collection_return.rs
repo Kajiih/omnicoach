@@ -4,10 +4,9 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     AnnotationTraversalDepth, CollectionKind, PythonCollectionType, collect_collection_types,
     collect_locally_mutated_return_functions, extract_function_signatures,
-    is_exempt_from_signature_rules,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::code_lint::policy::read_only_collection_replacements;
+use crate::code_lint::policy::{is_exempt_from_signature_rules, read_only_collection_replacements};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, EnforcementMode, Example, ImpactedQuality,

@@ -146,7 +146,7 @@ fn check_file(
         .filter(|signature| {
             signature.docstring().is_none()
                 && !signature.is_nested()
-                && !signature.is_exempt_from_docstring_rules()
+                && !signature.is_documented_elsewhere()
                 && !signature.is_documented_by_enclosing_class()
         })
         .filter_map(|signature| {

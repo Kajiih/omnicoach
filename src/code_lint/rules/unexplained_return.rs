@@ -134,7 +134,7 @@ fn check_file(
         .into_iter()
         .filter(|signature| {
             !signature.is_nested()
-                && !signature.is_exempt_from_docstring_rules()
+                && !signature.is_documented_elsewhere()
                 && !signature.is_property_getter()
                 && signature.docstring().is_some_and(|docstring| {
                     !docstring.describes_result() && has_non_obvious_result(signature, &docstring)

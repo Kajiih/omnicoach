@@ -34,8 +34,7 @@ pub use self::calls::{PythonEnvironSubscript, call_callee, collect_environ_subsc
 pub use self::classes::{
     PythonAnnotatedAttribute, PythonAttributeDefinition, PythonBaseClass, PythonClassInfo,
     PythonInheritedDocstring, PythonInstanceAttributeAnnotation, enclosing_class, extract_classes,
-    inherited_method_docstring, is_exempt_from_body_usage_rules, is_exempt_from_signature_rules,
-    local_ancestors, local_base_classes,
+    inherited_method_docstring, is_interface_method, local_ancestors, local_base_classes,
 };
 pub use self::complexity::PythonComplexityMetric;
 pub use self::declaration_order::{

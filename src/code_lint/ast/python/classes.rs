@@ -1,6 +1,5 @@
 //! Python class model: the class declaration (name, bases, decorators, docstring, and the kinds
-//! they declare), its members and hierarchy, a function's role in its enclosing class, and
-//! class/instance attribute walkers.
+//! they declare), its members and hierarchy, and a function's role in its enclosing class.
 
 use super::annotations::is_bare_final_annotation_expr;
 use super::decorators::{DecoratorInfo, extract_decorators_from_slice};
@@ -471,23 +470,11 @@ pub fn enclosing_class<'a>(signature: &PythonFunctionSignature<'a>) -> Option<Py
         .map(|class_def| PythonClassInfo::from_ast(class_def, signature.name_node.file))
 }
 
-/// Returns true if the function of `signature` is exempt from signature annotation rules.
-///
-/// Its signature is imposed ([`PythonFunctionSignature::has_imposed_signature`]) or it is a
-/// method of a `Protocol` or `ABC` class.
+/// Returns true if the function of `signature` is a method of an interface class
+/// ([`PythonClassInfo::is_interface`]: `Protocol` or `ABC`).
 #[must_use]
-pub fn is_exempt_from_signature_rules(signature: &PythonFunctionSignature<'_>) -> bool {
-    signature.has_imposed_signature()
-        || enclosing_class(signature).is_some_and(|class| class.is_interface())
-}
-
-/// Returns true if the function of `signature` is exempt from body-usage parameter rules.
-///
-/// It is exempt from signature rules ([`is_exempt_from_signature_rules`]) or its body is a stub
-/// consisting only of `...`, `pass`, or `raise NotImplementedError`.
-#[must_use]
-pub fn is_exempt_from_body_usage_rules(signature: &PythonFunctionSignature<'_>) -> bool {
-    is_exempt_from_signature_rules(signature) || signature.has_stub_body
+pub fn is_interface_method(signature: &PythonFunctionSignature<'_>) -> bool {
+    enclosing_class(signature).is_some_and(|class| class.is_interface())
 }
 
 /// Discovers and extracts all class definitions from a Python file.
@@ -1068,13 +1055,13 @@ mod tests {
         true
     )]
     #[case::regular_class("class C:\n    def f(self, x: list[int]) -> None: pass", false)]
-    fn protocol_and_abc_methods_are_exempt_from_signature_rules(
+    fn is_interface_method_detects_protocol_and_abc_methods(
         #[case] source: &str,
         #[case] expected: bool,
     ) {
         let file = ParsedFile::new(source, Language::Python);
         let signatures = super::super::extract_function_signatures(&file);
-        assert_eq!(is_exempt_from_signature_rules(&signatures[0]), expected);
+        assert_eq!(is_interface_method(&signatures[0]), expected);
     }
 
     #[test]

@@ -31,7 +31,7 @@ CLUSTER = Cluster(
             path=RETURNS,
             edits=(
                 (
-                    ".filter(|signature| !is_exempt_from_signature_rules(signature))",
+                    ".filter(|signature| !signature.has_imposed_signature() && !is_interface_method(signature))",
                     ".filter(|_| true)",
                 ),
             ),
@@ -222,7 +222,7 @@ CLUSTER = Cluster(
             path=UNEXPLAINED_RETURN,
             edits=(
                 (
-                    "                && !signature.is_exempt_from_docstring_rules()\n",
+                    "                && !signature.is_documented_elsewhere()\n",
                     "",
                 ),
             ),

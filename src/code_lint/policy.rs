@@ -4,11 +4,40 @@
 //! standard-library collection taxonomy and syntax positions where the language or API requires a
 //! literal); single-rule policy lives in that rule's file (`CodeLintRules`); policy shared by two
 //! or more rules or by a rule and `TestUtils` lives here (`CodeLintPolicy`).
+//!
+//! Two tests separate a fact from policy:
+//! 1. **Vocabulary**: a fact is stated and named in terms of the language or standard library
+//!    (`has_imposed_signature`, `is_interface_method`, `has_stub_body`, `is_documented_elsewhere`),
+//!    never in terms of rules ("exempt", "skip", "allowed").
+//! 2. **Rule disagreement**: when two rules can reasonably want different answers (for example,
+//!    `identical-positional-types` skips `has_imposed_signature()` while collection signature
+//!    rules also skip `is_interface_method`), the grouping is policy and the pieces underneath are
+//!    facts.
 
 architecture_component!(CodeLintPolicy);
 
 use crate::code_lint::ast::LiteralValue;
-use crate::code_lint::ast::python::{CollectionShape, PythonCollectionType};
+use crate::code_lint::ast::python::{
+    CollectionShape, PythonCollectionType, PythonFunctionSignature, is_interface_method,
+};
+
+/// Returns true if the function of `signature` is exempt from signature annotation rules.
+///
+/// Its signature is imposed ([`PythonFunctionSignature::has_imposed_signature`]) or it is a
+/// method of an interface class ([`is_interface_method`]).
+#[must_use]
+pub fn is_exempt_from_signature_rules(signature: &PythonFunctionSignature<'_>) -> bool {
+    signature.has_imposed_signature() || is_interface_method(signature)
+}
+
+/// Returns true if the function of `signature` is exempt from body-usage parameter rules.
+///
+/// It is exempt from signature rules ([`is_exempt_from_signature_rules`]) or its body is a stub
+/// ([`PythonFunctionSignature::has_stub_body`]).
+#[must_use]
+pub fn is_exempt_from_body_usage_rules(signature: &PythonFunctionSignature<'_>) -> bool {
+    is_exempt_from_signature_rules(signature) || signature.has_stub_body()
+}
 
 /// Returns true if `name` starts with the word `Fake` after any leading `_`: `Fake` alone or
 /// followed by anything but a lowercase letter, so `Faker` and `Fakeable` do not match.

@@ -725,7 +725,7 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "        is_exempt_dunder_method(&self.name)\n"
+                    "        is_data_model_dunder(&self.name)\n"
                     "            || extract_decorators_from_slice(&self.definition.decorator_list",
                     "        extract_decorators_from_slice(&self.definition.decorator_list",
                 ),
@@ -786,7 +786,7 @@ CLUSTER = Cluster(
             path=UNEXPLAINED_PARAMETER,
             edits=(
                 (
-                    "                && !signature.is_exempt_from_docstring_rules()\n",
+                    "                && !signature.is_documented_elsewhere()\n",
                     "\n",
                 ),
             ),

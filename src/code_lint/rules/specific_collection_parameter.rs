@@ -12,9 +12,10 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     AnnotationTraversalDepth, CollectionKind, ParameterCollectionCapability, PythonCollectionType,
     PythonParameterKind, collect_collection_types, extract_function_signatures,
-    is_exempt_from_body_usage_rules, summarize_parameter_usages,
+    summarize_parameter_usages,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
+use crate::code_lint::policy::is_exempt_from_body_usage_rules;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
