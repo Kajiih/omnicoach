@@ -5,12 +5,12 @@ use super::decorators::extract_decorators_from_slice;
 use super::functions::{CLS_RECEIVER, OVERLOAD_DECORATOR_PATHS, SELF_RECEIVER};
 use crate::code_lint::ast::{
     AstNode, DeclarationScope, DeclarationScopeKind, MemberAfterMethod, ParsedFile,
-    PlacementAnchor, RelationKind, ScopeItem, ScopeItemKind, Visibility, extend_references,
-    extend_unique, push_unique, span_from_ruff_range, split_at_redefinitions,
+    PlacementAnchor, RelationKind, ScopeItem, ScopeItemKind, Visibility, collapse_whitespace,
+    extend_references, extend_unique, push_unique, span_from_ruff_range, split_at_redefinitions,
 };
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, Stmt, StmtClassDef, StmtFunctionDef};
-use ruff_text_size::Ranged as _;
+use ruff_python_ast::{Decorator, Expr, Stmt, StmtClassDef, StmtFunctionDef};
+use ruff_text_size::{Ranged as _, TextRange};
 use std::collections::{HashMap, HashSet};
 
 const PYTHON_CONSTRUCTOR_NAMES: &[&str] = &[
@@ -325,6 +325,7 @@ fn build_class_declaration_scope<'a>(
                 name: group.name,
                 start_line: group.start_line,
                 end_line: group.end_line,
+                signature: Some(group.signature),
                 visibility: group.visibility,
                 is_constructor: group.is_constructor,
                 kind: ScopeItemKind::Callable,
@@ -359,6 +360,7 @@ struct GroupedPythonScopeItem<'a, 'ast> {
     name: String,
     start_line: usize,
     end_line: usize,
+    signature: String,
     visibility: Visibility,
     is_constructor: bool,
     first_stmt_idx: usize,
@@ -477,6 +479,7 @@ fn build_python_module_scope_item<'a>(
         name: group.name.clone(),
         start_line: group.start_line,
         end_line: group.end_line,
+        signature: Some(group.signature.clone()),
         visibility: group.visibility,
         is_constructor: group.is_constructor,
         kind,
@@ -812,6 +815,7 @@ fn group_python_scope_items<'a, 'ast>(
                     name,
                     start_line: def_node.start_line(),
                     end_line: def_node.end_line(),
+                    signature: python_function_signature(function_def, &file.source),
                     visibility,
                     is_constructor,
                     first_stmt_idx: stmt_idx,
@@ -828,6 +832,7 @@ fn group_python_scope_items<'a, 'ast>(
                     name,
                     start_line: class_node.start_line(),
                     end_line: class_node.end_line(),
+                    signature: python_class_signature(class_def, &file.source),
                     visibility,
                     is_constructor: false,
                     first_stmt_idx: stmt_idx,
@@ -881,6 +886,107 @@ fn is_dunder_name_expr(expr: &Expr) -> bool {
 /// Returns true if `expr` is a string literal with value `"__main__"`.
 fn is_dunder_main_literal(expr: &Expr) -> bool {
     matches!(expr, Expr::StringLiteral(literal) if literal.value.to_str() == "__main__")
+}
+
+/// Renders the compact signature of a `def`: its header without the trailing colon, prefixed by a
+/// `@classmethod`, `@staticmethod`, or `@property` decorator.
+fn python_function_signature(function_def: &StmtFunctionDef, source: &str) -> String {
+    let decorators: String = function_def
+        .decorator_list
+        .iter()
+        .filter_map(|decorator| {
+            let text = collapse_whitespace(&source[decorator.expression.range()]);
+            matches!(text.as_str(), "classmethod" | "staticmethod" | "property")
+                .then(|| format!("@{text} "))
+        })
+        .collect();
+    let header = python_header(
+        function_def.range(),
+        &function_def.decorator_list,
+        &function_def.body,
+        source,
+    );
+    format!("{decorators}{header}")
+}
+
+/// Renders the compact signature of a `class`: its header followed by its public annotated or
+/// constructor-assigned attributes.
+fn python_class_signature(class_def: &StmtClassDef, source: &str) -> String {
+    let header = python_header(
+        class_def.range(),
+        &class_def.decorator_list,
+        &class_def.body,
+        source,
+    );
+    let attributes = python_public_attributes(&class_def.body, source);
+    if attributes.is_empty() {
+        header
+    } else {
+        format!("{header} {{ {} }}", attributes.join(", "))
+    }
+}
+
+/// The header of a `def` or `class` spanning `range`: the text between its decorators and its
+/// body, joined into one line without comments or the trailing colon.
+fn python_header(
+    range: TextRange,
+    decorators: &[Decorator],
+    body: &[Stmt],
+    source: &str,
+) -> String {
+    let start = decorators
+        .last()
+        .map_or_else(|| range.start(), |decorator| decorator.range().end());
+    let end = body
+        .first()
+        .map_or_else(|| range.end(), |statement| statement.range().start());
+    let lines: Vec<&str> = source[TextRange::new(start, end)]
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or(line).trim())
+        .filter(|line| !line.is_empty())
+        .collect();
+    collapse_whitespace(lines.join(" ").trim_end_matches(':'))
+}
+
+/// Public class attributes: annotated class-body names and `self.` / `cls.` attributes assigned
+/// in `__init__` or `__new__`, in first-seen order.
+fn python_public_attributes(body: &[Stmt], source: &str) -> Vec<String> {
+    let mut attributes = Vec::new();
+    let mut seen = HashSet::new();
+    for statement in body {
+        match statement {
+            Stmt::AnnAssign(annotated) => {
+                if let Expr::Name(name) = &*annotated.target
+                    && !name.id.starts_with('_')
+                    && seen.insert(name.id.to_string())
+                {
+                    let annotation = collapse_whitespace(&source[annotated.annotation.range()]);
+                    attributes.push(format!("{}: {annotation}", name.id));
+                }
+            }
+            Stmt::FunctionDef(function_def)
+                if matches!(function_def.name.as_str(), "__init__" | "__new__") =>
+            {
+                for inner in &function_def.body {
+                    let Stmt::Assign(assign) = inner else {
+                        continue;
+                    };
+                    for target in &assign.targets {
+                        if let Expr::Attribute(attribute) = target
+                            && let Expr::Name(receiver) = &*attribute.value
+                            && matches!(receiver.id.as_str(), SELF_RECEIVER | CLS_RECEIVER)
+                            && !attribute.attr.starts_with('_')
+                            && seen.insert(attribute.attr.to_string())
+                        {
+                            attributes.push(attribute.attr.to_string());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    attributes
 }
 
 #[cfg(test)]

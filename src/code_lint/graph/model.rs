@@ -41,8 +41,8 @@ pub struct SourceLocation {
     pub line: usize,
     /// 1-indexed column number.
     pub column: usize,
-    /// Optional 1-indexed ending line number of the declaration span.
-    pub end_line: Option<usize>,
+    /// 1-indexed ending line number of the declaration span.
+    pub end_line: usize,
 }
 
 /// Kind of declaration represented by a leaf node.
@@ -649,7 +649,7 @@ mod tests {
                 file: "src/sample.rs".to_owned(),
                 line: 1,
                 column: 1,
-                end_line: None,
+                end_line: 1,
             },
             owners: owners.iter().map(|owner| NodeId::new(*owner)).collect(),
             recursion_group,

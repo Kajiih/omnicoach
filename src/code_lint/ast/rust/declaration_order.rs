@@ -5,8 +5,8 @@ use super::names::{SELF_KEYWORD, SELF_TYPE_KEYWORD};
 use super::trivia::previous_non_trivia_token;
 use crate::code_lint::ast::{
     AstNode, DeclarationScope, DeclarationScopeKind, MemberAfterMethod, ParsedFile,
-    PlacementAnchor, RelationKind, ScopeItem, ScopeItemKind, Visibility, extend_references,
-    extend_unique, push_unique, span_from_rowan_range, split_at_redefinitions,
+    PlacementAnchor, RelationKind, ScopeItem, ScopeItemKind, Visibility, collapse_whitespace,
+    extend_references, extend_unique, push_unique, span_from_rowan_range, split_at_redefinitions,
 };
 use ra_ap_syntax::ast::{
     self, HasGenericParams as _, HasModuleItem as _, HasName as _, HasVisibility as _,
@@ -159,6 +159,7 @@ fn collect_rust_module_decls<'a>(
                         start_line: file.line_index.line(syntax_start),
                         visibility,
                         syntax_start,
+                        signature: rust_item_signature(function.syntax(), &file.source),
                         item: RustModuleItem::Fn(function.clone()),
                     });
                 }
@@ -191,6 +192,7 @@ struct RustModuleDecl<'a> {
     start_line: usize,
     visibility: Visibility,
     syntax_start: usize,
+    signature: Option<String>,
     item: RustModuleItem,
 }
 
@@ -212,6 +214,7 @@ fn rust_type_decl<'a>(
         start_line: file.line_index.line(syntax_start),
         visibility,
         syntax_start,
+        signature: rust_item_signature(type_item.syntax(), &file.source),
         item: RustModuleItem::Type(type_item.syntax().clone()),
     })
 }
@@ -304,6 +307,7 @@ fn build_rust_module_scope_item<'a>(
         start_line: decl.start_line,
         end_line,
         name: decl.name.clone(),
+        signature: decl.signature.clone(),
         visibility: decl.visibility,
         is_constructor: false,
         kind,
@@ -737,6 +741,7 @@ fn collect_rust_impl_methods<'a>(
                 start_line: fn_node.start_line(),
                 end_line: fn_node.end_line(),
                 name,
+                signature: rust_item_signature(function.syntax(), &file.source),
                 visibility,
                 is_constructor,
                 kind: ScopeItemKind::Callable,
@@ -767,6 +772,149 @@ fn returns_self_type(function: &ast::Fn, type_name: &str) -> bool {
                     || (token.kind() == SyntaxKind::IDENT && token.text() == type_name)
             })
     })
+}
+
+/// Renders the compact signature of a `fn`, `struct`, `enum`, or `trait` item: its header up to
+/// the body, followed by the fields or variants of a type.
+fn rust_item_signature(node: &SyntaxNode, source: &str) -> Option<String> {
+    let header = |start: ra_ap_syntax::TextSize, end: ra_ap_syntax::TextSize| {
+        let start: usize = start.into();
+        let end: usize = end.into();
+        collapse_whitespace(source[start..end].trim_end_matches(';'))
+    };
+    let item_start = node.text_range().start();
+    let item_end = node.text_range().end();
+    match ast::Item::cast(node.clone())? {
+        ast::Item::Fn(function) => {
+            let start = function
+                .visibility()
+                .map(|visibility| visibility.syntax().text_range().start())
+                .or_else(|| {
+                    function
+                        .const_token()
+                        .map(|token| token.text_range().start())
+                })
+                .or_else(|| {
+                    function
+                        .async_token()
+                        .map(|token| token.text_range().start())
+                })
+                .or_else(|| {
+                    function
+                        .unsafe_token()
+                        .map(|token| token.text_range().start())
+                })
+                .or_else(|| function.abi().map(|abi| abi.syntax().text_range().start()))
+                .or_else(|| function.fn_token().map(|token| token.text_range().start()))
+                .unwrap_or(item_start);
+            let end = function
+                .body()
+                .map_or(item_end, |body| body.syntax().text_range().start());
+            Some(header(start, end))
+        }
+        ast::Item::Struct(struct_item) => {
+            let start = struct_item
+                .visibility()
+                .map(|visibility| visibility.syntax().text_range().start())
+                .or_else(|| {
+                    struct_item
+                        .struct_token()
+                        .map(|token| token.text_range().start())
+                })
+                .unwrap_or(item_start);
+            let end = struct_item
+                .field_list()
+                .map_or(item_end, |fields| fields.syntax().text_range().start());
+            let fields = rust_fields_summary(struct_item.field_list(), true);
+            Some(format!("{}{fields}", header(start, end)))
+        }
+        ast::Item::Enum(enum_item) => {
+            let start = enum_item
+                .visibility()
+                .map(|visibility| visibility.syntax().text_range().start())
+                .or_else(|| {
+                    enum_item
+                        .enum_token()
+                        .map(|token| token.text_range().start())
+                })
+                .unwrap_or(item_start);
+            let end = enum_item
+                .variant_list()
+                .map_or(item_end, |variants| variants.syntax().text_range().start());
+            let variants: Vec<String> = enum_item
+                .variant_list()
+                .into_iter()
+                .flat_map(|variants| variants.variants())
+                .filter_map(|variant| {
+                    let name = variant.name()?.text().to_string();
+                    let payload = rust_fields_summary(variant.field_list(), false);
+                    Some(format!("{name}{payload}"))
+                })
+                .collect();
+            Some(format!(
+                "{} {{ {} }}",
+                header(start, end),
+                variants.join(", ")
+            ))
+        }
+        ast::Item::Trait(trait_item) => {
+            let start = trait_item
+                .visibility()
+                .map(|visibility| visibility.syntax().text_range().start())
+                .or_else(|| {
+                    trait_item
+                        .trait_token()
+                        .map(|token| token.text_range().start())
+                })
+                .unwrap_or(item_start);
+            let end = trait_item
+                .assoc_item_list()
+                .map_or(item_end, |items| items.syntax().text_range().start());
+            Some(header(start, end))
+        }
+        _ => None,
+    }
+}
+
+/// Renders a struct or variant field list as ` { name: Type, ... }` or `(Type, ...)`.
+fn rust_fields_summary(fields: Option<ast::FieldList>, include_visibility: bool) -> String {
+    let visibility_prefix = |visibility: Option<ast::Visibility>| {
+        visibility
+            .filter(|_| include_visibility)
+            .map(|node| {
+                format!(
+                    "{} ",
+                    collapse_whitespace(&node.syntax().text().to_string())
+                )
+            })
+            .unwrap_or_default()
+    };
+    match fields {
+        Some(ast::FieldList::RecordFieldList(record)) => {
+            let fields: Vec<String> = record
+                .fields()
+                .filter_map(|field| {
+                    let name = field.name()?.text().to_string();
+                    let field_type = collapse_whitespace(&field.ty()?.syntax().text().to_string());
+                    let visibility = visibility_prefix(field.visibility());
+                    Some(format!("{visibility}{name}: {field_type}"))
+                })
+                .collect();
+            format!(" {{ {} }}", fields.join(", "))
+        }
+        Some(ast::FieldList::TupleFieldList(tuple)) => {
+            let fields: Vec<String> = tuple
+                .fields()
+                .filter_map(|field| {
+                    let field_type = collapse_whitespace(&field.ty()?.syntax().text().to_string());
+                    let visibility = visibility_prefix(field.visibility());
+                    Some(format!("{visibility}{field_type}"))
+                })
+                .collect();
+            format!("({})", fields.join(", "))
+        }
+        None => String::new(),
+    }
 }
 
 /// Collects associated `type` and `const` items declared after `fn` items inside Rust `impl`

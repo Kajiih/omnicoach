@@ -479,7 +479,7 @@ fn enclosing_symbol(scopes: &[ScopeFacts], line: usize) -> Option<String> {
                 if let Some(item) = scope
                     .items
                     .iter()
-                    .find(|item| item.line <= line && line <= item.end_line.unwrap_or(item.line))
+                    .find(|item| item.line <= line && line <= item.end_line)
                 {
                     return Some(item.name.clone());
                 }
@@ -489,7 +489,7 @@ fn enclosing_symbol(scopes: &[ScopeFacts], line: usize) -> Option<String> {
                 if scope
                     .items
                     .iter()
-                    .any(|item| item.line <= line && line <= item.end_line.unwrap_or(item.line))
+                    .any(|item| item.line <= line && line <= item.end_line)
                 {
                     return Some(name.clone());
                 }

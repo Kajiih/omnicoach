@@ -80,6 +80,12 @@ pub(in crate::code_lint::ast) fn with_innermost_function(
         .collect()
 }
 
+/// Returns `text` with every run of whitespace collapsed into one space and no surrounding
+/// whitespace.
+pub(in crate::code_lint::ast) fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// A dotted name together with its last segment (`typing.List` and `List`).
 #[derive(Clone)]
 pub(in crate::code_lint::ast) struct QualifiedName {

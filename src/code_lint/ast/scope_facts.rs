@@ -9,10 +9,6 @@ use super::{
     PlacementAnchor, RelationFact, ScopeGraph, ScopeItem, ScopeItemKind, Visibility,
     scope_findings,
 };
-use crate::diagnostic::Language;
-
-const INIT_MODULE: &str = "__init__";
-const SELF_SEGMENT: &str = "self";
 
 /// Everything the analyzer knows about one scope (`Module`, `Class`, or `Impl`) in a file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +40,7 @@ pub struct ItemFacts {
     pub line: usize,
     /// 1-based last line of the declaration, including its attached `impl` blocks or grouped
     /// overloads and accessors.
-    pub end_line: Option<usize>,
+    pub end_line: usize,
     /// 1-based column of the declaration's name identifier.
     pub column: usize,
     /// Compact one-line signature header (parameters + return type for callables; public fields or
@@ -85,18 +81,13 @@ pub struct FindingFact {
 /// Collects [`ScopeFacts`] for every declaration scope in `file`, in source order.
 #[must_use]
 pub fn collect_scope_facts(file: &ParsedFile) -> Vec<ScopeFacts> {
-    let spans_and_sigs = collect_item_spans_and_signatures(file);
-    let scopes = super::collect_declaration_scopes(file);
-    scopes
+    super::collect_declaration_scopes(file)
         .iter()
-        .map(|scope| scope_facts(scope, &spans_and_sigs))
+        .map(scope_facts)
         .collect()
 }
 
-fn scope_facts(
-    scope: &DeclarationScope<'_>,
-    spans_and_sigs: &std::collections::HashMap<(usize, String), (usize, String)>,
-) -> ScopeFacts {
+fn scope_facts(scope: &DeclarationScope<'_>) -> ScopeFacts {
     let items = &scope.items;
     let graph = ScopeGraph::new(items);
     let mut item_facts: Vec<ItemFacts> = items
@@ -104,18 +95,15 @@ fn scope_facts(
         .enumerate()
         .map(|(idx, item)| {
             let coordinate = item.name_node.start_coordinate();
-            let (end_line, signature) = spans_and_sigs
-                .get(&(coordinate.line, item.name.clone()))
-                .map_or((None, None), |(end, sig)| (Some(*end), Some(sig.clone())));
             ItemFacts {
                 name: item.name.clone(),
                 kind: item.kind,
                 visibility: item.visibility,
                 is_constructor: item.is_constructor,
                 line: coordinate.line,
-                end_line,
+                end_line: item.end_line,
                 column: coordinate.column,
-                signature,
+                signature: item.signature.clone(),
                 roots: graph.roots[idx].clone(),
                 unit_owners: graph.unit_owners[idx].clone(),
                 ownership: graph.ownership[idx],
@@ -160,312 +148,6 @@ fn raw_relations(items: &[ScopeItem<'_>]) -> Vec<RelationFact> {
     relations.sort();
     relations.dedup();
     relations
-}
-
-fn collect_item_spans_and_signatures(
-    file: &ParsedFile,
-) -> std::collections::HashMap<(usize, String), (usize, String)> {
-    match file.lang() {
-        Language::Rust => collect_rust_spans_and_signatures(file),
-        Language::Python => collect_python_spans_and_signatures(file),
-    }
-}
-
-fn collect_rust_spans_and_signatures(
-    file: &ParsedFile,
-) -> std::collections::HashMap<(usize, String), (usize, String)> {
-    use ra_ap_syntax::AstNode as _;
-    let mut out = std::collections::HashMap::new();
-    let Some(parsed) = file.rs_parsed() else {
-        return out;
-    };
-    for node in parsed.tree().syntax().descendants() {
-        if file.is_in_rust_inline_test(node.text_range().start().into()) {
-            continue;
-        }
-        record_rust_item_signature(&node, file, &mut out);
-    }
-    out
-}
-
-fn record_rust_item_signature(
-    node: &ra_ap_syntax::SyntaxNode,
-    file: &ParsedFile,
-    out: &mut std::collections::HashMap<(usize, String), (usize, String)>,
-) {
-    use ra_ap_syntax::AstNode as _;
-    use ra_ap_syntax::ast::{self, HasName as _, HasVisibility as _};
-
-    let source = &file.source;
-    let slice_header = |start: ra_ap_syntax::TextSize, end: ra_ap_syntax::TextSize| {
-        let start_idx: usize = start.into();
-        let end_idx: usize = end.into();
-        collapse_ws(source[start_idx..end_idx].trim_end_matches(';'))
-    };
-
-    let item: Option<(ast::Name, String)> = match ast::Item::cast(node.clone()) {
-        Some(ast::Item::Fn(func)) => {
-            let sig_start = func
-                .visibility()
-                .map(|visibility| visibility.syntax().text_range().start())
-                .or_else(|| func.const_token().map(|tok| tok.text_range().start()))
-                .or_else(|| func.async_token().map(|tok| tok.text_range().start()))
-                .or_else(|| func.unsafe_token().map(|tok| tok.text_range().start()))
-                .or_else(|| func.abi().map(|abi| abi.syntax().text_range().start()))
-                .or_else(|| func.fn_token().map(|tok| tok.text_range().start()))
-                .unwrap_or_else(|| func.syntax().text_range().start());
-            let sig_end = func.body().map_or_else(
-                || func.syntax().text_range().end(),
-                |body| body.syntax().text_range().start(),
-            );
-            func.name()
-                .map(|name| (name, slice_header(sig_start, sig_end)))
-        }
-        Some(ast::Item::Struct(st)) => {
-            let head_start = st
-                .visibility()
-                .map(|visibility| visibility.syntax().text_range().start())
-                .or_else(|| st.struct_token().map(|tok| tok.text_range().start()))
-                .unwrap_or_else(|| st.syntax().text_range().start());
-            let head_end = st.field_list().map_or_else(
-                || st.syntax().text_range().end(),
-                |fl| fl.syntax().text_range().start(),
-            );
-            let header = slice_header(head_start, head_end);
-            let body = rust_fields_summary(st.field_list(), true);
-            st.name().map(|name| (name, format!("{header}{body}")))
-        }
-        Some(ast::Item::Enum(en)) => {
-            let head_start = en
-                .visibility()
-                .map(|visibility| visibility.syntax().text_range().start())
-                .or_else(|| en.enum_token().map(|tok| tok.text_range().start()))
-                .unwrap_or_else(|| en.syntax().text_range().start());
-            let head_end = en.variant_list().map_or_else(
-                || en.syntax().text_range().end(),
-                |vl| vl.syntax().text_range().start(),
-            );
-            let header = slice_header(head_start, head_end);
-            let variants: Vec<String> = en
-                .variant_list()
-                .into_iter()
-                .flat_map(|vl| vl.variants())
-                .filter_map(|var| {
-                    let vname = var.name()?.text().to_string();
-                    let payload = rust_fields_summary(var.field_list(), false);
-                    Some(format!("{vname}{payload}"))
-                })
-                .collect();
-            en.name()
-                .map(|name| (name, format!("{header} {{ {} }}", variants.join(", "))))
-        }
-        Some(ast::Item::Trait(tr)) => {
-            let head_start = tr
-                .visibility()
-                .map(|visibility| visibility.syntax().text_range().start())
-                .or_else(|| tr.trait_token().map(|tok| tok.text_range().start()))
-                .unwrap_or_else(|| tr.syntax().text_range().start());
-            let head_end = tr.assoc_item_list().map_or_else(
-                || tr.syntax().text_range().end(),
-                |al| al.syntax().text_range().start(),
-            );
-            tr.name()
-                .map(|name| (name, slice_header(head_start, head_end)))
-        }
-        _ => None,
-    };
-
-    if let Some((name_tok, sig)) = item {
-        let line = file
-            .line_index
-            .line(name_tok.syntax().text_range().start().into());
-        let end_line = file.line_index.line(node.text_range().end().into());
-        out.insert((line, name_tok.text().to_string()), (end_line, sig));
-    }
-}
-
-fn rust_fields_summary(
-    fields_node: Option<ra_ap_syntax::ast::FieldList>,
-    include_visibility: bool,
-) -> String {
-    use ra_ap_syntax::AstNode as _;
-    use ra_ap_syntax::ast::{FieldList, HasName as _, HasVisibility as _};
-    let visibility_prefix = |visibility: Option<ra_ap_syntax::ast::Visibility>| {
-        if include_visibility {
-            visibility
-                .map(|node| format!("{} ", collapse_ws(&node.syntax().text().to_string())))
-                .unwrap_or_default()
-        } else {
-            String::new()
-        }
-    };
-    match fields_node {
-        Some(FieldList::RecordFieldList(rec)) => {
-            let fields: Vec<String> = rec
-                .fields()
-                .filter_map(|field| {
-                    let fname = field.name()?.text().to_string();
-                    let fty = collapse_ws(&field.ty()?.syntax().text().to_string());
-                    let fvis = visibility_prefix(field.visibility());
-                    Some(format!("{fvis}{fname}: {fty}"))
-                })
-                .collect();
-            format!(" {{ {} }}", fields.join(", "))
-        }
-        Some(FieldList::TupleFieldList(tup)) => {
-            let fields: Vec<String> = tup
-                .fields()
-                .filter_map(|field| {
-                    let fty = collapse_ws(&field.ty()?.syntax().text().to_string());
-                    let fvis = visibility_prefix(field.visibility());
-                    Some(format!("{fvis}{fty}"))
-                })
-                .collect();
-            format!("({})", fields.join(", "))
-        }
-        None => String::new(),
-    }
-}
-
-fn collect_python_spans_and_signatures(
-    file: &ParsedFile,
-) -> std::collections::HashMap<(usize, String), (usize, String)> {
-    use ruff_python_ast::Stmt;
-    use ruff_text_size::Ranged as _;
-
-    fn strip_py_header(raw: &str) -> String {
-        let cleaned: Vec<&str> = raw
-            .lines()
-            .map(|line| line.split('#').next().unwrap_or(line).trim())
-            .filter(|line| !line.is_empty())
-            .collect();
-        collapse_ws(cleaned.join(" ").trim_end_matches(':'))
-    }
-
-    fn visit_stmts(
-        stmts: &[Stmt],
-        file: &ParsedFile,
-        out: &mut std::collections::HashMap<(usize, String), (usize, String)>,
-    ) {
-        let source = &file.source;
-        for stmt in stmts {
-            match stmt {
-                Stmt::FunctionDef(func) => {
-                    let line = file.line_index.line(func.name.range().start().to_usize());
-                    let end = source[..func.range().end().to_usize().min(source.len())]
-                        .trim_end()
-                        .len();
-                    let end_line = file.line_index.line(end);
-                    let dec_prefix: String = func
-                        .decorator_list
-                        .iter()
-                        .filter_map(|dec| {
-                            let span = dec.expression.range();
-                            let text = collapse_ws(
-                                &source[span.start().to_usize()..span.end().to_usize()],
-                            );
-                            matches!(text.as_str(), "classmethod" | "staticmethod" | "property")
-                                .then(|| format!("@{text} "))
-                        })
-                        .collect();
-                    let sig_start = func.decorator_list.last().map_or_else(
-                        || func.range().start().to_usize(),
-                        |dec| dec.range().end().to_usize(),
-                    );
-                    let sig_end = func.body.first().map_or_else(
-                        || func.range().end().to_usize(),
-                        |first| first.range().start().to_usize(),
-                    );
-                    if sig_start <= sig_end && sig_end <= source.len() {
-                        let sig = format!(
-                            "{dec_prefix}{}",
-                            strip_py_header(&source[sig_start..sig_end])
-                        );
-                        out.insert((line, func.name.to_string()), (end_line, sig));
-                    }
-                    visit_stmts(&func.body, file, out);
-                }
-                Stmt::ClassDef(cls) => {
-                    let line = file.line_index.line(cls.name.range().start().to_usize());
-                    let end = source[..cls.range().end().to_usize().min(source.len())]
-                        .trim_end()
-                        .len();
-                    let end_line = file.line_index.line(end);
-                    let sig_start = cls.decorator_list.last().map_or_else(
-                        || cls.range().start().to_usize(),
-                        |dec| dec.range().end().to_usize(),
-                    );
-                    let sig_end = cls.body.first().map_or_else(
-                        || cls.range().end().to_usize(),
-                        |first| first.range().start().to_usize(),
-                    );
-                    if sig_start <= sig_end && sig_end <= source.len() {
-                        let header = strip_py_header(&source[sig_start..sig_end]);
-                        let attrs = collect_py_class_public_attrs(&cls.body, source);
-                        let full = if attrs.is_empty() {
-                            header
-                        } else {
-                            format!("{header} {{ {} }}", attrs.join(", "))
-                        };
-                        out.insert((line, cls.name.to_string()), (end_line, full));
-                    }
-                    visit_stmts(&cls.body, file, out);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    let mut out = std::collections::HashMap::new();
-    if let Some(parsed) = file.py_module() {
-        visit_stmts(&parsed.syntax().body, file, &mut out);
-    }
-    out
-}
-
-fn collect_py_class_public_attrs(body: &[ruff_python_ast::Stmt], source: &str) -> Vec<String> {
-    use ruff_python_ast::{Expr, Stmt};
-    use ruff_text_size::Ranged as _;
-
-    let mut attrs = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for stmt in body {
-        match stmt {
-            Stmt::AnnAssign(ann) => {
-                if let Expr::Name(name) = &*ann.target
-                    && !name.id.starts_with('_')
-                    && seen.insert(name.id.to_string())
-                {
-                    let span = ann.annotation.range();
-                    let annotation_text =
-                        collapse_ws(&source[span.start().to_usize()..span.end().to_usize()]);
-                    attrs.push(format!("{}: {annotation_text}", name.id));
-                }
-            }
-            Stmt::FunctionDef(func) if matches!(func.name.as_str(), INIT_MODULE | "__new__") => {
-                for inner in &func.body {
-                    if let Stmt::Assign(assign) = inner {
-                        for target in &assign.targets {
-                            if let Expr::Attribute(attr) = target
-                                && let Expr::Name(recv) = &*attr.value
-                                && matches!(recv.id.as_str(), SELF_SEGMENT | "cls")
-                                && !attr.attr.starts_with('_')
-                                && seen.insert(attr.attr.to_string())
-                            {
-                                attrs.push(attr.attr.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    attrs
-}
-
-fn collapse_ws(raw: &str) -> String {
-    raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]

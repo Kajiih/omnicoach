@@ -51,6 +51,9 @@ pub(in crate::code_lint::ast) struct ScopeItem<'a> {
     /// 1-based last line of the declaration (including contiguous overloads/accessors or inherent
     /// `impl` blocks).
     pub(in crate::code_lint::ast) end_line: usize,
+    /// Compact one-line signature: the header of a callable, or the header and public fields or
+    /// variants of a type, when the language module renders one.
+    pub(in crate::code_lint::ast) signature: Option<String>,
     /// Whether this item is a callable or a type definition.
     pub(in crate::code_lint::ast) kind: ScopeItemKind,
     /// Visibility tier (`Public` vs. `Private`).

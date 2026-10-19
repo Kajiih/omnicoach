@@ -1463,7 +1463,7 @@ mod tests {
             visibility,
             is_constructor: false,
             line,
-            end_line: Some(line),
+            end_line: line,
             column: 1,
             signature: None,
             roots: roots.to_vec(),

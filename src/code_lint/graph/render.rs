@@ -380,11 +380,11 @@ fn format_span(decl: &DeclarationNode, include_file: bool) -> String {
     } else {
         ""
     };
-    match decl.location.end_line {
-        Some(end) if end > decl.location.line => {
-            format!("{prefix}:{}..{end}", decl.location.line)
-        }
-        _ => format!("{prefix}:{}", decl.location.line),
+    let (line, end_line) = (decl.location.line, decl.location.end_line);
+    if end_line > line {
+        format!("{prefix}:{line}..{end_line}")
+    } else {
+        format!("{prefix}:{line}")
     }
 }
 
@@ -450,7 +450,7 @@ mod tests {
                 file: "src/fixture.rs".to_owned(),
                 line: 10,
                 column: 1,
-                end_line: Some(18),
+                end_line: 18,
             },
             owners: vec![NodeId::new("s0:i0:entry")],
             recursion_group: 1,
@@ -469,7 +469,7 @@ mod tests {
                 file: "src/fixture.rs".to_owned(),
                 line: 20,
                 column: 1,
-                end_line: Some(25),
+                end_line: 25,
             },
             owners: vec![NodeId::new("s0:i0:entry")],
             recursion_group: 0,
