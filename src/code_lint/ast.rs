@@ -46,8 +46,6 @@ use imports::path_separator;
 pub use imports::{ResolvedName, resolve_name};
 
 use crate::diagnostic::{Language, LineColumn, LineIndex, SourceLocation, SourceSpan};
-use ra_ap_syntax::AstNode as _;
-use ruff_text_size::Ranged;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -333,29 +331,12 @@ impl<'a> AstNode<'a> {
 
 /// Collects all comment nodes in `file` in source order.
 ///
-/// Uses `ruff_python_ast::token::TokenKind::Comment` for Python and `is_rust_comment_kind`
-/// for Rust so non-comment trivia (such as Python line continuations) is never included.
+/// Non-comment trivia (such as Python line continuations) is never included.
 #[must_use]
 pub fn collect_comment_nodes(file: &ParsedFile) -> Vec<AstNode<'_>> {
-    let spans = file.comment_spans.get_or_init(|| match &file.ast {
-        CodeLintAst::Python(Ok(parsed)) => parsed
-            .tokens()
-            .iter()
-            .filter(|token| token.kind() == ruff_python_ast::token::TokenKind::Comment)
-            .map(|token| span_from_ruff_range(token.range()))
-            .collect(),
-        CodeLintAst::Python(Err(_)) => Vec::new(),
-        CodeLintAst::Rust(parsed) => parsed
-            .tree()
-            .syntax()
-            .descendants_with_tokens()
-            .filter_map(|element| {
-                let token = element.into_token()?;
-                is_rust_comment_kind(token.kind())
-                    .then(|| span_from_rowan_range(token.text_range()))
-            })
-            .collect(),
-    });
+    let spans = file
+        .comment_spans
+        .get_or_init(|| dispatch_lang!(file.lang(), collect_comment_spans(file)));
     spans
         .iter()
         .map(|&span| AstNode::from_span(file, span))
@@ -376,18 +357,6 @@ pub(in crate::code_lint::ast) fn span_from_rowan_range(
     range: ra_ap_syntax::TextRange,
 ) -> SourceSpan {
     SourceSpan::new(range.start().into(), range.end().into())
-}
-
-/// Returns true if `kind` is a Rust comment token (`//`, `/* */`, `///`, `//!`, `/** */`, `/*! */`).
-#[must_use]
-pub(in crate::code_lint::ast) const fn is_rust_comment_kind(
-    kind: ra_ap_syntax::SyntaxKind,
-) -> bool {
-    use ra_ap_syntax::SyntaxKind;
-    matches!(
-        kind,
-        SyntaxKind::COMMENT | SyntaxKind::OUTER_DOC_COMMENT | SyntaxKind::INNER_DOC_COMMENT
-    )
 }
 
 /// Returns true if `text` is a Rust outer or inner doc comment (`///`, `//!`, `/** */`, `/*! */`).

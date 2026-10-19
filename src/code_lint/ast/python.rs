@@ -69,6 +69,7 @@ pub(super) use self::test_analysis::{
 
 use crate::code_lint::ast::{AstNode, ParsedFile, QualifiedName, span_from_ruff_range};
 use crate::diagnostic::SourceSpan;
+use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Decorator, Expr, ModModule, Stmt};
 use ruff_text_size::Ranged as _;
@@ -129,6 +130,20 @@ impl DecoratorInfo {
     pub(super) fn is_attribute_named(&self, attrs: &[&str]) -> bool {
         self.path.contains('.') && attrs.contains(&self.terminal_name.as_str())
     }
+}
+
+/// Collects the spans of all comment tokens in `file` in source order, or none if `file` failed
+/// to parse.
+pub(super) fn collect_comment_spans(file: &ParsedFile) -> Vec<SourceSpan> {
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    parsed
+        .tokens()
+        .iter()
+        .filter(|token| token.kind() == TokenKind::Comment)
+        .map(|token| span_from_ruff_range(token.range()))
+        .collect()
 }
 
 /// Finds the `Expr` node in `module` whose byte span equals `target_span`.

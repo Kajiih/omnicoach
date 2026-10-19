@@ -89,6 +89,22 @@ pub(super) fn record_decorator_and_attribute_spans(
     }
 }
 
+/// Collects the spans of all comment tokens in `file` in source order.
+pub(super) fn collect_comment_spans(file: &ParsedFile) -> Vec<SourceSpan> {
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
+    parsed
+        .tree()
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(|element| {
+            let token = element.into_token()?;
+            is_rust_comment_kind(token.kind()).then(|| span_from_rowan_range(token.text_range()))
+        })
+        .collect()
+}
+
 /// Casts the syntax node at `node.span()` (or an exact-range wrapper ancestor) to `T`.
 fn cast_at_span<T: ra_ap_syntax::AstNode>(node: &AstNode<'_>) -> Option<T> {
     let inner = syntax_node(node)?;
@@ -172,14 +188,22 @@ const fn is_rust_body_container(kind: SyntaxKind) -> bool {
 /// Returns true if `token` is whitespace or a non-doc Rust comment (`//`, `/* */`).
 fn is_rust_non_doc_trivia(token: &SyntaxToken) -> bool {
     matches!(token.kind(), SyntaxKind::WHITESPACE)
-        || (crate::code_lint::ast::is_rust_comment_kind(token.kind())
+        || (is_rust_comment_kind(token.kind())
             && !crate::code_lint::ast::is_rust_doc_comment(token.text()))
 }
 
 /// Returns true if `kind` is a Rust comment (`//`, `/* */`, `///`, `//!`, `/** */`, `/*! */`)
 /// or whitespace token.
 const fn is_rust_trivia(kind: SyntaxKind) -> bool {
-    matches!(kind, SyntaxKind::WHITESPACE) || crate::code_lint::ast::is_rust_comment_kind(kind)
+    matches!(kind, SyntaxKind::WHITESPACE) || is_rust_comment_kind(kind)
+}
+
+/// Returns true if `kind` is a Rust comment token (`//`, `/* */`, `///`, `//!`, `/** */`, `/*! */`).
+const fn is_rust_comment_kind(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::COMMENT | SyntaxKind::OUTER_DOC_COMMENT | SyntaxKind::INNER_DOC_COMMENT
+    )
 }
 
 /// Extracts the terminal identifier of an attribute's path (e.g. `"test"` for `#[tokio::test]`).
