@@ -560,3 +560,128 @@ fn best_anchor(
         .min()
         .map(|(_, after)| PlacementAnchor::after(&items[after].name, items[after].end_line))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::code_lint::ast::{ParsedFile, collect_declaration_scopes};
+    use crate::diagnostic::Language;
+    use std::cmp::Reverse;
+    use std::path::Path;
+
+    /// The layout the scope graph describes: each unit's public items followed by its helpers,
+    /// then the shared and unowned items, each group from higher to lower level. A recursion
+    /// group that cycles through a public item shares one level, so its private items keep their
+    /// private recursion order within it.
+    fn graph_layout(items: &[ScopeItem<'_>], graph: &ScopeGraph) -> Vec<usize> {
+        let is_public = |idx: usize| items[idx].visibility == Visibility::Public;
+        let mut private_lowers = vec![Vec::new(); items.len()];
+        for edge in &graph.edges {
+            if !is_public(edge.higher) && !is_public(edge.lower) {
+                private_lowers[edge.higher].push(edge.lower);
+            }
+        }
+        let private_level = levels(&private_lowers, &graph.private_recursion_group);
+        let by_level = |mut group: Vec<usize>| {
+            group.sort_by_key(|&idx| (Reverse(graph.level[idx]), Reverse(private_level[idx]), idx));
+            group
+        };
+        let mut placed = vec![false; items.len()];
+        let mut order = Vec::new();
+        let public_order = (0..items.len())
+            .filter(|&idx| items[idx].is_constructor)
+            .chain((0..items.len()).filter(|&idx| is_public(idx) && !items[idx].is_constructor));
+        for first_public in public_order {
+            if placed[first_public] {
+                continue;
+            }
+            let unit = graph.ownership[first_public];
+            let publics =
+                (0..items.len()).filter(|&idx| is_public(idx) && graph.ownership[idx] == unit);
+            let helpers: Vec<usize> = (0..items.len())
+                .filter(|&idx| !is_public(idx) && graph.ownership[idx] == unit)
+                .collect();
+            // A helper below a shared or unowned private item follows it into the trailing
+            // section, and the unit's other helpers follow so the unit is not split.
+            let below_trailing_item = graph.edges.iter().any(|edge| {
+                helpers.contains(&edge.lower)
+                    && !is_public(edge.higher)
+                    && graph.ownership[edge.higher] != unit
+            });
+            let cluster = if below_trailing_item {
+                Vec::new()
+            } else {
+                by_level(helpers)
+            };
+            for idx in publics.chain(cluster) {
+                placed[idx] = true;
+                order.push(idx);
+            }
+        }
+        order.extend(by_level(
+            (0..items.len()).filter(|&idx| !placed[idx]).collect(),
+        ));
+        order
+    }
+
+    fn source_files(directory: &Path, extension: &str, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(directory).expect("directory should be readable") {
+            let path = entry.expect("entry should be readable").path();
+            if path.is_dir() {
+                source_files(&path, extension, out);
+            } else if path.extension().is_some_and(|found| found == extension) {
+                out.push(path);
+            }
+        }
+    }
+
+    /// The style placements of `path`'s scopes that the layout its graph describes violates.
+    fn placements_violated_by_graph_layout(path: &Path) -> Vec<String> {
+        let lang = if path.extension().is_some_and(|found| found == "rs") {
+            Language::Rust
+        } else {
+            Language::Python
+        };
+        let source = std::fs::read_to_string(path).expect("source should be readable");
+        let file = ParsedFile::new(&source, lang);
+        collect_declaration_scopes(&file)
+            .iter()
+            .flat_map(|scope| {
+                let graph = ScopeGraph::new(&scope.items);
+                let layout = Layout::new(&graph_layout(&scope.items, &graph), &scope.items, &graph);
+                generate_placements(&scope.items, &graph)
+                    .into_iter()
+                    .filter(|placement| {
+                        placement.strength != Strength::Hard && !layout.holds(placement)
+                    })
+                    .map(|placement| {
+                        format!(
+                            "{}: `{}` {:?} `{}`",
+                            path.display(),
+                            scope.items[placement.subject].name,
+                            placement.constraint,
+                            scope.items[placement.related].name,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// Every style placement the rules generate holds in the layout the graph describes, so
+    /// the rules never ask for an order the graph cannot draw (ADR 011 §3.3).
+    #[test]
+    fn graph_layout_satisfies_every_rule_placement() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut paths = Vec::new();
+        source_files(&root.join("src"), "rs", &mut paths);
+        source_files(&root.join("scripts"), "py", &mut paths);
+
+        let violations: Vec<String> = paths
+            .iter()
+            .flat_map(|path| placements_violated_by_graph_layout(path))
+            .collect();
+
+        assert_eq!(violations, Vec::<String>::new());
+    }
+}
