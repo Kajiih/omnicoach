@@ -1,6 +1,7 @@
 //! AST helper predicates and structural extractors for Python.
 
 mod annotations;
+mod bindings;
 mod calls;
 mod classes;
 mod complexity;
@@ -12,13 +13,12 @@ mod format_strings;
 mod functions;
 mod literals;
 mod logging;
+mod multiline_strings;
 mod names;
 mod parameter_usage;
 mod positional_reads;
 mod returns;
-mod scopes;
 mod statement_spans;
-mod strings;
 mod test_analysis;
 mod tree;
 mod trivia;
@@ -28,6 +28,7 @@ pub use self::annotations::{
     PythonReturnTypeBranch, PythonReturnTypeUnion, collect_collection_types, collection_display,
     collection_type, generator_yield_type, return_type_union,
 };
+pub(super) use self::bindings::collect_bindings;
 pub(super) use self::calls::collect_call_candidates;
 pub use self::calls::{PythonEnvironSubscript, call_callee, collect_environ_subscripts};
 pub use self::classes::{
@@ -59,17 +60,16 @@ pub use self::functions::{
 pub(super) use self::literals::collect_literal_occurrences;
 pub use self::literals::{PythonModuleAssignment, collect_module_assignments};
 pub use self::logging::{PythonLoggerCall, collect_logger_calls};
+pub(super) use self::multiline_strings::find_unwrapped_multiline_strings;
 pub use self::parameter_usage::{
     ParameterCollectionCapability, ParameterUsage, summarize_parameter_usages,
 };
 pub(super) use self::positional_reads::collect_positional_reads;
 pub(super) use self::returns::collect_function_returns;
 pub use self::returns::{PythonBodyResults, collect_locally_mutated_return_functions};
-pub(super) use self::scopes::collect_bindings;
 pub(super) use self::statement_spans::{
     enclosing_statement_header_span, record_decorator_and_attribute_spans,
 };
-pub(super) use self::strings::find_unwrapped_multiline_strings;
 pub(super) use self::test_analysis::{
     collect_assertion_checks, collect_multi_phase_test_functions,
     collect_test_function_assertion_counts, collect_test_logic_constructs,

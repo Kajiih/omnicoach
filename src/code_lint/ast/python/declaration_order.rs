@@ -1,8 +1,8 @@
 //! Python declaration-order scope builders and field-after-method extraction.
 
+use super::bindings::{collect_local_bound_names, parameters_shadow_name};
 use super::decorators::extract_decorators_from_slice;
 use super::functions::{CLS_RECEIVER, OVERLOAD_DECORATOR_PATHS, SELF_RECEIVER};
-use super::scopes::{collect_local_bound_names, parameters_shadow_name};
 use crate::code_lint::ast::{
     AstNode, DeclarationScope, DeclarationScopeKind, MemberAfterMethod, MethodVisibility,
     ParsedFile, PlacementAnchor, ScopeItem, ScopeItemKind, extend_unique, push_unique,

@@ -6,12 +6,12 @@ mod calls;
 mod declaration_order;
 mod effects;
 mod file_summary;
-mod functions;
 mod literals;
+mod multiline_strings;
 mod names;
 mod positional_reads;
+mod returns;
 mod statement_spans;
-mod strings;
 mod test_analysis;
 mod tree;
 mod trivia;
@@ -25,14 +25,14 @@ pub use self::file_summary::{
     ExternalModDeclaration, RustFileSummary, RustPathReference, VisibleUseDeclaration,
     summarize_rust_file,
 };
-pub(super) use self::functions::collect_function_returns;
-pub use self::functions::{NullableReturnPayload, nullable_return_payload};
 pub(super) use self::literals::collect_literal_occurrences;
+pub(super) use self::multiline_strings::find_unwrapped_multiline_strings;
 pub(super) use self::positional_reads::collect_positional_reads;
+pub(super) use self::returns::collect_function_returns;
+pub use self::returns::{NullableReturnPayload, nullable_return_payload};
 pub(super) use self::statement_spans::{
     enclosing_statement_header_span, record_decorator_and_attribute_spans,
 };
-pub(super) use self::strings::find_unwrapped_multiline_strings;
 pub use self::test_analysis::collect_inline_test_ranges;
 pub(super) use self::test_analysis::{
     collect_assertion_checks, collect_multi_phase_test_functions,

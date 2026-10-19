@@ -2,7 +2,7 @@
 
 use super::effects::expr_contains_call;
 use super::functions::SELF_RECEIVER;
-use super::{docstrings, returns, scopes};
+use super::{bindings, docstrings, returns};
 use crate::code_lint::ast::{
     AssertionCheck, AstCallCandidate, AstNode, EnclosingFunction, MultiPhaseTest, ParsedFile,
     TestAssertionCount, TestFunctionSetup, TestLogicConstruct, TestStatementRole, TestToTestCall,
@@ -548,7 +548,7 @@ fn collect_python_function_locals_by_name_span(
             if let Stmt::FunctionDef(func_def) = statement {
                 self.out.insert(
                     span_from_ruff_range(func_def.name.range),
-                    scopes::collect_local_bound_names(func_def, self.file),
+                    bindings::collect_local_bound_names(func_def, self.file),
                 );
             }
             walk_stmt(self, statement);
