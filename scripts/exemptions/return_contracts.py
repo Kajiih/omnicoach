@@ -31,7 +31,7 @@ CLUSTER = Cluster(
             path=RETURNS,
             edits=(
                 (
-                    ".filter(|signature| !signature.is_exempt_from_signature_rules())",
+                    ".filter(|signature| !is_exempt_from_signature_rules(signature))",
                     ".filter(|_| true)",
                 ),
             ),

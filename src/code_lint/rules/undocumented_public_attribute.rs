@@ -121,11 +121,10 @@ fn check_file(
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for class in ast::python::extract_classes(file) {
-        let decl = class.declaration();
-        let Some(docstring) = &decl.docstring else {
+        let Some(docstring) = &class.docstring else {
             continue;
         };
-        if docstring.non_blank_line_count() <= 1 || decl.is_enum() {
+        if docstring.non_blank_line_count() <= 1 || class.is_enum() {
             continue;
         }
         let documented = docstring.section_entry_names(DocstringSectionKind::Attributes);
@@ -139,7 +138,7 @@ fn check_file(
                 diagnostics.push(rule.diagnostic_at_node(
                     path,
                     &definition.node,
-                    &[(NAME, name), (CLASS, &decl.name)],
+                    &[(NAME, name), (CLASS, &class.name)],
                 ));
             }
         }

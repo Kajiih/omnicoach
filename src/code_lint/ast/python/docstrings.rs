@@ -927,11 +927,7 @@ mod tests {
         let file = ParsedFile::new("class C:\n    '''Doc.'''\n", Language::Python);
         let classes = super::super::extract_classes(&file);
         assert_eq!(
-            classes[0]
-                .declaration()
-                .docstring
-                .as_ref()
-                .map(PythonDocstring::text),
+            classes[0].docstring.as_ref().map(PythonDocstring::text),
             Some("Doc.")
         );
     }

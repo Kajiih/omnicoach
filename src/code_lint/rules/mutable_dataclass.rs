@@ -80,11 +80,8 @@ pub const RULE: CodeRule = CodeRule {
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     extract_classes(file)
         .into_iter()
-        .filter(|class| class.declaration().is_dataclass_missing_arg("frozen"))
-        .map(|class| {
-            let decl = class.declaration();
-            rule.diagnostic_at_node(path, &decl.name_node, &[("class", &decl.name)])
-        })
+        .filter(|class| class.is_dataclass_missing_arg("frozen"))
+        .map(|class| rule.diagnostic_at_node(path, &class.name_node, &[("class", &class.name)]))
         .collect()
 }
 

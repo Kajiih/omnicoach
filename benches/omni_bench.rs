@@ -303,7 +303,12 @@ mod semantic {
             warm_shared_indexes(&file);
             bencher
                 .counter(BytesCount::of_str(test_file.code))
-                .bench_local(|| ast::python::collect_class_attributes(black_box(&file)).len());
+                .bench_local(|| {
+                    ast::python::extract_classes(black_box(&file))
+                        .iter()
+                        .map(|class| class.annotated_attributes().len())
+                        .sum::<usize>()
+                });
         }
 
         #[divan::bench(args = ALL_TEST_FILES)]

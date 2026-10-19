@@ -141,7 +141,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         }
     }
     for class in ast::python::extract_classes(file) {
-        let Some(docstring) = &class.declaration().docstring else {
+        let Some(docstring) = &class.docstring else {
             continue;
         };
         let attributes = class.attribute_definitions();

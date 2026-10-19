@@ -177,7 +177,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                     &[
                         (FUNCTION, &method.name),
                         (SECTIONS, &missing.join(" or ")),
-                        (CLASS, &ancestor.declaration().name),
+                        (CLASS, &ancestor.name),
                     ],
                 ));
             }

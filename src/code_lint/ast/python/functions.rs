@@ -1,6 +1,5 @@
-//! Python function signatures, parameter extraction, method receivers, and direct scope definitions.
+//! Python function signatures, parameter extraction, and method receivers.
 
-use super::class_declarations::{PythonClassDeclaration, is_protocol_or_abc_class};
 use super::decorators::{DecoratorInfo, extract_decorators_from_slice};
 use super::docstrings::{PythonDocstring, docstring_of};
 use super::names::written_name;
@@ -128,24 +127,6 @@ impl PythonFunctionSignature<'_> {
         is_exempt_dunder_method(&self.name) || self.has_exempt_signature_decorator
     }
 
-    /// Returns true if the function is exempt from signature annotation rules: its signature
-    /// is imposed ([`Self::has_imposed_signature`]) or it is a method of a `Protocol` or `ABC`
-    /// class.
-    #[must_use]
-    pub fn is_exempt_from_signature_rules(&self) -> bool {
-        self.has_imposed_signature()
-            || self
-                .enclosing_class
-                .is_some_and(|class_def| is_protocol_or_abc_class(class_def, self.name_node.file))
-    }
-
-    /// Returns true if the function is exempt from body-usage parameter rules (signature-exempt
-    /// functions or stub bodies consisting only of `...`, `pass`, or `raise NotImplementedError`).
-    #[must_use]
-    pub fn is_exempt_from_body_usage_rules(&self) -> bool {
-        self.is_exempt_from_signature_rules() || self.has_stub_body
-    }
-
     /// Returns true if the function is decorated with `@override` (`typing.override` or
     /// `typing_extensions.override`), resolved through the file's imports.
     #[must_use]
@@ -173,9 +154,9 @@ impl PythonFunctionSignature<'_> {
     #[must_use]
     pub fn is_documented_by_enclosing_class(&self) -> bool {
         self.is_constructor()
-            && self
-                .enclosing_class()
-                .is_some_and(|class| class.docstring.is_some())
+            && self.enclosing_class.is_some_and(|class_def| {
+                docstring_of(&class_def.body, self.name_node.file).is_some()
+            })
     }
 
     /// Returns true if the function is documented elsewhere, so docstring rules skip it: a
@@ -208,14 +189,6 @@ impl<'a> PythonFunctionSignature<'a> {
     #[must_use]
     pub fn docstring(&self) -> Option<PythonDocstring<'a>> {
         docstring_of(&self.definition.body, self.name_node.file)
-    }
-
-    /// The class whose body directly contains this function (when that `class` is its nearest
-    /// enclosing `def` or `class`), or `None` for module-level and nested functions.
-    #[must_use]
-    pub fn enclosing_class(&self) -> Option<PythonClassDeclaration<'a>> {
-        self.enclosing_class
-            .map(|class_def| PythonClassDeclaration::from_ast(class_def, self.name_node.file))
     }
 }
 
@@ -698,26 +671,5 @@ mod tests {
         let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
         assert_eq!(sigs[0].has_stub_body, expected);
-    }
-
-    #[rstest::rstest]
-    #[case::protocol_class(
-        "class P(Protocol):\n    def f(self, x: list[int]) -> None: pass",
-        true
-    )]
-    #[case::generic_protocol_class(
-        "class P(typing.Protocol[T]):\n    def f(self, x: list[int]) -> None: pass",
-        true
-    )]
-    #[case::abc_class("class A(abc.ABC):\n    def f(self, x: list[int]) -> None: pass", true)]
-    #[case::abc_meta_class(
-        "class A(metaclass=abc.ABCMeta):\n    def f(self, x: list[int]) -> None: pass",
-        true
-    )]
-    #[case::regular_class("class C:\n    def f(self, x: list[int]) -> None: pass", false)]
-    fn test_is_in_protocol_or_abc_class(#[case] source: &str, #[case] expected: bool) {
-        let file = ParsedFile::new(source, Language::Python);
-        let sigs = extract_function_signatures(&file);
-        assert_eq!(sigs[0].is_exempt_from_signature_rules(), expected);
     }
 }

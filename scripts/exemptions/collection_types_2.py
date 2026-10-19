@@ -350,7 +350,7 @@ CLUSTER = Cluster(
             path=MUTABLE_COLLECTION_ATTRIBUTE,
             edits=(
                 (
-                    "            || attribute.is_mutated_in_class\n",
+                    " || attribute.is_mutated_in_class",
                     "",
                 ),
             ),
@@ -374,8 +374,8 @@ CLUSTER = Cluster(
             path=MUTABLE_COLLECTION_ATTRIBUTE,
             edits=(
                 (
-                    "            || attribute.is_typed_dict_key\n",
-                    "",
+                    "class.is_interface() || class.is_typed_dict()",
+                    "class.is_interface()",
                 ),
             ),
             cases=("mutable_collection_attribute::pass::typed_dict_keys_exempt",),

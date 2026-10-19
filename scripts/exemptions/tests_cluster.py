@@ -1023,7 +1023,10 @@ CLUSTER = Cluster(
             path=FAKE_WITHOUT_PROTOCOL,
             edits=(
                 (
-                    "                && decl.bases.iter().all(PythonBaseClass::is_structural_marker)",
+                    "                && class\n"
+                    "                    .bases\n"
+                    "                    .iter()\n"
+                    "                    .all(PythonBaseClass::is_structural_marker)",
                     "                && true",
                 ),
             ),

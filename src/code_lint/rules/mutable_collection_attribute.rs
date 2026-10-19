@@ -2,8 +2,8 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    AnnotationTraversalDepth, CollectionKind, PythonCollectionType, collect_class_attributes,
-    collect_collection_types,
+    AnnotationTraversalDepth, CollectionKind, PythonCollectionType, collect_collection_types,
+    extract_classes,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::read_only_collection_replacements;
@@ -98,38 +98,39 @@ pub const RULE: CodeRule = CodeRule {
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    for attribute in collect_class_attributes(file) {
-        if attribute.name.starts_with('_')
-            || attribute.is_in_protocol_or_abc
-            || attribute.is_mutated_in_class
-            || attribute.is_typed_dict_key
-        {
+    for class in extract_classes(file) {
+        if class.is_interface() || class.is_typed_dict() {
             continue;
         }
-        let matched: Vec<_> = collect_collection_types(
-            &attribute.type_node,
-            AnnotationTraversalDepth::TransparentWrappersOnly,
-        )
-        .into_iter()
-        .filter(|collection_type| collection_type.kind == CollectionKind::AbstractMutable)
-        .collect();
-        if matched.is_empty() {
-            continue;
+        for attribute in class.annotated_attributes() {
+            if attribute.name.starts_with('_') || attribute.is_mutated_in_class {
+                continue;
+            }
+            let matched: Vec<_> = collect_collection_types(
+                &attribute.type_node,
+                AnnotationTraversalDepth::TransparentWrappersOnly,
+            )
+            .into_iter()
+            .filter(|collection_type| collection_type.kind == CollectionKind::AbstractMutable)
+            .collect();
+            if matched.is_empty() {
+                continue;
+            }
+            let token = PythonCollectionType::joined_paths(&matched);
+            let replacement = read_only_collection_replacements(&matched);
+            let expression = attribute.type_node.text();
+            diagnostics.push(rule.diagnostic_at_node(
+                path,
+                &attribute.type_node,
+                &[
+                    ("name", &attribute.name),
+                    ("class", &class.name),
+                    ("expression", expression.as_ref()),
+                    ("token", &token),
+                    ("replacement", &replacement),
+                ],
+            ));
         }
-        let token = PythonCollectionType::joined_paths(&matched);
-        let replacement = read_only_collection_replacements(&matched);
-        let expression = attribute.type_node.text();
-        diagnostics.push(rule.diagnostic_at_node(
-            path,
-            &attribute.type_node,
-            &[
-                ("name", &attribute.name),
-                ("class", &attribute.class_name),
-                ("expression", expression.as_ref()),
-                ("token", &token),
-                ("replacement", &replacement),
-            ],
-        ));
     }
     diagnostics
 }

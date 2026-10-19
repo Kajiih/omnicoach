@@ -3,7 +3,7 @@
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     AnnotationTraversalDepth, CollectionKind, PythonCollectionType, collect_collection_types,
-    extract_function_signatures,
+    extract_function_signatures, is_exempt_from_signature_rules,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::read_only_collection_replacements;
@@ -86,7 +86,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
     let mut diagnostics = Vec::new();
 
     for signature in extract_function_signatures(file) {
-        if signature.is_exempt_from_signature_rules() {
+        if is_exempt_from_signature_rules(&signature) {
             continue;
         }
         let Some(ref return_type_node) = signature.return_type_node else {

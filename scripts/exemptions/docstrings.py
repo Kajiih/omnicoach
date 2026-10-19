@@ -173,7 +173,7 @@ CLUSTER = Cluster(
         Mutation(
             label="Enum classes (undocumented-public-attribute)",
             path=UNDOCUMENTED_PUBLIC_ATTRIBUTE,
-            edits=(("|| decl.is_enum() {", "|| decl.name.is_empty() {"),),
+            edits=(("|| class.is_enum() {", "|| class.name.is_empty() {"),),
             cases=("undocumented_public_attribute::pass::enum_members_exempt",),
         ),
         Mutation(
@@ -570,8 +570,8 @@ CLUSTER = Cluster(
             path=CLASSES,
             edits=(
                 (
-                    "                .rposition(|candidate| candidate.declaration().name == name)",
-                    "                .position(|candidate| candidate.declaration().name == name)",
+                    "                .rposition(|candidate| candidate.name == name)",
+                    "                .position(|candidate| candidate.name == name)",
                 ),
             ),
             cases=(

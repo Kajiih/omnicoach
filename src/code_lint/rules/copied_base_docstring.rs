@@ -128,10 +128,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                 diagnostics.push(rule.diagnostic_at_node(
                     path,
                     &docstring.node(),
-                    &[
-                        (FUNCTION, &method.name),
-                        (CLASS, &ancestor.declaration().name),
-                    ],
+                    &[(FUNCTION, &method.name), (CLASS, &ancestor.name)],
                 ));
             }
         }

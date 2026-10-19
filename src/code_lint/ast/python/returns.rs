@@ -4,6 +4,7 @@
 //! Design: `docs/dev/return_contracts/03_design.md` (D1, D2).
 
 use super::annotations::{PythonReturnTypeUnion, positional_tuple_return_arity, return_type_union};
+use super::classes::is_exempt_from_signature_rules;
 use super::effects::in_place_mutated_receiver_expr;
 use super::functions::{PythonFunctionSignature, extract_function_signatures};
 use super::names::written_name;
@@ -79,13 +80,13 @@ impl PythonFunctionSignature<'_> {
 }
 
 /// See [`crate::code_lint::ast::collect_function_returns`]: functions whose signature is imposed
-/// ([`PythonFunctionSignature::is_exempt_from_signature_rules`]) are skipped.
+/// ([`is_exempt_from_signature_rules`]) are skipped.
 pub(in crate::code_lint::ast) fn collect_function_returns(
     file: &ParsedFile,
 ) -> Vec<FunctionReturn<'_>> {
     extract_function_signatures(file)
         .into_iter()
-        .filter(|signature| !signature.is_exempt_from_signature_rules())
+        .filter(|signature| !is_exempt_from_signature_rules(signature))
         .map(|signature| FunctionReturn {
             shape: signature.return_shape(),
             name: signature.name,

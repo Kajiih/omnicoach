@@ -5,7 +5,6 @@ from __future__ import annotations
 from .model import (
     ANNOTATIONS,
     AST,
-    CLASS_DECLARATIONS,
     CLASSES,
     CONCRETE_COLLECTION_ATTRIBUTE,
     CONCRETE_COLLECTION_PARAMETER,
@@ -369,11 +368,11 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Protocol class methods and attributes exempt from collection rules",
-            path=CLASS_DECLARATIONS,
+            path=CLASSES,
             edits=(
                 (
-                    "    is_protocol_class(class_def, file) || is_abc_class(class_def, file)",
-                    "    is_abc_class(class_def, file)",
+                    "        self.is_protocol() || self.is_abc()",
+                    "        self.is_abc()",
                 ),
             ),
             cases=(
@@ -389,11 +388,11 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="ABC class methods and attributes exempt from collection rules",
-            path=CLASS_DECLARATIONS,
+            path=CLASSES,
             edits=(
                 (
-                    "    is_protocol_class(class_def, file) || is_abc_class(class_def, file)",
-                    "    is_protocol_class(class_def, file)",
+                    "        self.is_protocol() || self.is_abc()",
+                    "        self.is_protocol()",
                 ),
             ),
             cases=(
@@ -410,8 +409,8 @@ CLUSTER = Cluster(
             path=CONCRETE_COLLECTION_ATTRIBUTE,
             edits=(
                 (
-                    "if attribute.name.starts_with('_') || attribute.is_in_protocol_or_abc {",
-                    "if attribute.is_in_protocol_or_abc {",
+                    "            if attribute.name.starts_with('_') {",
+                    "            if false {",
                 ),
             ),
             cases=("concrete_collection_attribute::pass::private_attributes_exempt",),
@@ -586,8 +585,8 @@ CLUSTER = Cluster(
             path=INLINE_PUBLIC_ATTRIBUTE_ANNOTATION,
             edits=(
                 (
-                    "!attribute.name.starts_with('_')",
-                    "true",
+                    "attribute.name.starts_with('_') || ",
+                    "",
                 ),
             ),
             cases=(
@@ -597,7 +596,7 @@ CLUSTER = Cluster(
         Mutation(
             label="bare Final inline annotation exempt from inline-public-attribute-annotation",
             path=INLINE_PUBLIC_ATTRIBUTE_ANNOTATION,
-            edits=(("&& !attribute.is_bare_final()", ""),),
+            edits=((" || attribute.is_bare_final()", ""),),
             cases=(
                 "inline_public_attribute_annotation::pass::bare_final_inline_annotation_exempt",
                 "inline_public_attribute_annotation::pass::annotated_wrapped_bare_final_exempt",
@@ -709,7 +708,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="@dataclass classes exempt from inline-public-attribute-annotation",
-            path=CLASS_DECLARATIONS,
+            path=CLASSES,
             edits=(('    "dataclass",\n    "dataclasses.dataclass",\n', ""),),
             cases=(
                 "inline_public_attribute_annotation::pass::dataclass_post_init_inline_annotation_exempt",
@@ -717,7 +716,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="attrs @define classes exempt from inline-public-attribute-annotation",
-            path=CLASS_DECLARATIONS,
+            path=CLASSES,
             edits=(('    "attrs.define",\n', ""),),
             cases=(
                 "inline_public_attribute_annotation::pass::attrs_define_inline_annotation_exempt",
@@ -725,18 +724,10 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Pydantic BaseModel subclasses exempt from inline-public-attribute-annotation",
-            path=CLASS_DECLARATIONS,
+            path=CLASSES,
             edits=(
                 (
-                    "\n"
-                    "        || resolved_base_class_paths(class_def, file)\n"
-                    "            .iter()\n"
-                    "            .any(|path| {\n"
-                    "                matches!(\n"
-                    "                    path.as_str(),\n"
-                    '                    "BaseModel" | "pydantic.BaseModel" | "pydantic.main.BaseModel"\n'
-                    "                )\n"
-                    "            })",
+                    "\n            || self.has_base_in(PYDANTIC_BASE_MODEL_PATHS)",
                     "",
                 ),
             ),
@@ -746,23 +737,13 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="aliased Pydantic BaseModel subclasses exempt from inline-public-attribute-annotation",
-            path=CLASS_DECLARATIONS,
+            path=CLASSES,
             edits=(
                 (
-                    "        || resolved_base_class_paths(class_def, file)\n"
-                    "            .iter()\n"
-                    "            .any(|path| {\n"
-                    "                matches!(\n"
-                    "                    path.as_str(),\n"
-                    '                    "BaseModel" | "pydantic.BaseModel" | "pydantic.main.BaseModel"',
-                    "        || class_def\n"
-                    "            .bases()\n"
-                    "            .iter()\n"
-                    "            .map(|base| written_name(base, &file.source).path)\n"
-                    "            .any(|path| {\n"
-                    "                matches!(\n"
-                    "                    path.as_str(),\n"
-                    '                    "BaseModel" | "pydantic.BaseModel" | "pydantic.main.BaseModel"',
+                    "self.has_base_in(PYDANTIC_BASE_MODEL_PATHS)",
+                    "self.bases\n"
+                    "                .iter()\n"
+                    "                .any(|base| PYDANTIC_BASE_MODEL_PATHS.contains(&base.unsubscripted_name()))",
                 ),
             ),
             cases=(
@@ -782,8 +763,8 @@ CLUSTER = Cluster(
         Unmutated(
             label="constructs the extractor never visits",
             reason=(
-                "String literals are not parsed as type expressions; `collect_class_attributes` and "
-                "`collect_instance_attribute_annotations` only visit `Stmt::ClassDef` bodies; and "
+                "String literals are not parsed as type expressions; `PythonClassInfo::annotated_attributes` "
+                "and `instance_attribute_annotations` only read `class` bodies; and "
                 "`collect_self_annotated_assignments` only matches `self.<attr>: <type>` (`Expr::Attribute` "
                 "with an `Expr::Name` receiver)."
             ),

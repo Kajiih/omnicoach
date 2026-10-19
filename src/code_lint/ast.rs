@@ -932,7 +932,8 @@ mod tests {
             "},
             Language::Python,
         );
-        let attributes = python::collect_instance_attribute_annotations(&attribute_file);
+        let attributes =
+            python::extract_classes(&attribute_file)[0].instance_attribute_annotations();
         assert_eq!(attributes.len(), 1);
         assert_eq!(
             attributes[0].first_method,

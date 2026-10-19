@@ -12,7 +12,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     AnnotationTraversalDepth, CollectionKind, ParameterCollectionCapability, PythonCollectionType,
     PythonParameterKind, collect_collection_types, extract_function_signatures,
-    summarize_parameter_usages,
+    is_exempt_from_body_usage_rules, summarize_parameter_usages,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
@@ -99,7 +99,7 @@ pub const RULE: CodeRule = CodeRule {
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for signature in extract_function_signatures(file) {
-        if signature.is_exempt_from_body_usage_rules() {
+        if is_exempt_from_body_usage_rules(&signature) {
             continue;
         }
         let usages = LazyCell::new(|| summarize_parameter_usages(&signature));

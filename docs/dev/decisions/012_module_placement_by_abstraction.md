@@ -20,18 +20,19 @@ To place an item, state its contract in one sentence (inputs, output, meaning). 
 - **P3. A cycle reveals conflated abstractions**: dependencies point from an abstraction to the abstractions it is defined in terms of. When two modules depend on each other, at least one holds two abstractions; split it until the graph is acyclic.
 - **P4. Parent modules route**: a module whose children are the abstractions (`mod` + `pub use`) is not itself an abstraction and holds no items.
 - **P5. Names follow abstractions**: the same abstraction has the same name in every language. Distinct abstractions keep their own names even when they play the same role.
+- **P6. One derivation per fact; a fact relating two abstractions belongs to the higher one**: each fact is computed in one place, from one representation, by the abstraction that owns it. A fact that combines two abstractions (a function's role in its class) belongs to the one already stated in terms of the other; the lower abstraction may navigate to its container's syntax but never re-derives the container's facts. Two symptoms reveal a violation: a second code path for a fact the owner already computes (a predicate over raw nodes next to a model that stores the same resolved data), and a dependency that exists for a single item.
 
 ### Worked examples (`code_lint::ast`)
 
 | Item | Contract | Owner | Not |
 |---|---|---|---|
-| `is_protocol_or_abc_class` | the `class` statement inherits `Protocol`/`ABC` or declares `metaclass=ABCMeta` | class declarations | `names` (a dependency); `functions` (a caller) |
+| `is_exempt_from_signature_rules` | the function's signature is imposed, or it is a method of a `Protocol`/`ABC` class | class model (a function's role in its class) | `functions` (one of its inputs) |
 | `direct_function_definitions` | the `FunctionDef` statements that are immediate children of a body | syntax-tree navigation | `bindings`, `classes`, `functions` (callers) |
 | `has_override_decorator` | the function overrides a base method | functions | decorators (the mechanism) |
 | `fstring_segments_and_interpolations` | an f-string split into literal text and replacement fields | format strings | string literals in general |
 | `attribute_terminal_name` (Rust) | the terminal name of an attribute's path | Rust attributes | `names` (a dependency) |
 
-`classes` ↔ `functions` (P3): the enclosing class a function needs is the class **declaration** (name, bases, kind, decorators, docstring). The members a class needs are functions. So the class declaration and the class model are two abstractions: `functions → class declarations`, and `class model → functions, class declarations`.
+`classes` ↔ `functions` (P3): `functions` needed its enclosing class only to answer "is this a method of a `Protocol` or `ABC`?" in `is_exempt_from_signature_rules`. That fact relates a function to its class, so it belongs to the class model, which is already stated in terms of functions. `functions` keeps a syntax pointer to the enclosing `class` statement, and `classes` derives the class kinds once, from the resolved bases it stores. A separate "class declaration" type also broke the cycle, but every consumer then held two views of one class, and the predicates `functions` called over raw `class` nodes re-derived kinds the class model already computed.
 
 Python decorators and Rust attributes (P5) both mark definitions, but a decorator is an expression applied to the definition (resolved through imports, possibly called with arguments), while an attribute is declarative metadata (outer or inner, never applied). They are different abstractions, so `decorators` and `attributes` keep their language's name.
 

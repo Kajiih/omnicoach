@@ -168,12 +168,11 @@ fn check_file(
             let own_docstring = signature.docstring();
             let constructor_class = signature
                 .is_constructor()
-                .then(|| signature.enclosing_class())
-                .flatten()
-                .map(PythonClassInfo::from_declaration);
+                .then(|| ast::python::enclosing_class(&signature))
+                .flatten();
             let class_docstring = constructor_class
                 .as_ref()
-                .and_then(|class| class.declaration().docstring.as_ref());
+                .and_then(|class| class.docstring.as_ref());
             if own_docstring.is_none() && class_docstring.is_none() {
                 return None;
             }
