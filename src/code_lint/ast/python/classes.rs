@@ -3,7 +3,7 @@
 
 use super::annotations::is_bare_final_annotation_expr;
 use super::decorators::{DecoratorInfo, extract_decorators_from_slice};
-use super::docstrings::{DocstringSectionKind, PythonDocstring, docstring_of};
+use super::docstrings::{PythonDocstring, docstring_of};
 use super::effects::in_place_mutated_receiver_expr;
 use super::functions::{
     CLS_RECEIVER, OVERLOAD_DECORATOR_PATHS, PythonFunctionSignature, SELF_RECEIVER,
@@ -399,21 +399,6 @@ impl<'a> PythonClassInfo<'a> {
             .map(|parameter| parameter.name.as_str())
             .collect();
         unchanged_self_copies(&constructor.definition.body, &receiver, &parameter_names)
-    }
-
-    /// Names of parameters of [`Self::constructor`] that are stored unchanged on `self`
-    /// ([`Self::unchanged_constructor_parameters`]) and listed under `Attributes:` in the class
-    /// docstring.
-    #[must_use]
-    pub fn documented_unchanged_constructor_parameters(&self) -> HashSet<String> {
-        let Some(docstring) = &self.docstring else {
-            return HashSet::new();
-        };
-        let documented = docstring.section_entry_names(DocstringSectionKind::Attributes);
-        self.unchanged_constructor_parameters()
-            .into_iter()
-            .filter(|name| documented.contains(name))
-            .collect()
     }
 
     /// Returns true if the class is a `Protocol` or an `ABC`, so its members declare an

@@ -14,6 +14,7 @@ use crate::rule_declaration::{
     Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality,
     LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
 };
+use std::collections::HashSet;
 use std::path::Path;
 
 const MIN_STATEMENTS: CountOption = CountOption {
@@ -188,7 +189,7 @@ fn check_file(
             let documented_unchanged_attrs = constructor_class
                 .as_ref()
                 .filter(|_| signature.name == "__init__")
-                .map(PythonClassInfo::documented_unchanged_constructor_parameters)
+                .map(documented_unchanged_constructor_parameters)
                 .unwrap_or_default();
             let missing: Vec<String> = signature
                 .parameters
@@ -212,6 +213,21 @@ fn check_file(
                 ],
             ))
         })
+        .collect()
+}
+
+/// Names of parameters of `class.constructor()` that are stored unchanged on `self`
+/// ([`PythonClassInfo::unchanged_constructor_parameters`]) and listed under `Attributes:` in the
+/// class docstring.
+fn documented_unchanged_constructor_parameters(class: &PythonClassInfo<'_>) -> HashSet<String> {
+    let Some(docstring) = &class.docstring else {
+        return HashSet::new();
+    };
+    let documented = docstring.section_entry_names(DocstringSectionKind::Attributes);
+    class
+        .unchanged_constructor_parameters()
+        .into_iter()
+        .filter(|name| documented.contains(name))
         .collect()
 }
 
