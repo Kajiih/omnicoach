@@ -8,12 +8,11 @@ from .model import (
     INLINE_TEST_ALWAYS_FALSE,
     PY_DECL_ORDER,
     RS_DECL_ORDER,
+    SCOPE_GRAPH,
     Cluster,
     Mutation,
     Unmutated,
 )
-
-CONSTRUCTOR_RULE = "src/code_lint/rules/constructor_after_method.rs"
 
 FIELD = "field_after_method::pass::"
 ASSOCIATED = "associated_item_after_method::pass::"
@@ -26,11 +25,11 @@ MAIN_GUARD = "statement_after_main_guard::"
 MUTATIONS = (
     Mutation(
         "constructors grouped at the top",
-        CONSTRUCTOR_RULE,
+        CALL_CLUSTERS,
         (
             (
-                "            if seen_non_constructor {",
-                "            if std::mem::replace(&mut seen_non_constructor, true) {",
+                "if let Some(first_non_constructor) = items.iter().position(|item| !item.is_constructor) {",
+                "if let Some(first_non_constructor) = items.iter().position(|_| true) {",
             ),
         ),
         (
@@ -79,50 +78,39 @@ MUTATIONS = (
     Mutation(
         "helper right after its only caller",
         CALL_CLUSTERS,
-        (
-            (
-                "let is_just_after_owner = ((owner + 1)..pos).all(in_owner_cluster);",
-                "let is_just_after_owner = false && ((owner + 1)..pos).all(in_owner_cluster);",
-            ),
-        ),
+        (("(unit.is_some() && self.in_cluster[subject]) ||", "false ||"),),
         (UNCOLOCATED + "helper_right_after_its_only_caller_allowed",),
-    ),
-    Mutation(
-        "shared helper in the trailing section",
-        CALL_CLUSTERS,
-        (("return pos > last_pub_idx;", "return false;"),),
-        (UNCOLOCATED + "shared_helper_in_trailing_section_allowed",),
     ),
     Mutation(
         "single-caller helper in the trailing section",
         CALL_CLUSTERS,
         (
             (
-                "let is_at_scope_end =\n        pos > last_pub_idx &&",
-                "let is_at_scope_end =\n        false &&",
+                "|| self.is_trailing(subject)\n",
+                "|| (unit.is_none() && self.is_trailing(subject))\n",
             ),
         ),
         (UNCOLOCATED + "all_private_helpers_at_end_of_scope",),
     ),
     Mutation(
-        "second constructor keeps the trailing section valid",
+        "cluster below the last public function is not split from the trailing section",
         CALL_CLUSTERS,
-        (("all(|mid| roots_of[mid] != *roots)", "all(|mid| !in_owner_cluster(mid))"),),
-        (UNCOLOCATED + "second_constructor_keeps_trailing_section_valid",),
+        (("self.in_cluster[subject]\n                    || !(", "!("),),
+        (UNCOLOCATED + "cluster_of_last_public_function_before_shared_helper_allowed",),
     ),
     Mutation(
-        "constructor helper after the constructor cluster",
-        CALL_CLUSTERS,
-        (("|| (callables[owner].is_constructor", "|| (false"),),
+        "constructors form one entrypoint unit",
+        SCOPE_GRAPH,
+        (("first_constructor.unwrap_or(root)", "root"),),
         (UNCOLOCATED + "constructor_helper_after_constructor_cluster_allowed",),
     ),
     Mutation(
         "caller walk stops at public functions",
-        CALL_CLUSTERS,
+        SCOPE_GRAPH,
         (
             (
-                "pub_roots.push(caller);\n",
-                "pub_roots.push(caller);\n                        stack.push(caller);\n",
+                "roots.push(caller);\n",
+                "roots.push(caller);\n                        stack.push(caller);\n",
             ),
         ),
         (UNCOLOCATED + "public_caller_of_public_function_does_not_share_its_helpers",),
@@ -132,8 +120,8 @@ MUTATIONS = (
         CALL_CLUSTERS,
         (
             (
-                "&& pos < last_pub_idx\n            {\n                out.private_before_public.push(",
-                "&& pos < last_pub_idx\n            {\n                out.uncolocated_helpers.push(",
+                "Constraint::Below(last_public),\n                CallClusterRule::PrivateBeforePublic,",
+                "Constraint::Below(last_public),\n                CallClusterRule::UncolocatedHelper,",
             ),
         ),
         (UNCOLOCATED + "uncalled_private_function_exempt",),
@@ -158,8 +146,8 @@ MUTATIONS = (
         CALL_CLUSTERS,
         (
             (
-                "        if pos < max_root {",
-                "        if last_pub.is_some_and(|last| pos < last) {",
+                "Constraint::Below(root),",
+                "Constraint::Below(last_public.unwrap_or(root)),",
             ),
         ),
         (
@@ -190,8 +178,8 @@ MUTATIONS = (
         CALL_CLUSTERS,
         (
             (
-                "let pinned_before = callables[pos].pinned_before;",
-                "let pinned_before: Option<usize> = None;",
+                "if let Some(pin) = items[subject].pinned_before {",
+                "if let Some(pin) = None::<usize> {",
             ),
         ),
         (
@@ -204,13 +192,24 @@ MUTATIONS = (
     Mutation(
         "mutual recursion",
         CALL_CLUSTERS,
-        (("&& scc_id[caller] != scc_id[callee]", ""),),
+        (
+            (
+                "            && graph.private_recursion_group[edge.higher]\n"
+                "                != graph.private_recursion_group[edge.lower]\n",
+                "",
+            ),
+        ),
         (CALLEE + "mutual_recursion_exempt",),
     ),
     Mutation(
-        "functions flagged by an earlier stage",
+        "one finding per item",
         CALL_CLUSTERS,
-        (("if flagged_p1_or_p2[callee] || callables[callee]", "if callables[callee]"),),
+        (
+            (
+                ".filter_map(|subject_violations| {\n            subject_violations.iter().find_map(",
+                ".flat_map(|subject_violations| {\n            subject_violations.iter().filter_map(",
+            ),
+        ),
         (CALLEE + "function_flagged_by_earlier_stage_not_reported_again",),
     ),
     Mutation(
@@ -218,10 +217,9 @@ MUTATIONS = (
         CALL_CLUSTERS,
         (
             (
-                "if flagged_p1_or_p2[callee] || callables[callee].visibility == MethodVisibility::Public {",
-                "if flagged_p1_or_p2[callee] {",
+                "if is_private(edge.higher)\n            && is_private(edge.lower)\n            &&",
+                "if",
             ),
-            ("&& callables[caller].visibility == MethodVisibility::Private", ""),
         ),
         (CALLEE + "public_callee_before_public_caller_exempt",),
     ),
@@ -244,8 +242,8 @@ MUTATIONS = (
     ),
     Mutation(
         "signature types are not encapsulated callees",
-        CALL_CLUSTERS,
-        (("|| sig_closure[callee]", "|| false"),),
+        SCOPE_GRAPH,
+        (("is_type(candidate) && !signature[candidate]", "is_type(candidate)"),),
         (CALLEE + "signature_closure_type_not_encapsulated_exempt",),
     ),
     Mutation(
@@ -282,6 +280,8 @@ UNMUTATED = (
             ASSOCIATED + "associated_items_before_methods",
             PRIVATE_FIRST + "shared_helper_below_all_its_public_callers_allowed",
             PRIVATE_FIRST + "private_helper_after_pub_struct_impl_allowed",
+            UNCOLOCATED + "shared_helper_in_trailing_section_allowed",
+            UNCOLOCATED + "second_constructor_keeps_trailing_section_valid",
             CALLEE + "top_down_caller_before_callee_across_tiers",
             CALLEE + "top_down_impl_order",
             MAIN_GUARD + "pass::main_guard_at_end_of_module",

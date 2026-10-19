@@ -1,6 +1,6 @@
 //! Flags class and inherent `impl` constructors defined after regular methods.
 
-use crate::code_lint::ast::{self, ParsedFile, PlacementAnchor, TypeMethod, TypeMethodScope};
+use crate::code_lint::ast::{self, CallClusterRule, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -121,62 +121,22 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    ast::collect_type_method_scopes(file)
+    ast::collect_call_cluster_findings(file, CallClusterRule::ConstructorAfterMethod)
         .iter()
-        .flat_map(constructors_after_methods)
-        .map(|misplaced| {
-            let line = misplaced.anchor.line.to_string();
+        .map(|finding| {
+            let line = finding.anchor.line.to_string();
             rule.diagnostic_at_node(
                 path,
-                &misplaced.constructor.name_node,
+                &finding.name_node,
                 &[
-                    ("function", &misplaced.constructor.name),
-                    ("class", misplaced.type_name),
-                    ("anchor", &misplaced.anchor.name),
+                    ("function", &finding.item),
+                    ("class", &finding.related),
+                    ("anchor", &finding.anchor.name),
                     ("line", &line),
                 ],
             )
         })
         .collect()
-}
-
-struct MisplacedConstructor<'a> {
-    type_name: &'a str,
-    constructor: &'a TypeMethod<'a>,
-    anchor: PlacementAnchor,
-}
-
-/// Returns every constructor in `scope` that appears after at least one non-constructor method,
-/// paired with the first non-constructor method as its placement anchor.
-fn constructors_after_methods<'a>(scope: &'a TypeMethodScope<'a>) -> Vec<MisplacedConstructor<'a>> {
-    let Some(first_non_constructor) = scope
-        .methods
-        .iter()
-        .find(|method| !method.is_constructor)
-        .or_else(|| scope.methods.first())
-    else {
-        return Vec::new();
-    };
-    let anchor = PlacementAnchor {
-        name: first_non_constructor.name.clone(),
-        line: first_non_constructor.start_line,
-    };
-    let mut seen_non_constructor = false;
-    let mut misplaced = Vec::new();
-    for method in &scope.methods {
-        if method.is_constructor {
-            if seen_non_constructor {
-                misplaced.push(MisplacedConstructor {
-                    type_name: scope.type_name.as_str(),
-                    constructor: method,
-                    anchor: anchor.clone(),
-                });
-            }
-        } else {
-            seen_non_constructor = true;
-        }
-    }
-    misplaced
 }
 
 #[cfg(test)]

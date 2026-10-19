@@ -2,8 +2,7 @@
 
 use crate::code_lint::ast::python::collect_path_references;
 use crate::code_lint::ast::rust::summarize_rust_file;
-use crate::code_lint::ast::scope_facts::{ScopeFacts, collect_scope_facts};
-use crate::code_lint::ast::{DeclarationScopeKind, ParsedFile};
+use crate::code_lint::ast::{DeclarationScopeKind, ParsedFile, ScopeFacts, collect_scope_facts};
 use crate::diagnostic::Language;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 

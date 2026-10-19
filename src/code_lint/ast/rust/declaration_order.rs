@@ -4,9 +4,9 @@ use super::bindings::{collect_rust_fn_local_names, collect_rust_generic_param_na
 use super::names::{SELF_KEYWORD, SELF_TYPE_KEYWORD};
 use super::trivia::previous_non_trivia_token;
 use crate::code_lint::ast::{
-    AstNode, DeclarationScope, DeclarationScopeKind, MemberAfterMethod, MethodVisibility,
-    ParsedFile, PlacementAnchor, ScopeItem, ScopeItemKind, TypeMethod, extend_unique, push_unique,
-    span_from_rowan_range, split_at_redefinitions,
+    AstNode, DeclarationScope, DeclarationScopeKind, MemberAfterMethod, ParsedFile,
+    PlacementAnchor, RelationKind, ScopeItem, ScopeItemKind, Visibility, extend_references,
+    extend_unique, push_unique, span_from_rowan_range, split_at_redefinitions,
 };
 use ra_ap_syntax::ast::{
     self, HasGenericParams as _, HasModuleItem as _, HasName as _, HasVisibility as _,
@@ -146,9 +146,9 @@ fn collect_rust_module_decls<'a>(
                 if let Some(name_node) = function.name() {
                     let name = name_node.text().trim().to_owned();
                     let visibility = if function.visibility().is_some() || name == "main" {
-                        MethodVisibility::Public
+                        Visibility::Public
                     } else {
-                        MethodVisibility::Private
+                        Visibility::Private
                     };
                     declarations.push(RustModuleDecl {
                         name_node: AstNode::from_span(
@@ -189,7 +189,7 @@ struct RustModuleDecl<'a> {
     name_node: AstNode<'a>,
     name: String,
     start_line: usize,
-    visibility: MethodVisibility,
+    visibility: Visibility,
     syntax_start: usize,
     item: RustModuleItem,
 }
@@ -201,16 +201,16 @@ fn rust_type_decl<'a>(
 ) -> Option<RustModuleDecl<'a>> {
     let name_node = type_item.name()?;
     let name = name_node.text().trim().to_owned();
-    let method_visibility = if type_item.visibility().is_some() {
-        MethodVisibility::Public
+    let visibility = if type_item.visibility().is_some() {
+        Visibility::Public
     } else {
-        MethodVisibility::Private
+        Visibility::Private
     };
     Some(RustModuleDecl {
         name_node: AstNode::from_span(file, span_from_rowan_range(name_node.syntax().text_range())),
         name,
         start_line: file.line_index.line(syntax_start),
-        visibility: method_visibility,
+        visibility,
         syntax_start,
         item: RustModuleItem::Type(type_item.syntax().clone()),
     })
@@ -263,83 +263,42 @@ fn build_rust_module_scope_item<'a>(
     segment_is_type: &[bool],
     external_impl_callees: &HashMap<String, Vec<usize>>,
 ) -> ScopeItem<'a> {
-    let mut callees = Vec::new();
-    let mut definition_callees = Vec::new();
-    let mut param_callees = Vec::new();
-    let mut return_callees = Vec::new();
-    let mut body_callees = Vec::new();
+    let mut references = Vec::new();
     let kind = match &decl.item {
         RustModuleItem::Fn(function) => {
-            let generic_names = collect_rust_generic_param_names(function.syntax());
-            let local_names = collect_rust_fn_local_names(function);
-            collect_rust_module_item_refs(
-                function.syntax(),
+            collect_rust_fn_module_references(
+                function,
                 item_by_name,
                 segment_is_type,
                 external_impl_callees,
-                &local_names,
-                &mut callees,
+                &mut references,
             );
-            if let Some(params) = function.param_list() {
-                collect_rust_module_item_refs(
-                    params.syntax(),
-                    item_by_name,
-                    segment_is_type,
-                    external_impl_callees,
-                    &generic_names,
-                    &mut param_callees,
-                );
-            }
-            if let Some(where_clause) = function.where_clause() {
-                collect_rust_module_item_refs(
-                    where_clause.syntax(),
-                    item_by_name,
-                    segment_is_type,
-                    external_impl_callees,
-                    &generic_names,
-                    &mut param_callees,
-                );
-            }
-            if let Some(ret_type) = function.ret_type() {
-                collect_rust_module_item_refs(
-                    ret_type.syntax(),
-                    item_by_name,
-                    segment_is_type,
-                    external_impl_callees,
-                    &generic_names,
-                    &mut return_callees,
-                );
-            }
-            if let Some(body) = function.body() {
-                collect_rust_module_item_refs(
-                    body.syntax(),
-                    item_by_name,
-                    segment_is_type,
-                    external_impl_callees,
-                    &local_names,
-                    &mut body_callees,
-                );
-            }
             ScopeItemKind::Callable
         }
         RustModuleItem::Type(syntax) => {
             let local_names = collect_rust_generic_param_names(syntax);
+            let mut definition_callees = Vec::new();
             collect_rust_module_item_refs(
                 syntax,
                 item_by_name,
                 segment_is_type,
                 external_impl_callees,
                 &local_names,
-                &mut callees,
+                &mut definition_callees,
             );
-            definition_callees.clone_from(&callees);
+            extend_references(
+                &mut references,
+                definition_callees,
+                RelationKind::Composition,
+            );
             ScopeItemKind::Type
         }
     };
-    extend_unique(&mut callees, attached_impl_callees.iter().copied());
-    if kind == ScopeItemKind::Type {
-        body_callees.clone_from(&callees);
-    }
+    extend_references(
+        &mut references,
+        attached_impl_callees.iter().copied(),
+        RelationKind::Behavior,
+    );
     ScopeItem {
         name_node: decl.name_node,
         start_line: decl.start_line,
@@ -348,13 +307,80 @@ fn build_rust_module_scope_item<'a>(
         visibility: decl.visibility,
         is_constructor: false,
         kind,
-        callees,
-        definition_callees,
-        param_callees,
-        return_callees,
-        body_callees,
+        references,
         pinned_before: None,
     }
+}
+
+fn collect_rust_fn_module_references(
+    function: &ast::Fn,
+    item_by_name: &HashMap<&str, usize>,
+    segment_is_type: &[bool],
+    external_impl_callees: &HashMap<String, Vec<usize>>,
+    references: &mut Vec<(usize, RelationKind)>,
+) {
+    let generic_names = collect_rust_generic_param_names(function.syntax());
+    let local_names = collect_rust_fn_local_names(function);
+    let mut fn_callees = Vec::new();
+    let mut param_callees = Vec::new();
+    let mut return_callees = Vec::new();
+    let mut body_callees = Vec::new();
+    collect_rust_module_item_refs(
+        function.syntax(),
+        item_by_name,
+        segment_is_type,
+        external_impl_callees,
+        &local_names,
+        &mut fn_callees,
+    );
+    if let Some(params) = function.param_list() {
+        collect_rust_module_item_refs(
+            params.syntax(),
+            item_by_name,
+            segment_is_type,
+            external_impl_callees,
+            &generic_names,
+            &mut param_callees,
+        );
+    }
+    if let Some(where_clause) = function.where_clause() {
+        collect_rust_module_item_refs(
+            where_clause.syntax(),
+            item_by_name,
+            segment_is_type,
+            external_impl_callees,
+            &generic_names,
+            &mut param_callees,
+        );
+    }
+    if let Some(ret_type) = function.ret_type() {
+        collect_rust_module_item_refs(
+            ret_type.syntax(),
+            item_by_name,
+            segment_is_type,
+            external_impl_callees,
+            &generic_names,
+            &mut return_callees,
+        );
+    }
+    if let Some(body) = function.body() {
+        collect_rust_module_item_refs(
+            body.syntax(),
+            item_by_name,
+            segment_is_type,
+            external_impl_callees,
+            &local_names,
+            &mut body_callees,
+        );
+    }
+    for target in fn_callees {
+        if !param_callees.contains(&target) && !return_callees.contains(&target) {
+            push_unique(&mut body_callees, target);
+        }
+    }
+    extend_references(references, param_callees, RelationKind::Parameter);
+    extend_references(references, return_callees, RelationKind::Return);
+    extend_references(references, body_callees, RelationKind::Body);
 }
 
 enum RustModuleItem {
@@ -563,43 +589,26 @@ fn build_rust_impl_declaration_scope<'a>(
         return None;
     }
 
-    let method_by_name: HashMap<&str, usize> = methods
+    let method_by_name: HashMap<String, usize> = methods
         .iter()
         .enumerate()
-        .map(|(idx, (method, _))| (method.name.as_str(), idx))
+        .map(|(idx, (item, _))| (item.name.clone(), idx))
         .collect();
 
     let items = methods
-        .iter()
-        .map(|(method, function)| {
-            let mut callees = Vec::new();
+        .into_iter()
+        .map(|(mut item, function)| {
+            let mut body_callees = Vec::new();
             if let Some(body) = function.body() {
                 collect_rust_impl_method_refs(
                     body.syntax(),
                     &type_name,
                     &method_by_name,
-                    &mut callees,
+                    &mut body_callees,
                 );
             }
-            let body_callees = callees.clone();
-            let end_line =
-                AstNode::from_span(file, span_from_rowan_range(function.syntax().text_range()))
-                    .end_line();
-            ScopeItem {
-                name_node: method.name_node,
-                start_line: method.start_line,
-                end_line,
-                name: method.name.clone(),
-                visibility: method.visibility,
-                is_constructor: method.is_constructor,
-                kind: ScopeItemKind::Callable,
-                callees,
-                definition_callees: Vec::new(),
-                param_callees: Vec::new(),
-                return_callees: Vec::new(),
-                body_callees,
-                pinned_before: None,
-            }
+            extend_references(&mut item.references, body_callees, RelationKind::Body);
+            item
         })
         .collect();
 
@@ -614,7 +623,7 @@ fn build_rust_impl_declaration_scope<'a>(
 fn collect_rust_impl_method_refs(
     root: &SyntaxNode,
     type_name: &str,
-    method_by_name: &HashMap<&str, usize>,
+    method_by_name: &HashMap<String, usize>,
     out: &mut Vec<usize>,
 ) {
     let mut stack = vec![root.clone()];
@@ -686,12 +695,12 @@ fn is_followed_by_open_paren(token: &SyntaxToken) -> bool {
 }
 
 /// Collects direct non-test `fn` items of a Rust inherent `impl` block along with their
-/// [`TypeMethod`] metadata in source order.
+/// [`ScopeItem`] metadata in source order.
 fn collect_rust_impl_methods<'a>(
     associated_items: &ast::AssocItemList,
     type_name: &str,
     file: &'a ParsedFile,
-) -> Vec<(TypeMethod<'a>, ast::Fn)> {
+) -> Vec<(ScopeItem<'a>, ast::Fn)> {
     let mut methods = Vec::new();
     for assoc_item in associated_items.assoc_items() {
         let ast::AssocItem::Fn(function) = assoc_item else {
@@ -706,9 +715,9 @@ fn collect_rust_impl_methods<'a>(
         let name = name_node.text().trim().to_owned();
         let is_exported = function.visibility().is_some();
         let visibility = if is_exported {
-            MethodVisibility::Public
+            Visibility::Public
         } else {
-            MethodVisibility::Private
+            Visibility::Private
         };
         let has_self = function
             .param_list()
@@ -717,19 +726,22 @@ fn collect_rust_impl_methods<'a>(
             && !has_self
             && is_rust_constructor_name(&name)
             && returns_self_type(&function, type_name);
-        let start_line =
-            AstNode::from_span(file, span_from_rowan_range(function.syntax().text_range()))
-                .start_line();
+        let fn_node =
+            AstNode::from_span(file, span_from_rowan_range(function.syntax().text_range()));
         methods.push((
-            TypeMethod {
+            ScopeItem {
                 name_node: AstNode::from_span(
                     file,
                     span_from_rowan_range(name_node.syntax().text_range()),
                 ),
-                start_line,
+                start_line: fn_node.start_line(),
+                end_line: fn_node.end_line(),
                 name,
                 visibility,
                 is_constructor,
+                kind: ScopeItemKind::Callable,
+                references: Vec::new(),
+                pinned_before: None,
             },
             function,
         ));
@@ -857,11 +869,10 @@ fn impl_self_type_name(impl_item: &ast::Impl, source: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::code_lint::ast::collect_type_method_scopes;
 
     #[test]
-    fn test_collect_type_method_scopes_rust() {
-        use MethodVisibility::{Private, Public};
+    fn test_collect_impl_declaration_scopes_rust() {
+        use Visibility::{Private, Public};
 
         let source = indoc::indoc! {r"
             impl<'a> Client<'a> {
@@ -876,12 +887,15 @@ mod tests {
             }
         "};
         let file = ParsedFile::rust(source);
-        let scopes = collect_type_method_scopes(&file);
+        let scopes = collect_declaration_scopes(&file);
         let summary: Vec<_> = scopes
             .iter()
-            .map(|scope| {
+            .filter_map(|scope| {
+                let DeclarationScopeKind::Impl { type_name } = &scope.kind else {
+                    return None;
+                };
                 let methods: Vec<_> = scope
-                    .methods
+                    .items
                     .iter()
                     .map(|method| {
                         (
@@ -891,7 +905,7 @@ mod tests {
                         )
                     })
                     .collect();
-                (scope.type_name.as_str(), methods)
+                Some((type_name.as_str(), methods))
             })
             .collect();
         assert_eq!(

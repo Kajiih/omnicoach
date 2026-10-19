@@ -22,8 +22,7 @@ pub use self::project_facts::{
 };
 pub use self::render::{ALPHA_BANNER, OutputFormat, render_graph};
 
-use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::ast::scope_facts::collect_scope_facts;
+use crate::code_lint::ast::{ParsedFile, collect_scope_facts};
 use crate::config::Config;
 use crate::diagnostic::Language;
 use std::fs;

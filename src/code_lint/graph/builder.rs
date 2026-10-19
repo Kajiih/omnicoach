@@ -6,8 +6,9 @@ use super::{
     GroupNode, ModelError, ModuleFact, NodeFinding, NodeId, NodeVisibility, OrderingEdge,
     ProjectFacts, ReferenceEdge, ReferenceKind, ReflexionStatus, SourceLocation, SummaryEdge,
 };
-use crate::code_lint::ast::scope_facts::{
-    ItemFacts, ItemKind, OrderingReason, RelationKind, ScopeFacts, ScopeLabel, Visibility,
+use crate::code_lint::ast::{
+    DeclarationScopeKind, ItemFacts, OrderingReason, RelationKind, ScopeFacts, ScopeItemKind,
+    Visibility,
 };
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
@@ -704,11 +705,11 @@ fn build_scope_graph(
     })
 }
 
-fn format_scope_title(file_path: &str, label: &ScopeLabel) -> String {
+fn format_scope_title(file_path: &str, label: &DeclarationScopeKind) -> String {
     match label {
-        ScopeLabel::Module => file_path.to_owned(),
-        ScopeLabel::Class { name } => format!("{file_path}::class {name}"),
-        ScopeLabel::Impl { type_name } => format!("{file_path}::impl {type_name}"),
+        DeclarationScopeKind::Module => file_path.to_owned(),
+        DeclarationScopeKind::Class { name } => format!("{file_path}::class {name}"),
+        DeclarationScopeKind::Impl { type_name } => format!("{file_path}::impl {type_name}"),
     }
 }
 
@@ -760,7 +761,7 @@ fn extract_type_member_groups(
 ) -> ExtractedTypeMembers {
     let mut groups = BTreeMap::new();
     let mut declarations = Vec::new();
-    if scopes[primary_scope_index].scope != ScopeLabel::Module {
+    if scopes[primary_scope_index].scope != DeclarationScopeKind::Module {
         return ExtractedTypeMembers {
             groups,
             declarations,
@@ -777,9 +778,9 @@ fn extract_type_member_groups(
                 continue;
             }
             let matches_type = match &candidate.scope {
-                ScopeLabel::Class { name } => name == &type_decl.name,
-                ScopeLabel::Impl { type_name } => type_name == &type_decl.name,
-                ScopeLabel::Module => false,
+                DeclarationScopeKind::Class { name } => name == &type_decl.name,
+                DeclarationScopeKind::Impl { type_name } => type_name == &type_decl.name,
+                DeclarationScopeKind::Module => false,
             };
             if matches_type {
                 let prefix = TypeMemberPrefix {
@@ -929,8 +930,8 @@ fn build_declaration_node(
         (
             item.name.clone(),
             match item.kind {
-                ItemKind::Callable => DeclarationKind::Callable,
-                ItemKind::Type => DeclarationKind::Type,
+                ScopeItemKind::Callable => DeclarationKind::Callable,
+                ScopeItemKind::Type => DeclarationKind::Type,
             },
             mapped_owners,
         )
@@ -1403,7 +1404,10 @@ fn compute_scc_and_levels(
 mod tests {
     use super::super::{ComponentFact, CrossModuleRefFact};
     use super::*;
-    use crate::code_lint::ast::scope_facts::{FindingFact, OrderingFact, RelationFact};
+    use crate::code_lint::ast::{
+        FindingFact, OrderingEdge as OrderingFact, OrderingReason, Ownership, PlacementAnchor,
+        RelationFact,
+    };
 
     fn sample_scopes() -> Vec<ScopeFacts> {
         vec![sample_module_scope(), sample_impl_scope()]
@@ -1411,11 +1415,11 @@ mod tests {
 
     fn sample_module_scope() -> ScopeFacts {
         ScopeFacts {
-            scope: ScopeLabel::Module,
+            scope: DeclarationScopeKind::Module,
             items: vec![
                 sample_item(
                     "entry_a",
-                    ItemKind::Callable,
+                    ScopeItemKind::Callable,
                     Visibility::Public,
                     10,
                     &[0],
@@ -1424,7 +1428,7 @@ mod tests {
                 ),
                 sample_item(
                     "entry_b",
-                    ItemKind::Callable,
+                    ScopeItemKind::Callable,
                     Visibility::Public,
                     20,
                     &[1],
@@ -1435,12 +1439,25 @@ mod tests {
                     findings: vec![FindingFact {
                         rule: "callee-before-caller",
                         related: "entry_a".to_owned(),
+                        reason: Some(OrderingReason::Encapsulation),
+                        anchor: PlacementAnchor {
+                            name: "entry_a".to_owned(),
+                            line: 10,
+                        },
                     }],
-                    ..sample_item("Spec", ItemKind::Type, Visibility::Private, 30, &[0], 2, 1)
+                    ..sample_item(
+                        "Spec",
+                        ScopeItemKind::Type,
+                        Visibility::Private,
+                        30,
+                        &[0],
+                        2,
+                        1,
+                    )
                 },
                 sample_item(
                     "only_a",
-                    ItemKind::Callable,
+                    ScopeItemKind::Callable,
                     Visibility::Private,
                     40,
                     &[0],
@@ -1449,7 +1466,7 @@ mod tests {
                 ),
                 sample_item(
                     "shared_ab",
-                    ItemKind::Callable,
+                    ScopeItemKind::Callable,
                     Visibility::Private,
                     50,
                     &[0, 1],
@@ -1476,7 +1493,7 @@ mod tests {
 
     fn sample_impl_scope() -> ScopeFacts {
         ScopeFacts {
-            scope: ScopeLabel::Impl {
+            scope: DeclarationScopeKind::Impl {
                 type_name: "Spec".to_owned(),
             },
             items: vec![
@@ -1484,7 +1501,7 @@ mod tests {
                     is_constructor: true,
                     ..sample_item(
                         "new",
-                        ItemKind::Callable,
+                        ScopeItemKind::Callable,
                         Visibility::Public,
                         32,
                         &[0],
@@ -1494,7 +1511,7 @@ mod tests {
                 },
                 sample_item(
                     "validate",
-                    ItemKind::Callable,
+                    ScopeItemKind::Callable,
                     Visibility::Private,
                     36,
                     &[0],
@@ -1509,7 +1526,7 @@ mod tests {
 
     fn sample_item(
         name: &str,
-        kind: ItemKind,
+        kind: ScopeItemKind,
         visibility: Visibility,
         line: usize,
         roots: &[usize],
@@ -1526,6 +1543,12 @@ mod tests {
             column: 1,
             signature: None,
             roots: roots.to_vec(),
+            unit_owners: roots.to_vec(),
+            ownership: match roots {
+                [] => Ownership::Unowned,
+                [only] => Ownership::Owner(*only),
+                _ => Ownership::Shared,
+            },
             recursion_group,
             level,
             findings: Vec::new(),

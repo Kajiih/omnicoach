@@ -24,18 +24,19 @@ mod call_clusters;
 mod imports;
 pub mod python;
 pub mod rust;
-pub mod scope_facts;
+mod scope_facts;
 mod test_analysis;
 
 pub(in crate::code_lint::ast) use self::call_clusters::{
-    CachedCallClusterFindings, CachedCallOrderFinding, DeclarationScope, ScopeItem,
-    analyze_declaration_scope, compute_public_roots, compute_stage3_callees, compute_tarjan_sccs,
-    extend_unique, push_unique, split_at_redefinitions,
+    CachedCallOrderFinding, DeclarationScope, ScopeGraph, ScopeItem, extend_references,
+    extend_unique, push_unique, scope_findings, split_at_redefinitions,
 };
 pub use self::call_clusters::{
-    CallClusterFindings, CallOrderFinding, DeclarationScopeKind, MemberAfterMethod,
-    MethodVisibility, PlacementAnchor, ScopeItemKind, TypeMethod, TypeMethodScope,
+    CallClusterRule, CallOrderFinding, DeclarationScopeKind, MemberAfterMethod, OrderingEdge,
+    OrderingReason, Ownership, PlacementAnchor, RelationFact, RelationKind, ScopeItemKind,
+    Visibility, levels, strongly_connected_components,
 };
+pub use self::scope_facts::{FindingFact, ItemFacts, ScopeFacts, collect_scope_facts};
 pub use self::test_analysis::{
     AssertionCheck, MultiPhaseTest, TestAssertionCount, TestFunctionSetup, TestLogicConstruct,
     TestToTestCall,
@@ -176,7 +177,7 @@ pub struct ParsedFile {
     pub(in crate::code_lint::ast) rust_inline_test_ranges: OnceLock<Vec<std::ops::Range<usize>>>,
     pub(in crate::code_lint::ast) imports: OnceLock<ImportMap>,
     pub(in crate::code_lint::ast) locally_mutated_return_functions: OnceLock<HashSet<String>>,
-    pub(in crate::code_lint::ast) call_cluster_findings: OnceLock<CachedCallClusterFindings>,
+    pub(in crate::code_lint::ast) call_cluster_findings: OnceLock<Vec<CachedCallOrderFinding>>,
 }
 
 impl ParsedFile {
@@ -718,34 +719,6 @@ pub fn is_predicate_name(name: &str) -> bool {
             })
 }
 
-/// Collects each Python `class` and Rust inherent `impl` block in `file` with its direct methods
-/// in source order.
-#[must_use]
-pub fn collect_type_method_scopes(file: &ParsedFile) -> Vec<TypeMethodScope<'_>> {
-    collect_declaration_scopes(file)
-        .into_iter()
-        .filter_map(|scope| {
-            let type_name = match scope.kind {
-                DeclarationScopeKind::Class { name }
-                | DeclarationScopeKind::Impl { type_name: name } => name,
-                DeclarationScopeKind::Module => return None,
-            };
-            let methods = scope
-                .items
-                .into_iter()
-                .map(|item| TypeMethod {
-                    name_node: item.name_node,
-                    name: item.name,
-                    start_line: item.start_line,
-                    visibility: item.visibility,
-                    is_constructor: item.is_constructor,
-                })
-                .collect();
-            Some(TypeMethodScope { type_name, methods })
-        })
-        .collect()
-}
-
 /// Collects non-method members (type-annotated Python class/instance attributes or Rust
 /// associated `type` / `const` items) declared after a method in the same `class`, `impl`, or
 /// `trait` body.
@@ -754,35 +727,50 @@ pub fn collect_members_after_methods(file: &ParsedFile) -> Vec<MemberAfterMethod
     dispatch_lang!(file.lang(), collect_members_after_methods(file))
 }
 
-/// Computes and memoizes the declaration-cluster ordering findings (`private-before-public`,
-/// `uncolocated-helper`, and `callee-before-caller`) across all module and class/`impl` scopes
-/// in `file`.
+/// Computes and memoizes the call-cluster placement findings across all module and class/`impl`
+/// scopes in `file`, and returns those of `rule`.
 #[must_use]
-pub fn collect_call_cluster_findings(file: &ParsedFile) -> CallClusterFindings<'_> {
+pub fn collect_call_cluster_findings(
+    file: &ParsedFile,
+    rule: CallClusterRule,
+) -> Vec<CallOrderFinding<'_>> {
     let cached = file.call_cluster_findings.get_or_init(|| {
-        let scopes = collect_declaration_scopes(file);
-        let mut out = CachedCallClusterFindings::default();
-        for scope in &scopes {
-            analyze_declaration_scope(scope, &mut out);
+        let mut out = Vec::new();
+        for scope in collect_declaration_scopes(file) {
+            let graph = ScopeGraph::new(&scope.items);
+            for finding in scope_findings(&scope, &graph) {
+                let item = &scope.items[finding.item];
+                let related = match (finding.rule, &scope.kind) {
+                    (
+                        CallClusterRule::ConstructorAfterMethod,
+                        DeclarationScopeKind::Class { name }
+                        | DeclarationScopeKind::Impl { type_name: name },
+                    ) => name.clone(),
+                    _ => scope.items[finding.related].name.clone(),
+                };
+                out.push(CachedCallOrderFinding {
+                    rule: finding.rule,
+                    span: item.name_node.span(),
+                    item: item.name.clone(),
+                    related,
+                    reason: finding.reason,
+                    anchor: finding.anchor,
+                });
+            }
         }
         out
     });
-    let materialize = |items: &[CachedCallOrderFinding]| -> Vec<CallOrderFinding<'_>> {
-        items
-            .iter()
-            .map(|entry| CallOrderFinding {
-                name_node: AstNode::from_span(file, entry.span),
-                function: entry.function.clone(),
-                caller: entry.caller.clone(),
-                anchor: entry.anchor.clone(),
-            })
-            .collect()
-    };
-    CallClusterFindings {
-        uncolocated_helpers: materialize(&cached.uncolocated_helpers),
-        private_before_public: materialize(&cached.private_before_public),
-        callee_before_caller: materialize(&cached.callee_before_caller),
-    }
+    cached
+        .iter()
+        .filter(|entry| entry.rule == rule)
+        .map(|entry| CallOrderFinding {
+            name_node: AstNode::from_span(file, entry.span),
+            item: entry.item.clone(),
+            related: entry.related.clone(),
+            reason: entry.reason,
+            anchor: entry.anchor.clone(),
+        })
+        .collect()
 }
 
 /// Collects all module and class/`impl` [`DeclarationScope`]s in `file`.
@@ -947,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn test_type_method_scope_start_line_includes_doc_comment() {
+    fn test_constructor_after_method_anchor_line_includes_doc_comment() {
         let constructor_file = ParsedFile::new(
             indoc::indoc! {r"
                 pub struct Connection {
@@ -967,10 +955,18 @@ mod tests {
             "},
             Language::Rust,
         );
-        let scopes = collect_type_method_scopes(&constructor_file);
-        assert_eq!(scopes.len(), 1);
-        assert_eq!(scopes[0].methods[0].name, "port");
-        assert_eq!(scopes[0].methods[0].start_line, 6);
+        let findings = collect_call_cluster_findings(
+            &constructor_file,
+            CallClusterRule::ConstructorAfterMethod,
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].anchor,
+            PlacementAnchor {
+                name: "port".to_string(),
+                line: 6,
+            }
+        );
     }
 
     #[test]
@@ -1104,22 +1100,27 @@ mod tests {
         #[case] expected: (&str, &str, &str, usize),
     ) {
         let file = ParsedFile::new(source, lang);
-        let findings = collect_call_cluster_findings(&file);
-        let all: Vec<_> = findings
-            .uncolocated_helpers
-            .iter()
-            .chain(&findings.private_before_public)
-            .chain(&findings.callee_before_caller)
-            .map(|finding| {
-                (
-                    finding.function.as_str(),
-                    finding.caller.as_str(),
-                    finding.anchor.name.as_str(),
-                    finding.anchor.line,
-                )
-            })
-            .collect();
-        assert_eq!(all, vec![expected]);
+        let all: Vec<_> = [
+            CallClusterRule::PrivateBeforePublic,
+            CallClusterRule::UncolocatedHelper,
+            CallClusterRule::CalleeBeforeCaller,
+        ]
+        .into_iter()
+        .flat_map(|rule| collect_call_cluster_findings(&file, rule))
+        .map(|finding| {
+            (
+                finding.item,
+                finding.related,
+                finding.anchor.name,
+                finding.anchor.line,
+            )
+        })
+        .collect();
+        let (item, related, anchor, line) = expected;
+        assert_eq!(
+            all,
+            [(item.to_owned(), related.to_owned(), anchor.to_owned(), line)]
+        );
     }
 
     #[rstest::rstest]

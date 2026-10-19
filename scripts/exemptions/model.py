@@ -6,6 +6,7 @@ from typing import NamedTuple
 
 AST = "src/code_lint/ast.rs"
 CALL_CLUSTERS = "src/code_lint/ast/call_clusters.rs"
+SCOPE_GRAPH = "src/code_lint/ast/call_clusters/scope_graph.rs"
 TEST_ANALYSIS = "src/code_lint/ast/test_analysis.rs"
 POLICY = "src/code_lint/policy.rs"
 RS_BINDINGS = "src/code_lint/ast/rust/bindings.rs"

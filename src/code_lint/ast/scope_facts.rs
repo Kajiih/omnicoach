@@ -1,13 +1,13 @@
-//! Per-file declaration-scope and reference facts extracted from a [`ParsedFile`].
+//! Per-file declaration-scope facts extracted from a [`ParsedFile`].
 //!
 //! Collects each scope's items, raw reference relations, `callee-before-caller` ordering edges,
-//! recursion groups, and topological levels for a single parsed file. Multi-file project
-//! resolution lives in `crate::code_lint::graph`.
+//! public-root ownership, recursion groups, topological levels, and ordering findings for a single
+//! parsed file. Multi-file project resolution lives in `crate::code_lint::graph`.
 
 use super::{
-    CachedCallClusterFindings, DeclarationScope, DeclarationScopeKind, MethodVisibility,
-    ParsedFile, ScopeItem, ScopeItemKind, analyze_declaration_scope, compute_public_roots,
-    compute_stage3_callees, compute_tarjan_sccs,
+    DeclarationScope, DeclarationScopeKind, OrderingEdge, OrderingReason, Ownership, ParsedFile,
+    PlacementAnchor, RelationFact, ScopeGraph, ScopeItem, ScopeItemKind, Visibility,
+    scope_findings,
 };
 use crate::diagnostic::Language;
 
@@ -18,7 +18,7 @@ const SELF_SEGMENT: &str = "self";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeFacts {
     /// Which syntactic container this scope covers.
-    pub scope: ScopeLabel,
+    pub scope: DeclarationScopeKind,
     /// Declarations in source order. Every index in [`ScopeFacts`] (`roots`, `source`, `target`,
     /// `higher`, `lower`) indexes into this slice.
     pub items: Vec<ItemFacts>,
@@ -26,11 +26,8 @@ pub struct ScopeFacts {
     pub relations: Vec<RelationFact>,
     /// Downward `callee-before-caller` ordering edges (`higher -> lower`), labeled by why `higher`
     /// sits above `lower`.
-    pub ordering: Vec<OrderingFact>,
+    pub ordering: Vec<OrderingEdge>,
 }
-
-/// Which syntactic container a [`ScopeFacts`] covers.
-pub type ScopeLabel = DeclarationScopeKind;
 
 /// One declaration in [`ScopeFacts::items`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,14 +35,15 @@ pub struct ItemFacts {
     /// Identifier name of the declaration.
     pub name: String,
     /// Callable (`fn` / `def`) or type (`struct`, `enum`, `union`, `trait`, `class`).
-    pub kind: ItemKind,
+    pub kind: ScopeItemKind,
     /// Public or private visibility tier.
     pub visibility: Visibility,
     /// True if this callable is a lifecycle constructor (`__init__`, `pub fn new`, etc.).
     pub is_constructor: bool,
     /// 1-based line of the declaration's name identifier.
     pub line: usize,
-    /// 1-based last line of the declaration, when available.
+    /// 1-based last line of the declaration, including its attached `impl` blocks or grouped
+    /// overloads and accessors.
     pub end_line: Option<usize>,
     /// 1-based column of the declaration's name identifier.
     pub column: usize,
@@ -55,6 +53,12 @@ pub struct ItemFacts {
     /// Sorted indices in [`ScopeFacts::items`] of the public entrypoints that reach this item
     /// through private references (`Roots(f)`). A public item's roots are `[its_own_index]`.
     pub roots: Vec<usize>,
+    /// Sorted indices in [`ScopeFacts::items`] of the public entrypoint units that own this item
+    /// (`roots` with constructors collapsed to the scope's first constructor).
+    pub unit_owners: Vec<usize>,
+    /// Public entrypoint unit ownership (`Owner(unit)`, `Shared`, or `Unowned`), derived from
+    /// [`Self::unit_owners`].
+    pub ownership: Ownership,
     /// Strongly connected component id over [`ScopeFacts::ordering`]. Mutual recursion shares an id.
     pub recursion_group: usize,
     /// Topological level in [`ScopeFacts::ordering`]: `0` for leaves, `1 + max(callee.level)` above
@@ -64,73 +68,18 @@ pub struct ItemFacts {
     pub findings: Vec<FindingFact>,
 }
 
-/// Whether an [`ItemFacts`] is a callable or a type definition.
-pub type ItemKind = ScopeItemKind;
-
-/// Visibility tier of an [`ItemFacts`].
-pub type Visibility = MethodVisibility;
-
-/// A direct intra-scope reference from `items[source]` to `items[target]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct RelationFact {
-    /// Referring item index in [`ScopeFacts::items`].
-    pub source: usize,
-    /// Referenced item index in [`ScopeFacts::items`].
-    pub target: usize,
-    /// Where in `source` the reference to `target` occurs.
-    pub kind: RelationKind,
-}
-
-/// Where a [`RelationFact`] occurs in the referring declaration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum RelationKind {
-    /// Callable parameter, generic bound, decorator, or `where` clause.
-    Parameter,
-    /// Callable return annotation.
-    Return,
-    /// Callable body.
-    Body,
-    /// Type definition itself: `struct` fields, `enum` variants, base classes, class attributes.
-    Composition,
-    /// Methods or inherent `impl` blocks attached to a type.
-    Behavior,
-}
-
-/// A `callee-before-caller` ordering edge requiring `items[higher]` above `items[lower]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct OrderingFact {
-    /// Index of the higher-level item (caller, composite type, or signature contract type).
-    pub higher: usize,
-    /// Index of the lower-level item (callee, component type, or encapsulated detail).
-    pub lower: usize,
-    /// Why `higher` sits above `lower` in the abstraction order.
-    pub reason: OrderingReason,
-}
-
-/// Why an [`OrderingFact`] places `higher` above `lower` (ADR 011 §3.4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum OrderingReason {
-    /// `Callable -> Callable`: `higher` calls `lower`.
-    Call,
-    /// `Type -> Type`: `higher`'s own fields, variants, or bases contain `lower`.
-    Containment,
-    /// `Type -> Callable` or `Type -> Type`: `higher`'s methods or `impl` blocks use `lower`.
-    ImplBehavior,
-    /// `Callable -> Type`: `higher` constructs or uses `lower` inside its body without exposing
-    /// `lower` in its signature.
-    Encapsulation,
-    /// `Type -> Callable`: `lower` names `higher` in its parameter or return signature, so the
-    /// type is the vocabulary of `lower`'s contract.
-    SignatureContract,
-}
-
 /// A call-cluster lint finding attached to an [`ItemFacts`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FindingFact {
-    /// Rule name (`private-before-public`, `uncolocated-helper`, or `callee-before-caller`).
+    /// Rule name (`constructor-after-method`, `private-before-public`, `uncolocated-helper`, or
+    /// `callee-before-caller`).
     pub rule: &'static str,
     /// Name of the owning or calling declaration the finding relates to.
     pub related: String,
+    /// Why `related` sits above this item (`callee-before-caller` only).
+    pub reason: Option<OrderingReason>,
+    /// Sibling declaration next to which this item belongs.
+    pub anchor: PlacementAnchor,
 }
 
 /// Collects [`ScopeFacts`] for every declaration scope in `file`, in source order.
@@ -149,22 +98,7 @@ fn scope_facts(
     spans_and_sigs: &std::collections::HashMap<(usize, String), (usize, String)>,
 ) -> ScopeFacts {
     let items = &scope.items;
-    let count = items.len();
-    let mut callers_of = vec![Vec::new(); count];
-    for (caller, item) in items.iter().enumerate() {
-        for &callee in &item.callees {
-            if caller != callee && callee < count && !callers_of[callee].contains(&caller) {
-                callers_of[callee].push(caller);
-            }
-        }
-    }
-    let stage3 = compute_stage3_callees(items);
-    let scc_id = compute_cycle_groups(&stage3);
-    let roots_of = compute_public_roots(items, &callers_of);
-    let levels = compute_levels(&stage3, &scc_id);
-    let mut findings = CachedCallClusterFindings::default();
-    analyze_declaration_scope(scope, &mut findings);
-
+    let graph = ScopeGraph::new(items);
     let mut item_facts: Vec<ItemFacts> = items
         .iter()
         .enumerate()
@@ -182,38 +116,50 @@ fn scope_facts(
                 end_line,
                 column: coordinate.column,
                 signature,
-                roots: roots_of[idx].clone(),
-                recursion_group: scc_id[idx],
-                level: levels[idx],
+                roots: graph.roots[idx].clone(),
+                unit_owners: graph.unit_owners[idx].clone(),
+                ownership: graph.ownership[idx],
+                recursion_group: graph.recursion_group[idx],
+                level: graph.level[idx],
                 findings: Vec::new(),
             }
         })
         .collect();
-
-    for (rule, list) in [
-        ("private-before-public", &findings.private_before_public),
-        ("uncolocated-helper", &findings.uncolocated_helpers),
-        ("callee-before-caller", &findings.callee_before_caller),
-    ] {
-        for finding in list {
-            if let Some(slot) = items
-                .iter()
-                .position(|item| item.name_node.span() == finding.span)
-            {
-                item_facts[slot].findings.push(FindingFact {
-                    rule,
-                    related: finding.caller.clone(),
-                });
-            }
-        }
+    for finding in scope_findings(scope, &graph) {
+        item_facts[finding.item].findings.push(FindingFact {
+            rule: finding.rule.name(),
+            related: items[finding.related].name.clone(),
+            reason: finding.reason,
+            anchor: finding.anchor,
+        });
     }
-
     ScopeFacts {
         scope: scope.kind.clone(),
         items: item_facts,
         relations: raw_relations(items),
-        ordering: ordering_facts(items, &stage3),
+        ordering: graph.edges,
     }
+}
+
+/// Direct intra-scope references (`source != target`), sorted by `(source, target, kind)`.
+fn raw_relations(items: &[ScopeItem<'_>]) -> Vec<RelationFact> {
+    let mut relations: Vec<RelationFact> = items
+        .iter()
+        .enumerate()
+        .flat_map(|(source, item)| {
+            item.references
+                .iter()
+                .filter(move |&&(target, _)| target != source && target < items.len())
+                .map(move |&(target, kind)| RelationFact {
+                    source,
+                    target,
+                    kind,
+                })
+        })
+        .collect();
+    relations.sort();
+    relations.dedup();
+    relations
 }
 
 fn collect_item_spans_and_signatures(
@@ -522,134 +468,10 @@ fn collapse_ws(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Raw references as the analyzer records them: by signature part for callables, and by
-/// definition versus methods for types.
-fn raw_relations(items: &[ScopeItem<'_>]) -> Vec<RelationFact> {
-    let mut relations = Vec::new();
-    for (source, item) in items.iter().enumerate() {
-        let behavior: Vec<usize> = item
-            .callees
-            .iter()
-            .copied()
-            .filter(|target| !item.definition_callees.contains(target))
-            .collect();
-        let parts: &[(&[usize], RelationKind)] = match item.kind {
-            ScopeItemKind::Callable => &[
-                (&item.param_callees, RelationKind::Parameter),
-                (&item.return_callees, RelationKind::Return),
-                (&item.body_callees, RelationKind::Body),
-            ],
-            ScopeItemKind::Type => &[
-                (&item.definition_callees, RelationKind::Composition),
-                (&behavior, RelationKind::Behavior),
-            ],
-        };
-        for &(targets, kind) in parts {
-            for &target in targets {
-                let relation = RelationFact {
-                    source,
-                    target,
-                    kind,
-                };
-                if target != source && target < items.len() && !relations.contains(&relation) {
-                    relations.push(relation);
-                }
-            }
-        }
-    }
-    relations.sort();
-    relations
-}
-
-/// The `callee-before-caller` ordering edges, each labeled with the ADR 011 §3.4 reason.
-fn ordering_facts(items: &[ScopeItem<'_>], stage3: &[Vec<usize>]) -> Vec<OrderingFact> {
-    let mut ordering = Vec::new();
-    for (higher, lowers) in stage3.iter().enumerate() {
-        for &lower in lowers {
-            let reason = match (items[higher].kind, items[lower].kind) {
-                (ScopeItemKind::Callable, ScopeItemKind::Callable) => OrderingReason::Call,
-                (ScopeItemKind::Type, ScopeItemKind::Type) => {
-                    if items[higher].definition_callees.contains(&lower) {
-                        OrderingReason::Containment
-                    } else {
-                        OrderingReason::ImplBehavior
-                    }
-                }
-                (ScopeItemKind::Callable, ScopeItemKind::Type) => OrderingReason::Encapsulation,
-                (ScopeItemKind::Type, ScopeItemKind::Callable) => {
-                    let signature = &items[lower];
-                    if signature.param_callees.contains(&higher)
-                        || signature.return_callees.contains(&higher)
-                    {
-                        OrderingReason::SignatureContract
-                    } else {
-                        OrderingReason::ImplBehavior
-                    }
-                }
-            };
-            ordering.push(OrderingFact {
-                higher,
-                lower,
-                reason,
-            });
-        }
-    }
-    ordering.sort();
-    ordering
-}
-
-/// Groups items that reach each other through ordering edges, including cycles through public
-/// items. The analyzer's own groups stop at public boundaries, so they can leave cycles that
-/// would make levelization loop forever.
-fn compute_cycle_groups(stage3: &[Vec<usize>]) -> Vec<usize> {
-    compute_tarjan_sccs(stage3.len(), |node, visit| {
-        for &next in &stage3[node] {
-            visit(next);
-        }
-    })
-}
-
-/// Levelizes the ordering graph: each recursion group is one unit, at level 0 when nothing is
-/// below it, otherwise one above the highest group below it.
-fn compute_levels(stage3: &[Vec<usize>], scc_id: &[usize]) -> Vec<usize> {
-    fn group_level(
-        group: usize,
-        members: &[Vec<usize>],
-        stage3: &[Vec<usize>],
-        scc_id: &[usize],
-        memo: &mut [Option<usize>],
-    ) -> usize {
-        if let Some(level) = memo[group] {
-            return level;
-        }
-        let mut level = 0;
-        for &member in &members[group] {
-            for &lower in &stage3[member] {
-                if scc_id[lower] != group {
-                    level =
-                        level.max(group_level(scc_id[lower], members, stage3, scc_id, memo) + 1);
-                }
-            }
-        }
-        memo[group] = Some(level);
-        level
-    }
-
-    let group_count = scc_id.iter().copied().max().map_or(0, |max| max + 1);
-    let mut members = vec![Vec::new(); group_count];
-    for (idx, &group) in scc_id.iter().enumerate() {
-        members[group].push(idx);
-    }
-    let mut memo = vec![None; group_count];
-    scc_id
-        .iter()
-        .map(|&group| group_level(group, &members, stage3, scc_id, &mut memo))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::code_lint::ast::RelationKind;
     use crate::diagnostic::Language;
 
     const SANDWICH: &str = indoc::indoc! {r"
@@ -694,7 +516,7 @@ mod tests {
     #[test]
     fn module_scope_items_roots_and_levels() {
         let facts = only_scope(SANDWICH);
-        let summary: Vec<(&str, ItemKind, Visibility, &[usize], usize)> = facts
+        let summary: Vec<_> = facts
             .items
             .iter()
             .map(|item| {
@@ -703,37 +525,48 @@ mod tests {
                     item.kind,
                     item.visibility,
                     item.roots.as_slice(),
+                    item.ownership,
                     item.level,
                 )
             })
             .collect();
 
-        assert_eq!(facts.scope, ScopeLabel::Module);
+        assert_eq!(facts.scope, DeclarationScopeKind::Module);
         assert_eq!(
             summary,
             [
                 (
                     "parse_config",
-                    ItemKind::Callable,
+                    ScopeItemKind::Callable,
                     Visibility::Public,
                     &[0][..],
+                    Ownership::Owner(0),
                     3
                 ),
                 (
                     "measure",
-                    ItemKind::Callable,
+                    ScopeItemKind::Callable,
                     Visibility::Private,
                     &[0][..],
+                    Ownership::Owner(0),
                     2
                 ),
                 (
                     "frame_len",
-                    ItemKind::Callable,
+                    ScopeItemKind::Callable,
                     Visibility::Private,
                     &[0][..],
+                    Ownership::Owner(0),
                     0
                 ),
-                ("Frame", ItemKind::Type, Visibility::Private, &[0][..], 1),
+                (
+                    "Frame",
+                    ScopeItemKind::Type,
+                    Visibility::Private,
+                    &[0][..],
+                    Ownership::Owner(0),
+                    1
+                ),
             ]
         );
     }
@@ -778,22 +611,22 @@ mod tests {
         assert_eq!(
             facts.ordering,
             [
-                OrderingFact {
+                OrderingEdge {
                     higher: 0,
                     lower: 1,
                     reason: OrderingReason::Call
                 },
-                OrderingFact {
+                OrderingEdge {
                     higher: 1,
                     lower: 2,
                     reason: OrderingReason::Call
                 },
-                OrderingFact {
+                OrderingEdge {
                     higher: 1,
                     lower: 3,
                     reason: OrderingReason::Encapsulation
                 },
-                OrderingFact {
+                OrderingEdge {
                     higher: 3,
                     lower: 2,
                     reason: OrderingReason::SignatureContract
@@ -810,7 +643,12 @@ mod tests {
             facts.items[2].findings,
             [FindingFact {
                 rule: "callee-before-caller",
-                related: "Frame".to_owned()
+                related: "Frame".to_owned(),
+                reason: Some(OrderingReason::SignatureContract),
+                anchor: PlacementAnchor {
+                    name: "Frame".to_owned(),
+                    line: 16,
+                },
             }]
         );
         assert!(
@@ -934,7 +772,7 @@ mod tests {
 
         assert_eq!(
             facts.ordering,
-            [OrderingFact {
+            [OrderingEdge {
                 higher: 0,
                 lower: 1,
                 reason: OrderingReason::ImplBehavior

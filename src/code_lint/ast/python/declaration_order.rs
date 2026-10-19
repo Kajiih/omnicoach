@@ -4,9 +4,9 @@ use super::bindings::{collect_local_bound_names, parameters_shadow_name};
 use super::decorators::extract_decorators_from_slice;
 use super::functions::{CLS_RECEIVER, OVERLOAD_DECORATOR_PATHS, SELF_RECEIVER};
 use crate::code_lint::ast::{
-    AstNode, DeclarationScope, DeclarationScopeKind, MemberAfterMethod, MethodVisibility,
-    ParsedFile, PlacementAnchor, ScopeItem, ScopeItemKind, extend_unique, push_unique,
-    span_from_ruff_range, split_at_redefinitions,
+    AstNode, DeclarationScope, DeclarationScopeKind, MemberAfterMethod, ParsedFile,
+    PlacementAnchor, RelationKind, ScopeItem, ScopeItemKind, Visibility, extend_references,
+    extend_unique, push_unique, span_from_ruff_range, split_at_redefinitions,
 };
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtClassDef, StmtFunctionDef};
@@ -303,7 +303,7 @@ fn build_class_declaration_scope<'a>(
     let mut items: Vec<ScopeItem<'a>> = grouped
         .into_iter()
         .map(|group| {
-            let mut callees = Vec::new();
+            let mut body_callees = Vec::new();
             if let PythonScopeItem::Callable(defs) = &group.item {
                 for def in defs {
                     let local_names = collect_local_bound_names(def, file);
@@ -313,12 +313,13 @@ fn build_class_declaration_scope<'a>(
                         local_names: &local_names,
                         has_self_param: parameters_shadow_name(&def.parameters, SELF_RECEIVER),
                         has_cls_param: parameters_shadow_name(&def.parameters, CLS_RECEIVER),
-                        callees: &mut callees,
+                        callees: &mut body_callees,
                     }
                     .visit_body(&def.body);
                 }
             }
-            let body_callees = callees.clone();
+            let mut references = Vec::new();
+            extend_references(&mut references, body_callees, RelationKind::Body);
             ScopeItem {
                 name_node: group.name_node,
                 name: group.name,
@@ -327,11 +328,7 @@ fn build_class_declaration_scope<'a>(
                 visibility: group.visibility,
                 is_constructor: group.is_constructor,
                 kind: ScopeItemKind::Callable,
-                callees,
-                definition_callees: Vec::new(),
-                param_callees: Vec::new(),
-                return_callees: Vec::new(),
-                body_callees,
+                references,
                 pinned_before: None,
             }
         })
@@ -362,7 +359,7 @@ struct GroupedPythonScopeItem<'a, 'ast> {
     name: String,
     start_line: usize,
     end_line: usize,
-    visibility: MethodVisibility,
+    visibility: Visibility,
     is_constructor: bool,
     first_stmt_idx: usize,
     item: PythonScopeItem<'ast>,
@@ -408,13 +405,12 @@ fn build_python_module_scope_item<'a>(
     file: &ParsedFile,
 ) -> ScopeItem<'a> {
     let empty_locals = HashSet::new();
-    let mut callees = Vec::new();
-    let mut definition_callees = Vec::new();
-    let mut param_callees = Vec::new();
-    let mut return_callees = Vec::new();
-    let mut body_callees = Vec::new();
+    let mut references = Vec::new();
     let kind = match &group.item {
         PythonScopeItem::Callable(defs) => {
+            let mut param_callees = Vec::new();
+            let mut return_callees = Vec::new();
+            let mut body_callees = Vec::new();
             for def in defs {
                 let mut param_visitor = ModuleRefVisitor {
                     fn_by_name: item_by_name,
@@ -444,17 +440,14 @@ fn build_python_module_scope_item<'a>(
                 };
                 body_visitor.visit_body(&def.body);
             }
-            extend_unique(
-                &mut callees,
-                param_callees
-                    .iter()
-                    .chain(&return_callees)
-                    .chain(&body_callees)
-                    .copied(),
-            );
+            extend_references(&mut references, param_callees, RelationKind::Parameter);
+            extend_references(&mut references, return_callees, RelationKind::Return);
+            extend_references(&mut references, body_callees, RelationKind::Body);
             ScopeItemKind::Callable
         }
         PythonScopeItem::Type(class_def) => {
+            let mut definition_callees = Vec::new();
+            let mut all_callees = Vec::new();
             collect_python_class_definition_refs(
                 class_def,
                 item_by_name,
@@ -468,9 +461,14 @@ fn build_python_module_scope_item<'a>(
                 external_class_callees,
                 &empty_locals,
                 file,
-                &mut callees,
+                &mut all_callees,
             );
-            body_callees.clone_from(&callees);
+            extend_references(
+                &mut references,
+                definition_callees,
+                RelationKind::Composition,
+            );
+            extend_references(&mut references, all_callees, RelationKind::Behavior);
             ScopeItemKind::Type
         }
     };
@@ -482,11 +480,7 @@ fn build_python_module_scope_item<'a>(
         visibility: group.visibility,
         is_constructor: group.is_constructor,
         kind,
-        callees,
-        definition_callees,
-        param_callees,
-        return_callees,
-        body_callees,
+        references,
         pinned_before: None,
     }
 }
@@ -654,7 +648,7 @@ fn compute_python_pinned_before(
                 continue;
             }
             visited[cur] = true;
-            for &callee in &items[cur].callees {
+            for &(callee, _) in &items[cur].references {
                 if callee < pin {
                     pinned[callee] = Some(pinned[callee].map_or(pin, |prev| prev.min(pin)));
                     if is_callable[callee] {
@@ -806,7 +800,7 @@ fn group_python_scope_items<'a, 'ast>(
                         has_non_overload: !is_overload,
                     },
                 );
-                let visibility = python_method_visibility(&name);
+                let visibility = python_visibility(&name);
                 let is_constructor =
                     is_class_scope && PYTHON_CONSTRUCTOR_NAMES.contains(&name.as_str());
                 let def_node = AstNode::from_span(file, span_from_ruff_range(function_def.range));
@@ -827,7 +821,7 @@ fn group_python_scope_items<'a, 'ast>(
             Stmt::ClassDef(class_def) if !is_class_scope => {
                 let name = class_def.name.id.to_string();
                 seen_by_name.remove(&name);
-                let visibility = python_method_visibility(&name);
+                let visibility = python_visibility(&name);
                 let class_node = AstNode::from_span(file, span_from_ruff_range(class_def.range));
                 items.push(GroupedPythonScopeItem {
                     name_node: AstNode::from_span(file, span_from_ruff_range(class_def.name.range)),
@@ -852,15 +846,15 @@ enum PythonScopeItem<'ast> {
     Type(&'ast StmtClassDef),
 }
 
-/// Classifies the visibility tier of a Python function or method identifier: public or
-/// `__dunder__` names are `Public`; single-underscore (`_name`) and name-mangled (`__name`)
-/// names are `Private`.
-fn python_method_visibility(name: &str) -> MethodVisibility {
+/// Classifies the visibility tier of a Python declaration identifier: public or `__dunder__`
+/// names are `Public`; single-underscore (`_name`) and name-mangled (`__name`) names are
+/// `Private`.
+fn python_visibility(name: &str) -> Visibility {
     let is_dunder = name.starts_with("__") && name.ends_with("__") && name.len() > 4;
     if is_dunder || !name.starts_with('_') {
-        MethodVisibility::Public
+        Visibility::Public
     } else {
-        MethodVisibility::Private
+        Visibility::Private
     }
 }
 
@@ -892,12 +886,11 @@ fn is_dunder_main_literal(expr: &Expr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::code_lint::ast::collect_type_method_scopes;
     use crate::diagnostic::Language;
 
     #[test]
-    fn test_collect_type_method_scopes_python() {
-        use crate::code_lint::ast::MethodVisibility::{Private, Public};
+    fn test_collect_class_declaration_scopes_python() {
+        use Visibility::{Private, Public};
 
         let source = indoc::indoc! {r"
             class Service:
@@ -926,12 +919,15 @@ mod tests {
                     pass
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let scopes = collect_type_method_scopes(&file);
+        let scopes = collect_declaration_scopes(&file);
         let summary: Vec<_> = scopes
             .iter()
-            .map(|scope| {
+            .filter_map(|scope| {
+                let DeclarationScopeKind::Class { name } = &scope.kind else {
+                    return None;
+                };
                 let methods: Vec<_> = scope
-                    .methods
+                    .items
                     .iter()
                     .map(|method| {
                         (
@@ -941,7 +937,7 @@ mod tests {
                         )
                     })
                     .collect();
-                (scope.type_name.as_str(), methods)
+                Some((name.as_str(), methods))
             })
             .collect();
         assert_eq!(

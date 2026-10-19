@@ -35,6 +35,7 @@ Inside a single module, class, or inherent `impl` block, the **same invariants**
 | **Abstraction Gradient (`callee-before-caller`)** | Higher layers depend on lower layers (`Runner -> Rules -> Semantic -> Ast`) | Among **private helpers** (`Private -> Private`), higher-abstraction **callers** precede lower-abstraction **callees** (`_step_1 -> _step_2` or `_exclusive -> _shared`), while `Public -> Public` calls are unconstrained so public APIs can order either orchestrator-first or core-primitive-first. |
 
 This aligns with empirical program-comprehension research:
+
 - **Top-Down Plan Recognition (Brooks 1983; Soloway & Ehrlich 1984; Von Mayrhauser & Vans 1995)**: Readers orient via high-level contracts (fields, constructors, public entrypoints) before descending into implementation helpers.
 - **Eye-Tracking & The Stepdown Rule (Busjahn et al. 2015; Martin 2008, *Clean Code* Ch. 5)**: Readers scan entrypoints and step downward from caller to callee.
 
@@ -101,19 +102,30 @@ def _shared_1() -> None:    # Place 2: 2-user helper below its callers _a_step_1
     ...
 ```
 
-### 3.3 The Three Disjoint Call-Cluster Rules
+### 3.3 The Four Call-Cluster Rules as Placement Constraints
 
-Because visibility, helper placement, and caller-callee ordering are projections of one structural order over the call graph, they are computed by **one shared call-cluster analyzer** in [call_clusters.rs](../../../src/code_lint/ast/call_clusters.rs) and evaluated in three mutually exclusive stages (so a single misplaced function is never reported twice):
+Constructor grouping, visibility, helper placement, and caller-callee ordering are projections of one structure: the scope's abstraction graph (`ScopeGraph` in [scope_graph.rs](../../../src/code_lint/ast/call_clusters/scope_graph.rs)), which holds `Roots(h)`, the owning **unit** of each item, the typed ordering edges of §3.4, and recursion groups. The abstraction graph command (`omnicoach graph`) renders the same structure. A **unit** is a public entrypoint, except that all constructors of a scope form one unit.
 
-| Stage | Rule Name | Invariant Enforced |
+Each rule is a set of declarative **placement constraints** generated from that graph ([call_clusters.rs](../../../src/code_lint/ast/call_clusters.rs)). One evaluator checks them against the source order and finds where a misplaced item belongs:
+
+| Rule (priority order) | Constraint on an item `h` | Generated when |
 | :--- | :--- | :--- |
-| **Stage 1 (`pos < max(Roots(h))`)** | **`private-before-public`** | • A **single-user helper** (`Roots(h) = {p}`) must be declared **below** its owning public entrypoint `p` (`pos(h) > pos(p)`).<br>• A **multi-user helper** (`\|Roots(h)\| >= 2`) must be declared **below all** of its public callers (`pos(h) > max(Roots(h))`).<br>• An **unrooted private function** (`\|Roots(h)\| = 0`) must be declared below all public functions in the scope (`pos(h) > last_pub`). |
-| **Stage 2 (`pos > max(Roots(h))`)** | **`uncolocated-helper`** | Once a rooted private helper `h` (`\|Roots(h)\| >= 1`) is below all of its public callers, it must sit in **one of two valid places**:<br>• **Place 1 (Immediately after consumer, `Roots(h) = {p}` only)**: every item between `p` and `h` also has `Roots == {p}` (or is a sibling constructor when `p` is a constructor).<br>• **Place 2 (Trailing helper section at the end of the scope, `\|Roots(h)\| >= 1`)**: `pos(h) > last_pub` (and if `Roots(h) = {p}`, none of `p`'s helpers were placed in Place 1 before `last_pub`). |
-| **Stage 3 (`Private -> Private` Order)** | **`callee-before-caller`** | Among all private callables not flagged by Stage 1 or Stage 2 (`Private -> Private`), a `callee` must not be declared before its `caller` (unless they belong to the same Strongly Connected Component of mutually recursive functions, or in a scope where the caller is unrooted and the callee is rooted). |
+| **`constructor-after-method`** | `h` above the first non-constructor | `h` is a constructor (`__init__`, `pub fn new`, etc.) |
+| **`private-before-public`** | `h` below `p` | for each `p ∈ Roots(h)` |
+| | `h` below the last public item | `Roots(h) = ∅` |
+| **`uncolocated-helper`** | `h` in `Cluster(u)` (Place 1) or in the trailing section (Place 2) | `h` is owned by the single unit `u` |
+| | `h` in its unit's cluster, or not in the trailing section while a sibling helper is in the cluster (Place 1 and Place 2 are not mixed) | `h` is owned by the single unit `u` |
+| | `h` in the trailing section | `h` is shared by two or more units |
+| **`callee-before-caller`** | `h` below `g`, explained by the edge's §3.4 reason | edge `g -> h` between private items outside a common private recursion group |
+| *(hard)* | `h` above the first item evaluated at runtime that uses it | Python import- or class-time uses |
 
-### 3.4 Stage 3 Abstraction Edges Between Functions and Types
+- `Cluster(u)` is the contiguous run of `u`'s items that starts at one of its public items. The trailing section is every position after the last public item.
+- **One finding per item:** an item reports only its first violated constraint in rule priority.
+- **Only fixable findings:** a violation is reported only if moving the item alone satisfies it without breaking a hard constraint or a stronger constraint that held. The suggested anchor is the slot that breaks the fewest other constraints, then the closest one.
 
-Stages 1 and 2 count every reference (signature or body) toward root ownership. Stage 3 orders private functions and types from higher to lower abstraction, where `u -> v` requires `pos(u) < pos(v)`:
+### 3.4 Abstraction Edges Between Functions and Types
+
+`Roots(h)` counts every reference (signature or body). The ordering edges below order functions and types from higher to lower abstraction, where `u -> v` requires `pos(u) < pos(v)`; each edge carries its reason, which `callee-before-caller` names in its diagnostic:
 
 | Edge | When | Why `u` is higher-level |
 | :--- | :--- | :--- |
@@ -130,7 +142,7 @@ Together, the last two edges place each private type between the function that e
 ## 4. Consequences
 
 1. **Zero Contradictions Across Rules**:
-   - Stage 1 (`pos < max(Roots(h))`), Stage 2 (`pos > max(Roots(h))` outside Place 1 and Place 2), and Stage 3 (`Private -> Private` `callee < caller`) partition the failure modes cleanly without overlapping diagnostics.
+   - Rule priority plus the one-finding-per-item and fixable-only policies (§3.3) keep the three rules from overlapping or contradicting each other.
 2. **Supports Both Public-First Types and Vertical-Slice Modules**:
    - Cohesive classes, inherent `impl` blocks, and small utility modules (`InterceptedCommand`, `SuppressionTracker`, `CommentIndex`, `test_utils.rs`, `scopes.rs`) can group all public methods/functions at the top and place all private helpers in the trailing helper section (Place 2), while multi-subsystem modules (`ast.rs`, `config.rs`, `ast/rust.rs`) can colocate 1-user helpers immediately after their public entrypoint (Place 1) and keep 2+-user helpers at the end of the file (Place 2).
 3. **Complete `Topic::DECLARATION_ORDER` Suite**:

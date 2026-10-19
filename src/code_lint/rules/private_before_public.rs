@@ -1,6 +1,6 @@
 //! Flags private functions, methods, and types defined above their owning or calling public entrypoints.
 
-use crate::code_lint::ast::{self, ParsedFile};
+use crate::code_lint::ast::{self, CallClusterRule, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -117,8 +117,7 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    ast::collect_call_cluster_findings(file)
-        .private_before_public
+    ast::collect_call_cluster_findings(file, CallClusterRule::PrivateBeforePublic)
         .iter()
         .map(|finding| {
             let line = finding.anchor.line.to_string();
@@ -126,8 +125,8 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                 path,
                 &finding.name_node,
                 &[
-                    ("function", &finding.function),
-                    ("caller", &finding.caller),
+                    ("function", &finding.item),
+                    ("caller", &finding.related),
                     ("anchor", &finding.anchor.name),
                     ("line", &line),
                 ],

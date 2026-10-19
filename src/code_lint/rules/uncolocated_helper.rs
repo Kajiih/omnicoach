@@ -1,7 +1,7 @@
 //! Flags private helpers that are neither colocated right after their single public consumer nor
 //! placed in the trailing helper section at the end of the scope.
 
-use crate::code_lint::ast::{self, ParsedFile};
+use crate::code_lint::ast::{self, CallClusterRule, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -149,8 +149,7 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    ast::collect_call_cluster_findings(file)
-        .uncolocated_helpers
+    ast::collect_call_cluster_findings(file, CallClusterRule::UncolocatedHelper)
         .iter()
         .map(|finding| {
             let line = finding.anchor.line.to_string();
@@ -158,8 +157,8 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                 path,
                 &finding.name_node,
                 &[
-                    ("function", &finding.function),
-                    ("caller", &finding.caller),
+                    ("function", &finding.item),
+                    ("caller", &finding.related),
                     ("anchor", &finding.anchor.name),
                     ("line", &line),
                 ],
@@ -185,6 +184,19 @@ crate::test_utils::rule_test!(
                         return f"[{token}]"
 
                     def build_footer(raw: str) -> str:
+                        return raw.strip()
+                "#,
+                cluster_of_last_public_function_before_shared_helper_allowed => r#"
+                    def build_header(raw: str) -> str:
+                        return _normalize_token(raw)
+
+                    def build_footer(raw: str) -> str:
+                        return _wrap_brackets(_normalize_token(raw))
+
+                    def _wrap_brackets(token: str) -> str:
+                        return f"[{token}]"
+
+                    def _normalize_token(raw: str) -> str:
                         return raw.strip()
                 "#,
                 shared_helper_in_trailing_section_allowed => r#"
