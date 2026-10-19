@@ -4,7 +4,9 @@
 //! Design: `docs/dev/complex_function_docstring/03_design.md` and `03c_section_requirements.md`
 //! (proposal P2, without the prose-mention exemption).
 
-use crate::code_lint::ast::python::{DocstringSectionKind, PythonClassInfo};
+use crate::code_lint::ast::python::{
+    DocstringSectionKind, PythonClassInfo, PythonParameterInfo, PythonParameterKind,
+};
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
@@ -193,7 +195,7 @@ fn check_file(
                 .iter()
                 .filter(|parameter| {
                     !parameter.name.starts_with('_')
-                        && parameter.is_non_obvious()
+                        && is_non_obvious(parameter)
                         && !documented_unchanged_attrs.contains(&parameter.name)
                 })
                 .map(|parameter| format!("`{}`", parameter.display_name()))
@@ -211,6 +213,25 @@ fn check_file(
             ))
         })
         .collect()
+}
+
+/// Returns true if `parameter`'s value changes behavior in ways its name and type annotation do
+/// not state: `*args` / `**kwargs`, a default of `None`, `True` or `False`, or an annotation that
+/// includes `None`, `bool` or `Callable`.
+fn is_non_obvious(parameter: &PythonParameterInfo<'_>) -> bool {
+    if parameter.kind == PythonParameterKind::Receiver {
+        return false;
+    }
+    let has_non_obvious_default = parameter
+        .default_node
+        .as_ref()
+        .is_some_and(|node| matches!(node.text().trim(), "None" | "True" | "False"));
+    parameter.is_variadic()
+        || has_non_obvious_default
+        || parameter
+            .type_node
+            .as_ref()
+            .is_some_and(ast::python::includes_none_bool_or_callable)
 }
 
 #[cfg(test)]

@@ -26,7 +26,7 @@ mod trivia;
 pub use self::annotations::{
     AnnotationTraversalDepth, CollectionKind, CollectionShape, PythonCollectionType,
     PythonReturnTypeBranch, PythonReturnTypeUnion, collect_collection_types, collection_display,
-    collection_type, generator_yield_type, return_type_union,
+    collection_type, generator_yield_type, includes_none_bool_or_callable, return_type_union,
 };
 pub(super) use self::bindings::collect_bindings;
 pub(super) use self::calls::collect_call_candidates;

@@ -59,26 +59,6 @@ impl PythonParameterInfo<'_> {
         )
     }
 
-    /// Returns true if the parameter's value changes behavior in ways its name and type
-    /// annotation do not state: `*args` / `**kwargs`, a default of `None`, `True` or `False`, or
-    /// an annotation that includes `None`, `bool` or `Callable`.
-    #[must_use]
-    pub fn is_non_obvious(&self) -> bool {
-        if self.kind == PythonParameterKind::Receiver {
-            return false;
-        }
-        let has_non_obvious_default = self
-            .default_node
-            .as_ref()
-            .is_some_and(|node| matches!(node.text().trim(), "None" | "True" | "False"));
-        self.is_variadic()
-            || has_non_obvious_default
-            || self
-                .type_node
-                .as_ref()
-                .is_some_and(super::annotations::is_non_obvious_parameter_type)
-    }
-
     /// The parameter name with its leading `*` or `**` when variadic.
     #[must_use]
     pub fn display_name(&self) -> String {

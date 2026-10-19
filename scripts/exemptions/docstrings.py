@@ -798,8 +798,8 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "                    !parameter.name.starts_with('_')\n"
-                    "                        && parameter.is_non_obvious()",
-                    "                    parameter.is_non_obvious()",
+                    "                        && is_non_obvious(parameter)",
+                    "                    is_non_obvious(parameter)",
                 ),
             ),
             cases=(
