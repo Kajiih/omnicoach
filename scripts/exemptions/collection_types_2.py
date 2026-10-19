@@ -435,17 +435,6 @@ CLUSTER = Cluster(
             ),
             cases=("nullable_collection_return::pass::trait_impl_exempt",),
         ),
-        Mutation(
-            label="Rust locally defined type shadowing a collection name exempt from nullable-collection-return",
-            path=AST,
-            edits=(
-                (
-                    "            ResolvedName::Local => None,",
-                    "            ResolvedName::Local => Some(self),",
-                ),
-            ),
-            cases=("nullable_collection_return::pass::locally_shadowed_vec_exempt",),
-        ),
         # --- Module constant exemptions (mutable-module-constant) ---
         Mutation(
             label="Mapping-annotated dict literal/comprehension/call exempt from mutable-module-constant",

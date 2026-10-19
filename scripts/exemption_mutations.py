@@ -48,8 +48,18 @@ def main() -> int:
         mutation survives, else 0.
     """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("label_filter", nargs="?", default="", help="only run mutations whose label contains this")
-    parser.add_argument("--jobs", type=int, default=DEFAULT_JOBS, help="parallel workers (default: %(default)s)")
+    parser.add_argument(
+        "label_filter",
+        nargs="?",
+        default="",
+        help="only run mutations whose label contains this",
+    )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=DEFAULT_JOBS,
+        help="parallel workers (default: %(default)s)",
+    )
     arguments = parser.parse_args()
 
     mutations = [
@@ -59,14 +69,32 @@ def main() -> int:
         if re.search(arguments.label_filter, mutation.label)
         or any(re.search(arguments.label_filter, case) for case in mutation.cases)
     ]
-    workers = prepare_workers(max(1, min(arguments.jobs, len(mutations))))
-    test_names = list_tests(workers[0])
-    problems = list(check_coverage(test_names))
-    problems += run_mutations(mutations, test_names, workers)
+    problems = list(check_edits())
+    if not problems and mutations:
+        workers = prepare_workers(max(1, min(arguments.jobs, len(mutations))))
+        test_names = list_tests(workers[0])
+        problems += check_coverage(test_names)
+        problems += run_mutations(mutations, test_names, workers)
     print("\nProblems:" if problems else "\nAll exemptions are protected.")
     for problem in problems:
         print(f"  {problem}")
     return 1 if problems else 0
+
+
+def check_edits() -> tuple[str, ...]:
+    """Reports any mutation whose file is missing or whose edits do not match in order."""
+    problems = []
+    for cluster in CLUSTERS:
+        for mutation in cluster.mutations:
+            path = ROOT / mutation.path
+            if not path.is_file():
+                problems.append(f"{mutation.label}: missing file {mutation.path}")
+                continue
+            try:
+                apply_edits(mutation, path.read_text())
+            except ValueError as error:
+                problems.append(str(error))
+    return tuple(problems)
 
 
 def prepare_workers(count: int) -> tuple[pathlib.Path, ...]:
@@ -94,7 +122,9 @@ def prepare_workers(count: int) -> tuple[pathlib.Path, ...]:
 def list_tests(worker: pathlib.Path) -> tuple[str, ...]:
     listing = cargo_lib_tests(worker, "--list").stdout
     return tuple(
-        line.removesuffix(TEST_LISTING_SUFFIX) for line in listing.splitlines() if line.endswith(TEST_LISTING_SUFFIX)
+        line.removesuffix(TEST_LISTING_SUFFIX)
+        for line in listing.splitlines()
+        if line.endswith(TEST_LISTING_SUFFIX)
     )
 
 
@@ -113,9 +143,13 @@ def check_coverage(test_names: Sequence[str]) -> tuple[str, ...]:
     for test_name in test_names:
         rule = re.search(r"rules::(?:\w+::tests_)?(\w+)(?:::tests)?::pass::", test_name)
         if rule and rule.group(1) not in covered_rules:
-            problems.append(f"uncovered rule `{rule.group(1)}`: register it in scripts/exemptions/")
+            problems.append(
+                f"uncovered rule `{rule.group(1)}`: register it in scripts/exemptions/"
+            )
         elif rule and test_name not in listed:
-            problems.append(f"unlisted pass case `{test_name}`: map it to an exemption in scripts/exemptions/")
+            problems.append(
+                f"unlisted pass case `{test_name}`: map it to an exemption in scripts/exemptions/"
+            )
     return tuple(problems)
 
 
@@ -123,8 +157,12 @@ def resolve(case: str, test_names: Iterable[str]) -> tuple[str, ...]:
     """Returns the generated test names of `case`, whose `case_N_` prefix shifts as cases are added."""
     case, _, language = case.partition("@")
     rule, kind, name = case.split("::")
-    pattern = re.compile(rf"rules::(?:\w+::tests_)?{rule}(?:::tests)?::{kind}::case_\d+_{name}$")
-    matches = tuple(sorted(test_name for test_name in test_names if pattern.search(test_name)))
+    pattern = re.compile(
+        rf"rules::(?:\w+::tests_)?{rule}(?:::tests)?::{kind}::case_\d+_{name}$"
+    )
+    matches = tuple(
+        sorted(test_name for test_name in test_names if pattern.search(test_name))
+    )
     # `rule_test!` numbers Python cases before Rust cases.
     if language == "python":
         return matches[:1]
@@ -134,20 +172,26 @@ def resolve(case: str, test_names: Iterable[str]) -> tuple[str, ...]:
 
 
 def run_mutations(
-    mutations: Sequence[Mutation], test_names: Sequence[str], workers: Collection[pathlib.Path]
+    mutations: Sequence[Mutation],
+    test_names: Sequence[str],
+    workers: Collection[pathlib.Path],
 ) -> tuple[str, ...]:
     """Runs each mutation on the next free worker; returns problems in spec order."""
     free_workers: queue.Queue[pathlib.Path] = queue.Queue()
     for worker in workers:
         free_workers.put(worker)
-    run_one = functools.partial(run_on_free_worker, test_names=test_names, free_workers=free_workers)
+    run_one = functools.partial(
+        run_on_free_worker, test_names=test_names, free_workers=free_workers
+    )
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(workers)) as executor:
         results = executor.map(run_one, mutations)
         return tuple(problem for problems in results for problem in problems)
 
 
 def run_on_free_worker(
-    mutation: Mutation, test_names: Sequence[str], free_workers: queue.Queue[pathlib.Path]
+    mutation: Mutation,
+    test_names: Sequence[str],
+    free_workers: queue.Queue[pathlib.Path],
 ) -> tuple[str, ...]:
     worker = free_workers.get()
     try:
@@ -156,7 +200,9 @@ def run_on_free_worker(
         free_workers.put(worker)
 
 
-def run_mutation(mutation: Mutation, test_names: Sequence[str], worker: pathlib.Path) -> tuple[str, ...]:
+def run_mutation(
+    mutation: Mutation, test_names: Sequence[str], worker: pathlib.Path
+) -> tuple[str, ...]:
     """Applies `mutation` in `worker`, runs its cases, then restores the original source.
 
     Returns:
@@ -165,12 +211,13 @@ def run_mutation(mutation: Mutation, test_names: Sequence[str], worker: pathlib.
     """
     path = worker / mutation.path
     original = path.read_text()
-    mutated = original
-    for old, new in mutation.edits:
-        if mutated.count(old) != 1:
-            return (f"{mutation.label}: edit target found {mutated.count(old)} times in {mutation.path}: {old!r}",)
-        mutated = mutated.replace(old, new, 1)
-    cases = [test_name for case in mutation.cases for test_name in resolve(case, test_names)]
+    try:
+        mutated = apply_edits(mutation, original)
+    except ValueError as error:
+        return (str(error),)
+    cases = [
+        test_name for case in mutation.cases for test_name in resolve(case, test_names)
+    ]
     path.write_text(mutated)
     try:
         outcomes = run_cases(worker, cases)
@@ -179,24 +226,55 @@ def run_mutation(mutation: Mutation, test_names: Sequence[str], worker: pathlib.
     problems = []
     for test_name in cases:
         status = outcomes.get(test_name, "not run")
-        print(f"{'killed' if status == FAILED else 'SURVIVED':9} {mutation.label}: {test_name}", flush=True)
+        print(
+            f"{'killed' if status == FAILED else 'SURVIVED':9} {mutation.label}: {test_name}",
+            flush=True,
+        )
         if status != FAILED:
-            problems.append(f"{mutation.label}: `{test_name}` {status} without the exemption")
+            problems.append(
+                f"{mutation.label}: `{test_name}` {status} without the exemption"
+            )
     return tuple(problems)
+
+
+def apply_edits(mutation: Mutation, text: str) -> str:
+    """Applies `mutation.edits` in order, raising `ValueError` if an edit does not match once."""
+    mutated = text
+    for old, new in mutation.edits:
+        if mutated.count(old) != 1:
+            raise ValueError(
+                f"{mutation.label}: edit target found {mutated.count(old)} times in {mutation.path}: {old!r}"
+            )
+        mutated = mutated.replace(old, new, 1)
+    return mutated
 
 
 def run_cases(worker: pathlib.Path, test_names: Sequence[str]) -> Mapping[str, str]:
     result = cargo_lib_tests(worker, "--exact", *test_names)
     if "test result:" not in result.stdout:
         return dict.fromkeys(test_names, "did not build")
-    return dict(re.findall(rf"^test (\S+) \.\.\. (ok|{FAILED})$", result.stdout, flags=re.MULTILINE))
+    return dict(
+        re.findall(
+            rf"^test (\S+) \.\.\. (ok|{FAILED})$", result.stdout, flags=re.MULTILINE
+        )
+    )
 
 
-def cargo_lib_tests(worker: pathlib.Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+def cargo_lib_tests(
+    worker: pathlib.Path, *arguments: str
+) -> subprocess.CompletedProcess[str]:
     """Runs library tests with lints capped, since a mutation often leaves a helper unused."""
-    environment = {**os.environ, "RUSTFLAGS": "--cap-lints=warn", "CARGO_TARGET_DIR": str(worker / TARGET)}
+    environment = {
+        **os.environ,
+        "RUSTFLAGS": "--cap-lints=warn",
+        "CARGO_TARGET_DIR": str(worker / TARGET),
+    }
     return subprocess.run(
-        ["cargo", "test", "--lib", "--", *arguments], cwd=worker, env=environment, capture_output=True, text=True
+        ["cargo", "test", "--lib", "--", *arguments],
+        cwd=worker,
+        env=environment,
+        capture_output=True,
+        text=True,
     )
 
 

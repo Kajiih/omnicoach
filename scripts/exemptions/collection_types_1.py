@@ -222,7 +222,7 @@ CLUSTER = Cluster(
             ),
         ),
         Mutation(
-            label="local class definition shadowing typing name exempt from collection classification",
+            label="local definition shadowing an imported collection or typing name exempt from collection classification",
             path=AST,
             edits=(
                 (
@@ -232,6 +232,7 @@ CLUSTER = Cluster(
             ),
             cases=(
                 "concrete_collection_parameter::pass::local_class_shadows_typing_name",
+                "nullable_collection_return::pass::locally_shadowed_vec_exempt",
             ),
         ),
         # --- Signature, parameter, decorator, and class exemptions ---

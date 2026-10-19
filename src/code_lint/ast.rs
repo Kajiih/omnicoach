@@ -109,8 +109,7 @@ impl QualifiedName {
     }
 }
 
-/// Syntactic context surrounding a call expression, shared across [`AstCallCandidate`] and
-/// [`crate::code_lint::semantic::calls::CallMatch`].
+/// Syntactic context surrounding a call expression.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CallSiteContext {
     /// True if the call is the context-manager expression of a Python `with` item (`with
