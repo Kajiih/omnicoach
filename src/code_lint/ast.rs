@@ -427,7 +427,7 @@ pub struct ScopePositionalReads<'a> {
     /// Receivers for which unpacking would not be equivalent. Python: receivers the scope writes
     /// to or uses as a collection (iterated, sized, indexed by a non-literal, sliced, mutated).
     /// Rust: receivers with a field assigned or mutably borrowed.
-    pub exempt_receivers: HashSet<String>,
+    pub non_unpackable_receivers: HashSet<String>,
 }
 
 /// Collects positional reads in `file` grouped by scope.

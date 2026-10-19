@@ -55,7 +55,7 @@ impl PositionalReadsCollector<'_> {
                 });
             }
         } else {
-            scope.exempt_receivers.insert(receiver_text);
+            scope.non_unpackable_receivers.insert(receiver_text);
         }
     }
 
@@ -63,20 +63,20 @@ impl PositionalReadsCollector<'_> {
         match call.func.as_ref() {
             Expr::Name(func_name) if is_collection_builtin(func_name.id.as_str()) => {
                 for arg in &call.arguments.args {
-                    self.record_exempt_receiver(arg);
+                    self.record_non_unpackable_receiver(arg);
                 }
             }
             Expr::Attribute(attr) if MUTATING_METHODS.contains(&attr.attr.as_str()) => {
-                self.record_exempt_receiver(&attr.value);
+                self.record_non_unpackable_receiver(&attr.value);
             }
             _ => {}
         }
     }
 
-    fn record_exempt_receiver(&mut self, expr: &Expr) {
+    fn record_non_unpackable_receiver(&mut self, expr: &Expr) {
         let text = self.expr_text(expr);
         if let Some(scope) = &mut self.current_scope {
-            scope.exempt_receivers.insert(text);
+            scope.non_unpackable_receivers.insert(text);
         }
     }
 
@@ -111,7 +111,7 @@ impl<'a> SourceOrderVisitor<'a> for PositionalReadsCollector<'a> {
                 self.current_scope = prev_scope;
             }
             Stmt::For(for_statement) => {
-                self.record_exempt_receiver(&for_statement.iter);
+                self.record_non_unpackable_receiver(&for_statement.iter);
                 walk_stmt(self, statement);
             }
             _ => walk_stmt(self, statement),
@@ -119,7 +119,7 @@ impl<'a> SourceOrderVisitor<'a> for PositionalReadsCollector<'a> {
     }
 
     fn visit_comprehension(&mut self, comp: &'a ruff_python_ast::Comprehension) {
-        self.record_exempt_receiver(&comp.iter);
+        self.record_non_unpackable_receiver(&comp.iter);
         ruff_python_ast::visitor::source_order::walk_comprehension(self, comp);
     }
 

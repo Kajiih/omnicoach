@@ -431,7 +431,7 @@ CLUSTER = Cluster(
             path=POSITIONAL_READS,
             edits=(
                 (
-                    "        } else {\n            scope.exempt_receivers.insert(receiver_text);\n        }",
+                    "        } else {\n            scope.non_unpackable_receivers.insert(receiver_text);\n        }",
                     "        }",
                 ),
             ),
@@ -461,7 +461,7 @@ CLUSTER = Cluster(
             path=POSITIONAL_READS,
             edits=(
                 (
-                    "                self.record_exempt_receiver(&for_statement.iter);\n",
+                    "                self.record_non_unpackable_receiver(&for_statement.iter);\n",
                     "",
                 ),
             ),
@@ -474,7 +474,7 @@ CLUSTER = Cluster(
                 (
                     "            Expr::Name(func_name) if is_collection_builtin(func_name.id.as_str()) => {\n"
                     "                for arg in &call.arguments.args {\n"
-                    "                    self.record_exempt_receiver(arg);\n"
+                    "                    self.record_non_unpackable_receiver(arg);\n"
                     "                }\n"
                     "            }",
                     "",
@@ -491,7 +491,7 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "            Expr::Attribute(attr) if MUTATING_METHODS.contains(&attr.attr.as_str()) => {\n"
-                    "                self.record_exempt_receiver(&attr.value);\n"
+                    "                self.record_non_unpackable_receiver(&attr.value);\n"
                     "            }",
                     "",
                 ),

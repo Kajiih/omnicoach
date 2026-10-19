@@ -46,8 +46,8 @@ fn collect_positional_reads_rec<'a>(
     }
 }
 
-/// Records a tuple-field access (`span.0`) as a positional read, or its receiver as an exempt
-/// receiver when the field is mutated.
+/// Records a tuple-field access (`span.0`) as a positional read, or its receiver as non-unpackable
+/// when the field is mutated.
 fn record_field_expression<'a>(
     field_expr: &ast::FieldExpr,
     file: &'a ParsedFile,
@@ -66,7 +66,7 @@ fn record_field_expression<'a>(
     let receiver_span = span_from_rowan_range(receiver.syntax().text_range());
     let receiver_text = file.source[receiver_span.start..receiver_span.end].to_string();
     if is_mutated(field_expr.syntax()) {
-        scope.exempt_receivers.insert(receiver_text);
+        scope.non_unpackable_receivers.insert(receiver_text);
     } else if is_stable_receiver(&receiver)
         && let Ok(position) = field_name.text().parse()
     {
