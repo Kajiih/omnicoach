@@ -1,7 +1,7 @@
 //! Python parameter-usage analysis: one walk of a function body classifies every use of its
 //! parameters (mutation or escape, and the read-only collection capability they need).
 
-use super::PythonFunctionSignature;
+use super::functions::PythonFunctionSignature;
 use super::scopes::parameters_shadow_name;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Parameters, Stmt};

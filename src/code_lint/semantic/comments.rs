@@ -23,7 +23,7 @@ impl<'a> CommentIndex<'a> {
         let source = source_text.as_ref();
         let mut comments_by_line = HashMap::new();
         for node in ast::collect_comment_nodes(file) {
-            if file.lang() == Language::Rust && ast::is_rust_doc_comment(&node.text()) {
+            if file.lang() == Language::Rust && ast::rust::is_rust_doc_comment(&node.text()) {
                 continue;
             }
             let start_line = node.start_line();

@@ -1,12 +1,12 @@
 //! Python declaration-order scope builders and field-after-method extraction.
 
-use super::classes::{CLS_RECEIVER, OVERLOAD_DECORATOR_PATHS, SELF_RECEIVER};
+use super::decorators::extract_decorators_from_slice;
+use super::functions::{CLS_RECEIVER, OVERLOAD_DECORATOR_PATHS, SELF_RECEIVER};
 use super::scopes::{collect_local_bound_names, parameters_shadow_name};
-use super::{AstNode, ParsedFile, extract_decorators_from_slice};
 use crate::code_lint::ast::{
-    DeclarationScope, DeclarationScopeKind, MemberAfterMethod, MethodVisibility, PlacementAnchor,
-    ScopeItem, ScopeItemKind, extend_unique, push_unique, span_from_ruff_range,
-    split_at_redefinitions,
+    AstNode, DeclarationScope, DeclarationScopeKind, MemberAfterMethod, MethodVisibility,
+    ParsedFile, PlacementAnchor, ScopeItem, ScopeItemKind, extend_unique, push_unique,
+    span_from_ruff_range, split_at_redefinitions,
 };
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtClassDef, StmtFunctionDef};

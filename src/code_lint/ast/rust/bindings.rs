@@ -1,6 +1,6 @@
 //! Binding and enclosing-function extraction for Rust (`ra_ap_syntax`).
 
-use super::SELF_KEYWORD;
+use super::names::SELF_KEYWORD;
 use crate::code_lint::ast::{
     AstNode, Binding, BindingKind, EnclosingFunction, ParsedFile, push_bindings,
     span_from_rowan_range,

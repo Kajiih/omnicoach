@@ -1,6 +1,6 @@
 //! Multiline string literal analysis for Python (`ruff_python_ast`).
 
-use super::resolve_path_and_terminal_expr;
+use super::names::resolve_path_and_terminal_expr;
 use crate::code_lint::ast::{AstNode, ParsedFile, span_from_ruff_range};
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};

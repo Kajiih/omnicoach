@@ -1,7 +1,7 @@
 //! Python positional reads (`xs[0]`, `argv[-1]`) grouped by scope, with the receivers that the
 //! scope also iterates, sizes or mutates.
 
-use super::MUTATING_METHODS;
+use super::effects::{MUTATING_METHODS, expr_contains_call};
 use super::parameter_usage::is_collection_builtin;
 use crate::code_lint::ast::{
     AstNode, ParsedFile, PositionalRead, ScopePositionalReads, span_from_ruff_range,
@@ -171,7 +171,7 @@ fn is_stable_receiver_expr(receiver: &Expr) -> bool {
     matches!(
         receiver,
         Expr::Name(_) | Expr::Attribute(_) | Expr::Subscript(_)
-    ) && !super::expr_contains_call(receiver)
+    ) && !expr_contains_call(receiver)
 }
 
 #[cfg(test)]

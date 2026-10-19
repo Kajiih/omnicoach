@@ -1,10 +1,10 @@
 //! Python binding extraction and lexical scope boundaries.
 
-use super::functions::{
-    direct_function_definitions, has_override_decorator, method_receiver_name_ast,
+use super::functions::{has_override_decorator, method_receiver_name_ast};
+use super::tree::direct_function_definitions;
+use crate::code_lint::ast::{
+    AstNode, Binding, BindingKind, ParsedFile, push_bindings, span_from_ruff_range,
 };
-use super::{AstNode, ParsedFile};
-use crate::code_lint::ast::{Binding, BindingKind, push_bindings, span_from_ruff_range};
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, walk_comprehension, walk_except_handler, walk_expr, walk_match_case,

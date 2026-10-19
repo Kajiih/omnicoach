@@ -358,17 +358,6 @@ pub(in crate::code_lint::ast) fn span_from_rowan_range(
     SourceSpan::new(range.start().into(), range.end().into())
 }
 
-/// Returns true if `text` is a Rust outer or inner doc comment (`///`, `//!`, `/** */`, `/*! */`).
-///
-/// Per the Rust Reference, `////...`, `/***...`, and `/**/` are ordinary non-doc comments.
-#[must_use]
-pub fn is_rust_doc_comment(text: &str) -> bool {
-    (text.starts_with("///") && !text.starts_with("////"))
-        || text.starts_with("//!")
-        || (text.starts_with("/**") && !text.starts_with("/***") && text != "/**/")
-        || text.starts_with("/*!")
-}
-
 /// Candidate call expression extracted from the syntax tree.
 pub struct AstCallCandidate<'a> {
     /// The call expression AST node.

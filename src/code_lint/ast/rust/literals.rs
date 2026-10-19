@@ -1,6 +1,6 @@
 //! Literal occurrence and value extraction for Rust (`ra_ap_syntax`).
 
-use super::{macro_call_terminal_name, resolve_preceding_macro_path};
+use super::names::{macro_call_terminal_name, resolve_preceding_macro_path};
 use crate::code_lint::ast::{
     AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, parse_float_literal,
     parse_integer_literal, span_from_rowan_range,

@@ -1,10 +1,11 @@
 //! Structural and dependency summary of production Rust source files (`ra_ap_syntax`).
 
-use super::test_analysis::extract_macro_arguments;
-use super::{
-    SELF_KEYWORD, attribute_terminal_name, compact_path_text, is_path_segment_token_kind,
-    is_rust_comment_kind, macro_call_terminal_name,
+use super::attributes::attribute_terminal_name;
+use super::names::{
+    SELF_KEYWORD, compact_path_text, is_path_segment_token_kind, macro_call_terminal_name,
 };
+use super::test_analysis::extract_macro_arguments;
+use super::trivia::is_rust_comment_kind;
 use crate::code_lint::ast::{AstNode, ParsedFile, span_from_rowan_range};
 use ra_ap_syntax::ast::{
     self, HasAttrs as _, HasGenericArgs as _, HasModuleItem as _, HasName as _, HasVisibility as _,

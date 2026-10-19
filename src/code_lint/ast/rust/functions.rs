@@ -1,6 +1,7 @@
 //! Function definitions, return shapes, and nullable return payloads for Rust (`ra_ap_syntax`).
 
-use super::{cast_at_span, compact_path_text};
+use super::names::compact_path_text;
+use super::tree::cast_at_span;
 use crate::code_lint::ast::{
     AstNode, FunctionReturn, ParsedFile, QualifiedName, ReturnShape, span_from_rowan_range,
 };

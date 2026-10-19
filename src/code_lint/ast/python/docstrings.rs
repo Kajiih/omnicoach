@@ -1,7 +1,6 @@
 //! Python docstrings: the docstring of a function or class body and its Google-style sections.
 
-use super::{AstNode, ParsedFile};
-use crate::code_lint::ast::span_from_ruff_range;
+use crate::code_lint::ast::{AstNode, ParsedFile, span_from_ruff_range};
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::Ranged as _;

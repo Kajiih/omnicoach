@@ -4,8 +4,9 @@
 //! Design: `docs/dev/return_contracts/03_design.md` (D1, D2).
 
 use super::annotations::{PythonReturnTypeUnion, positional_tuple_return_arity, return_type_union};
+use super::effects::in_place_mutated_receiver_expr;
 use super::functions::{PythonFunctionSignature, extract_function_signatures};
-use super::{in_place_mutated_receiver_expr, resolve_path_and_terminal_expr};
+use super::names::resolve_path_and_terminal_expr;
 use crate::code_lint::ast::{FunctionReturn, ParsedFile, ReturnShape};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt};

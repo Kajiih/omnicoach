@@ -1,6 +1,7 @@
 //! Rust declaration-order scope builders and associated-item placement extraction (`ra_ap_syntax`).
 
-use super::{SELF_KEYWORD, SELF_TYPE_KEYWORD, previous_non_trivia_token};
+use super::names::{SELF_KEYWORD, SELF_TYPE_KEYWORD};
+use super::trivia::previous_non_trivia_token;
 use crate::code_lint::ast::{
     AstNode, DeclarationScope, DeclarationScopeKind, MemberAfterMethod, MethodVisibility,
     ParsedFile, PlacementAnchor, ScopeItem, ScopeItemKind, TypeMethod, extend_unique, push_unique,

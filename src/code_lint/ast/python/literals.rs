@@ -1,7 +1,7 @@
 //! Python literal occurrences and module-level constant assignments.
 
 use super::annotations::has_final_annotation_expr;
-use super::resolve_path_and_terminal_expr;
+use super::names::resolve_path_and_terminal_expr;
 use crate::code_lint::ast::{
     AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, parse_float_literal,
     parse_integer_literal, span_from_ruff_range,

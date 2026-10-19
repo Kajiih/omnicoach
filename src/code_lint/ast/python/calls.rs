@@ -1,6 +1,6 @@
 //! Python call-expression and environment-subscript extraction (`ruff_python_ast`).
 
-use super::find_expr_at_span;
+use super::tree::find_expr_at_span;
 use crate::code_lint::ast::{
     AstNode, CachedCallCandidate, CallSiteContext, EnclosingFunction, ParsedFile,
     span_from_ruff_range, with_innermost_function,

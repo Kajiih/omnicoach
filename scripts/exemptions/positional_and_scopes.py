@@ -247,8 +247,8 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    '        let kind = if is_first_param && matches!(name, SELF_PARAMETER | "cls") {',
-                    '        let kind = if is_first_param && name == "cls" {',
+                    "        let kind = if is_first_param && matches!(name, SELF_RECEIVER | CLS_RECEIVER) {",
+                    "        let kind = if is_first_param && name == CLS_RECEIVER {",
                 ),
             ),
             cases=("identical_positional_types::pass::method_self_excluded_below_min",),
@@ -258,8 +258,8 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    '        let kind = if is_first_param && matches!(name, SELF_PARAMETER | "cls") {',
-                    "        let kind = if is_first_param && name == SELF_PARAMETER {",
+                    "        let kind = if is_first_param && matches!(name, SELF_RECEIVER | CLS_RECEIVER) {",
+                    "        let kind = if is_first_param && name == SELF_RECEIVER {",
                 ),
             ),
             cases=(

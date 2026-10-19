@@ -2,9 +2,8 @@
 //!
 //! Definitions: `docs/dev/complex_function_docstring/03b_complexity_gate.md` (D-gate2, D-gate3).
 
-use super::PythonParameterKind;
 use super::docstrings::docstring_of;
-use super::functions::PythonFunctionSignature;
+use super::functions::{PythonFunctionSignature, PythonParameterKind};
 use crate::code_lint::ast::ParsedFile;
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, walk_except_handler, walk_expr, walk_match_case, walk_stmt,

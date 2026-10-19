@@ -623,7 +623,7 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "    resolved_path_and_terminal_expr(unwrapped, file)\n",
-                    "    Some(super::resolve_path_and_terminal_expr(unwrapped, &file.source))\n",
+                    "    Some(super::names::resolve_path_and_terminal_expr(unwrapped, &file.source))\n",
                 ),
             ),
             cases=(
@@ -657,7 +657,7 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "    if !allow_classmethod_cls && first.name != SELF_PARAMETER {\n"
+                    "    if !allow_classmethod_cls && first.name != SELF_RECEIVER {\n"
                     "        return None;\n"
                     "    }",
                     "",
@@ -756,7 +756,7 @@ CLUSTER = Cluster(
                     "        || class_def\n"
                     "            .bases()\n"
                     "            .iter()\n"
-                    "            .map(|base| super::resolve_path_and_terminal_expr(base, &file.source).path)\n"
+                    "            .map(|base| super::names::resolve_path_and_terminal_expr(base, &file.source).path)\n"
                     "            .any(|path| {\n"
                     "                matches!(\n"
                     "                    path.as_str(),\n"

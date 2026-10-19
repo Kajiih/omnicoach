@@ -1,23 +1,21 @@
 //! Python class definitions, base-class classification, and class/instance attribute walkers.
 
 use super::annotations::is_bare_final_annotation_expr;
+use super::decorators::{DecoratorInfo, extract_decorators_from_slice};
 use super::docstrings::{DocstringSectionKind, PythonDocstring, docstring_of};
+use super::effects::in_place_mutated_receiver_expr;
 use super::functions::{
-    PythonFunctionSignature, direct_function_definitions, function_signature,
-    method_receiver_name_ast,
+    CLS_RECEIVER, OVERLOAD_DECORATOR_PATHS, PythonFunctionSignature, SELF_RECEIVER,
+    function_signature, method_receiver_name_ast,
 };
-use super::{
-    AstNode, DecoratorInfo, ParsedFile, extract_decorators_from_slice,
-    in_place_mutated_receiver_expr, resolved_path_and_terminal_expr,
-};
-use crate::code_lint::ast::{PlacementAnchor, span_from_ruff_range};
+use super::names::resolved_path_and_terminal_expr;
+use super::tree::direct_function_definitions;
+use crate::code_lint::ast::{AstNode, ParsedFile, PlacementAnchor, span_from_ruff_range};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef};
 use ruff_text_size::Ranged as _;
 use std::collections::HashSet;
 
-pub(super) const SELF_RECEIVER: &str = "self";
-pub(super) const CLS_RECEIVER: &str = "cls";
 const DATACLASS_DECORATOR_PATHS: &[&str] = &["dataclass", "dataclasses.dataclass"];
 const PROTOCOL_PATHS: &[&str] = &["Protocol", "typing.Protocol", "typing_extensions.Protocol"];
 const ABC_PATHS: &[&str] = &["ABC", "abc.ABC"];
@@ -67,8 +65,9 @@ const INIT_VAR_PATHS: &[&str] = &["InitVar", "dataclasses.InitVar"];
 pub struct PythonBaseClass {
     /// Base class identifier or dotted path text (e.g. `"Protocol"`, `"abc.ABC"`).
     pub name: String,
-    /// Canonical path of the unsubscripted base class resolved through [`super::resolve_name`], or
-    /// `None` when the first segment is defined in the file.
+    /// Canonical path of the unsubscripted base class resolved through
+    /// [`crate::code_lint::ast::resolve_name`], or `None` when the first segment is defined in the
+    /// file.
     resolved_path: Option<String>,
 }
 
@@ -814,9 +813,6 @@ fn collect_self_annotated_assignments(body: &[Stmt]) -> Vec<(&StmtAnnAssign, Str
     visitor.visit_body(body);
     visitor.out
 }
-
-pub(super) const OVERLOAD_DECORATOR_PATHS: &[&str] =
-    &["overload", "typing.overload", "typing_extensions.overload"];
 
 /// Accumulates [`PythonAttributeDefinition`]s, keeping the first definition of each name.
 struct AttributeCollector<'a> {

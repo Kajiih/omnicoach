@@ -1,7 +1,8 @@
 //! Python type annotation unwrapping, constructor resolution, union flattening, and collection type vocabularies.
 
-use super::{AstNode, ParsedFile, find_expr_at_span, resolved_path_and_terminal_expr};
-use crate::code_lint::ast::{QualifiedName, span_from_ruff_range};
+use super::names::resolved_path_and_terminal_expr;
+use super::tree::find_expr_at_span;
+use crate::code_lint::ast::{AstNode, ParsedFile, QualifiedName, span_from_ruff_range};
 use ruff_python_ast::{Expr, Operator};
 use ruff_text_size::Ranged as _;
 

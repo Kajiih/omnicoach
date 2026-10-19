@@ -1,12 +1,10 @@
 //! Python function signatures, parameter extraction, method receivers, and direct scope definitions.
 
 use super::classes::{PythonClassInfo, is_protocol_or_abc_class};
+use super::decorators::{DecoratorInfo, extract_decorators_from_slice};
 use super::docstrings::{PythonDocstring, docstring_of};
-use super::{
-    AstNode, DecoratorInfo, ParsedFile, extract_decorators_from_slice,
-    resolve_path_and_terminal_expr,
-};
-use crate::code_lint::ast::span_from_ruff_range;
+use super::names::resolve_path_and_terminal_expr;
+use crate::code_lint::ast::{AstNode, ParsedFile, span_from_ruff_range};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
 use ruff_python_ast::{
     Decorator, Expr, Parameter, ParameterWithDefault, Parameters, Stmt, StmtClassDef,
@@ -221,7 +219,10 @@ impl<'a> PythonFunctionSignature<'a> {
     }
 }
 
-const SELF_PARAMETER: &str = "self";
+pub(super) const SELF_RECEIVER: &str = "self";
+pub(super) const CLS_RECEIVER: &str = "cls";
+pub(super) const OVERLOAD_DECORATOR_PATHS: &[&str] =
+    &["overload", "typing.overload", "typing_extensions.overload"];
 const INIT_METHOD: &str = "__init__";
 const NEW_METHOD: &str = "__new__";
 const NOT_IMPLEMENTED_ERROR: &str = "NotImplementedError";
@@ -273,7 +274,7 @@ pub(super) fn method_receiver_name_ast(
     if first.kind != PythonParameterKind::Receiver {
         return None;
     }
-    if !allow_classmethod_cls && first.name != SELF_PARAMETER {
+    if !allow_classmethod_cls && first.name != SELF_RECEIVER {
         return None;
     }
     Some(first.name)
@@ -412,17 +413,6 @@ fn is_stub_statement(statement: &Stmt, source: &str) -> bool {
     }
 }
 
-/// Returns each direct `StmtFunctionDef` in `scope_body` (`module` or class `body`).
-pub(super) fn direct_function_definitions(scope_body: &[Stmt]) -> Vec<&StmtFunctionDef> {
-    scope_body
-        .iter()
-        .filter_map(|statement| match statement {
-            Stmt::FunctionDef(func_def) => Some(func_def),
-            _ => None,
-        })
-        .collect()
-}
-
 /// Extracts all parameters in order from a `ruff_python_ast::Parameters` node.
 pub(super) fn extract_parameters_from_ast<'a>(
     params: &Parameters,
@@ -433,7 +423,7 @@ pub(super) fn extract_parameters_from_ast<'a>(
 
     for param_with_default in params.posonlyargs.iter().chain(params.args.iter()) {
         let name = param_with_default.parameter.name.id.as_str();
-        let kind = if is_first_param && matches!(name, SELF_PARAMETER | "cls") {
+        let kind = if is_first_param && matches!(name, SELF_RECEIVER | CLS_RECEIVER) {
             PythonParameterKind::Receiver
         } else {
             PythonParameterKind::Positional

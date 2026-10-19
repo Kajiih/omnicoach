@@ -1,20 +1,24 @@
 //! Test-function, assertion, and macro analysis for Rust (`ra_ap_syntax`).
 
+use super::attributes::attribute_terminal_name;
 use super::declaration_order::collect_rust_fn_local_names;
-use super::{
-    SELF_KEYWORD, SUPER_KEYWORD, TEST_IDENTIFIER, attribute_terminal_name, cast_at_span,
-    macro_call_terminal_name, resolve_preceding_macro_path, syntax_node,
+use super::effects::expr_contains_call;
+use super::names::{
+    SELF_KEYWORD, SUPER_KEYWORD, macro_call_terminal_name, resolve_preceding_macro_path,
 };
+use super::tree::{cast_at_span, syntax_node};
 use crate::code_lint::ast::{
     AssertionCheck, AstCallCandidate, AstNode, MultiPhaseTest, ParsedFile, TestAssertionCount,
     TestFunctionSetup, TestLogicConstruct, TestStatementRole, TestToTestCall,
-    has_multi_phase_interleaving, normalize_statement_text, resolve_assertion_helpers,
-    span_from_rowan_range, split_at_redefinitions,
+    has_multi_phase_interleaving, is_assertion_function_name, normalize_statement_text,
+    resolve_assertion_helpers, span_from_rowan_range, split_at_redefinitions,
 };
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast::{self, HasAttrs as _, HasModuleItem as _, HasName as _};
 use ra_ap_syntax::{AstNode as _, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 use std::collections::{HashMap, HashSet};
+
+const TEST_IDENTIFIER: &str = "test";
 
 /// Collects byte spans for all inline test items (`#[cfg(test)]` modules/items and `#[test]` functions)
 /// within a Rust source file.
@@ -225,7 +229,7 @@ fn is_rust_projection_expr(expr: &ast::Expr) -> bool {
                 .is_some_and(|base| is_rust_projection_expr(&base))
                 && index
                     .index()
-                    .is_some_and(|index_expr| !super::expr_contains_call(&index_expr))
+                    .is_some_and(|index_expr| !expr_contains_call(&index_expr))
         }
         ast::Expr::RefExpr(reference) => reference
             .expr()
@@ -776,13 +780,13 @@ fn is_rust_assertion_call_node(node: &SyntaxNode, assertion_helpers: &HashSet<St
         && let Some(name_ref) = segment.name_ref()
     {
         let name = name_ref.text().trim();
-        return super::is_assertion_function_name(name)
+        return is_assertion_function_name(name)
             || (path.qualifier().is_none() && assertion_helpers.contains(name));
     }
     if let Some(method_call) = ast::MethodCallExpr::cast(node.clone())
         && let Some(name_ref) = method_call.name_ref()
     {
-        return super::is_assertion_function_name(name_ref.text().trim());
+        return is_assertion_function_name(name_ref.text().trim());
     }
     false
 }

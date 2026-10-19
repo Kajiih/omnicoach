@@ -1,6 +1,7 @@
 //! Python test-function and assertion extractors.
 
-use super::classes::SELF_RECEIVER;
+use super::effects::expr_contains_call;
+use super::functions::SELF_RECEIVER;
 use super::{docstrings, returns, scopes};
 use crate::code_lint::ast::{
     AssertionCheck, AstCallCandidate, AstNode, EnclosingFunction, MultiPhaseTest, ParsedFile,
@@ -307,8 +308,7 @@ fn is_python_inspection_expr(expr: &Expr) -> bool {
         Expr::Name(_) => true,
         Expr::Attribute(attr) => is_python_inspection_expr(&attr.value),
         Expr::Subscript(subscript) => {
-            is_python_inspection_expr(&subscript.value)
-                && !super::expr_contains_call(&subscript.slice)
+            is_python_inspection_expr(&subscript.value) && !expr_contains_call(&subscript.slice)
         }
         Expr::Tuple(tuple) => {
             !tuple.elts.is_empty() && tuple.elts.iter().all(is_python_inspection_expr)

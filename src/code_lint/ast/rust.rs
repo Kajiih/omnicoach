@@ -1,14 +1,20 @@
 //! AST helper predicates and structural extractors for Rust (`ra_ap_syntax`).
 
+mod attributes;
 mod bindings;
 mod calls;
 mod declaration_order;
+mod effects;
 mod file_summary;
 mod functions;
 mod literals;
+mod names;
 mod positional_reads;
+mod statement_spans;
 mod strings;
 mod test_analysis;
+mod tree;
+mod trivia;
 
 pub(super) use self::bindings::collect_bindings;
 pub(super) use self::calls::collect_call_candidates;
@@ -23,6 +29,9 @@ pub(super) use self::functions::collect_function_returns;
 pub use self::functions::{NullableReturnPayload, nullable_return_payload};
 pub(super) use self::literals::collect_literal_occurrences;
 pub(super) use self::positional_reads::collect_positional_reads;
+pub(super) use self::statement_spans::{
+    enclosing_statement_header_span, record_decorator_and_attribute_spans,
+};
 pub(super) use self::strings::find_unwrapped_multiline_strings;
 pub use self::test_analysis::collect_inline_test_ranges;
 pub(super) use self::test_analysis::{
@@ -30,256 +39,5 @@ pub(super) use self::test_analysis::{
     collect_test_function_assertion_counts, collect_test_logic_constructs,
     collect_test_setup_scopes, collect_test_to_test_calls,
 };
-
-use crate::code_lint::ast::{
-    AstNode, ParsedFile, QualifiedName, is_assertion_function_name, span_from_rowan_range,
-};
-use crate::diagnostic::SourceSpan;
-use ra_ap_syntax::ast;
-use ra_ap_syntax::{AstNode as _, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
-
-/// Keyword identifier `"self"` in Rust `use` trees and expressions.
-const SELF_KEYWORD: &str = "self";
-/// Self-type keyword `"Self"` in Rust paths and `impl` blocks.
-const SELF_TYPE_KEYWORD: &str = "Self";
-/// Keyword identifier `"super"` in Rust module paths.
-const SUPER_KEYWORD: &str = "super";
-/// Identifier `"test"` used in `#[test]`, `#[cfg(test)]`, and `test_*` functions.
-const TEST_IDENTIFIER: &str = "test";
-
-/// Returns true if `expr` contains a function call, method call, or macro invocation.
-pub(super) fn expr_contains_call(expr: &ast::Expr) -> bool {
-    expr.syntax().descendants().any(|node| {
-        matches!(
-            node.kind(),
-            SyntaxKind::CALL_EXPR | SyntaxKind::METHOD_CALL_EXPR | SyntaxKind::MACRO_EXPR
-        )
-    })
-}
-
-/// Resolves the byte span of the header of the innermost Rust statement enclosing `span`.
-pub(super) fn enclosing_statement_header_span(
-    file: &ParsedFile,
-    span: SourceSpan,
-) -> Option<SourceSpan> {
-    let start_node = syntax_node_at_span(file, span)?;
-    let statement = start_node.ancestors().find(|candidate| {
-        candidate
-            .parent()
-            .is_some_and(|parent| is_rust_statement_container(parent.kind()))
-    })?;
-    Some(rust_header_span(&statement))
-}
-
-/// Records the byte span of every Rust attribute in `file`.
-pub(super) fn record_decorator_and_attribute_spans(
-    file: &ParsedFile,
-    record: &mut impl FnMut(SourceSpan),
-) {
-    let Some(parsed) = file.rs_parsed() else {
-        return;
-    };
-    for attribute in parsed
-        .tree()
-        .syntax()
-        .descendants()
-        .filter_map(ast::Attr::cast)
-    {
-        record(span_from_rowan_range(attribute.syntax().text_range()));
-    }
-}
-
-/// Collects the spans of all comment tokens in `file` in source order.
-pub(super) fn collect_comment_spans(file: &ParsedFile) -> Vec<SourceSpan> {
-    let Some(parsed) = file.rs_parsed() else {
-        return Vec::new();
-    };
-    parsed
-        .tree()
-        .syntax()
-        .descendants_with_tokens()
-        .filter_map(|element| {
-            let token = element.into_token()?;
-            is_rust_comment_kind(token.kind()).then(|| span_from_rowan_range(token.text_range()))
-        })
-        .collect()
-}
-
-/// Casts the syntax node at `node.span()` (or an exact-range wrapper ancestor) to `T`.
-fn cast_at_span<T: ra_ap_syntax::AstNode>(node: &AstNode<'_>) -> Option<T> {
-    let inner = syntax_node(node)?;
-    let target_range = inner.text_range();
-    inner
-        .ancestors()
-        .take_while(|ancestor| ancestor.text_range() == target_range)
-        .find_map(T::cast)
-}
-
-/// Resolves the deepest [`SyntaxNode`] in `node`'s file covering `node.span()`.
-fn syntax_node(node: &AstNode<'_>) -> Option<SyntaxNode> {
-    syntax_node_at_span(node.file, node.span())
-}
-
-/// Resolves the deepest [`SyntaxNode`] in `file` covering `span`.
-fn syntax_node_at_span(file: &ParsedFile, span: SourceSpan) -> Option<SyntaxNode> {
-    let parsed = file.rs_parsed()?;
-    let start_offset = u32::try_from(span.start).ok()?;
-    let end_offset = u32::try_from(span.end).ok()?;
-    let range = ra_ap_syntax::TextRange::new(start_offset.into(), end_offset.into());
-    match parsed.tree().syntax().covering_element(range) {
-        SyntaxElement::Node(found) => Some(found),
-        SyntaxElement::Token(token) => token.parent(),
-    }
-}
-
-/// Returns true for Rust `SyntaxKind`s that hold statements or items as direct children.
-const fn is_rust_statement_container(kind: SyntaxKind) -> bool {
-    matches!(
-        kind,
-        SyntaxKind::SOURCE_FILE
-            | SyntaxKind::STMT_LIST
-            | SyntaxKind::ASSOC_ITEM_LIST
-            | SyntaxKind::ITEM_LIST
-            | SyntaxKind::EXTERN_ITEM_LIST
-    )
-}
-
-/// Computes the byte span of a Rust `statement` node's header.
-///
-/// Leading whitespace and non-doc comments attached inside `statement` are skipped when
-/// determining the header start so that outer doc comments (`///`, `/** */`) and `#[...]`
-/// outer attributes start the header and preceding `//` explanation comments are recognized
-/// above it.
-fn rust_header_span(statement: &SyntaxNode) -> SourceSpan {
-    let fallback_start = usize::from(statement.text_range().start());
-    let start_offset = statement
-        .descendants_with_tokens()
-        .filter_map(SyntaxElement::into_token)
-        .find(|token| !is_rust_non_doc_trivia(token))
-        .map_or(fallback_start, |token| {
-            usize::from(token.text_range().start())
-        });
-    let mut header_end_offset = start_offset;
-
-    for child in statement.children_with_tokens() {
-        if is_rust_body_container(child.kind()) {
-            break;
-        }
-        if !is_rust_trivia(child.kind()) {
-            header_end_offset = usize::from(child.text_range().end());
-        }
-    }
-
-    SourceSpan::new(start_offset, header_end_offset)
-}
-
-/// Returns true for Rust `SyntaxKind`s that form the braced body of a compound statement or item.
-const fn is_rust_body_container(kind: SyntaxKind) -> bool {
-    matches!(
-        kind,
-        SyntaxKind::BLOCK_EXPR
-            | SyntaxKind::STMT_LIST
-            | SyntaxKind::ASSOC_ITEM_LIST
-            | SyntaxKind::ITEM_LIST
-            | SyntaxKind::EXTERN_ITEM_LIST
-    )
-}
-
-/// Returns true if `token` is whitespace or a non-doc Rust comment (`//`, `/* */`).
-fn is_rust_non_doc_trivia(token: &SyntaxToken) -> bool {
-    matches!(token.kind(), SyntaxKind::WHITESPACE)
-        || (is_rust_comment_kind(token.kind())
-            && !crate::code_lint::ast::is_rust_doc_comment(token.text()))
-}
-
-/// Returns true if `kind` is a Rust comment (`//`, `/* */`, `///`, `//!`, `/** */`, `/*! */`)
-/// or whitespace token.
-const fn is_rust_trivia(kind: SyntaxKind) -> bool {
-    matches!(kind, SyntaxKind::WHITESPACE) || is_rust_comment_kind(kind)
-}
-
-/// Returns true if `kind` is a Rust comment token (`//`, `/* */`, `///`, `//!`, `/** */`, `/*! */`).
-const fn is_rust_comment_kind(kind: SyntaxKind) -> bool {
-    matches!(
-        kind,
-        SyntaxKind::COMMENT | SyntaxKind::OUTER_DOC_COMMENT | SyntaxKind::INNER_DOC_COMMENT
-    )
-}
-
-/// Extracts the terminal identifier of an attribute's path (e.g. `"test"` for `#[tokio::test]`).
-fn attribute_terminal_name(attribute: &ast::Attr) -> Option<ast::NameRef> {
-    let path = attribute
-        .path()
-        .or_else(|| attribute.syntax().descendants().find_map(ast::Path::cast))?;
-    path.segment()?.name_ref()
-}
-
-/// Extracts the terminal macro identifier from a [`ast::MacroCall`] node.
-fn macro_call_terminal_name(macro_call: &ast::MacroCall) -> String {
-    macro_call
-        .path()
-        .and_then(|path| path.segment())
-        .and_then(|segment| segment.name_ref())
-        .map_or_else(String::new, |name_ref| name_ref.text().trim().to_string())
-}
-
-/// Resolves the macro path if `token_tree` is immediately preceded by `!` and a macro path
-/// (such as `indoc! { ... }` or `indoc::indoc! { ... }` inside an outer `token_tree`).
-fn resolve_preceding_macro_path(token_tree: &SyntaxNode) -> Option<QualifiedName> {
-    let first_token = token_tree.first_token()?;
-    let bang = previous_non_trivia_token(&first_token)?;
-    if bang.kind() != SyntaxKind::BANG {
-        return None;
-    }
-    let macro_ident = previous_non_trivia_token(&bang)?;
-    if !is_path_segment_token_kind(macro_ident.kind()) {
-        return None;
-    }
-    let terminal = macro_ident.text().trim().to_string();
-    let mut full_path = terminal.clone();
-    let mut current = macro_ident;
-    while let Some(preceding) = previous_non_trivia_token(&current) {
-        let before_colons = if preceding.kind() == SyntaxKind::COLON2 {
-            previous_non_trivia_token(&preceding)
-        } else if preceding.kind() == SyntaxKind::COLON
-            && let Some(first_colon) = previous_non_trivia_token(&preceding)
-            && first_colon.kind() == SyntaxKind::COLON
-        {
-            previous_non_trivia_token(&first_colon)
-        } else {
-            break;
-        };
-        if let Some(prev_ident) = before_colons
-            && is_path_segment_token_kind(prev_ident.kind())
-        {
-            full_path = format!("{prefix}::{full_path}", prefix = prev_ident.text().trim());
-            current = prev_ident;
-        } else {
-            break;
-        }
-    }
-    Some(QualifiedName {
-        path: full_path,
-        terminal,
-    })
-}
-
-/// Returns the previous non-trivia token before `token`.
-fn previous_non_trivia_token(token: &SyntaxToken) -> Option<SyntaxToken> {
-    std::iter::successors(token.prev_token(), SyntaxToken::prev_token)
-        .find(|candidate| !candidate.kind().is_trivia())
-}
-
-/// Returns true if `kind` can be a segment of a Rust path (`ident`, `crate`, `self`, `super`).
-const fn is_path_segment_token_kind(kind: SyntaxKind) -> bool {
-    matches!(
-        kind,
-        SyntaxKind::IDENT | SyntaxKind::CRATE_KW | SyntaxKind::SELF_KW | SyntaxKind::SUPER_KW
-    )
-}
-
-fn compact_path_text(text: &str) -> String {
-    text.chars()
-        .filter(|character| !character.is_whitespace())
-        .collect()
-}
+pub(super) use self::trivia::collect_comment_spans;
+pub use self::trivia::is_rust_doc_comment;

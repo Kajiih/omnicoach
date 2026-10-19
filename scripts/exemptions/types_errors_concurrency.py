@@ -7,9 +7,9 @@ from __future__ import annotations
 from .model import (
     CALLS,
     CLASSES,
+    DECORATORS,
     ERROR_LOG_IN_EXCEPT,
     PY_CALLS,
-    PYTHON,
     SUPPRESSED_EXCEPTION,
     Cluster,
     Mutation,
@@ -108,7 +108,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="explicit `frozen=False` and `slots=False` opt-out allowed by mutable-dataclass and unslotted-dataclass",
-            path=PYTHON,
+            path=DECORATORS,
             edits=(
                 (
                     "                .filter_map(|kw| Some(kw.arg.as_ref()?.id.to_string()))",

@@ -1,12 +1,13 @@
 //! Positional tuple-field read extraction for Rust (`ra_ap_syntax`).
 
+use super::effects::expr_contains_call;
 use crate::code_lint::ast::{
     AstNode, ParsedFile, PositionalRead, ScopePositionalReads, span_from_rowan_range,
 };
 use ra_ap_syntax::ast;
 use ra_ap_syntax::{AstNode as _, SyntaxKind, SyntaxNode};
 
-/// Collects Rust tuple-field reads grouped by function (see [`super::collect_positional_reads`]).
+/// Collects Rust tuple-field reads grouped by function (see [`crate::code_lint::ast::collect_positional_reads`]).
 #[must_use]
 pub(in crate::code_lint::ast) fn collect_positional_reads(
     file: &ParsedFile,
@@ -118,5 +119,5 @@ fn is_stable_receiver(receiver: &ast::Expr) -> bool {
         ast::Expr::FieldExpr(_) => true,
         _ => false,
     };
-    is_name_or_field && !super::expr_contains_call(receiver)
+    is_name_or_field && !expr_contains_call(receiver)
 }
