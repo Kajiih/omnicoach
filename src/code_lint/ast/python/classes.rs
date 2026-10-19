@@ -1,11 +1,14 @@
 //! Python class definitions, base-class classification, and class/instance attribute walkers.
 
+use super::annotations::is_bare_final_annotation_expr;
 use super::docstrings::{DocstringSectionKind, PythonDocstring, docstring_of};
-use super::functions::{PythonFunctionSignature, function_signature};
+use super::functions::{
+    PythonFunctionSignature, direct_function_definitions, function_signature,
+    method_receiver_name_ast,
+};
 use super::{
-    AstNode, DecoratorInfo, ParsedFile, direct_function_definitions, extract_decorators_from_slice,
-    in_place_mutated_receiver_expr, is_bare_final_annotation_expr, method_receiver_name_ast,
-    resolved_path_and_terminal_expr,
+    AstNode, DecoratorInfo, ParsedFile, extract_decorators_from_slice,
+    in_place_mutated_receiver_expr, resolved_path_and_terminal_expr,
 };
 use crate::code_lint::ast::{PlacementAnchor, span_from_ruff_range};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};

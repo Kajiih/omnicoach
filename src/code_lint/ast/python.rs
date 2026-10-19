@@ -67,13 +67,6 @@ pub(super) use self::test_analysis::{
     collect_test_setup_scopes, collect_test_to_test_calls,
 };
 
-use self::annotations::is_bare_final_annotation_expr;
-use self::classes::is_protocol_or_abc_class;
-use self::functions::{
-    direct_function_definitions, has_override_decorator, method_receiver_name_ast,
-};
-use self::logging::extract_logger_call;
-use self::strings::{TemplateParts, fstring_segments_and_interpolations, static_string_text};
 use crate::code_lint::ast::{
     AstNode, ParsedFile, QualifiedName, ResolvedName, resolve_name, span_from_ruff_range,
 };

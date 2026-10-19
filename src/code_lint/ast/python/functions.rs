@@ -1,9 +1,9 @@
 //! Python function signatures, parameter extraction, method receivers, and direct scope definitions.
 
-use super::classes::PythonClassInfo;
+use super::classes::{PythonClassInfo, is_protocol_or_abc_class};
 use super::docstrings::{PythonDocstring, docstring_of};
 use super::{
-    AstNode, DecoratorInfo, ParsedFile, extract_decorators_from_slice, is_protocol_or_abc_class,
+    AstNode, DecoratorInfo, ParsedFile, extract_decorators_from_slice,
     resolve_path_and_terminal_expr,
 };
 use crate::code_lint::ast::span_from_ruff_range;

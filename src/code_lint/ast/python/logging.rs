@@ -1,7 +1,7 @@
 //! Python logger calls (`logging` and `loguru`): receiver and method recognition, message and
 //! arguments.
 
-use super::{AstNode, ParsedFile, static_string_text};
+use super::{AstNode, ParsedFile};
 use crate::code_lint::ast::span_from_ruff_range;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
 use ruff_python_ast::{Expr, ExprCall};
@@ -128,6 +128,16 @@ pub(super) fn extract_logger_call<'a>(
         uses_printf,
         message_range: message_expr.range(),
     })
+}
+
+/// Extracts the decoded text of a plain string literal or an implicit concatenation of plain
+/// string literals, excluding f-strings and byte strings.
+fn static_string_text(expr: &Expr) -> Option<String> {
+    let Expr::StringLiteral(string_literal) = expr else {
+        return None;
+    };
+    let text = string_literal.value.to_str();
+    (!text.is_empty()).then(|| text.to_owned())
 }
 
 /// Returns true if `receiver` is a recognized logger variable, module, or attribute (`logger`,

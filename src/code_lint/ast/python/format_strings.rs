@@ -1,12 +1,14 @@
 //! Python format strings: f-strings, `str.format` templates and `%` (printf-style) templates,
 //! split into literal text and replacement fields, plus PEP 3101 field-name parsing.
 
-use super::{
-    AstNode, ParsedFile, TemplateParts, extract_logger_call, fstring_segments_and_interpolations,
-};
+use super::logging::extract_logger_call;
+use super::{AstNode, ParsedFile};
 use crate::code_lint::ast::span_from_ruff_range;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_arguments, walk_expr};
-use ruff_python_ast::{Expr, FStringPartRef, InterpolatedElement, Operator, StringLiteral};
+use ruff_python_ast::{
+    Expr, FString, FStringPartRef, InterpolatedElement, InterpolatedStringElement, Operator,
+    StringFlags as _, StringLiteral,
+};
 use ruff_text_size::{Ranged as _, TextRange};
 
 /// `%` conversion types accepted by printf-style formatting.
@@ -249,6 +251,59 @@ fn fstring_placeholder(
             spec_text.strip_prefix(':').unwrap_or(spec_text).to_owned()
         }),
         is_self_documenting: interpolation.debug_text.is_some(),
+    }
+}
+
+/// Template text split into literal segments around its replacement fields.
+struct TemplateParts<F> {
+    /// Literal text around `fields`: `literals[i]` precedes `fields[i]` and the last entry
+    /// follows the last field, so there is one more literal than fields.
+    literals: Vec<String>,
+    /// The replacement fields, in source order.
+    fields: Vec<F>,
+}
+
+/// Splits an `FString` node into its literal text segments (between delimiters and
+/// `InterpolatedElement` children) and its `InterpolatedElement` nodes, using raw source byte
+/// offsets so escape sequences are not decoded.
+fn fstring_segments_and_interpolations<'a>(
+    fstring: &'a FString,
+    source: &str,
+) -> TemplateParts<&'a InterpolatedElement> {
+    let content_start = usize::from(fstring.range.start() + fstring.flags.opener_len());
+    let content_end = usize::from(fstring.range.end() - fstring.flags.closer_len());
+
+    let interpolations: Vec<&'a InterpolatedElement> = fstring
+        .elements
+        .iter()
+        .filter_map(|element| match element {
+            InterpolatedStringElement::Interpolation(interpolation) => Some(interpolation),
+            InterpolatedStringElement::Literal(_) => None,
+        })
+        .collect();
+
+    let mut segments = Vec::with_capacity(interpolations.len() + 1);
+    let mut cursor = content_start;
+    for interpolation in &interpolations {
+        let interp_start = usize::from(interpolation.range.start());
+        let interp_end = usize::from(interpolation.range.end());
+        segments.push(
+            source
+                .get(cursor..interp_start)
+                .unwrap_or_default()
+                .to_owned(),
+        );
+        cursor = interp_end;
+    }
+    segments.push(
+        source
+            .get(cursor..content_end)
+            .unwrap_or_default()
+            .to_owned(),
+    );
+    TemplateParts {
+        literals: segments,
+        fields: interpolations,
     }
 }
 

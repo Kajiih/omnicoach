@@ -1,76 +1,11 @@
-//! Python string literals: prefixes, implicit concatenation and literal segments.
+//! Multiline string literal analysis for Python (`ruff_python_ast`).
 
 use super::resolve_path_and_terminal_expr;
 use crate::code_lint::ast::{AstNode, ParsedFile, span_from_ruff_range};
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
-use ruff_python_ast::{
-    Expr, FString, InterpolatedElement, InterpolatedStringElement, Stmt, StringFlags as _,
-};
+use ruff_python_ast::{Expr, Stmt, StringFlags as _};
 use ruff_text_size::Ranged as _;
-
-/// Template text split into literal segments around its replacement fields.
-pub(super) struct TemplateParts<F> {
-    /// Literal text around `fields`: `literals[i]` precedes `fields[i]` and the last entry
-    /// follows the last field, so there is one more literal than fields.
-    pub(super) literals: Vec<String>,
-    /// The replacement fields, in source order.
-    pub(super) fields: Vec<F>,
-}
-
-/// Splits an `FString` node into its literal text segments (between delimiters and
-/// `InterpolatedElement` children) and its `InterpolatedElement` nodes, using raw source byte
-/// offsets so escape sequences are not decoded.
-pub(super) fn fstring_segments_and_interpolations<'a>(
-    fstring: &'a FString,
-    source: &str,
-) -> TemplateParts<&'a InterpolatedElement> {
-    let content_start = usize::from(fstring.range.start() + fstring.flags.opener_len());
-    let content_end = usize::from(fstring.range.end() - fstring.flags.closer_len());
-
-    let interpolations: Vec<&'a InterpolatedElement> = fstring
-        .elements
-        .iter()
-        .filter_map(|element| match element {
-            InterpolatedStringElement::Interpolation(interpolation) => Some(interpolation),
-            InterpolatedStringElement::Literal(_) => None,
-        })
-        .collect();
-
-    let mut segments = Vec::with_capacity(interpolations.len() + 1);
-    let mut cursor = content_start;
-    for interpolation in &interpolations {
-        let interp_start = usize::from(interpolation.range.start());
-        let interp_end = usize::from(interpolation.range.end());
-        segments.push(
-            source
-                .get(cursor..interp_start)
-                .unwrap_or_default()
-                .to_owned(),
-        );
-        cursor = interp_end;
-    }
-    segments.push(
-        source
-            .get(cursor..content_end)
-            .unwrap_or_default()
-            .to_owned(),
-    );
-    TemplateParts {
-        literals: segments,
-        fields: interpolations,
-    }
-}
-
-/// Extracts the decoded text of a plain string literal or an implicit concatenation of plain
-/// string literals, excluding f-strings and byte strings.
-pub(super) fn static_string_text(expr: &Expr) -> Option<String> {
-    let Expr::StringLiteral(string_literal) = expr else {
-        return None;
-    };
-    let text = string_literal.value.to_str();
-    (!text.is_empty()).then(|| text.to_owned())
-}
 
 /// Finds all multiline string literals in a Python file that are not docstrings
 /// and not wrapped in an allowed call.

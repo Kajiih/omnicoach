@@ -25,7 +25,6 @@ pub(super) use self::literals::collect_literal_occurrences;
 pub(super) use self::positional_reads::collect_positional_reads;
 pub(super) use self::strings::find_unwrapped_multiline_strings;
 pub use self::test_analysis::collect_inline_test_ranges;
-use self::test_analysis::extract_macro_arguments;
 pub(super) use self::test_analysis::{
     collect_assertion_checks, collect_multi_phase_test_functions,
     collect_test_function_assertion_counts, collect_test_logic_constructs,
