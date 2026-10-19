@@ -4,15 +4,28 @@ use super::bindings::{collect_rust_fn_local_names, collect_rust_generic_param_na
 use super::names::{SELF_KEYWORD, SELF_TYPE_KEYWORD};
 use super::trivia::previous_non_trivia_token;
 use crate::code_lint::ast::{
-    AstNode, DeclarationScope, DeclarationScopeKind, MemberAfterMethod, ParsedFile,
-    PlacementAnchor, RelationKind, ScopeItem, ScopeItemKind, Visibility, collapse_whitespace,
-    extend_references, extend_unique, push_unique, span_from_rowan_range, split_at_redefinitions,
+    AstNode, DeclarationScope, DeclarationScopeKind, ParsedFile, PlacementAnchor, RelationKind,
+    ScopeItem, ScopeItemKind, Visibility, collapse_whitespace, extend_references, extend_unique,
+    push_unique, span_from_rowan_range, split_at_redefinitions,
 };
 use ra_ap_syntax::ast::{
     self, HasGenericParams as _, HasModuleItem as _, HasName as _, HasVisibility as _,
 };
 use ra_ap_syntax::{AstNode as _, SyntaxKind, SyntaxNode, SyntaxToken};
 use std::collections::{HashMap, HashSet};
+
+/// An associated `type` or `const` item declared after at least one `fn` item inside a Rust
+/// `impl` or `trait` block.
+pub struct RustAssociatedItemAfterMethod<'a> {
+    /// Name of the enclosing `impl` self-type or `trait`.
+    pub container_name: String,
+    /// Identifier of the misplaced `type` or `const` item.
+    pub name: String,
+    /// First `fn` in the same block before which the item should move.
+    pub first_method: PlacementAnchor,
+    /// AST node of the misplaced item's name.
+    pub node: AstNode<'a>,
+}
 
 /// Collects all module and inherent `impl` [`DeclarationScope`]s in a Rust `file`.
 #[must_use]
@@ -920,9 +933,9 @@ fn rust_fields_summary(fields: Option<ast::FieldList>, include_visibility: bool)
 /// Collects associated `type` and `const` items declared after `fn` items inside Rust `impl`
 /// (inherent or trait) and `trait` blocks across `file`.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_members_after_methods(
+pub fn collect_associated_items_after_methods(
     file: &ParsedFile,
-) -> Vec<MemberAfterMethod<'_>> {
+) -> Vec<RustAssociatedItemAfterMethod<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -959,7 +972,7 @@ fn collect_misplaced_assoc_items<'a>(
     associated_items: &ast::AssocItemList,
     container_name: &str,
     file: &'a ParsedFile,
-    out: &mut Vec<MemberAfterMethod<'a>>,
+    out: &mut Vec<RustAssociatedItemAfterMethod<'a>>,
 ) {
     let mut first_fn: Option<PlacementAnchor> = None;
     for assoc_item in associated_items.assoc_items() {
@@ -986,7 +999,7 @@ fn collect_misplaced_assoc_items<'a>(
             _ => None,
         };
         if let (Some(name_node), Some(first_method)) = (misplaced_name, &first_fn) {
-            out.push(MemberAfterMethod {
+            out.push(RustAssociatedItemAfterMethod {
                 container_name: container_name.to_owned(),
                 name: name_node.text().trim().to_owned(),
                 first_method: first_method.clone(),
@@ -1071,7 +1084,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_members_after_methods_rust() {
+    fn test_collect_associated_items_after_methods_rust() {
         let source = indoc::indoc! {r"
             trait Codec {
                 type Input;
@@ -1088,7 +1101,7 @@ mod tests {
         "};
         let file = ParsedFile::rust(source);
         let items: Vec<(String, String, String, PlacementAnchor)> =
-            collect_members_after_methods(&file)
+            collect_associated_items_after_methods(&file)
                 .into_iter()
                 .map(|item| {
                     (

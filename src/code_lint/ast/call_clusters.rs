@@ -202,20 +202,6 @@ impl PlacementAnchor {
     }
 }
 
-/// A non-method member (a type-annotated Python class/instance attribute or a Rust associated
-/// `type` / `const` item) declared after a method definition in the same `class`, `impl`, or
-/// `trait` body.
-pub struct MemberAfterMethod<'a> {
-    /// Name of the enclosing Python `class` or Rust `impl` self-type / `trait`.
-    pub container_name: String,
-    /// Member identifier name.
-    pub name: String,
-    /// First method in the enclosing container, directly above which the member belongs.
-    pub first_method: PlacementAnchor,
-    /// Diagnostic target AST node (full `Stmt::AnnAssign` in Python; identifier in Rust).
-    pub node: AstNode<'a>,
-}
-
 /// A call-cluster placement rule, in priority order: an item violating several rules is
 /// reported only under the first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

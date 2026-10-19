@@ -18,8 +18,9 @@ mod trivia;
 
 pub(super) use self::bindings::{collect_bindings, collect_import_map};
 pub(super) use self::calls::collect_call_candidates;
-pub(super) use self::declaration_order::{
-    collect_declaration_scopes, collect_members_after_methods,
+pub(super) use self::declaration_order::collect_declaration_scopes;
+pub use self::declaration_order::{
+    RustAssociatedItemAfterMethod, collect_associated_items_after_methods,
 };
 pub use self::file_summary::{
     ExternalModDeclaration, RustFileSummary, RustPathReference, VisibleUseDeclaration,

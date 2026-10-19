@@ -39,11 +39,10 @@ pub use self::classes::{
     local_ancestors, local_base_classes,
 };
 pub use self::complexity::PythonComplexityMetric;
+pub(super) use self::declaration_order::collect_declaration_scopes;
 pub use self::declaration_order::{
-    PythonStatementAfterMainGuard, collect_statements_after_main_guard,
-};
-pub(super) use self::declaration_order::{
-    collect_declaration_scopes, collect_members_after_methods,
+    PythonFieldAfterMethod, PythonStatementAfterMainGuard, collect_fields_after_methods,
+    collect_statements_after_main_guard,
 };
 pub use self::docstrings::{
     DocstringEntry, DocstringLine, DocstringSection, DocstringSectionKind, DocstringTypedLine,

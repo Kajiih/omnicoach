@@ -32,9 +32,9 @@ pub(in crate::code_lint::ast) use self::call_clusters::{
     extend_unique, push_unique, scope_findings, split_at_redefinitions,
 };
 pub use self::call_clusters::{
-    CallClusterRule, CallOrderFinding, DeclarationScopeKind, MemberAfterMethod, OrderingEdge,
-    OrderingReason, Ownership, PlacementAnchor, RelationFact, RelationKind, ScopeItemKind,
-    Visibility, levels, strongly_connected_components,
+    CallClusterRule, CallOrderFinding, DeclarationScopeKind, OrderingEdge, OrderingReason,
+    Ownership, PlacementAnchor, RelationFact, RelationKind, ScopeItemKind, Visibility, levels,
+    strongly_connected_components,
 };
 pub use self::scope_facts::{FindingFact, ItemFacts, ScopeFacts, collect_scope_facts};
 pub use self::test_analysis::{
@@ -725,14 +725,6 @@ pub fn is_predicate_name(name: &str) -> bool {
             })
 }
 
-/// Collects non-method members (type-annotated Python class/instance attributes or Rust
-/// associated `type` / `const` items) declared after a method in the same `class`, `impl`, or
-/// `trait` body.
-#[must_use]
-pub fn collect_members_after_methods(file: &ParsedFile) -> Vec<MemberAfterMethod<'_>> {
-    dispatch_lang!(file.lang(), collect_members_after_methods(file))
-}
-
 /// Computes and memoizes the call-cluster placement findings across all module and class/`impl`
 /// scopes in `file`, and returns those of `rule`.
 #[must_use]
@@ -903,7 +895,7 @@ mod tests {
             "},
             Language::Python,
         );
-        let fields = collect_members_after_methods(&field_file);
+        let fields = python::collect_fields_after_methods(&field_file);
         assert_eq!(fields.len(), 1);
         assert_eq!(
             fields[0].first_method,
@@ -988,7 +980,7 @@ mod tests {
             "},
             Language::Rust,
         );
-        let associated_items = collect_members_after_methods(&associated_file);
+        let associated_items = rust::collect_associated_items_after_methods(&associated_file);
         assert_eq!(associated_items.len(), 1);
         assert_eq!(
             associated_items[0].first_method,

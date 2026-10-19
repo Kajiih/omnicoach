@@ -1,6 +1,7 @@
 //! Flags type-annotated class and instance attributes declared after methods in a Python class body.
 
-use crate::code_lint::ast::{ParsedFile, collect_members_after_methods};
+use crate::code_lint::ast::ParsedFile;
+use crate::code_lint::ast::python::collect_fields_after_methods;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
@@ -83,7 +84,7 @@ pub const RULE: CodeRule = CodeRule {
 };
 
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
-    collect_members_after_methods(file)
+    collect_fields_after_methods(file)
         .into_iter()
         .map(|field| {
             let line = field.first_method.line.to_string();
@@ -92,7 +93,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                 &field.node,
                 &[
                     ("name", &field.name),
-                    ("class", &field.container_name),
+                    ("class", &field.class_name),
                     ("anchor", &field.first_method.name),
                     ("line", &line),
                 ],

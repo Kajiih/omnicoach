@@ -4,9 +4,9 @@ use super::bindings::{collect_local_bound_names, parameters_shadow_name};
 use super::decorators::extract_decorators_from_slice;
 use super::functions::{CLS_RECEIVER, OVERLOAD_DECORATOR_PATHS, SELF_RECEIVER};
 use crate::code_lint::ast::{
-    AstNode, DeclarationScope, DeclarationScopeKind, MemberAfterMethod, ParsedFile,
-    PlacementAnchor, RelationKind, ScopeItem, ScopeItemKind, Visibility, collapse_whitespace,
-    extend_references, extend_unique, push_unique, span_from_ruff_range, split_at_redefinitions,
+    AstNode, DeclarationScope, DeclarationScopeKind, ParsedFile, PlacementAnchor, RelationKind,
+    ScopeItem, ScopeItemKind, Visibility, collapse_whitespace, extend_references, extend_unique,
+    push_unique, span_from_ruff_range, split_at_redefinitions,
 };
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Decorator, Expr, Stmt, StmtClassDef, StmtFunctionDef};
@@ -22,6 +22,19 @@ const PYTHON_CONSTRUCTOR_NAMES: &[&str] = &[
     "__attrs_pre_init__",
     "__attrs_post_init__",
 ];
+
+/// A type-annotated class-body attribute declaration (`Stmt::AnnAssign` with an identifier target)
+/// appearing after at least one direct method definition in the same Python `class`.
+pub struct PythonFieldAfterMethod<'a> {
+    /// Name of the enclosing class.
+    pub class_name: String,
+    /// Identifier of the misplaced field.
+    pub name: String,
+    /// First direct method in the class before which the field should move.
+    pub first_method: PlacementAnchor,
+    /// AST node of the misplaced attribute declaration.
+    pub node: AstNode<'a>,
+}
 
 /// A top-level Python statement appearing after the `if __name__ == "__main__":` guard block.
 pub struct PythonStatementAfterMainGuard<'a> {
@@ -72,12 +85,10 @@ pub(in crate::code_lint::ast) fn collect_declaration_scopes(
 /// Collects type-annotated class-body attribute declarations (`Stmt::AnnAssign` with an
 /// identifier target) that appear after at least one direct method definition in the same class.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_members_after_methods(
-    file: &ParsedFile,
-) -> Vec<MemberAfterMethod<'_>> {
+pub fn collect_fields_after_methods(file: &ParsedFile) -> Vec<PythonFieldAfterMethod<'_>> {
     struct FieldAfterMethodVisitor<'a> {
         file: &'a ParsedFile,
-        out: Vec<MemberAfterMethod<'a>>,
+        out: Vec<PythonFieldAfterMethod<'a>>,
     }
 
     impl<'a> SourceOrderVisitor<'a> for FieldAfterMethodVisitor<'a> {
@@ -102,8 +113,8 @@ pub(in crate::code_lint::ast) fn collect_members_after_methods(
                             if let Some(first_method) = &first_method
                                 && let Expr::Name(target) = ann.target.as_ref()
                             {
-                                self.out.push(MemberAfterMethod {
-                                    container_name: class_name.clone(),
+                                self.out.push(PythonFieldAfterMethod {
+                                    class_name: class_name.clone(),
                                     name: target.id.to_string(),
                                     first_method: first_method.clone(),
                                     node: AstNode::from_span(
@@ -1062,7 +1073,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_members_after_methods_and_statements_after_main_guard() {
+    fn test_collect_fields_after_methods_and_statements_after_main_guard() {
         let source = indoc::indoc! {r#"
             class Config:
                 host: str
@@ -1080,11 +1091,11 @@ mod tests {
         "#};
         let file = ParsedFile::new(source, Language::Python);
         let fields: Vec<(String, String, String, PlacementAnchor)> =
-            collect_members_after_methods(&file)
+            collect_fields_after_methods(&file)
                 .into_iter()
                 .map(|field| {
                     (
-                        field.container_name,
+                        field.class_name,
                         field.name,
                         field.node.text().into_owned(),
                         field.first_method,
