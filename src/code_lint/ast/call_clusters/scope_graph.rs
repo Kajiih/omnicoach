@@ -63,7 +63,7 @@ pub struct OrderingEdge {
 /// A unit is a public item, except that all constructors of a scope form one unit identified by
 /// the first constructor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Ownership {
+pub(in crate::code_lint::ast) enum Ownership {
     /// A public item of unit `unit`, or a private item reached only from that unit.
     Owner(usize),
     /// A private item reached from two or more units.
@@ -81,8 +81,6 @@ pub(in crate::code_lint::ast) struct ScopeGraph {
     /// Sorted public entrypoint unit indices of each item (`Roots(f)` with constructors collapsed
     /// to the first constructor).
     pub(in crate::code_lint::ast) unit_owners: Vec<Vec<usize>>,
-    /// Owning unit of each item, derived from `unit_owners`.
-    pub(in crate::code_lint::ast) ownership: Vec<Ownership>,
     /// Strongly connected component of each item over `edges`.
     pub(in crate::code_lint::ast) recursion_group: Vec<usize>,
     /// Strongly connected component of each item over the `edges` between private items: items
@@ -110,15 +108,22 @@ impl ScopeGraph {
         let level = levels(&lowers, &recursion_group);
         let roots = public_roots(items);
         let unit_owners = unit_owners(items, &roots);
-        let ownership = ownership(&unit_owners);
         Self {
             edges,
             roots,
             unit_owners,
-            ownership,
             recursion_group,
             private_recursion_group,
             level,
+        }
+    }
+
+    /// Returns the [`Ownership`] of item `idx`, derived from [`Self::unit_owners`].
+    pub(in crate::code_lint::ast) fn ownership(&self, idx: usize) -> Ownership {
+        match self.unit_owners[idx].as_slice() {
+            [] => Ownership::Unowned,
+            [unit] => Ownership::Owner(*unit),
+            _ => Ownership::Shared,
         }
     }
 }
@@ -357,18 +362,6 @@ fn unit_owners(items: &[ScopeItem<'_>], roots: &[Vec<usize>]) -> Vec<Vec<usize>>
             units.sort_unstable();
             units.dedup();
             units
-        })
-        .collect()
-}
-
-/// Maps each item's unit owners to its [`Ownership`].
-fn ownership(unit_owners: &[Vec<usize>]) -> Vec<Ownership> {
-    unit_owners
-        .iter()
-        .map(|units| match units.as_slice() {
-            [] => Ownership::Unowned,
-            [unit] => Ownership::Owner(*unit),
-            _ => Ownership::Shared,
         })
         .collect()
 }

@@ -7,10 +7,10 @@
 
 mod scope_graph;
 
+use self::scope_graph::Ownership;
 pub(in crate::code_lint::ast) use self::scope_graph::ScopeGraph;
 pub use self::scope_graph::{
-    OrderingEdge, OrderingReason, Ownership, RelationFact, RelationKind, levels,
-    strongly_connected_components,
+    OrderingEdge, OrderingReason, RelationFact, RelationKind, levels, strongly_connected_components,
 };
 
 use super::AstNode;
@@ -336,7 +336,7 @@ impl Layout {
         let mut open_unit = None;
         for (position, &idx) in order.iter().enumerate() {
             pos[idx] = position;
-            let unit = match graph.ownership[idx] {
+            let unit = match graph.ownership(idx) {
                 Ownership::Owner(unit) => Some(unit),
                 Ownership::Shared | Ownership::Unowned => None,
             };
@@ -456,7 +456,7 @@ fn generate_placements(items: &[ScopeItem<'_>], graph: &ScopeGraph) -> Vec<Place
             ));
         }
         let last_root = roots.last().copied();
-        match (graph.ownership[subject], last_root, last_public) {
+        match (graph.ownership(subject), last_root, last_public) {
             (Ownership::Unowned, _, Some(last_public)) => placements.push(rule(
                 subject,
                 Constraint::Below(last_public),
@@ -581,18 +581,18 @@ mod tests {
             if placed[first_public] {
                 continue;
             }
-            let unit = graph.ownership[first_public];
+            let unit = graph.ownership(first_public);
             let publics =
-                (0..items.len()).filter(|&idx| is_public(idx) && graph.ownership[idx] == unit);
+                (0..items.len()).filter(|&idx| is_public(idx) && graph.ownership(idx) == unit);
             let helpers: Vec<usize> = (0..items.len())
-                .filter(|&idx| !is_public(idx) && graph.ownership[idx] == unit)
+                .filter(|&idx| !is_public(idx) && graph.ownership(idx) == unit)
                 .collect();
             // A helper below a shared or unowned private item follows it into the trailing
             // section, and the unit's other helpers follow so the unit is not split.
             let below_trailing_item = graph.edges.iter().any(|edge| {
                 helpers.contains(&edge.lower)
                     && !is_public(edge.higher)
-                    && graph.ownership[edge.higher] != unit
+                    && graph.ownership(edge.higher) != unit
             });
             let cluster = if below_trailing_item {
                 Vec::new()

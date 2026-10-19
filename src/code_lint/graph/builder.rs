@@ -910,9 +910,9 @@ fn build_declaration_node(
     member_prefix: Option<TypeMemberPrefix<'_>>,
 ) -> DeclarationNode {
     let mapped_owners: Vec<NodeId> = item
-        .unit_owners
+        .roots
         .iter()
-        .map(|&unit_idx| scope_item_ids[unit_idx].clone())
+        .map(|&root_idx| scope_item_ids[root_idx].clone())
         .collect();
     let (name, kind, owners) = if let Some(prefix) = member_prefix {
         let method_owners = if mapped_owners.is_empty() {
@@ -1324,8 +1324,7 @@ mod tests {
     use super::super::{ComponentFact, CrossModuleRefFact};
     use super::*;
     use crate::code_lint::ast::{
-        FindingFact, OrderingEdge as AstOrderingEdge, OrderingReason, Ownership, PlacementAnchor,
-        RelationFact,
+        FindingFact, OrderingEdge as AstOrderingEdge, OrderingReason, PlacementAnchor, RelationFact,
     };
 
     fn sample_scopes() -> Vec<ScopeFacts> {
@@ -1452,11 +1451,6 @@ mod tests {
         recursion_group: usize,
         level: usize,
     ) -> ItemFacts {
-        let ownership = match roots {
-            [] => Ownership::Unowned,
-            [only] => Ownership::Owner(*only),
-            _ => Ownership::Shared,
-        };
         ItemFacts {
             name: name.to_owned(),
             kind,
@@ -1467,8 +1461,6 @@ mod tests {
             column: 1,
             signature: None,
             roots: roots.to_vec(),
-            ownership,
-            unit_owners: roots.to_vec(),
             recursion_group,
             level,
             findings: Vec::new(),

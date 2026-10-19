@@ -33,7 +33,7 @@ pub(in crate::code_lint::ast) use self::call_clusters::{
 };
 pub use self::call_clusters::{
     CallClusterRule, CallOrderFinding, DeclarationScopeKind, OrderingEdge, OrderingReason,
-    Ownership, PlacementAnchor, RelationFact, RelationKind, ScopeItemKind, Visibility, levels,
+    PlacementAnchor, RelationFact, RelationKind, ScopeItemKind, Visibility, levels,
     strongly_connected_components,
 };
 pub use self::scope_facts::{FindingFact, ItemFacts, ScopeFacts, collect_scope_facts};

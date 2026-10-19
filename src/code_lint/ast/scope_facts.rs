@@ -5,7 +5,7 @@
 //! parsed file. Multi-file project resolution lives in `crate::code_lint::graph`.
 
 use super::{
-    DeclarationScope, DeclarationScopeKind, OrderingEdge, OrderingReason, Ownership, ParsedFile,
+    DeclarationScope, DeclarationScopeKind, OrderingEdge, OrderingReason, ParsedFile,
     PlacementAnchor, RelationFact, ScopeGraph, ScopeItem, ScopeItemKind, Visibility,
     scope_findings,
 };
@@ -46,15 +46,10 @@ pub struct ItemFacts {
     /// Compact one-line signature header (parameters + return type for callables; public fields or
     /// variants for types), when available.
     pub signature: Option<String>,
-    /// Sorted indices in [`ScopeFacts::items`] of the public entrypoints that reach this item
-    /// through private references (`Roots(f)`). A public item's roots are `[its_own_index]`.
+    /// Sorted indices in [`ScopeFacts::items`] of the public entrypoint units that reach this item
+    /// through private references (`Roots(f)` with constructors collapsed to the scope's first
+    /// constructor).
     pub roots: Vec<usize>,
-    /// Sorted indices in [`ScopeFacts::items`] of the public entrypoint units that own this item
-    /// (`roots` with constructors collapsed to the scope's first constructor).
-    pub unit_owners: Vec<usize>,
-    /// Public entrypoint unit ownership (`Owner(unit)`, `Shared`, or `Unowned`), derived from
-    /// [`Self::unit_owners`].
-    pub ownership: Ownership,
     /// Strongly connected component id over [`ScopeFacts::ordering`]. Mutual recursion shares an id.
     pub recursion_group: usize,
     /// Topological level in [`ScopeFacts::ordering`]: `0` for leaves, `1 + max(callee.level)` above
@@ -104,9 +99,7 @@ fn scope_facts(scope: &DeclarationScope<'_>) -> ScopeFacts {
                 end_line: item.end_line,
                 column: coordinate.column,
                 signature: item.signature.clone(),
-                roots: graph.roots[idx].clone(),
-                unit_owners: graph.unit_owners[idx].clone(),
-                ownership: graph.ownership[idx],
+                roots: graph.unit_owners[idx].clone(),
                 recursion_group: graph.recursion_group[idx],
                 level: graph.level[idx],
                 findings: Vec::new(),
@@ -207,7 +200,6 @@ mod tests {
                     item.kind,
                     item.visibility,
                     item.roots.as_slice(),
-                    item.ownership,
                     item.level,
                 )
             })
@@ -222,7 +214,6 @@ mod tests {
                     ScopeItemKind::Callable,
                     Visibility::Public,
                     &[0][..],
-                    Ownership::Owner(0),
                     3
                 ),
                 (
@@ -230,7 +221,6 @@ mod tests {
                     ScopeItemKind::Callable,
                     Visibility::Private,
                     &[0][..],
-                    Ownership::Owner(0),
                     2
                 ),
                 (
@@ -238,7 +228,6 @@ mod tests {
                     ScopeItemKind::Callable,
                     Visibility::Private,
                     &[0][..],
-                    Ownership::Owner(0),
                     0
                 ),
                 (
@@ -246,7 +235,6 @@ mod tests {
                     ScopeItemKind::Type,
                     Visibility::Private,
                     &[0][..],
-                    Ownership::Owner(0),
                     1
                 ),
             ]
