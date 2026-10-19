@@ -10,7 +10,7 @@ from .model import (
     MUTABLE_MODULE_CONSTANT,
     NULLABLE_COLLECTION_RETURN,
     PARAMETER_USAGE,
-    PY_LITERALS,
+    PY_BINDINGS,
     RETURNS,
     RS_RETURNS,
     Cluster,
@@ -478,7 +478,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="class-body assignments not collected by collect_module_assignments",
-            path=PY_LITERALS,
+            path=PY_BINDINGS,
             edits=(
                 (
                     "            Stmt::With(with_statement) => {\n"
@@ -496,7 +496,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="function-body assignments not collected by collect_module_assignments",
-            path=PY_LITERALS,
+            path=PY_BINDINGS,
             edits=(
                 (
                     "            Stmt::With(with_statement) => {\n"
@@ -514,7 +514,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="attribute target not collected by collect_module_assignments",
-            path=PY_LITERALS,
+            path=PY_BINDINGS,
             edits=(
                 (
                     "            Stmt::AnnAssign(ann) => {\n"
@@ -538,7 +538,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="unpacking target not collected by collect_module_assignments",
-            path=PY_LITERALS,
+            path=PY_BINDINGS,
             edits=(
                 (
                     "            Stmt::Assign(assign) => {\n"
@@ -602,7 +602,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="PEP 695 type statement not collected by collect_module_assignments",
-            path=PY_LITERALS,
+            path=PY_BINDINGS,
             edits=(
                 (
                     "            Stmt::With(with_statement) => {\n"

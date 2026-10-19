@@ -150,7 +150,7 @@ CLUSTER = Cluster(
             path=PY_LITERALS,
             edits=(
                 (
-                    "self.record_constant_rhs(&assign.value);",
+                    "self.record_constant_rhs(value);",
                     "walk_stmt(self, statement);",
                 ),
             ),

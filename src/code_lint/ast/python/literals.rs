@@ -1,6 +1,6 @@
-//! Python literal occurrences and module-level constant assignments.
+//! Python literal occurrences.
 
-use super::annotations::has_final_annotation_expr;
+use super::bindings::constant_assignment_value;
 use super::names::written_name;
 use crate::code_lint::ast::{
     AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, parse_float_literal,
@@ -22,29 +22,6 @@ const TYPE_NAME_FIRST_ARGUMENT_CALLS: &[&str] = &[
     "cast",
 ];
 
-/// A single-name assignment at module level, including inside the bodies of top-level `if`,
-/// `try` and `with` statements (`ALLOWED = [...]`, `PORTS: Final = {...}`, `NAME: str`).
-pub struct PythonModuleAssignment<'a> {
-    /// The assigned name (e.g. `"ALLOWED"` or `"_cache"`).
-    pub name: String,
-    /// The type annotation, if any.
-    pub annotation: Option<AstNode<'a>>,
-    /// The assigned value without enclosing parentheses, absent for a bare annotation.
-    pub value: Option<AstNode<'a>>,
-    /// True if the annotation is `Final` or `Final[T]` (qualified or not, optionally wrapped in
-    /// `Annotated`).
-    has_final_annotation: bool,
-}
-
-impl PythonModuleAssignment<'_> {
-    /// Whether the assignment declares a constant: an `UPPER_SNAKE_CASE` name or a `Final`
-    /// annotation.
-    #[must_use]
-    pub fn is_constant(&self) -> bool {
-        is_constant_name(&self.name) || self.has_final_annotation
-    }
-}
-
 /// Collects Python literal occurrences (see [`crate::code_lint::ast::collect_literal_occurrences`]).
 #[must_use]
 pub(in crate::code_lint::ast) fn collect_literal_occurrences(
@@ -60,18 +37,6 @@ pub(in crate::code_lint::ast) fn collect_literal_occurrences(
     };
     collector.visit_body(&parsed.syntax().body);
     collector.out
-}
-
-/// Collects the single-name module-level assignments of `file`, in source order. Attribute and
-/// unpacking targets are not collected.
-#[must_use]
-pub fn collect_module_assignments(file: &ParsedFile) -> Vec<PythonModuleAssignment<'_>> {
-    let Some(parsed) = file.py_module() else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    collect_module_assignments_in_stmts(&parsed.syntax().body, file, &mut out);
-    out
 }
 
 struct LiteralOccurrenceCollector<'a> {
@@ -140,25 +105,11 @@ impl<'a> SourceOrderVisitor<'a> for LiteralOccurrenceCollector<'a> {
         match statement {
             Stmt::TypeAlias(_) => {}
             Stmt::Expr(expr_statement) if is_standalone_string_expr(&expr_statement.value) => {}
-            Stmt::Assign(assign)
+            Stmt::Assign(_) | Stmt::AnnAssign(_)
                 if self.in_constant_scope
-                    && matches!(
-                        assign.targets.as_slice(),
-                        [Expr::Name(name)] if is_constant_name(name.id.as_str())
-                    ) =>
+                    && let Some(value) = constant_assignment_value(statement, self.file) =>
             {
-                self.record_constant_rhs(&assign.value);
-            }
-            Stmt::AnnAssign(ann)
-                if self.in_constant_scope
-                    && (matches!(
-                        ann.target.as_ref(),
-                        Expr::Name(name) if is_constant_name(name.id.as_str())
-                    ) || has_final_annotation_expr(&ann.annotation, self.file)) =>
-            {
-                if let Some(value) = &ann.value {
-                    self.record_constant_rhs(value);
-                }
+                self.record_constant_rhs(value);
             }
             Stmt::ClassDef(cls) => {
                 let prev = self.in_constant_scope;
@@ -385,75 +336,6 @@ fn number_literal_value(expr: &Expr, source: &str) -> Option<LiteralValue> {
     }
 }
 
-/// Collects single-name module-level assignments from `stmts`, recursing into top-level
-/// `if`, `try`, and `with` blocks.
-fn collect_module_assignments_in_stmts<'a>(
-    stmts: &[Stmt],
-    file: &'a ParsedFile,
-    out: &mut Vec<PythonModuleAssignment<'a>>,
-) {
-    for statement in stmts {
-        match statement {
-            Stmt::Assign(assign) => {
-                if let [Expr::Name(target)] = assign.targets.as_slice() {
-                    out.push(PythonModuleAssignment {
-                        name: target.id.to_string(),
-                        annotation: None,
-                        value: Some(AstNode::from_span(
-                            file,
-                            span_from_ruff_range(assign.value.range()),
-                        )),
-                        has_final_annotation: false,
-                    });
-                }
-            }
-            Stmt::AnnAssign(ann) => {
-                if let Expr::Name(target) = ann.target.as_ref() {
-                    out.push(PythonModuleAssignment {
-                        name: target.id.to_string(),
-                        annotation: Some(AstNode::from_span(
-                            file,
-                            span_from_ruff_range(ann.annotation.range()),
-                        )),
-                        value: ann
-                            .value
-                            .as_ref()
-                            .map(|val| AstNode::from_span(file, span_from_ruff_range(val.range()))),
-                        has_final_annotation: has_final_annotation_expr(&ann.annotation, file),
-                    });
-                }
-            }
-            Stmt::If(if_statement) => {
-                collect_module_assignments_in_stmts(&if_statement.body, file, out);
-                for clause in &if_statement.elif_else_clauses {
-                    collect_module_assignments_in_stmts(&clause.body, file, out);
-                }
-            }
-            Stmt::Try(try_statement) => {
-                collect_module_assignments_in_stmts(&try_statement.body, file, out);
-                for handler in &try_statement.handlers {
-                    let ExceptHandler::ExceptHandler(handler_clause) = handler;
-                    collect_module_assignments_in_stmts(&handler_clause.body, file, out);
-                }
-                collect_module_assignments_in_stmts(&try_statement.orelse, file, out);
-                collect_module_assignments_in_stmts(&try_statement.finalbody, file, out);
-            }
-            Stmt::With(with_statement) => {
-                collect_module_assignments_in_stmts(&with_statement.body, file, out);
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Returns true if `name` is spelled as a constant (`MAX_RETRIES`, `_TIMEOUT_S`).
-fn is_constant_name(name: &str) -> bool {
-    name.chars().any(|character| character.is_ascii_uppercase())
-        && name.chars().all(|character| {
-            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,56 +423,5 @@ mod tests {
             .map(|occurrence| occurrence.value)
             .collect();
         assert_eq!(values, vec![expected]);
-    }
-
-    #[rstest::rstest]
-    #[case::annotated_value(
-        "ALLOWED: list[str] = (\"a\",)",
-        &[("ALLOWED", Some("list[str]"), Some("(\"a\",)"), true)]
-    )]
-    #[case::parenthesized_value_with_comment(
-        "ALLOWED = (\n    # Default roles\n    [\"admin\"]\n)",
-        &[("ALLOWED", None, Some("[\"admin\"]"), true)]
-    )]
-    #[case::bare_annotation("NAME: str", &[("NAME", Some("str"), None, true)])]
-    #[case::lowercase_final(
-        "from typing import Final\nallowed: Final = 1",
-        &[("allowed", Some("Final"), Some("1"), true)]
-    )]
-    #[case::lowercase_variable("cache = {}", &[("cache", None, Some("{}"), false)])]
-    #[case::inside_top_level_if("if FLAG:\n    HOSTS = []", &[("HOSTS", None, Some("[]"), true)])]
-    #[case::other_targets_and_scopes_not_collected(
-        "config.X = 1\nA, B = 1, 2\ndef f():\n    LOCAL = 1\nclass C:\n    ATTR = 1",
-        &[]
-    )]
-    fn test_collect_module_assignments(
-        #[case] source: &str,
-        #[case] expected: &[(&str, Option<&str>, Option<&str>, bool)],
-    ) {
-        let file = ParsedFile::new(source, Language::Python);
-        let assignments = collect_module_assignments(&file);
-        let collected: Vec<_> = assignments
-            .iter()
-            .map(|assignment| {
-                (
-                    assignment.name.as_str(),
-                    assignment.annotation.as_ref().map(AstNode::text),
-                    assignment.value.as_ref().map(AstNode::text),
-                    assignment.is_constant(),
-                )
-            })
-            .collect();
-        let expected: Vec<_> = expected
-            .iter()
-            .map(|&(name, annotation, value, is_constant)| {
-                (
-                    name,
-                    annotation.map(Into::into),
-                    value.map(Into::into),
-                    is_constant,
-                )
-            })
-            .collect();
-        assert_eq!(collected, expected);
     }
 }

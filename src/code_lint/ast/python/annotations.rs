@@ -774,9 +774,9 @@ fn is_std_type_constructor_prefix(path: &str, terminal: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::bindings::collect_module_assignments;
     use super::super::calls::call_callee;
     use super::super::functions::extract_function_signatures;
-    use super::super::literals::collect_module_assignments;
     use super::*;
     use crate::diagnostic::Language;
     use rstest::rstest;

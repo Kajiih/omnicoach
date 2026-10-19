@@ -29,6 +29,7 @@ pub use self::annotations::{
     collection_type, generator_yield_type, includes_none_bool_or_callable, return_type_union,
 };
 pub(super) use self::bindings::collect_bindings;
+pub use self::bindings::{PythonModuleAssignment, collect_module_assignments};
 pub(super) use self::calls::collect_call_candidates;
 pub use self::calls::{PythonEnvironSubscript, call_callee, collect_environ_subscripts};
 pub use self::classes::{
@@ -57,7 +58,6 @@ pub use self::functions::{
     find_nested_classes, find_nested_functions,
 };
 pub(super) use self::literals::collect_literal_occurrences;
-pub use self::literals::{PythonModuleAssignment, collect_module_assignments};
 pub use self::logging::{PythonLoggerCall, collect_logger_calls};
 pub(super) use self::multiline_strings::find_unwrapped_multiline_strings;
 pub use self::parameter_usage::{
