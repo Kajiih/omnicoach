@@ -42,6 +42,7 @@ pub(in crate::code_lint::ast) use self::test_analysis::{
     TestStatementRole, has_multi_phase_interleaving, is_assertion_function_name,
     normalize_statement_text, resolve_assertion_helpers,
 };
+pub(in crate::code_lint::ast) use imports::ImportMap;
 use imports::path_separator;
 pub use imports::{ResolvedName, resolve_name};
 
@@ -171,7 +172,7 @@ pub struct ParsedFile {
     pub(in crate::code_lint::ast) bindings: OnceLock<Vec<(SourceSpan, BindingKind)>>,
     pub(in crate::code_lint::ast) call_candidates: OnceLock<Vec<CachedCallCandidate>>,
     pub(in crate::code_lint::ast) rust_inline_test_ranges: OnceLock<Vec<std::ops::Range<usize>>>,
-    pub(in crate::code_lint::ast) imports: OnceLock<imports::ImportMap>,
+    pub(in crate::code_lint::ast) imports: OnceLock<ImportMap>,
     pub(in crate::code_lint::ast) locally_mutated_return_functions: OnceLock<HashSet<String>>,
     pub(in crate::code_lint::ast) call_cluster_findings: OnceLock<CachedCallClusterFindings>,
 }

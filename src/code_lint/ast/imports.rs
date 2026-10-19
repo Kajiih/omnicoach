@@ -1,11 +1,8 @@
 //! Per-file import map: resolves names through Python `import` / `from … import` and Rust `use`
 //! declarations, with file-level definitions shadowing imports.
 
-use super::{CodeLintAst, ParsedFile};
+use super::ParsedFile;
 use crate::diagnostic::Language;
-use ra_ap_syntax::AstNode as _;
-use ra_ap_syntax::ast::{self, HasModuleItem as _, HasName as _};
-use ruff_python_ast::{ExceptHandler, Stmt};
 use std::collections::{HashMap, HashSet};
 
 /// What a dotted (Python) or `::` (Rust) name refers to, judged by its first segment.
@@ -24,9 +21,9 @@ pub enum ResolvedName {
 #[derive(Default)]
 pub(in crate::code_lint::ast) struct ImportMap {
     /// Bound name to canonical path (`c` to `a.b` for `import a.b as c`).
-    imports: HashMap<String, String>,
+    pub(in crate::code_lint::ast) imports: HashMap<String, String>,
     /// Names defined in the file, which shadow imports.
-    locals: HashSet<String>,
+    pub(in crate::code_lint::ast) locals: HashSet<String>,
 }
 
 /// Resolves `name` (`os.getenv`, `t.List`, `thread::sleep`) through the file-level imports and
@@ -52,7 +49,9 @@ pub fn resolve_name(file: &ParsedFile, name: &str) -> ResolvedName {
     if !is_identifier(head) {
         return ResolvedName::Unbound;
     }
-    let map = file.imports.get_or_init(|| build_import_map(file));
+    let map = file
+        .imports
+        .get_or_init(|| dispatch_lang!(file.lang(), collect_import_map(file)));
     if map.locals.contains(head) {
         return ResolvedName::Local;
     }
@@ -79,149 +78,6 @@ fn is_identifier(text: &str) -> bool {
         .next()
         .is_some_and(|first| first == '_' || first.is_alphabetic())
         && characters.all(|character| character == '_' || character.is_alphanumeric())
-}
-
-fn build_import_map(file: &ParsedFile) -> ImportMap {
-    let mut map = ImportMap::default();
-    match &file.ast {
-        CodeLintAst::Python(Ok(parsed)) => collect_python_bindings(&parsed.syntax().body, &mut map),
-        CodeLintAst::Python(Err(_)) => {}
-        CodeLintAst::Rust(parsed) => {
-            for item in parsed.tree().items() {
-                match item {
-                    ast::Item::Use(use_item) => {
-                        if let Some(use_tree) = use_item.use_tree() {
-                            collect_use_tree(&use_tree, "", &mut map);
-                        }
-                    }
-                    item => {
-                        if let Some(name) = rust_item_name(&item) {
-                            map.locals.insert(name);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    map
-}
-
-/// Records the imports and definitions of a Python module body or top-level block `body`.
-fn collect_python_bindings(body: &[Stmt], map: &mut ImportMap) {
-    for statement in body {
-        match statement {
-            Stmt::Import(import) => {
-                for alias in &import.names {
-                    let module = alias.name.as_str();
-                    if let Some(asname) = &alias.asname {
-                        map.imports.insert(asname.to_string(), module.to_owned());
-                    } else {
-                        let package = module.split('.').next().unwrap_or(module);
-                        map.imports.insert(package.to_owned(), package.to_owned());
-                    }
-                }
-            }
-            Stmt::ImportFrom(import_from) => {
-                let dots = ".".repeat(import_from.level as usize);
-                let module = import_from
-                    .module
-                    .as_ref()
-                    .map_or_else(|| dots.clone(), |module| format!("{dots}{module}"));
-                for alias in &import_from.names {
-                    let name = alias.name.as_str();
-                    if name == "*" {
-                        continue;
-                    }
-                    let path = if module.ends_with('.') {
-                        format!("{module}{name}")
-                    } else {
-                        format!("{module}.{name}")
-                    };
-                    let bound = alias.asname.as_ref().unwrap_or(&alias.name);
-                    map.imports.insert(bound.to_string(), path);
-                }
-            }
-            Stmt::FunctionDef(function) => {
-                map.locals.insert(function.name.to_string());
-            }
-            Stmt::ClassDef(class) => {
-                map.locals.insert(class.name.to_string());
-            }
-            Stmt::If(if_statement) => {
-                collect_python_bindings(&if_statement.body, map);
-                for clause in &if_statement.elif_else_clauses {
-                    collect_python_bindings(&clause.body, map);
-                }
-            }
-            Stmt::Try(try_statement) => {
-                collect_python_bindings(&try_statement.body, map);
-                for ExceptHandler::ExceptHandler(handler) in &try_statement.handlers {
-                    collect_python_bindings(&handler.body, map);
-                }
-                collect_python_bindings(&try_statement.orelse, map);
-                collect_python_bindings(&try_statement.finalbody, map);
-            }
-            Stmt::With(with_statement) => collect_python_bindings(&with_statement.body, map),
-            _ => {}
-        }
-    }
-}
-
-/// Records the bindings of Rust `use_tree`, nested under the `::`-joined `prefix`.
-fn collect_use_tree(use_tree: &ast::UseTree, prefix: &str, map: &mut ImportMap) {
-    let path_text = use_tree.path().map(|path| {
-        path.syntax()
-            .text()
-            .to_string()
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect::<String>()
-    });
-    let full_path = match path_text.as_deref() {
-        None => prefix.to_owned(),
-        Some("self") if !prefix.is_empty() => prefix.to_owned(),
-        Some(path) if prefix.is_empty() => path.trim_start_matches("::").to_owned(),
-        Some(path) => format!("{prefix}::{path}"),
-    };
-    if let Some(sub_trees) = use_tree.use_tree_list() {
-        for child_tree in sub_trees.use_trees() {
-            collect_use_tree(&child_tree, &full_path, map);
-        }
-        return;
-    }
-    if use_tree.star_token().is_some() || full_path.is_empty() {
-        return;
-    }
-    let bound = match use_tree.rename() {
-        Some(rename) => match rename.name() {
-            Some(name) => name.text().to_string(),
-            None => return,
-        },
-        None => full_path
-            .rsplit("::")
-            .next()
-            .unwrap_or(&full_path)
-            .to_owned(),
-    };
-    map.imports.insert(bound, full_path);
-}
-
-/// The name a root-level Rust item defines, if it is a named definition.
-fn rust_item_name(item: &ast::Item) -> Option<String> {
-    let name = match item {
-        ast::Item::Fn(item) => item.name(),
-        ast::Item::Struct(item) => item.name(),
-        ast::Item::Enum(item) => item.name(),
-        ast::Item::Union(item) => item.name(),
-        ast::Item::Trait(item) => item.name(),
-        ast::Item::TypeAlias(item) => item.name(),
-        ast::Item::Const(item) => item.name(),
-        ast::Item::Static(item) => item.name(),
-        ast::Item::Module(item) => item.name(),
-        ast::Item::MacroRules(item) => item.name(),
-        _ => None,
-    }?;
-    Some(name.text().to_string())
 }
 
 #[cfg(test)]

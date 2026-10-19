@@ -28,8 +28,8 @@ pub use self::annotations::{
     PythonReturnTypeBranch, PythonReturnTypeUnion, collect_collection_types, collection_display,
     collection_type, generator_yield_type, includes_none_bool_or_callable, return_type_union,
 };
-pub(super) use self::bindings::collect_bindings;
 pub use self::bindings::{PythonModuleAssignment, collect_module_assignments};
+pub(super) use self::bindings::{collect_bindings, collect_import_map};
 pub(super) use self::calls::collect_call_candidates;
 pub use self::calls::{PythonEnvironSubscript, call_callee, collect_environ_subscripts};
 pub use self::classes::{

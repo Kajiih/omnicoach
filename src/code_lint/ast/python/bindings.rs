@@ -4,7 +4,7 @@ use super::annotations::has_final_annotation_expr;
 use super::functions::{has_override_decorator, method_receiver_name_ast};
 use super::tree::direct_function_definitions;
 use crate::code_lint::ast::{
-    AstNode, Binding, BindingKind, ParsedFile, push_bindings, span_from_ruff_range,
+    AstNode, Binding, BindingKind, ImportMap, ParsedFile, push_bindings, span_from_ruff_range,
 };
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{
@@ -71,6 +71,17 @@ pub(in crate::code_lint::ast) fn collect_bindings(file: &ParsedFile) -> Vec<Bind
         walk_match_case::<BindingVisitor<'_>>,
     );
     visitor.bindings
+}
+
+/// Collects the file-level imports and `def` / `class` definitions of `file` (see
+/// [`crate::code_lint::ast::resolve_name`]).
+#[must_use]
+pub(in crate::code_lint::ast) fn collect_import_map(file: &ParsedFile) -> ImportMap {
+    let mut map = ImportMap::default();
+    if let Some(parsed) = file.py_module() {
+        collect_python_import_bindings(&parsed.syntax().body, &mut map);
+    }
+    map
 }
 
 /// Returns the RHS expression if `statement` assigns a value to a constant binding (a single
@@ -454,6 +465,69 @@ fn collect_module_assignments_in_stmts<'a>(
             }
             Stmt::With(with_statement) => {
                 collect_module_assignments_in_stmts(&with_statement.body, file, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Records the imports and definitions of a Python module body or top-level block `body`.
+fn collect_python_import_bindings(body: &[Stmt], map: &mut ImportMap) {
+    for statement in body {
+        match statement {
+            Stmt::Import(import) => {
+                for alias in &import.names {
+                    let module = alias.name.as_str();
+                    if let Some(asname) = &alias.asname {
+                        map.imports.insert(asname.to_string(), module.to_owned());
+                    } else {
+                        let package = module.split('.').next().unwrap_or(module);
+                        map.imports.insert(package.to_owned(), package.to_owned());
+                    }
+                }
+            }
+            Stmt::ImportFrom(import_from) => {
+                let dots = ".".repeat(import_from.level as usize);
+                let module = import_from
+                    .module
+                    .as_ref()
+                    .map_or_else(|| dots.clone(), |module| format!("{dots}{module}"));
+                for alias in &import_from.names {
+                    let name = alias.name.as_str();
+                    if name == "*" {
+                        continue;
+                    }
+                    let path = if module.ends_with('.') {
+                        format!("{module}{name}")
+                    } else {
+                        format!("{module}.{name}")
+                    };
+                    let bound = alias.asname.as_ref().unwrap_or(&alias.name);
+                    map.imports.insert(bound.to_string(), path);
+                }
+            }
+            Stmt::FunctionDef(function) => {
+                map.locals.insert(function.name.to_string());
+            }
+            Stmt::ClassDef(class) => {
+                map.locals.insert(class.name.to_string());
+            }
+            Stmt::If(if_statement) => {
+                collect_python_import_bindings(&if_statement.body, map);
+                for clause in &if_statement.elif_else_clauses {
+                    collect_python_import_bindings(&clause.body, map);
+                }
+            }
+            Stmt::Try(try_statement) => {
+                collect_python_import_bindings(&try_statement.body, map);
+                for ExceptHandler::ExceptHandler(handler) in &try_statement.handlers {
+                    collect_python_import_bindings(&handler.body, map);
+                }
+                collect_python_import_bindings(&try_statement.orelse, map);
+                collect_python_import_bindings(&try_statement.finalbody, map);
+            }
+            Stmt::With(with_statement) => {
+                collect_python_import_bindings(&with_statement.body, map);
             }
             _ => {}
         }

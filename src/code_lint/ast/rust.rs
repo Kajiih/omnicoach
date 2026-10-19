@@ -16,7 +16,7 @@ mod test_analysis;
 mod tree;
 mod trivia;
 
-pub(super) use self::bindings::collect_bindings;
+pub(super) use self::bindings::{collect_bindings, collect_import_map};
 pub(super) use self::calls::collect_call_candidates;
 pub(super) use self::declaration_order::{
     collect_declaration_scopes, collect_members_after_methods,
