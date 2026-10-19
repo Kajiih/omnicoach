@@ -323,9 +323,7 @@ impl<'a> PythonClassInfo<'a> {
         }
         annotations
     }
-}
 
-impl PythonClassInfo<'_> {
     /// Returns true if the class body defines a function (method, property accessor) named
     /// `name`.
     #[must_use]
