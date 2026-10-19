@@ -29,12 +29,11 @@ const READONLY_COLLECTION_METHODS: &[&str] = &[
 const BOOL_CONSTRUCTOR: &str = "bool";
 const BUILTIN_LEN: &str = "len";
 
-/// Builtins that iterate their collection argument(s) in a single pass and are also treated as
-/// collection-sizing/iterating calls in positional-read analysis.
-const ITERATING_COLLECTION_BUILTINS: &[&str] = &["enumerate", "zip", "sorted"];
-
-/// Additional builtins that consume an `Iterable` in a single pass.
-const OTHER_SINGLE_PASS_ITERABLE_BUILTINS: &[&str] = &[
+/// Builtins that consume an `Iterable` in a single pass.
+const SINGLE_PASS_ITERABLE_BUILTINS: &[&str] = &[
+    "enumerate",
+    "zip",
+    "sorted",
     "sum",
     "min",
     "max",
@@ -52,8 +51,9 @@ const OTHER_SINGLE_PASS_ITERABLE_BUILTINS: &[&str] = &[
 
 /// Additional builtins that read a collection without mutating it in place or retaining a
 /// mutable alias to the outer container.
-const OTHER_SAFE_READONLY_BUILTINS: &[&str] = &[
+const SAFE_READONLY_BUILTINS: &[&str] = &[
     BOOL_CONSTRUCTOR,
+    "reversed",
     "repr",
     "str",
     "hash",
@@ -83,12 +83,6 @@ pub fn summarize_parameter_usages<'a>(
     };
     visitor.visit_body(&func.body);
     visitor.usages
-}
-
-/// Returns true if `name` is a builtin that iterates or sizes its positional arguments
-/// (`len(xs)`, `enumerate(xs)`, `zip(xs, ys)`, `reversed(xs)`, `sorted(xs)`).
-pub(super) fn is_collection_builtin(name: &str) -> bool {
-    matches!(name, BUILTIN_LEN | "reversed") || ITERATING_COLLECTION_BUILTINS.contains(&name)
 }
 
 /// How a function body uses one of its parameters; see [`summarize_parameter_usages`].
@@ -430,15 +424,14 @@ enum UseRole {
 /// Returns true if `name` is a builtin that reads or iterates a collection without mutating it
 /// in place or retaining a mutable alias to the outer container.
 fn is_safe_readonly_builtin(name: &str) -> bool {
-    is_single_pass_iterable_builtin(name)
-        || is_collection_builtin(name)
-        || OTHER_SAFE_READONLY_BUILTINS.contains(&name)
+    name == BUILTIN_LEN
+        || is_single_pass_iterable_builtin(name)
+        || SAFE_READONLY_BUILTINS.contains(&name)
 }
 
 /// Returns true if `name` is a builtin that consumes an `Iterable` in a single pass.
 fn is_single_pass_iterable_builtin(name: &str) -> bool {
-    ITERATING_COLLECTION_BUILTINS.contains(&name)
-        || OTHER_SINGLE_PASS_ITERABLE_BUILTINS.contains(&name)
+    SINGLE_PASS_ITERABLE_BUILTINS.contains(&name)
 }
 
 #[cfg(test)]

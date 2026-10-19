@@ -7,6 +7,7 @@ use crate::code_lint::ast::{
 };
 use ra_ap_syntax::ast::{self, HasName as _};
 use ra_ap_syntax::{AstNode as _, SyntaxKind, SyntaxNode};
+use std::collections::HashSet;
 
 /// Returns `node` as an [`EnclosingFunction`] if it is a named function or method item; top level
 /// if it is an item of the source file.
@@ -20,6 +21,71 @@ pub(super) fn named_function(node: &SyntaxNode) -> Option<EnclosingFunction> {
             .is_some_and(|parent| ast::SourceFile::can_cast(parent.kind())),
         enclosing_class: None,
     })
+}
+
+/// Collects the type and const generic parameter names declared directly on `node`.
+pub(super) fn collect_rust_generic_param_names(node: &SyntaxNode) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for child in node.children() {
+        if let Some(generic_params) = ast::GenericParamList::cast(child) {
+            for param in generic_params.generic_params() {
+                match param {
+                    ast::GenericParam::TypeParam(type_param) => {
+                        if let Some(name) = type_param.name() {
+                            names.insert(name.text().trim().to_owned());
+                        }
+                    }
+                    ast::GenericParam::ConstParam(const_param) => {
+                        if let Some(name) = const_param.name() {
+                            names.insert(name.text().trim().to_owned());
+                        }
+                    }
+                    ast::GenericParam::LifetimeParam(_) => {}
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Collects generic parameter, local parameter, pattern, and nested-item names bound inside
+/// `function` (without descending into nested module or `impl` items).
+pub(super) fn collect_rust_fn_local_names(function: &ast::Fn) -> HashSet<String> {
+    let mut names = collect_rust_generic_param_names(function.syntax());
+    if let Some(params) = function.param_list() {
+        for pat in params
+            .syntax()
+            .descendants()
+            .filter_map(ast::IdentPat::cast)
+        {
+            if let Some(name) = pat.name() {
+                names.insert(name.text().trim().to_owned());
+            }
+        }
+    }
+    if let Some(body) = function.body() {
+        let mut stack = vec![body.syntax().clone()];
+        while let Some(node) = stack.pop() {
+            if ast::Item::can_cast(node.kind()) {
+                for child in node.children() {
+                    if let Some(name) = ast::Name::cast(child) {
+                        names.insert(name.text().trim().to_owned());
+                        break;
+                    }
+                }
+                continue;
+            }
+            if let Some(ident_pat) = ast::IdentPat::cast(node.clone())
+                && let Some(name) = ident_pat.name()
+            {
+                names.insert(name.text().trim().to_owned());
+            }
+            for child in node.children() {
+                stack.push(child);
+            }
+        }
+    }
+    names
 }
 
 /// Collects all binding definitions (variables, functions, structs, named struct fields, etc.)

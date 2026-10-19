@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .model import ANNOTATIONS, AST, RETURNS, RS_FUNCTIONS, Cluster, Mutation, Unmutated
+from .model import ANNOTATIONS, AST, RETURNS, RS_RETURNS, Cluster, Mutation, Unmutated
 
 UNEXPLAINED_RETURN = "src/code_lint/rules/unexplained_return.rs"
 
@@ -42,7 +42,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust trait items and trait implementations are not collected (E3)",
-            path=RS_FUNCTIONS,
+            path=RS_RETURNS,
             edits=(
                 (
                     "if is_trait_or_trait_impl || node.is_in_rust_inline_test() {",
@@ -56,7 +56,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust inline tests are not collected (E4)",
-            path=RS_FUNCTIONS,
+            path=RS_RETURNS,
             edits=(
                 (
                     "if is_trait_or_trait_impl || node.is_in_rust_inline_test() {",
@@ -112,7 +112,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust `Result<bool, E>` / `Poll<bool>` are booleans (E9)",
-            path=RS_FUNCTIONS,
+            path=RS_RETURNS,
             edits=(
                 (
                     "let success = unwrap_rust_return_envelope(type_node, file);",
@@ -123,7 +123,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="aliases whose last segment ends in `Result` are results (E9)",
-            path=RS_FUNCTIONS,
+            path=RS_RETURNS,
             edits=(
                 (
                     'let is_result_or_poll = base_terminal.ends_with("Result")',

@@ -8,13 +8,13 @@ from .model import (
     FORMAT_STRINGS,
     INLINE_TEST_ALWAYS_FALSE,
     LOGGING,
+    MULTILINE_STRINGS,
     POLICY,
     PY_LITERALS,
     QUOTE_WRAPPED,
     REPEATED_LITERAL,
     RS_LITERALS,
-    RS_STRINGS,
-    STRINGS,
+    RS_MULTILINE_STRINGS,
     UNMATCHED_LOGGER,
     Cluster,
     Mutation,
@@ -32,7 +32,7 @@ CLUSTER = Cluster(
         # --- bare-multiline-string ---
         Mutation(
             label="Python standalone string statements (docstrings) exempt from bare-multiline-string",
-            path=STRINGS,
+            path=MULTILINE_STRINGS,
             edits=(
                 (
                     "let is_docstring = self.docstring_expr_span == Some(span);",
@@ -46,13 +46,13 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python allowed dedent wrapper call exempt from bare-multiline-string",
-            path=STRINGS,
+            path=MULTILINE_STRINGS,
             edits=(("&& self.allowed_call_depth == 0", ""),),
             cases=("bare_multiline_string::pass::inspect_cleandoc_allowed",),
         ),
         Mutation(
             label="Python single-quoted strings with line breaks exempt from bare-multiline-string",
-            path=STRINGS,
+            path=MULTILINE_STRINGS,
             edits=(
                 ("if is_triple_quoted", "let _ = is_triple_quoted;\n        if true"),
             ),
@@ -63,25 +63,25 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust allowed indoc macro exempt from bare-multiline-string",
-            path=RS_STRINGS,
+            path=RS_MULTILINE_STRINGS,
             edits=(("&& !is_enclosed_in_macro(token, &is_allowed_wrapper)", ""),),
             cases=("bare_multiline_string::pass::indoc_macro_allowed",),
         ),
         Mutation(
             label="Rust backslash line continuation exempt from bare-multiline-string",
-            path=RS_STRINGS,
+            path=RS_MULTILINE_STRINGS,
             edits=(("lines.any(|line| !line.trim_end().ends_with('\\\\'))", "true"),),
             cases=("bare_multiline_string::pass::backslash_continuation_allowed@rust",),
         ),
         Mutation(
             label="Rust insta inline snapshot exempt from bare-multiline-string",
-            path=RS_STRINGS,
+            path=RS_MULTILINE_STRINGS,
             edits=(("&& !is_insta_inline_snapshot(token)", ""),),
             cases=("bare_multiline_string::pass::insta_inline_snapshot_exempt",),
         ),
         Mutation(
             label="Rust doc attribute exempt from bare-multiline-string",
-            path=RS_STRINGS,
+            path=RS_MULTILINE_STRINGS,
             edits=(("&& !is_enclosed_in_doc_attribute(token)", ""),),
             cases=("bare_multiline_string::pass::doc_attribute_exempt",),
         ),

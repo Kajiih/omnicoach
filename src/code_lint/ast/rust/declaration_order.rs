@@ -1,5 +1,6 @@
 //! Rust declaration-order scope builders and associated-item placement extraction (`ra_ap_syntax`).
 
+use super::bindings::{collect_rust_fn_local_names, collect_rust_generic_param_names};
 use super::names::{SELF_KEYWORD, SELF_TYPE_KEYWORD};
 use super::trivia::previous_non_trivia_token;
 use crate::code_lint::ast::{
@@ -832,70 +833,6 @@ fn collect_misplaced_assoc_items<'a>(
             });
         }
     }
-}
-
-/// Collects generic parameter, local parameter, pattern, and nested-item names bound inside
-/// `function` (without descending into nested module or `impl` items).
-pub(super) fn collect_rust_fn_local_names(function: &ast::Fn) -> HashSet<String> {
-    let mut names = collect_rust_generic_param_names(function.syntax());
-    if let Some(params) = function.param_list() {
-        for pat in params
-            .syntax()
-            .descendants()
-            .filter_map(ast::IdentPat::cast)
-        {
-            if let Some(name) = pat.name() {
-                names.insert(name.text().trim().to_owned());
-            }
-        }
-    }
-    if let Some(body) = function.body() {
-        let mut stack = vec![body.syntax().clone()];
-        while let Some(node) = stack.pop() {
-            if ast::Item::can_cast(node.kind()) {
-                for child in node.children() {
-                    if let Some(name) = ast::Name::cast(child) {
-                        names.insert(name.text().trim().to_owned());
-                        break;
-                    }
-                }
-                continue;
-            }
-            if let Some(ident_pat) = ast::IdentPat::cast(node.clone())
-                && let Some(name) = ident_pat.name()
-            {
-                names.insert(name.text().trim().to_owned());
-            }
-            for child in node.children() {
-                stack.push(child);
-            }
-        }
-    }
-    names
-}
-
-fn collect_rust_generic_param_names(node: &SyntaxNode) -> HashSet<String> {
-    let mut names = HashSet::new();
-    for child in node.children() {
-        if let Some(generic_params) = ast::GenericParamList::cast(child) {
-            for param in generic_params.generic_params() {
-                match param {
-                    ast::GenericParam::TypeParam(type_param) => {
-                        if let Some(name) = type_param.name() {
-                            names.insert(name.text().trim().to_owned());
-                        }
-                    }
-                    ast::GenericParam::ConstParam(const_param) => {
-                        if let Some(name) = const_param.name() {
-                            names.insert(name.text().trim().to_owned());
-                        }
-                    }
-                    ast::GenericParam::LifetimeParam(_) => {}
-                }
-            }
-        }
-    }
-    names
 }
 
 /// Extracts the terminal type name of `impl_item.self_ty()` (or its trimmed source text when

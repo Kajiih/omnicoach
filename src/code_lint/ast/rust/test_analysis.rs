@@ -1,12 +1,12 @@
 //! Test-function, assertion, and macro analysis for Rust (`ra_ap_syntax`).
 
 use super::attributes::attribute_terminal_name;
-use super::declaration_order::collect_rust_fn_local_names;
+use super::bindings::collect_rust_fn_local_names;
 use super::effects::expr_contains_call;
 use super::names::{
     SELF_KEYWORD, SUPER_KEYWORD, macro_call_terminal_name, resolve_preceding_macro_path,
 };
-use super::tree::{cast_at_span, syntax_node};
+use super::tree::{meaningful_token_tree_elements, syntax_node};
 use crate::code_lint::ast::{
     AssertionCheck, AstCallCandidate, AstNode, MultiPhaseTest, ParsedFile, TestAssertionCount,
     TestFunctionSetup, TestLogicConstruct, TestStatementRole, TestToTestCall,
@@ -482,23 +482,6 @@ fn is_standalone_collection_token_tree(token_tree: &ast::TokenTree) -> bool {
     )
 }
 
-/// Extracts the argument nodes inside a Rust `macro_invocation`'s `token_tree`.
-#[must_use]
-pub(super) fn extract_macro_arguments<'a>(macro_node: &AstNode<'a>) -> Vec<AstNode<'a>> {
-    let Some(macro_call) = cast_at_span::<ast::MacroCall>(macro_node) else {
-        return Vec::new();
-    };
-    let Some(token_tree) = macro_call.token_tree() else {
-        return Vec::new();
-    };
-    meaningful_token_tree_elements(&token_tree)
-        .into_iter()
-        .map(|element| {
-            AstNode::from_span(macro_node.file, span_from_rowan_range(element.text_range()))
-        })
-        .collect()
-}
-
 /// Collects calls in a Rust test file where a function calls a `#[test]` function defined in the
 /// same file.
 #[must_use]
@@ -700,35 +683,6 @@ fn is_unit_rust_function(function: &ast::Fn) -> bool {
             Some(ast::Type::TupleType(tuple)) if tuple.fields().next().is_none()
         )
     })
-}
-
-/// Extracts the non-delimiter, non-trivia direct child elements of `token_tree`.
-fn meaningful_token_tree_elements(token_tree: &ast::TokenTree) -> Vec<SyntaxElement> {
-    token_tree
-        .syntax()
-        .children_with_tokens()
-        .filter(|element| !is_token_tree_delimiter_or_trivia(element))
-        .collect()
-}
-
-/// Returns true if `element` is a delimiter or comma token inside a `TokenTree`.
-fn is_token_tree_delimiter_or_trivia(element: &SyntaxElement) -> bool {
-    match element {
-        SyntaxElement::Node(_) => false,
-        SyntaxElement::Token(token) => {
-            token.kind().is_trivia()
-                || matches!(
-                    token.kind(),
-                    SyntaxKind::L_PAREN
-                        | SyntaxKind::R_PAREN
-                        | SyntaxKind::L_BRACK
-                        | SyntaxKind::R_BRACK
-                        | SyntaxKind::L_CURLY
-                        | SyntaxKind::R_CURLY
-                        | SyntaxKind::COMMA
-                )
-        }
-    }
 }
 
 /// Returns the executable top-level statements and tail expression of `block_statements`,

@@ -481,9 +481,9 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "fn is_single_pass_iterable_builtin(name: &str) -> bool {\n"
-                    "    ITERATING_COLLECTION_BUILTINS.contains(&name)",
+                    "    SINGLE_PASS_ITERABLE_BUILTINS.contains(&name)",
                     "fn is_single_pass_iterable_builtin(name: &str) -> bool {\n"
-                    '    name == "reversed" || ITERATING_COLLECTION_BUILTINS.contains(&name)',
+                    '    name == "reversed" || SINGLE_PASS_ITERABLE_BUILTINS.contains(&name)',
                 ),
             ),
             cases=("specific_collection_parameter::pass::reversed_requires_sequence",),

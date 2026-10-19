@@ -4,7 +4,7 @@ use super::attributes::attribute_terminal_name;
 use super::names::{
     SELF_KEYWORD, compact_path_text, is_path_segment_token_kind, macro_call_terminal_name,
 };
-use super::test_analysis::extract_macro_arguments;
+use super::tree::extract_macro_arguments;
 use super::trivia::is_rust_comment_kind;
 use crate::code_lint::ast::{AstNode, ParsedFile, span_from_rowan_range};
 use ra_ap_syntax::ast::{

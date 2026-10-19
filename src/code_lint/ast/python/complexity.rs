@@ -361,7 +361,7 @@ impl<'a> SourceOrderVisitor<'a> for CognitiveComplexityVisitor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::extract_function_signatures;
+    use super::super::functions::extract_function_signatures;
     use crate::code_lint::ast::ParsedFile;
     use crate::diagnostic::Language;
     use indoc::indoc;

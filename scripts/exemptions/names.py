@@ -6,8 +6,8 @@ from __future__ import annotations
 from .model import (
     ABBREVIATED_NAME,
     BINDINGS,
+    PY_BINDINGS,
     RS_BINDINGS,
-    SCOPES,
     SINGLE_LETTER_NAME,
     TYPE_SUFFIXED_NAME,
     Cluster,
@@ -57,7 +57,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python import statement classified as BindingKind::Import",
-            path=SCOPES,
+            path=PY_BINDINGS,
             edits=(
                 (
                     "            Stmt::Import(import_statement) => {\n"
@@ -76,7 +76,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python from-import statement classified as BindingKind::Import",
-            path=SCOPES,
+            path=PY_BINDINGS,
             edits=(
                 (
                     "            Stmt::ImportFrom(import_from) => {\n"
@@ -114,7 +114,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python @override method classified as BindingKind::ContractMember",
-            path=SCOPES,
+            path=PY_BINDINGS,
             edits=(
                 (
                     "                let kind = if has_override_decorator(&func_def.decorator_list, file) {\n"
@@ -130,7 +130,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python attribute writes outside __init__ not extracted as attribute declarations",
-            path=SCOPES,
+            path=PY_BINDINGS,
             edits=(
                 (
                     "    let Some(init) = direct_function_definitions(&class_def.body)\n"
@@ -212,7 +212,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python wildcard _ ignored by extract_from_expr_target",
-            path=SCOPES,
+            path=PY_BINDINGS,
             edits=(
                 (
                     '        Expr::Name(name) => {\n            if name.id.as_str() != "_" {',
@@ -223,7 +223,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python class definition classified as BindingKind::StructuralDefinition",
-            path=SCOPES,
+            path=PY_BINDINGS,
             edits=(
                 (
                     "                self.bindings.push(Binding {\n"
@@ -243,7 +243,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Python function definition classified as BindingKind::StructuralDefinition",
-            path=SCOPES,
+            path=PY_BINDINGS,
             edits=(
                 (
                     "                let kind = if has_override_decorator(&func_def.decorator_list, file) {\n"

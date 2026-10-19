@@ -2,7 +2,6 @@
 //! scope also iterates, sizes or mutates.
 
 use super::effects::{MUTATING_METHODS, expr_contains_call};
-use super::parameter_usage::is_collection_builtin;
 use crate::code_lint::ast::{
     AstNode, ParsedFile, PositionalRead, ScopePositionalReads, span_from_ruff_range,
 };
@@ -137,6 +136,12 @@ impl<'a> SourceOrderVisitor<'a> for PositionalReadsCollector<'a> {
         }
         walk_expr(self, expr);
     }
+}
+
+/// Returns true if `name` is a builtin that iterates or sizes its positional arguments
+/// (`len(xs)`, `enumerate(xs)`, `zip(xs, ys)`, `reversed(xs)`, `sorted(xs)`).
+fn is_collection_builtin(name: &str) -> bool {
+    matches!(name, "len" | "reversed" | "enumerate" | "zip" | "sorted")
 }
 
 /// Returns the position read by a Python `subscript` index: a decimal literal, or its negation

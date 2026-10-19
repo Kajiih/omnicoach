@@ -12,7 +12,7 @@ from .model import (
     PARAMETER_USAGE,
     PY_LITERALS,
     RETURNS,
-    RS_FUNCTIONS,
+    RS_RETURNS,
     Cluster,
     Mutation,
     Unmutated,
@@ -412,7 +412,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust trait declaration exempt from nullable-collection-return",
-            path=RS_FUNCTIONS,
+            path=RS_RETURNS,
             edits=(
                 (
                     "    ast::Trait::can_cast(enclosing_item.kind())\n"
@@ -424,7 +424,7 @@ CLUSTER = Cluster(
         ),
         Mutation(
             label="Rust trait impl exempt from nullable-collection-return",
-            path=RS_FUNCTIONS,
+            path=RS_RETURNS,
             edits=(
                 (
                     "    ast::Trait::can_cast(enclosing_item.kind())\n"
