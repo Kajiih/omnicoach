@@ -6,9 +6,8 @@ use super::names::{
 };
 use super::tree::extract_macro_arguments;
 use super::trivia::is_rust_comment_kind;
-use crate::code_lint::ast::{
-    AstNode, ParsedFile, ResolvedName, resolve_name, span_from_rowan_range,
-};
+use crate::code_lint::ast::imports::{ResolvedName, resolve_name};
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_rowan_range};
 use ra_ap_syntax::ast::{
     self, HasAttrs as _, HasGenericArgs as _, HasModuleItem as _, HasName as _, HasVisibility as _,
 };

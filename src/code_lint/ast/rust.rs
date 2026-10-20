@@ -6,6 +6,7 @@ mod calls;
 mod declaration_order;
 mod effects;
 mod file_summary;
+mod imports;
 mod literals;
 mod multiline_strings;
 mod names;
@@ -16,7 +17,7 @@ mod test_analysis;
 mod tree;
 mod trivia;
 
-pub(super) use self::bindings::{collect_bindings, collect_import_map};
+pub(super) use self::bindings::collect_bindings;
 pub(super) use self::calls::collect_call_candidates;
 pub(super) use self::declaration_order::collect_declaration_scopes;
 pub use self::declaration_order::{
@@ -26,6 +27,7 @@ pub use self::file_summary::{
     ExternalModDeclaration, RustFileSummary, RustPathReference, VisibleUseDeclaration,
     summarize_rust_file,
 };
+pub(super) use self::imports::collect_import_map;
 pub(super) use self::literals::collect_literal_occurrences;
 pub(super) use self::multiline_strings::find_unwrapped_multiline_strings;
 pub(super) use self::positional_reads::collect_positional_reads;

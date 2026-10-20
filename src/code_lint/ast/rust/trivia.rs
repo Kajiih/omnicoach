@@ -1,6 +1,6 @@
 //! Rust comments (including doc comments) and whitespace.
 
-use crate::code_lint::ast::{ParsedFile, span_from_rowan_range};
+use crate::code_lint::ast::tree::{ParsedFile, span_from_rowan_range};
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::{AstNode as _, SyntaxKind, SyntaxToken};
 

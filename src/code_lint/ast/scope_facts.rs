@@ -4,11 +4,12 @@
 //! public-root ownership, recursion groups, topological levels, and ordering findings for a single
 //! parsed file. Multi-file project resolution lives in `crate::code_lint::graph`.
 
-use super::{
-    DeclarationScope, DeclarationScopeKind, OrderingEdge, OrderingReason, ParsedFile,
-    PlacementAnchor, RelationFact, ScopeGraph, ScopeItem, ScopeItemKind, Visibility,
+use super::call_clusters::{
+    DeclarationScope, DeclarationScopeKind, OrderingEdge, OrderingReason, PlacementAnchor,
+    RelationFact, ScopeGraph, ScopeItem, ScopeItemKind, Visibility, collect_declaration_scopes,
     scope_findings,
 };
+use super::tree::ParsedFile;
 
 /// Everything the analyzer knows about one scope (`Module`, `Class`, or `Impl`) in a file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,7 +77,7 @@ pub struct FindingFact {
 /// Collects [`ScopeFacts`] for every declaration scope in `file`, in source order.
 #[must_use]
 pub fn collect_scope_facts(file: &ParsedFile) -> Vec<ScopeFacts> {
-    super::collect_declaration_scopes(file)
+    collect_declaration_scopes(file)
         .iter()
         .map(scope_facts)
         .collect()
@@ -145,8 +146,8 @@ fn raw_relations(items: &[ScopeItem<'_>]) -> Vec<RelationFact> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::call_clusters::RelationKind;
     use super::*;
-    use crate::code_lint::ast::RelationKind;
     use crate::diagnostic::Language;
 
     const SANDWICH: &str = indoc::indoc! {r"

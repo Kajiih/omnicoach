@@ -3,11 +3,12 @@
 use super::bindings::{collect_rust_fn_local_names, collect_rust_generic_param_names};
 use super::names::{SELF_KEYWORD, SELF_TYPE_KEYWORD};
 use super::trivia::previous_non_trivia_token;
-use crate::code_lint::ast::{
-    AstNode, DeclarationScope, DeclarationScopeKind, ParsedFile, PlacementAnchor, RelationKind,
-    ScopeItem, ScopeItemKind, Visibility, collapse_whitespace, extend_references, extend_unique,
-    push_unique, span_from_rowan_range, split_at_redefinitions,
+use crate::code_lint::ast::call_clusters::{
+    DeclarationScope, DeclarationScopeKind, PlacementAnchor, RelationKind, ScopeItem,
+    ScopeItemKind, Visibility, collapse_whitespace, extend_references, extend_unique, push_unique,
+    split_at_redefinitions,
 };
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_rowan_range};
 use ra_ap_syntax::ast::{
     self, HasGenericParams as _, HasModuleItem as _, HasName as _, HasVisibility as _,
 };
@@ -1143,6 +1144,27 @@ mod tests {
                     },
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn test_associated_item_after_method_placement_anchor() {
+        let associated_file = ParsedFile::rust(indoc::indoc! {r"
+            pub trait Decoder {
+                /// Decodes an input frame.
+                fn decode(&self, input: &str) -> Self::Output;
+
+                type Output;
+            }
+        "});
+        let associated_items = collect_associated_items_after_methods(&associated_file);
+        assert_eq!(associated_items.len(), 1);
+        assert_eq!(
+            associated_items[0].first_method,
+            PlacementAnchor {
+                name: "decode".to_string(),
+                line: 2,
+            }
         );
     }
 }

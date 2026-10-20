@@ -2,7 +2,7 @@
 //! arguments.
 
 use super::names::written_name;
-use crate::code_lint::ast::ParsedFile;
+use crate::code_lint::ast::tree::ParsedFile;
 use ruff_python_ast::{Decorator, Expr};
 
 /// Structured metadata for a Python decorator.

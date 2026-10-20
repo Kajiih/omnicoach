@@ -1,10 +1,10 @@
 //! Python call-expression and environment-subscript extraction (`ruff_python_ast`).
 
 use super::tree::find_expr;
-use crate::code_lint::ast::{
-    AstNode, CachedCallCandidate, CallSiteContext, EnclosingFunction, ParsedFile,
-    span_from_ruff_range, with_innermost_function,
+use crate::code_lint::ast::calls::{
+    CachedCallCandidate, CallSiteContext, EnclosingFunction, with_innermost_function,
 };
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, walk_except_handler, walk_expr, walk_stmt, walk_with_item,
@@ -322,7 +322,7 @@ mod tests {
         let file = ParsedFile::new(source, Language::Python);
         let calls = collect_call_candidates(&file);
         assert_eq!(calls.len(), 2);
-        assert!(calls[0].is_with_context_manager);
-        assert!(!calls[1].is_with_context_manager);
+        assert!(calls[0].context.is_with_context_manager);
+        assert!(!calls[1].context.is_with_context_manager);
     }
 }

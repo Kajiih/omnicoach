@@ -11,7 +11,8 @@ use super::functions::{
 };
 use super::names::written_name;
 use super::tree::direct_function_definitions;
-use crate::code_lint::ast::{AstNode, ParsedFile, PlacementAnchor, span_from_ruff_range};
+use crate::code_lint::ast::call_clusters::PlacementAnchor;
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef};
 use ruff_text_size::Ranged as _;
@@ -1295,5 +1296,30 @@ mod tests {
             })
             .collect();
         assert_eq!(actual, [expected]);
+    }
+
+    #[test]
+    fn test_inline_attribute_annotation_placement_anchor() {
+        let attribute_file = ParsedFile::new(
+            indoc::indoc! {r"
+                class Client:
+                    @classmethod
+                    def default_port(cls) -> int:
+                        return 80
+
+                    def __init__(self, host: str) -> None:
+                        self.host: str = host
+            "},
+            Language::Python,
+        );
+        let attributes = extract_classes(&attribute_file)[0].instance_attribute_annotations();
+        assert_eq!(attributes.len(), 1);
+        assert_eq!(
+            attributes[0].first_method,
+            PlacementAnchor {
+                name: "default_port".to_string(),
+                line: 2,
+            }
+        );
     }
 }

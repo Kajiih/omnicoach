@@ -4,7 +4,7 @@
 
 use super::docstrings::docstring_of;
 use super::functions::{PythonFunctionSignature, PythonParameterKind};
-use crate::code_lint::ast::ParsedFile;
+use crate::code_lint::ast::tree::ParsedFile;
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, walk_except_handler, walk_expr, walk_match_case, walk_stmt,
 };
@@ -362,7 +362,7 @@ impl<'a> SourceOrderVisitor<'a> for CognitiveComplexityVisitor<'a> {
 #[cfg(test)]
 mod tests {
     use super::super::functions::extract_function_signatures;
-    use crate::code_lint::ast::ParsedFile;
+    use super::*;
     use crate::diagnostic::Language;
     use indoc::indoc;
     use rstest::rstest;

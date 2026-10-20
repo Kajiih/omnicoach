@@ -3,13 +3,14 @@
 use super::effects::expr_contains_call;
 use super::functions::SELF_RECEIVER;
 use super::{bindings, docstrings, returns};
-use crate::code_lint::ast::{
-    AssertionCheck, AstCallCandidate, AstNode, EnclosingFunction, MultiPhaseTest, ParsedFile,
-    TestAssertionCount, TestFunctionSetup, TestLogicConstruct, TestStatementRole, TestToTestCall,
-    collect_call_candidates, has_multi_phase_interleaving, is_assertion_function_name,
-    normalize_statement_text, resolve_assertion_helpers, span_from_ruff_range,
-    split_at_redefinitions,
+use crate::code_lint::ast::call_clusters::split_at_redefinitions;
+use crate::code_lint::ast::calls::{AstCallCandidate, EnclosingFunction, collect_call_candidates};
+use crate::code_lint::ast::test_analysis::{
+    AssertionCheck, MultiPhaseTest, TestAssertionCount, TestFunctionSetup, TestLogicConstruct,
+    TestStatementRole, TestToTestCall, has_multi_phase_interleaving, is_assertion_function_name,
+    normalize_statement_text, resolve_assertion_helpers,
 };
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtClassDef, StmtFunctionDef};

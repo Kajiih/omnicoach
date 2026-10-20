@@ -1,7 +1,7 @@
 //! Python logger calls (`logging` and `loguru`): receiver and method recognition, message and
 //! arguments.
 
-use crate::code_lint::ast::{AstNode, ParsedFile, span_from_ruff_range};
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
 use ruff_python_ast::{Expr, ExprCall};
 use ruff_text_size::{Ranged as _, TextRange};

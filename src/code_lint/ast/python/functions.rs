@@ -3,7 +3,7 @@
 use super::decorators::{DecoratorInfo, extract_decorators_from_slice};
 use super::docstrings::{PythonDocstring, docstring_of};
 use super::names::written_name;
-use crate::code_lint::ast::{AstNode, ParsedFile, span_from_ruff_range};
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
 use ruff_python_ast::{
     Decorator, Expr, Parameter, ParameterWithDefault, Parameters, Stmt, StmtClassDef,

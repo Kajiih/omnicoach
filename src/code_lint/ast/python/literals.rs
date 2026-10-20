@@ -2,10 +2,10 @@
 
 use super::bindings::constant_assignment_value;
 use super::names::written_name;
-use crate::code_lint::ast::{
-    AstNode, LiteralOccurrence, LiteralRole, LiteralValue, ParsedFile, parse_float_literal,
-    parse_integer_literal, span_from_ruff_range,
+use crate::code_lint::ast::literals::{
+    LiteralOccurrence, LiteralRole, LiteralValue, parse_float_literal, parse_integer_literal,
 };
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{ExceptHandler, Expr, Stmt};
 use ruff_text_size::Ranged as _;

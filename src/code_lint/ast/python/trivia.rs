@@ -1,6 +1,6 @@
 //! Python comments and whitespace.
 
-use crate::code_lint::ast::{ParsedFile, span_from_ruff_range};
+use crate::code_lint::ast::tree::{ParsedFile, span_from_ruff_range};
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::token::TokenKind;
 use ruff_text_size::Ranged as _;

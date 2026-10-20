@@ -2,9 +2,8 @@
 //! scope also iterates, sizes or mutates.
 
 use super::effects::{MUTATING_METHODS, expr_contains_call};
-use crate::code_lint::ast::{
-    AstNode, ParsedFile, PositionalRead, ScopePositionalReads, span_from_ruff_range,
-};
+use crate::code_lint::ast::positional_reads::{PositionalRead, ScopePositionalReads};
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::Ranged as _;

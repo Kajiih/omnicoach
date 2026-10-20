@@ -2,9 +2,9 @@
 
 use super::names::compact_path_text;
 use super::tree::cast_at_span;
-use crate::code_lint::ast::{
-    AstNode, FunctionReturn, ParsedFile, QualifiedName, ReturnShape, span_from_rowan_range,
-};
+use crate::code_lint::ast::imports::QualifiedName;
+use crate::code_lint::ast::returns::{FunctionReturn, ReturnShape};
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_rowan_range};
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::AstNode as _;
 use ra_ap_syntax::ast::{self, HasGenericArgs as _, HasName as _};

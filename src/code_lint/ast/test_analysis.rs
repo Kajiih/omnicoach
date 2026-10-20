@@ -1,7 +1,28 @@
 //! Shared data structures and language-agnostic algorithms for test-function and assertion analysis.
 
-use super::AstNode;
+use super::rust;
+use super::tree::{AstNode, ParsedFile, dispatch_lang};
+use crate::diagnostic::Language;
 use std::collections::HashSet;
+
+impl ParsedFile {
+    /// Returns true if `offset` lies inside a Rust `#[cfg(test)]` or `#[test]` item.
+    #[must_use]
+    pub(super) fn is_in_rust_inline_test(&self, offset: usize) -> bool {
+        self.lang() == Language::Rust
+            && rust::collect_inline_test_ranges(self)
+                .iter()
+                .any(|range| range.contains(&offset))
+    }
+}
+
+impl AstNode<'_> {
+    /// Returns true if this node starts inside a Rust `#[cfg(test)]` or `#[test]` item.
+    #[must_use]
+    pub fn is_in_rust_inline_test(&self) -> bool {
+        self.file.is_in_rust_inline_test(self.span.start)
+    }
+}
 
 /// An outermost test function and the number of behavioral assertions in its body.
 pub struct TestAssertionCount<'a> {
@@ -68,7 +89,7 @@ pub struct TestToTestCall<'a> {
 
 /// Classification of a top-level statement in a test body for multi-phase test detection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::code_lint::ast) enum TestStatementRole {
+pub(super) enum TestStatementRole {
     /// A behavioral assertion statement or call.
     Assertion,
     /// A call-free local projection binding, capture readout, or narrowing guard assertion.
@@ -77,8 +98,47 @@ pub(in crate::code_lint::ast) enum TestStatementRole {
     Action,
 }
 
+/// Collects all outermost test functions in `file` along with their identifier node, name, and assertion count.
+#[must_use]
+pub fn collect_test_function_assertion_counts(file: &ParsedFile) -> Vec<TestAssertionCount<'_>> {
+    dispatch_lang!(file.lang(), collect_test_function_assertion_counts(file))
+}
+
+/// Collects control-flow and conditional constructs directly inside outermost test functions in `file`.
+#[must_use]
+pub fn collect_test_logic_constructs(file: &ParsedFile) -> Vec<TestLogicConstruct<'_>> {
+    dispatch_lang!(file.lang(), collect_test_logic_constructs(file))
+}
+
+/// Collects outermost test functions in `file` that interleave non-assertion statements between
+/// behavioral assertions.
+#[must_use]
+pub fn collect_multi_phase_test_functions(file: &ParsedFile) -> Vec<MultiPhaseTest<'_>> {
+    dispatch_lang!(file.lang(), collect_multi_phase_test_functions(file))
+}
+
+/// Collects all Python `assert` statements and Rust assertion macro invocations in `file`
+/// with their condition-packing properties.
+#[must_use]
+pub fn collect_assertion_checks(file: &ParsedFile) -> Vec<AssertionCheck<'_>> {
+    dispatch_lang!(file.lang(), collect_assertion_checks(file))
+}
+
+/// Collects test functions grouped by enclosing module, class, or `mod` scope (segmented on
+/// duplicate function names) along with their leading non-assertion setup statements.
+#[must_use]
+pub fn collect_test_setup_scopes(file: &ParsedFile) -> Vec<Vec<TestFunctionSetup<'_>>> {
+    dispatch_lang!(file.lang(), collect_test_setup_scopes(file))
+}
+
+/// Collects calls in `file` where a function calls a test function defined in the same file.
+#[must_use]
+pub fn collect_test_to_test_calls(file: &ParsedFile) -> Vec<TestToTestCall<'_>> {
+    dispatch_lang!(file.lang(), collect_test_to_test_calls(file))
+}
+
 /// Computes the fixed point of same-file assertion helper names from `candidates`.
-pub(in crate::code_lint::ast) fn resolve_assertion_helpers<'a, T: 'a>(
+pub(super) fn resolve_assertion_helpers<'a, T: 'a>(
     candidates: &'a [T],
     name_of: impl Fn(&'a T) -> &'a str,
     is_helper: impl Fn(&'a T, &HashSet<String>) -> bool,
@@ -101,7 +161,7 @@ pub(in crate::code_lint::ast) fn resolve_assertion_helpers<'a, T: 'a>(
 }
 
 /// Returns true if `roles` contains an `Action` after an `Assertion` followed by another `Assertion`.
-pub(in crate::code_lint::ast) fn has_multi_phase_interleaving(
+pub(super) fn has_multi_phase_interleaving(
     roles: impl IntoIterator<Item = TestStatementRole>,
 ) -> bool {
     let mut seen_assertion = false;
@@ -126,12 +186,12 @@ pub(in crate::code_lint::ast) fn has_multi_phase_interleaving(
 }
 
 /// Normalizes a statement's source slice by trimming each line and joining with `\n`.
-pub(in crate::code_lint::ast) fn normalize_statement_text(raw: &str) -> String {
+pub(super) fn normalize_statement_text(raw: &str) -> String {
     raw.lines().map(str::trim).collect::<Vec<_>>().join("\n")
 }
 
 /// Returns true if `name` is an assertion helper function or method name (`assert_*` or `_assert_*`).
 #[must_use]
-pub(in crate::code_lint::ast) fn is_assertion_function_name(name: &str) -> bool {
+pub(super) fn is_assertion_function_name(name: &str) -> bool {
     name.starts_with("assert_") || name.starts_with("_assert_")
 }

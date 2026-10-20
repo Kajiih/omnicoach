@@ -1,10 +1,10 @@
 //! Rust call and method-call candidate extraction (`ra_ap_syntax`).
 
 use super::bindings::named_function;
-use crate::code_lint::ast::{
-    CachedCallCandidate, CallSiteContext, EnclosingFunction, ParsedFile, span_from_rowan_range,
-    with_innermost_function,
+use crate::code_lint::ast::calls::{
+    CachedCallCandidate, CallSiteContext, EnclosingFunction, with_innermost_function,
 };
+use crate::code_lint::ast::tree::{ParsedFile, span_from_rowan_range};
 use ra_ap_syntax::AstNode as _;
 use std::sync::Arc;
 

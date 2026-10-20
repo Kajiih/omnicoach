@@ -1,9 +1,8 @@
 //! Positional tuple-field read extraction for Rust (`ra_ap_syntax`).
 
 use super::effects::expr_contains_call;
-use crate::code_lint::ast::{
-    AstNode, ParsedFile, PositionalRead, ScopePositionalReads, span_from_rowan_range,
-};
+use crate::code_lint::ast::positional_reads::{PositionalRead, ScopePositionalReads};
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_rowan_range};
 use ra_ap_syntax::ast;
 use ra_ap_syntax::{AstNode as _, SyntaxKind, SyntaxNode};
 

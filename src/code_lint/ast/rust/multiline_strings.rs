@@ -3,7 +3,7 @@
 use super::attributes::attribute_terminal_name;
 use super::names::{compact_path_text, resolve_preceding_macro_path};
 use super::trivia::previous_non_trivia_token;
-use crate::code_lint::ast::{AstNode, ParsedFile, span_from_rowan_range};
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_rowan_range};
 use ra_ap_syntax::ast;
 use ra_ap_syntax::{AstNode as _, SyntaxElement, SyntaxKind, SyntaxToken};
 

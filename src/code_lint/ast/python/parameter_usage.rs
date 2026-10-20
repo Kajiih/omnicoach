@@ -438,7 +438,7 @@ fn is_single_pass_iterable_builtin(name: &str) -> bool {
 mod tests {
     use super::super::functions::extract_function_signatures;
     use super::*;
-    use crate::code_lint::ast::ParsedFile;
+    use crate::code_lint::ast::tree::ParsedFile;
     use crate::diagnostic::Language;
 
     #[rstest::rstest]

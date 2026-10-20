@@ -2,7 +2,7 @@
 //! split into literal text and replacement fields, plus PEP 3101 field-name parsing.
 
 use super::logging::extract_logger_call;
-use crate::code_lint::ast::{AstNode, ParsedFile, span_from_ruff_range};
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_arguments, walk_expr};
 use ruff_python_ast::{
     Expr, FString, FStringPartRef, InterpolatedElement, InterpolatedStringElement, Operator,

@@ -7,12 +7,14 @@ use super::names::{
     SELF_KEYWORD, SUPER_KEYWORD, macro_call_terminal_name, resolve_preceding_macro_path,
 };
 use super::tree::{meaningful_token_tree_elements, syntax_node};
-use crate::code_lint::ast::{
-    AssertionCheck, AstCallCandidate, AstNode, MultiPhaseTest, ParsedFile, TestAssertionCount,
-    TestFunctionSetup, TestLogicConstruct, TestStatementRole, TestToTestCall,
-    has_multi_phase_interleaving, is_assertion_function_name, normalize_statement_text,
-    resolve_assertion_helpers, span_from_rowan_range, split_at_redefinitions,
+use crate::code_lint::ast::call_clusters::split_at_redefinitions;
+use crate::code_lint::ast::calls::{AstCallCandidate, collect_call_candidates};
+use crate::code_lint::ast::test_analysis::{
+    AssertionCheck, MultiPhaseTest, TestAssertionCount, TestFunctionSetup, TestLogicConstruct,
+    TestStatementRole, TestToTestCall, has_multi_phase_interleaving, is_assertion_function_name,
+    normalize_statement_text, resolve_assertion_helpers,
 };
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_rowan_range};
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast::{self, HasAttrs as _, HasModuleItem as _, HasName as _};
 use ra_ap_syntax::{AstNode as _, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
@@ -513,7 +515,7 @@ pub(in crate::code_lint::ast) fn collect_test_to_test_calls(
         }
     }
     let mut out = Vec::new();
-    for candidate in crate::code_lint::ast::collect_call_candidates(file) {
+    for candidate in collect_call_candidates(file) {
         let Some(caller_fn) = candidate.enclosing_functions.first() else {
             continue;
         };

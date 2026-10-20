@@ -1,7 +1,7 @@
 //! What a Rust path or macro invocation names.
 
 use super::trivia::previous_non_trivia_token;
-use crate::code_lint::ast::QualifiedName;
+use crate::code_lint::ast::imports::QualifiedName;
 use ra_ap_syntax::ast;
 use ra_ap_syntax::{SyntaxKind, SyntaxNode};
 

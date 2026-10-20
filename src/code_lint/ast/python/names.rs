@@ -1,8 +1,7 @@
 //! What a Python expression names: dotted path extraction and imported path references.
 
-use crate::code_lint::ast::{
-    ParsedFile, QualifiedName, ResolvedName, import_lines, resolve_name, span_from_ruff_range,
-};
+use crate::code_lint::ast::imports::{QualifiedName, ResolvedName, import_lines, resolve_name};
+use crate::code_lint::ast::tree::{ParsedFile, span_from_ruff_range};
 use ruff_python_ast::Expr;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
 use ruff_text_size::Ranged as _;

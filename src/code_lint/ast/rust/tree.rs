@@ -1,7 +1,7 @@
 //! Navigating the Rust syntax tree (`ra_ap_syntax`): finding and casting nodes by span, and
 //! inspecting `TokenTree` elements.
 
-use crate::code_lint::ast::{AstNode, ParsedFile, span_from_rowan_range};
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_rowan_range};
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast;
 use ra_ap_syntax::{AstNode as _, SyntaxElement, SyntaxKind, SyntaxNode};

@@ -2,7 +2,8 @@
 
 use super::names::written_name;
 use super::tree::find_expr;
-use crate::code_lint::ast::{AstNode, ParsedFile, QualifiedName, span_from_ruff_range};
+use crate::code_lint::ast::imports::QualifiedName;
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
 use ruff_python_ast::{Expr, Operator};
 use ruff_text_size::Ranged as _;
 

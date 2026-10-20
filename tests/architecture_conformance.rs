@@ -349,10 +349,6 @@ fn discover_component_roots(
 static ARCHITECTURE_CONFORMANCE_RULES: LazyLock<Vec<ForbiddenDependencyRule>> =
     LazyLock::new(|| {
         let component_roots = discover_component_roots(&DECLARED_COMPONENTS);
-        let all_modules: Vec<&str> = SOURCE_FILES
-            .iter()
-            .map(|entry| entry.module_path.as_str())
-            .collect();
         let mut rules = Vec::new();
 
         // 1. Cross-component DAG dependency rules
@@ -399,23 +395,25 @@ static ARCHITECTURE_CONFORMANCE_RULES: LazyLock<Vec<ForbiddenDependencyRule>> =
                 }
             }
 
-            // 2b. Direct-child subtree isolation under each component root
+            // 2b. Direct-child subtree isolation between non-private child modules under each component root
             for root in roots {
-                let direct_children: Vec<&str> = all_modules
+                let Some(root_entry) = SOURCE_FILES.iter().find(|entry| &entry.module_path == root)
+                else {
+                    continue;
+                };
+                let direct_children: Vec<String> = root_entry
+                    .summary
+                    .external_mods
                     .iter()
-                    .copied()
-                    .filter(|module| {
-                        module
-                            .rsplit_once("::")
-                            .is_some_and(|(parent, _)| parent == root)
-                    })
+                    .filter(|declaration| !declaration.is_private)
+                    .map(|declaration| format!("{root}::{}", declaration.name))
                     .collect();
 
                 if direct_children.len() > 1 {
-                    for &child in &direct_children {
+                    for child in &direct_children {
                         let siblings = direct_children
                             .iter()
-                            .copied()
+                            .map(String::as_str)
                             .filter(|&other| other != child);
                         rules.push(ForbiddenDependencyRule::must_not_depend_on(child, siblings));
                     }
@@ -885,6 +883,11 @@ fn test_architecture_rules_detect_forbidden_dependencies() {
             "code_lint::semantic::bindings",
             "fn call_sibling() { assert!(super::calls::check()); }",
         ),
+        SourceFileEntry::from_source(
+            "src/code_lint/ast/python/bindings.rs",
+            "code_lint::ast::python::bindings",
+            "use crate::code_lint::ast::rust::collect_bindings;",
+        ),
         SourceFileEntry::from_source("src/diff.rs", "diff", "use crate::diagnostic::Violation;"),
     ];
 
@@ -893,6 +896,7 @@ fn test_architecture_rules_detect_forbidden_dependencies() {
         "code_lint::runner",
         "command_lint::vcs",
         "code_lint::semantic::calls",
+        "code_lint::ast::rust",
         "diagnostic",
     ]
     .into_iter()
@@ -909,6 +913,7 @@ fn test_architecture_rules_detect_forbidden_dependencies() {
             "code_lint::runner",
             "command_lint::vcs",
             "code_lint::semantic::calls",
+            "code_lint::ast::rust",
             "diagnostic",
         ]
     );

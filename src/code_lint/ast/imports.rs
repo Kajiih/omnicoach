@@ -1,7 +1,7 @@
 //! Per-file import map: resolves names through Python `import` / `from … import` and Rust `use`
 //! declarations, with file-level definitions shadowing imports.
 
-use super::ParsedFile;
+use super::tree::{ParsedFile, dispatch_lang};
 use crate::diagnostic::Language;
 use std::collections::{HashMap, HashSet};
 
@@ -19,13 +19,46 @@ pub enum ResolvedName {
 
 /// Names bound by file-level imports and definitions.
 #[derive(Default)]
-pub(in crate::code_lint::ast) struct ImportMap {
+pub(super) struct ImportMap {
     /// Bound name to canonical path (`c` to `a.b` for `import a.b as c`).
-    pub(in crate::code_lint::ast) imports: HashMap<String, String>,
+    pub(super) imports: HashMap<String, String>,
     /// `(line, canonical_path)` of every Python `import` / `from … import` binding.
-    pub(in crate::code_lint::ast) import_lines: Vec<(usize, String)>,
+    pub(super) import_lines: Vec<(usize, String)>,
     /// Names defined in the file, which shadow imports.
-    pub(in crate::code_lint::ast) locals: HashSet<String>,
+    pub(super) locals: HashSet<String>,
+}
+
+/// A dotted name together with its last segment (`typing.List` and `List`).
+#[derive(Clone)]
+pub(super) struct QualifiedName {
+    /// The full dotted or `::`-separated path.
+    pub(super) path: String,
+    /// The last segment of `path`.
+    pub(super) terminal: String,
+}
+
+impl QualifiedName {
+    /// Builds a name whose terminal is the part of `path` after its last `separator`.
+    pub(super) fn from_path(path: String, separator: &str) -> Self {
+        let terminal = path
+            .rsplit_once(separator)
+            .map_or(path.as_str(), |(_, terminal)| terminal)
+            .to_owned();
+        Self { path, terminal }
+    }
+
+    /// Resolves `path` through the imports of `file` (`t.List` after `import typing as t` is
+    /// `typing.List` with terminal `List`), or `None` if it names a definition of `file`
+    /// (see [`resolve_name`]).
+    pub(super) fn resolve(self, file: &ParsedFile) -> Option<Self> {
+        match resolve_name(file, &self.path) {
+            ResolvedName::Imported(resolved) => {
+                Some(Self::from_path(resolved, path_separator(file.lang())))
+            }
+            ResolvedName::Local => None,
+            ResolvedName::Unbound => Some(self),
+        }
+    }
 }
 
 /// Resolves `name` (`os.getenv`, `t.List`, `thread::sleep`) through the file-level imports and
@@ -64,23 +97,6 @@ pub fn resolve_name(file: &ParsedFile, name: &str) -> ResolvedName {
     })
 }
 
-/// Returns `(line, canonical_path)` for every file-level `import` / `from … import` in `file`.
-#[must_use]
-pub(in crate::code_lint::ast) fn import_lines(file: &ParsedFile) -> &[(usize, String)] {
-    &file
-        .imports
-        .get_or_init(|| dispatch_lang!(file.lang(), collect_import_map(file)))
-        .import_lines
-}
-
-/// The separator between the segments of a path in `lang` (`.` or `::`).
-pub(super) const fn path_separator(lang: Language) -> &'static str {
-    match lang {
-        Language::Python => ".",
-        Language::Rust => "::",
-    }
-}
-
 /// Returns true if `text` is a non-empty identifier (`[A-Za-z_][A-Za-z0-9_]*`, Unicode letters
 /// included).
 fn is_identifier(text: &str) -> bool {
@@ -90,6 +106,24 @@ fn is_identifier(text: &str) -> bool {
         .is_some_and(|first| first == '_' || first.is_alphabetic())
         && characters.all(|character| character == '_' || character.is_alphanumeric())
 }
+
+/// Returns `(line, canonical_path)` for every file-level `import` / `from … import` in `file`.
+#[must_use]
+pub(super) fn import_lines(file: &ParsedFile) -> &[(usize, String)] {
+    &file
+        .imports
+        .get_or_init(|| dispatch_lang!(file.lang(), collect_import_map(file)))
+        .import_lines
+}
+
+/// The separator between the segments of a path in `lang` (`.` or `::`).
+const fn path_separator(lang: Language) -> &'static str {
+    match lang {
+        Language::Python => ".",
+        Language::Rust => "::",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

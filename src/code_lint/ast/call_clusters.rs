@@ -8,12 +8,12 @@
 mod scope_graph;
 
 use self::scope_graph::Ownership;
-pub(in crate::code_lint::ast) use self::scope_graph::ScopeGraph;
+pub(super) use self::scope_graph::ScopeGraph;
 pub use self::scope_graph::{
     OrderingEdge, OrderingReason, RelationFact, RelationKind, levels, strongly_connected_components,
 };
 
-use super::AstNode;
+use super::tree::{AstNode, ParsedFile, dispatch_lang};
 use crate::diagnostic::SourceSpan;
 use std::collections::HashSet;
 
@@ -41,48 +41,41 @@ pub enum ScopeItemKind {
 /// A function, method, or type definition inside a module, Python `class`, or Rust inherent
 /// `impl` scope.
 #[derive(Clone)]
-pub(in crate::code_lint::ast) struct ScopeItem<'a> {
+pub(super) struct ScopeItem<'a> {
     /// Identifier AST node of the declaration.
-    pub(in crate::code_lint::ast) name_node: AstNode<'a>,
+    pub(super) name_node: AstNode<'a>,
     /// Declaration identifier name.
-    pub(in crate::code_lint::ast) name: String,
+    pub(super) name: String,
     /// 1-based first line of the declaration (including decorators or attributes).
-    pub(in crate::code_lint::ast) start_line: usize,
+    pub(super) start_line: usize,
     /// 1-based last line of the declaration (including contiguous overloads/accessors or inherent
     /// `impl` blocks).
-    pub(in crate::code_lint::ast) end_line: usize,
+    pub(super) end_line: usize,
     /// Compact one-line signature: the header of a callable, or the header and public fields or
     /// variants of a type, when the language module renders one.
-    pub(in crate::code_lint::ast) signature: Option<String>,
+    pub(super) signature: Option<String>,
     /// Whether this item is a callable or a type definition.
-    pub(in crate::code_lint::ast) kind: ScopeItemKind,
+    pub(super) kind: ScopeItemKind,
     /// Visibility tier (`Public` vs. `Private`).
-    pub(in crate::code_lint::ast) visibility: Visibility,
+    pub(super) visibility: Visibility,
     /// True if this callable is a Tier 0 lifecycle constructor.
-    pub(in crate::code_lint::ast) is_constructor: bool,
+    pub(super) is_constructor: bool,
     /// Direct references from this declaration to sibling items in [`DeclarationScope::items`],
     /// paired with the [`RelationKind`] where each reference occurs.
-    pub(in crate::code_lint::ast) references: Vec<(usize, RelationKind)>,
+    pub(super) references: Vec<(usize, RelationKind)>,
     /// Smallest index in [`DeclarationScope::items`] before which this item must remain due to
     /// top-to-bottom runtime evaluation (e.g. Python import-time or class-definition-time uses).
-    pub(in crate::code_lint::ast) pinned_before: Option<usize>,
+    pub(super) pinned_before: Option<usize>,
 }
 
 impl ScopeItem<'_> {
     /// Returns true if this item references `target` in `kind`.
-    pub(in crate::code_lint::ast) fn has_reference(
-        &self,
-        target: usize,
-        kind: RelationKind,
-    ) -> bool {
+    fn has_reference(&self, target: usize, kind: RelationKind) -> bool {
         self.references.contains(&(target, kind))
     }
 
     /// Yields the sibling item indices referenced in any of `kinds`.
-    pub(in crate::code_lint::ast) fn references_in<'a>(
-        &'a self,
-        kinds: &'a [RelationKind],
-    ) -> impl Iterator<Item = usize> + 'a {
+    fn references_in<'a>(&'a self, kinds: &'a [RelationKind]) -> impl Iterator<Item = usize> + 'a {
         self.references
             .iter()
             .filter(move |&&(_, relation_kind)| kinds.contains(&relation_kind))
@@ -90,8 +83,14 @@ impl ScopeItem<'_> {
     }
 }
 
+/// Returns `text` with every run of whitespace collapsed into one space and no surrounding
+/// whitespace.
+pub(super) fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Appends `(target, kind)` for each `target` in `targets` to `references` if not already present.
-pub(in crate::code_lint::ast) fn extend_references(
+pub(super) fn extend_references(
     references: &mut Vec<(usize, RelationKind)>,
     targets: impl IntoIterator<Item = usize>,
     kind: RelationKind,
@@ -125,16 +124,16 @@ pub enum DeclarationScopeKind {
 
 /// A module, Python `class`, or Rust inherent `impl` scope with its direct declarations in
 /// source order and their intra-scope reference edges.
-pub(in crate::code_lint::ast) struct DeclarationScope<'a> {
+pub(super) struct DeclarationScope<'a> {
     /// Which container this scope covers.
-    pub(in crate::code_lint::ast) kind: DeclarationScopeKind,
+    pub(super) kind: DeclarationScopeKind,
     /// Direct declarations in source order.
-    pub(in crate::code_lint::ast) items: Vec<ScopeItem<'a>>,
+    pub(super) items: Vec<ScopeItem<'a>>,
 }
 
 /// Splits `declarations` into consecutive segments, starting a new segment whenever `name`
 /// returns a name already declared in the current segment.
-pub(in crate::code_lint::ast) fn split_at_redefinitions<T>(
+pub(super) fn split_at_redefinitions<T>(
     declarations: Vec<T>,
     name: impl Fn(&T) -> &str,
 ) -> Vec<Vec<T>> {
@@ -156,17 +155,14 @@ pub(in crate::code_lint::ast) fn split_at_redefinitions<T>(
 }
 
 /// Appends `item` to `vec` if it is not already present.
-pub(in crate::code_lint::ast) fn push_unique<T: PartialEq>(vec: &mut Vec<T>, item: T) {
+pub(super) fn push_unique<T: PartialEq>(vec: &mut Vec<T>, item: T) {
     if !vec.contains(&item) {
         vec.push(item);
     }
 }
 
 /// Appends each element of `items` to `vec` if it is not already present.
-pub(in crate::code_lint::ast) fn extend_unique<T: PartialEq>(
-    vec: &mut Vec<T>,
-    items: impl IntoIterator<Item = T>,
-) {
+pub(super) fn extend_unique<T: PartialEq>(vec: &mut Vec<T>, items: impl IntoIterator<Item = T>) {
     for item in items {
         push_unique(vec, item);
     }
@@ -221,7 +217,7 @@ pub enum CallClusterRule {
 impl CallClusterRule {
     /// The rule's name.
     #[must_use]
-    pub const fn name(self) -> &'static str {
+    pub(super) const fn name(self) -> &'static str {
         match self {
             Self::ConstructorAfterMethod => "constructor-after-method",
             Self::PrivateBeforePublic => "private-before-public",
@@ -246,30 +242,82 @@ pub struct CallOrderFinding<'a> {
 }
 
 /// A [`CallOrderFinding`] cached on its file without lifetime ties to it.
-pub(in crate::code_lint::ast) struct CachedCallOrderFinding {
-    pub(in crate::code_lint::ast) rule: CallClusterRule,
-    pub(in crate::code_lint::ast) span: SourceSpan,
-    pub(in crate::code_lint::ast) item: String,
-    pub(in crate::code_lint::ast) related: String,
-    pub(in crate::code_lint::ast) reason: Option<OrderingReason>,
-    pub(in crate::code_lint::ast) anchor: PlacementAnchor,
+pub(super) struct CachedCallOrderFinding {
+    rule: CallClusterRule,
+    span: SourceSpan,
+    item: String,
+    related: String,
+    reason: Option<OrderingReason>,
+    anchor: PlacementAnchor,
 }
 
 /// A call-cluster finding within one [`DeclarationScope`], by item index.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::code_lint::ast) struct ScopeFinding {
-    pub(in crate::code_lint::ast) rule: CallClusterRule,
+pub(super) struct ScopeFinding {
+    pub(super) rule: CallClusterRule,
     /// The misplaced item.
-    pub(in crate::code_lint::ast) item: usize,
+    pub(super) item: usize,
     /// The item the violated placement refers to.
-    pub(in crate::code_lint::ast) related: usize,
+    pub(super) related: usize,
     /// Sibling declaration next to which `item` belongs.
-    pub(in crate::code_lint::ast) anchor: PlacementAnchor,
-    pub(in crate::code_lint::ast) reason: Option<OrderingReason>,
+    pub(super) anchor: PlacementAnchor,
+    pub(super) reason: Option<OrderingReason>,
+}
+
+/// Computes and memoizes the call-cluster placement findings across all module and class/`impl`
+/// scopes in `file`, and returns those of `rule`.
+#[must_use]
+pub fn collect_call_cluster_findings(
+    file: &ParsedFile,
+    rule: CallClusterRule,
+) -> Vec<CallOrderFinding<'_>> {
+    let cached = file.call_cluster_findings.get_or_init(|| {
+        let mut out = Vec::new();
+        for scope in collect_declaration_scopes(file) {
+            let graph = ScopeGraph::new(&scope.items);
+            for finding in scope_findings(&scope, &graph) {
+                let item = &scope.items[finding.item];
+                let related = match (finding.rule, &scope.kind) {
+                    (
+                        CallClusterRule::ConstructorAfterMethod,
+                        DeclarationScopeKind::Class { name }
+                        | DeclarationScopeKind::Impl { type_name: name },
+                    ) => name.clone(),
+                    _ => scope.items[finding.related].name.clone(),
+                };
+                out.push(CachedCallOrderFinding {
+                    rule: finding.rule,
+                    span: item.name_node.span(),
+                    item: item.name.clone(),
+                    related,
+                    reason: finding.reason,
+                    anchor: finding.anchor,
+                });
+            }
+        }
+        out
+    });
+    cached
+        .iter()
+        .filter(|entry| entry.rule == rule)
+        .map(|entry| CallOrderFinding {
+            name_node: AstNode::from_span(file, entry.span),
+            item: entry.item.clone(),
+            related: entry.related.clone(),
+            reason: entry.reason,
+            anchor: entry.anchor.clone(),
+        })
+        .collect()
+}
+
+/// Collects all module and class/`impl` [`DeclarationScope`]s in `file`.
+#[must_use]
+pub(super) fn collect_declaration_scopes(file: &ParsedFile) -> Vec<DeclarationScope<'_>> {
+    dispatch_lang!(file.lang(), collect_declaration_scopes(file))
 }
 
 /// Finds the call-cluster findings of one scope from its graph.
-pub(in crate::code_lint::ast) fn scope_findings(
+pub(super) fn scope_findings(
     scope: &DeclarationScope<'_>,
     graph: &ScopeGraph,
 ) -> Vec<ScopeFinding> {
@@ -550,7 +598,6 @@ fn best_anchor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::code_lint::ast::{ParsedFile, collect_declaration_scopes};
     use crate::diagnostic::Language;
     use std::cmp::Reverse;
     use std::path::Path;
@@ -663,5 +710,152 @@ mod tests {
             .collect();
 
         assert_eq!(violations, Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_constructor_after_method_anchor_line_includes_doc_comment() {
+        let constructor_file = ParsedFile::new(
+            indoc::indoc! {r"
+                pub struct Connection {
+                    port: u16,
+                }
+
+                impl Connection {
+                    /// Returns the configured port.
+                    pub fn port(&self) -> u16 {
+                        self.port
+                    }
+
+                    pub fn new(port: u16) -> Self {
+                        Self { port }
+                    }
+                }
+            "},
+            Language::Rust,
+        );
+        let findings = collect_call_cluster_findings(
+            &constructor_file,
+            CallClusterRule::ConstructorAfterMethod,
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].anchor,
+            PlacementAnchor {
+                name: "port".to_string(),
+                line: 6,
+            }
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::uncolocated_place_1(
+        Language::Python,
+        indoc::indoc! {r"
+            def render_header(title: str) -> str:
+                return _format_title(title)
+
+            def render_body(body: str) -> str:
+                return body.strip()
+
+            def _format_title(title: str) -> str:
+                return title.upper()
+
+            def render_footer(footer: str) -> str:
+                return footer.lower()
+        "},
+        ("_format_title", "render_header", "render_header", 2)
+    )]
+    #[case::uncolocated_place_2_split_cluster(
+        Language::Python,
+        indoc::indoc! {r"
+            def build_report(raw: str) -> str:
+                return _parse_section(raw) + _format_section(raw)
+
+            def _parse_section(raw: str) -> str:
+                return raw.strip()
+
+            def build_summary(raw: str) -> str:
+                return raw.lower()
+
+            def _format_section(raw: str) -> str:
+                return raw.upper()
+        "},
+        ("_format_section", "build_report", "_parse_section", 5)
+    )]
+    #[case::uncolocated_shared_helper(
+        Language::Python,
+        indoc::indoc! {r"
+            def export_csv(rows: list[str]) -> str:
+                return _join_lines(rows)
+
+            def export_tsv(rows: list[str]) -> str:
+                return _join_lines(rows)
+
+            def _join_lines(rows: list[str]) -> str:
+                return '\n'.join(rows)
+
+            def export_count(rows: list[str]) -> int:
+                return len(rows)
+        "},
+        ("_join_lines", "export_tsv", "export_count", 11)
+    )]
+    #[case::private_before_public_rust_struct_impl(
+        Language::Rust,
+        indoc::indoc! {r"
+            fn compute_hash(input: &str) -> usize {
+                input.len()
+            }
+
+            pub struct Hasher;
+
+            impl Hasher {
+                pub fn hash(&self, input: &str) -> usize {
+                    compute_hash(input)
+                }
+            }
+        "},
+        ("compute_hash", "Hasher", "Hasher", 11)
+    )]
+    #[case::callee_before_caller_chain(
+        Language::Python,
+        indoc::indoc! {r"
+            def run_pipeline(raw: str) -> str:
+                return _step_one(raw)
+
+            def _step_two(text: str) -> str:
+                return text.lower()
+
+            def _step_one(raw: str) -> str:
+                return _step_two(raw.strip())
+        "},
+        ("_step_two", "_step_one", "_step_one", 8)
+    )]
+    fn test_call_cluster_placement_anchors(
+        #[case] lang: Language,
+        #[case] source: &str,
+        #[case] expected: (&str, &str, &str, usize),
+    ) {
+        let file = ParsedFile::new(source, lang);
+        let all: Vec<_> = [
+            CallClusterRule::PrivateBeforePublic,
+            CallClusterRule::UncolocatedHelper,
+            CallClusterRule::CalleeBeforeCaller,
+        ]
+        .into_iter()
+        .flat_map(|rule| collect_call_cluster_findings(&file, rule))
+        .map(|finding| {
+            (
+                finding.item,
+                finding.related,
+                finding.anchor.name,
+                finding.anchor.line,
+            )
+        })
+        .collect();
+        let (item, related, anchor, line) = expected;
+        assert_eq!(
+            all,
+            [(item.to_owned(), related.to_owned(), anchor.to_owned(), line)]
+        );
     }
 }

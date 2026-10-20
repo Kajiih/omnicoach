@@ -2,7 +2,7 @@
 
 use super::tree::syntax_node_at_span;
 use super::trivia::{is_rust_non_doc_trivia, is_rust_trivia};
-use crate::code_lint::ast::{ParsedFile, span_from_rowan_range};
+use crate::code_lint::ast::tree::{ParsedFile, span_from_rowan_range};
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast;
 use ra_ap_syntax::{AstNode as _, SyntaxElement, SyntaxKind, SyntaxNode};

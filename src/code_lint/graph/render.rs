@@ -3,7 +3,7 @@
 //! Maps [`AbstractionGraph`] onto the two agent-facing formats selected in
 //! `docs/dev/abstraction_graph/08_stage_c_agent_formats.md`.
 
-use super::{
+use super::model::{
     AbstractionGraph, DeclarationKind, DeclarationNode, EdgeReason, GroupKind, GroupNode, NodeId,
     ReflexionStatus,
 };

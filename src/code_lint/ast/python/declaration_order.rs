@@ -3,11 +3,12 @@
 use super::bindings::{collect_local_bound_names, parameters_shadow_name};
 use super::decorators::extract_decorators_from_slice;
 use super::functions::{CLS_RECEIVER, OVERLOAD_DECORATOR_PATHS, SELF_RECEIVER};
-use crate::code_lint::ast::{
-    AstNode, DeclarationScope, DeclarationScopeKind, ParsedFile, PlacementAnchor, RelationKind,
-    ScopeItem, ScopeItemKind, Visibility, collapse_whitespace, extend_references, extend_unique,
-    push_unique, span_from_ruff_range, split_at_redefinitions,
+use crate::code_lint::ast::call_clusters::{
+    DeclarationScope, DeclarationScopeKind, PlacementAnchor, RelationKind, ScopeItem,
+    ScopeItemKind, Visibility, collapse_whitespace, extend_references, extend_unique, push_unique,
+    split_at_redefinitions,
 };
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Decorator, Expr, Stmt, StmtClassDef, StmtFunctionDef};
 use ruff_text_size::{Ranged as _, TextRange};
@@ -1119,5 +1120,47 @@ mod tests {
             )]
         );
         assert_eq!(trailing, vec![("EXTRA = 1".to_owned(), 10)]);
+    }
+
+    #[test]
+    fn test_field_after_method_placement_anchor() {
+        let field_file = ParsedFile::new(
+            indoc::indoc! {r"
+                class Config:
+                    @classmethod
+                    def from_env(cls) -> 'Config':
+                        return cls()
+
+                    retries: int = 3
+            "},
+            Language::Python,
+        );
+        let fields = collect_fields_after_methods(&field_file);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(
+            fields[0].first_method,
+            PlacementAnchor {
+                name: "from_env".to_string(),
+                line: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn test_statement_after_main_guard_line() {
+        let guard_file = ParsedFile::new(
+            indoc::indoc! {r#"
+                DEFAULT_PORT = 8080
+
+                if __name__ == "__main__":
+                    print(DEFAULT_PORT)
+
+                EXTRA = 1
+            "#},
+            Language::Python,
+        );
+        let after_guard = collect_statements_after_main_guard(&guard_file);
+        assert_eq!(after_guard.len(), 1);
+        assert_eq!(after_guard[0].guard_line, 3);
     }
 }

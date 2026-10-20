@@ -1,11 +1,12 @@
 //! Alpha / experimental Layer L2 builder: transforms [`ScopeFacts`] and [`ProjectFacts`] into a
 //! validated [`AbstractionGraph`] (`docs/dev/abstraction_graph/03_design.md` §4.2 and §5.1).
 
-use super::{
+use super::model::{
     AbstractionGraph, DeclarationKind, DeclarationNode, EdgeReason, GraphParts, GroupKind,
-    GroupNode, ModelError, ModuleFact, NodeId, OrderingEdge, ProjectFacts, ReferenceEdge,
-    ReflexionStatus, SourceLocation, SummaryEdge,
+    GroupNode, ModelError, NodeId, OrderingEdge, ReferenceEdge, ReflexionStatus, SourceLocation,
+    SummaryEdge,
 };
+use super::project_facts::{ModuleFact, ProjectFacts};
 use crate::code_lint::ast::{
     DeclarationScopeKind, ItemFacts, RelationKind, ScopeFacts, ScopeItemKind, Visibility, levels,
     strongly_connected_components,
