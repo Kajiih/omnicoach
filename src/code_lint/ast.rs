@@ -611,15 +611,15 @@ pub fn collect_test_to_test_calls(file: &ParsedFile) -> Vec<TestToTestCall<'_>> 
 }
 
 /// Finds all multiline string literals in `file` that are not docstrings/doc-attributes/snapshots
-/// and are not wrapped in an allowed dedent helper.
+/// and are not wrapped in a call or macro matching `is_wrapper`.
 #[must_use]
 pub fn find_unwrapped_multiline_strings(
     file: &ParsedFile,
-    is_allowed_wrapper: impl Fn(&str) -> bool,
+    is_wrapper: impl Fn(&str) -> bool,
 ) -> Vec<AstNode<'_>> {
     dispatch_lang!(
         file.lang(),
-        find_unwrapped_multiline_strings(file, is_allowed_wrapper)
+        find_unwrapped_multiline_strings(file, is_wrapper)
     )
 }
 

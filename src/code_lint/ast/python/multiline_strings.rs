@@ -8,20 +8,20 @@ use ruff_python_ast::{Expr, Stmt, StringFlags as _};
 use ruff_text_size::Ranged as _;
 
 /// Finds all multiline string literals in a Python file that are not docstrings
-/// and not wrapped in an allowed call.
+/// and not wrapped in a call matching `is_wrapper`.
 #[must_use]
 pub(in crate::code_lint::ast) fn find_unwrapped_multiline_strings(
     file: &ParsedFile,
-    is_allowed_wrapper: impl Fn(&str) -> bool,
+    is_wrapper: impl Fn(&str) -> bool,
 ) -> Vec<AstNode<'_>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
     let mut finder = UnwrappedMultilineFinder {
         file,
-        is_allowed_wrapper,
+        is_wrapper,
         docstring_expr_span: None,
-        allowed_call_depth: 0,
+        wrapper_call_depth: 0,
         out: Vec::new(),
     };
     finder.visit_body(&parsed.syntax().body);
@@ -30,9 +30,9 @@ pub(in crate::code_lint::ast) fn find_unwrapped_multiline_strings(
 
 struct UnwrappedMultilineFinder<'a, F> {
     file: &'a ParsedFile,
-    is_allowed_wrapper: F,
+    is_wrapper: F,
     docstring_expr_span: Option<SourceSpan>,
-    allowed_call_depth: usize,
+    wrapper_call_depth: usize,
     out: Vec<AstNode<'a>>,
 }
 
@@ -42,7 +42,7 @@ impl<F> UnwrappedMultilineFinder<'_, F> {
         if is_triple_quoted
             && self.file.source[span.start..span.end].contains('\n')
             && !is_docstring
-            && self.allowed_call_depth == 0
+            && self.wrapper_call_depth == 0
         {
             self.out.push(AstNode::from_span(self.file, span));
         }
@@ -60,10 +60,10 @@ impl<'a, F: Fn(&str) -> bool> SourceOrderVisitor<'a> for UnwrappedMultilineFinde
                 if let Some(returns) = &func.returns {
                     self.visit_annotation(returns);
                 }
-                let prev_depth = self.allowed_call_depth;
-                self.allowed_call_depth = 0;
+                let prev_depth = self.wrapper_call_depth;
+                self.wrapper_call_depth = 0;
                 self.visit_body(&func.body);
-                self.allowed_call_depth = prev_depth;
+                self.wrapper_call_depth = prev_depth;
             }
             Stmt::ClassDef(cls) => {
                 for dec in &cls.decorator_list {
@@ -72,10 +72,10 @@ impl<'a, F: Fn(&str) -> bool> SourceOrderVisitor<'a> for UnwrappedMultilineFinde
                 if let Some(args) = &cls.arguments {
                     self.visit_arguments(args);
                 }
-                let prev_depth = self.allowed_call_depth;
-                self.allowed_call_depth = 0;
+                let prev_depth = self.wrapper_call_depth;
+                self.wrapper_call_depth = 0;
                 self.visit_body(&cls.body);
-                self.allowed_call_depth = prev_depth;
+                self.wrapper_call_depth = prev_depth;
             }
             Stmt::Expr(expr_statement) => {
                 let prev_doc = self.docstring_expr_span;
@@ -93,20 +93,20 @@ impl<'a, F: Fn(&str) -> bool> SourceOrderVisitor<'a> for UnwrappedMultilineFinde
                 if let Some(params) = &lambda.parameters {
                     self.visit_parameters(params);
                 }
-                let prev_depth = self.allowed_call_depth;
-                self.allowed_call_depth = 0;
+                let prev_depth = self.wrapper_call_depth;
+                self.wrapper_call_depth = 0;
                 self.visit_expr(&lambda.body);
-                self.allowed_call_depth = prev_depth;
+                self.wrapper_call_depth = prev_depth;
             }
             Expr::Call(call) => {
                 let path = written_name(&call.func, &self.file.source).path;
-                let is_allowed = (self.is_allowed_wrapper)(&path);
-                if is_allowed {
-                    self.allowed_call_depth += 1;
+                let is_wrapped = (self.is_wrapper)(&path);
+                if is_wrapped {
+                    self.wrapper_call_depth += 1;
                 }
                 walk_expr(self, expr);
-                if is_allowed {
-                    self.allowed_call_depth -= 1;
+                if is_wrapped {
+                    self.wrapper_call_depth -= 1;
                 }
             }
             Expr::StringLiteral(str_lit) => {

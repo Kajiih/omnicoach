@@ -47,7 +47,7 @@ CLUSTER = Cluster(
         Mutation(
             label="Python allowed dedent wrapper call exempt from bare-multiline-string",
             path=MULTILINE_STRINGS,
-            edits=(("&& self.allowed_call_depth == 0", ""),),
+            edits=(("&& self.wrapper_call_depth == 0", ""),),
             cases=("bare_multiline_string::pass::inspect_cleandoc_allowed",),
         ),
         Mutation(
@@ -64,7 +64,7 @@ CLUSTER = Cluster(
         Mutation(
             label="Rust allowed indoc macro exempt from bare-multiline-string",
             path=RS_MULTILINE_STRINGS,
-            edits=(("&& !is_enclosed_in_macro(token, &is_allowed_wrapper)", ""),),
+            edits=(("&& !is_enclosed_in_macro(token, &is_wrapper)", ""),),
             cases=("bare_multiline_string::pass::indoc_macro_allowed",),
         ),
         Mutation(
