@@ -129,16 +129,6 @@ impl PythonFunctionSignature<'_> {
         self.enclosing_class.is_some() && matches!(self.name.as_str(), INIT_METHOD | NEW_METHOD)
     }
 
-    /// Returns true if the function is a constructor (`__init__` or `__new__`) whose enclosing
-    /// class has a docstring.
-    #[must_use]
-    pub fn is_documented_by_enclosing_class(&self) -> bool {
-        self.is_constructor()
-            && self.enclosing_class.is_some_and(|class_def| {
-                docstring_of(&class_def.body, self.name_node.file).is_some()
-            })
-    }
-
     /// Returns true if the function body is a stub consisting only of an optional docstring
     /// and `...`, `pass`, or `raise NotImplementedError`.
     #[must_use]

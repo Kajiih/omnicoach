@@ -712,7 +712,7 @@ CLUSTER = Cluster(
             path=UNDOCUMENTED_NONTRIVIAL_FUNCTION,
             edits=(
                 (
-                    "                && !signature.is_documented_by_enclosing_class()\n",
+                    "                && !ast::python::is_documented_by_enclosing_class(signature)\n",
                     "",
                 ),
             ),

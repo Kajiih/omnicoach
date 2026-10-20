@@ -460,6 +460,14 @@ pub fn is_interface_method(signature: &PythonFunctionSignature<'_>) -> bool {
     enclosing_class(signature).is_some_and(|class| class.is_interface())
 }
 
+/// Returns true if the function of `signature` is a constructor (`__init__` or `__new__`) whose
+/// enclosing class has a docstring.
+#[must_use]
+pub fn is_documented_by_enclosing_class(signature: &PythonFunctionSignature<'_>) -> bool {
+    signature.is_constructor()
+        && enclosing_class(signature).is_some_and(|class| class.docstring.is_some())
+}
+
 /// Discovers and extracts all class definitions from a Python file.
 #[must_use]
 pub fn extract_classes(file: &ParsedFile) -> Vec<PythonClassInfo<'_>> {

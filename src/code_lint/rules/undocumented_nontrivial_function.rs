@@ -147,7 +147,7 @@ fn check_file(
             signature.docstring().is_none()
                 && !signature.is_nested()
                 && !signature.is_documented_elsewhere()
-                && !signature.is_documented_by_enclosing_class()
+                && !ast::python::is_documented_by_enclosing_class(signature)
         })
         .filter_map(|signature| {
             let metric = signature.nontrivial_metric(min_statements, min_cognitive_complexity)?;
