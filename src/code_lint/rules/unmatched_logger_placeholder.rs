@@ -143,7 +143,7 @@ crate::test_utils::rule_test!(
                     logger.info("Literal {{order_id}} for {}", order_id)
                 "#,
                 f_string_message_not_flagged => r#"
-                    logger.info(f"Order {order_id} filled: {}", status)
+                    logger.info(f"Order {order_id} filled", status)
                 "#,
                 dictionary_splat_kwargs_exempt => r#"
                     logger.info("Order {order_id} filled", extra_positional, **context)

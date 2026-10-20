@@ -20,8 +20,10 @@ use std::path::Path;
 /// cases test the rule's own logic rather than `require-explanation` comment filtering.
 ///
 /// # Panics
-/// Panics if `filename` does not have a recognized file extension (`.py` or `.rs`).
+/// Panics if `filename` does not have a recognized file extension (`.py` or `.rs`) or if `source`
+/// has a syntax error.
 #[must_use]
+#[track_caller]
 pub fn run_code_rule<Options: OptionsDeclaration>(
     rule: &CodeRule<Options>,
     source: &str,
@@ -31,6 +33,12 @@ pub fn run_code_rule<Options: OptionsDeclaration>(
     let lang = Language::from_path(path).unwrap_or_else(|| {
         panic!("run_code_rule: unsupported extension in test file '{filename}'")
     });
+    let parsed = ParsedFile::new(source, lang);
+    assert!(
+        !parsed.has_syntax_error(),
+        "run_code_rule [{}] ({lang:?}): test snippet has a syntax error:\n{source}",
+        rule.declaration.name.0,
+    );
     let banned = CodeRule {
         declaration: Declaration {
             options: RuleOptions {
@@ -45,7 +53,7 @@ pub fn run_code_rule<Options: OptionsDeclaration>(
         },
         ..*rule
     };
-    banned.check_file(path, &ParsedFile::new(source, lang), None)
+    banned.check_file(path, &parsed, None)
 }
 
 /// Formats a list of diagnostics to a clean, human-readable simplified snapshot string.
