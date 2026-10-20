@@ -45,10 +45,12 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "                    has_top_level_logical_and: matches!(\n"
-                    "                        test,\n"
-                    "                        Expr::BoolOp(bool_op) if bool_op.op == ruff_python_ast::BoolOp::And\n"
-                    "                    ),",
+                    (
+                        "                    has_top_level_logical_and: matches!(\n"
+                        "                        test,\n"
+                        "                        Expr::BoolOp(bool_op) if bool_op.op == ruff_python_ast::BoolOp::And\n"
+                        "                    ),"
+                    ),
                     "                    has_top_level_logical_and: matches!(test, Expr::BoolOp(_)),",
                 ),
             ),
@@ -70,10 +72,12 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "                    has_top_level_logical_and: matches!(\n"
-                    "                        test,\n"
-                    "                        Expr::BoolOp(bool_op) if bool_op.op == ruff_python_ast::BoolOp::And\n"
-                    "                    ),",
+                    (
+                        "                    has_top_level_logical_and: matches!(\n"
+                        "                        test,\n"
+                        "                        Expr::BoolOp(bool_op) if bool_op.op == ruff_python_ast::BoolOp::And\n"
+                        "                    ),"
+                    ),
                     '                    has_top_level_logical_and: format!("{test:?}").contains("And"),',
                 ),
             ),
@@ -95,14 +99,18 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "    elements.len() >= 2\n"
-                    "        && elements\n"
-                    "            .iter()\n"
-                    "            .all(|element| matches!(element, Expr::BooleanLiteral(_)))",
-                    "    !elements.is_empty()\n"
-                    "        && elements\n"
-                    "            .iter()\n"
-                    "            .all(|element| matches!(element, Expr::BooleanLiteral(_)))",
+                    (
+                        "    elements.len() >= 2\n"
+                        "        && elements\n"
+                        "            .iter()\n"
+                        "            .all(|element| matches!(element, Expr::BooleanLiteral(_)))"
+                    ),
+                    (
+                        "    !elements.is_empty()\n"
+                        "        && elements\n"
+                        "            .iter()\n"
+                        "            .all(|element| matches!(element, Expr::BooleanLiteral(_)))"
+                    ),
                 ),
             ),
             cases=("packed_assertion::pass::single_element_boolean_tuple@python",),
@@ -123,10 +131,12 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "    elements.len() >= 2\n"
-                    "        && elements\n"
-                    "            .iter()\n"
-                    "            .all(|element| matches!(element, Expr::BooleanLiteral(_)))",
+                    (
+                        "    elements.len() >= 2\n"
+                        "        && elements\n"
+                        "            .iter()\n"
+                        "            .all(|element| matches!(element, Expr::BooleanLiteral(_)))"
+                    ),
                     "    elements.len() >= 2",
                 ),
             ),
@@ -140,12 +150,16 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "                                .filter(|operand| is_multi_element_collection_expr(operand))\n"
-                    "                                .count()\n"
-                    "                                >= 2",
-                    "                                .filter(|operand| is_multi_element_collection_expr(operand))\n"
-                    "                                .count()\n"
-                    "                                >= 1",
+                    (
+                        "                                .filter(|operand| is_multi_element_collection_expr(operand))\n"
+                        "                                .count()\n"
+                        "                                >= 2"
+                    ),
+                    (
+                        "                                .filter(|operand| is_multi_element_collection_expr(operand))\n"
+                        "                                .count()\n"
+                        "                                >= 1"
+                    ),
                 ),
             ),
             cases=(
@@ -159,14 +173,16 @@ CLUSTER = Cluster(
             path=RS_TESTS,
             edits=(
                 (
-                    "    items.len() >= 2\n"
-                    "        && items.iter().all(|item| {\n"
-                    "            matches!(\n"
-                    "                item,\n"
-                    "                SyntaxElement::Token(token)\n"
-                    "                    if matches!(token.kind(), SyntaxKind::TRUE_KW | SyntaxKind::FALSE_KW)\n"
-                    "            )\n"
-                    "        })",
+                    (
+                        "    items.len() >= 2\n"
+                        "        && items.iter().all(|item| {\n"
+                        "            matches!(\n"
+                        "                item,\n"
+                        "                SyntaxElement::Token(token)\n"
+                        "                    if matches!(token.kind(), SyntaxKind::TRUE_KW | SyntaxKind::FALSE_KW)\n"
+                        "            )\n"
+                        "        })"
+                    ),
                     "    items.len() >= 2",
                 ),
             ),
@@ -181,10 +197,12 @@ CLUSTER = Cluster(
             path=RS_TESTS,
             edits=(
                 (
-                    "    matches!(\n"
-                    "        preceding.kind(),\n"
-                    "        SyntaxKind::L_PAREN | SyntaxKind::L_BRACK | SyntaxKind::L_CURLY | SyntaxKind::COMMA\n"
-                    "    )",
+                    (
+                        "    matches!(\n"
+                        "        preceding.kind(),\n"
+                        "        SyntaxKind::L_PAREN | SyntaxKind::L_BRACK | SyntaxKind::L_CURLY | SyntaxKind::COMMA\n"
+                        "    )"
+                    ),
                     "    let _ = preceding;\n    true",
                 ),
             ),
@@ -196,11 +214,15 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "            if let Stmt::FunctionDef(func_def) = statement {\n"
-                    "                if is_test_function_def(func_def) {",
-                    "            if let Stmt::FunctionDef(func_def) = statement {\n"
-                    "                let _ = is_test_function_def(func_def);\n"
-                    "                if true {",
+                    (
+                        "            if let Stmt::FunctionDef(func_def) = statement {\n"
+                        "                if is_test_function_def(func_def) {"
+                    ),
+                    (
+                        "            if let Stmt::FunctionDef(func_def) = statement {\n"
+                        "                let _ = is_test_function_def(func_def);\n"
+                        "                if true {"
+                    ),
                 ),
             ),
             cases=(
@@ -268,8 +290,10 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "    narrowed_variable_name(assert_statement)\n"
-                    "        .is_some_and(|name| body_loads_name_after(body, name, assert_statement.range().end()))",
+                    (
+                        "    narrowed_variable_name(assert_statement)\n"
+                        "        .is_some_and(|name| body_loads_name_after(body, name, assert_statement.range().end()))"
+                    ),
                     "    let _ = (assert_statement, body);\n    false",
                 ),
             ),
@@ -357,11 +381,13 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "                Expr::ListComp(comp)\n"
-                    "                    if comp\n"
-                    "                        .generators\n"
-                    "                        .iter()\n"
-                    "                        .any(|generator| !generator.ifs.is_empty()) =>",
+                    (
+                        "                Expr::ListComp(comp)\n"
+                        "                    if comp\n"
+                        "                        .generators\n"
+                        "                        .iter()\n"
+                        "                        .any(|generator| !generator.ifs.is_empty()) =>"
+                    ),
                     "                Expr::ListComp(_) =>",
                 ),
             ),
@@ -372,8 +398,10 @@ CLUSTER = Cluster(
             path=RS_TESTS,
             edits=(
                 (
-                    "    if (ast::Item::can_cast(node.kind()) && !ast::MacroCall::can_cast(node.kind()))\n"
-                    "        || ast::ClosureExpr::can_cast(node.kind())",
+                    (
+                        "    if (ast::Item::can_cast(node.kind()) && !ast::MacroCall::can_cast(node.kind()))\n"
+                        "        || ast::ClosureExpr::can_cast(node.kind())"
+                    ),
                     "    if ast::ClosureExpr::can_cast(node.kind())",
                 ),
             ),
@@ -384,8 +412,10 @@ CLUSTER = Cluster(
             path=RS_TESTS,
             edits=(
                 (
-                    "    if (ast::Item::can_cast(node.kind()) && !ast::MacroCall::can_cast(node.kind()))\n"
-                    "        || ast::ClosureExpr::can_cast(node.kind())",
+                    (
+                        "    if (ast::Item::can_cast(node.kind()) && !ast::MacroCall::can_cast(node.kind()))\n"
+                        "        || ast::ClosureExpr::can_cast(node.kind())"
+                    ),
                     "    if ast::Item::can_cast(node.kind()) && !ast::MacroCall::can_cast(node.kind())",
                 ),
             ),
@@ -397,11 +427,13 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "        if let Stmt::Assert(assert_statement) = statement\n"
-                    "            && is_narrowing_guard_assert(assert_statement, body)\n"
-                    "        {\n"
-                    "            return TestStatementRole::InspectionOrGuard;\n"
-                    "        }",
+                    (
+                        "        if let Stmt::Assert(assert_statement) = statement\n"
+                        "            && is_narrowing_guard_assert(assert_statement, body)\n"
+                        "        {\n"
+                        "            return TestStatementRole::InspectionOrGuard;\n"
+                        "        }"
+                    ),
                     "        let _ = statement;",
                 ),
             ),
@@ -414,11 +446,15 @@ CLUSTER = Cluster(
             path=TEST_ANALYSIS,
             edits=(
                 (
-                    "            TestStatementRole::Assertion => {\n"
-                    "                if seen_action_after_assertion {",
-                    "            TestStatementRole::Assertion => {\n"
-                    "                let _ = seen_action_after_assertion;\n"
-                    "                if seen_assertion {",
+                    (
+                        "            TestStatementRole::Assertion => {\n"
+                        "                if seen_action_after_assertion {"
+                    ),
+                    (
+                        "            TestStatementRole::Assertion => {\n"
+                        "                let _ = seen_action_after_assertion;\n"
+                        "                if seen_assertion {"
+                    ),
                 ),
             ),
             cases=(
@@ -436,10 +472,14 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "        } else if is_python_inspection_binding(statement) {\n"
-                    "            TestStatementRole::InspectionOrGuard",
-                    "        } else if is_python_inspection_binding(statement) && false {\n"
-                    "            TestStatementRole::InspectionOrGuard",
+                    (
+                        "        } else if is_python_inspection_binding(statement) {\n"
+                        "            TestStatementRole::InspectionOrGuard"
+                    ),
+                    (
+                        "        } else if is_python_inspection_binding(statement) && false {\n"
+                        "            TestStatementRole::InspectionOrGuard"
+                    ),
                 ),
             ),
             cases=(
@@ -452,10 +492,14 @@ CLUSTER = Cluster(
             path=RS_TESTS,
             edits=(
                 (
-                    "            } else if is_rust_inspection_binding(&statement_node) {\n"
-                    "                TestStatementRole::InspectionOrGuard",
-                    "            } else if is_rust_inspection_binding(&statement_node) && false {\n"
-                    "                TestStatementRole::InspectionOrGuard",
+                    (
+                        "            } else if is_rust_inspection_binding(&statement_node) {\n"
+                        "                TestStatementRole::InspectionOrGuard"
+                    ),
+                    (
+                        "            } else if is_rust_inspection_binding(&statement_node) && false {\n"
+                        "                TestStatementRole::InspectionOrGuard"
+                    ),
                 ),
             ),
             cases=(
@@ -467,12 +511,14 @@ CLUSTER = Cluster(
             path=RS_TESTS,
             edits=(
                 (
-                    "        .filter(|statement| {\n"
-                    "            !matches!(\n"
-                    "                statement,\n"
-                    "                ast::Stmt::Item(item) if !matches!(item, ast::Item::MacroCall(_))\n"
-                    "            )\n"
-                    "        })",
+                    (
+                        "        .filter(|statement| {\n"
+                        "            !matches!(\n"
+                        "                statement,\n"
+                        "                ast::Stmt::Item(item) if !matches!(item, ast::Item::MacroCall(_))\n"
+                        "            )\n"
+                        "        })"
+                    ),
                     "        .filter(|_| true)",
                 ),
             ),
@@ -537,11 +583,13 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "    let statements = if docstrings::docstring_of(&func_def.body, file).is_some() {\n"
-                    "        &func_def.body[1..]\n"
-                    "    } else {\n"
-                    "        &func_def.body[..]\n"
-                    "    };",
+                    (
+                        "    let statements = if docstrings::docstring_of(&func_def.body, file).is_some() {\n"
+                        "        &func_def.body[1..]\n"
+                        "    } else {\n"
+                        "        &func_def.body[..]\n"
+                        "    };"
+                    ),
                     "    let statements = &func_def.body[..];",
                 ),
             ),
@@ -578,13 +626,15 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "        .take_while(|statement| {\n"
-                    "            count_python_assertions_in_slice(\n"
-                    "                std::slice::from_ref(*statement),\n"
-                    "                &func_def.body,\n"
-                    "                assertion_helpers,\n"
-                    "            ) == 0\n"
-                    "        })",
+                    (
+                        "        .take_while(|statement| {\n"
+                        "            count_python_assertions_in_slice(\n"
+                        "                std::slice::from_ref(*statement),\n"
+                        "                &func_def.body,\n"
+                        "                assertion_helpers,\n"
+                        "            ) == 0\n"
+                        "        })"
+                    ),
                     "        .take_while(|_| true)",
                 ),
             ),
@@ -625,9 +675,11 @@ CLUSTER = Cluster(
             path=SLEEP_IN_TESTS,
             edits=(
                 (
-                    "    rule.check_banned_calls_where(path, file, banned, |call_match| {\n"
-                    "        !has_zero_duration_argument(call_match)\n"
-                    "    })",
+                    (
+                        "    rule.check_banned_calls_where(path, file, banned, |call_match| {\n"
+                        "        !has_zero_duration_argument(call_match)\n"
+                        "    })"
+                    ),
                     "    rule.check_banned_calls_where(path, file, banned, |_| true)",
                 ),
             ),
@@ -655,12 +707,16 @@ CLUSTER = Cluster(
             path=SLEEP_IN_TESTS,
             edits=(
                 (
-                    "    let [argument] = call_match.arguments.as_slice() else {\n"
-                    "        return false;\n"
-                    "    };",
-                    "    let Some(argument) = call_match.arguments.first() else {\n"
-                    "        return false;\n"
-                    "    };",
+                    (
+                        "    let [argument] = call_match.arguments.as_slice() else {\n"
+                        "        return false;\n"
+                        "    };"
+                    ),
+                    (
+                        "    let Some(argument) = call_match.arguments.first() else {\n"
+                        "        return false;\n"
+                        "    };"
+                    ),
                 ),
             ),
             cases=("zero_sleep_in_tests::pass::multi_arg_sleep",),
@@ -685,10 +741,14 @@ CLUSTER = Cluster(
             path=PY_CALLS,
             edits=(
                 (
-                    "                    self.visit_expr(&for_stmt.iter);\n"
-                    "                    self.in_loop = true;",
-                    "                    self.in_loop = true;\n"
-                    "                    self.visit_expr(&for_stmt.iter);",
+                    (
+                        "                    self.visit_expr(&for_stmt.iter);\n"
+                        "                    self.in_loop = true;"
+                    ),
+                    (
+                        "                    self.in_loop = true;\n"
+                        "                    self.visit_expr(&for_stmt.iter);"
+                    ),
                 ),
             ),
             cases=("yield_loop_in_tests::pass::for_loop_iter_expression_exempt",),
@@ -698,11 +758,15 @@ CLUSTER = Cluster(
             path=PY_CALLS,
             edits=(
                 (
-                    "                    self.visit_body(&for_stmt.body);\n"
-                    "                    self.in_loop = enclosing_loop;\n"
-                    "                    self.visit_body(&for_stmt.orelse);",
-                    "                    self.visit_body(&for_stmt.body);\n"
-                    "                    self.visit_body(&for_stmt.orelse);",
+                    (
+                        "                    self.visit_body(&for_stmt.body);\n"
+                        "                    self.in_loop = enclosing_loop;\n"
+                        "                    self.visit_body(&for_stmt.orelse);"
+                    ),
+                    (
+                        "                    self.visit_body(&for_stmt.body);\n"
+                        "                    self.visit_body(&for_stmt.orelse);"
+                    ),
                 ),
             ),
             cases=("yield_loop_in_tests::pass::for_loop_else_clause_exempt",),
@@ -712,11 +776,15 @@ CLUSTER = Cluster(
             path=PY_CALLS,
             edits=(
                 (
-                    "                    self.visit_body(&while_stmt.body);\n"
-                    "                    self.in_loop = enclosing_loop;\n"
-                    "                    self.visit_body(&while_stmt.orelse);",
-                    "                    self.visit_body(&while_stmt.body);\n"
-                    "                    self.visit_body(&while_stmt.orelse);",
+                    (
+                        "                    self.visit_body(&while_stmt.body);\n"
+                        "                    self.in_loop = enclosing_loop;\n"
+                        "                    self.visit_body(&while_stmt.orelse);"
+                    ),
+                    (
+                        "                    self.visit_body(&while_stmt.body);\n"
+                        "                    self.visit_body(&while_stmt.orelse);"
+                    ),
                 ),
             ),
             cases=("yield_loop_in_tests::pass::while_loop_else_clause_exempt",),
@@ -726,9 +794,11 @@ CLUSTER = Cluster(
             path=PY_CALLS,
             edits=(
                 (
-                    "            if matches!(statement, Stmt::FunctionDef(_)) {\n"
-                    "                self.in_loop = false;\n"
-                    "            }",
+                    (
+                        "            if matches!(statement, Stmt::FunctionDef(_)) {\n"
+                        "                self.in_loop = false;\n"
+                        "            }"
+                    ),
                     "",
                 ),
             ),
@@ -741,13 +811,17 @@ CLUSTER = Cluster(
             path=PY_CALLS,
             edits=(
                 (
-                    "                Expr::Lambda(_) => {\n"
-                    "                    self.in_except_clause = false;\n"
-                    "                    self.in_loop = false;\n"
-                    "                }",
-                    "                Expr::Lambda(_) => {\n"
-                    "                    self.in_except_clause = false;\n"
-                    "                }",
+                    (
+                        "                Expr::Lambda(_) => {\n"
+                        "                    self.in_except_clause = false;\n"
+                        "                    self.in_loop = false;\n"
+                        "                }"
+                    ),
+                    (
+                        "                Expr::Lambda(_) => {\n"
+                        "                    self.in_except_clause = false;\n"
+                        "                }"
+                    ),
                 ),
             ),
             cases=("yield_loop_in_tests::pass::lambda_inside_loop_exempt",),
@@ -757,11 +831,13 @@ CLUSTER = Cluster(
             path=RS_CALLS,
             edits=(
                 (
-                    "        if let Some(for_expr) = ast::ForExpr::cast(ancestor)\n"
-                    "            && for_expr\n"
-                    "                .loop_body()\n"
-                    "                .is_some_and(|body| body.syntax().text_range().contains_range(range))\n"
-                    "        {",
+                    (
+                        "        if let Some(for_expr) = ast::ForExpr::cast(ancestor)\n"
+                        "            && for_expr\n"
+                        "                .loop_body()\n"
+                        "                .is_some_and(|body| body.syntax().text_range().contains_range(range))\n"
+                        "        {"
+                    ),
                     "        if ast::ForExpr::can_cast(ancestor.kind()) {",
                 ),
             ),
@@ -808,16 +884,20 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "        let Some(caller_fn) = candidate.enclosing_functions.first() else {\n"
-                    "            continue;\n"
-                    "        };",
-                    "        let default_fn = EnclosingFunction {\n"
-                    "            name: String::new(),\n"
-                    "            name_span: SourceSpan::new(0, 0),\n"
-                    "            is_top_level: true,\n"
-                    "            enclosing_class: None,\n"
-                    "        };\n"
-                    "        let caller_fn = candidate.enclosing_functions.first().unwrap_or(&default_fn);",
+                    (
+                        "        let Some(caller_fn) = candidate.enclosing_functions.first() else {\n"
+                        "            continue;\n"
+                        "        };"
+                    ),
+                    (
+                        "        let default_fn = EnclosingFunction {\n"
+                        "            name: String::new(),\n"
+                        "            name_span: SourceSpan::new(0, 0),\n"
+                        "            is_top_level: true,\n"
+                        "            enclosing_class: None,\n"
+                        "        };\n"
+                        "        let caller_fn = candidate.enclosing_functions.first().unwrap_or(&default_fn);"
+                    ),
                 ),
             ),
             cases=("test_calls_test::pass::module_level_call_outside_function_exempt",),
@@ -827,18 +907,22 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "            .map(|_| PythonTestTarget::Class { class_name, method })\n"
-                    "    } else {\n"
-                    "        None\n"
-                    "    }",
-                    "            .map(|_| PythonTestTarget::Class { class_name, method })\n"
-                    "    } else {\n"
-                    "        candidate\n"
-                    "            .method_name\n"
-                    "            .as_deref()\n"
-                    "            .filter(|method| module_tests.contains(method))\n"
-                    "            .map(PythonTestTarget::Module)\n"
-                    "    }",
+                    (
+                        "            .map(|_| PythonTestTarget::Class { class_name, method })\n"
+                        "    } else {\n"
+                        "        None\n"
+                        "    }"
+                    ),
+                    (
+                        "            .map(|_| PythonTestTarget::Class { class_name, method })\n"
+                        "    } else {\n"
+                        "        candidate\n"
+                        "            .method_name\n"
+                        "            .as_deref()\n"
+                        "            .filter(|method| module_tests.contains(method))\n"
+                        "            .map(PythonTestTarget::Module)\n"
+                        "    }"
+                    ),
                 ),
             ),
             cases=("test_calls_test::pass::method_named_test_on_collaborator_exempt",),
@@ -870,9 +954,11 @@ CLUSTER = Cluster(
             path=PY_TESTS,
             edits=(
                 (
-                    "        if is_recursive_python_test_call(&candidate, caller_fn, &target) {\n"
-                    "            continue;\n"
-                    "        }",
+                    (
+                        "        if is_recursive_python_test_call(&candidate, caller_fn, &target) {\n"
+                        "            continue;\n"
+                        "        }"
+                    ),
                     "        if false {\n            continue;\n        }",
                 ),
             ),
@@ -898,12 +984,14 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "    if candidate.method_name.is_some() {\n        return None;\n    }",
-                    "    if let Some(method) = candidate.method_name.as_deref() {\n"
-                    "        return Some(LocalRustCallee {\n"
-                    "            super_count: 0,\n"
-                    "            name: method,\n"
-                    "        });\n"
-                    "    }",
+                    (
+                        "    if let Some(method) = candidate.method_name.as_deref() {\n"
+                        "        return Some(LocalRustCallee {\n"
+                        "            super_count: 0,\n"
+                        "            name: method,\n"
+                        "        });\n"
+                        "    }"
+                    ),
                 ),
             ),
             cases=("test_calls_test::pass::method_named_test_on_struct_exempt",),
@@ -935,9 +1023,11 @@ CLUSTER = Cluster(
             path=RS_TESTS,
             edits=(
                 (
-                    "        if super_count == 0 && callee_name == caller_fn.name {\n"
-                    "            continue;\n"
-                    "        }",
+                    (
+                        "        if super_count == 0 && callee_name == caller_fn.name {\n"
+                        "            continue;\n"
+                        "        }"
+                    ),
                     "        if false {\n            continue;\n        }",
                 ),
             ),
@@ -965,16 +1055,18 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "                ResolvedName::Unbound => literal_callees.contains(candidate.callee.as_str()),",
-                    "                ResolvedName::Unbound => {\n"
-                    "                    literal_callees.contains(candidate.callee.as_str())\n"
-                    "                        || candidate.method_name.as_deref().is_some_and(|method| {\n"
-                    "                            literal_callees.iter().any(|entry| {\n"
-                    "                                *entry == method\n"
-                    '                                    || entry.ends_with(&format!(".{method}"))\n'
-                    '                                    || entry.ends_with(&format!("::{method}"))\n'
-                    "                            })\n"
-                    "                        })\n"
-                    "                }",
+                    (
+                        "                ResolvedName::Unbound => {\n"
+                        "                    literal_callees.contains(candidate.callee.as_str())\n"
+                        "                        || candidate.method_name.as_deref().is_some_and(|method| {\n"
+                        "                            literal_callees.iter().any(|entry| {\n"
+                        "                                *entry == method\n"
+                        '                                    || entry.ends_with(&format!(".{method}"))\n'
+                        '                                    || entry.ends_with(&format!("::{method}"))\n'
+                        "                            })\n"
+                        "                        })\n"
+                        "                }"
+                    ),
                 ),
             ),
             cases=(
@@ -1023,10 +1115,12 @@ CLUSTER = Cluster(
             path=FAKE_WITHOUT_PROTOCOL,
             edits=(
                 (
-                    "                && class\n"
-                    "                    .bases\n"
-                    "                    .iter()\n"
-                    "                    .all(PythonBaseClass::is_structural_marker)",
+                    (
+                        "                && class\n"
+                        "                    .bases\n"
+                        "                    .iter()\n"
+                        "                    .all(PythonBaseClass::is_structural_marker)"
+                    ),
                     "                && true",
                 ),
             ),
@@ -1078,11 +1172,13 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "    name.trim_start_matches('_')\n        .strip_prefix(\"Fake\")",
-                    "    name.trim_start_matches('_')\n"
-                    "        .to_ascii_lowercase()\n"
-                    '        .strip_prefix("fake")\n'
-                    "        .map(str::to_owned)\n"
-                    "        .as_deref()",
+                    (
+                        "    name.trim_start_matches('_')\n"
+                        "        .to_ascii_lowercase()\n"
+                        '        .strip_prefix("fake")\n'
+                        "        .map(str::to_owned)\n"
+                        "        .as_deref()"
+                    ),
                 ),
             ),
             cases=("fake_without_protocol::pass::lowercase_fake_prefix_exempt",),

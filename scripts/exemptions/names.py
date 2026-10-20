@@ -28,12 +28,16 @@ CLUSTER = Cluster(
             path=ABBREVIATED_NAME,
             edits=(
                 (
-                    "        let segments = split_segments(&name);\n"
-                    "        for segment in non_imported_segments(&segments, &imported_segments) {\n"
-                    "            if banned.contains(segment) {",
-                    "        let lower = name.to_lowercase();\n"
-                    "        for segment in banned {\n"
-                    "            if lower.contains(segment.as_str()) {",
+                    (
+                        "        let segments = split_segments(&name);\n"
+                        "        for segment in non_imported_segments(&segments, &imported_segments) {\n"
+                        "            if banned.contains(segment) {"
+                    ),
+                    (
+                        "        let lower = name.to_lowercase();\n"
+                        "        for segment in banned {\n"
+                        "            if lower.contains(segment.as_str()) {"
+                    ),
                 ),
             ),
             cases=(
@@ -60,10 +64,14 @@ CLUSTER = Cluster(
             path=PY_BINDINGS,
             edits=(
                 (
-                    "            Stmt::Import(import_statement) => {\n"
-                    "                push_bindings(&mut self.bindings, BindingKind::Import, |out| {",
-                    "            Stmt::Import(import_statement) => {\n"
-                    "                push_bindings(&mut self.bindings, BindingKind::Value, |out| {",
+                    (
+                        "            Stmt::Import(import_statement) => {\n"
+                        "                push_bindings(&mut self.bindings, BindingKind::Import, |out| {"
+                    ),
+                    (
+                        "            Stmt::Import(import_statement) => {\n"
+                        "                push_bindings(&mut self.bindings, BindingKind::Value, |out| {"
+                    ),
                 ),
             ),
             cases=(
@@ -79,10 +87,14 @@ CLUSTER = Cluster(
             path=PY_BINDINGS,
             edits=(
                 (
-                    "            Stmt::ImportFrom(import_from) => {\n"
-                    "                push_bindings(&mut self.bindings, BindingKind::Import, |out| {",
-                    "            Stmt::ImportFrom(import_from) => {\n"
-                    "                push_bindings(&mut self.bindings, BindingKind::Value, |out| {",
+                    (
+                        "            Stmt::ImportFrom(import_from) => {\n"
+                        "                push_bindings(&mut self.bindings, BindingKind::Import, |out| {"
+                    ),
+                    (
+                        "            Stmt::ImportFrom(import_from) => {\n"
+                        "                push_bindings(&mut self.bindings, BindingKind::Value, |out| {"
+                    ),
                 ),
             ),
             cases=(
@@ -96,12 +108,16 @@ CLUSTER = Cluster(
             path=RS_BINDINGS,
             edits=(
                 (
-                    "    if let Some(use_item) = ast::Use::cast(node.clone()) {\n"
-                    "        if let Some(use_tree) = use_item.use_tree() {\n"
-                    "            push_bindings(bindings, BindingKind::Import, |out| {",
-                    "    if let Some(use_item) = ast::Use::cast(node.clone()) {\n"
-                    "        if let Some(use_tree) = use_item.use_tree() {\n"
-                    "            push_bindings(bindings, BindingKind::Value, |out| {",
+                    (
+                        "    if let Some(use_item) = ast::Use::cast(node.clone()) {\n"
+                        "        if let Some(use_tree) = use_item.use_tree() {\n"
+                        "            push_bindings(bindings, BindingKind::Import, |out| {"
+                    ),
+                    (
+                        "    if let Some(use_item) = ast::Use::cast(node.clone()) {\n"
+                        "        if let Some(use_tree) = use_item.use_tree() {\n"
+                        "            push_bindings(bindings, BindingKind::Value, |out| {"
+                    ),
                 ),
             ),
             cases=(
@@ -117,13 +133,17 @@ CLUSTER = Cluster(
             path=PY_BINDINGS,
             edits=(
                 (
-                    "                let kind = if has_override_decorator(&func_def.decorator_list, file) {\n"
-                    "                    BindingKind::ContractMember\n"
-                    "                } else {\n"
-                    "                    BindingKind::StructuralDefinition\n"
-                    "                };",
-                    "                let _ = has_override_decorator(&func_def.decorator_list, file);\n"
-                    "                let kind = BindingKind::StructuralDefinition;",
+                    (
+                        "                let kind = if has_override_decorator(&func_def.decorator_list, file) {\n"
+                        "                    BindingKind::ContractMember\n"
+                        "                } else {\n"
+                        "                    BindingKind::StructuralDefinition\n"
+                        "                };"
+                    ),
+                    (
+                        "                let _ = has_override_decorator(&func_def.decorator_list, file);\n"
+                        "                let kind = BindingKind::StructuralDefinition;"
+                    ),
                 ),
             ),
             cases=("abbreviated_name::pass::override_method_contract_exempt",),
@@ -133,12 +153,16 @@ CLUSTER = Cluster(
             path=PY_BINDINGS,
             edits=(
                 (
-                    "    let Some(init) = direct_function_definitions(&class_def.body)\n"
-                    "        .into_iter()\n"
-                    '        .find(|func_def| func_def.name.id == "__init__")',
-                    "    let Some(init) = direct_function_definitions(&class_def.body)\n"
-                    "        .into_iter()\n"
-                    "        .next()",
+                    (
+                        "    let Some(init) = direct_function_definitions(&class_def.body)\n"
+                        "        .into_iter()\n"
+                        '        .find(|func_def| func_def.name.id == "__init__")'
+                    ),
+                    (
+                        "    let Some(init) = direct_function_definitions(&class_def.body)\n"
+                        "        .into_iter()\n"
+                        "        .next()"
+                    ),
                 ),
             ),
             cases=(
@@ -226,14 +250,18 @@ CLUSTER = Cluster(
             path=PY_BINDINGS,
             edits=(
                 (
-                    "                self.bindings.push(Binding {\n"
-                    "                    node: AstNode::from_span(file, span_from_ruff_range(class_def.name.range)),\n"
-                    "                    kind: BindingKind::StructuralDefinition,\n"
-                    "                });",
-                    "                self.bindings.push(Binding {\n"
-                    "                    node: AstNode::from_span(file, span_from_ruff_range(class_def.name.range)),\n"
-                    "                    kind: BindingKind::Value,\n"
-                    "                });",
+                    (
+                        "                self.bindings.push(Binding {\n"
+                        "                    node: AstNode::from_span(file, span_from_ruff_range(class_def.name.range)),\n"
+                        "                    kind: BindingKind::StructuralDefinition,\n"
+                        "                });"
+                    ),
+                    (
+                        "                self.bindings.push(Binding {\n"
+                        "                    node: AstNode::from_span(file, span_from_ruff_range(class_def.name.range)),\n"
+                        "                    kind: BindingKind::Value,\n"
+                        "                });"
+                    ),
                 ),
             ),
             cases=(
@@ -246,16 +274,20 @@ CLUSTER = Cluster(
             path=PY_BINDINGS,
             edits=(
                 (
-                    "                let kind = if has_override_decorator(&func_def.decorator_list, file) {\n"
-                    "                    BindingKind::ContractMember\n"
-                    "                } else {\n"
-                    "                    BindingKind::StructuralDefinition\n"
-                    "                };",
-                    "                let kind = if has_override_decorator(&func_def.decorator_list, file) {\n"
-                    "                    BindingKind::ContractMember\n"
-                    "                } else {\n"
-                    "                    BindingKind::Value\n"
-                    "                };",
+                    (
+                        "                let kind = if has_override_decorator(&func_def.decorator_list, file) {\n"
+                        "                    BindingKind::ContractMember\n"
+                        "                } else {\n"
+                        "                    BindingKind::StructuralDefinition\n"
+                        "                };"
+                    ),
+                    (
+                        "                let kind = if has_override_decorator(&func_def.decorator_list, file) {\n"
+                        "                    BindingKind::ContractMember\n"
+                        "                } else {\n"
+                        "                    BindingKind::Value\n"
+                        "                };"
+                    ),
                 ),
             ),
             cases=(
@@ -268,15 +300,19 @@ CLUSTER = Cluster(
             path=RS_BINDINGS,
             edits=(
                 (
-                    "        SyntaxKind::STRUCT\n"
-                    "        | SyntaxKind::ENUM\n"
-                    "        | SyntaxKind::TRAIT\n"
-                    "        | SyntaxKind::TYPE_ALIAS\n"
-                    "        | SyntaxKind::FN => BindingKind::StructuralDefinition,",
-                    "        SyntaxKind::ENUM\n"
-                    "        | SyntaxKind::TRAIT\n"
-                    "        | SyntaxKind::TYPE_ALIAS\n"
-                    "        | SyntaxKind::FN => BindingKind::StructuralDefinition,",
+                    (
+                        "        SyntaxKind::STRUCT\n"
+                        "        | SyntaxKind::ENUM\n"
+                        "        | SyntaxKind::TRAIT\n"
+                        "        | SyntaxKind::TYPE_ALIAS\n"
+                        "        | SyntaxKind::FN => BindingKind::StructuralDefinition,"
+                    ),
+                    (
+                        "        SyntaxKind::ENUM\n"
+                        "        | SyntaxKind::TRAIT\n"
+                        "        | SyntaxKind::TYPE_ALIAS\n"
+                        "        | SyntaxKind::FN => BindingKind::StructuralDefinition,"
+                    ),
                 ),
             ),
             cases=(
@@ -289,15 +325,19 @@ CLUSTER = Cluster(
             path=RS_BINDINGS,
             edits=(
                 (
-                    "        SyntaxKind::STRUCT\n"
-                    "        | SyntaxKind::ENUM\n"
-                    "        | SyntaxKind::TRAIT\n"
-                    "        | SyntaxKind::TYPE_ALIAS\n"
-                    "        | SyntaxKind::FN => BindingKind::StructuralDefinition,",
-                    "        SyntaxKind::STRUCT\n"
-                    "        | SyntaxKind::ENUM\n"
-                    "        | SyntaxKind::TRAIT\n"
-                    "        | SyntaxKind::TYPE_ALIAS => BindingKind::StructuralDefinition,",
+                    (
+                        "        SyntaxKind::STRUCT\n"
+                        "        | SyntaxKind::ENUM\n"
+                        "        | SyntaxKind::TRAIT\n"
+                        "        | SyntaxKind::TYPE_ALIAS\n"
+                        "        | SyntaxKind::FN => BindingKind::StructuralDefinition,"
+                    ),
+                    (
+                        "        SyntaxKind::STRUCT\n"
+                        "        | SyntaxKind::ENUM\n"
+                        "        | SyntaxKind::TRAIT\n"
+                        "        | SyntaxKind::TYPE_ALIAS => BindingKind::StructuralDefinition,"
+                    ),
                 ),
             ),
             cases=(

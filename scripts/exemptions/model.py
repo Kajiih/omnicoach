@@ -72,8 +72,10 @@ YIELD_LOOP_IN_TESTS = "src/code_lint/rules/yield_loop_in_tests.rs"
 INLINE_TEST_ALWAYS_FALSE = (
     (
         "pub fn is_in_rust_inline_test(&self, offset: usize) -> bool {",
-        "pub fn is_in_rust_inline_test(&self, offset: usize) -> bool {\n"
-        "        let _ = offset;\n        return false;",
+        (
+            "pub fn is_in_rust_inline_test(&self, offset: usize) -> bool {\n"
+            "        let _ = offset;\n        return false;"
+        ),
     ),
 )
 

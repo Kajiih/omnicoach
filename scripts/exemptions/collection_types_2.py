@@ -34,14 +34,16 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "            func => self.visit_expr(func),",
-                    "            Expr::Attribute(attr) => {\n"
-                    '                if matches!(attr.attr.as_str(), "append" | "sort") {\n'
-                    "                    self.visit_expr_as(&attr.value, UseRole::Read);\n"
-                    "                } else {\n"
-                    "                    self.visit_expr(call.func.as_ref());\n"
-                    "                }\n"
-                    "            }\n"
-                    "            func => self.visit_expr(func),",
+                    (
+                        "            Expr::Attribute(attr) => {\n"
+                        '                if matches!(attr.attr.as_str(), "append" | "sort") {\n'
+                        "                    self.visit_expr_as(&attr.value, UseRole::Read);\n"
+                        "                } else {\n"
+                        "                    self.visit_expr(call.func.as_ref());\n"
+                        "                }\n"
+                        "            }\n"
+                        "            func => self.visit_expr(func),"
+                    ),
                 ),
             ),
             cases=("mutable_collection_parameter::pass::mutating_sequence_methods",),
@@ -52,14 +54,16 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "            func => self.visit_expr(func),",
-                    "            Expr::Attribute(attr) => {\n"
-                    '                if attr.attr.as_str() == "setdefault" {\n'
-                    "                    self.visit_expr_as(&attr.value, UseRole::Read);\n"
-                    "                } else {\n"
-                    "                    self.visit_expr(call.func.as_ref());\n"
-                    "                }\n"
-                    "            }\n"
-                    "            func => self.visit_expr(func),",
+                    (
+                        "            Expr::Attribute(attr) => {\n"
+                        '                if attr.attr.as_str() == "setdefault" {\n'
+                        "                    self.visit_expr_as(&attr.value, UseRole::Read);\n"
+                        "                } else {\n"
+                        "                    self.visit_expr(call.func.as_ref());\n"
+                        "                }\n"
+                        "            }\n"
+                        "            func => self.visit_expr(func),"
+                    ),
                 ),
             ),
             cases=("mutable_collection_parameter::pass::mutating_mapping_methods",),
@@ -70,14 +74,16 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "            func => self.visit_expr(func),",
-                    "            Expr::Attribute(attr) => {\n"
-                    '                if attr.attr.as_str() == "discard" {\n'
-                    "                    self.visit_expr_as(&attr.value, UseRole::Read);\n"
-                    "                } else {\n"
-                    "                    self.visit_expr(call.func.as_ref());\n"
-                    "                }\n"
-                    "            }\n"
-                    "            func => self.visit_expr(func),",
+                    (
+                        "            Expr::Attribute(attr) => {\n"
+                        '                if attr.attr.as_str() == "discard" {\n'
+                        "                    self.visit_expr_as(&attr.value, UseRole::Read);\n"
+                        "                } else {\n"
+                        "                    self.visit_expr(call.func.as_ref());\n"
+                        "                }\n"
+                        "            }\n"
+                        "            func => self.visit_expr(func),"
+                    ),
                 ),
             ),
             cases=("mutable_collection_parameter::pass::mutating_set_methods",),
@@ -88,12 +94,14 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "Expr::Subscript(sub) if matches!(sub.ctx, ruff_python_ast::ExprContext::Load) => {",
-                    "Expr::Subscript(sub)\n"
-                    "                if matches!(\n"
-                    "                    sub.ctx,\n"
-                    "                    ruff_python_ast::ExprContext::Load | ruff_python_ast::ExprContext::Store\n"
-                    "                ) =>\n"
-                    "            {",
+                    (
+                        "Expr::Subscript(sub)\n"
+                        "                if matches!(\n"
+                        "                    sub.ctx,\n"
+                        "                    ruff_python_ast::ExprContext::Load | ruff_python_ast::ExprContext::Store\n"
+                        "                ) =>\n"
+                        "            {"
+                    ),
                 ),
             ),
             cases=(
@@ -108,12 +116,14 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "Expr::Subscript(sub) if matches!(sub.ctx, ruff_python_ast::ExprContext::Load) => {",
-                    "Expr::Subscript(sub)\n"
-                    "                if matches!(\n"
-                    "                    sub.ctx,\n"
-                    "                    ruff_python_ast::ExprContext::Load | ruff_python_ast::ExprContext::Del\n"
-                    "                ) =>\n"
-                    "            {",
+                    (
+                        "Expr::Subscript(sub)\n"
+                        "                if matches!(\n"
+                        "                    sub.ctx,\n"
+                        "                    ruff_python_ast::ExprContext::Load | ruff_python_ast::ExprContext::Del\n"
+                        "                ) =>\n"
+                        "            {"
+                    ),
                 ),
             ),
             cases=("mutable_collection_parameter::pass::subscript_deletion",),
@@ -124,8 +134,10 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "            _ => walk_stmt(self, statement),",
-                    "            Stmt::AugAssign(aug) => self.visit_expr(&aug.value),\n"
-                    "            _ => walk_stmt(self, statement),",
+                    (
+                        "            Stmt::AugAssign(aug) => self.visit_expr(&aug.value),\n"
+                        "            _ => walk_stmt(self, statement),"
+                    ),
                 ),
             ),
             cases=(
@@ -137,10 +149,12 @@ CLUSTER = Cluster(
             path=PARAMETER_USAGE,
             edits=(
                 (
-                    "        let Some(positional_role) = positional_role else {\n"
-                    "            self.visit_arguments(&call.arguments);\n"
-                    "            return;\n"
-                    "        };",
+                    (
+                        "        let Some(positional_role) = positional_role else {\n"
+                        "            self.visit_arguments(&call.arguments);\n"
+                        "            return;\n"
+                        "        };"
+                    ),
                     "        let positional_role = positional_role.unwrap_or(UseRole::Read);",
                 ),
             ),
@@ -155,8 +169,10 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "            _ => walk_stmt(self, statement),",
-                    "            Stmt::Assign(assign) => self.visit_expr_as(&assign.value, UseRole::Read),\n"
-                    "            _ => walk_stmt(self, statement),",
+                    (
+                        "            Stmt::Assign(assign) => self.visit_expr_as(&assign.value, UseRole::Read),\n"
+                        "            _ => walk_stmt(self, statement),"
+                    ),
                 ),
             ),
             cases=(
@@ -181,8 +197,10 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "            _ => walk_stmt(self, statement),",
-                    "            Stmt::Return(_) => {}\n"
-                    "            _ => walk_stmt(self, statement),",
+                    (
+                        "            Stmt::Return(_) => {}\n"
+                        "            _ => walk_stmt(self, statement),"
+                    ),
                 ),
             ),
             cases=("mutable_collection_parameter::pass::returned",),
@@ -193,8 +211,10 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "            Expr::YieldFrom(yield_from) => {",
-                    "            Expr::Yield(_) => {}\n"
-                    "            Expr::YieldFrom(yield_from) => {",
+                    (
+                        "            Expr::Yield(_) => {}\n"
+                        "            Expr::YieldFrom(yield_from) => {"
+                    ),
                 ),
             ),
             cases=("mutable_collection_parameter::pass::yielded",),
@@ -204,9 +224,11 @@ CLUSTER = Cluster(
             path=PARAMETER_USAGE,
             edits=(
                 (
-                    "                self.visit_nested_scope(Some(&func.parameters), |visitor| {\n"
-                    "                    visitor.visit_body(&func.body);\n"
-                    "                });",
+                    (
+                        "                self.visit_nested_scope(Some(&func.parameters), |visitor| {\n"
+                        "                    visitor.visit_body(&func.body);\n"
+                        "                });"
+                    ),
                     "",
                 ),
             ),
@@ -219,8 +241,10 @@ CLUSTER = Cluster(
             path=PARAMETER_USAGE,
             edits=(
                 (
-                    "                // Defaults are evaluated in the enclosing scope; only the body is shadowed.\n"
-                    "                self.visit_parameters(&func.parameters);",
+                    (
+                        "                // Defaults are evaluated in the enclosing scope; only the body is shadowed.\n"
+                        "                self.visit_parameters(&func.parameters);"
+                    ),
                     "",
                 ),
             ),
@@ -233,9 +257,11 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "        Stmt::Expr(expr_statement) => {\n"
-                    "            matches!(expr_statement.value.as_ref(), Expr::EllipsisLiteral(_))\n"
-                    "        }",
+                    (
+                        "        Stmt::Expr(expr_statement) => {\n"
+                        "            matches!(expr_statement.value.as_ref(), Expr::EllipsisLiteral(_))\n"
+                        "        }"
+                    ),
                     "        Stmt::Expr(_) => false,",
                 ),
             ),
@@ -257,16 +283,18 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "        Stmt::Raise(raise_statement) => {\n"
-                    "            raise_statement.cause.is_none()\n"
-                    "                && raise_statement.exc.as_deref().is_some_and(|exc| match exc {\n"
-                    "                    Expr::Name(name) => name.id == NOT_IMPLEMENTED_ERROR,\n"
-                    "                    Expr::Call(call) => {\n"
-                    "                        written_name(&call.func, source).terminal == NOT_IMPLEMENTED_ERROR\n"
-                    "                    }\n"
-                    "                    _ => false,\n"
-                    "                })\n"
-                    "        }",
+                    (
+                        "        Stmt::Raise(raise_statement) => {\n"
+                        "            raise_statement.cause.is_none()\n"
+                        "                && raise_statement.exc.as_deref().is_some_and(|exc| match exc {\n"
+                        "                    Expr::Name(name) => name.id == NOT_IMPLEMENTED_ERROR,\n"
+                        "                    Expr::Call(call) => {\n"
+                        "                        written_name(&call.func, source).terminal == NOT_IMPLEMENTED_ERROR\n"
+                        "                    }\n"
+                        "                    _ => false,\n"
+                        "                })\n"
+                        "        }"
+                    ),
                     "        Stmt::Raise(_) => false,",
                 ),
             ),
@@ -282,8 +310,10 @@ CLUSTER = Cluster(
             path=RETURNS,
             edits=(
                 (
-                    "                if let Some(callee_name) = called_terminal_name_expr(receiver, self.source) {\n"
-                    "                    self.mutated_functions.insert(callee_name);",
+                    (
+                        "                if let Some(callee_name) = called_terminal_name_expr(receiver, self.source) {\n"
+                        "                    self.mutated_functions.insert(callee_name);"
+                    ),
                     "                if false {",
                 ),
             ),
@@ -297,12 +327,14 @@ CLUSTER = Cluster(
             path=RETURNS,
             edits=(
                 (
-                    "                    Stmt::Assign(assign) => {\n"
-                    "                        if let [target] = assign.targets.as_slice() {\n"
-                    "                            self.record_binding(target, &assign.value);\n"
-                    "                        }\n"
-                    "                        walk_stmt(self, statement);\n"
-                    "                    }",
+                    (
+                        "                    Stmt::Assign(assign) => {\n"
+                        "                        if let [target] = assign.targets.as_slice() {\n"
+                        "                            self.record_binding(target, &assign.value);\n"
+                        "                        }\n"
+                        "                        walk_stmt(self, statement);\n"
+                        "                    }"
+                    ),
                     "                    Stmt::Assign(_) => walk_stmt(self, statement),",
                 ),
             ),
@@ -315,9 +347,11 @@ CLUSTER = Cluster(
             path=RETURNS,
             edits=(
                 (
-                    "                if let Expr::Named(named) = expr {\n"
-                    "                    self.record_binding(&named.target, &named.value);\n"
-                    "                }",
+                    (
+                        "                if let Expr::Named(named) = expr {\n"
+                        "                    self.record_binding(&named.target, &named.value);\n"
+                        "                }"
+                    ),
                     "",
                 ),
             ),
@@ -330,13 +364,17 @@ CLUSTER = Cluster(
             path=ANNOTATIONS,
             edits=(
                 (
-                    "            if depth == AnnotationTraversalDepth::CovariantPositions\n"
-                    "                && is_std_type_constructor_prefix(&base_path, &base_terminal)\n"
-                    "                && !is_concrete_collection_constructor(&base_path, &base_terminal)\n"
-                    "            {",
-                    "            if is_std_type_constructor_prefix(&base_path, &base_terminal)\n"
-                    "                && !is_concrete_collection_constructor(&base_path, &base_terminal)\n"
-                    "            {",
+                    (
+                        "            if depth == AnnotationTraversalDepth::CovariantPositions\n"
+                        "                && is_std_type_constructor_prefix(&base_path, &base_terminal)\n"
+                        "                && !is_concrete_collection_constructor(&base_path, &base_terminal)\n"
+                        "            {"
+                    ),
+                    (
+                        "            if is_std_type_constructor_prefix(&base_path, &base_terminal)\n"
+                        "                && !is_concrete_collection_constructor(&base_path, &base_terminal)\n"
+                        "            {"
+                    ),
                 ),
             ),
             cases=(
@@ -386,10 +424,12 @@ CLUSTER = Cluster(
             path=NULLABLE_COLLECTION_RETURN,
             edits=(
                 (
-                    '        let is_variadic = args.len() == 2 && args[1].text() == "...";\n'
-                    "        if !is_variadic {\n"
-                    "            return None;\n"
-                    "        }",
+                    (
+                        '        let is_variadic = args.len() == 2 && args[1].text() == "...";\n'
+                        "        if !is_variadic {\n"
+                        "            return None;\n"
+                        "        }"
+                    ),
                     "",
                 ),
             ),
@@ -415,8 +455,10 @@ CLUSTER = Cluster(
             path=RS_RETURNS,
             edits=(
                 (
-                    "    ast::Trait::can_cast(enclosing_item.kind())\n"
-                    "        || ast::Impl::cast(enclosing_item).is_some_and(|impl_item| impl_item.trait_().is_some())",
+                    (
+                        "    ast::Trait::can_cast(enclosing_item.kind())\n"
+                        "        || ast::Impl::cast(enclosing_item).is_some_and(|impl_item| impl_item.trait_().is_some())"
+                    ),
                     "    ast::Impl::cast(enclosing_item).is_some_and(|impl_item| impl_item.trait_().is_some())",
                 ),
             ),
@@ -427,8 +469,10 @@ CLUSTER = Cluster(
             path=RS_RETURNS,
             edits=(
                 (
-                    "    ast::Trait::can_cast(enclosing_item.kind())\n"
-                    "        || ast::Impl::cast(enclosing_item).is_some_and(|impl_item| impl_item.trait_().is_some())",
+                    (
+                        "    ast::Trait::can_cast(enclosing_item.kind())\n"
+                        "        || ast::Impl::cast(enclosing_item).is_some_and(|impl_item| impl_item.trait_().is_some())"
+                    ),
                     "    ast::Trait::can_cast(enclosing_item.kind())",
                 ),
             ),
@@ -440,9 +484,11 @@ CLUSTER = Cluster(
             path=MUTABLE_MODULE_CONSTANT,
             edits=(
                 (
-                    "    if is_read_only_mapping && built.name == DICT {\n"
-                    "        return None;\n"
-                    "    }",
+                    (
+                        "    if is_read_only_mapping && built.name == DICT {\n"
+                        "        return None;\n"
+                        "    }"
+                    ),
                     "",
                 ),
             ),
@@ -481,15 +527,19 @@ CLUSTER = Cluster(
             path=PY_BINDINGS,
             edits=(
                 (
-                    "            Stmt::With(with_statement) => {\n"
-                    "                collect_module_assignments_in_stmts(&with_statement.body, file, out);\n"
-                    "            }",
-                    "            Stmt::With(with_statement) => {\n"
-                    "                collect_module_assignments_in_stmts(&with_statement.body, file, out);\n"
-                    "            }\n"
-                    "            Stmt::ClassDef(class_def) => {\n"
-                    "                collect_module_assignments_in_stmts(&class_def.body, file, out);\n"
-                    "            }",
+                    (
+                        "            Stmt::With(with_statement) => {\n"
+                        "                collect_module_assignments_in_stmts(&with_statement.body, file, out);\n"
+                        "            }"
+                    ),
+                    (
+                        "            Stmt::With(with_statement) => {\n"
+                        "                collect_module_assignments_in_stmts(&with_statement.body, file, out);\n"
+                        "            }\n"
+                        "            Stmt::ClassDef(class_def) => {\n"
+                        "                collect_module_assignments_in_stmts(&class_def.body, file, out);\n"
+                        "            }"
+                    ),
                 ),
             ),
             cases=("mutable_module_constant::pass::class_scope_not_flagged",),
@@ -499,15 +549,19 @@ CLUSTER = Cluster(
             path=PY_BINDINGS,
             edits=(
                 (
-                    "            Stmt::With(with_statement) => {\n"
-                    "                collect_module_assignments_in_stmts(&with_statement.body, file, out);\n"
-                    "            }",
-                    "            Stmt::With(with_statement) => {\n"
-                    "                collect_module_assignments_in_stmts(&with_statement.body, file, out);\n"
-                    "            }\n"
-                    "            Stmt::FunctionDef(func_def) => {\n"
-                    "                collect_module_assignments_in_stmts(&func_def.body, file, out);\n"
-                    "            }",
+                    (
+                        "            Stmt::With(with_statement) => {\n"
+                        "                collect_module_assignments_in_stmts(&with_statement.body, file, out);\n"
+                        "            }"
+                    ),
+                    (
+                        "            Stmt::With(with_statement) => {\n"
+                        "                collect_module_assignments_in_stmts(&with_statement.body, file, out);\n"
+                        "            }\n"
+                        "            Stmt::FunctionDef(func_def) => {\n"
+                        "                collect_module_assignments_in_stmts(&func_def.body, file, out);\n"
+                        "            }"
+                    ),
                 ),
             ),
             cases=("mutable_module_constant::pass::function_scope_not_flagged",),
@@ -517,21 +571,29 @@ CLUSTER = Cluster(
             path=PY_BINDINGS,
             edits=(
                 (
-                    "            Stmt::AnnAssign(ann) => {\n"
-                    "                if let Expr::Name(target) = ann.target.as_ref() {",
-                    "            Stmt::AnnAssign(ann) => {\n"
-                    "                let target_id = match ann.target.as_ref() {\n"
-                    "                    Expr::Name(target) => Some(target.id.to_string()),\n"
-                    "                    Expr::Attribute(attr) => Some(attr.attr.to_string()),\n"
-                    "                    _ => None,\n"
-                    "                };\n"
-                    "                if let Some(name) = target_id {",
+                    (
+                        "            Stmt::AnnAssign(ann) => {\n"
+                        "                if let Expr::Name(target) = ann.target.as_ref() {"
+                    ),
+                    (
+                        "            Stmt::AnnAssign(ann) => {\n"
+                        "                let target_id = match ann.target.as_ref() {\n"
+                        "                    Expr::Name(target) => Some(target.id.to_string()),\n"
+                        "                    Expr::Attribute(attr) => Some(attr.attr.to_string()),\n"
+                        "                    _ => None,\n"
+                        "                };\n"
+                        "                if let Some(name) = target_id {"
+                    ),
                 ),
                 (
-                    "                        name: target.id.to_string(),\n"
-                    "                        annotation: Some(AstNode::from_span(",
-                    "                        name,\n"
-                    "                        annotation: Some(AstNode::from_span(",
+                    (
+                        "                        name: target.id.to_string(),\n"
+                        "                        annotation: Some(AstNode::from_span("
+                    ),
+                    (
+                        "                        name,\n"
+                        "                        annotation: Some(AstNode::from_span("
+                    ),
                 ),
             ),
             cases=("mutable_module_constant::pass::attribute_target_not_flagged",),
@@ -541,36 +603,40 @@ CLUSTER = Cluster(
             path=PY_BINDINGS,
             edits=(
                 (
-                    "            Stmt::Assign(assign) => {\n"
-                    "                if let [Expr::Name(target)] = assign.targets.as_slice() {\n"
-                    "                    out.push(PythonModuleAssignment {\n"
-                    "                        name: target.id.to_string(),\n"
-                    "                        annotation: None,\n"
-                    "                        value: Some(AstNode::from_span(\n"
-                    "                            file,\n"
-                    "                            span_from_ruff_range(assign.value.range()),\n"
-                    "                        )),",
-                    "            Stmt::Assign(assign) => {\n"
-                    "                let target_and_val = match assign.targets.as_slice() {\n"
-                    "                    [Expr::Name(target)] => Some((target.id.to_string(), assign.value.as_ref())),\n"
-                    "                    [Expr::Tuple(tuple)] => tuple.elts.first().and_then(|elt| {\n"
-                    "                        let val = if let Expr::Tuple(val_tuple) = assign.value.as_ref() {\n"
-                    "                            val_tuple.elts.first().unwrap_or(&assign.value)\n"
-                    "                        } else {\n"
-                    "                            assign.value.as_ref()\n"
-                    "                        };\n"
-                    "                        if let Expr::Name(target) = elt { Some((target.id.to_string(), val)) } else { None }\n"
-                    "                    }),\n"
-                    "                    _ => None,\n"
-                    "                };\n"
-                    "                if let Some((name, val_expr)) = target_and_val {\n"
-                    "                    out.push(PythonModuleAssignment {\n"
-                    "                        name,\n"
-                    "                        annotation: None,\n"
-                    "                        value: Some(AstNode::from_span(\n"
-                    "                            file,\n"
-                    "                            span_from_ruff_range(val_expr.range()),\n"
-                    "                        )),",
+                    (
+                        "            Stmt::Assign(assign) => {\n"
+                        "                if let [Expr::Name(target)] = assign.targets.as_slice() {\n"
+                        "                    out.push(PythonModuleAssignment {\n"
+                        "                        name: target.id.to_string(),\n"
+                        "                        annotation: None,\n"
+                        "                        value: Some(AstNode::from_span(\n"
+                        "                            file,\n"
+                        "                            span_from_ruff_range(assign.value.range()),\n"
+                        "                        )),"
+                    ),
+                    (
+                        "            Stmt::Assign(assign) => {\n"
+                        "                let target_and_val = match assign.targets.as_slice() {\n"
+                        "                    [Expr::Name(target)] => Some((target.id.to_string(), assign.value.as_ref())),\n"
+                        "                    [Expr::Tuple(tuple)] => tuple.elts.first().and_then(|elt| {\n"
+                        "                        let val = if let Expr::Tuple(val_tuple) = assign.value.as_ref() {\n"
+                        "                            val_tuple.elts.first().unwrap_or(&assign.value)\n"
+                        "                        } else {\n"
+                        "                            assign.value.as_ref()\n"
+                        "                        };\n"
+                        "                        if let Expr::Name(target) = elt { Some((target.id.to_string(), val)) } else { None }\n"
+                        "                    }),\n"
+                        "                    _ => None,\n"
+                        "                };\n"
+                        "                if let Some((name, val_expr)) = target_and_val {\n"
+                        "                    out.push(PythonModuleAssignment {\n"
+                        "                        name,\n"
+                        "                        annotation: None,\n"
+                        "                        value: Some(AstNode::from_span(\n"
+                        "                            file,\n"
+                        "                            span_from_ruff_range(val_expr.range()),\n"
+                        "                        )),"
+                    ),
                 ),
             ),
             cases=("mutable_module_constant::pass::unpacking_target_not_flagged",),
@@ -580,22 +646,26 @@ CLUSTER = Cluster(
             path=MUTABLE_MODULE_CONSTANT,
             edits=(
                 (
-                    "    let built = collection_display(value).or_else(|| {\n"
-                    "        call_callee(value)\n"
-                    "            .and_then(|callee| collection_type(&callee))\n"
-                    "            .filter(is_runtime_mutable_collection_constructor)\n"
-                    "    })?;",
-                    "    let built = collection_display(value)\n"
-                    "        .or_else(|| {\n"
-                    "            call_callee(value)\n"
-                    "                .and_then(|callee| collection_type(&callee))\n"
-                    "                .filter(is_runtime_mutable_collection_constructor)\n"
-                    "        })\n"
-                    "        .or_else(|| {\n"
-                    "            collect_collection_types(value, AnnotationTraversalDepth::TransparentWrappersOnly)\n"
-                    "                .into_iter()\n"
-                    "                .find(|collection_type| collection_type.kind == CollectionKind::ConcreteMutable)\n"
-                    "        })?;",
+                    (
+                        "    let built = collection_display(value).or_else(|| {\n"
+                        "        call_callee(value)\n"
+                        "            .and_then(|callee| collection_type(&callee))\n"
+                        "            .filter(is_runtime_mutable_collection_constructor)\n"
+                        "    })?;"
+                    ),
+                    (
+                        "    let built = collection_display(value)\n"
+                        "        .or_else(|| {\n"
+                        "            call_callee(value)\n"
+                        "                .and_then(|callee| collection_type(&callee))\n"
+                        "                .filter(is_runtime_mutable_collection_constructor)\n"
+                        "        })\n"
+                        "        .or_else(|| {\n"
+                        "            collect_collection_types(value, AnnotationTraversalDepth::TransparentWrappersOnly)\n"
+                        "                .into_iter()\n"
+                        "                .find(|collection_type| collection_type.kind == CollectionKind::ConcreteMutable)\n"
+                        "        })?;"
+                    ),
                 ),
             ),
             cases=("mutable_module_constant::pass::typing_type_alias_not_flagged",),
@@ -605,25 +675,29 @@ CLUSTER = Cluster(
             path=PY_BINDINGS,
             edits=(
                 (
-                    "            Stmt::With(with_statement) => {\n"
-                    "                collect_module_assignments_in_stmts(&with_statement.body, file, out);\n"
-                    "            }",
-                    "            Stmt::With(with_statement) => {\n"
-                    "                collect_module_assignments_in_stmts(&with_statement.body, file, out);\n"
-                    "            }\n"
-                    "            Stmt::TypeAlias(type_alias) => {\n"
-                    "                if let Expr::Name(target) = type_alias.name.as_ref() {\n"
-                    "                    out.push(PythonModuleAssignment {\n"
-                    "                        name: target.id.to_string(),\n"
-                    "                        annotation: Some(AstNode::from_span(\n"
-                    "                            file,\n"
-                    "                            span_from_ruff_range(type_alias.value.range()),\n"
-                    "                        )),\n"
-                    "                        value: None,\n"
-                    "                        has_final_annotation: true,\n"
-                    "                    });\n"
-                    "                }\n"
-                    "            }",
+                    (
+                        "            Stmt::With(with_statement) => {\n"
+                        "                collect_module_assignments_in_stmts(&with_statement.body, file, out);\n"
+                        "            }"
+                    ),
+                    (
+                        "            Stmt::With(with_statement) => {\n"
+                        "                collect_module_assignments_in_stmts(&with_statement.body, file, out);\n"
+                        "            }\n"
+                        "            Stmt::TypeAlias(type_alias) => {\n"
+                        "                if let Expr::Name(target) = type_alias.name.as_ref() {\n"
+                        "                    out.push(PythonModuleAssignment {\n"
+                        "                        name: target.id.to_string(),\n"
+                        "                        annotation: Some(AstNode::from_span(\n"
+                        "                            file,\n"
+                        "                            span_from_ruff_range(type_alias.value.range()),\n"
+                        "                        )),\n"
+                        "                        value: None,\n"
+                        "                        has_final_annotation: true,\n"
+                        "                    });\n"
+                        "                }\n"
+                        "            }"
+                    ),
                 ),
             ),
             cases=("mutable_module_constant::pass::pep695_type_alias_not_flagged",),
@@ -633,9 +707,11 @@ CLUSTER = Cluster(
             path=AST,
             edits=(
                 (
-                    "            ResolvedName::Imported(resolved) => {\n"
-                    "                Some(Self::from_path(resolved, path_separator(file.lang())))\n"
-                    "            }",
+                    (
+                        "            ResolvedName::Imported(resolved) => {\n"
+                        "                Some(Self::from_path(resolved, path_separator(file.lang())))\n"
+                        "            }"
+                    ),
                     "            ResolvedName::Imported(_) => Some(self),",
                 ),
             ),

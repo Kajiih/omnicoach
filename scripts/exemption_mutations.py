@@ -271,6 +271,7 @@ def cargo_lib_tests(
     }
     return subprocess.run(
         ["cargo", "test", "--lib", "--", *arguments],
+        check=False,
         cwd=worker,
         env=environment,
         capture_output=True,

@@ -104,11 +104,13 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "self.has_base_in(PROTOCOL_PATHS)",
-                    "self.bases.iter().any(|base| {\n"
-                    "            base.resolved_path\n"
-                    "                .as_deref()\n"
-                    '                .is_some_and(|path| path.ends_with("Protocol"))\n'
-                    "        })",
+                    (
+                        "self.bases.iter().any(|base| {\n"
+                        "            base.resolved_path\n"
+                        "                .as_deref()\n"
+                        '                .is_some_and(|path| path.ends_with("Protocol"))\n'
+                        "        })"
+                    ),
                 ),
             ),
             cases=("uninherited_protocol::pass::non_typing_protocol_base",),

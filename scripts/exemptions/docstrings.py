@@ -55,8 +55,10 @@ CLUSTER = Cluster(
             path=DOCSTRINGS,
             edits=(
                 (
-                    "    let is_noun_phrase =\n"
-                    "        noun_stems.contains(&lowercase.as_str()) && noun_followers.contains(&next_word.as_str());",
+                    (
+                        "    let is_noun_phrase =\n"
+                        "        noun_stems.contains(&lowercase.as_str()) && noun_followers.contains(&next_word.as_str());"
+                    ),
                     "    let _ = (noun_stems, noun_followers, next_word);\n    let is_noun_phrase = false;",
                 ),
             ),
@@ -96,11 +98,13 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "    let word = leading_word(text);",
-                    "    let word = text\n"
-                    "        .split_whitespace()\n"
-                    "        .map(leading_word)\n"
-                    "        .find(|candidate| verbs.contains(&candidate.to_ascii_lowercase().as_str()))\n"
-                    "        .unwrap_or_default();",
+                    (
+                        "    let word = text\n"
+                        "        .split_whitespace()\n"
+                        "        .map(leading_word)\n"
+                        "        .find(|candidate| verbs.contains(&candidate.to_ascii_lowercase().as_str()))\n"
+                        "        .unwrap_or_default();"
+                    ),
                 ),
             ),
             cases=(
@@ -200,11 +204,15 @@ CLUSTER = Cluster(
             path=CLASSES,
             edits=(
                 (
-                    "                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,\n"
-                    "                Stmt::Assign(assign) => {\n"
-                    "                    self.out\n",
-                    "                Stmt::Assign(assign) => {\n"
-                    "                    self.out\n",
+                    (
+                        "                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,\n"
+                        "                Stmt::Assign(assign) => {\n"
+                        "                    self.out\n"
+                    ),
+                    (
+                        "                Stmt::Assign(assign) => {\n"
+                        "                    self.out\n"
+                    ),
                 ),
             ),
             cases=(
@@ -363,12 +371,14 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "    text.match_indices(NONE).filter_map(",
-                    "    text.to_ascii_lowercase()\n"
-                    '        .match_indices("none")\n'
-                    "        .map(|(start, _)| (start, ()))\n"
-                    "        .collect::<Vec<_>>()\n"
-                    "        .into_iter()\n"
-                    "        .filter_map(",
+                    (
+                        "    text.to_ascii_lowercase()\n"
+                        '        .match_indices("none")\n'
+                        "        .map(|(start, _)| (start, ()))\n"
+                        "        .collect::<Vec<_>>()\n"
+                        "        .into_iter()\n"
+                        "        .filter_map("
+                    ),
                 ),
             ),
             cases=(
@@ -469,11 +479,15 @@ CLUSTER = Cluster(
             path=UNEXPLAINED_OPTIONAL_ARGUMENT,
             edits=(
                 (
-                    "        let constructor_parameters = class\n"
-                    "            .constructor()",
-                    "        let constructor_parameters = class\n"
-                    "            .constructor()\n"
-                    "            .filter(|_| false)",
+                    (
+                        "        let constructor_parameters = class\n"
+                        "            .constructor()"
+                    ),
+                    (
+                        "        let constructor_parameters = class\n"
+                        "            .constructor()\n"
+                        "            .filter(|_| false)"
+                    ),
                 ),
             ),
             cases=(
@@ -531,8 +545,10 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "|| docstring.copies_summary_of(&inherited);",
-                    "|| crate::code_lint::ast::python::normalize_docstring_text(&docstring.summary_paragraph())\n"
-                    "                    == crate::code_lint::ast::python::normalize_docstring_text(&inherited.summary_paragraph());",
+                    (
+                        "|| crate::code_lint::ast::python::normalize_docstring_text(&docstring.summary_paragraph())\n"
+                        "                    == crate::code_lint::ast::python::normalize_docstring_text(&inherited.summary_paragraph());"
+                    ),
                 ),
             ),
             cases=("copied_base_docstring::pass::same_summary_different_body_exempt",),
@@ -543,13 +559,15 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "|| docstring.copies_summary_of(&inherited);",
-                    "|| docstring.copies_summary_of(&inherited)\n"
-                    "                || {\n"
-                    "                    let words = |text: &str| text.split_whitespace().map(str::to_owned)\n"
-                    "                        .collect::<std::collections::HashSet<_>>();\n"
-                    "                    let (own, base) = (words(&docstring.normalized()), words(&inherited.normalized()));\n"
-                    "                    own.intersection(&base).count() * 5 >= own.union(&base).count() * 4\n"
-                    "                };",
+                    (
+                        "|| docstring.copies_summary_of(&inherited)\n"
+                        "                || {\n"
+                        "                    let words = |text: &str| text.split_whitespace().map(str::to_owned)\n"
+                        "                        .collect::<std::collections::HashSet<_>>();\n"
+                        "                    let (own, base) = (words(&docstring.normalized()), words(&inherited.normalized()));\n"
+                        "                    own.intersection(&base).count() * 5 >= own.union(&base).count() * 4\n"
+                        "                };"
+                    ),
                 ),
             ),
             cases=("copied_base_docstring::pass::adapted_copy_exempt",),
@@ -593,10 +611,12 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "    local_ancestors(classes, index)\n        .into_iter()\n",
-                    "    local_ancestors(classes, index)\n"
-                    "        .into_iter()\n"
-                    "        .filter(|&ancestor| classes[ancestor].methods().iter().any(|method| method.name == name))\n"
-                    "        .take(1)\n",
+                    (
+                        "    local_ancestors(classes, index)\n"
+                        "        .into_iter()\n"
+                        "        .filter(|&ancestor| classes[ancestor].methods().iter().any(|method| method.name == name))\n"
+                        "        .take(1)\n"
+                    ),
                 ),
             ),
             cases=(
@@ -634,9 +654,11 @@ CLUSTER = Cluster(
             edits=(
                 (
                     '    (DocstringSectionKind::Raises, "Raises"),\n];',
-                    '    (DocstringSectionKind::Raises, "Raises"),\n'
-                    '    (DocstringSectionKind::Attributes, "Attributes"),\n'
-                    '    (DocstringSectionKind::Other, "Other"),\n];',
+                    (
+                        '    (DocstringSectionKind::Raises, "Raises"),\n'
+                        '    (DocstringSectionKind::Attributes, "Attributes"),\n'
+                        '    (DocstringSectionKind::Other, "Other"),\n];'
+                    ),
                 ),
             ),
             cases=("partial_override_docstring::pass::non_contract_sections_exempt",),
@@ -647,10 +669,12 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "= docstring\n        .sections()\n        .iter()\n",
-                    "= docstring\n"
-                    "        .sections()\n"
-                    "        .iter()\n"
-                    "        .filter(|section| CONTRACT_SECTIONS.iter().any(|(_, header)| *header == section.header))\n",
+                    (
+                        "= docstring\n"
+                        "        .sections()\n"
+                        "        .iter()\n"
+                        "        .filter(|section| CONTRACT_SECTIONS.iter().any(|(_, header)| *header == section.header))\n"
+                    ),
                 ),
             ),
             cases=(
@@ -725,11 +749,15 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "        is_data_model_dunder(&self.name)\n"
-                    "            || self.decorators.iter().any(|decorator| {\n"
-                    "                decorator.matches_any(OVERRIDE_DECORATOR_PATHS)",
-                    "        self.decorators.iter().any(|decorator| {\n"
-                    "                decorator.matches_any(OVERRIDE_DECORATOR_PATHS)",
+                    (
+                        "        is_data_model_dunder(&self.name)\n"
+                        "            || self.decorators.iter().any(|decorator| {\n"
+                        "                decorator.matches_any(OVERRIDE_DECORATOR_PATHS)"
+                    ),
+                    (
+                        "        self.decorators.iter().any(|decorator| {\n"
+                        "                decorator.matches_any(OVERRIDE_DECORATOR_PATHS)"
+                    ),
                 ),
             ),
             cases=("undocumented_nontrivial_function::pass::data_model_dunder_exempt",),
@@ -739,8 +767,10 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "                decorator.matches_any(OVERRIDE_DECORATOR_PATHS)\n"
-                    '                    || decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])',
+                    (
+                        "                decorator.matches_any(OVERRIDE_DECORATOR_PATHS)\n"
+                        '                    || decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])'
+                    ),
                     '                decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])',
                 ),
             ),
@@ -764,9 +794,11 @@ CLUSTER = Cluster(
             path=UNEXPLAINED_PARAMETER,
             edits=(
                 (
-                    "            if own_docstring.is_none() && class_docstring.is_none() {\n"
-                    "                return None;\n"
-                    "            }\n",
+                    (
+                        "            if own_docstring.is_none() && class_docstring.is_none() {\n"
+                        "                return None;\n"
+                        "            }\n"
+                    ),
                     "",
                 ),
             ),
@@ -799,8 +831,10 @@ CLUSTER = Cluster(
             path=UNEXPLAINED_PARAMETER,
             edits=(
                 (
-                    "                    !parameter.name.starts_with('_')\n"
-                    "                        && is_non_obvious(parameter)",
+                    (
+                        "                    !parameter.name.starts_with('_')\n"
+                        "                        && is_non_obvious(parameter)"
+                    ),
                     "                    is_non_obvious(parameter)",
                 ),
             ),

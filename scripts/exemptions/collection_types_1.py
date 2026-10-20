@@ -32,10 +32,14 @@ CLUSTER = Cluster(
             path=ANNOTATIONS,
             edits=(
                 (
-                    "    } else if is_std_type_constructor(path, terminal, READ_ONLY_COLLECTION_ABCS) {\n"
-                    "        CollectionKind::AbstractReadOnly",
-                    "    } else if is_std_type_constructor(path, terminal, READ_ONLY_COLLECTION_ABCS) {\n"
-                    "        CollectionKind::ConcreteMutable",
+                    (
+                        "    } else if is_std_type_constructor(path, terminal, READ_ONLY_COLLECTION_ABCS) {\n"
+                        "        CollectionKind::AbstractReadOnly"
+                    ),
+                    (
+                        "    } else if is_std_type_constructor(path, terminal, READ_ONLY_COLLECTION_ABCS) {\n"
+                        "        CollectionKind::ConcreteMutable"
+                    ),
                 ),
             ),
             cases=(
@@ -49,10 +53,14 @@ CLUSTER = Cluster(
             path=ANNOTATIONS,
             edits=(
                 (
-                    "    } else if is_std_type_constructor(path, terminal, MUTABLE_COLLECTION_ABCS) {\n"
-                    "        CollectionKind::AbstractMutable",
-                    "    } else if is_std_type_constructor(path, terminal, MUTABLE_COLLECTION_ABCS) {\n"
-                    "        CollectionKind::ConcreteMutable",
+                    (
+                        "    } else if is_std_type_constructor(path, terminal, MUTABLE_COLLECTION_ABCS) {\n"
+                        "        CollectionKind::AbstractMutable"
+                    ),
+                    (
+                        "    } else if is_std_type_constructor(path, terminal, MUTABLE_COLLECTION_ABCS) {\n"
+                        "        CollectionKind::ConcreteMutable"
+                    ),
                 ),
             ),
             cases=("concrete_collection_attribute::pass::abstract_mutable_attributes",),
@@ -62,10 +70,14 @@ CLUSTER = Cluster(
             path=ANNOTATIONS,
             edits=(
                 (
-                    "    } else if is_std_type_constructor(path, terminal, IMMUTABLE_COLLECTIONS) {\n"
-                    "        CollectionKind::Immutable",
-                    "    } else if is_std_type_constructor(path, terminal, IMMUTABLE_COLLECTIONS) {\n"
-                    "        CollectionKind::ConcreteMutable",
+                    (
+                        "    } else if is_std_type_constructor(path, terminal, IMMUTABLE_COLLECTIONS) {\n"
+                        "        CollectionKind::Immutable"
+                    ),
+                    (
+                        "    } else if is_std_type_constructor(path, terminal, IMMUTABLE_COLLECTIONS) {\n"
+                        "        CollectionKind::ConcreteMutable"
+                    ),
                 ),
             ),
             cases=(
@@ -92,12 +104,14 @@ CLUSTER = Cluster(
             path=ANNOTATIONS,
             edits=(
                 (
-                    "        TYPING_SET_CONSTRUCTOR => {\n"
-                    "            matches!(\n"
-                    "                path,\n"
-                    '                TYPING_SET_CONSTRUCTOR | "typing.Set" | "typing_extensions.Set"\n'
-                    "            )\n"
-                    "        }",
+                    (
+                        "        TYPING_SET_CONSTRUCTOR => {\n"
+                        "            matches!(\n"
+                        "                path,\n"
+                        '                TYPING_SET_CONSTRUCTOR | "typing.Set" | "typing_extensions.Set"\n'
+                        "            )\n"
+                        "        }"
+                    ),
                     "        TYPING_SET_CONSTRUCTOR => is_std_type_constructor_prefix(path, terminal),",
                 ),
             ),
@@ -112,18 +126,22 @@ CLUSTER = Cluster(
             path=ANNOTATIONS,
             edits=(
                 (
-                    "            if is_std_type_constructor(&base_path, &base_terminal, TRANSPARENT_FIRST_ARG_WRAPPERS) {\n"
-                    "                if let Some(first_arg) = type_args.first() {\n"
-                    "                    collect_collection_types_expr(first_arg, file, depth, out);\n"
-                    "                }\n"
-                    "                return;\n"
-                    "            }",
-                    "            if is_std_type_constructor(&base_path, &base_terminal, TRANSPARENT_FIRST_ARG_WRAPPERS) {\n"
-                    "                for arg in &type_args {\n"
-                    "                    collect_collection_types_expr(arg, file, depth, out);\n"
-                    "                }\n"
-                    "                return;\n"
-                    "            }",
+                    (
+                        "            if is_std_type_constructor(&base_path, &base_terminal, TRANSPARENT_FIRST_ARG_WRAPPERS) {\n"
+                        "                if let Some(first_arg) = type_args.first() {\n"
+                        "                    collect_collection_types_expr(first_arg, file, depth, out);\n"
+                        "                }\n"
+                        "                return;\n"
+                        "            }"
+                    ),
+                    (
+                        "            if is_std_type_constructor(&base_path, &base_terminal, TRANSPARENT_FIRST_ARG_WRAPPERS) {\n"
+                        "                for arg in &type_args {\n"
+                        "                    collect_collection_types_expr(arg, file, depth, out);\n"
+                        "                }\n"
+                        "                return;\n"
+                        "            }"
+                    ),
                 ),
             ),
             cases=(
@@ -136,24 +154,30 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "        Expr::Name(_) | Expr::Attribute(_) => push_collection_type(expr, file, out),",
-                    "        Expr::Name(_) | Expr::Attribute(_) => push_collection_type(expr, file, out),\n"
-                    "        Expr::List(list) => {\n"
-                    "            for elt in &list.elts {\n"
-                    "                collect_collection_types_expr(elt, file, depth, out);\n"
-                    "            }\n"
-                    "        }",
+                    (
+                        "        Expr::Name(_) | Expr::Attribute(_) => push_collection_type(expr, file, out),\n"
+                        "        Expr::List(list) => {\n"
+                        "            for elt in &list.elts {\n"
+                        "                collect_collection_types_expr(elt, file, depth, out);\n"
+                        "            }\n"
+                        "        }"
+                    ),
                 ),
                 (
-                    "                    TYPE_MAPPING | TYPE_CALLABLE => {\n"
-                    "                        if let Some(second_arg) = type_args.get(1) {\n"
-                    "                            collect_collection_types_expr(second_arg, file, depth, out);\n"
-                    "                        }\n"
-                    "                    }",
-                    "                    TYPE_MAPPING | TYPE_CALLABLE => {\n"
-                    "                        for arg in &type_args {\n"
-                    "                            collect_collection_types_expr(arg, file, depth, out);\n"
-                    "                        }\n"
-                    "                    }",
+                    (
+                        "                    TYPE_MAPPING | TYPE_CALLABLE => {\n"
+                        "                        if let Some(second_arg) = type_args.get(1) {\n"
+                        "                            collect_collection_types_expr(second_arg, file, depth, out);\n"
+                        "                        }\n"
+                        "                    }"
+                    ),
+                    (
+                        "                    TYPE_MAPPING | TYPE_CALLABLE => {\n"
+                        "                        for arg in &type_args {\n"
+                        "                            collect_collection_types_expr(arg, file, depth, out);\n"
+                        "                        }\n"
+                        "                    }"
+                    ),
                 ),
             ),
             cases=(
@@ -165,22 +189,26 @@ CLUSTER = Cluster(
             path=ANNOTATIONS,
             edits=(
                 (
-                    '                    "AsyncGenerator" => {\n'
-                    "                        if let Some(yield_arg) = type_args.first() {\n"
-                    "                            collect_collection_types_expr(yield_arg, file, depth, out);\n"
-                    "                        }\n"
-                    "                    }\n"
-                    "                    _ => {}",
-                    '                    "AsyncGenerator" => {\n'
-                    "                        if let Some(yield_arg) = type_args.first() {\n"
-                    "                            collect_collection_types_expr(yield_arg, file, depth, out);\n"
-                    "                        }\n"
-                    "                    }\n"
-                    "                    _ => {\n"
-                    "                        for arg in &type_args {\n"
-                    "                            collect_collection_types_expr(arg, file, depth, out);\n"
-                    "                        }\n"
-                    "                    }",
+                    (
+                        '                    "AsyncGenerator" => {\n'
+                        "                        if let Some(yield_arg) = type_args.first() {\n"
+                        "                            collect_collection_types_expr(yield_arg, file, depth, out);\n"
+                        "                        }\n"
+                        "                    }\n"
+                        "                    _ => {}"
+                    ),
+                    (
+                        '                    "AsyncGenerator" => {\n'
+                        "                        if let Some(yield_arg) = type_args.first() {\n"
+                        "                            collect_collection_types_expr(yield_arg, file, depth, out);\n"
+                        "                        }\n"
+                        "                    }\n"
+                        "                    _ => {\n"
+                        "                        for arg in &type_args {\n"
+                        "                            collect_collection_types_expr(arg, file, depth, out);\n"
+                        "                        }\n"
+                        "                    }"
+                    ),
                 ),
             ),
             cases=(
@@ -192,29 +220,35 @@ CLUSTER = Cluster(
             path=ANNOTATIONS,
             edits=(
                 (
-                    "            if depth == AnnotationTraversalDepth::CovariantPositions\n"
-                    "                && is_std_type_constructor_prefix(&base_path, &base_terminal)\n"
-                    "                && !is_concrete_collection_constructor(&base_path, &base_terminal)\n"
-                    "            {",
+                    (
+                        "            if depth == AnnotationTraversalDepth::CovariantPositions\n"
+                        "                && is_std_type_constructor_prefix(&base_path, &base_terminal)\n"
+                        "                && !is_concrete_collection_constructor(&base_path, &base_terminal)\n"
+                        "            {"
+                    ),
                     "            if depth == AnnotationTraversalDepth::CovariantPositions {",
                 ),
                 (
-                    '                    "AsyncGenerator" => {\n'
-                    "                        if let Some(yield_arg) = type_args.first() {\n"
-                    "                            collect_collection_types_expr(yield_arg, file, depth, out);\n"
-                    "                        }\n"
-                    "                    }\n"
-                    "                    _ => {}",
-                    '                    "AsyncGenerator" => {\n'
-                    "                        if let Some(yield_arg) = type_args.first() {\n"
-                    "                            collect_collection_types_expr(yield_arg, file, depth, out);\n"
-                    "                        }\n"
-                    "                    }\n"
-                    "                    _ => {\n"
-                    "                        for arg in &type_args {\n"
-                    "                            collect_collection_types_expr(arg, file, depth, out);\n"
-                    "                        }\n"
-                    "                    }",
+                    (
+                        '                    "AsyncGenerator" => {\n'
+                        "                        if let Some(yield_arg) = type_args.first() {\n"
+                        "                            collect_collection_types_expr(yield_arg, file, depth, out);\n"
+                        "                        }\n"
+                        "                    }\n"
+                        "                    _ => {}"
+                    ),
+                    (
+                        '                    "AsyncGenerator" => {\n'
+                        "                        if let Some(yield_arg) = type_args.first() {\n"
+                        "                            collect_collection_types_expr(yield_arg, file, depth, out);\n"
+                        "                        }\n"
+                        "                    }\n"
+                        "                    _ => {\n"
+                        "                        for arg in &type_args {\n"
+                        "                            collect_collection_types_expr(arg, file, depth, out);\n"
+                        "                        }\n"
+                        "                    }"
+                    ),
                 ),
             ),
             cases=(
@@ -434,10 +468,14 @@ CLUSTER = Cluster(
             path=PARAMETER_USAGE,
             edits=(
                 (
-                    "            let role = if has_in_operator && idx + 1 == comp.operands.len() {\n"
-                    "                UseRole::Sized",
-                    "            let role = if has_in_operator && idx + 1 == comp.operands.len() {\n"
-                    "                UseRole::Identity",
+                    (
+                        "            let role = if has_in_operator && idx + 1 == comp.operands.len() {\n"
+                        "                UseRole::Sized"
+                    ),
+                    (
+                        "            let role = if has_in_operator && idx + 1 == comp.operands.len() {\n"
+                        "                UseRole::Identity"
+                    ),
                 ),
             ),
             cases=(
@@ -462,12 +500,16 @@ CLUSTER = Cluster(
             path=PARAMETER_USAGE,
             edits=(
                 (
-                    "        } else if self.needs_collection || self.iteration_count > 1 {\n"
-                    "            ParameterCollectionCapability::Collection\n"
-                    "        } else if self.iteration_count == 1 {",
-                    "        } else if self.needs_collection {\n"
-                    "            ParameterCollectionCapability::Collection\n"
-                    "        } else if self.iteration_count >= 1 {",
+                    (
+                        "        } else if self.needs_collection || self.iteration_count > 1 {\n"
+                        "            ParameterCollectionCapability::Collection\n"
+                        "        } else if self.iteration_count == 1 {"
+                    ),
+                    (
+                        "        } else if self.needs_collection {\n"
+                        "            ParameterCollectionCapability::Collection\n"
+                        "        } else if self.iteration_count >= 1 {"
+                    ),
                 ),
             ),
             cases=(
@@ -479,10 +521,14 @@ CLUSTER = Cluster(
             path=PARAMETER_USAGE,
             edits=(
                 (
-                    "fn is_single_pass_iterable_builtin(name: &str) -> bool {\n"
-                    "    SINGLE_PASS_ITERABLE_BUILTINS.contains(&name)",
-                    "fn is_single_pass_iterable_builtin(name: &str) -> bool {\n"
-                    '    name == "reversed" || SINGLE_PASS_ITERABLE_BUILTINS.contains(&name)',
+                    (
+                        "fn is_single_pass_iterable_builtin(name: &str) -> bool {\n"
+                        "    SINGLE_PASS_ITERABLE_BUILTINS.contains(&name)"
+                    ),
+                    (
+                        "fn is_single_pass_iterable_builtin(name: &str) -> bool {\n"
+                        '    name == "reversed" || SINGLE_PASS_ITERABLE_BUILTINS.contains(&name)'
+                    ),
                 ),
             ),
             cases=("specific_collection_parameter::pass::reversed_requires_sequence",),
@@ -492,15 +538,19 @@ CLUSTER = Cluster(
             path=PARAMETER_USAGE,
             edits=(
                 (
-                    "            Expr::Attribute(attr) if READONLY_COLLECTION_METHODS.contains(&attr.attr.as_str()) => {\n"
-                    "                self.visit_expr_as(&attr.value, UseRole::Read);\n"
-                    "            }",
-                    '            Expr::Attribute(attr) if attr.attr.as_str() == "count" => {\n'
-                    "                self.visit_expr_as(&attr.value, UseRole::Iterated);\n"
-                    "            }\n"
-                    "            Expr::Attribute(attr) if READONLY_COLLECTION_METHODS.contains(&attr.attr.as_str()) => {\n"
-                    "                self.visit_expr_as(&attr.value, UseRole::Read);\n"
-                    "            }",
+                    (
+                        "            Expr::Attribute(attr) if READONLY_COLLECTION_METHODS.contains(&attr.attr.as_str()) => {\n"
+                        "                self.visit_expr_as(&attr.value, UseRole::Read);\n"
+                        "            }"
+                    ),
+                    (
+                        '            Expr::Attribute(attr) if attr.attr.as_str() == "count" => {\n'
+                        "                self.visit_expr_as(&attr.value, UseRole::Iterated);\n"
+                        "            }\n"
+                        "            Expr::Attribute(attr) if READONLY_COLLECTION_METHODS.contains(&attr.attr.as_str()) => {\n"
+                        "                self.visit_expr_as(&attr.value, UseRole::Read);\n"
+                        "            }"
+                    ),
                 ),
             ),
             cases=(
@@ -512,15 +562,19 @@ CLUSTER = Cluster(
             path=PARAMETER_USAGE,
             edits=(
                 (
-                    "            Expr::Attribute(attr) if READONLY_COLLECTION_METHODS.contains(&attr.attr.as_str()) => {\n"
-                    "                self.visit_expr_as(&attr.value, UseRole::Read);\n"
-                    "            }",
-                    '            Expr::Attribute(attr) if attr.attr.as_str() == "index" => {\n'
-                    "                self.visit_expr_as(&attr.value, UseRole::Iterated);\n"
-                    "            }\n"
-                    "            Expr::Attribute(attr) if READONLY_COLLECTION_METHODS.contains(&attr.attr.as_str()) => {\n"
-                    "                self.visit_expr_as(&attr.value, UseRole::Read);\n"
-                    "            }",
+                    (
+                        "            Expr::Attribute(attr) if READONLY_COLLECTION_METHODS.contains(&attr.attr.as_str()) => {\n"
+                        "                self.visit_expr_as(&attr.value, UseRole::Read);\n"
+                        "            }"
+                    ),
+                    (
+                        '            Expr::Attribute(attr) if attr.attr.as_str() == "index" => {\n'
+                        "                self.visit_expr_as(&attr.value, UseRole::Iterated);\n"
+                        "            }\n"
+                        "            Expr::Attribute(attr) if READONLY_COLLECTION_METHODS.contains(&attr.attr.as_str()) => {\n"
+                        "                self.visit_expr_as(&attr.value, UseRole::Read);\n"
+                        "            }"
+                    ),
                 ),
             ),
             cases=(
@@ -532,10 +586,14 @@ CLUSTER = Cluster(
             path=PARAMETER_USAGE,
             edits=(
                 (
-                    "            Expr::Subscript(sub) if matches!(sub.ctx, ruff_python_ast::ExprContext::Load) => {\n"
-                    "                self.visit_expr_as(&sub.value, UseRole::Read);",
-                    "            Expr::Subscript(sub) if matches!(sub.ctx, ruff_python_ast::ExprContext::Load) => {\n"
-                    "                self.visit_expr_as(&sub.value, UseRole::Iterated);",
+                    (
+                        "            Expr::Subscript(sub) if matches!(sub.ctx, ruff_python_ast::ExprContext::Load) => {\n"
+                        "                self.visit_expr_as(&sub.value, UseRole::Read);"
+                    ),
+                    (
+                        "            Expr::Subscript(sub) if matches!(sub.ctx, ruff_python_ast::ExprContext::Load) => {\n"
+                        "                self.visit_expr_as(&sub.value, UseRole::Iterated);"
+                    ),
                 ),
             ),
             cases=("specific_collection_parameter::pass::indexing_requires_sequence",),
@@ -545,14 +603,18 @@ CLUSTER = Cluster(
             path=PARAMETER_USAGE,
             edits=(
                 (
-                    "            UseRole::Escape => {\n"
-                    "                usage.mutated_or_escaping = true;\n"
-                    "                usage.needs_sequence = true;\n"
-                    "            }",
-                    "            UseRole::Escape => {\n"
-                    "                usage.mutated_or_escaping = true;\n"
-                    "                usage.iteration_count += 1;\n"
-                    "            }",
+                    (
+                        "            UseRole::Escape => {\n"
+                        "                usage.mutated_or_escaping = true;\n"
+                        "                usage.needs_sequence = true;\n"
+                        "            }"
+                    ),
+                    (
+                        "            UseRole::Escape => {\n"
+                        "                usage.mutated_or_escaping = true;\n"
+                        "                usage.iteration_count += 1;\n"
+                        "            }"
+                    ),
                 ),
             ),
             cases=(
@@ -607,10 +669,14 @@ CLUSTER = Cluster(
             path=ANNOTATIONS,
             edits=(
                 (
-                    "pub(super) fn is_bare_final_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> bool {\n"
-                    "    let unwrapped = unwrap_annotated_expr(type_expr, file);",
-                    "pub(super) fn is_bare_final_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> bool {\n"
-                    "    let unwrapped = type_expr;",
+                    (
+                        "pub(super) fn is_bare_final_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> bool {\n"
+                        "    let unwrapped = unwrap_annotated_expr(type_expr, file);"
+                    ),
+                    (
+                        "pub(super) fn is_bare_final_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> bool {\n"
+                        "    let unwrapped = type_expr;"
+                    ),
                 ),
             ),
             cases=(
@@ -622,8 +688,10 @@ CLUSTER = Cluster(
             path=ANNOTATIONS,
             edits=(
                 (
-                    "    written_name(unwrapped, &file.source)\n"
-                    "        .resolve(file)\n",
+                    (
+                        "    written_name(unwrapped, &file.source)\n"
+                        "        .resolve(file)\n"
+                    ),
                     "    Some(written_name(unwrapped, &file.source))\n",
                 ),
             ),
@@ -658,9 +726,11 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "    if !allow_classmethod_cls && first.name != SELF_RECEIVER {\n"
-                    "        return None;\n"
-                    "    }",
+                    (
+                        "    if !allow_classmethod_cls && first.name != SELF_RECEIVER {\n"
+                        "        return None;\n"
+                        "    }"
+                    ),
                     "",
                 ),
             ),
@@ -673,9 +743,11 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "    if first.kind != PythonParameterKind::Receiver {\n"
-                    "        return None;\n"
-                    "    }",
+                    (
+                        "    if first.kind != PythonParameterKind::Receiver {\n"
+                        "        return None;\n"
+                        "    }"
+                    ),
                     "",
                 ),
             ),
@@ -696,10 +768,14 @@ CLUSTER = Cluster(
             path=CLASSES,
             edits=(
                 (
-                    "                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,\n"
-                    "                Stmt::AnnAssign(ann) => {",
-                    "                Stmt::ClassDef(_) => return,\n"
-                    "                Stmt::AnnAssign(ann) => {",
+                    (
+                        "                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,\n"
+                        "                Stmt::AnnAssign(ann) => {"
+                    ),
+                    (
+                        "                Stmt::ClassDef(_) => return,\n"
+                        "                Stmt::AnnAssign(ann) => {"
+                    ),
                 ),
             ),
             cases=(
@@ -741,9 +817,11 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "self.has_base_in(PYDANTIC_BASE_MODEL_PATHS)",
-                    "self.bases\n"
-                    "                .iter()\n"
-                    "                .any(|base| PYDANTIC_BASE_MODEL_PATHS.contains(&base.unsubscripted_name()))",
+                    (
+                        "self.bases\n"
+                        "                .iter()\n"
+                        "                .any(|base| PYDANTIC_BASE_MODEL_PATHS.contains(&base.unsubscripted_name()))"
+                    ),
                 ),
             ),
             cases=(

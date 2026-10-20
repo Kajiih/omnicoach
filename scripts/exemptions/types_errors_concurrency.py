@@ -34,13 +34,15 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "                ResolvedName::Unbound => literal_callees.contains(candidate.callee.as_str()),",
-                    "                ResolvedName::Unbound => {\n"
-                    "                    literal_callees.contains(candidate.callee.as_str())\n"
-                    "                        || candidate\n"
-                    "                            .method_name\n"
-                    "                            .as_deref()\n"
-                    "                            .is_some_and(|method| literal_callees.contains(method))\n"
-                    "                }",
+                    (
+                        "                ResolvedName::Unbound => {\n"
+                        "                    literal_callees.contains(candidate.callee.as_str())\n"
+                        "                        || candidate\n"
+                        "                            .method_name\n"
+                        "                            .as_deref()\n"
+                        "                            .is_some_and(|method| literal_callees.contains(method))\n"
+                        "                }"
+                    ),
                 ),
             ),
             cases=(
@@ -94,8 +96,10 @@ CLUSTER = Cluster(
             path=CLASSES,
             edits=(
                 (
-                    "        self.dataclass_decorator()\n"
-                    "            .is_some_and(|decorator| !decorator.has_arg(key))",
+                    (
+                        "        self.dataclass_decorator()\n"
+                        "            .is_some_and(|decorator| !decorator.has_arg(key))"
+                    ),
                     "        let _ = key;\n        self.dataclass_decorator().is_some()",
                 ),
             ),
@@ -112,8 +116,10 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "                .filter_map(|kw| Some(kw.arg.as_ref()?.id.to_string()))",
-                    "                .filter(|kw| !matches!(&kw.value, Expr::BooleanLiteral(b) if !b.value))\n"
-                    "                .filter_map(|kw| Some(kw.arg.as_ref()?.id.to_string()))",
+                    (
+                        "                .filter(|kw| !matches!(&kw.value, Expr::BooleanLiteral(b) if !b.value))\n"
+                        "                .filter_map(|kw| Some(kw.arg.as_ref()?.id.to_string()))"
+                    ),
                 ),
             ),
             cases=(
@@ -126,10 +132,14 @@ CLUSTER = Cluster(
             path=CLASSES,
             edits=(
                 (
-                    "        self.dataclass_decorator()\n"
-                    "            .is_some_and(|decorator| !decorator.has_arg(key))",
-                    "        self.decorators.is_empty()\n"
-                    "            || self.dataclass_decorator().is_some_and(|decorator| !decorator.has_arg(key))",
+                    (
+                        "        self.dataclass_decorator()\n"
+                        "            .is_some_and(|decorator| !decorator.has_arg(key))"
+                    ),
+                    (
+                        "        self.decorators.is_empty()\n"
+                        "            || self.dataclass_decorator().is_some_and(|decorator| !decorator.has_arg(key))"
+                    ),
                 ),
             ),
             cases=(
@@ -142,9 +152,11 @@ CLUSTER = Cluster(
             path=CLASSES,
             edits=(
                 (
-                    "        self.decorators\n"
-                    "            .iter()\n"
-                    "            .find(|decorator| decorator.matches_any(DATACLASS_DECORATOR_PATHS))",
+                    (
+                        "        self.decorators\n"
+                        "            .iter()\n"
+                        "            .find(|decorator| decorator.matches_any(DATACLASS_DECORATOR_PATHS))"
+                    ),
                     "        self.decorators.first()",
                 ),
             ),
@@ -173,9 +185,11 @@ CLUSTER = Cluster(
             path=SUPPRESSED_EXCEPTION,
             edits=(
                 (
-                    "    rule.check_banned_calls_where(path, file, banned_calls, |matched| {\n"
-                    "        matched.is_with_context_manager\n"
-                    "    })",
+                    (
+                        "    rule.check_banned_calls_where(path, file, banned_calls, |matched| {\n"
+                        "        matched.is_with_context_manager\n"
+                        "    })"
+                    ),
                     "    rule.check_banned_calls_where(path, file, banned_calls, |_| true)",
                 ),
             ),
@@ -202,12 +216,16 @@ CLUSTER = Cluster(
             path=PY_CALLS,
             edits=(
                 (
-                    "            if matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {\n"
-                    "                self.in_except_clause = false;\n"
-                    "            }",
-                    "            if matches!(statement, Stmt::Try(_)) {\n"
-                    "                self.in_except_clause = true;\n"
-                    "            }",
+                    (
+                        "            if matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {\n"
+                        "                self.in_except_clause = false;\n"
+                        "            }"
+                    ),
+                    (
+                        "            if matches!(statement, Stmt::Try(_)) {\n"
+                        "                self.in_except_clause = true;\n"
+                        "            }"
+                    ),
                 ),
             ),
             cases=(
@@ -220,9 +238,11 @@ CLUSTER = Cluster(
             path=PY_CALLS,
             edits=(
                 (
-                    "            if matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {\n"
-                    "                self.in_except_clause = false;\n"
-                    "            }",
+                    (
+                        "            if matches!(statement, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {\n"
+                        "                self.in_except_clause = false;\n"
+                        "            }"
+                    ),
                     "",
                 ),
             ),
@@ -235,13 +255,17 @@ CLUSTER = Cluster(
             path=PY_CALLS,
             edits=(
                 (
-                    "                Expr::Lambda(_) => {\n"
-                    "                    self.in_except_clause = false;\n"
-                    "                    self.in_loop = false;\n"
-                    "                }",
-                    "                Expr::Lambda(_) => {\n"
-                    "                    self.in_loop = false;\n"
-                    "                }",
+                    (
+                        "                Expr::Lambda(_) => {\n"
+                        "                    self.in_except_clause = false;\n"
+                        "                    self.in_loop = false;\n"
+                        "                }"
+                    ),
+                    (
+                        "                Expr::Lambda(_) => {\n"
+                        "                    self.in_loop = false;\n"
+                        "                }"
+                    ),
                 ),
             ),
             cases=("error_log_in_except::pass::logging_error_in_lambda_inside_except",),

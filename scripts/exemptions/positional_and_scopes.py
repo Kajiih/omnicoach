@@ -32,16 +32,20 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "    let mut visitor = NestedFunctionVisitor {\n"
-                    "        file,\n"
-                    "        in_function: false,\n"
-                    "        out: Vec::new(),\n"
-                    "    };",
-                    "    let mut visitor = NestedFunctionVisitor {\n"
-                    "        file,\n"
-                    "        in_function: true,\n"
-                    "        out: Vec::new(),\n"
-                    "    };",
+                    (
+                        "    let mut visitor = NestedFunctionVisitor {\n"
+                        "        file,\n"
+                        "        in_function: false,\n"
+                        "        out: Vec::new(),\n"
+                        "    };"
+                    ),
+                    (
+                        "    let mut visitor = NestedFunctionVisitor {\n"
+                        "        file,\n"
+                        "        in_function: true,\n"
+                        "        out: Vec::new(),\n"
+                        "    };"
+                    ),
                 ),
             ),
             cases=("nested_function::pass::top_level_functions_allowed",),
@@ -51,12 +55,16 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "                Stmt::ClassDef(_) => {\n"
-                    "                    let prev = self.in_function;\n"
-                    "                    self.in_function = false;",
-                    "                Stmt::ClassDef(_) => {\n"
-                    "                    let prev = self.in_function;\n"
-                    "                    self.in_function = true;",
+                    (
+                        "                Stmt::ClassDef(_) => {\n"
+                        "                    let prev = self.in_function;\n"
+                        "                    self.in_function = false;"
+                    ),
+                    (
+                        "                Stmt::ClassDef(_) => {\n"
+                        "                    let prev = self.in_function;\n"
+                        "                    self.in_function = true;"
+                    ),
                 ),
             ),
             cases=(
@@ -69,16 +77,20 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "    let mut visitor = NestedClassVisitor {\n"
-                    "        file,\n"
-                    "        in_function: false,\n"
-                    "        out: Vec::new(),\n"
-                    "    };",
-                    "    let mut visitor = NestedClassVisitor {\n"
-                    "        file,\n"
-                    "        in_function: true,\n"
-                    "        out: Vec::new(),\n"
-                    "    };",
+                    (
+                        "    let mut visitor = NestedClassVisitor {\n"
+                        "        file,\n"
+                        "        in_function: false,\n"
+                        "        out: Vec::new(),\n"
+                        "    };"
+                    ),
+                    (
+                        "    let mut visitor = NestedClassVisitor {\n"
+                        "        file,\n"
+                        "        in_function: true,\n"
+                        "        out: Vec::new(),\n"
+                        "    };"
+                    ),
                 ),
             ),
             cases=(
@@ -92,13 +104,17 @@ CLUSTER = Cluster(
             path=ENVIRONMENT_VARIABLE_IN_FUNCTION,
             edits=(
                 (
-                    "    enclosing_functions\n"
-                    "        .first()\n"
-                    "        .map(|function| function.name.as_str())",
-                    "    enclosing_functions\n"
-                    "        .first()\n"
-                    "        .map(|function| function.name.as_str())\n"
-                    '        .or(Some("<module>"))',
+                    (
+                        "    enclosing_functions\n"
+                        "        .first()\n"
+                        "        .map(|function| function.name.as_str())"
+                    ),
+                    (
+                        "    enclosing_functions\n"
+                        "        .first()\n"
+                        "        .map(|function| function.name.as_str())\n"
+                        '        .or(Some("<module>"))'
+                    ),
                 ),
             ),
             cases=(
@@ -171,12 +187,16 @@ CLUSTER = Cluster(
             path=ENVIRONMENT_VARIABLE_IN_FUNCTION,
             edits=(
                 (
-                    "    if enclosing_functions\n"
-                    "        .iter()\n"
-                    "        .any(|function| is_exempt_boundary_function(&function.name, function.is_top_level))",
-                    "    if enclosing_functions\n"
-                    "        .first()\n"
-                    "        .is_some_and(|function| is_exempt_boundary_function(&function.name, function.is_top_level))",
+                    (
+                        "    if enclosing_functions\n"
+                        "        .iter()\n"
+                        "        .any(|function| is_exempt_boundary_function(&function.name, function.is_top_level))"
+                    ),
+                    (
+                        "    if enclosing_functions\n"
+                        "        .first()\n"
+                        "        .is_some_and(|function| is_exempt_boundary_function(&function.name, function.is_top_level))"
+                    ),
                 ),
             ),
             cases=(
@@ -225,16 +245,20 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "        result.push(build_parameter_with_default(\n"
-                    "            param_with_default,\n"
-                    "            PythonParameterKind::KeywordOnly,\n"
-                    "            file,\n"
-                    "        ));",
-                    "        result.push(build_parameter_with_default(\n"
-                    "            param_with_default,\n"
-                    "            PythonParameterKind::Positional,\n"
-                    "            file,\n"
-                    "        ));",
+                    (
+                        "        result.push(build_parameter_with_default(\n"
+                        "            param_with_default,\n"
+                        "            PythonParameterKind::KeywordOnly,\n"
+                        "            file,\n"
+                        "        ));"
+                    ),
+                    (
+                        "        result.push(build_parameter_with_default(\n"
+                        "            param_with_default,\n"
+                        "            PythonParameterKind::Positional,\n"
+                        "            file,\n"
+                        "        ));"
+                    ),
                 ),
             ),
             cases=(
@@ -271,16 +295,20 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "        result.push(build_variadic_parameter(\n"
-                    "            kwarg,\n"
-                    "            PythonParameterKind::VarKeyword,\n"
-                    "            file,\n"
-                    "        ));",
-                    "        result.push(build_variadic_parameter(\n"
-                    "            kwarg,\n"
-                    "            PythonParameterKind::Positional,\n"
-                    "            file,\n"
-                    "        ));",
+                    (
+                        "        result.push(build_variadic_parameter(\n"
+                        "            kwarg,\n"
+                        "            PythonParameterKind::VarKeyword,\n"
+                        "            file,\n"
+                        "        ));"
+                    ),
+                    (
+                        "        result.push(build_variadic_parameter(\n"
+                        "            kwarg,\n"
+                        "            PythonParameterKind::Positional,\n"
+                        "            file,\n"
+                        "        ));"
+                    ),
                 ),
             ),
             cases=("identical_positional_types::pass::var_keyword_excluded",),
@@ -291,9 +319,11 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "        if let Some(ref type_annotation) = param.type_text {",
-                    "        let fallback = String::new();\n"
-                    "        let type_annotation = param.type_text.as_ref().unwrap_or(&fallback);\n"
-                    "        {",
+                    (
+                        "        let fallback = String::new();\n"
+                        "        let type_annotation = param.type_text.as_ref().unwrap_or(&fallback);\n"
+                        "        {"
+                    ),
                 ),
             ),
             cases=("identical_positional_types::pass::untyped_parameters_not_grouped",),
@@ -303,11 +333,15 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "        is_data_model_dunder(&self.name)\n"
-                    "            || self.decorators.iter().any(|decorator| {\n"
-                    "                decorator.matches_any(IMPOSED_SIGNATURE_DECORATOR_PATHS)",
-                    "        self.decorators.iter().any(|decorator| {\n"
-                    "                decorator.matches_any(IMPOSED_SIGNATURE_DECORATOR_PATHS)",
+                    (
+                        "        is_data_model_dunder(&self.name)\n"
+                        "            || self.decorators.iter().any(|decorator| {\n"
+                        "                decorator.matches_any(IMPOSED_SIGNATURE_DECORATOR_PATHS)"
+                    ),
+                    (
+                        "        self.decorators.iter().any(|decorator| {\n"
+                        "                decorator.matches_any(IMPOSED_SIGNATURE_DECORATOR_PATHS)"
+                    ),
                 ),
             ),
             cases=("identical_positional_types::pass::dunder_method_exempt",),
@@ -346,10 +380,12 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "        let is_stable = is_stable_receiver_expr(&subscript.value);",
-                    "        let is_stable = {\n"
-                    "            let _ = is_stable_receiver_expr(&subscript.value);\n"
-                    "            true\n"
-                    "        };",
+                    (
+                        "        let is_stable = {\n"
+                        "            let _ = is_stable_receiver_expr(&subscript.value);\n"
+                        "            true\n"
+                        "        };"
+                    ),
                 ),
             ),
             cases=("repeated_index_access::pass::call_receiver@python",),
@@ -370,10 +406,12 @@ CLUSTER = Cluster(
             path=REPEATED_INDEX_ACCESS,
             edits=(
                 (
-                    "    let leading_gaps = leading\n"
-                    "        .clone()\n"
-                    "        .next_back()\n"
-                    "        .map_or(0, |&last| last.unsigned_abs() + 1 - leading.count() as u64);",
+                    (
+                        "    let leading_gaps = leading\n"
+                        "        .clone()\n"
+                        "        .next_back()\n"
+                        "        .map_or(0, |&last| last.unsigned_abs() + 1 - leading.count() as u64);"
+                    ),
                     "    let _ = leading;\n    let leading_gaps = 0;",
                 ),
             ),
@@ -387,10 +425,12 @@ CLUSTER = Cluster(
             path=REPEATED_INDEX_ACCESS,
             edits=(
                 (
-                    "    let trailing_gaps = trailing\n"
-                    "        .clone()\n"
-                    "        .next()\n"
-                    "        .map_or(0, |&first| first.unsigned_abs() - trailing.count() as u64);",
+                    (
+                        "    let trailing_gaps = trailing\n"
+                        "        .clone()\n"
+                        "        .next()\n"
+                        "        .map_or(0, |&first| first.unsigned_abs() - trailing.count() as u64);"
+                    ),
                     "    let _ = trailing;\n    let trailing_gaps = 0;",
                 ),
             ),
@@ -402,10 +442,12 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "        let is_load = matches!(subscript.ctx, ruff_python_ast::ExprContext::Load);",
-                    "        let is_load = matches!(\n"
-                    "            subscript.ctx,\n"
-                    "            ruff_python_ast::ExprContext::Load | ruff_python_ast::ExprContext::Store\n"
-                    "        );",
+                    (
+                        "        let is_load = matches!(\n"
+                        "            subscript.ctx,\n"
+                        "            ruff_python_ast::ExprContext::Load | ruff_python_ast::ExprContext::Store\n"
+                        "        );"
+                    ),
                 ),
             ),
             cases=(
@@ -421,10 +463,12 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "        let is_load = matches!(subscript.ctx, ruff_python_ast::ExprContext::Load);",
-                    "        let is_load = matches!(\n"
-                    "            subscript.ctx,\n"
-                    "            ruff_python_ast::ExprContext::Load | ruff_python_ast::ExprContext::Del\n"
-                    "        );",
+                    (
+                        "        let is_load = matches!(\n"
+                        "            subscript.ctx,\n"
+                        "            ruff_python_ast::ExprContext::Load | ruff_python_ast::ExprContext::Del\n"
+                        "        );"
+                    ),
                 ),
             ),
             cases=("repeated_index_access::pass::delete_exempts_receiver",),
@@ -449,12 +493,16 @@ CLUSTER = Cluster(
             path=POSITIONAL_READS,
             edits=(
                 (
-                    "    if !text.bytes().all(|byte| byte.is_ascii_digit()) {\n"
-                    "        return None;\n"
-                    "    }",
-                    "    if let ruff_python_ast::Number::Int(int_val) = &number.value {\n"
-                    "        return int_val.as_i64();\n"
-                    "    }",
+                    (
+                        "    if !text.bytes().all(|byte| byte.is_ascii_digit()) {\n"
+                        "        return None;\n"
+                        "    }"
+                    ),
+                    (
+                        "    if let ruff_python_ast::Number::Int(int_val) = &number.value {\n"
+                        "        return int_val.as_i64();\n"
+                        "    }"
+                    ),
                 ),
             ),
             cases=("repeated_index_access::pass::non_decimal_index_exempts_receiver",),
@@ -475,11 +523,13 @@ CLUSTER = Cluster(
             path=POSITIONAL_READS,
             edits=(
                 (
-                    "            Expr::Name(func_name) if is_collection_builtin(func_name.id.as_str()) => {\n"
-                    "                for arg in &call.arguments.args {\n"
-                    "                    self.record_non_unpackable_receiver(arg);\n"
-                    "                }\n"
-                    "            }",
+                    (
+                        "            Expr::Name(func_name) if is_collection_builtin(func_name.id.as_str()) => {\n"
+                        "                for arg in &call.arguments.args {\n"
+                        "                    self.record_non_unpackable_receiver(arg);\n"
+                        "                }\n"
+                        "            }"
+                    ),
                     "",
                 ),
             ),
@@ -493,9 +543,11 @@ CLUSTER = Cluster(
             path=POSITIONAL_READS,
             edits=(
                 (
-                    "            Expr::Attribute(attr) if MUTATING_METHODS.contains(&attr.attr.as_str()) => {\n"
-                    "                self.record_non_unpackable_receiver(&attr.value);\n"
-                    "            }",
+                    (
+                        "            Expr::Attribute(attr) if MUTATING_METHODS.contains(&attr.attr.as_str()) => {\n"
+                        "                self.record_non_unpackable_receiver(&attr.value);\n"
+                        "            }"
+                    ),
                     "",
                 ),
             ),
@@ -506,16 +558,20 @@ CLUSTER = Cluster(
             path=POSITIONAL_READS,
             edits=(
                 (
-                    "                self.visit_parameters(&func.parameters);\n"
-                    "                if let Some(returns) = &func.returns {\n"
-                    "                    self.visit_annotation(returns);\n"
-                    "                }\n"
-                    "                let prev_scope = self.current_scope.replace(ScopePositionalReads::default());",
-                    "                let prev_scope = self.current_scope.replace(ScopePositionalReads::default());\n"
-                    "                self.visit_parameters(&func.parameters);\n"
-                    "                if let Some(returns) = &func.returns {\n"
-                    "                    self.visit_annotation(returns);\n"
-                    "                }",
+                    (
+                        "                self.visit_parameters(&func.parameters);\n"
+                        "                if let Some(returns) = &func.returns {\n"
+                        "                    self.visit_annotation(returns);\n"
+                        "                }\n"
+                        "                let prev_scope = self.current_scope.replace(ScopePositionalReads::default());"
+                    ),
+                    (
+                        "                let prev_scope = self.current_scope.replace(ScopePositionalReads::default());\n"
+                        "                self.visit_parameters(&func.parameters);\n"
+                        "                if let Some(returns) = &func.returns {\n"
+                        "                    self.visit_annotation(returns);\n"
+                        "                }"
+                    ),
                 ),
             ),
             cases=(
@@ -527,12 +583,14 @@ CLUSTER = Cluster(
             path=POSITIONAL_READS,
             edits=(
                 (
-                    "                let prev_scope = self.current_scope.replace(ScopePositionalReads::default());\n"
-                    "                self.visit_body(&func.body);\n"
-                    "                if let Some(finished_scope) = std::mem::replace(&mut self.current_scope, prev_scope)\n"
-                    "                {\n"
-                    "                    self.out.push(finished_scope);\n"
-                    "                }",
+                    (
+                        "                let prev_scope = self.current_scope.replace(ScopePositionalReads::default());\n"
+                        "                self.visit_body(&func.body);\n"
+                        "                if let Some(finished_scope) = std::mem::replace(&mut self.current_scope, prev_scope)\n"
+                        "                {\n"
+                        "                    self.out.push(finished_scope);\n"
+                        "                }"
+                    ),
                     "                self.visit_body(&func.body);",
                 ),
             ),
@@ -549,11 +607,13 @@ CLUSTER = Cluster(
             path=POSITIONAL_READS,
             edits=(
                 (
-                    "            Stmt::ClassDef(_) => {\n"
-                    "                let prev_scope = self.current_scope.take();\n"
-                    "                walk_stmt(self, statement);\n"
-                    "                self.current_scope = prev_scope;\n"
-                    "            }",
+                    (
+                        "            Stmt::ClassDef(_) => {\n"
+                        "                let prev_scope = self.current_scope.take();\n"
+                        "                walk_stmt(self, statement);\n"
+                        "                self.current_scope = prev_scope;\n"
+                        "            }"
+                    ),
                     "",
                 ),
             ),
@@ -564,9 +624,11 @@ CLUSTER = Cluster(
             path=RS_POSITIONAL_READS,
             edits=(
                 (
-                    "                if !matches!(bin_expr.op_kind(), Some(ast::BinaryOp::Assignment { .. })) {\n"
-                    "                    return false;\n"
-                    "                }",
+                    (
+                        "                if !matches!(bin_expr.op_kind(), Some(ast::BinaryOp::Assignment { .. })) {\n"
+                        "                    return false;\n"
+                        "                }"
+                    ),
                     "                let _ = bin_expr;\n                return false;",
                 ),
             ),
@@ -577,10 +639,12 @@ CLUSTER = Cluster(
             path=RS_POSITIONAL_READS,
             edits=(
                 (
-                    "            SyntaxKind::REF_EXPR => {\n"
-                    "                return ast::RefExpr::cast(parent)\n"
-                    "                    .is_some_and(|ref_expr| ref_expr.mut_token().is_some());\n"
-                    "            }",
+                    (
+                        "            SyntaxKind::REF_EXPR => {\n"
+                        "                return ast::RefExpr::cast(parent)\n"
+                        "                    .is_some_and(|ref_expr| ref_expr.mut_token().is_some());\n"
+                        "            }"
+                    ),
                     "",
                 ),
             ),
@@ -602,14 +666,18 @@ CLUSTER = Cluster(
             path=RS_POSITIONAL_READS,
             edits=(
                 (
-                    "    let mut out = Vec::new();\n"
-                    "    collect_positional_reads_rec(parsed.tree().syntax(), file, None, &mut out);\n"
-                    "    out",
-                    "    let mut out = Vec::new();\n"
-                    "    let mut root_scope = ScopePositionalReads::default();\n"
-                    "    collect_positional_reads_rec(parsed.tree().syntax(), file, Some(&mut root_scope), &mut out);\n"
-                    "    out.push(root_scope);\n"
-                    "    out",
+                    (
+                        "    let mut out = Vec::new();\n"
+                        "    collect_positional_reads_rec(parsed.tree().syntax(), file, None, &mut out);\n"
+                        "    out"
+                    ),
+                    (
+                        "    let mut out = Vec::new();\n"
+                        "    let mut root_scope = ScopePositionalReads::default();\n"
+                        "    collect_positional_reads_rec(parsed.tree().syntax(), file, Some(&mut root_scope), &mut out);\n"
+                        "    out.push(root_scope);\n"
+                        "    out"
+                    ),
                 ),
             ),
             cases=("repeated_index_access::pass::items_outside_functions_ignored",),
@@ -619,20 +687,24 @@ CLUSTER = Cluster(
             path=RS_POSITIONAL_READS,
             edits=(
                 (
-                    "    if ast::Fn::can_cast(node.kind()) {\n"
-                    "        let mut function_scope = ScopePositionalReads::default();\n"
-                    "        for child in node.children() {\n"
-                    "            collect_positional_reads_rec(&child, file, Some(&mut function_scope), out);\n"
-                    "        }\n"
-                    "        out.push(function_scope);\n"
-                    "        return;\n"
-                    "    }",
-                    "    if ast::Fn::can_cast(node.kind()) && scope.is_none() {\n"
-                    "        let mut function_scope = ScopePositionalReads::default();\n"
-                    "        collect_positional_reads_rec(&node.parent().unwrap(), file, Some(&mut function_scope), out);\n"
-                    "        out.push(function_scope);\n"
-                    "        return;\n"
-                    "    }",
+                    (
+                        "    if ast::Fn::can_cast(node.kind()) {\n"
+                        "        let mut function_scope = ScopePositionalReads::default();\n"
+                        "        for child in node.children() {\n"
+                        "            collect_positional_reads_rec(&child, file, Some(&mut function_scope), out);\n"
+                        "        }\n"
+                        "        out.push(function_scope);\n"
+                        "        return;\n"
+                        "    }"
+                    ),
+                    (
+                        "    if ast::Fn::can_cast(node.kind()) && scope.is_none() {\n"
+                        "        let mut function_scope = ScopePositionalReads::default();\n"
+                        "        collect_positional_reads_rec(&node.parent().unwrap(), file, Some(&mut function_scope), out);\n"
+                        "        out.push(function_scope);\n"
+                        "        return;\n"
+                        "    }"
+                    ),
                 ),
             ),
             cases=("repeated_index_access::pass::reads_split_across_functions@rust",),

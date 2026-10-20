@@ -176,12 +176,16 @@ CLUSTER = Cluster(
             path=PY_LITERALS,
             edits=(
                 (
-                    "LiteralValue::Bytes(\n"
-                    "                            String::from_utf8_lossy(part.as_slice()).into_owned(),\n"
-                    "                        )",
-                    "LiteralValue::Str(\n"
-                    "                            String::from_utf8_lossy(part.as_slice()).into_owned(),\n"
-                    "                        )",
+                    (
+                        "LiteralValue::Bytes(\n"
+                        "                            String::from_utf8_lossy(part.as_slice()).into_owned(),\n"
+                        "                        )"
+                    ),
+                    (
+                        "LiteralValue::Str(\n"
+                        "                            String::from_utf8_lossy(part.as_slice()).into_owned(),\n"
+                        "                        )"
+                    ),
                 ),
             ),
             cases=("repeated_literal::pass::str_distinct_from_bytes@python",),
@@ -191,12 +195,16 @@ CLUSTER = Cluster(
             path=RS_LITERALS,
             edits=(
                 (
-                    "return Some(LiteralValue::Bytes(\n"
-                    "            String::from_utf8_lossy(&decoded).into_owned(),\n"
-                    "        ));",
-                    "return Some(LiteralValue::Str(\n"
-                    "            String::from_utf8_lossy(&decoded).into_owned(),\n"
-                    "        ));",
+                    (
+                        "return Some(LiteralValue::Bytes(\n"
+                        "            String::from_utf8_lossy(&decoded).into_owned(),\n"
+                        "        ));"
+                    ),
+                    (
+                        "return Some(LiteralValue::Str(\n"
+                        "            String::from_utf8_lossy(&decoded).into_owned(),\n"
+                        "        ));"
+                    ),
                 ),
             ),
             cases=("repeated_literal::pass::str_distinct_from_bytes@rust",),
@@ -261,11 +269,13 @@ CLUSTER = Cluster(
             path=PY_LITERALS,
             edits=(
                 (
-                    "if fpart\n"
-                    "                        .elements\n"
-                    "                        .iter()\n"
-                    "                        .any(ruff_python_ast::InterpolatedStringElement::is_interpolation)\n"
-                    "                    {",
+                    (
+                        "if fpart\n"
+                        "                        .elements\n"
+                        "                        .iter()\n"
+                        "                        .any(ruff_python_ast::InterpolatedStringElement::is_interpolation)\n"
+                        "                    {"
+                    ),
                     "if false {",
                 ),
             ),
@@ -328,8 +338,10 @@ CLUSTER = Cluster(
             path=QUOTE_WRAPPED,
             edits=(
                 (
-                    "PythonFormatStyle::FString => (placeholder.conversion.is_none()\n"
-                    "            && placeholder.format_spec.is_none()",
+                    (
+                        "PythonFormatStyle::FString => (placeholder.conversion.is_none()\n"
+                        "            && placeholder.format_spec.is_none()"
+                    ),
                     "PythonFormatStyle::FString => (placeholder.format_spec.is_none()",
                 ),
             ),
@@ -415,15 +427,17 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "if bytes.get(index + 1) == Some(&b'%') {\n            index += 2;\n            continue;\n        }",
-                    "if bytes.get(index + 1) == Some(&b'%') {\n"
-                    "            if let Some(placeholder) = parse_printf_field(content, index + 1) {\n"
-                    "                literals.push(content[literal_start..index].to_owned());\n"
-                    "                index += 1 + placeholder.text.len();\n"
-                    "                placeholders.push(placeholder);\n"
-                    "                literal_start = index;\n"
-                    "                continue;\n"
-                    "            }\n"
-                    "        }",
+                    (
+                        "if bytes.get(index + 1) == Some(&b'%') {\n"
+                        "            if let Some(placeholder) = parse_printf_field(content, index + 1) {\n"
+                        "                literals.push(content[literal_start..index].to_owned());\n"
+                        "                index += 1 + placeholder.text.len();\n"
+                        "                placeholders.push(placeholder);\n"
+                        "                literal_start = index;\n"
+                        "                continue;\n"
+                        "            }\n"
+                        "        }"
+                    ),
                 ),
             ),
             cases=("quote_wrapped_placeholder::pass::printf_escaped_percent",),
@@ -434,13 +448,15 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "if is_escaped {\n            index += 2;\n            continue;\n        }",
-                    "if is_escaped && current == b'{' && let Some(close) = content[index + 2..].find(\"}}\") {\n"
-                    "            literals.push(content[literal_start..index].to_owned());\n"
-                    "            placeholders.push(brace_placeholder(&content[index + 1..=index + 2 + close]));\n"
-                    "            index = index + 2 + close + 2;\n"
-                    "            literal_start = index;\n"
-                    "            continue;\n"
-                    "        }",
+                    (
+                        "if is_escaped && current == b'{' && let Some(close) = content[index + 2..].find(\"}}\") {\n"
+                        "            literals.push(content[literal_start..index].to_owned());\n"
+                        "            placeholders.push(brace_placeholder(&content[index + 1..=index + 2 + close]));\n"
+                        "            index = index + 2 + close + 2;\n"
+                        "            literal_start = index;\n"
+                        "            continue;\n"
+                        "        }"
+                    ),
                 ),
             ),
             cases=("quote_wrapped_placeholder::pass::str_format_escaped_braces",),
@@ -450,8 +466,10 @@ CLUSTER = Cluster(
             path=QUOTE_WRAPPED,
             edits=(
                 (
-                    "PythonFormatStyle::StrFormat => (placeholder.conversion.is_none()\n"
-                    "            && placeholder.format_spec.is_none()",
+                    (
+                        "PythonFormatStyle::StrFormat => (placeholder.conversion.is_none()\n"
+                        "            && placeholder.format_spec.is_none()"
+                    ),
                     "PythonFormatStyle::StrFormat => (placeholder.format_spec.is_none()",
                 ),
             ),
@@ -462,8 +480,10 @@ CLUSTER = Cluster(
             path=QUOTE_WRAPPED,
             edits=(
                 (
-                    "PythonFormatStyle::StrFormat => (placeholder.conversion.is_none()\n"
-                    "            && placeholder.format_spec.is_none()",
+                    (
+                        "PythonFormatStyle::StrFormat => (placeholder.conversion.is_none()\n"
+                        "            && placeholder.format_spec.is_none()"
+                    ),
                     "PythonFormatStyle::StrFormat => (placeholder.conversion.is_none()",
                 ),
             ),
@@ -509,8 +529,10 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "if backtick_count % 2 != 0 || has_unclosed_structured_delimiter(structure_prefix_before_quote) {",
-                    "let _ = backtick_count;\n"
-                    "    if has_unclosed_structured_delimiter(structure_prefix_before_quote) {",
+                    (
+                        "let _ = backtick_count;\n"
+                        "    if has_unclosed_structured_delimiter(structure_prefix_before_quote) {"
+                    ),
                 ),
             ),
             cases=(
@@ -538,9 +560,11 @@ CLUSTER = Cluster(
             path=QUOTE_WRAPPED,
             edits=(
                 (
-                    "second_char.is_ascii_whitespace()\n"
-                    "                || is_prose_punctuation(second_char)\n"
-                    "                || matches!(second_char, '\\'' | '\"')",
+                    (
+                        "second_char.is_ascii_whitespace()\n"
+                        "                || is_prose_punctuation(second_char)\n"
+                        "                || matches!(second_char, '\\'' | '\"')"
+                    ),
                     "let _ = second_char;\n            true",
                 ),
             ),
@@ -586,12 +610,16 @@ CLUSTER = Cluster(
             path=FORMAT_STRINGS,
             edits=(
                 (
-                    "let valid_start = first == '_' || first.is_alphabetic();\n"
-                    "    valid_start\n"
-                    "        && characters.all(|character| character == '_' || character.is_alphanumeric())\n"
-                    "        && !first.is_ascii_digit()",
-                    "let _ = first;\n"
-                    "    characters.all(|character| character == '_' || character.is_alphanumeric())",
+                    (
+                        "let valid_start = first == '_' || first.is_alphabetic();\n"
+                        "    valid_start\n"
+                        "        && characters.all(|character| character == '_' || character.is_alphanumeric())\n"
+                        "        && !first.is_ascii_digit()"
+                    ),
+                    (
+                        "let _ = first;\n"
+                        "    characters.all(|character| character == '_' || character.is_alphanumeric())"
+                    ),
                 ),
             ),
             cases=(
@@ -643,11 +671,13 @@ CLUSTER = Cluster(
             path=FORMAT_STRINGS,
             edits=(
                 (
-                    'if rest.starts_with("{{") || rest.starts_with("}}") {\n'
-                    "            cursor += 2;\n"
-                    "        } else if rest.starts_with('}') {\n"
-                    "            return None;\n"
-                    "        }",
+                    (
+                        'if rest.starts_with("{{") || rest.starts_with("}}") {\n'
+                        "            cursor += 2;\n"
+                        "        } else if rest.starts_with('}') {\n"
+                        "            return None;\n"
+                        "        }"
+                    ),
                     "if rest.starts_with(\"{{\") || rest.starts_with('}') {\n            cursor += 1;\n        }",
                 ),
             ),
