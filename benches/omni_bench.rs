@@ -35,16 +35,16 @@ use std::sync::LazyLock;
 use divan::counter::BytesCount;
 use divan::{AllocProfiler, Bencher, black_box};
 
-use omni::code_lint::ast::{self, ParsedFile};
-use omni::code_lint::contract::AnyCodeRule;
-use omni::code_lint::rules::{self, CODE_RULES};
-use omni::code_lint::runner::lint_file;
-use omni::code_lint::suppression::SuppressionTracker;
-use omni::command_lint::command::InterceptedCommand;
-use omni::command_lint::runner::run_command_lint;
-use omni::config::Config;
-use omni::diagnostic::Language;
-use omni::rule_selection::parse_config;
+use omnicoach::code_lint::ast::{self, ParsedFile};
+use omnicoach::code_lint::contract::AnyCodeRule;
+use omnicoach::code_lint::rules::{self, CODE_RULES};
+use omnicoach::code_lint::runner::lint_file;
+use omnicoach::code_lint::suppression::SuppressionTracker;
+use omnicoach::command_lint::command::InterceptedCommand;
+use omnicoach::command_lint::runner::run_command_lint;
+use omnicoach::config::Config;
+use omnicoach::diagnostic::Language;
+use omnicoach::rule_selection::parse_config;
 
 #[global_allocator]
 static ALLOC: AllocProfiler = AllocProfiler::system();

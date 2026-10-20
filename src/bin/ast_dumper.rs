@@ -1,7 +1,7 @@
 //! AST Dumper
 //! A utility to dump syntax trees for Rust and Python constructs.
 
-omni::architecture_component!(Bin);
+omnicoach::architecture_component!(Bin);
 
 use ra_ap_syntax::{Edition, SourceFile, SyntaxElement, SyntaxNode};
 

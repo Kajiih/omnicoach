@@ -4,11 +4,11 @@
 // Workaround for rust-lang/rust-clippy#13981 so clippy.toml `allow-*-in-tests` applies to the whole file.
 #![cfg(test)]
 
-use omni::code_lint::rules::CODE_RULES;
-use omni::code_lint::suppression::SUPPRESSION_AUDITS;
-use omni::command_lint::rules::COMMAND_RULES;
-use omni::diagnostic::{Language, LanguageText};
-use omni::rule_declaration::{
+use omnicoach::code_lint::rules::CODE_RULES;
+use omnicoach::code_lint::suppression::SUPPRESSION_AUDITS;
+use omnicoach::command_lint::rules::COMMAND_RULES;
+use omnicoach::diagnostic::{Language, LanguageText};
+use omnicoach::rule_declaration::{
     Declaration, DeclaredOptions, DeclaredRule, EnforcementMode, OptionSpec, is_kebab_case,
 };
 use rstest::rstest;

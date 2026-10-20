@@ -9,9 +9,9 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use omni::architecture::{ARCHITECTURE_GRAPH, ArchitectureComponent, ComponentDefinition};
-use omni::code_lint::ast::ParsedFile;
-use omni::code_lint::ast::rust::{
+use omnicoach::architecture::{ARCHITECTURE_GRAPH, ArchitectureComponent, ComponentDefinition};
+use omnicoach::code_lint::ast::ParsedFile;
+use omnicoach::code_lint::ast::rust::{
     ExternalModDeclaration, RustFileSummary, VisibleUseDeclaration, summarize_rust_file,
 };
 use strum::VariantArray;
@@ -53,7 +53,7 @@ enum PathOrigin {
     /// `self` / `super` relative path, recording the shallowest ancestor module reached
     /// while resolving `super` segments (`None` if `super` climbed past the crate root).
     Relative { shallowest_ancestor: Option<String> },
-    /// Crate-absolute (`crate::`, `omni::`), local child module, or external/local path.
+    /// Crate-absolute (`crate::`, `omnicoach::`), local child module, or external/local path.
     NonRelative,
 }
 
@@ -76,7 +76,7 @@ fn resolve_reference_path(
         enclosing_module
     };
 
-    if raw_path == "crate" || raw_path == "omni" {
+    if raw_path == "crate" || raw_path == "omnicoach" {
         return ResolvedPath {
             origin: PathOrigin::NonRelative,
             canonical_path: String::new(),
@@ -84,7 +84,7 @@ fn resolve_reference_path(
     }
     if let Some(rest) = raw_path
         .strip_prefix("crate::")
-        .or_else(|| raw_path.strip_prefix("omni::"))
+        .or_else(|| raw_path.strip_prefix("omnicoach::"))
     {
         return ResolvedPath {
             origin: PathOrigin::NonRelative,
@@ -189,7 +189,7 @@ impl ForbiddenDependencyRule {
             return Vec::new();
         }
         let subject_label = if self.subject_prefix.is_empty() {
-            "omni"
+            "omnicoach"
         } else {
             &self.subject_prefix
         };

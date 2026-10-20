@@ -120,7 +120,7 @@ fn test_code_lint_with_violations() {
 fn test_code_lint_invalid_config() {
     let temp_dir = tempfile::tempdir().unwrap();
     fs::write(
-        temp_dir.path().join(omni::config::CONFIG_FILE_NAME),
+        temp_dir.path().join(omnicoach::config::CONFIG_FILE_NAME),
         "select = [invalid syntax]",
     )
     .unwrap();
@@ -371,7 +371,7 @@ fn test_cli_config_override_and_missing_file_error() {
 fn test_cli_select_and_ignore_override_toml_and_explain() {
     let temp_dir = create_temp_file("test.py", "def outer():\n    def inner():\n        pass\n");
     fs::write(
-        temp_dir.path().join(omni::config::CONFIG_FILE_NAME),
+        temp_dir.path().join(omnicoach::config::CONFIG_FILE_NAME),
         "select = [\"nested-function\"]\n",
     )
     .unwrap();

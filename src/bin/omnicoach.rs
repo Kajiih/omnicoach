@@ -1,19 +1,19 @@
 //! Static analysis and command workflow coach binary.
 
-omni::architecture_component!(Bin);
+omnicoach::architecture_component!(Bin);
 
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use omni::code_lint::graph::{
+use omnicoach::code_lint::graph::{
     GraphOptions, OutputFormat as GraphOutputFormat, ProjectDepth, generate_graph,
 };
-use omni::code_lint::runner::{LintOptions, run_code_lint};
-use omni::command_lint::runner::run_command_lint;
-use omni::config::Config;
-use omni::diagnostic::{OutputFormat, print_diagnostics};
-use omni::rule_catalog::{DiscoveryArgs, code_report_footer, explain_footer};
-use omni::rule_selection::{ConfigOverrides, load_config};
+use omnicoach::code_lint::runner::{LintOptions, run_code_lint};
+use omnicoach::command_lint::runner::run_command_lint;
+use omnicoach::config::Config;
+use omnicoach::diagnostic::{OutputFormat, print_diagnostics};
+use omnicoach::rule_catalog::{DiscoveryArgs, code_report_footer, explain_footer};
+use omnicoach::rule_selection::{ConfigOverrides, load_config};
 
 fn main() {
     if let Err(error) = run() {

@@ -7,10 +7,10 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use omni::code_lint;
-use omni::diagnostic::{self, Diagnostic, Language};
-use omni::rule_catalog;
-use omni::rule_selection;
+use omnicoach::code_lint;
+use omnicoach::diagnostic::{self, Diagnostic, Language};
+use omnicoach::rule_catalog;
+use omnicoach::rule_selection;
 use serde::{Deserialize, Serialize};
 
 static INPUT_BUFFER: Mutex<Vec<u8>> = Mutex::new(Vec::new());

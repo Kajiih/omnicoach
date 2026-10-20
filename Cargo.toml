@@ -48,7 +48,7 @@ broken_intra_doc_links = "deny"
 private_intra_doc_links = "deny"
 
 [lib]
-name = "omni"
+name = "omnicoach"
 path = "src/lib.rs"
 
 [[bin]]

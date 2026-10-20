@@ -1,7 +1,9 @@
 # Architectural DAG Specification and Conformance Checking
 
 ## 1. Problem Statement
+
 Previously, architectural layering in `omni` was enforced via a crude 1D slice array in `tests/architecture.rs`:
+
 ```rust
 const LAYERS: &[&[&str]] = &[
     &["diagnostic", "diff"],
@@ -14,6 +16,7 @@ const LAYERS: &[&[&str]] = &[
 ```
 
 This 1D layering suffered from multiple architectural deficiencies:
+
 1. **Total Order Fallacy**: Slices forced two completely independent domain paths (`code_lint` and `command_lint`) into the same horizontal tiers, creating an artificial total order that permitted cross-domain contamination.
 2. **Invisible Intent & Lack of Self-Documentation**: Module files lacked any self-declaring architectural identity; an engineer reading a file in `src/` could not tell which component or boundary it belonged to without cross-referencing an external test file.
 3. **Overly Permissive Test Utilities**: Placing `test_utils` in an intermediate layer permitted production rules to import test harness code in production logic.
@@ -26,29 +29,38 @@ This 1D layering suffered from multiple architectural deficiencies:
 We model and enforce the architecture as a **strongly-typed Directed Acyclic Graph (DAG)** with **colocated component declarations**:
 
 ### 2.1. Canonical Architecture Components
+
 We define a strongly-typed enum `ArchitectureComponent` representing the 21 bounded functional units across the repository, named directly after their module path (`code_lint::ast` $\to$ `CodeLintAst`):
+
 - **Shared Foundations**: `Architecture`, `Diagnostic`, `Diff`, `RuleDeclaration`, `Config`
 - **Static Code Analysis Domain (`code_lint`)**: `CodeLintAst`, `CodeLintSemantic`, `CodeLintContract`, `CodeLintSuppression`, `CodeLintPolicy`, `CodeLintRules`, `CodeLintRunner`
 - **Command Safety Domain (`command_lint`)**: `CommandLintVcs`, `CommandLintCommand`, `CommandLintContract`, `CommandLintRules`, `CommandLintRunner`
 - **Selection, Discovery, Test Harness & Entrypoints**: `RuleSelection`, `RuleCatalog`, `TestUtils`, `Bin`
 
 ### 2.2. Component-Root Declarations & Subtree Inheritance
+
 Each component root file in `src/` explicitly declares its component identity at the top of the file:
+
 ```rust
 architecture_component!(CodeLintRules);
 ```
+
 In `src/lib.rs`, `#[macro_export] macro_rules! architecture_component` expands to a typed module-scoped constant:
+
 ```rust
 const _ARCHITECTURE_COMPONENT: $crate::architecture::ArchitectureComponent =
     $crate::architecture::ArchitectureComponent::$component;
 ```
-This gives immediate compile-time validation by `rustc` (catching misspelled variants with `E0599` and duplicate declarations in the same module with `E0428`), IDE hover documentation, and direct support in binary targets (`omni::architecture_component!(Bin);`).
+
+This gives immediate compile-time validation by `rustc` (catching misspelled variants with `E0599` and duplicate declarations in the same module with `E0428`), IDE hover documentation, and direct support in binary targets (`omnicoach::architecture_component!(Bin);`).
 
 - **Subtree Inheritance**: Descendant leaf modules inside a component's subtree (e.g. `src/rule_declaration/*.rs`, `src/code_lint/rules/*.rs`, `src/code_lint/ast/*.rs`, `src/code_lint/semantic/*.rs`, `src/command_lint/rules/*.rs`) inherit their component automatically from their nearest declared ancestor and are forbidden from redundantly re-declaring `architecture_component!(...)`.
 - **Content-Verified Pure Namespace Routers**: Files outside any component subtree (`src/lib.rs`, `src/code_lint.rs`, `src/command_lint.rs`) require no hardcoded exemption list; instead, `test_all_source_files_declare_architecture_component` verifies via the Rust CST that they are pure namespace routers containing only external `mod <name>;` declarations (plus `macro_rules!` in `src/lib.rs`) and zero production functions, types, constants, inline `mod { ... }` blocks, or `use` imports.
 
 ### 2.3. The `define_architecture!` Macro and Compile-Time Acyclicity by Declaration Order
-In `src/architecture.rs` (`Architecture`), `define_architecture!` generates the `strum`-derived `ArchitectureComponent` enum (attaching the `///` doc comments to each variant), the `ARCHITECTURE_GRAPH` constant, and a compile-time `const` assertion requiring every dependency in `$node => [ $($dep),* ]` to be declared earlier (`(ArchitectureComponent::$dep as usize) < (ArchitectureComponent::$node as usize)`). This makes any cycle or forward edge a `rustc` compile error (`E0080`) during `cargo check`, with zero runtime cycle-detection code. Only `architecture_component!` is exported from `src/lib.rs`, because binary crates invoke it as `omni::architecture_component!`:
+
+In `src/architecture.rs` (`Architecture`), `define_architecture!` generates the `strum`-derived `ArchitectureComponent` enum (attaching the `///` doc comments to each variant), the `ARCHITECTURE_GRAPH` constant, and a compile-time `const` assertion requiring every dependency in `$node => [ $($dep),* ]` to be declared earlier (`(ArchitectureComponent::$dep as usize) < (ArchitectureComponent::$node as usize)`). This makes any cycle or forward edge a `rustc` compile error (`E0080`) during `cargo check`, with zero runtime cycle-detection code. Only `architecture_component!` is exported from `src/lib.rs`, because binary crates invoke it as `omnicoach::architecture_component!`:
+
 ```rust
 define_architecture! {
     // --- Shared Foundations ---
@@ -85,9 +97,10 @@ define_architecture! {
 ```
 
 ### 2.4. Native Single-Pass CST Conformance Engine & Idiomatic Module Policies
+
 - **Single-Pass `RustFileSummary` Extraction (`src/code_lint/ast/rust/file_summary.rs`)**: All `.rs` files in `src/` are parsed once via `ParsedFile::rust` and summarized by `summarize_rust_file` into plain `Send + Sync` value structs (`RustFileSummary`) cached in a `static LazyLock` in `tests/architecture_conformance.rs`.
 - **Automatic Module Discovery**: Component roots are discovered directly from the `architecture_component!(...)` declarations in `src/`, and child modules resolve their component by climbing their module path to the nearest declared ancestor. Unannotated router modules (`src/lib.rs`, `src/code_lint.rs`, `src/command_lint.rs`) are verified both topologically (must be an ancestor of at least one declared component root) and structurally via the CST (may contain only external `mod <name>;` declarations, plus `macro_rules!` in `src/lib.rs`).
-- **Complete Path Canonicalization & Transitive Reachability ($\to^+$)**: Every referenced path in production code—across expanded `use` trees, inline expressions/types (`scoped_identifier` / `scoped_type_identifier`), turbofish type arguments, and macro `token_tree` arguments—is normalized (`crate::`, `omni::`, `self::`, `super::`, and local child `mod` prefixes) to a canonical module path and verified against the transitive reachability of `ARCHITECTURE_GRAPH`.
+- **Complete Path Canonicalization & Transitive Reachability ($\to^+$)**: Every referenced path in production code—across expanded `use` trees, inline expressions/types (`scoped_identifier` / `scoped_type_identifier`), turbofish type arguments, and macro `token_tree` arguments—is normalized (`crate::`, `omnicoach::`, `self::`, `super::`, and local child `mod` prefixes) to a canonical module path and verified against the transitive reachability of `ARCHITECTURE_GRAPH`.
 - **Universal Sibling Subtree Isolation**: Every multi-unit component enforces a strict hub-and-spoke internal topology:
   - The component root (`code_lint::ast`, `code_lint::semantic`, `code_lint::rules`, `command_lint::rules`) owns shared component contracts and coordinates its children.
   - Direct child subtrees under a component root (as well as multi-root siblings in `FoundationPrimitives` and `ApplicationBinaries`) may import from their component root, but **may never import sideways from sibling units**.
@@ -98,7 +111,9 @@ define_architecture! {
 ---
 
 ## 3. Automated Verification
+
 The graph definition is verified at compile time (`const` topological-order assertion in `define_architecture!` and `missing_docs = "deny"` on every `ArchitectureComponent` variant), while `tests/architecture_conformance.rs` enforces conformance of the source tree:
+
 1. `test_all_source_files_declare_architecture_component`: Ensures every file in `src/` either belongs to a valid component subtree (with no redundant child declarations) or is a topologically valid, CST-verified pure namespace router (`mod`-only items), and every component variant is backed by at least one root file.
 2. `test_architecture_conformance`: Verifies all source files comply with the DAG reachability and universal sibling subtree isolation rules.
 3. `test_architecture_rules_detect_forbidden_dependencies`: Guards against vacuous conformance passes by injecting upward, cross-domain, turbofish, macro-argument, direct-child sibling (via `super::`), and multi-root sibling dependencies.
