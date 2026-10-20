@@ -3,14 +3,49 @@ name = "omnicoach"
 version = "0.2.0"
 edition = "2024"
 description = "Lightweight, high-signal static analysis and command linter for Python and Rust"
-license = "MIT"
-repository = "https://github.com/Kajiih/omnicoach"
 readme = "README.md"
-keywords = ["linter", "static-analysis", "ast-grep", "python", "rust"]
-categories = ["development-tools", "command-line-utilities"]
+repository = "https://github.com/Kajiih/omnicoach"
+license = "MIT"
+keywords = ["ast-grep", "linter", "python", "rust", "static-analysis"]
+categories = ["command-line-utilities", "development-tools"]
+include = ["/LICENSE", "/README.md", "/src/**"]
 default-run = "omnicoach"
 autobins = false
-include = ["/src/**", "/README.md", "/LICENSE"]
+
+[workspace]
+members = [".", "playground"]
+default-members = ["."]
+
+[workspace.lints.clippy]
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+cargo = { level = "deny", priority = -1 }
+dbg_macro = "deny"
+expect_used = "deny"
+# Clippy lint severity levels (`allow` / `warn` / `deny`) can only be configured in
+# `[lints.clippy]` (`clippy.toml` only accepts lint-specific configuration parameters);
+# `ruff_python_parser` and `ra_ap_syntax` pull in different versions of shared transitive
+# crates (such as `itertools` and `hashbrown`).
+multiple_crate_versions = "allow"
+nursery = { level = "deny", priority = -1 }
+panic = "deny"
+pedantic = { level = "deny", priority = -1 }
+todo = "deny"
+undocumented_unsafe_blocks = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+
+[workspace.lints.rust]
+dead_code = "deny"
+missing_docs = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+unsafe_code = "deny"
+unused = { level = "deny", priority = -1 }
+unused_qualifications = "deny"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
 
 [lib]
 name = "omni"
@@ -25,83 +60,32 @@ name = "ast_dumper"
 path = "src/bin/ast_dumper.rs"
 
 [[bench]]
-name = "omni_bench"
 harness = false
-
-[profile.release]
-lto = "fat"
-strip = "symbols"
-
-[profile.profiling]
-inherits = "release"
-debug = "line-tables-only"
-strip = "none"
-
-[lints]
-workspace = true
-
-[workspace.lints.rust]
-unsafe_code = "deny"
-unused_qualifications = "deny"
-missing_docs = "deny"
-unused = { level = "deny", priority = -1 }
-dead_code = "deny"
-rust_2018_idioms = { level = "deny", priority = -1 }
-
-[workspace.lints.clippy]
-pedantic = { level = "deny", priority = -1 }
-nursery = { level = "deny", priority = -1 }
-cargo = { level = "deny", priority = -1 }
-# Clippy lint severity levels (`allow` / `warn` / `deny`) can only be configured in
-# `[lints.clippy]` (`clippy.toml` only accepts lint-specific configuration parameters);
-# `ruff_python_parser` and `ra_ap_syntax` pull in different versions of shared transitive
-# crates (such as `itertools` and `hashbrown`).
-multiple_crate_versions = "allow"
-allow_attributes = "deny"
-allow_attributes_without_reason = "deny"
-undocumented_unsafe_blocks = "deny"
-unwrap_used = "deny"
-expect_used = "deny"
-dbg_macro = "deny"
-todo = "deny"
-panic = "deny"
-unimplemented = "deny"
-
-[workspace.lints.rustdoc]
-broken_intra_doc_links = "deny"
-private_intra_doc_links = "deny"
+name = "omni_bench"
 
 [dependencies]
 anyhow = "1.0"
-serde = { version = "1.0", features = ["derive"] }
-toml = { version = "1.1", features = ["preserve_order"] }
-ruff_python_parser = "0.0.16"
-ruff_python_ast = "0.0.16"
-ruff_text_size = "0.0.16"
+clap = { version = "4.5", features = ["derive"] }
+globset = "0.4"
+ignore = "0.4"
+indoc = "2.0.7"
+line-index = "0.1.2"
 ra_ap_syntax = "0.0.357"
+rayon = "1.12"
+ruff_python_ast = "0.0.16"
+ruff_python_parser = "0.0.16"
+ruff_text_size = "0.0.16"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+shell-words = "1.1"  # Safe shell tokenization for cmd guard
+strum = { version = "0.28", features = ["derive"] }
+thiserror = "2.0"
+toml = { version = "1.1", features = ["preserve_order"] }
 # Transitive cap, not imported: ra-ap-rustc_lexer 0.166 asserts at compile time that
 # unicode-ident and unicode-properties share a Unicode version, and unicode-ident >=1.0.25
 # is ahead of unicode-properties 0.1.4. Without it, `cargo install` without `--locked` fails.
 # Remove once ra_ap_syntax or unicode-properties catches up.
 unicode-ident = ">=1.0.24, <1.0.25"
-shell-words = "1.1" # Safe shell tokenization for cmd guard
-serde_json = "1.0"
-clap = { version = "4.5", features = ["derive"] }
-ignore = "0.4"
-line-index = "0.1.2"
-strum = { version = "0.28", features = ["derive"] }
-thiserror = "2.0"
-globset = "0.4"
-rayon = "1.12"
-indoc = "2.0.7"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ast-grep-core = "0.45" # SOTA structural search using tree-sitter (used by command_lint)
-ast-grep-language = { version = "0.45", default-features = false, features = ["tree-sitter-bash"] }
-
-[workspace]
-members = [".", "playground"]
-default-members = ["."]
 
 [dev-dependencies]
 assert_cmd = "2.0"
@@ -111,3 +95,19 @@ predicates = "3.0"
 pretty_assertions = "1.4.0"
 rstest = "0.27"
 tempfile = "3.27"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ast-grep-core = "0.45"  # SOTA structural search using tree-sitter (used by command_lint)
+ast-grep-language = { version = "0.45", default-features = false, features = ["tree-sitter-bash"] }
+
+[lints]
+workspace = true
+
+[profile.release]
+strip = "symbols"
+lto = "fat"
+
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = "none"

@@ -29,37 +29,33 @@ fn setup_temp_jj_repo() -> tempfile::TempDir {
 
     let temp = tempfile::tempdir().unwrap();
 
-    // Initialize temporary repository
-    let status = std::process::Command::new("jj")
-        .arg("git")
-        .arg("init")
+    // Initialize temporary repository with test user identity so the initial working-copy
+    // commit is authored by the test user before repo config is written.
+    let init_output = std::process::Command::new("jj")
+        .args([
+            "--config",
+            "user.name=\"Test User\"",
+            "--config",
+            "user.email=\"test@example.com\"",
+            "git",
+            "init",
+        ])
         .current_dir(temp.path())
-        .status()
+        .output()
         .expect("failed to run jj git init");
-    assert!(status.success(), "jj git init failed");
+    assert!(init_output.status.success(), "jj git init failed");
 
-    // Set configuration for user identity to prevent warnings/failures
-    let status = std::process::Command::new("jj")
-        .arg("config")
-        .arg("set")
-        .arg("--repo")
-        .arg("user.name")
-        .arg("Test User")
-        .current_dir(temp.path())
-        .status()
-        .expect("failed to set jj user.name");
-    assert!(status.success());
-
-    let status = std::process::Command::new("jj")
-        .arg("config")
-        .arg("set")
-        .arg("--repo")
-        .arg("user.email")
-        .arg("test@example.com")
-        .current_dir(temp.path())
-        .status()
-        .expect("failed to set jj user.email");
-    assert!(status.success());
+    for (key, value) in [
+        ("user.name", "Test User"),
+        ("user.email", "test@example.com"),
+    ] {
+        let output = std::process::Command::new("jj")
+            .args(["config", "set", "--repo", key, value])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to set jj repo config");
+        assert!(output.status.success());
+    }
 
     temp
 }
@@ -170,16 +166,14 @@ fn test_discovery_is_identical_across_subcommands(#[case] args: &[&str]) {
 fn test_command_lint_described_commit_blocked() {
     let temp_repo = setup_temp_jj_repo();
 
-    let status = std::process::Command::new("jj")
-        .arg("describe")
-        .arg("-m")
-        .arg("wip commit")
+    let describe_output = std::process::Command::new("jj")
+        .args(["describe", "-m", "wip commit"])
         .current_dir(temp_repo.path())
-        .status()
+        .output()
         .expect("failed to describe commit");
     let output = run_cli(&["command", "--cmd", "jj edit @"], Some(temp_repo.path()));
 
-    assert!(status.success());
+    assert!(describe_output.status.success());
     insta::assert_snapshot!(output);
 }
 
@@ -205,10 +199,10 @@ fn test_code_lint_diff_flag_jj() {
     fs::write(&file_path, violating_code_1).unwrap();
 
     // 2. Commit it to draft state by creating a new change on top of it
-    let status = std::process::Command::new("jj")
+    let new_output = std::process::Command::new("jj")
         .arg("new")
         .current_dir(repo_path)
-        .status()
+        .output()
         .expect("failed to run jj new");
 
     // 3. Now the first violation is in parent `@-`.
@@ -230,7 +224,7 @@ fn test_code_lint_diff_flag_jj() {
     // It should ONLY report `world` because `inner` was already in the parent commit!
     let output_diff = run_cli(&["code", "--diff-rev", "@-", "test.py"], Some(repo_path));
 
-    assert!(status.success());
+    assert!(new_output.status.success());
     insta::assert_snapshot!("full_baseline", output_full);
     insta::assert_snapshot!("diff_only", output_diff);
 }

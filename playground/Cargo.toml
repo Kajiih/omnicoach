@@ -2,21 +2,21 @@
 name = "omnicoach-playground"
 version = "0.1.0"
 edition = "2024"
-publish = false
 description = "WebAssembly request/response entrypoint for the omnicoach playground"
-license = "MIT"
-repository = "https://github.com/Kajiih/omnicoach"
 readme = "../README.md"
-keywords = ["linter", "static-analysis", "wasm", "python", "rust"]
+repository = "https://github.com/Kajiih/omnicoach"
+license = "MIT"
+keywords = ["linter", "python", "rust", "static-analysis", "wasm"]
 categories = ["development-tools", "wasm"]
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
-
-[lints]
-workspace = true
 
 [dependencies]
 omnicoach = { path = ".." }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+[lints]
+workspace = true
