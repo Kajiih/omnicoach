@@ -726,8 +726,10 @@ CLUSTER = Cluster(
             edits=(
                 (
                     "        is_data_model_dunder(&self.name)\n"
-                    "            || extract_decorators_from_slice(&self.definition.decorator_list",
-                    "        extract_decorators_from_slice(&self.definition.decorator_list",
+                    "            || self.decorators.iter().any(|decorator| {\n"
+                    "                decorator.matches_any(OVERRIDE_DECORATOR_PATHS)",
+                    "        self.decorators.iter().any(|decorator| {\n"
+                    "                decorator.matches_any(OVERRIDE_DECORATOR_PATHS)",
                 ),
             ),
             cases=("undocumented_nontrivial_function::pass::data_model_dunder_exempt",),
@@ -737,9 +739,9 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "                    decorator.matches_any(OVERRIDE_DECORATOR_PATHS)\n"
-                    '                        || decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])',
-                    '                    decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])',
+                    "                decorator.matches_any(OVERRIDE_DECORATOR_PATHS)\n"
+                    '                    || decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])',
+                    '                decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])',
                 ),
             ),
             cases=("undocumented_nontrivial_function::pass::override_method_exempt",),
@@ -749,7 +751,7 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    '                        || decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])',
+                    '                    || decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])',
                     "",
                 ),
             ),

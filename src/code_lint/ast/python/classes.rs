@@ -6,8 +6,8 @@ use super::decorators::{DecoratorInfo, extract_decorators_from_slice};
 use super::docstrings::{PythonDocstring, docstring_of};
 use super::effects::in_place_mutated_receiver_expr;
 use super::functions::{
-    CLS_RECEIVER, OVERLOAD_DECORATOR_PATHS, PythonFunctionSignature, SELF_RECEIVER,
-    function_signature, method_receiver_name_ast,
+    CLS_RECEIVER, PythonFunctionSignature, SELF_RECEIVER, function_signature,
+    method_receiver_name_ast,
 };
 use super::names::written_name;
 use super::tree::direct_function_definitions;
@@ -190,13 +190,9 @@ impl<'a> PythonClassInfo<'a> {
     /// one when it is redefined.
     #[must_use]
     pub fn constructor(&self) -> Option<PythonFunctionSignature<'a>> {
-        let file = self.name_node.file;
-        self.methods().into_iter().rfind(|method| {
-            method.name == INIT_METHOD
-                && !extract_decorators_from_slice(&method.definition.decorator_list, file)
-                    .iter()
-                    .any(|decorator| decorator.matches_any(OVERLOAD_DECORATOR_PATHS))
-        })
+        self.methods()
+            .into_iter()
+            .rfind(|method| method.name == INIT_METHOD && !method.is_overload())
     }
 
     /// The first definition of each attribute name the class creates, in source order.

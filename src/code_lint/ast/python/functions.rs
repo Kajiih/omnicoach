@@ -83,9 +83,8 @@ pub struct PythonFunctionSignature<'a> {
     pub parameters: Vec<PythonParameterInfo<'a>>,
     /// Return type annotation AST node (`-> <type>`), if present.
     pub return_type_node: Option<AstNode<'a>>,
-    /// True if the function is decorated with a decorator that imposes its signature
-    /// ([`has_imposed_signature_decorator`]).
-    pub(super) has_imposed_signature_decorator: bool,
+    /// Parsed decorators on this function definition.
+    decorators: Vec<DecoratorInfo>,
     /// True if the body is a stub ([`is_stub_body`]).
     pub(super) has_stub_body: bool,
     /// The `class` whose body contains this function when it is the nearest enclosing `def` or
@@ -100,18 +99,35 @@ pub struct PythonFunctionSignature<'a> {
 impl PythonFunctionSignature<'_> {
     /// Returns true if the function's signature is imposed from outside: a data-model dunder
     /// method other than `__init__`, `__new__`, and `__call__`, or a function decorated with
-    /// `@override`, `@overload`, `@abstractmethod`, `@fixture`, `@<function>.register`, or
-    /// `@<property>.setter`.
+    /// `@override`, `@overload`, `@abstractmethod`, `@fixture` (`@pytest.fixture`),
+    /// `@<function>.register` (`functools.singledispatch` implementations, which dispatch on
+    /// their annotations), or `@<property>.setter` (whose value type mirrors the getter's return
+    /// type).
     #[must_use]
     pub fn has_imposed_signature(&self) -> bool {
-        is_data_model_dunder(&self.name) || self.has_imposed_signature_decorator
+        is_data_model_dunder(&self.name)
+            || self.decorators.iter().any(|decorator| {
+                decorator.matches_any(IMPOSED_SIGNATURE_DECORATOR_PATHS)
+                    || decorator.is_attribute_named(&["register", SETTER_ATTRIBUTE])
+            })
     }
 
     /// Returns true if the function is decorated with `@override` (`typing.override` or
     /// `typing_extensions.override`), resolved through the file's imports.
     #[must_use]
     pub fn has_override_decorator(&self) -> bool {
-        has_override_decorator(&self.definition.decorator_list, self.name_node.file)
+        self.decorators
+            .iter()
+            .any(|decorator| decorator.matches_any(OVERRIDE_DECORATOR_PATHS))
+    }
+
+    /// Returns true if the function is decorated with `@overload` (`typing.overload` or
+    /// `typing_extensions.overload`), resolved through the file's imports.
+    #[must_use]
+    pub(super) fn is_overload(&self) -> bool {
+        self.decorators
+            .iter()
+            .any(|decorator| decorator.matches_any(OVERLOAD_DECORATOR_PATHS))
     }
 
     /// Returns true if the function is defined in another function's body (its nearest
@@ -143,19 +159,17 @@ impl PythonFunctionSignature<'_> {
     #[must_use]
     pub fn is_documented_elsewhere(&self) -> bool {
         is_data_model_dunder(&self.name)
-            || extract_decorators_from_slice(&self.definition.decorator_list, self.name_node.file)
-                .iter()
-                .any(|decorator| {
-                    decorator.matches_any(OVERRIDE_DECORATOR_PATHS)
-                        || decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])
-                })
+            || self.decorators.iter().any(|decorator| {
+                decorator.matches_any(OVERRIDE_DECORATOR_PATHS)
+                    || decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])
+            })
     }
 
     /// Returns true if the function is a property getter (`@property`,
     /// `@functools.cached_property`), documented like an attribute rather than a function.
     #[must_use]
     pub fn is_property_getter(&self) -> bool {
-        extract_decorators_from_slice(&self.definition.decorator_list, self.name_node.file)
+        self.decorators
             .iter()
             .any(|decorator| decorator.matches_any(PROPERTY_DECORATOR_PATHS))
     }
@@ -290,7 +304,6 @@ pub(super) fn function_signature<'a>(
     enclosing_class: Option<&'a StmtClassDef>,
     enclosing_function: Option<&'a StmtFunctionDef>,
 ) -> PythonFunctionSignature<'a> {
-    let decorators = extract_decorators_from_slice(&func_def.decorator_list, file);
     PythonFunctionSignature {
         name_node: AstNode::from_span(file, span_from_ruff_range(func_def.name.range)),
         name: func_def.name.id.to_string(),
@@ -299,23 +312,12 @@ pub(super) fn function_signature<'a>(
             .returns
             .as_ref()
             .map(|ret| AstNode::from_span(file, span_from_ruff_range(ret.range()))),
-        has_imposed_signature_decorator: has_imposed_signature_decorator(&decorators),
+        decorators: extract_decorators_from_slice(&func_def.decorator_list, file),
         has_stub_body: is_stub_body(&func_def.body, &file.source),
         enclosing_class,
         enclosing_function,
         definition: func_def,
     }
-}
-
-/// Returns true if `decorators` include `@override`, `@overload`, `@abstractmethod`,
-/// `@fixture` (`@pytest.fixture`), `@<function>.register` (`functools.singledispatch`
-/// implementations, which dispatch on their annotations), or `@<property>.setter` (whose value
-/// type mirrors the getter's return type).
-fn has_imposed_signature_decorator(decorators: &[DecoratorInfo]) -> bool {
-    decorators.iter().any(|decorator| {
-        decorator.matches_any(IMPOSED_SIGNATURE_DECORATOR_PATHS)
-            || decorator.is_attribute_named(&["register", SETTER_ATTRIBUTE])
-    })
 }
 
 /// Returns true if the function body `statements` is a stub consisting only of an optional

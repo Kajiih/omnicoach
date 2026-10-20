@@ -303,14 +303,17 @@ CLUSTER = Cluster(
             path=FUNCTIONS,
             edits=(
                 (
-                    "        is_data_model_dunder(&self.name) || self.has_imposed_signature_decorator",
-                    "        self.has_imposed_signature_decorator",
+                    "        is_data_model_dunder(&self.name)\n"
+                    "            || self.decorators.iter().any(|decorator| {\n"
+                    "                decorator.matches_any(IMPOSED_SIGNATURE_DECORATOR_PATHS)",
+                    "        self.decorators.iter().any(|decorator| {\n"
+                    "                decorator.matches_any(IMPOSED_SIGNATURE_DECORATOR_PATHS)",
                 ),
             ),
             cases=("identical_positional_types::pass::dunder_method_exempt",),
         ),
         # The @overload/@fixture/@override/@abstractmethod/@<fn>.register exemptions share
-        # `has_imposed_signature_decorator`: their cases are listed in `collection_types_1`.
+        # `has_imposed_signature`: their cases are listed in `collection_types_1`.
         # --- repeated-index-access ---
         Mutation(
             label="single distinct position read exempt from repeated-index-access",
