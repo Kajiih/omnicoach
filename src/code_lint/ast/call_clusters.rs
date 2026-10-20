@@ -610,12 +610,12 @@ mod tests {
         order
     }
 
-    fn source_files(directory: &Path, extension: &str, out: &mut Vec<std::path::PathBuf>) {
+    fn rust_source_files(directory: &Path, out: &mut Vec<std::path::PathBuf>) {
         for entry in std::fs::read_dir(directory).expect("directory should be readable") {
             let path = entry.expect("entry should be readable").path();
             if path.is_dir() {
-                source_files(&path, extension, out);
-            } else if path.extension().is_some_and(|found| found == extension) {
+                rust_source_files(&path, out);
+            } else if path.extension().is_some_and(|found| found == "rs") {
                 out.push(path);
             }
         }
@@ -623,13 +623,8 @@ mod tests {
 
     /// The style placements of `path`'s scopes that the layout its graph describes violates.
     fn placements_violated_by_graph_layout(path: &Path) -> Vec<String> {
-        let lang = if path.extension().is_some_and(|found| found == "rs") {
-            Language::Rust
-        } else {
-            Language::Python
-        };
         let source = std::fs::read_to_string(path).expect("source should be readable");
-        let file = ParsedFile::new(&source, lang);
+        let file = ParsedFile::new(&source, Language::Rust);
         collect_declaration_scopes(&file)
             .iter()
             .flat_map(|scope| {
@@ -660,8 +655,7 @@ mod tests {
     fn graph_layout_satisfies_every_rule_placement() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut paths = Vec::new();
-        source_files(&root.join("src"), "rs", &mut paths);
-        source_files(&root.join("scripts"), "py", &mut paths);
+        rust_source_files(&root.join("src"), &mut paths);
 
         let violations: Vec<String> = paths
             .iter()

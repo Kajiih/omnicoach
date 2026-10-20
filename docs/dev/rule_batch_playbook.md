@@ -26,8 +26,7 @@
 ### 4. Execute (workers, integration serialized)
 
 - Workers may write their rule file in parallel, but **shared files are integrated one rule at a time by the lead**: `ast/python.rs`, `rules.rs`, `taxonomy.rs`, `tests/snapshots/cli__list_rules.snap`, [ROADMAP.md](../../ROADMAP.md).
-- After each integration run the full verification from [adding_a_rule.md](adding_a_rule.md) step 9, including self-dogfooding (`omnicoach code .`), which caught naming violations in the new helpers.
-- **Mutation check per exemption.** Give each named exemption one dedicated `pass` case, add an entry for it to [scripts/exemption_mutations.py](../../scripts/exemption_mutations.py) (a source edit that disables the exemption, plus the case), and run the script. It also fails when a listed case no longer exists or a `pass` case of a covered rule is unlisted. Do not keep the harness in scratch space: the legacy batch harness was lost, and the declaration-order batch later found 7 cases that still passed with their exemption removed.
+- After each integration run the checks from [adding_a_rule.md](adding_a_rule.md) steps 8–9, including self-dogfooding (`omnicoach code .`), which caught naming violations in the new helpers.
 - Know the harness: `rule_test!` also runs every `fail` case as `{code}\n{code}` in one module and expects exactly the two copies' spans. The second copy redefines every top-level name, so a rule that reasons about the other definitions in a scope (declaration order, redefinitions, same-name grouping) must plan for it in Phase 3. `call-before-definition` bent its semantics to pass (epochs), and a simpler same-name merge had to be reverted. Open design problem: "Rule test harness" in [ROADMAP.md](../../ROADMAP.md).
 
 ### 5. Consolidate (lead, mandatory holistic synthesis)
@@ -37,7 +36,7 @@ Parallel workers design and implement each rule from that rule's perspective alo
 1. **Audit both the shared layers and `rules/` across the batch.** Look beyond duplicate free functions in `ast/`: inspect the rule files for shared domain concepts implemented locally, ad-hoc `SourceSpan` join tables that stitch together separately extracted AST items because a structural link was missing, and partition predicates duplicated between sibling rules.
 2. **Elevate shared domain concepts onto the core types.** Express each domain concept once on the shared AST, semantic, or command types (whether cross-language abstractions like `CallableItem` / `TypeMethod` or language-specific nodes across Rust, Python, Markdown, and shell commands) so every rule's check is a direct, readable composition of domain predicates with no local plumbing. When two workers implemented the same concept with slightly different edge cases, unify them on the stronger semantics.
 3. **Refactor and simplify pre-existing abstractions.** Use the batch's broader view to replace narrow one-off flags on existing types with the underlying structural relationship from which both old and new queries derive, and split modules that grew past readability.
-4. **Sync and re-run `scripts/exemption_mutations.py`.** When an exemption moves from rule files into a shared helper, point its mutation at the shared helper (covering all rules that rely on it) and re-run the script to verify that no exemption was weakened or orphaned.
+4. **Verify consolidated helpers.** When logic moves from rule files into a shared helper, unit-test the helper directly and run the adequacy checks from [adding_a_rule.md](adding_a_rule.md) step 8 on it so no branch is weakened or orphaned.
 
 ### 6. Review (two reviewers, whole batch)
 
@@ -48,7 +47,7 @@ Parallel workers design and implement each rule from that rule's perspective alo
 
 ### 7. Learn (workers draft, lead edits)
 
-Each `07_learn.md` keeps only reusable lessons. Batch-level lessons go into this playbook. Before closing `06`/`07`, grep every backticked identifier against `src/` and recount the cases: docs drafted from worker reports named about 25 helpers and tests that did not exist, and the declaration-order batch repeated it. Cite test cases by name without the generated `case_N_` prefix, which shifts when cases are added, and do not copy the exemption-to-case table into docs: `scripts/exemption_mutations.py` is that table and checks it.
+Each `07_learn.md` keeps only reusable lessons. Batch-level lessons go into this playbook. Before closing `06`/`07`, grep every backticked identifier against `src/` and recount the cases: docs drafted from worker reports named about 25 helpers and tests that did not exist, and the declaration-order batch repeated it. Cite test cases by name without the generated `case_N_` prefix, which shifts when cases are added.
 
 ## Tooling constraints
 
