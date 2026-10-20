@@ -218,37 +218,6 @@ pub(super) fn collect_local_bound_names(
     names
 }
 
-/// Recursively extracts binding identifiers from an assignment/loop target expression, stopping
-/// at `Expr::Attribute` and `Expr::Subscript` so `self.ctx = 1` or `items[idx] = 1` does not
-/// record `ctx` or `idx` as a local variable binding.
-pub(super) fn extract_from_expr_target<'a>(
-    target: &Expr,
-    file: &'a ParsedFile,
-    bindings: &mut Vec<AstNode<'a>>,
-) {
-    match target {
-        Expr::Name(name) => {
-            if name.id.as_str() != "_" {
-                bindings.push(AstNode::from_span(file, span_from_ruff_range(name.range)));
-            }
-        }
-        Expr::Tuple(tuple) => {
-            for elt in &tuple.elts {
-                extract_from_expr_target(elt, file, bindings);
-            }
-        }
-        Expr::List(list) => {
-            for elt in &list.elts {
-                extract_from_expr_target(elt, file, bindings);
-            }
-        }
-        Expr::Starred(starred) => {
-            extract_from_expr_target(&starred.value, file, bindings);
-        }
-        _ => {}
-    }
-}
-
 /// Returns true if `parameters` declares a parameter named `parameter_name`.
 pub(super) fn parameters_shadow_name(parameters: &Parameters, parameter_name: &str) -> bool {
     parameters
@@ -677,6 +646,37 @@ fn extend_expr_target_names(target: &Expr, file: &ParsedFile, names: &mut HashSe
     extract_from_expr_target(target, file, &mut nodes);
     for node in nodes {
         names.insert(node.text().into_owned());
+    }
+}
+
+/// Recursively extracts binding identifiers from an assignment/loop target expression, stopping
+/// at `Expr::Attribute` and `Expr::Subscript` so `self.ctx = 1` or `items[idx] = 1` does not
+/// record `ctx` or `idx` as a local variable binding.
+fn extract_from_expr_target<'a>(
+    target: &Expr,
+    file: &'a ParsedFile,
+    bindings: &mut Vec<AstNode<'a>>,
+) {
+    match target {
+        Expr::Name(name) => {
+            if name.id.as_str() != "_" {
+                bindings.push(AstNode::from_span(file, span_from_ruff_range(name.range)));
+            }
+        }
+        Expr::Tuple(tuple) => {
+            for elt in &tuple.elts {
+                extract_from_expr_target(elt, file, bindings);
+            }
+        }
+        Expr::List(list) => {
+            for elt in &list.elts {
+                extract_from_expr_target(elt, file, bindings);
+            }
+        }
+        Expr::Starred(starred) => {
+            extract_from_expr_target(&starred.value, file, bindings);
+        }
+        _ => {}
     }
 }
 

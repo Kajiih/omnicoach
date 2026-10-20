@@ -70,8 +70,7 @@ const SINGLE_ARG_COVARIANT_CONTAINERS: &[&str] = &[
 ];
 
 /// Abstract mutable collection constructors in `collections.abc` and `typing`.
-pub(super) const MUTABLE_COLLECTION_ABCS: &[&str] =
-    &["MutableSequence", "MutableMapping", "MutableSet"];
+const MUTABLE_COLLECTION_ABCS: &[&str] = &["MutableSequence", "MutableMapping", "MutableSet"];
 
 /// Abstract read-only collection constructors in `collections.abc` and `typing`.
 const READ_ONLY_COLLECTION_ABCS: &[&str] = &[
@@ -144,75 +143,6 @@ impl PythonCollectionType {
             .map(|collection_type| collection_type.path.as_str())
             .collect::<Vec<_>>()
             .join(", ")
-    }
-}
-
-/// A subscripted type annotation (`dict[str, int]`).
-pub(super) struct GenericType<'a> {
-    /// The subscripted base expression (`dict`).
-    pub(super) base: &'a Expr,
-    /// The type argument expressions, in source order (`str` and `int`).
-    pub(super) arguments: Vec<&'a Expr>,
-}
-
-/// Extracts the base and type arguments from a Python `Expr::Subscript` node inside a type
-/// annotation.
-pub(super) fn extract_generic_base_and_args(expr: &Expr) -> Option<GenericType<'_>> {
-    let Expr::Subscript(subscript) = expr else {
-        return None;
-    };
-    let type_args = if let Expr::Tuple(tuple) = subscript.slice.as_ref() {
-        tuple.elts.iter().collect()
-    } else {
-        vec![subscript.slice.as_ref()]
-    };
-    Some(GenericType {
-        base: subscript.value.as_ref(),
-        arguments: type_args,
-    })
-}
-
-/// Returns true if `(path, terminal)` matches one of `targets` in the standard typing namespaces.
-pub(super) fn is_std_type_constructor(path: &str, terminal: &str, targets: &[&str]) -> bool {
-    targets.contains(&terminal) && is_std_type_constructor_prefix(path, terminal)
-}
-
-/// Returns true if `(path, terminal)` is a concrete mutable collection constructor (`list`, `dict`,
-/// `set`, `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, `typing.Set`, etc.), or a
-/// `collections` container (`defaultdict`, `deque`, `Counter`, `OrderedDict`) or its `typing`
-/// alias (`DefaultDict`, `Deque`).
-///
-/// Qualified `collections.abc.Set` is excluded because it is the abstract set ABC, whereas
-/// unqualified `Set` and `typing.Set` are flagged as concrete (per Ruff `PYI025`, `collections.abc.Set`
-/// should be imported `as AbstractSet`).
-pub(super) fn is_concrete_collection_constructor(path: &str, terminal: &str) -> bool {
-    match terminal {
-        LIST_CONSTRUCTOR
-        | "List"
-        | DICT_CONSTRUCTOR
-        | TYPING_DICT_CONSTRUCTOR
-        | SET_CONSTRUCTOR => is_std_type_constructor_prefix(path, terminal),
-        TYPING_SET_CONSTRUCTOR => {
-            matches!(
-                path,
-                TYPING_SET_CONSTRUCTOR | "typing.Set" | "typing_extensions.Set"
-            )
-        }
-        TYPE_DEFAULTDICT
-        | TYPE_TYPING_DEFAULTDICT
-        | "deque"
-        | "Deque"
-        | TYPE_COUNTER
-        | ORDERED_DICT_CONSTRUCTOR => {
-            path == terminal
-                || path.strip_suffix(terminal).is_some_and(|prefix| {
-                    matches!(
-                        prefix,
-                        "collections." | TYPING_PREFIX | TYPING_EXTENSIONS_PREFIX
-                    )
-                })
-        }
-        _ => false,
     }
 }
 
@@ -757,6 +687,75 @@ fn collection_shape(terminal: &str) -> CollectionShape {
         | "FrozenSet" => CollectionShape::Set,
         "Collection" | "Iterable" | "Iterator" | "Reversible" => CollectionShape::Iterable,
         _ => CollectionShape::Sequence,
+    }
+}
+
+/// A subscripted type annotation (`dict[str, int]`).
+struct GenericType<'a> {
+    /// The subscripted base expression (`dict`).
+    base: &'a Expr,
+    /// The type argument expressions, in source order (`str` and `int`).
+    arguments: Vec<&'a Expr>,
+}
+
+/// Extracts the base and type arguments from a Python `Expr::Subscript` node inside a type
+/// annotation.
+fn extract_generic_base_and_args(expr: &Expr) -> Option<GenericType<'_>> {
+    let Expr::Subscript(subscript) = expr else {
+        return None;
+    };
+    let type_args = if let Expr::Tuple(tuple) = subscript.slice.as_ref() {
+        tuple.elts.iter().collect()
+    } else {
+        vec![subscript.slice.as_ref()]
+    };
+    Some(GenericType {
+        base: subscript.value.as_ref(),
+        arguments: type_args,
+    })
+}
+
+/// Returns true if `(path, terminal)` matches one of `targets` in the standard typing namespaces.
+fn is_std_type_constructor(path: &str, terminal: &str, targets: &[&str]) -> bool {
+    targets.contains(&terminal) && is_std_type_constructor_prefix(path, terminal)
+}
+
+/// Returns true if `(path, terminal)` is a concrete mutable collection constructor (`list`, `dict`,
+/// `set`, `List`, `Dict`, `Set`, `typing.List`, `typing.Dict`, `typing.Set`, etc.), or a
+/// `collections` container (`defaultdict`, `deque`, `Counter`, `OrderedDict`) or its `typing`
+/// alias (`DefaultDict`, `Deque`).
+///
+/// Qualified `collections.abc.Set` is excluded because it is the abstract set ABC, whereas
+/// unqualified `Set` and `typing.Set` are flagged as concrete (per Ruff `PYI025`, `collections.abc.Set`
+/// should be imported `as AbstractSet`).
+fn is_concrete_collection_constructor(path: &str, terminal: &str) -> bool {
+    match terminal {
+        LIST_CONSTRUCTOR
+        | "List"
+        | DICT_CONSTRUCTOR
+        | TYPING_DICT_CONSTRUCTOR
+        | SET_CONSTRUCTOR => is_std_type_constructor_prefix(path, terminal),
+        TYPING_SET_CONSTRUCTOR => {
+            matches!(
+                path,
+                TYPING_SET_CONSTRUCTOR | "typing.Set" | "typing_extensions.Set"
+            )
+        }
+        TYPE_DEFAULTDICT
+        | TYPE_TYPING_DEFAULTDICT
+        | "deque"
+        | "Deque"
+        | TYPE_COUNTER
+        | ORDERED_DICT_CONSTRUCTOR => {
+            path == terminal
+                || path.strip_suffix(terminal).is_some_and(|prefix| {
+                    matches!(
+                        prefix,
+                        "collections." | TYPING_PREFIX | TYPING_EXTENSIONS_PREFIX
+                    )
+                })
+        }
+        _ => false,
     }
 }
 

@@ -86,17 +86,17 @@ pub struct PythonFunctionSignature<'a> {
     /// Parsed decorators on this function definition.
     decorators: Vec<DecoratorInfo>,
     /// True if the body is a stub ([`is_stub_body`]).
-    pub(super) has_stub_body: bool,
+    has_stub_body: bool,
     /// The `class` whose body contains this function when it is the nearest enclosing `def` or
     /// `class`.
     pub(super) enclosing_class: Option<&'a StmtClassDef>,
     /// The `def` whose body contains this one when it is the nearest enclosing `def` or `class`.
-    pub(super) enclosing_function: Option<&'a StmtFunctionDef>,
+    enclosing_function: Option<&'a StmtFunctionDef>,
     /// The parsed definition, for analyses of the body.
     pub(super) definition: &'a StmtFunctionDef,
 }
 
-impl PythonFunctionSignature<'_> {
+impl<'a> PythonFunctionSignature<'a> {
     /// Returns true if the function's signature is imposed from outside: a data-model dunder
     /// method other than `__init__`, `__new__`, and `__call__`, or a function decorated with
     /// `@override`, `@overload`, `@abstractmethod`, `@fixture` (`@pytest.fixture`),
@@ -173,9 +173,7 @@ impl PythonFunctionSignature<'_> {
             .iter()
             .any(|decorator| decorator.matches_any(PROPERTY_DECORATOR_PATHS))
     }
-}
 
-impl<'a> PythonFunctionSignature<'a> {
     /// The function's docstring, if its body starts with one.
     #[must_use]
     pub fn docstring(&self) -> Option<PythonDocstring<'a>> {
@@ -320,145 +318,6 @@ pub(super) fn function_signature<'a>(
     }
 }
 
-/// Returns true if the function body `statements` is a stub consisting only of an optional
-/// docstring and `...`, `pass`, or `raise NotImplementedError`.
-fn is_stub_body(statements: &[Stmt], source: &str) -> bool {
-    let remaining = if statements.first().is_some_and(is_docstring_statement) {
-        &statements[1..]
-    } else {
-        statements
-    };
-    remaining.is_empty() || (remaining.len() == 1 && is_stub_statement(&remaining[0], source))
-}
-
-/// Returns true if `statement` is an expression statement wrapping a string literal (docstring).
-fn is_docstring_statement(statement: &Stmt) -> bool {
-    matches!(
-        statement,
-        Stmt::Expr(expr_statement)
-            if matches!(
-                expr_statement.value.as_ref(),
-                Expr::StringLiteral(_) | Expr::BytesLiteral(_) | Expr::FString(_)
-            )
-    )
-}
-
-/// Returns true if `statement` is `pass`, `...`, or `raise NotImplementedError` / `raise NotImplementedError(...)`.
-fn is_stub_statement(statement: &Stmt, source: &str) -> bool {
-    match statement {
-        Stmt::Pass(_) => true,
-        Stmt::Expr(expr_statement) => {
-            matches!(expr_statement.value.as_ref(), Expr::EllipsisLiteral(_))
-        }
-        Stmt::Raise(raise_statement) => {
-            raise_statement.cause.is_none()
-                && raise_statement.exc.as_deref().is_some_and(|exc| match exc {
-                    Expr::Name(name) => name.id == NOT_IMPLEMENTED_ERROR,
-                    Expr::Call(call) => {
-                        written_name(&call.func, source).terminal == NOT_IMPLEMENTED_ERROR
-                    }
-                    _ => false,
-                })
-        }
-        _ => false,
-    }
-}
-
-/// Extracts all parameters in order from a `ruff_python_ast::Parameters` node.
-pub(super) fn extract_parameters_from_ast<'a>(
-    params: &Parameters,
-    file: &'a ParsedFile,
-) -> Vec<PythonParameterInfo<'a>> {
-    let mut result = Vec::new();
-    let mut is_first_param = true;
-
-    for param_with_default in params.posonlyargs.iter().chain(params.args.iter()) {
-        let name = param_with_default.parameter.name.id.as_str();
-        let kind = if is_first_param && matches!(name, SELF_RECEIVER | CLS_RECEIVER) {
-            PythonParameterKind::Receiver
-        } else {
-            PythonParameterKind::Positional
-        };
-        is_first_param = false;
-        result.push(build_parameter_with_default(param_with_default, kind, file));
-    }
-
-    if let Some(vararg) = &params.vararg {
-        result.push(build_variadic_parameter(
-            vararg,
-            PythonParameterKind::VarPositional,
-            file,
-        ));
-    }
-
-    for param_with_default in &params.kwonlyargs {
-        result.push(build_parameter_with_default(
-            param_with_default,
-            PythonParameterKind::KeywordOnly,
-            file,
-        ));
-    }
-
-    if let Some(kwarg) = &params.kwarg {
-        result.push(build_variadic_parameter(
-            kwarg,
-            PythonParameterKind::VarKeyword,
-            file,
-        ));
-    }
-
-    result
-}
-
-fn build_parameter_with_default<'a>(
-    param_with_default: &ParameterWithDefault,
-    kind: PythonParameterKind,
-    file: &'a ParsedFile,
-) -> PythonParameterInfo<'a> {
-    let parameter = &param_with_default.parameter;
-    let type_span = parameter
-        .annotation
-        .as_ref()
-        .map(|ann| span_from_ruff_range(ann.range()));
-    let type_text = type_span.map(|span| file.source[span.start..span.end].to_string());
-    let type_node = type_span.map(|span| AstNode::from_span(file, span));
-    let default_node = param_with_default
-        .default
-        .as_ref()
-        .map(|default| AstNode::from_span(file, span_from_ruff_range(default.range())));
-
-    PythonParameterInfo {
-        name: parameter.name.id.to_string(),
-        name_node: AstNode::from_span(file, span_from_ruff_range(parameter.name.range)),
-        type_node,
-        type_text,
-        default_node,
-        kind,
-    }
-}
-
-fn build_variadic_parameter<'a>(
-    parameter: &Parameter,
-    kind: PythonParameterKind,
-    file: &'a ParsedFile,
-) -> PythonParameterInfo<'a> {
-    let type_span = parameter
-        .annotation
-        .as_ref()
-        .map(|ann| span_from_ruff_range(ann.range()));
-    let type_text = type_span.map(|span| file.source[span.start..span.end].to_string());
-    let type_node = type_span.map(|span| AstNode::from_span(file, span));
-
-    PythonParameterInfo {
-        name: parameter.name.id.to_string(),
-        name_node: AstNode::from_span(file, span_from_ruff_range(parameter.name.range)),
-        type_node,
-        type_text,
-        default_node: None,
-        kind,
-    }
-}
-
 /// Returns true if `decorators` include `@override`, which makes the decorated method's name
 /// mandated by a contract.
 ///
@@ -574,6 +433,145 @@ fn is_data_model_dunder(func_name: &str) -> bool {
         && func_name.ends_with("__")
         && func_name.len() > 4
         && !matches!(func_name, INIT_METHOD | NEW_METHOD | "__call__")
+}
+
+/// Returns true if the function body `statements` is a stub consisting only of an optional
+/// docstring and `...`, `pass`, or `raise NotImplementedError`.
+fn is_stub_body(statements: &[Stmt], source: &str) -> bool {
+    let remaining = if statements.first().is_some_and(is_docstring_statement) {
+        &statements[1..]
+    } else {
+        statements
+    };
+    remaining.is_empty() || (remaining.len() == 1 && is_stub_statement(&remaining[0], source))
+}
+
+/// Returns true if `statement` is an expression statement wrapping a string literal (docstring).
+fn is_docstring_statement(statement: &Stmt) -> bool {
+    matches!(
+        statement,
+        Stmt::Expr(expr_statement)
+            if matches!(
+                expr_statement.value.as_ref(),
+                Expr::StringLiteral(_) | Expr::BytesLiteral(_) | Expr::FString(_)
+            )
+    )
+}
+
+/// Returns true if `statement` is `pass`, `...`, or `raise NotImplementedError` / `raise NotImplementedError(...)`.
+fn is_stub_statement(statement: &Stmt, source: &str) -> bool {
+    match statement {
+        Stmt::Pass(_) => true,
+        Stmt::Expr(expr_statement) => {
+            matches!(expr_statement.value.as_ref(), Expr::EllipsisLiteral(_))
+        }
+        Stmt::Raise(raise_statement) => {
+            raise_statement.cause.is_none()
+                && raise_statement.exc.as_deref().is_some_and(|exc| match exc {
+                    Expr::Name(name) => name.id == NOT_IMPLEMENTED_ERROR,
+                    Expr::Call(call) => {
+                        written_name(&call.func, source).terminal == NOT_IMPLEMENTED_ERROR
+                    }
+                    _ => false,
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Extracts all parameters in order from a `ruff_python_ast::Parameters` node.
+fn extract_parameters_from_ast<'a>(
+    params: &Parameters,
+    file: &'a ParsedFile,
+) -> Vec<PythonParameterInfo<'a>> {
+    let mut result = Vec::new();
+    let mut is_first_param = true;
+
+    for param_with_default in params.posonlyargs.iter().chain(params.args.iter()) {
+        let name = param_with_default.parameter.name.id.as_str();
+        let kind = if is_first_param && matches!(name, SELF_RECEIVER | CLS_RECEIVER) {
+            PythonParameterKind::Receiver
+        } else {
+            PythonParameterKind::Positional
+        };
+        is_first_param = false;
+        result.push(build_parameter_with_default(param_with_default, kind, file));
+    }
+
+    if let Some(vararg) = &params.vararg {
+        result.push(build_variadic_parameter(
+            vararg,
+            PythonParameterKind::VarPositional,
+            file,
+        ));
+    }
+
+    for param_with_default in &params.kwonlyargs {
+        result.push(build_parameter_with_default(
+            param_with_default,
+            PythonParameterKind::KeywordOnly,
+            file,
+        ));
+    }
+
+    if let Some(kwarg) = &params.kwarg {
+        result.push(build_variadic_parameter(
+            kwarg,
+            PythonParameterKind::VarKeyword,
+            file,
+        ));
+    }
+
+    result
+}
+
+fn build_parameter_with_default<'a>(
+    param_with_default: &ParameterWithDefault,
+    kind: PythonParameterKind,
+    file: &'a ParsedFile,
+) -> PythonParameterInfo<'a> {
+    let parameter = &param_with_default.parameter;
+    let type_span = parameter
+        .annotation
+        .as_ref()
+        .map(|ann| span_from_ruff_range(ann.range()));
+    let type_text = type_span.map(|span| file.source[span.start..span.end].to_string());
+    let type_node = type_span.map(|span| AstNode::from_span(file, span));
+    let default_node = param_with_default
+        .default
+        .as_ref()
+        .map(|default| AstNode::from_span(file, span_from_ruff_range(default.range())));
+
+    PythonParameterInfo {
+        name: parameter.name.id.to_string(),
+        name_node: AstNode::from_span(file, span_from_ruff_range(parameter.name.range)),
+        type_node,
+        type_text,
+        default_node,
+        kind,
+    }
+}
+
+fn build_variadic_parameter<'a>(
+    parameter: &Parameter,
+    kind: PythonParameterKind,
+    file: &'a ParsedFile,
+) -> PythonParameterInfo<'a> {
+    let type_span = parameter
+        .annotation
+        .as_ref()
+        .map(|ann| span_from_ruff_range(ann.range()));
+    let type_text = type_span.map(|span| file.source[span.start..span.end].to_string());
+    let type_node = type_span.map(|span| AstNode::from_span(file, span));
+
+    PythonParameterInfo {
+        name: parameter.name.id.to_string(),
+        name_node: AstNode::from_span(file, span_from_ruff_range(parameter.name.range)),
+        type_node,
+        type_text,
+        default_node: None,
+        kind,
+    }
 }
 
 #[cfg(test)]

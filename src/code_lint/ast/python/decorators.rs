@@ -9,9 +9,9 @@ use ruff_python_ast::{Decorator, Expr};
 #[derive(Clone)]
 pub(super) struct DecoratorInfo {
     /// Full path string as written (e.g. `"dataclasses.dataclass"`, `"pytest.mark.parametrize"`).
-    pub(super) path: String,
+    path: String,
     /// Terminal identifier as written (e.g. `"dataclass"`, `"parametrize"`).
-    pub(super) terminal_name: String,
+    terminal_name: String,
     /// Canonical path resolved through [`crate::code_lint::ast::resolve_name`], or `None` when the
     /// first segment is a module-level definition in the file.
     resolved_path: Option<String>,

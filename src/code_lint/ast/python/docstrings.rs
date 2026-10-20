@@ -26,7 +26,7 @@ pub struct PythonDocstring<'a> {
     lines_match_source: bool,
 }
 
-impl PythonDocstring<'_> {
+impl<'a> PythonDocstring<'a> {
     /// The docstring value after escape processing, without indentation removal.
     #[must_use]
     pub fn text(&self) -> &str {
@@ -155,21 +155,6 @@ impl PythonDocstring<'_> {
             )
     }
 
-    /// The words of the summary line, lowercase, without surrounding punctuation.
-    fn summary_words(&self) -> Vec<String> {
-        self.summary()
-            .unwrap_or_default()
-            .split_whitespace()
-            .map(|token| {
-                token
-                    .trim_matches(|character: char| !character.is_alphabetic())
-                    .to_ascii_lowercase()
-            })
-            .collect()
-    }
-}
-
-impl<'a> PythonDocstring<'a> {
     /// The string literal expression node.
     #[must_use]
     pub const fn node(&self) -> AstNode<'a> {
@@ -207,6 +192,19 @@ impl<'a> PythonDocstring<'a> {
             self.node.file,
             SourceSpan::new(start, span.start + line_start + content.len()),
         )
+    }
+
+    /// The words of the summary line, lowercase, without surrounding punctuation.
+    fn summary_words(&self) -> Vec<String> {
+        self.summary()
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(|token| {
+                token
+                    .trim_matches(|character: char| !character.is_alphabetic())
+                    .to_ascii_lowercase()
+            })
+            .collect()
     }
 }
 

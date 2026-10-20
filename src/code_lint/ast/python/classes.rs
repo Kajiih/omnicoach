@@ -1116,7 +1116,7 @@ mod tests {
 
         let cls = &classes[0];
         assert_eq!(cls.name, "Config");
-        assert_eq!(cls.decorators[0].terminal_name, "dataclass");
+        assert!(cls.is_field_synthesizing());
         assert!(!cls.is_dataclass_missing_arg("frozen"));
         assert!(cls.is_dataclass_missing_arg("slots"));
     }

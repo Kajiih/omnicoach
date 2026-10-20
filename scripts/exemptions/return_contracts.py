@@ -146,7 +146,7 @@ CLUSTER = Cluster(
         Mutation(
             label="a stub body has an unknown result (E10)",
             path=RETURNS,
-            edits=(("        if self.has_stub_body {", "        if false {"),),
+            edits=(("        if self.has_stub_body() {", "        if false {"),),
             cases=("non_boolean_predicate::pass::stub_body_exempt",),
         ),
         Mutation(

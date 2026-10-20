@@ -33,9 +33,7 @@ impl<'a> PythonFunctionSignature<'a> {
     pub fn return_type_union(&self) -> Option<PythonReturnTypeUnion<'a>> {
         self.return_type_node.as_ref().map(return_type_union)
     }
-}
 
-impl PythonFunctionSignature<'_> {
     /// What the function's own body returns or yields.
     #[must_use]
     pub fn body_results(&self) -> PythonBodyResults {
@@ -64,7 +62,7 @@ impl PythonFunctionSignature<'_> {
 
     /// See [`Self::return_shape`]: a stub body says nothing about the result.
     fn unannotated_return_shape(&self) -> ReturnShape {
-        if self.has_stub_body {
+        if self.has_stub_body() {
             return ReturnShape::Unknown;
         }
         let results = self.body_results();
