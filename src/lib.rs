@@ -24,10 +24,10 @@ pub mod code_lint;
 pub mod command_lint;
 pub mod config;
 pub mod diagnostic;
-pub(crate) mod diff;
+mod diff;
 pub mod rule_catalog;
 pub mod rule_declaration;
 pub mod rule_selection;
 
 #[cfg(test)]
-pub mod test_utils;
+mod test_utils;

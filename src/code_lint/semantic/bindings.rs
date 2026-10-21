@@ -8,7 +8,7 @@ use std::collections::HashSet;
 /// Collects all binding nodes in `file` whose identifier names are locally authored and
 /// eligible for renaming (excluding imports and trait/override contract members).
 #[must_use]
-pub fn collect_renameable_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
+pub(in crate::code_lint) fn collect_renameable_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
     ast::collect_bindings(file)
         .into_iter()
         .filter(|binding| {
@@ -23,7 +23,7 @@ pub fn collect_renameable_bindings(file: &ParsedFile) -> Vec<AstNode<'_>> {
 
 /// Collects the identifier names of all bindings introduced by imports in `file`.
 #[must_use]
-pub fn collect_imported_names(file: &ParsedFile) -> Vec<String> {
+pub(in crate::code_lint) fn collect_imported_names(file: &ParsedFile) -> Vec<String> {
     ast::collect_bindings(file)
         .into_iter()
         .filter(|binding| binding.kind == BindingKind::Import)
@@ -33,15 +33,15 @@ pub fn collect_imported_names(file: &ParsedFile) -> Vec<String> {
 
 /// A variable, constant, parameter, or attribute/field binding whose identifier ends with a
 /// matched suffix.
-pub struct SuffixedBindingMatch<'a> {
+pub(in crate::code_lint) struct SuffixedBindingMatch<'a> {
     /// The matched identifier AST node.
-    pub node: AstNode<'a>,
+    pub(in crate::code_lint) node: AstNode<'a>,
     /// Full identifier text (e.g. `timeout_seconds` or `user_list`).
-    pub name: String,
+    pub(in crate::code_lint) name: String,
     /// Matched suffix slice preserving the identifier's original case (e.g. `_seconds` or `_INT`).
-    pub actual_suffix: String,
+    pub(in crate::code_lint) actual_suffix: String,
     /// Identifier stem preceding the matched suffix (e.g. `timeout` or `MY`).
-    pub base_name: String,
+    pub(in crate::code_lint) base_name: String,
 }
 
 /// Finds all value bindings (variables, constants, parameters, declared Python attributes, and
@@ -52,7 +52,7 @@ pub struct SuffixedBindingMatch<'a> {
 /// (functions, classes, structs, enums, traits, type aliases), and trait/override contract names
 /// are skipped. Suffixes are evaluated longest-first for deterministic matching.
 #[must_use]
-pub fn find_suffixed_bindings<'a, S: std::hash::BuildHasher>(
+pub(in crate::code_lint) fn find_suffixed_bindings<'a, S: std::hash::BuildHasher>(
     file: &'a ParsedFile,
     banned_suffixes: &HashSet<String, S>,
 ) -> Vec<SuffixedBindingMatch<'a>> {

@@ -10,18 +10,18 @@ use std::fmt;
 
 /// Unique identifier of a declaration or group node within an [`AbstractionGraph`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NodeId(pub String);
+pub(super) struct NodeId(pub(super) String);
 
 impl NodeId {
     /// Creates a node identifier from a string slice.
     #[must_use]
-    pub fn new(value: impl Into<String>) -> Self {
+    pub(super) fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
 
     /// Borrows the underlying identifier string.
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub(super) fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -34,20 +34,20 @@ impl fmt::Display for NodeId {
 
 /// Source file and 1-indexed position of a declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceLocation {
+pub(super) struct SourceLocation {
     /// Relative path of the source file.
-    pub file: String,
+    pub(super) file: String,
     /// 1-indexed line number.
-    pub line: usize,
+    pub(super) line: usize,
     /// 1-indexed column number.
-    pub column: usize,
+    pub(super) column: usize,
     /// 1-indexed ending line number of the declaration span.
-    pub end_line: usize,
+    pub(super) end_line: usize,
 }
 
 /// Kind of declaration represented by a leaf node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum DeclarationKind {
+pub(super) enum DeclarationKind {
     /// A module-level function or callable.
     Callable,
     /// A method inside an `impl` block or `class`.
@@ -58,36 +58,36 @@ pub enum DeclarationKind {
 
 /// A leaf node representing one source declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeclarationNode {
+pub(super) struct DeclarationNode {
     /// Unique identifier within the graph.
-    pub id: NodeId,
+    pub(super) id: NodeId,
     /// Unqualified or qualified display name.
-    pub name: String,
+    pub(super) name: String,
     /// Optional compact language signature or type definition header.
-    pub signature: Option<String>,
+    pub(super) signature: Option<String>,
     /// Identifier of the declaration scope this item came from.
-    pub scope_id: usize,
+    pub(super) scope_id: usize,
     /// Callable, method, or type.
-    pub kind: DeclarationKind,
+    pub(super) kind: DeclarationKind,
     /// Public or private.
-    pub visibility: Visibility,
+    pub(super) visibility: Visibility,
     /// Whether this callable is a constructor (`new`, `__init__`, etc.).
-    pub is_constructor: bool,
+    pub(super) is_constructor: bool,
     /// File, line, and column of the declaration name.
-    pub location: SourceLocation,
+    pub(super) location: SourceLocation,
     /// Public declaration IDs that reach this declaration through private declarations only.
-    pub owners: Vec<NodeId>,
+    pub(super) owners: Vec<NodeId>,
     /// Recursion group identifier within `scope_id`.
-    pub recursion_group: usize,
+    pub(super) recursion_group: usize,
     /// Lakos abstraction level within `scope_id` (0 = leaf).
-    pub level: usize,
+    pub(super) level: usize,
     /// Lint findings reported on this declaration.
-    pub findings: Vec<FindingFact>,
+    pub(super) findings: Vec<FindingFact>,
 }
 
 /// Semantic role of a container group in the containment tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GroupKind {
+pub(super) enum GroupKind {
     /// A declared or inferred architectural component containing modules.
     Component {
         /// Explicitly declared dependency component names from `define_architecture!`, when
@@ -125,24 +125,24 @@ pub enum GroupKind {
 
 /// A container node in the containment forest.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GroupNode {
+pub(super) struct GroupNode {
     /// Unique identifier within the graph.
-    pub id: NodeId,
+    pub(super) id: NodeId,
     /// Display label for the group.
-    pub label: String,
+    pub(super) label: String,
     /// Semantic kind of group.
-    pub kind: GroupKind,
+    pub(super) kind: GroupKind,
     /// Component-level recursion group identifier (for top-level groups).
-    pub recursion_group: usize,
+    pub(super) recursion_group: usize,
     /// Abstraction level of the group within its parent scope.
-    pub level: usize,
+    pub(super) level: usize,
     /// Direct child node IDs (either [`GroupNode`]s or [`DeclarationNode`]s).
-    pub children: Vec<NodeId>,
+    pub(super) children: Vec<NodeId>,
 }
 
 /// Why one declaration sits at a higher abstraction level than another (ADR 011 §3.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum EdgeReason {
+pub(super) enum EdgeReason {
     /// A callable calls another callable.
     Call,
     /// A type's own definition contains another type.
@@ -171,7 +171,7 @@ impl From<OrderingReason> for EdgeReason {
 
 /// Status of a component-to-component summary edge under Murphy et al.'s Reflexion Model (D30).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ReflexionStatus {
+pub(super) enum ReflexionStatus {
     /// Declared in `define_architecture!` and observed in source (`count > 0`).
     Convergent,
     /// Declared in `define_architecture!` with zero observed references (`count == 0`).
@@ -184,44 +184,44 @@ pub enum ReflexionStatus {
 
 /// An abstraction-ordering edge between two declarations (`higher` is above `lower`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct OrderingEdge {
+pub(super) struct OrderingEdge {
     /// Higher-level declaration ID.
-    pub higher: NodeId,
+    pub(super) higher: NodeId,
     /// Lower-level declaration ID.
-    pub lower: NodeId,
+    pub(super) lower: NodeId,
     /// ADR 011 §3.4 ordering reason.
-    pub reason: EdgeReason,
+    pub(super) reason: EdgeReason,
 }
 
 /// A raw syntactic reference from `source` to `target`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ReferenceEdge {
+pub(super) struct ReferenceEdge {
     /// Referencing declaration ID.
-    pub source: NodeId,
+    pub(super) source: NodeId,
     /// Referenced declaration ID.
-    pub target: NodeId,
+    pub(super) target: NodeId,
     /// Syntactic site of the reference.
-    pub kind: RelationKind,
+    pub(super) kind: RelationKind,
 }
 
 /// Aggregated relation between two container groups in the folded overview (CP3, CUJ4, D30).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SummaryEdge {
+pub(super) struct SummaryEdge {
     /// Higher-level group ID.
-    pub higher: NodeId,
+    pub(super) higher: NodeId,
     /// Lower-level group ID.
-    pub lower: NodeId,
+    pub(super) lower: NodeId,
     /// Ordering reason being summarized.
-    pub reason: EdgeReason,
+    pub(super) reason: EdgeReason,
     /// Number of underlying declaration-to-declaration or cross-module edges of this reason.
-    pub count: usize,
+    pub(super) count: usize,
     /// Optional 3-way Reflexion classification for component-to-component edges.
-    pub reflexion: Option<ReflexionStatus>,
+    pub(super) reflexion: Option<ReflexionStatus>,
 }
 
 /// Invariant violation rejected by [`AbstractionGraph::new`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ModelError {
+pub(super) enum ModelError {
     /// A node ID is empty.
     EmptyNodeId,
     /// Two nodes share the same identifier.
@@ -333,24 +333,24 @@ impl std::error::Error for ModelError {}
 
 /// Unvalidated components passed to [`AbstractionGraph::new`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GraphParts {
+pub(super) struct GraphParts {
     /// Title or path of the scope being modeled.
-    pub title: String,
+    pub(super) title: String,
     /// Leaf declaration nodes.
-    pub declarations: Vec<DeclarationNode>,
+    pub(super) declarations: Vec<DeclarationNode>,
     /// Container group nodes.
-    pub groups: Vec<GroupNode>,
+    pub(super) groups: Vec<GroupNode>,
     /// Abstraction ordering edges between declarations.
-    pub ordering_edges: Vec<OrderingEdge>,
+    pub(super) ordering_edges: Vec<OrderingEdge>,
     /// Raw syntactic reference edges between declarations.
-    pub reference_edges: Vec<ReferenceEdge>,
+    pub(super) reference_edges: Vec<ReferenceEdge>,
     /// Aggregated summary edges between top-level groups.
-    pub summary_edges: Vec<SummaryEdge>,
+    pub(super) summary_edges: Vec<SummaryEdge>,
 }
 
 /// Validated, tool-agnostic abstraction graph (Layer L1).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AbstractionGraph {
+pub(super) struct AbstractionGraph {
     title: String,
     declarations: Vec<DeclarationNode>,
     groups: Vec<GroupNode>,
@@ -366,7 +366,7 @@ impl AbstractionGraph {
     /// # Errors
     ///
     /// Returns [`ModelError`] if any invariant in `03_design.md` §5.2 is violated.
-    pub fn new(parts: GraphParts) -> Result<Self, ModelError> {
+    pub(super) fn new(parts: GraphParts) -> Result<Self, ModelError> {
         let decl_by_id = index_declarations(&parts.declarations)?;
         let group_by_id = index_groups(&parts.groups, &decl_by_id)?;
         let parent_by_child = validate_containment(&parts.groups, &decl_by_id, &group_by_id)?;
@@ -392,43 +392,43 @@ impl AbstractionGraph {
 
     /// Title or source path of the graph.
     #[must_use]
-    pub fn title(&self) -> &str {
+    pub(super) fn title(&self) -> &str {
         &self.title
     }
 
     /// Leaf declaration nodes in deterministic order.
     #[must_use]
-    pub fn declarations(&self) -> &[DeclarationNode] {
+    pub(super) fn declarations(&self) -> &[DeclarationNode] {
         &self.declarations
     }
 
     /// Container group nodes in deterministic order.
     #[must_use]
-    pub fn groups(&self) -> &[GroupNode] {
+    pub(super) fn groups(&self) -> &[GroupNode] {
         &self.groups
     }
 
     /// Validated abstraction-ordering edges between declarations.
     #[must_use]
-    pub fn ordering_edges(&self) -> &[OrderingEdge] {
+    pub(super) fn ordering_edges(&self) -> &[OrderingEdge] {
         &self.ordering_edges
     }
 
     /// Validated raw reference edges between declarations.
     #[must_use]
-    pub fn reference_edges(&self) -> &[ReferenceEdge] {
+    pub(super) fn reference_edges(&self) -> &[ReferenceEdge] {
         &self.reference_edges
     }
 
     /// Validated summary edges between container groups.
     #[must_use]
-    pub fn summary_edges(&self) -> &[SummaryEdge] {
+    pub(super) fn summary_edges(&self) -> &[SummaryEdge] {
         &self.summary_edges
     }
 
     /// Returns the parent group ID of `node_id`, if it is nested inside a group.
     #[must_use]
-    pub fn parent_of(&self, node_id: &NodeId) -> Option<&NodeId> {
+    pub(super) fn parent_of(&self, node_id: &NodeId) -> Option<&NodeId> {
         self.parent_by_child.get(node_id)
     }
 }

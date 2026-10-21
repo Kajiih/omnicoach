@@ -13,63 +13,63 @@ const SUPER_SEGMENT: &str = "super";
 
 /// Multi-file project facts across a Rust crate or Python package.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProjectFacts {
+pub(super) struct ProjectFacts {
     /// Human-readable project or package name.
-    pub title: String,
+    pub(super) title: String,
     /// True if architectural components and their allowed dependencies are explicitly declared
     /// (for example via `define_architecture!` + `architecture_component!`).
-    pub has_declared_architecture: bool,
+    pub(super) has_declared_architecture: bool,
     /// Architectural components (declared or inferred from top-level directory / package structure).
-    pub components: Vec<ComponentFact>,
+    pub(super) components: Vec<ComponentFact>,
     /// Parsed modules in deterministic path order.
-    pub modules: Vec<ModuleFact>,
+    pub(super) modules: Vec<ModuleFact>,
     /// Resolved cross-module reference edges (`source_module -> target_module`).
-    pub cross_module_refs: Vec<CrossModuleRefFact>,
+    pub(super) cross_module_refs: Vec<CrossModuleRefFact>,
 }
 
 /// An architectural component and its declared dependency list (empty when inferred).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ComponentFact {
+pub(super) struct ComponentFact {
     /// Component identifier (e.g. `"CodeLintAst"` or `"zoneinfo"`).
-    pub name: String,
+    pub(super) name: String,
     /// Directly declared dependency component names (when [`ProjectFacts::has_declared_architecture`]
     /// is `true`).
-    pub declared_dependencies: Vec<String>,
+    pub(super) declared_dependencies: Vec<String>,
 }
 
 /// One module file within [`ProjectFacts`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModuleFact {
+pub(super) struct ModuleFact {
     /// Canonical module path (`"code_lint::ast"` or `"zoneinfo._tzpath"`).
-    pub module_path: String,
+    pub(super) module_path: String,
     /// Relative source file path (`"src/code_lint/ast.rs"`).
-    pub path: String,
+    pub(super) path: String,
     /// Owning component name.
-    pub component: String,
+    pub(super) component: String,
     /// Per-scope facts inside this module (`scopes[0]` is the module scope).
-    pub scopes: Vec<ScopeFacts>,
+    pub(super) scopes: Vec<ScopeFacts>,
 }
 
 /// A resolved reference from one module (and optional top-level item) to another module in the
 /// same project.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CrossModuleRefFact {
+pub(super) struct CrossModuleRefFact {
     /// Referring module path.
-    pub source_module: String,
+    pub(super) source_module: String,
     /// Referring top-level symbol in `source_module`, when the reference lies inside a top-level
     /// declaration.
-    pub source_symbol: Option<String>,
+    pub(super) source_symbol: Option<String>,
     /// Target module path.
-    pub target_module: String,
+    pub(super) target_module: String,
     /// Referenced top-level symbol in `target_module`, when resolved to a specific item.
-    pub target_symbol: Option<String>,
+    pub(super) target_symbol: Option<String>,
     /// 1-based line number of the reference in `source_module`.
-    pub line: usize,
+    pub(super) line: usize,
 }
 
 /// Collects [`ProjectFacts`] from an in-memory slice of `(relative_path, source_text)` pairs.
 #[must_use]
-pub fn collect_project_facts_from_sources(
+pub(super) fn collect_project_facts_from_sources(
     title: &str,
     lang: Language,
     files: &[(&str, &str)],

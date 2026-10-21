@@ -26,7 +26,7 @@ use crate::code_lint::ast::python::{
 /// Its signature is imposed ([`PythonFunctionSignature::has_imposed_signature`]) or it is a
 /// method of an interface class ([`is_interface_method`]).
 #[must_use]
-pub fn is_exempt_from_signature_rules(signature: &PythonFunctionSignature<'_>) -> bool {
+pub(super) fn is_exempt_from_signature_rules(signature: &PythonFunctionSignature<'_>) -> bool {
     signature.has_imposed_signature() || is_interface_method(signature)
 }
 
@@ -35,14 +35,14 @@ pub fn is_exempt_from_signature_rules(signature: &PythonFunctionSignature<'_>) -
 /// It is exempt from signature rules ([`is_exempt_from_signature_rules`]) or its body is a stub
 /// ([`PythonFunctionSignature::has_stub_body`]).
 #[must_use]
-pub fn is_exempt_from_body_usage_rules(signature: &PythonFunctionSignature<'_>) -> bool {
+pub(super) fn is_exempt_from_body_usage_rules(signature: &PythonFunctionSignature<'_>) -> bool {
     is_exempt_from_signature_rules(signature) || signature.has_stub_body()
 }
 
 /// Returns true if `name` starts with the word `Fake` after any leading `_`: `Fake` alone or
 /// followed by anything but a lowercase letter, so `Faker` and `Fakeable` do not match.
 #[must_use]
-pub fn is_fake_class_name(name: &str) -> bool {
+pub(super) fn is_fake_class_name(name: &str) -> bool {
     name.trim_start_matches('_')
         .strip_prefix("Fake")
         .is_some_and(|rest| !rest.starts_with(|character: char| character.is_ascii_lowercase()))
@@ -78,7 +78,7 @@ pub fn is_trivial_literal(value: &LiteralValue) -> bool {
 /// The read-only `collections.abc` counterparts of `collection_types`, deduplicated in order and
 /// joined with `", "`.
 #[must_use]
-pub fn read_only_collection_replacements(collection_types: &[PythonCollectionType]) -> String {
+pub(super) fn read_only_collection_replacements(collection_types: &[PythonCollectionType]) -> String {
     replacements_by_shape(collection_types, |shape| match shape {
         CollectionShape::Mapping => "collections.abc.Mapping",
         CollectionShape::Set => "collections.abc.Set",
@@ -89,7 +89,7 @@ pub fn read_only_collection_replacements(collection_types: &[PythonCollectionTyp
 /// The `replacement` of each shape in `collection_types`, deduplicated in order and joined with
 /// `", "`.
 #[must_use]
-pub fn replacements_by_shape(
+pub(super) fn replacements_by_shape(
     collection_types: &[PythonCollectionType],
     replacement: impl Fn(CollectionShape) -> &'static str,
 ) -> String {

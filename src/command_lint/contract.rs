@@ -19,13 +19,13 @@ pub struct CommandRule {
     /// Name, template, options, classification and doc; command rules analyze no language.
     pub declaration: Declaration,
     /// Finds the rule's violations in one intercepted command.
-    pub check: fn(&Self, &InterceptedCommand, &dyn JjClient) -> Vec<Diagnostic>,
+    pub(super) check: fn(&Self, &InterceptedCommand, &dyn JjClient) -> Vec<Diagnostic>,
 }
 
 impl CommandRule {
     /// Finds the rule's violations in `cmd`.
     #[must_use]
-    pub fn check_command(
+    pub(crate) fn check_command(
         &self,
         cmd: &InterceptedCommand,
         jj_client: &dyn JjClient,

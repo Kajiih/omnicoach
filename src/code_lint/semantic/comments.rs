@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 /// Index of non-doc source comments, mapping 1-indexed lines to comment AST nodes.
 #[derive(Default)]
-pub struct CommentIndex<'a> {
+pub(in crate::code_lint) struct CommentIndex<'a> {
     comments_by_line: HashMap<usize, IndexedComment<'a>>,
 }
 
@@ -18,7 +18,7 @@ impl<'a> CommentIndex<'a> {
     /// Builds a `CommentIndex` from a parsed file, excluding Rust doc comments (`///`, `//!`,
     /// `/** */`, `/*! */`).
     #[must_use]
-    pub fn from_file(file: &'a ParsedFile) -> Self {
+    pub(in crate::code_lint) fn from_file(file: &'a ParsedFile) -> Self {
         let source_text = file.source_text();
         let source = source_text.as_ref();
         let mut comments_by_line = HashMap::new();
@@ -52,7 +52,7 @@ impl<'a> CommentIndex<'a> {
     /// Comments inside the statement's body are deliberately excluded: they document the body,
     /// not the statement that introduces it.
     #[must_use]
-    pub fn has_explanation_for_span(
+    pub(in crate::code_lint) fn has_explanation_for_span(
         &self,
         file: &ParsedFile,
         span: crate::diagnostic::SourceSpan,
@@ -102,7 +102,7 @@ impl<'a> CommentIndex<'a> {
     /// Verifies if the contiguous standalone comment block directly above 1-indexed `line`
     /// holds a substantive explanation.
     #[must_use]
-    pub fn has_explanation_above(&self, line: usize) -> bool {
+    pub(in crate::code_lint) fn has_explanation_above(&self, line: usize) -> bool {
         let mut curr_line = line.saturating_sub(1);
         let mut prev_range: Option<crate::diagnostic::SourceSpan> = None;
         let mut parts = Vec::new();
@@ -159,7 +159,7 @@ const DIRECTIVE_PREFIXES: &[&str] = &[
 /// Returns `Some(stripped)` if delimiters were present, or `None` if the text
 /// does not start with standard comment delimiters.
 #[must_use]
-pub fn strip_comment_delimiters(text: &str) -> Option<&str> {
+pub(in crate::code_lint) fn strip_comment_delimiters(text: &str) -> Option<&str> {
     let trimmed = text.trim();
     trimmed
         .strip_prefix("//")

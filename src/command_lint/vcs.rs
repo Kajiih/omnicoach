@@ -13,7 +13,7 @@ pub trait JjClient {
 }
 
 /// Command-line client executing `jj` commands as subprocesses.
-pub struct JjCliClient;
+pub(super) struct JjCliClient;
 
 impl JjClient for JjCliClient {
     /// Queries the description of the given revision using the `jj` CLI command.

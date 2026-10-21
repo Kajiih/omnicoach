@@ -31,7 +31,7 @@ pub enum ProjectDepth {
 /// # Errors
 ///
 /// Returns [`ModelError`] if the resulting graph violates any Layer L1 invariant.
-pub fn build_project_graph(
+pub(super) fn build_project_graph(
     project: &ProjectFacts,
     depth: ProjectDepth,
 ) -> Result<AbstractionGraph, ModelError> {
@@ -658,7 +658,7 @@ fn build_component_reflexion_summaries(
 /// # Errors
 ///
 /// Returns [`ModelError`] if the resulting graph violates any Layer L1 invariant.
-pub fn build_file_graph(
+pub(super) fn build_file_graph(
     path: &Path,
     scopes: &[ScopeFacts],
 ) -> Result<AbstractionGraph, ModelError> {
@@ -1322,7 +1322,7 @@ fn compute_scc_and_levels(
 
 #[cfg(test)]
 mod tests {
-    use super::super::{ComponentFact, CrossModuleRefFact};
+    use super::super::project_facts::{ComponentFact, CrossModuleRefFact};
     use super::*;
     use crate::code_lint::ast::{
         FindingFact, OrderingEdge as AstOrderingEdge, OrderingReason, PlacementAnchor, RelationFact,

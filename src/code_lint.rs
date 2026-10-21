@@ -3,8 +3,8 @@
 pub mod ast;
 pub mod contract;
 pub mod graph;
-pub mod policy;
+pub(crate) mod policy;
 pub mod rules;
 pub mod runner;
-pub(crate) mod semantic;
+mod semantic;
 pub mod suppression;

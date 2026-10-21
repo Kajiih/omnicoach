@@ -1,5 +1,5 @@
 //! The intercepted command parser: shell input split into commands ([`InterceptedCommand`])
-//! and their arguments ([`ParsedArgs`]) under a program's option layout ([`ProgramCliSchema`]).
+//! and their arguments (`ParsedArgs`) under a program's option layout (`ProgramCliSchema`).
 
 architecture_component!(CommandLintCommand);
 
@@ -16,24 +16,24 @@ type BashNode<'a> = ast_grep_core::Node<'a, StrDoc<SupportLang>>;
 
 /// Schema defining a program's command-line interface options layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProgramCliSchema {
+pub(super) struct ProgramCliSchema {
     /// The name of the binary/program (e.g. `"jj"`, `"git"`).
-    pub program_name: &'static str,
+    pub(super) program_name: &'static str,
     /// List of option flags that accept values (e.g. `["-R", "--repository"]`).
-    pub options_with_values: &'static [&'static str],
+    pub(super) options_with_values: &'static [&'static str],
 }
 
 /// Representation of an intercepted CLI command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterceptedCommand {
     /// The original full raw CLI input string.
-    pub raw_string: String,
+    pub(super) raw_string: String,
     /// The name of the binary/program being executed.
-    pub program_name: String,
+    pub(super) program_name: String,
     /// The list of arguments parsed from the command string.
-    pub arguments: Vec<String>,
+    pub(super) arguments: Vec<String>,
     /// The byte offsets span of this command in the raw CLI string.
-    pub span: (usize, usize),
+    pub(super) span: (usize, usize),
 }
 
 impl InterceptedCommand {
@@ -58,13 +58,13 @@ impl InterceptedCommand {
 
     /// Extracts positional arguments (skipping option flags and their values) and option key-values.
     #[must_use]
-    pub fn parse_args(&self, schema: &ProgramCliSchema) -> ParsedArgs {
+    pub(super) fn parse_args(&self, schema: &ProgramCliSchema) -> ParsedArgs {
         ArgParser::new(&self.arguments, schema.options_with_values).parse()
     }
 
     /// Returns the base name of the program (e.g. "jj" from "/usr/bin/jj").
     #[must_use]
-    pub fn program_base_name(&self) -> &str {
+    pub(super) fn program_base_name(&self) -> &str {
         std::path::Path::new(&self.program_name)
             .file_name()
             .and_then(|file_name| file_name.to_str())
@@ -199,23 +199,24 @@ impl<'a> ArgParser<'a> {
 
 /// Represents parsed command line arguments and options.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedArgs {
+pub(super) struct ParsedArgs {
     /// The positional arguments (e.g. `["edit", "@-"]`).
-    pub positionals: Vec<String>,
+    pub(super) positionals: Vec<String>,
     /// Option flags and their values.
     options: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl ParsedArgs {
     /// Checks if a boolean or key-value option flag was provided.
+    #[cfg(test)]
     #[must_use]
-    pub fn has_flag(&self, flag: &str) -> bool {
+    pub(super) fn has_flag(&self, flag: &str) -> bool {
         self.options.contains_key(flag)
     }
 
     /// Gets the first value associated with an option flag, if present.
     #[must_use]
-    pub fn get_option(&self, option: &str) -> Option<&str> {
+    pub(super) fn get_option(&self, option: &str) -> Option<&str> {
         self.options
             .get(option)
             .and_then(|values| values.first())
@@ -224,7 +225,7 @@ impl ParsedArgs {
 
     /// Verifies if the sequence of positional arguments starts with the given subcommands.
     #[must_use]
-    pub fn has_subcommand_sequence(&self, sequence: &[&str]) -> bool {
+    pub(super) fn has_subcommand_sequence(&self, sequence: &[&str]) -> bool {
         if self.positionals.len() < sequence.len() {
             return false;
         }

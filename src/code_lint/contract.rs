@@ -36,8 +36,8 @@ pub enum RuleTarget {
 /// whose last parameter does not match the declared options does not compile.
 ///
 /// Rules express policy, not plumbing. `check` queries the [`ParsedFile`] through named
-/// `code_lint::ast` and `code_lint::semantic` helpers (or [`Self::check_banned_calls`]) and
-/// anchors findings on an [`AstNode`] with [`Self::diagnostic_at_node`]. `AstNode` exposes
+/// `code_lint::ast` and `code_lint::semantic` helpers (or `Self::check_banned_calls`) and
+/// anchors findings on an [`AstNode`] with `Self::diagnostic_at_node`. `AstNode` exposes
 /// text and location but no tree navigation, so a rule needing a new structural fact adds a
 /// named helper to `code_lint::ast` rather than walking the tree itself.
 #[derive(Clone, Copy)]
@@ -48,7 +48,7 @@ pub struct CodeRule<Options: OptionsDeclaration = ()> {
     pub target: RuleTarget,
     /// Finds the rule's violations in one file. Returned diagnostics may be in any order:
     /// ordering is owned by the reporting layer ([`crate::diagnostic`]).
-    pub check: for<'a> fn(&Self, &Path, &ParsedFile, Options::Param<'a>) -> Vec<Diagnostic>,
+    pub(crate) check: for<'a> fn(&Self, &Path, &ParsedFile, Options::Param<'a>) -> Vec<Diagnostic>,
 }
 
 impl<Options: OptionsDeclaration> CodeRule<Options> {
@@ -93,7 +93,7 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
 
     /// Renders this rule's violation template at the given AST node using the node's language.
     #[must_use]
-    pub fn diagnostic_at_node(
+    pub(super) fn diagnostic_at_node(
         &self,
         path: &Path,
         node: &AstNode<'_>,
@@ -109,7 +109,7 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
     /// Emits a diagnostic with `("callee", &matched.callee)` for every call in `file` to one of
     /// the `banned` callees.
     #[must_use]
-    pub fn check_banned_calls(
+    pub(super) fn check_banned_calls(
         &self,
         path: &Path,
         file: &ParsedFile,
@@ -121,7 +121,7 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
     /// Emits a diagnostic with `("callee", &matched.callee)` for every call in `file` to one of
     /// the `banned` callees that satisfies `predicate`.
     #[must_use]
-    pub fn check_banned_calls_where(
+    pub(super) fn check_banned_calls_where(
         &self,
         path: &Path,
         file: &ParsedFile,
@@ -141,7 +141,7 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
     /// value binding (variable, constant, parameter, declared attribute, or struct field) ending
     /// in one of the `banned` suffixes.
     #[must_use]
-    pub fn check_banned_suffixes(
+    pub(super) fn check_banned_suffixes(
         &self,
         path: &Path,
         file: &ParsedFile,
@@ -153,7 +153,7 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
     /// Emits a diagnostic with `("name", ...), ("suffix", ...), ("stem", ...)` for every
     /// value binding ending in one of the `banned` suffixes that satisfies `predicate`.
     #[must_use]
-    pub fn check_banned_suffixes_where(
+    pub(super) fn check_banned_suffixes_where(
         &self,
         path: &Path,
         file: &ParsedFile,

@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 /// Alpha status banner included in rendered `# Scope:` headers.
-pub const ALPHA_BANNER: &str =
+const ALPHA_BANNER: &str =
     "[ALPHA — experimental, under active investigation & design; format may change at any time]";
 
 /// Supported text output formats for `omnicoach graph`.
@@ -29,7 +29,7 @@ pub enum OutputFormat {
 
 /// Serializes `graph` into `format`.
 #[must_use]
-pub fn render_graph(graph: &AbstractionGraph, format: OutputFormat) -> String {
+pub(super) fn render_graph(graph: &AbstractionGraph, format: OutputFormat) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# Scope: {} {ALPHA_BANNER}", graph.title());
     let idx = GraphEdgeIndex::build(graph);
@@ -431,11 +431,11 @@ const fn format_reflexion_status(status: ReflexionStatus) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::code_lint::ast::{OrderingReason, PlacementAnchor};
-    use crate::code_lint::graph::{
+    use super::super::model::{
         GraphParts, OrderingEdge, ReferenceEdge, SourceLocation, SummaryEdge,
     };
+    use super::*;
+    use crate::code_lint::ast::{OrderingReason, PlacementAnchor};
 
     fn fixture_graph() -> AbstractionGraph {
         let entry = DeclarationNode {

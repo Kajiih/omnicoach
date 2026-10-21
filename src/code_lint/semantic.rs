@@ -2,6 +2,6 @@
 
 architecture_component!(CodeLintSemantic);
 
-pub mod bindings;
-pub mod calls;
-pub mod comments;
+pub(super) mod bindings;
+pub(super) mod calls;
+pub(super) mod comments;

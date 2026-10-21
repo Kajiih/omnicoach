@@ -194,7 +194,7 @@ const BLANKET_SUPPRESSION: Declaration = Declaration {
     },
 };
 
-/// The suppression audits, evaluated by [`SuppressionTracker::audit`] rather than per file
+/// The suppression audits, evaluated by `SuppressionTracker::audit` rather than per file
 /// like code rules.
 pub const SUPPRESSION_AUDITS: &[Declaration] = &[
     MISSING_SUPPRESSION_REASON,
@@ -220,7 +220,7 @@ const TOOL_DIRECTIVE_MARKERS: &[&str] = &["noqa", "ignore", "disable", "skip-fil
 /// Returns `true` if `content` may contain a suppression directive: an `omni:` or `omnicoach:`
 /// one in any language, or a third-party one in Python.
 #[must_use]
-pub fn contains_directive_prefix(content: &str, lang: Language) -> bool {
+pub(super) fn contains_directive_prefix(content: &str, lang: Language) -> bool {
     DIRECTIVE_NAMESPACES
         .iter()
         .any(|namespace| content.contains(namespace))
@@ -269,7 +269,7 @@ impl SuppressionTracker {
 
     /// Filters diagnostics against active directives, marking matched rules as used.
     #[must_use]
-    pub fn filter_diagnostics(&mut self, diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    pub(super) fn filter_diagnostics(&mut self, diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
         if self.directives.is_empty() {
             return diagnostics;
         }
@@ -307,7 +307,7 @@ impl SuppressionTracker {
     /// `evaluated_rules` holds the subset that actually ran on `path`; both are supplied by the
     /// caller so this module stays independent of the rule registry.
     #[must_use]
-    pub fn audit(
+    pub(super) fn audit(
         &self,
         path: &Path,
         config: &Config,

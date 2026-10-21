@@ -11,16 +11,12 @@ mod model;
 mod project_facts;
 mod render;
 
-pub use self::builder::{ProjectDepth, build_file_graph, build_project_graph};
-pub use self::model::{
-    AbstractionGraph, DeclarationKind, DeclarationNode, EdgeReason, GraphParts, GroupKind,
-    GroupNode, ModelError, NodeId, OrderingEdge, ReferenceEdge, ReflexionStatus, SourceLocation,
-    SummaryEdge,
-};
-pub use self::project_facts::{
-    ComponentFact, CrossModuleRefFact, ModuleFact, ProjectFacts, collect_project_facts_from_sources,
-};
-pub use self::render::{ALPHA_BANNER, OutputFormat, render_graph};
+pub use self::builder::ProjectDepth;
+pub use self::render::OutputFormat;
+
+use self::builder::{build_file_graph, build_project_graph};
+use self::project_facts::collect_project_facts_from_sources;
+use self::render::render_graph;
 
 use crate::code_lint::ast::{ParsedFile, collect_scope_facts};
 use crate::config::Config;
