@@ -17,34 +17,34 @@ use std::collections::{HashMap, HashSet};
 
 /// What a function's own body returns or yields, nested functions, classes and lambdas excluded.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct PythonBodyResults {
+pub(in crate::code_lint) struct PythonBodyResults {
     /// True if the body has a `return <value>` whose value is not the `None` literal.
-    pub returns_value: bool,
+    pub(in crate::code_lint) returns_value: bool,
     /// True if the body has a `yield` or `yield from`.
-    pub yields: bool,
+    pub(in crate::code_lint) yields: bool,
     /// The largest element count among the tuple displays of at least two elements that the body
     /// returns or yields (`return low, high`); displays with a starred element are not counted.
-    pub tuple_display_arity: Option<usize>,
+    pub(in crate::code_lint) tuple_display_arity: Option<usize>,
 }
 
 impl<'a> PythonFunctionSignature<'a> {
     /// The return annotation flattened across unions, if the function has one (see
     /// [`return_type_union`]).
     #[must_use]
-    pub fn return_type_union(&self) -> Option<PythonReturnTypeUnion<'a>> {
+    pub(in crate::code_lint) fn return_type_union(&self) -> Option<PythonReturnTypeUnion<'a>> {
         self.return_type_node.as_ref().map(return_type_union)
     }
 
     /// What the function's own body returns or yields.
     #[must_use]
-    pub fn body_results(&self) -> PythonBodyResults {
+    pub(in crate::code_lint) fn body_results(&self) -> PythonBodyResults {
         collect_body_results(&self.definition.body)
     }
 
     /// What the function returns: read from its return annotation, or, when unannotated, from
     /// what its own body returns or yields.
     #[must_use]
-    pub fn return_shape(&self) -> ReturnShape {
+    pub(in crate::code_lint) fn return_shape(&self) -> ReturnShape {
         let Some(return_type_node) = &self.return_type_node else {
             return self.unannotated_return_shape();
         };

@@ -13,7 +13,7 @@ use ruff_text_size::Ranged as _;
 
 /// Parameter classification in a Python function signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PythonParameterKind {
+pub(in crate::code_lint) enum PythonParameterKind {
     /// Method receiver (`self` or `cls`).
     Receiver,
     /// Standard positional or positional-or-keyword parameter.
@@ -30,29 +30,27 @@ pub enum PythonParameterKind {
 #[derive(Clone)]
 pub struct PythonParameterInfo<'a> {
     /// Parameter identifier name.
-    pub name: String,
-    /// Parameter identifier AST node.
-    pub name_node: AstNode<'a>,
+    pub(in crate::code_lint) name: String,
     /// Type annotation AST node if present (e.g. `list[str]`).
-    pub type_node: Option<AstNode<'a>>,
+    pub(in crate::code_lint) type_node: Option<AstNode<'a>>,
     /// Formatted type annotation text.
-    pub type_text: Option<String>,
+    pub(in crate::code_lint) type_text: Option<String>,
     /// Default value expression AST node if present (e.g. `None` in `x: int | None = None`).
-    pub default_node: Option<AstNode<'a>>,
+    pub(in crate::code_lint) default_node: Option<AstNode<'a>>,
     /// Parameter classification kind.
-    pub kind: PythonParameterKind,
+    pub(in crate::code_lint) kind: PythonParameterKind,
 }
 
 impl PythonParameterInfo<'_> {
     /// Returns true if the parameter is a standard positional or positional-or-keyword parameter.
     #[must_use]
-    pub const fn is_positional(&self) -> bool {
+    pub(in crate::code_lint) const fn is_positional(&self) -> bool {
         matches!(self.kind, PythonParameterKind::Positional)
     }
 
     /// Returns true if the parameter is a variadic (`*args` or `**kwargs`).
     #[must_use]
-    pub const fn is_variadic(&self) -> bool {
+    pub(in crate::code_lint) const fn is_variadic(&self) -> bool {
         matches!(
             self.kind,
             PythonParameterKind::VarPositional | PythonParameterKind::VarKeyword
@@ -61,7 +59,7 @@ impl PythonParameterInfo<'_> {
 
     /// The parameter name with its leading `*` or `**` when variadic.
     #[must_use]
-    pub fn display_name(&self) -> String {
+    pub(in crate::code_lint) fn display_name(&self) -> String {
         match self.kind {
             PythonParameterKind::VarPositional => format!("*{}", self.name),
             PythonParameterKind::VarKeyword => format!("**{}", self.name),
@@ -76,13 +74,13 @@ impl PythonParameterInfo<'_> {
 #[derive(Clone)]
 pub struct PythonFunctionSignature<'a> {
     /// Function identifier AST node.
-    pub name_node: AstNode<'a>,
+    pub(in crate::code_lint) name_node: AstNode<'a>,
     /// Function identifier name.
-    pub name: String,
+    pub(in crate::code_lint) name: String,
     /// Parsed parameters in declaration order.
-    pub parameters: Vec<PythonParameterInfo<'a>>,
+    pub(in crate::code_lint) parameters: Vec<PythonParameterInfo<'a>>,
     /// Return type annotation AST node (`-> <type>`), if present.
-    pub return_type_node: Option<AstNode<'a>>,
+    pub(in crate::code_lint) return_type_node: Option<AstNode<'a>>,
     /// Parsed decorators on this function definition.
     decorators: Vec<DecoratorInfo>,
     /// True if the body is a stub ([`is_stub_body`]).
@@ -104,7 +102,7 @@ impl<'a> PythonFunctionSignature<'a> {
     /// their annotations), or `@<property>.setter` (whose value type mirrors the getter's return
     /// type).
     #[must_use]
-    pub fn has_imposed_signature(&self) -> bool {
+    pub(in crate::code_lint) fn has_imposed_signature(&self) -> bool {
         is_data_model_dunder(&self.name)
             || self.decorators.iter().any(|decorator| {
                 decorator.matches_any(IMPOSED_SIGNATURE_DECORATOR_PATHS)
@@ -115,7 +113,7 @@ impl<'a> PythonFunctionSignature<'a> {
     /// Returns true if the function is decorated with `@override` (`typing.override` or
     /// `typing_extensions.override`), resolved through the file's imports.
     #[must_use]
-    pub fn has_override_decorator(&self) -> bool {
+    pub(in crate::code_lint) fn has_override_decorator(&self) -> bool {
         self.decorators
             .iter()
             .any(|decorator| decorator.matches_any(OVERRIDE_DECORATOR_PATHS))
@@ -134,21 +132,21 @@ impl<'a> PythonFunctionSignature<'a> {
     /// enclosing `def` or `class` is a `def`). Methods of a class defined in a function are not
     /// nested.
     #[must_use]
-    pub const fn is_nested(&self) -> bool {
+    pub(in crate::code_lint) const fn is_nested(&self) -> bool {
         self.enclosing_function.is_some()
     }
 
     /// Returns true if the function is a class constructor (`__init__` or `__new__`) defined
     /// directly in a class body.
     #[must_use]
-    pub fn is_constructor(&self) -> bool {
+    pub(in crate::code_lint) fn is_constructor(&self) -> bool {
         self.enclosing_class.is_some() && matches!(self.name.as_str(), INIT_METHOD | NEW_METHOD)
     }
 
     /// Returns true if the function body is a stub consisting only of an optional docstring
     /// and `...`, `pass`, or `raise NotImplementedError`.
     #[must_use]
-    pub const fn has_stub_body(&self) -> bool {
+    pub(in crate::code_lint) const fn has_stub_body(&self) -> bool {
         self.has_stub_body
     }
 
@@ -157,7 +155,7 @@ impl<'a> PythonFunctionSignature<'a> {
     /// `@override` method (documented on the base method), or a `@<property>.setter` /
     /// `@<property>.deleter` accessor (documented on the getter).
     #[must_use]
-    pub fn is_documented_elsewhere(&self) -> bool {
+    pub(in crate::code_lint) fn is_documented_elsewhere(&self) -> bool {
         is_data_model_dunder(&self.name)
             || self.decorators.iter().any(|decorator| {
                 decorator.matches_any(OVERRIDE_DECORATOR_PATHS)
@@ -168,7 +166,7 @@ impl<'a> PythonFunctionSignature<'a> {
     /// Returns true if the function is a property getter (`@property`,
     /// `@functools.cached_property`), documented like an attribute rather than a function.
     #[must_use]
-    pub fn is_property_getter(&self) -> bool {
+    pub(in crate::code_lint) fn is_property_getter(&self) -> bool {
         self.decorators
             .iter()
             .any(|decorator| decorator.matches_any(PROPERTY_DECORATOR_PATHS))
@@ -176,7 +174,7 @@ impl<'a> PythonFunctionSignature<'a> {
 
     /// The function's docstring, if its body starts with one.
     #[must_use]
-    pub fn docstring(&self) -> Option<PythonDocstring<'a>> {
+    pub(in crate::code_lint) fn docstring(&self) -> Option<PythonDocstring<'a>> {
         docstring_of(&self.definition.body, self.name_node.file)
     }
 }
@@ -332,7 +330,7 @@ pub(super) fn has_override_decorator(decorators: &[Decorator], file: &ParsedFile
 /// Finds all nested Python function definitions (`def ...` inside another `def ...`) and returns
 /// `(function_node, function_name)` pairs.
 #[must_use]
-pub fn find_nested_functions(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
+pub(in crate::code_lint) fn find_nested_functions(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
     struct NestedFunctionVisitor<'a> {
         file: &'a ParsedFile,
         in_function: bool,
@@ -380,7 +378,7 @@ pub fn find_nested_functions(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
 /// Finds all Python class definitions inside a function or method body (`class ...` inside `def ...`)
 /// and returns `(class_node, class_name)` pairs.
 #[must_use]
-pub fn find_nested_classes(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
+pub(in crate::code_lint) fn find_nested_classes(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
     struct NestedClassVisitor<'a> {
         file: &'a ParsedFile,
         in_function: bool,
@@ -544,7 +542,6 @@ fn build_parameter_with_default<'a>(
 
     PythonParameterInfo {
         name: parameter.name.id.to_string(),
-        name_node: AstNode::from_span(file, span_from_ruff_range(parameter.name.range)),
         type_node,
         type_text,
         default_node,
@@ -566,7 +563,6 @@ fn build_variadic_parameter<'a>(
 
     PythonParameterInfo {
         name: parameter.name.id.to_string(),
-        name_node: AstNode::from_span(file, span_from_ruff_range(parameter.name.range)),
         type_node,
         type_text,
         default_node: None,

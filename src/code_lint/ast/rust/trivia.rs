@@ -30,7 +30,7 @@ pub(super) fn is_rust_non_doc_trivia(token: &SyntaxToken) -> bool {
 ///
 /// Per the Rust Reference, `////...`, `/***...`, and `/**/` are ordinary non-doc comments.
 #[must_use]
-pub fn is_rust_doc_comment(text: &str) -> bool {
+pub(in crate::code_lint) fn is_rust_doc_comment(text: &str) -> bool {
     (text.starts_with("///") && !text.starts_with("////"))
         || text.starts_with("//!")
         || (text.starts_with("/**") && !text.starts_with("/***") && text != "/**/")

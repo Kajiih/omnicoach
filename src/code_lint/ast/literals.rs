@@ -33,7 +33,7 @@ impl LiteralValue {
 
 /// Whether a literal defines a named constant or is used inline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LiteralRole {
+pub(in crate::code_lint) enum LiteralRole {
     /// The whole value of a named scalar constant (`MAX_RETRIES = 3`, `const JJ: &str = "jj";`).
     ConstantDefinition,
     /// Any other position.
@@ -43,11 +43,11 @@ pub enum LiteralRole {
 /// A literal that could be replaced by a named constant.
 pub struct LiteralOccurrence<'a> {
     /// The literal, or for a negative number the node spanning its sign and digits.
-    pub node: AstNode<'a>,
+    pub(crate) node: AstNode<'a>,
     /// The normalized value.
-    pub value: LiteralValue,
+    pub(crate) value: LiteralValue,
     /// Whether the literal defines a constant or is used inline.
-    pub role: LiteralRole,
+    pub(in crate::code_lint) role: LiteralRole,
 }
 
 /// Collects the literals in `file` that could be replaced by a named constant, in source order.

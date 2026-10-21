@@ -56,7 +56,7 @@ pub struct RustFileSummary {
     pub architecture_components: Vec<String>,
     /// `(component_name, declared_dependencies)` entries from `define_architecture! { ... }` macro
     /// invocations in production code.
-    pub defined_architecture: Vec<(String, Vec<String>)>,
+    pub(in crate::code_lint) defined_architecture: Vec<(String, Vec<String>)>,
     /// Top-level external `mod <name>;` declarations (`mod foo;`, `pub mod foo;`).
     pub external_mods: Vec<ExternalModDeclaration>,
     /// `(line, item_text)` of top-level production items that are neither external `mod` declarations
@@ -215,7 +215,10 @@ fn summarize_rust_node(
     }
 
     for child in node.children() {
-        if !matches!(child.kind(), SyntaxKind::TOKEN_TREE | SyntaxKind::VISIBILITY) {
+        if !matches!(
+            child.kind(),
+            SyntaxKind::TOKEN_TREE | SyntaxKind::VISIBILITY
+        ) {
             summarize_rust_node(&child, file, defined_macros, summary);
         }
     }

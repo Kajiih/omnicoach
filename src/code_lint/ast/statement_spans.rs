@@ -7,7 +7,7 @@ use std::ops::RangeInclusive;
 
 /// Resolves the 1-indexed inclusive header line range of the innermost statement enclosing `span`.
 #[must_use]
-pub fn enclosing_statement_header_range(
+pub(in crate::code_lint) fn enclosing_statement_header_range(
     file: &ParsedFile,
     span: SourceSpan,
 ) -> Option<RangeInclusive<usize>> {
@@ -20,7 +20,9 @@ pub fn enclosing_statement_header_range(
 /// Lines are 1-indexed. Covers Python `@decorator` and Rust `#[...]` attributes; when several
 /// start on the same line, the largest ending line is kept.
 #[must_use]
-pub fn decorator_and_attribute_end_lines(file: &ParsedFile) -> HashMap<usize, usize> {
+pub(in crate::code_lint) fn decorator_and_attribute_end_lines(
+    file: &ParsedFile,
+) -> HashMap<usize, usize> {
     let mut end_lines = HashMap::new();
     let mut record = |span: SourceSpan| {
         let start_line = file.line_index.line(span.start);

@@ -25,7 +25,7 @@ const COW_TYPE_NAME: &str = "Cow";
 const BOOL_TYPE_NAME: &str = "bool";
 
 /// The payload `T` of an optional return type, as classified by [`nullable_return_payload`].
-pub enum NullableReturnPayload {
+pub(in crate::code_lint) enum NullableReturnPayload {
     /// A slice or unsized array type (`[T]`), with its source text.
     Slice(String),
     /// A generic path type (`std::vec::Vec<T>`).
@@ -126,7 +126,9 @@ fn return_shape(return_type: Option<ast::Type>, file: &ParsedFile) -> ReturnShap
 /// `Arc<T>`, `Cow<'_, T>`) around `T`. Returns `None` if there is no `Option` or `T` is neither a
 /// slice nor a generic path type.
 #[must_use]
-pub fn nullable_return_payload(return_type: &AstNode<'_>) -> Option<NullableReturnPayload> {
+pub(in crate::code_lint) fn nullable_return_payload(
+    return_type: &AstNode<'_>,
+) -> Option<NullableReturnPayload> {
     let file = return_type.file;
     let source = &file.source;
     let return_type = cast_at_span::<ast::Type>(return_type)?;

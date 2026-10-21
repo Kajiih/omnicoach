@@ -6,18 +6,18 @@ use std::sync::Arc;
 
 /// A function enclosing a collected node, recorded by the walk that collected the node.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnclosingFunction {
+pub(in crate::code_lint) struct EnclosingFunction {
     /// The function's name.
-    pub name: String,
+    pub(in crate::code_lint) name: String,
     /// Byte span of the function's declared name identifier.
-    pub name_span: SourceSpan,
+    pub(in crate::code_lint) name_span: SourceSpan,
     /// True if the function is defined at file scope: a statement of the Python module body or
     /// an item of the Rust source file (not nested in a class, `impl`, `mod`, or block).
-    pub is_top_level: bool,
+    pub(in crate::code_lint) is_top_level: bool,
     /// Name of the immediately enclosing top-level Python `class`, if this function is a direct
     /// method of that class. `None` for module-level functions, nested functions, methods of
     /// nested classes, and all Rust functions.
-    pub enclosing_class: Option<String>,
+    pub(in crate::code_lint) enclosing_class: Option<String>,
 }
 
 /// Returns `outer` (innermost first) with `function` prepended as the new innermost function.
@@ -35,16 +35,16 @@ pub(super) fn with_innermost_function(
 pub struct CallSiteContext {
     /// True if the call is the context-manager expression of a Python `with` item (`with
     /// suppress(KeyError):`). Always false in Rust.
-    pub is_with_context_manager: bool,
+    pub(in crate::code_lint) is_with_context_manager: bool,
     /// True if the call is inside a Python `except` handler without an intervening `def`,
     /// `class`, or `lambda` boundary. Always false in Rust.
-    pub is_in_except_clause: bool,
+    pub(in crate::code_lint) is_in_except_clause: bool,
     /// True if the call is inside the condition or body of a `for`, `while`, or `loop`
     /// statement without an intervening function, lambda, or closure boundary.
-    pub is_in_loop: bool,
+    pub(in crate::code_lint) is_in_loop: bool,
     /// The functions enclosing the call, innermost first. A Python function encloses its
     /// decorators, parameters, and body; lambdas and Rust closures are not functions.
-    pub enclosing_functions: Arc<[EnclosingFunction]>,
+    pub(in crate::code_lint) enclosing_functions: Arc<[EnclosingFunction]>,
 }
 
 /// Cached call expression metadata without lifetime ties to `ParsedFile`.
@@ -60,18 +60,18 @@ pub(super) struct CachedCallCandidate {
 /// Candidate call expression extracted from the syntax tree.
 pub struct AstCallCandidate<'a> {
     /// The call expression AST node.
-    pub node: AstNode<'a>,
+    pub(in crate::code_lint) node: AstNode<'a>,
     /// Full source text of the invoked function/callee expression.
-    pub callee: String,
+    pub(in crate::code_lint) callee: String,
     /// Terminal method identifier text if the callee is a method access (e.g. `obj.method`).
-    pub method_name: Option<String>,
+    pub(in crate::code_lint) method_name: Option<String>,
     /// If the receiver of a method call is itself a call expression (e.g. `get_loop().create_task(coro)`),
     /// the callee text of that receiver call (e.g. `"get_loop"` or `"asyncio.get_running_loop"`).
-    pub receiver_call_callee: Option<String>,
+    pub(in crate::code_lint) receiver_call_callee: Option<String>,
     /// Semantic argument nodes passed to the call.
-    pub arguments: Vec<AstNode<'a>>,
+    pub(in crate::code_lint) arguments: Vec<AstNode<'a>>,
     /// Syntactic context surrounding the call expression.
-    pub context: CallSiteContext,
+    pub(in crate::code_lint) context: CallSiteContext,
 }
 
 impl std::ops::Deref for AstCallCandidate<'_> {

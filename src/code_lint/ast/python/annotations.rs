@@ -9,7 +9,7 @@ use ruff_text_size::Ranged as _;
 
 /// Controls how deeply [`collect_collection_types`] traverses a Python type annotation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnnotationTraversalDepth {
+pub(in crate::code_lint) enum AnnotationTraversalDepth {
     /// Unwraps only transparent wrappers (`|`, `Optional`, `Union`, `Annotated[T, ...]`,
     /// `ClassVar[T]`, `Final[T]`, `Required[T]`, `NotRequired[T]`, `ReadOnly[T]`).
     TransparentWrappersOnly,
@@ -95,7 +95,7 @@ const IMMUTABLE_COLLECTIONS: &[&str] = &[
 
 /// What a standard-library collection type lets its holder do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CollectionKind {
+pub(in crate::code_lint) enum CollectionKind {
     /// A concrete mutable container: `list`, `dict`, `set`, their `typing` aliases, and the
     /// `collections` containers (`defaultdict`, `deque`, `Counter`, `OrderedDict`).
     ConcreteMutable,
@@ -110,7 +110,7 @@ pub enum CollectionKind {
 
 /// How a standard-library collection type gives access to its elements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CollectionShape {
+pub(in crate::code_lint) enum CollectionShape {
     /// By key: `dict`, `Mapping`, `MutableMapping`, `defaultdict`, `Counter`, `OrderedDict`.
     Mapping,
     /// By membership: `set`, `frozenset`, `AbstractSet`, `MutableSet`.
@@ -123,22 +123,22 @@ pub enum CollectionShape {
 
 /// A standard-library collection type, as named in source or built by a display.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PythonCollectionType {
+pub(in crate::code_lint) struct PythonCollectionType {
     /// The type as written (`list`, `typing.Dict`, `collections.abc.Sequence`).
-    pub path: String,
+    pub(in crate::code_lint) path: String,
     /// The constructor's unqualified name, resolved through the file's imports (`list`, `Dict`,
     /// `Sequence`; `Set` for `ReadOnlySet` after `from collections.abc import Set as ReadOnlySet`).
-    pub name: String,
+    pub(in crate::code_lint) name: String,
     /// What the type lets its holder do.
-    pub kind: CollectionKind,
+    pub(in crate::code_lint) kind: CollectionKind,
     /// How the type gives access to its elements.
-    pub shape: CollectionShape,
+    pub(in crate::code_lint) shape: CollectionShape,
 }
 
 impl PythonCollectionType {
     /// The paths of `collection_types`, joined with `", "`.
     #[must_use]
-    pub fn joined_paths(collection_types: &[Self]) -> String {
+    pub(in crate::code_lint) fn joined_paths(collection_types: &[Self]) -> String {
         collection_types
             .iter()
             .map(|collection_type| collection_type.path.as_str())
@@ -177,7 +177,7 @@ pub(super) fn is_bare_final_annotation_expr(type_expr: &Expr, file: &ParsedFile)
 /// `from collections.abc import Set` makes `Set` the abstract `collections.abc.Set` rather than
 /// the concrete `typing.Set`, and a locally defined `class Set` is not a collection type.
 #[must_use]
-pub fn collect_collection_types(
+pub(in crate::code_lint) fn collect_collection_types(
     type_node: &AstNode<'_>,
     depth: AnnotationTraversalDepth,
 ) -> Vec<PythonCollectionType> {
@@ -290,7 +290,9 @@ fn push_collection_type(expr: &Expr, file: &ParsedFile, out: &mut Vec<PythonColl
 ///
 /// Names are resolved through the file's imports as in [`collect_collection_types`].
 #[must_use]
-pub fn collection_type(expression: &AstNode<'_>) -> Option<PythonCollectionType> {
+pub(in crate::code_lint) fn collection_type(
+    expression: &AstNode<'_>,
+) -> Option<PythonCollectionType> {
     let expr = find_expr(expression)?;
     collection_type_expr(expr, expression.file)
 }
@@ -298,7 +300,9 @@ pub fn collection_type(expression: &AstNode<'_>) -> Option<PythonCollectionType>
 /// The builtin collection that `expression` builds if it is a list, set or dictionary display
 /// (`[...]`, `{a, b}`, `{k: v}`) or comprehension.
 #[must_use]
-pub fn collection_display(expression: &AstNode<'_>) -> Option<PythonCollectionType> {
+pub(in crate::code_lint) fn collection_display(
+    expression: &AstNode<'_>,
+) -> Option<PythonCollectionType> {
     let expr = find_expr(expression)?;
     let (name, shape) = match expr {
         Expr::List(_) | Expr::ListComp(_) => (LIST_CONSTRUCTOR, CollectionShape::Sequence),
@@ -317,32 +321,32 @@ pub fn collection_display(expression: &AstNode<'_>) -> Option<PythonCollectionTy
 /// A Python return type flattened across union constructs (`|`, `Union[...]`, `Optional[...]`),
 /// with async envelopes (`Awaitable`, `Coroutine`) and metadata wrappers (`Annotated`) unwrapped.
 #[derive(Clone)]
-pub struct PythonReturnTypeUnion<'a> {
+pub(in crate::code_lint) struct PythonReturnTypeUnion<'a> {
     /// True if `None` (`none`) or an `Optional[...]` wrapper is part of the union.
-    pub has_none: bool,
+    pub(in crate::code_lint) has_none: bool,
     /// The non-`None` alternative branches in source order.
-    pub branches: Vec<PythonReturnTypeBranch<'a>>,
+    pub(in crate::code_lint) branches: Vec<PythonReturnTypeBranch<'a>>,
 }
 
 impl PythonReturnTypeUnion<'_> {
     /// Returns true if the union admits `None` and at least one other type (`int | None`,
     /// `Optional[str]`).
     #[must_use]
-    pub const fn is_nullable(&self) -> bool {
+    pub(in crate::code_lint) const fn is_nullable(&self) -> bool {
         self.has_none && !self.branches.is_empty()
     }
 
     /// Returns true if the type is exactly a boolean: `bool`, `TypeGuard[T]` or `TypeIs[T]`,
     /// without `None`.
     #[must_use]
-    pub fn is_boolean(&self) -> bool {
+    pub(in crate::code_lint) fn is_boolean(&self) -> bool {
         self.single_branch()
             .is_some_and(|branch| branch.is_std_type(BOOLEAN_TYPES))
     }
 
     /// Returns true if the type is exactly `Any` or `object`, which says nothing about the value.
     #[must_use]
-    pub fn is_opaque(&self) -> bool {
+    pub(in crate::code_lint) fn is_opaque(&self) -> bool {
         self.single_branch()
             .is_some_and(|branch| branch.is_std_type(OPAQUE_TYPES))
     }
@@ -350,7 +354,7 @@ impl PythonReturnTypeUnion<'_> {
     /// The largest element count among the fixed-length tuple branches of at least two elements
     /// (`tuple[str, int]`, `Tuple[a, b, c]`; not `tuple[int, ...]` or `tuple[int]`).
     #[must_use]
-    pub fn positional_tuple_arity(&self) -> Option<usize> {
+    pub(in crate::code_lint) fn positional_tuple_arity(&self) -> Option<usize> {
         self.branches
             .iter()
             .filter_map(PythonReturnTypeBranch::positional_tuple_arity)
@@ -374,14 +378,15 @@ const OPAQUE_TYPES: &[&str] = &["Any", "object"];
 
 /// A non-`None` alternative of a [`PythonReturnTypeUnion`].
 #[derive(Clone)]
-pub struct PythonReturnTypeBranch<'a> {
+pub(in crate::code_lint) struct PythonReturnTypeBranch<'a> {
     /// The branch type expression.
-    pub node: AstNode<'a>,
+    #[cfg(test)]
+    node: AstNode<'a>,
     /// The collection type the branch names, directly (`list`) or as the base of a subscript
     /// (`list[int]`); see [`collection_type`].
-    pub collection: Option<PythonCollectionType>,
+    pub(in crate::code_lint) collection: Option<PythonCollectionType>,
     /// The type arguments if the branch is a subscript (`int` and `...` in `tuple[int, ...]`).
-    pub type_arguments: Option<Vec<AstNode<'a>>>,
+    pub(in crate::code_lint) type_arguments: Option<Vec<AstNode<'a>>>,
     /// The constructor (the branch, or the base of its subscript) resolved through the file's
     /// imports, as a path and its terminal name.
     constructor: Option<QualifiedName>,
@@ -390,7 +395,7 @@ pub struct PythonReturnTypeBranch<'a> {
 impl PythonReturnTypeBranch<'_> {
     /// The element count if the branch is a fixed-length tuple of at least two elements.
     #[must_use]
-    pub fn positional_tuple_arity(&self) -> Option<usize> {
+    pub(in crate::code_lint) fn positional_tuple_arity(&self) -> Option<usize> {
         let collection = self.collection.as_ref()?;
         if !matches!(
             collection.name.as_str(),
@@ -416,7 +421,9 @@ impl PythonReturnTypeBranch<'_> {
 /// Flattens `return_type_node` across union constructs (`|`, `Union[...]`, `Optional[...]`)
 /// after unwrapping outer async and metadata envelopes (`Awaitable`, `Coroutine`, `Annotated`).
 #[must_use]
-pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnTypeUnion<'a> {
+pub(in crate::code_lint) fn return_type_union<'a>(
+    return_type_node: &AstNode<'a>,
+) -> PythonReturnTypeUnion<'a> {
     let Some(expr) = find_expr(return_type_node) else {
         return PythonReturnTypeUnion {
             has_none: false,
@@ -437,6 +444,7 @@ pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnType
                 let generic = extract_generic_base_and_args(branch);
                 let constructor = generic.as_ref().map_or(branch, |generic| generic.base);
                 PythonReturnTypeBranch {
+                    #[cfg(test)]
                     node: node_of(branch),
                     collection: collection_type_expr(constructor, file),
                     type_arguments: generic
@@ -464,7 +472,9 @@ const GENERATOR_TYPES: &[&str] = &[
 /// `Async` forms from `typing`, `typing_extensions` or `collections.abc`, resolved through the
 /// file's imports.
 #[must_use]
-pub fn generator_yield_type<'a>(return_type_node: &AstNode<'a>) -> Option<AstNode<'a>> {
+pub(in crate::code_lint) fn generator_yield_type<'a>(
+    return_type_node: &AstNode<'a>,
+) -> Option<AstNode<'a>> {
     let file = return_type_node.file;
     let expr = find_expr(return_type_node)?;
     let GenericType {
@@ -488,7 +498,7 @@ pub fn generator_yield_type<'a>(return_type_node: &AstNode<'a>) -> Option<AstNod
 /// Returns true if `type_node` (flattened across `|`, `Union[...]`, `Optional[...]` and
 /// `Annotated[T, ...]`) includes `None`, `bool` or `Callable`.
 #[must_use]
-pub fn includes_none_bool_or_callable(type_node: &AstNode<'_>) -> bool {
+pub(in crate::code_lint) fn includes_none_bool_or_callable(type_node: &AstNode<'_>) -> bool {
     let file = type_node.file;
     let Some(expr) = find_expr(type_node) else {
         return false;
@@ -505,7 +515,9 @@ pub fn includes_none_bool_or_callable(type_node: &AstNode<'_>) -> bool {
 /// The element count of the positional tuple that `return_type_node` returns or, for a generator
 /// or iterator annotation, yields (see [`PythonReturnTypeUnion::positional_tuple_arity`]).
 #[must_use]
-pub fn positional_tuple_return_arity(return_type_node: &AstNode<'_>) -> Option<usize> {
+pub(in crate::code_lint) fn positional_tuple_return_arity(
+    return_type_node: &AstNode<'_>,
+) -> Option<usize> {
     let target = generator_yield_type(return_type_node).unwrap_or(*return_type_node);
     return_type_union(&target).positional_tuple_arity()
 }

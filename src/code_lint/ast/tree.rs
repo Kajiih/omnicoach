@@ -137,43 +137,46 @@ impl<'a> AstNode<'a> {
 
     /// Returns the source text slice spanned by this node.
     #[must_use]
-    pub fn text(&self) -> std::borrow::Cow<'_, str> {
+    pub(crate) fn text(&self) -> std::borrow::Cow<'_, str> {
         std::borrow::Cow::Borrowed(&self.file.source[self.span.start..self.span.end])
     }
 
     /// Returns the programming language of the file containing this node.
     #[must_use]
-    pub const fn lang(&self) -> Language {
+    pub(in crate::code_lint) const fn lang(&self) -> Language {
         self.file.lang()
     }
 
     /// Returns the [`SourceSpan`] (byte range) of this node.
     #[must_use]
-    pub const fn span(&self) -> SourceSpan {
+    pub(crate) const fn span(&self) -> SourceSpan {
         self.span
     }
 
     /// Returns the 1-indexed starting line number of this node.
     #[must_use]
-    pub fn start_line(&self) -> usize {
+    pub(in crate::code_lint) fn start_line(&self) -> usize {
         self.file.line_index.line(self.span.start)
     }
 
     /// Returns the 1-indexed ending line number of this node.
     #[must_use]
-    pub fn end_line(&self) -> usize {
+    pub(in crate::code_lint) fn end_line(&self) -> usize {
         self.file.line_index.line(self.span.end)
     }
 
     /// Constructs a [`SourceLocation`] for this node inside the file at `path`.
     #[must_use]
-    pub fn to_source_location(&self, path: impl Into<PathBuf>) -> SourceLocation {
+    pub(in crate::code_lint) fn to_source_location(
+        self,
+        path: impl Into<PathBuf>,
+    ) -> SourceLocation {
         SourceLocation::file_span(path, self.span, self.start_coordinate())
     }
 
     /// Resolves the 1-indexed start `(line, column)` coordinate of this node.
     #[must_use]
-    pub fn start_coordinate(&self) -> LineColumn {
+    pub(in crate::code_lint) fn start_coordinate(&self) -> LineColumn {
         self.file.line_index.lookup(self.span.start)
     }
 }

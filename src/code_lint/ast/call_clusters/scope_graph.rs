@@ -6,18 +6,18 @@ use std::collections::BTreeMap;
 
 /// A syntactic reference from one declaration in a scope to a sibling declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RelationFact {
+pub(in crate::code_lint) struct RelationFact {
     /// Index of the declaration that contains the reference.
-    pub source: usize,
+    pub(in crate::code_lint) source: usize,
     /// Index of the referenced sibling declaration.
-    pub target: usize,
+    pub(in crate::code_lint) target: usize,
     /// Where in `source` the reference appears.
-    pub kind: RelationKind,
+    pub(in crate::code_lint) kind: RelationKind,
 }
 
 /// Which syntactic region of a declaration contains a reference to a sibling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum RelationKind {
+pub(in crate::code_lint) enum RelationKind {
     /// A callable's parameter type annotation.
     Parameter,
     /// A callable's return type annotation.
@@ -32,7 +32,7 @@ pub enum RelationKind {
 
 /// Why an ordering edge places its higher item above its lower item (ADR 011 §3.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum OrderingReason {
+pub(in crate::code_lint) enum OrderingReason {
     /// `Callable -> Callable`: the higher callable calls the lower one.
     Call,
     /// `Type -> Type`: the higher type's own fields, variants, or bases contain the lower one.
@@ -49,13 +49,13 @@ pub enum OrderingReason {
 
 /// A downward abstraction edge: `items[higher]` reads before `items[lower]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct OrderingEdge {
+pub(in crate::code_lint) struct OrderingEdge {
     /// Index of the item that reads first (caller, composite type, or contract type).
-    pub higher: usize,
+    pub(in crate::code_lint) higher: usize,
     /// Index of the item that reads after it (callee, component, or encapsulated detail).
-    pub lower: usize,
+    pub(in crate::code_lint) lower: usize,
     /// Why `higher` sits above `lower`.
-    pub reason: OrderingReason,
+    pub(in crate::code_lint) reason: OrderingReason,
 }
 
 /// Which public entrypoint unit an item belongs to.
@@ -130,7 +130,7 @@ impl ScopeGraph {
 
 /// Computes strongly connected component ids over `successors` with Tarjan's algorithm.
 #[must_use]
-pub fn strongly_connected_components(successors: &[Vec<usize>]) -> Vec<usize> {
+pub(in crate::code_lint) fn strongly_connected_components(successors: &[Vec<usize>]) -> Vec<usize> {
     struct Tarjan<'a> {
         successors: &'a [Vec<usize>],
         next_index: usize,
@@ -196,7 +196,7 @@ pub fn strongly_connected_components(successors: &[Vec<usize>]) -> Vec<usize> {
 /// Levelizes `successors`: each component of `component` is one unit, at level `0` when nothing
 /// is below it, otherwise one above the highest component below it.
 #[must_use]
-pub fn levels(successors: &[Vec<usize>], component: &[usize]) -> Vec<usize> {
+pub(in crate::code_lint) fn levels(successors: &[Vec<usize>], component: &[usize]) -> Vec<usize> {
     let component_count = component.iter().copied().max().map_or(0, |max| max + 1);
     let mut component_level = vec![0; component_count];
     // Tarjan numbers components in reverse topological order: every component below another

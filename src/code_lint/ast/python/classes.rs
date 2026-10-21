@@ -96,7 +96,7 @@ const FIELD_SYNTHESIZING_DECORATOR_PATHS: &[&str] = &[
 #[derive(Clone)]
 pub struct PythonBaseClass {
     /// Base class identifier or dotted path text (e.g. `"Protocol"`, `"abc.ABC"`).
-    pub name: String,
+    pub(in crate::code_lint) name: String,
     /// Canonical path of the unsubscripted base class resolved through
     /// [`crate::code_lint::ast::resolve_name`], or `None` when the first segment is defined in the
     /// file.
@@ -106,7 +106,7 @@ pub struct PythonBaseClass {
 impl PythonBaseClass {
     /// Base class name with any generic type argument subscript (`[...]`) stripped.
     #[must_use]
-    pub fn unsubscripted_name(&self) -> &str {
+    pub(in crate::code_lint) fn unsubscripted_name(&self) -> &str {
         self.name
             .split_once('[')
             .map_or(self.name.as_str(), |(base, _)| base.trim())
@@ -116,7 +116,7 @@ impl PythonBaseClass {
     /// `object`, `Generic`, `Protocol`, or `ABC` itself (optionally subscripted, qualified, or
     /// imported under an alias).
     #[must_use]
-    pub fn is_structural_marker(&self) -> bool {
+    pub(in crate::code_lint) fn is_structural_marker(&self) -> bool {
         self.resolved_path
             .as_deref()
             .is_some_and(|path| STRUCTURAL_MARKER_PATHS.contains(&path))
@@ -131,13 +131,13 @@ impl PythonBaseClass {
 #[derive(Clone)]
 pub struct PythonClassInfo<'a> {
     /// Class name identifier text.
-    pub name: String,
+    pub(in crate::code_lint) name: String,
     /// Class name AST node.
-    pub name_node: AstNode<'a>,
+    pub(in crate::code_lint) name_node: AstNode<'a>,
     /// Base classes from `class Foo(Base1, Base2):`.
-    pub bases: Vec<PythonBaseClass>,
+    pub(in crate::code_lint) bases: Vec<PythonBaseClass>,
     /// The class docstring, if the class body starts with one.
-    pub docstring: Option<PythonDocstring<'a>>,
+    pub(in crate::code_lint) docstring: Option<PythonDocstring<'a>>,
     /// Parsed decorators on this class definition.
     decorators: Vec<DecoratorInfo>,
     /// The parsed definition, for analyses of the body.
@@ -170,7 +170,7 @@ impl<'a> PythonClassInfo<'a> {
 
     /// The functions defined directly in the class body (not nested deeper), in source order.
     #[must_use]
-    pub fn methods(&self) -> Vec<PythonFunctionSignature<'a>> {
+    pub(in crate::code_lint) fn methods(&self) -> Vec<PythonFunctionSignature<'a>> {
         let file = self.name_node.file;
         self.definition
             .body
@@ -190,7 +190,7 @@ impl<'a> PythonClassInfo<'a> {
     /// The `__init__` defined directly in the class body, skipping `@overload` stubs; the last
     /// one when it is redefined.
     #[must_use]
-    pub fn constructor(&self) -> Option<PythonFunctionSignature<'a>> {
+    pub(in crate::code_lint) fn constructor(&self) -> Option<PythonFunctionSignature<'a>> {
         self.methods()
             .into_iter()
             .rfind(|method| method.name == INIT_METHOD && !method.is_overload())
@@ -205,7 +205,7 @@ impl<'a> PythonClassInfo<'a> {
     /// method's `self` parameter. Nested functions, lambdas and classes are not read, and
     /// other methods are not read. Private and dunder names are included.
     #[must_use]
-    pub fn attribute_definitions(&self) -> Vec<PythonAttributeDefinition<'a>> {
+    pub(in crate::code_lint) fn attribute_definitions(&self) -> Vec<PythonAttributeDefinition<'a>> {
         let file = self.name_node.file;
         let mut collector = AttributeCollector {
             file,
@@ -286,7 +286,9 @@ impl<'a> PythonClassInfo<'a> {
     /// Instance methods are those not decorated with `@staticmethod` or `@classmethod` whose first
     /// parameter is the receiver `self`.
     #[must_use]
-    pub fn instance_attribute_annotations(&self) -> Vec<PythonInstanceAttributeAnnotation<'a>> {
+    pub(in crate::code_lint) fn instance_attribute_annotations(
+        &self,
+    ) -> Vec<PythonInstanceAttributeAnnotation<'a>> {
         let file = self.name_node.file;
         let direct_methods = direct_function_definitions(&self.definition.body);
         let Some(first) = direct_methods.first() else {
@@ -324,7 +326,7 @@ impl<'a> PythonClassInfo<'a> {
     /// Returns true if the class body defines a function (method, property accessor) named
     /// `name`.
     #[must_use]
-    pub fn defines_function(&self, name: &str) -> bool {
+    pub(in crate::code_lint) fn defines_function(&self, name: &str) -> bool {
         direct_function_definitions(&self.definition.body)
             .iter()
             .any(|function_def| function_def.name.id == name)
@@ -334,7 +336,7 @@ impl<'a> PythonClassInfo<'a> {
     /// `StrEnum`, `Flag`, `IntFlag`, `ReprEnum`). Subclasses of a project enum are not
     /// recognized.
     #[must_use]
-    pub fn is_enum(&self) -> bool {
+    pub(in crate::code_lint) fn is_enum(&self) -> bool {
         self.has_base_in(ENUM_BASE_PATHS)
     }
 
@@ -342,14 +344,14 @@ impl<'a> PythonClassInfo<'a> {
     /// `typing_extensions.Protocol` (optionally subscripted), making the class a `Protocol`
     /// rather than an implementation of one.
     #[must_use]
-    pub fn is_protocol(&self) -> bool {
+    pub(in crate::code_lint) fn is_protocol(&self) -> bool {
         self.has_base_in(PROTOCOL_PATHS)
     }
 
     /// Returns true if a direct base class resolves to `abc.ABC` or the class declares
     /// `metaclass=ABCMeta`.
     #[must_use]
-    pub fn is_abc(&self) -> bool {
+    pub(in crate::code_lint) fn is_abc(&self) -> bool {
         let file = self.name_node.file;
         let has_abc_metaclass = self.definition.keywords().iter().any(|keyword| {
             keyword
@@ -366,14 +368,14 @@ impl<'a> PythonClassInfo<'a> {
     /// Returns true if a direct base class resolves to `typing.NamedTuple` or
     /// `typing_extensions.NamedTuple`.
     #[must_use]
-    pub fn is_named_tuple(&self) -> bool {
+    pub(in crate::code_lint) fn is_named_tuple(&self) -> bool {
         self.has_base_in(NAMED_TUPLE_PATHS)
     }
 
     /// Returns true if the class carries a `@dataclass` or `@dataclasses.dataclass` decorator
     /// that does not pass the keyword argument `key`.
     #[must_use]
-    pub fn is_dataclass_missing_arg(&self, key: &str) -> bool {
+    pub(in crate::code_lint) fn is_dataclass_missing_arg(&self, key: &str) -> bool {
         self.dataclass_decorator()
             .is_some_and(|decorator| !decorator.has_arg(key))
     }
@@ -381,7 +383,7 @@ impl<'a> PythonClassInfo<'a> {
     /// Names of parameters of [`Self::constructor`] that are stored unchanged on `self`
     /// (`self.<name> = <name>` or `self.<name>: <T> = <name>`) and are not rebound in `__init__`.
     #[must_use]
-    pub fn unchanged_constructor_parameters(&self) -> HashSet<String> {
+    pub(in crate::code_lint) fn unchanged_constructor_parameters(&self) -> HashSet<String> {
         let Some(constructor) = self.constructor() else {
             return HashSet::new();
         };
@@ -401,21 +403,21 @@ impl<'a> PythonClassInfo<'a> {
     /// Returns true if the class is a `Protocol` or an `ABC`, so its members declare an
     /// interface rather than implement one.
     #[must_use]
-    pub fn is_interface(&self) -> bool {
+    pub(in crate::code_lint) fn is_interface(&self) -> bool {
         self.is_protocol() || self.is_abc()
     }
 
     /// Returns true if a direct base class resolves to `TypedDict`, so the class-body
     /// annotations declare dictionary keys.
     #[must_use]
-    pub fn is_typed_dict(&self) -> bool {
+    pub(in crate::code_lint) fn is_typed_dict(&self) -> bool {
         self.has_base_in(TYPED_DICT_PATHS)
     }
 
     /// Returns true if the class synthesizes constructor fields from class-body annotations
     /// (`@dataclass`, `attrs` decorators, or Pydantic `BaseModel` subclasses).
     #[must_use]
-    pub fn is_field_synthesizing(&self) -> bool {
+    pub(in crate::code_lint) fn is_field_synthesizing(&self) -> bool {
         self.decorators
             .iter()
             .any(|decorator| decorator.matches_any(FIELD_SYNTHESIZING_DECORATOR_PATHS))
@@ -444,7 +446,9 @@ impl<'a> PythonClassInfo<'a> {
 /// The class whose body directly contains the function of `signature` (when that `class` is its
 /// nearest enclosing `def` or `class`), or `None` for module-level and nested functions.
 #[must_use]
-pub fn enclosing_class<'a>(signature: &PythonFunctionSignature<'a>) -> Option<PythonClassInfo<'a>> {
+pub(in crate::code_lint) fn enclosing_class<'a>(
+    signature: &PythonFunctionSignature<'a>,
+) -> Option<PythonClassInfo<'a>> {
     signature
         .enclosing_class
         .map(|class_def| PythonClassInfo::from_ast(class_def, signature.name_node.file))
@@ -453,14 +457,16 @@ pub fn enclosing_class<'a>(signature: &PythonFunctionSignature<'a>) -> Option<Py
 /// Returns true if the function of `signature` is a method of an interface class
 /// ([`PythonClassInfo::is_interface`]: `Protocol` or `ABC`).
 #[must_use]
-pub fn is_interface_method(signature: &PythonFunctionSignature<'_>) -> bool {
+pub(in crate::code_lint) fn is_interface_method(signature: &PythonFunctionSignature<'_>) -> bool {
     enclosing_class(signature).is_some_and(|class| class.is_interface())
 }
 
 /// Returns true if the function of `signature` is a constructor (`__init__` or `__new__`) whose
 /// enclosing class has a docstring.
 #[must_use]
-pub fn is_documented_by_enclosing_class(signature: &PythonFunctionSignature<'_>) -> bool {
+pub(in crate::code_lint) fn is_documented_by_enclosing_class(
+    signature: &PythonFunctionSignature<'_>,
+) -> bool {
     signature.is_constructor()
         && enclosing_class(signature).is_some_and(|class| class.docstring.is_some())
 }
@@ -494,32 +500,15 @@ pub fn extract_classes(file: &ParsedFile) -> Vec<PythonClassInfo<'_>> {
     visitor.classes
 }
 
-/// The indexes in `classes` of the classes that the bases of `classes[index]` name, in base
-/// order. `classes` is in source order, as [`extract_classes`] returns it.
-///
-/// As at runtime, a base written as a simple name (optionally subscripted, `Base[T]`) refers to
-/// the last class of that name defined before the subclass. Dotted bases (`module.Base`),
-/// imported names and classes defined after the subclass are not resolved.
-#[must_use]
-pub fn local_base_classes(classes: &[PythonClassInfo<'_>], index: usize) -> Vec<usize> {
-    classes[index]
-        .bases
-        .iter()
-        .filter_map(|base| {
-            let name = base.unsubscripted_name();
-            classes[..index]
-                .iter()
-                .rposition(|candidate| candidate.name == name)
-        })
-        .collect()
-}
-
 /// The indexes of the in-file ancestors of `classes[index]`, depth-first and left to right.
 ///
 /// Each class of [`local_base_classes`], transitively, appears once: an approximation of the
 /// method resolution order as far as the file shows it.
 #[must_use]
-pub fn local_ancestors(classes: &[PythonClassInfo<'_>], index: usize) -> Vec<usize> {
+pub(in crate::code_lint) fn local_ancestors(
+    classes: &[PythonClassInfo<'_>],
+    index: usize,
+) -> Vec<usize> {
     let mut ancestors = Vec::new();
     let mut pending: Vec<usize> = local_base_classes(classes, index)
         .into_iter()
@@ -534,12 +523,32 @@ pub fn local_ancestors(classes: &[PythonClassInfo<'_>], index: usize) -> Vec<usi
     ancestors
 }
 
+/// The indexes in `classes` of the classes that the bases of `classes[index]` name, in base
+/// order. `classes` is in source order, as [`extract_classes`] returns it.
+///
+/// As at runtime, a base written as a simple name (optionally subscripted, `Base[T]`) refers to
+/// the last class of that name defined before the subclass. Dotted bases (`module.Base`),
+/// imported names and classes defined after the subclass are not resolved.
+#[must_use]
+fn local_base_classes(classes: &[PythonClassInfo<'_>], index: usize) -> Vec<usize> {
+    classes[index]
+        .bases
+        .iter()
+        .filter_map(|base| {
+            let name = base.unsubscripted_name();
+            classes[..index]
+                .iter()
+                .rposition(|candidate| candidate.name == name)
+        })
+        .collect()
+}
+
 /// A method docstring inherited from an in-file ancestor class.
-pub struct PythonInheritedDocstring<'c, 'a> {
+pub(in crate::code_lint) struct PythonInheritedDocstring<'c, 'a> {
     /// The ancestor class whose method declares the docstring.
-    pub ancestor: &'c PythonClassInfo<'a>,
+    pub(in crate::code_lint) ancestor: &'c PythonClassInfo<'a>,
     /// The inherited docstring.
-    pub docstring: PythonDocstring<'a>,
+    pub(in crate::code_lint) docstring: PythonDocstring<'a>,
 }
 
 /// The docstring that documentation tools show for method `name` of `classes[index]` when the
@@ -550,7 +559,7 @@ pub struct PythonInheritedDocstring<'c, 'a> {
 /// the last documented `def name` counts, since `@overload` stubs and property setters usually
 /// have none.
 #[must_use]
-pub fn inherited_method_docstring<'c, 'a>(
+pub(in crate::code_lint) fn inherited_method_docstring<'c, 'a>(
     classes: &'c [PythonClassInfo<'a>],
     index: usize,
     name: &str,
@@ -575,45 +584,45 @@ pub fn inherited_method_docstring<'c, 'a>(
 /// The first definition of a Python class attribute, from
 /// [`PythonClassInfo::attribute_definitions`].
 #[derive(Clone)]
-pub struct PythonAttributeDefinition<'a> {
+pub(in crate::code_lint) struct PythonAttributeDefinition<'a> {
     /// Attribute name.
-    pub name: String,
+    pub(in crate::code_lint) name: String,
     /// The assignment target: the class-body name or the `<receiver>.<name>` attribute.
-    pub node: AstNode<'a>,
+    pub(in crate::code_lint) node: AstNode<'a>,
     /// The type annotation, if the definition is annotated.
-    pub annotation: Option<AstNode<'a>>,
+    pub(in crate::code_lint) annotation: Option<AstNode<'a>>,
     /// True if the definition is in the class body rather than in an initializer method.
-    pub is_in_class_body: bool,
+    pub(in crate::code_lint) is_in_class_body: bool,
     /// True if the annotation is `dataclasses.InitVar` (bare or subscripted): a constructor-only
     /// pseudo-field.
-    pub is_init_var: bool,
+    pub(in crate::code_lint) is_init_var: bool,
 }
 
 /// A class-body or `__init__` instance attribute carrying a type annotation, from
 /// [`PythonClassInfo::annotated_attributes`].
 pub struct PythonAnnotatedAttribute<'a> {
     /// Attribute identifier name (e.g. `"items"`).
-    pub name: String,
+    pub(in crate::code_lint) name: String,
     /// Type annotation AST node (`type`).
-    pub type_node: AstNode<'a>,
+    pub(in crate::code_lint) type_node: AstNode<'a>,
     /// True if any method in the class mutates this attribute in place.
-    pub is_mutated_in_class: bool,
+    pub(in crate::code_lint) is_mutated_in_class: bool,
 }
 
 /// A Python instance attribute annotated inline (`self.<name>: <type>`) inside an instance
 /// method, from [`PythonClassInfo::instance_attribute_annotations`].
 #[derive(Clone)]
-pub struct PythonInstanceAttributeAnnotation<'a> {
+pub(in crate::code_lint) struct PythonInstanceAttributeAnnotation<'a> {
     /// Name of the enclosing instance method.
-    pub method_name: String,
+    pub(in crate::code_lint) method_name: String,
     /// First method in the enclosing class body, directly above which the attribute annotation belongs.
-    pub first_method: PlacementAnchor,
+    pub(in crate::code_lint) first_method: PlacementAnchor,
     /// Attribute identifier, without `"self."`.
-    pub name: String,
+    pub(in crate::code_lint) name: String,
     /// Type annotation AST node (`int` or `Final[int]`).
-    pub annotation: AstNode<'a>,
+    pub(in crate::code_lint) annotation: AstNode<'a>,
     /// Full `assignment` AST node (`self.foo: int = 1` or `self.foo: int`).
-    pub assignment_node: AstNode<'a>,
+    pub(in crate::code_lint) assignment_node: AstNode<'a>,
     /// True if `annotation` is an unparameterized `Final` qualifier.
     is_bare_final: bool,
 }
@@ -623,7 +632,7 @@ impl PythonInstanceAttributeAnnotation<'_> {
     /// `typing.Final`, `Annotated[Final, ...]`), which PEP 591 forbids in a class body without
     /// an initializer.
     #[must_use]
-    pub const fn is_bare_final(&self) -> bool {
+    pub(in crate::code_lint) const fn is_bare_final(&self) -> bool {
         self.is_bare_final
     }
 }

@@ -30,20 +30,20 @@ const PRINTF_LOGGER_METHODS: &[&str] = &[
 const LOGURU_ONLY_METHODS: &[&str] = &["trace", "success"];
 
 /// A call to a recognized logger method (`logger.info(...)`, `self.log.error(...)`).
-pub struct PythonLoggerCall<'a> {
+pub(in crate::code_lint) struct PythonLoggerCall<'a> {
     /// The `call` node.
-    pub node: AstNode<'a>,
+    pub(in crate::code_lint) node: AstNode<'a>,
     /// Source text of the invoked method (`logger.info`, `app.logger.error`).
-    pub callee: String,
+    pub(in crate::code_lint) callee: String,
     /// Static text of the message when it is a plain string literal or an implicit
     /// concatenation of them.
-    pub message: Option<String>,
+    pub(in crate::code_lint) message: Option<String>,
     /// True if at least one positional or `*args` argument follows the message.
-    pub has_trailing_positional_args: bool,
+    pub(in crate::code_lint) has_trailing_positional_args: bool,
     /// True if the call contains a `**kwargs` dictionary splat.
-    pub has_keyword_splat: bool,
+    pub(in crate::code_lint) has_keyword_splat: bool,
     /// Explicit keyword argument names passed to the call.
-    pub keyword_names: HashSet<String>,
+    pub(in crate::code_lint) keyword_names: HashSet<String>,
     /// Whether this method supports stdlib `logging` `%`-formatting (`false` for `trace`/`success`).
     pub(super) uses_printf: bool,
     /// Byte range of the message expression (`arg 0`, or `arg 1` for `.log(level, msg, ...)`).
@@ -52,7 +52,7 @@ pub struct PythonLoggerCall<'a> {
 
 /// Collects the logger calls in `file`, in source order.
 #[must_use]
-pub fn collect_logger_calls(file: &ParsedFile) -> Vec<PythonLoggerCall<'_>> {
+pub(in crate::code_lint) fn collect_logger_calls(file: &ParsedFile) -> Vec<PythonLoggerCall<'_>> {
     struct LoggerCallVisitor<'a> {
         file: &'a ParsedFile,
         out: Vec<PythonLoggerCall<'a>>,

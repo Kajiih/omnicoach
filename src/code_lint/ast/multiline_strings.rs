@@ -5,7 +5,7 @@ use super::tree::{AstNode, ParsedFile, dispatch_lang};
 /// Finds all multiline string literals in `file` that are not docstrings/doc-attributes/snapshots
 /// and are not wrapped in a call or macro matching `is_wrapper`.
 #[must_use]
-pub fn find_unwrapped_multiline_strings(
+pub(in crate::code_lint) fn find_unwrapped_multiline_strings(
     file: &ParsedFile,
     is_wrapper: impl Fn(&str) -> bool,
 ) -> Vec<AstNode<'_>> {

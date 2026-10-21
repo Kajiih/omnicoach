@@ -4,7 +4,7 @@ use super::tree::{AstNode, ParsedFile, dispatch_lang};
 
 /// What introduced a binding name, recorded by the walk that collects the binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BindingKind {
+pub(in crate::code_lint) enum BindingKind {
     /// A name introduced by an import (`import x`, `from m import y`, `use a::b`).
     Import,
     /// The name of a member mandated by a contract: a function, type alias, or constant defined
@@ -21,9 +21,9 @@ pub enum BindingKind {
 #[derive(Clone, Copy)]
 pub struct Binding<'a> {
     /// The binding identifier node.
-    pub node: AstNode<'a>,
+    pub(in crate::code_lint) node: AstNode<'a>,
     /// What introduced the binding.
-    pub kind: BindingKind,
+    pub(in crate::code_lint) kind: BindingKind,
 }
 
 /// Appends each node that `extract` collects to `bindings` as a binding of `kind`.

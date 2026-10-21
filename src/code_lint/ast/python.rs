@@ -24,51 +24,52 @@ mod test_analysis;
 mod tree;
 mod trivia;
 
-pub use self::annotations::{
+pub(in crate::code_lint) use self::annotations::{
     AnnotationTraversalDepth, CollectionKind, CollectionShape, PythonCollectionType,
-    PythonReturnTypeBranch, PythonReturnTypeUnion, collect_collection_types, collection_display,
-    collection_type, generator_yield_type, includes_none_bool_or_callable, return_type_union,
+    PythonReturnTypeBranch, collect_collection_types, collection_display, collection_type,
+    generator_yield_type, includes_none_bool_or_callable, return_type_union,
 };
 pub(super) use self::bindings::collect_bindings;
-pub use self::bindings::{PythonModuleAssignment, collect_module_assignments};
+pub(in crate::code_lint) use self::bindings::{PythonModuleAssignment, collect_module_assignments};
 pub(super) use self::calls::collect_call_candidates;
-pub use self::calls::{PythonEnvironSubscript, call_callee, collect_environ_subscripts};
+pub(in crate::code_lint) use self::calls::{call_callee, collect_environ_subscripts};
 pub use self::classes::{
-    PythonAnnotatedAttribute, PythonAttributeDefinition, PythonBaseClass, PythonClassInfo,
-    PythonInheritedDocstring, PythonInstanceAttributeAnnotation, enclosing_class, extract_classes,
+    PythonAnnotatedAttribute, PythonBaseClass, PythonClassInfo, extract_classes,
+};
+pub(in crate::code_lint) use self::classes::{
+    PythonAttributeDefinition, PythonInheritedDocstring, enclosing_class,
     inherited_method_docstring, is_documented_by_enclosing_class, is_interface_method,
-    local_ancestors, local_base_classes,
+    local_ancestors,
 };
-pub use self::complexity::PythonComplexityMetric;
 pub(super) use self::declaration_order::collect_declaration_scopes;
-pub use self::declaration_order::{
-    PythonFieldAfterMethod, PythonStatementAfterMainGuard, collect_fields_after_methods,
-    collect_statements_after_main_guard,
+pub(in crate::code_lint) use self::declaration_order::{
+    collect_fields_after_methods, collect_statements_after_main_guard,
 };
-pub use self::docstrings::{
-    DocstringEntry, DocstringLine, DocstringSection, DocstringSectionKind, DocstringTypedLine,
-    PythonDocstring, is_clause_end, is_clause_start, leading_verb, none_words,
-    normalize_docstring_text, nullability_markers, parse_google_sections, without_byte_ranges,
+pub(in crate::code_lint) use self::docstrings::{
+    DocstringEntry, DocstringLine, DocstringSection, DocstringSectionKind, PythonDocstring,
+    is_clause_end, is_clause_start, leading_verb, none_words, normalize_docstring_text,
+    nullability_markers, without_byte_ranges,
 };
-pub use self::format_strings::{
+pub(in crate::code_lint) use self::format_strings::{
     PythonFormatPlaceholder, PythonFormatString, PythonFormatStyle, collect_format_strings,
     extract_valid_field_root, named_format_field_roots,
 };
 pub use self::functions::{
-    PythonFunctionSignature, PythonParameterInfo, PythonParameterKind, extract_function_signatures,
-    find_nested_classes, find_nested_functions,
+    PythonFunctionSignature, PythonParameterInfo, extract_function_signatures,
+};
+pub(in crate::code_lint) use self::functions::{
+    PythonParameterKind, find_nested_classes, find_nested_functions,
 };
 pub(super) use self::imports::collect_import_map;
 pub(super) use self::literals::collect_literal_occurrences;
-pub use self::logging::{PythonLoggerCall, collect_logger_calls};
+pub(in crate::code_lint) use self::logging::collect_logger_calls;
 pub(super) use self::multiline_strings::find_unwrapped_multiline_strings;
-pub use self::names::collect_path_references;
-pub use self::parameter_usage::{
-    ParameterCollectionCapability, ParameterUsage, summarize_parameter_usages,
-};
+pub(in crate::code_lint) use self::names::collect_path_references;
+pub(in crate::code_lint) use self::parameter_usage::ParameterCollectionCapability;
+pub use self::parameter_usage::{ParameterUsage, summarize_parameter_usages};
 pub(super) use self::positional_reads::collect_positional_reads;
 pub(super) use self::returns::collect_function_returns;
-pub use self::returns::{PythonBodyResults, collect_locally_mutated_return_functions};
+pub use self::returns::collect_locally_mutated_return_functions;
 pub(super) use self::statement_spans::{
     enclosing_statement_header_span, record_decorator_and_attribute_spans,
 };

@@ -98,13 +98,13 @@ impl ParameterUsage {
     /// Returns true if the parameter is mutated in place or escapes (aliased, returned, yielded,
     /// or passed to an unknown function or method).
     #[must_use]
-    pub const fn is_mutated_or_escaping(self) -> bool {
+    pub(in crate::code_lint) const fn is_mutated_or_escaping(self) -> bool {
         self.mutated_or_escaping
     }
 
     /// Returns the minimum read-only collection capability the parameter's uses require.
     #[must_use]
-    pub const fn collection_capability(self) -> ParameterCollectionCapability {
+    pub(in crate::code_lint) const fn collection_capability(self) -> ParameterCollectionCapability {
         if self.needs_sequence {
             ParameterCollectionCapability::Sequence
         } else if self.needs_collection || self.iteration_count > 1 {
@@ -120,7 +120,7 @@ impl ParameterUsage {
 /// Minimum read-only `collections.abc` capability required by a parameter's usages inside
 /// its function body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ParameterCollectionCapability {
+pub(in crate::code_lint) enum ParameterCollectionCapability {
     /// Parameter is never referenced in the function body.
     Unused,
     /// Parameter is only iterated once at top-level depth (`Iterable` suffices).

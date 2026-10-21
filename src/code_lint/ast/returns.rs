@@ -17,7 +17,7 @@ const PREDICATE_PREFIXES: &[&str] = &[
 /// What a function returns, as far as its signature (or, for an unannotated Python function, its
 /// own body) shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReturnShape {
+pub(in crate::code_lint) enum ReturnShape {
     /// No value: Rust `()` or no return type (also as the success type of `Result` / `Poll`);
     /// Python `-> None`, or an unannotated function whose body neither returns a value nor yields.
     Unit,
@@ -42,22 +42,22 @@ pub enum ReturnShape {
 /// `@abstractmethod`, fixtures, `@register`, data-model dunders and `Protocol` / `ABC` members;
 /// Rust trait items, trait implementations and inline tests.
 #[derive(Clone)]
-pub struct FunctionReturn<'a> {
+pub(in crate::code_lint) struct FunctionReturn<'a> {
     /// Function identifier name.
-    pub name: String,
+    pub(in crate::code_lint) name: String,
     /// Identifier AST node of the function declaration.
-    pub name_node: AstNode<'a>,
+    pub(in crate::code_lint) name_node: AstNode<'a>,
     /// The declared return type (`-> T`), if any.
-    pub declared_type: Option<AstNode<'a>>,
+    pub(in crate::code_lint) declared_type: Option<AstNode<'a>>,
     /// What the function returns.
-    pub shape: ReturnShape,
+    pub(in crate::code_lint) shape: ReturnShape,
 }
 
 impl FunctionReturn<'_> {
     /// The declared return type as written, or the language's unit type (`None` in Python, `()`
     /// in Rust) when there is none.
     #[must_use]
-    pub fn declared_type_text(&self) -> String {
+    pub(in crate::code_lint) fn declared_type_text(&self) -> String {
         self.declared_type.map_or_else(
             || {
                 match self.name_node.lang() {
@@ -74,7 +74,7 @@ impl FunctionReturn<'_> {
 /// Collects the return contract of every function and method in `file` whose signature its
 /// author chose, in source order.
 #[must_use]
-pub fn collect_function_returns(file: &ParsedFile) -> Vec<FunctionReturn<'_>> {
+pub(in crate::code_lint) fn collect_function_returns(file: &ParsedFile) -> Vec<FunctionReturn<'_>> {
     dispatch_lang!(file.lang(), collect_function_returns(file))
 }
 
@@ -84,7 +84,7 @@ pub fn collect_function_returns(file: &ParsedFile) -> Vec<FunctionReturn<'_>> {
 /// or one of those or `is`, `has`, `can`, `should`, `supports`, `allows`, `requires`, `needs`
 /// followed by `_` and more (`is_valid`, `_has_key`, `contains_key`).
 #[must_use]
-pub fn is_predicate_name(name: &str) -> bool {
+pub(in crate::code_lint) fn is_predicate_name(name: &str) -> bool {
     let bare = name.trim_start_matches('_');
     PREDICATE_VERBS.contains(&bare)
         || PREDICATE_VERBS

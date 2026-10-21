@@ -15,7 +15,7 @@ const COGNITIVE_COMPLEXITY_METRIC: &str = "cognitive complexity";
 
 /// A complexity threshold reached by a function, with the function's value for that metric.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PythonComplexityMetric {
+pub(in crate::code_lint) enum PythonComplexityMetric {
     /// The function's statement count ([`PythonFunctionSignature::statement_count`]).
     StatementCount(usize),
     /// The function's cognitive complexity ([`PythonFunctionSignature::cognitive_complexity`]).
@@ -25,7 +25,7 @@ pub enum PythonComplexityMetric {
 impl PythonComplexityMetric {
     /// The metric's name (`"statement count"` or `"cognitive complexity"`).
     #[must_use]
-    pub const fn name(self) -> &'static str {
+    pub(in crate::code_lint) const fn name(self) -> &'static str {
         match self {
             Self::StatementCount(_) => STATEMENT_COUNT_METRIC,
             Self::CognitiveComplexity(_) => COGNITIVE_COMPLEXITY_METRIC,
@@ -34,7 +34,7 @@ impl PythonComplexityMetric {
 
     /// The function's value for the metric.
     #[must_use]
-    pub const fn value(self) -> usize {
+    pub(in crate::code_lint) const fn value(self) -> usize {
         match self {
             Self::StatementCount(value) | Self::CognitiveComplexity(value) => value,
         }
@@ -49,7 +49,7 @@ impl PythonFunctionSignature<'_> {
     /// `else` and `finally`, `with`, `match` cases) are counted too; a nested `def` or `class`
     /// counts 1 and its body is not entered.
     #[must_use]
-    pub fn statement_count(&self) -> usize {
+    pub(in crate::code_lint) fn statement_count(&self) -> usize {
         let body = &self.definition.body;
         let own_body = if self.docstring().is_some() {
             &body[1..]
@@ -69,7 +69,7 @@ impl PythonFunctionSignature<'_> {
     /// `return <name>` statements (a decorator), whose nested `def` keeps the nesting.
     /// Comprehensions, `try`, `finally` and `with` add nothing.
     #[must_use]
-    pub fn cognitive_complexity(&self) -> usize {
+    pub(in crate::code_lint) fn cognitive_complexity(&self) -> usize {
         let receiver = self
             .parameters
             .first()
@@ -94,7 +94,7 @@ impl PythonFunctionSignature<'_> {
     /// then cognitive complexity), or `None` if neither threshold is reached. A threshold of `0`
     /// disables that trigger.
     #[must_use]
-    pub fn nontrivial_metric(
+    pub(in crate::code_lint) fn nontrivial_metric(
         &self,
         min_statements: usize,
         min_cognitive_complexity: usize,
@@ -111,7 +111,11 @@ impl PythonFunctionSignature<'_> {
     /// Returns true if the function reaches `min_statements` or `min_cognitive_complexity` (`0`
     /// disables a trigger).
     #[must_use]
-    pub fn is_nontrivial(&self, min_statements: usize, min_cognitive_complexity: usize) -> bool {
+    pub(in crate::code_lint) fn is_nontrivial(
+        &self,
+        min_statements: usize,
+        min_cognitive_complexity: usize,
+    ) -> bool {
         self.nontrivial_metric(min_statements, min_cognitive_complexity)
             .is_some()
     }

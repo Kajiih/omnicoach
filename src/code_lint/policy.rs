@@ -78,7 +78,9 @@ pub fn is_trivial_literal(value: &LiteralValue) -> bool {
 /// The read-only `collections.abc` counterparts of `collection_types`, deduplicated in order and
 /// joined with `", "`.
 #[must_use]
-pub(super) fn read_only_collection_replacements(collection_types: &[PythonCollectionType]) -> String {
+pub(super) fn read_only_collection_replacements(
+    collection_types: &[PythonCollectionType],
+) -> String {
     replacements_by_shape(collection_types, |shape| match shape {
         CollectionShape::Mapping => "collections.abc.Mapping",
         CollectionShape::Set => "collections.abc.Set",

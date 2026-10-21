@@ -19,72 +19,72 @@ impl ParsedFile {
 impl AstNode<'_> {
     /// Returns true if this node starts inside a Rust `#[cfg(test)]` or `#[test]` item.
     #[must_use]
-    pub fn is_in_rust_inline_test(&self) -> bool {
+    pub(in crate::code_lint) fn is_in_rust_inline_test(&self) -> bool {
         self.file.is_in_rust_inline_test(self.span.start)
     }
 }
 
 /// An outermost test function and the number of behavioral assertions in its body.
-pub struct TestAssertionCount<'a> {
+pub(in crate::code_lint) struct TestAssertionCount<'a> {
     /// Identifier AST node of the test function declaration.
-    pub name_node: AstNode<'a>,
+    pub(in crate::code_lint) name_node: AstNode<'a>,
     /// Name of the test function.
-    pub name: String,
+    pub(in crate::code_lint) name: String,
     /// Number of behavioral assertions in the test function body.
-    pub count: usize,
+    pub(in crate::code_lint) count: usize,
 }
 
 /// A branching or loop construct directly inside an outermost test function.
-pub struct TestLogicConstruct<'a> {
+pub(in crate::code_lint) struct TestLogicConstruct<'a> {
     /// AST node of the branching or loop construct.
-    pub node: AstNode<'a>,
+    pub(in crate::code_lint) node: AstNode<'a>,
     /// Name of the enclosing test function.
-    pub test_name: String,
+    pub(in crate::code_lint) test_name: String,
     /// Human-readable description of the construct (e.g. "an `if` statement").
-    pub construct: &'static str,
+    pub(in crate::code_lint) construct: &'static str,
 }
 
 /// An outermost test function that interleaves actions and assertions across multiple phases.
-pub struct MultiPhaseTest<'a> {
+pub(in crate::code_lint) struct MultiPhaseTest<'a> {
     /// Identifier AST node of the test function declaration.
-    pub name_node: AstNode<'a>,
+    pub(in crate::code_lint) name_node: AstNode<'a>,
     /// Name of the test function.
-    pub name: String,
+    pub(in crate::code_lint) name: String,
 }
 
 /// A Python `assert` statement or Rust assertion macro invocation (`assert!`, `assert_eq!`,
 /// `assert_ne!`, `debug_assert*!`) with its condition-packing properties.
-pub struct AssertionCheck<'a> {
+pub(in crate::code_lint) struct AssertionCheck<'a> {
     /// The `assert` statement or macro invocation node.
-    pub node: AstNode<'a>,
+    pub(in crate::code_lint) node: AstNode<'a>,
     /// Rust macro terminal name (`"assert"`, `"assert_eq"`, ...), or empty in Python.
-    pub callee: String,
+    pub(in crate::code_lint) callee: String,
     /// True if the condition has a top-level `and` (Python) or `&&` (Rust `assert!` / `debug_assert!`).
-    pub has_top_level_logical_and: bool,
+    pub(in crate::code_lint) has_top_level_logical_and: bool,
     /// True if the assertion compares against a tuple/list/array/`vec!` of `>= 2` boolean literals.
-    pub has_boolean_literal_comparison: bool,
+    pub(in crate::code_lint) has_boolean_literal_comparison: bool,
     /// True if the assertion compares two or more multi-element collection literals.
-    pub has_composite_collection_comparison: bool,
+    pub(in crate::code_lint) has_composite_collection_comparison: bool,
 }
 
 /// A test function and its normalized leading non-assertion setup statements.
-pub struct TestFunctionSetup<'a> {
+pub(in crate::code_lint) struct TestFunctionSetup<'a> {
     /// Identifier AST node of the test function declaration.
-    pub name_node: AstNode<'a>,
+    pub(in crate::code_lint) name_node: AstNode<'a>,
     /// Name of the test function.
-    pub name: String,
+    pub(in crate::code_lint) name: String,
     /// Normalized source text of each leading non-assertion setup statement, in source order.
-    pub leading_setup_statements: Vec<String>,
+    pub(in crate::code_lint) leading_setup_statements: Vec<String>,
 }
 
 /// A call inside a test file to another test function defined in the same file.
-pub struct TestToTestCall<'a> {
+pub(in crate::code_lint) struct TestToTestCall<'a> {
     /// The call expression node.
-    pub node: AstNode<'a>,
+    pub(in crate::code_lint) node: AstNode<'a>,
     /// The name of the enclosing function making the call.
-    pub caller: String,
+    pub(in crate::code_lint) caller: String,
     /// The source callee text as written (`test_login`, `self.test_login`).
-    pub callee: String,
+    pub(in crate::code_lint) callee: String,
 }
 
 /// Classification of a top-level statement in a test body for multi-phase test detection.
@@ -100,40 +100,50 @@ pub(super) enum TestStatementRole {
 
 /// Collects all outermost test functions in `file` along with their identifier node, name, and assertion count.
 #[must_use]
-pub fn collect_test_function_assertion_counts(file: &ParsedFile) -> Vec<TestAssertionCount<'_>> {
+pub(in crate::code_lint) fn collect_test_function_assertion_counts(
+    file: &ParsedFile,
+) -> Vec<TestAssertionCount<'_>> {
     dispatch_lang!(file.lang(), collect_test_function_assertion_counts(file))
 }
 
 /// Collects control-flow and conditional constructs directly inside outermost test functions in `file`.
 #[must_use]
-pub fn collect_test_logic_constructs(file: &ParsedFile) -> Vec<TestLogicConstruct<'_>> {
+pub(in crate::code_lint) fn collect_test_logic_constructs(
+    file: &ParsedFile,
+) -> Vec<TestLogicConstruct<'_>> {
     dispatch_lang!(file.lang(), collect_test_logic_constructs(file))
 }
 
 /// Collects outermost test functions in `file` that interleave non-assertion statements between
 /// behavioral assertions.
 #[must_use]
-pub fn collect_multi_phase_test_functions(file: &ParsedFile) -> Vec<MultiPhaseTest<'_>> {
+pub(in crate::code_lint) fn collect_multi_phase_test_functions(
+    file: &ParsedFile,
+) -> Vec<MultiPhaseTest<'_>> {
     dispatch_lang!(file.lang(), collect_multi_phase_test_functions(file))
 }
 
 /// Collects all Python `assert` statements and Rust assertion macro invocations in `file`
 /// with their condition-packing properties.
 #[must_use]
-pub fn collect_assertion_checks(file: &ParsedFile) -> Vec<AssertionCheck<'_>> {
+pub(in crate::code_lint) fn collect_assertion_checks(file: &ParsedFile) -> Vec<AssertionCheck<'_>> {
     dispatch_lang!(file.lang(), collect_assertion_checks(file))
 }
 
 /// Collects test functions grouped by enclosing module, class, or `mod` scope (segmented on
 /// duplicate function names) along with their leading non-assertion setup statements.
 #[must_use]
-pub fn collect_test_setup_scopes(file: &ParsedFile) -> Vec<Vec<TestFunctionSetup<'_>>> {
+pub(in crate::code_lint) fn collect_test_setup_scopes(
+    file: &ParsedFile,
+) -> Vec<Vec<TestFunctionSetup<'_>>> {
     dispatch_lang!(file.lang(), collect_test_setup_scopes(file))
 }
 
 /// Collects calls in `file` where a function calls a test function defined in the same file.
 #[must_use]
-pub fn collect_test_to_test_calls(file: &ParsedFile) -> Vec<TestToTestCall<'_>> {
+pub(in crate::code_lint) fn collect_test_to_test_calls(
+    file: &ParsedFile,
+) -> Vec<TestToTestCall<'_>> {
     dispatch_lang!(file.lang(), collect_test_to_test_calls(file))
 }
 

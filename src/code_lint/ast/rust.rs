@@ -19,10 +19,8 @@ mod trivia;
 
 pub(super) use self::bindings::collect_bindings;
 pub(super) use self::calls::collect_call_candidates;
+pub(in crate::code_lint) use self::declaration_order::collect_associated_items_after_methods;
 pub(super) use self::declaration_order::collect_declaration_scopes;
-pub use self::declaration_order::{
-    RustAssociatedItemAfterMethod, collect_associated_items_after_methods,
-};
 pub use self::file_summary::{
     ExternalModDeclaration, RustFileSummary, RustPathReference, VisibleUseDeclaration,
     summarize_rust_file,
@@ -32,7 +30,7 @@ pub(super) use self::literals::collect_literal_occurrences;
 pub(super) use self::multiline_strings::find_unwrapped_multiline_strings;
 pub(super) use self::positional_reads::collect_positional_reads;
 pub(super) use self::returns::collect_function_returns;
-pub use self::returns::{NullableReturnPayload, nullable_return_payload};
+pub(in crate::code_lint) use self::returns::{NullableReturnPayload, nullable_return_payload};
 pub(super) use self::statement_spans::{
     enclosing_statement_header_span, record_decorator_and_attribute_spans,
 };
@@ -43,4 +41,4 @@ pub(super) use self::test_analysis::{
     collect_test_setup_scopes, collect_test_to_test_calls,
 };
 pub(super) use self::trivia::collect_comment_spans;
-pub use self::trivia::is_rust_doc_comment;
+pub(in crate::code_lint) use self::trivia::is_rust_doc_comment;

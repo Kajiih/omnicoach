@@ -19,13 +19,13 @@ use std::collections::HashSet;
 
 /// A single-name assignment at module level, including inside the bodies of top-level `if`,
 /// `try` and `with` statements (`ALLOWED = [...]`, `PORTS: Final = {...}`, `NAME: str`).
-pub struct PythonModuleAssignment<'a> {
+pub(in crate::code_lint) struct PythonModuleAssignment<'a> {
     /// The assigned name (e.g. `"ALLOWED"` or `"_cache"`).
-    pub name: String,
+    pub(in crate::code_lint) name: String,
     /// The type annotation, if any.
-    pub annotation: Option<AstNode<'a>>,
+    pub(in crate::code_lint) annotation: Option<AstNode<'a>>,
     /// The assigned value without enclosing parentheses, absent for a bare annotation.
-    pub value: Option<AstNode<'a>>,
+    pub(in crate::code_lint) value: Option<AstNode<'a>>,
     /// True if the annotation is `Final` or `Final[T]` (qualified or not, optionally wrapped in
     /// `Annotated`).
     has_final_annotation: bool,
@@ -35,7 +35,7 @@ impl PythonModuleAssignment<'_> {
     /// Whether the assignment declares a constant: an `UPPER_SNAKE_CASE` name or a `Final`
     /// annotation.
     #[must_use]
-    pub fn is_constant(&self) -> bool {
+    pub(in crate::code_lint) fn is_constant(&self) -> bool {
         is_constant_name(&self.name) || self.has_final_annotation
     }
 }
@@ -43,7 +43,9 @@ impl PythonModuleAssignment<'_> {
 /// Collects the single-name module-level assignments of `file`, in source order. Attribute and
 /// unpacking targets are not collected.
 #[must_use]
-pub fn collect_module_assignments(file: &ParsedFile) -> Vec<PythonModuleAssignment<'_>> {
+pub(in crate::code_lint) fn collect_module_assignments(
+    file: &ParsedFile,
+) -> Vec<PythonModuleAssignment<'_>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };

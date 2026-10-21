@@ -15,7 +15,7 @@ const NONE: &str = "None";
 /// The docstring of a Python module, class, or function: the string literal that is the first
 /// statement of its body.
 #[derive(Clone)]
-pub struct PythonDocstring<'a> {
+pub(in crate::code_lint) struct PythonDocstring<'a> {
     /// The string literal expression.
     node: AstNode<'a>,
     /// The literal's value after escape processing.
@@ -27,15 +27,9 @@ pub struct PythonDocstring<'a> {
 }
 
 impl<'a> PythonDocstring<'a> {
-    /// The docstring value after escape processing, without indentation removal.
-    #[must_use]
-    pub fn text(&self) -> &str {
-        &self.text
-    }
-
     /// The number of lines that contain non-whitespace text.
     #[must_use]
-    pub fn non_blank_line_count(&self) -> usize {
+    pub(in crate::code_lint) fn non_blank_line_count(&self) -> usize {
         self.text
             .lines()
             .filter(|line| !line.trim().is_empty())
@@ -44,19 +38,22 @@ impl<'a> PythonDocstring<'a> {
 
     /// The Google-style sections (`Args:`, `Returns:`, …) of the docstring, in order.
     #[must_use]
-    pub fn sections(&self) -> Vec<DocstringSection> {
+    pub(in crate::code_lint) fn sections(&self) -> Vec<DocstringSection> {
         parse_google_sections(&self.text)
     }
 
     /// Returns true if the docstring contains at least one section of `kind`.
     #[must_use]
-    pub fn has_section(&self, kind: DocstringSectionKind) -> bool {
+    pub(in crate::code_lint) fn has_section(&self, kind: DocstringSectionKind) -> bool {
         self.sections().iter().any(|section| section.kind == kind)
     }
 
     /// The `name` of every entry across all sections of `kind`.
     #[must_use]
-    pub fn section_entry_names(&self, kind: DocstringSectionKind) -> HashSet<String> {
+    pub(in crate::code_lint) fn section_entry_names(
+        &self,
+        kind: DocstringSectionKind,
+    ) -> HashSet<String> {
         self.sections()
             .into_iter()
             .filter(|section| section.kind == kind)
@@ -67,7 +64,7 @@ impl<'a> PythonDocstring<'a> {
 
     /// The first non-blank line, without surrounding whitespace.
     #[must_use]
-    pub fn summary(&self) -> Option<&str> {
+    pub(in crate::code_lint) fn summary(&self) -> Option<&str> {
         self.text
             .lines()
             .map(str::trim)
@@ -76,7 +73,7 @@ impl<'a> PythonDocstring<'a> {
 
     /// The first non-blank line, with its 0-based line index and without surrounding whitespace.
     #[must_use]
-    pub fn summary_line(&self) -> Option<DocstringLine> {
+    pub(in crate::code_lint) fn summary_line(&self) -> Option<DocstringLine> {
         self.text.lines().enumerate().find_map(|(index, line)| {
             let trimmed = line.trim();
             (!trimmed.is_empty()).then(|| DocstringLine {
@@ -89,7 +86,7 @@ impl<'a> PythonDocstring<'a> {
     /// The first paragraph (the lines up to the first blank line after the summary), joined by
     /// single spaces.
     #[must_use]
-    pub fn summary_paragraph(&self) -> String {
+    pub(in crate::code_lint) fn summary_paragraph(&self) -> String {
         self.text
             .lines()
             .map(str::trim)
@@ -102,20 +99,20 @@ impl<'a> PythonDocstring<'a> {
     /// The text compared for equality between docstrings: whitespace runs collapsed to one
     /// space, lowercase, without trailing periods. Indentation and line wrapping do not matter.
     #[must_use]
-    pub fn normalized(&self) -> String {
+    pub(in crate::code_lint) fn normalized(&self) -> String {
         normalize_docstring_text(&self.text)
     }
 
     /// Returns true if the docstring, once normalized, equals the normalized summary paragraph of
     /// `other`.
     #[must_use]
-    pub fn copies_summary_of(&self, other: &Self) -> bool {
+    pub(in crate::code_lint) fn copies_summary_of(&self, other: &Self) -> bool {
         self.normalized() == normalize_docstring_text(&other.summary_paragraph())
     }
 
     /// Returns true if the docstring has a `Returns:` or `Yields:` section.
     #[must_use]
-    pub fn has_result_section(&self) -> bool {
+    pub(in crate::code_lint) fn has_result_section(&self) -> bool {
         self.sections().iter().any(|section| {
             matches!(
                 section.kind,
@@ -127,7 +124,7 @@ impl<'a> PythonDocstring<'a> {
     /// Returns true if the summary opens with `Return`, `Returns`, `Yield`, or `Yields`
     /// (case-insensitive).
     #[must_use]
-    pub fn has_result_verb_summary(&self) -> bool {
+    pub(in crate::code_lint) fn has_result_verb_summary(&self) -> bool {
         self.summary_words()
             .first()
             .is_some_and(|word| RESULT_SUMMARY_VERBS.contains(&word.as_str()))
@@ -136,7 +133,7 @@ impl<'a> PythonDocstring<'a> {
     /// Returns true if the docstring describes the function's return or yield value: either via a
     /// `Returns:` / `Yields:` section or via a summary opening with `Return(s)` or `Yield(s)`.
     #[must_use]
-    pub fn describes_result(&self) -> bool {
+    pub(in crate::code_lint) fn describes_result(&self) -> bool {
         self.has_result_section() || self.has_result_verb_summary()
     }
 
@@ -144,7 +141,7 @@ impl<'a> PythonDocstring<'a> {
     /// `whether`, or opens with `True if`, `True when`, `False if` or `False when`
     /// (case-insensitive).
     #[must_use]
-    pub fn has_condition_summary(&self) -> bool {
+    pub(in crate::code_lint) fn has_condition_summary(&self) -> bool {
         let words = self.summary_words();
         words.iter().any(|word| word == "whether")
             || matches!(
@@ -157,7 +154,7 @@ impl<'a> PythonDocstring<'a> {
 
     /// The string literal expression node.
     #[must_use]
-    pub const fn node(&self) -> AstNode<'a> {
+    pub(in crate::code_lint) const fn node(&self) -> AstNode<'a> {
         self.node
     }
 
@@ -165,7 +162,7 @@ impl<'a> PythonDocstring<'a> {
     /// its indentation. Falls back to the whole docstring when the line is the opening line or
     /// cannot be mapped to the source (implicit concatenation or a line-altering escape).
     #[must_use]
-    pub fn line_node(&self, line_index: usize) -> AstNode<'a> {
+    pub(in crate::code_lint) fn line_node(&self, line_index: usize) -> AstNode<'a> {
         if line_index == 0 || !self.lines_match_source {
             return self.node;
         }
@@ -234,7 +231,7 @@ pub(super) fn docstring_of<'a>(
 
 /// Normalizes docstring `text` for equality comparisons, as [`PythonDocstring::normalized`].
 #[must_use]
-pub fn normalize_docstring_text(text: &str) -> String {
+pub(in crate::code_lint) fn normalize_docstring_text(text: &str) -> String {
     text.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -245,7 +242,7 @@ pub fn normalize_docstring_text(text: &str) -> String {
 
 /// The kind of a Google-style docstring section, from its header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DocstringSectionKind {
+pub(in crate::code_lint) enum DocstringSectionKind {
     /// `Args:`, `Arguments:`, `Parameters:`, `Params:`, `Keyword Args:`, `Keyword Arguments:`,
     /// `Other Parameters:`.
     Args,
@@ -264,7 +261,7 @@ pub enum DocstringSectionKind {
 impl DocstringSectionKind {
     /// Returns true if the section lists named entries (`name: description`).
     #[must_use]
-    pub const fn has_entries(self) -> bool {
+    pub(in crate::code_lint) const fn has_entries(self) -> bool {
         matches!(self, Self::Args | Self::Attributes | Self::Raises)
     }
 }
@@ -302,20 +299,20 @@ const SECTION_HEADERS: &[(&str, DocstringSectionKind)] = &[
 
 /// A docstring line split at its leading Napoleon type prefix (`bool: True if ready.`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DocstringTypedLine<'a> {
+pub(in crate::code_lint) struct DocstringTypedLine<'a> {
     /// The type prefix before the colon (`bool`).
-    pub type_text: &'a str,
+    pub(in crate::code_lint) type_text: &'a str,
     /// The text after the colon, without leading whitespace (`True if ready.`).
-    pub description: &'a str,
+    pub(in crate::code_lint) description: &'a str,
 }
 
 /// One line of a docstring section body.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DocstringLine {
+pub(in crate::code_lint) struct DocstringLine {
     /// 0-based line index in the docstring text, for [`PythonDocstring::line_node`].
-    pub index: usize,
+    pub(in crate::code_lint) index: usize,
     /// The line without leading and trailing whitespace.
-    pub text: String,
+    pub(in crate::code_lint) text: String,
 }
 
 impl DocstringLine {
@@ -326,7 +323,7 @@ impl DocstringLine {
     /// outside brackets except around `|` (`dict[str, int]` and `User | None` qualify, `Note
     /// that` does not), and the colon is followed by whitespace or the end of the line.
     #[must_use]
-    pub fn split_type_prefix(&self) -> Option<DocstringTypedLine<'_>> {
+    pub(in crate::code_lint) fn split_type_prefix(&self) -> Option<DocstringTypedLine<'_>> {
         let mut depth = 0_usize;
         for (offset, character) in self.text.char_indices() {
             match character {
@@ -357,27 +354,27 @@ impl DocstringLine {
 
 /// A named entry of an `Args:`, `Attributes:`, or `Raises:` section.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DocstringEntry {
+pub(in crate::code_lint) struct DocstringEntry {
     /// The documented name, with any `*` / `**` prefix (`*args`) or dotted path (`os.error`).
-    pub name: String,
+    pub(in crate::code_lint) name: String,
     /// The parenthesized type of `name (type): …`, without the parentheses.
-    pub type_text: Option<String>,
+    pub(in crate::code_lint) type_text: Option<String>,
     /// The description: the text after the colon and the continuation lines, joined by spaces.
-    pub description: String,
+    pub(in crate::code_lint) description: String,
     /// 0-based line index of the entry's first line in the docstring text.
-    pub line_index: usize,
+    pub(in crate::code_lint) line_index: usize,
 }
 
 impl DocstringEntry {
     /// The documented name without a `*` / `**` prefix, to match it with a parameter name.
     #[must_use]
-    pub fn bare_name(&self) -> &str {
+    pub(in crate::code_lint) fn bare_name(&self) -> &str {
         self.name.trim_start_matches('*')
     }
 
     /// The parenthesized slot if it is bare `optional` (case-insensitive), as written.
     #[must_use]
-    pub fn optional_marker(&self) -> Option<&str> {
+    pub(in crate::code_lint) fn optional_marker(&self) -> Option<&str> {
         self.type_text
             .as_deref()
             .filter(|slot| slot.eq_ignore_ascii_case(OPTIONAL_MARKER))
@@ -386,7 +383,7 @@ impl DocstringEntry {
     /// The parenthesized type in `name (type): …`, or `None` when absent or when the
     /// parenthetical is only `optional` or a `default …` note.
     #[must_use]
-    pub fn declared_type(&self) -> Option<&str> {
+    pub(in crate::code_lint) fn declared_type(&self) -> Option<&str> {
         let type_text = self.type_text.as_deref()?;
         let lowercase = type_text.to_ascii_lowercase();
         let is_default_note = lowercase.strip_prefix("default").is_some_and(|rest| {
@@ -398,24 +395,24 @@ impl DocstringEntry {
 
 /// A Google-style docstring section: a header line ending in a colon and its indented body.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DocstringSection {
+pub(in crate::code_lint) struct DocstringSection {
     /// The section kind.
-    pub kind: DocstringSectionKind,
+    pub(in crate::code_lint) kind: DocstringSectionKind,
     /// The header text without the colon, as written (`"Keyword Args"`).
-    pub header: String,
+    pub(in crate::code_lint) header: String,
     /// 0-based line index of the header in the docstring text.
-    pub header_line_index: usize,
+    pub(in crate::code_lint) header_line_index: usize,
     /// The non-blank body lines, in order.
-    pub body: Vec<DocstringLine>,
+    pub(in crate::code_lint) body: Vec<DocstringLine>,
     /// The named entries, for kinds where [`DocstringSectionKind::has_entries`]; empty otherwise.
-    pub entries: Vec<DocstringEntry>,
+    pub(in crate::code_lint) entries: Vec<DocstringEntry>,
 }
 
 impl DocstringSection {
     /// The prose of the section body after any leading Napoleon type prefix on the first line,
     /// joined by single spaces.
     #[must_use]
-    pub fn description(&self) -> Option<String> {
+    pub(in crate::code_lint) fn description(&self) -> Option<String> {
         let opening_text = self.opening_description_text()?;
         let mut parts = Vec::with_capacity(self.body.len());
         if !opening_text.is_empty() {
@@ -427,7 +424,7 @@ impl DocstringSection {
 
     /// The 0-based docstring line index containing byte `offset` in [`Self::description`].
     #[must_use]
-    pub fn line_at_description_offset(&self, offset: usize) -> Option<usize> {
+    pub(in crate::code_lint) fn line_at_description_offset(&self, offset: usize) -> Option<usize> {
         let opening_line = self.body.first()?;
         let opening_text = self.opening_description_text()?;
         let mut cursor = if opening_text.is_empty() {
@@ -458,13 +455,105 @@ impl DocstringSection {
     }
 }
 
+/// Returns the opening word of `text` if it is in `verbs` (case-insensitive) and is not a
+/// `noun_stems` + `noun_followers` noun phrase (`Return code of …` or `Return-code …`).
+#[must_use]
+pub(in crate::code_lint) fn leading_verb<'a>(
+    text: &'a str,
+    verbs: &[&str],
+    noun_stems: &[&str],
+    noun_followers: &[&str],
+) -> Option<&'a str> {
+    let word = leading_word(text);
+    let lowercase = word.to_ascii_lowercase();
+    if !verbs.contains(&lowercase.as_str()) {
+        return None;
+    }
+    let after_first = text[word.len()..]
+        .trim_start_matches(|character: char| character.is_whitespace() || character == '-');
+    let next_word = leading_word(after_first).to_ascii_lowercase();
+    let is_noun_phrase =
+        noun_stems.contains(&lowercase.as_str()) && noun_followers.contains(&next_word.as_str());
+    (!is_noun_phrase).then_some(word)
+}
+
+/// Byte ranges of the nullability markers in `description`: a word `None` (optionally
+/// backticked, then optionally followed by `)`) at a clause end, with its leading words from
+/// `leads`.
+#[must_use]
+pub(in crate::code_lint) fn nullability_markers(
+    description: &str,
+    leads: &[&str],
+) -> Vec<Range<usize>> {
+    none_words(description)
+        .filter_map(|word| {
+            let after = &description[word.end..];
+            if !is_clause_end(after.strip_prefix(')').unwrap_or(after)) {
+                return None;
+            }
+            let before = description[..word.start].trim_end();
+            let lowercase = before.to_ascii_lowercase();
+            let lead = leads.iter().find(|lead| {
+                lowercase.strip_suffix(**lead).is_some_and(|preceding| {
+                    !lead.starts_with(char::is_alphabetic) || !preceding.ends_with(is_word_char)
+                })
+            })?;
+            Some(before.len() - lead.len()..word.end)
+        })
+        .collect()
+}
+
+/// `text` with all characters whose byte offset falls inside any range in `ranges` removed.
+#[must_use]
+pub(in crate::code_lint) fn without_byte_ranges(text: &str, ranges: &[Range<usize>]) -> String {
+    text.char_indices()
+        .filter(|(offset, _)| !ranges.iter().any(|range| range.contains(offset)))
+        .map(|(_, character)| character)
+        .collect()
+}
+
+/// Byte ranges of each whole word `None` in `text`, including enclosing backticks.
+pub(in crate::code_lint) fn none_words(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
+    text.match_indices(NONE).filter_map(move |(start, _)| {
+        let end = start + NONE.len();
+        let (before, after) = (&text[..start], &text[end..]);
+        if before.ends_with(is_word_char) || after.starts_with(is_word_char) {
+            return None;
+        }
+        let is_backticked = before.ends_with('`') && after.starts_with('`');
+        Some(if is_backticked {
+            start - 1..end + 1
+        } else {
+            start..end
+        })
+    })
+}
+
+/// Returns true if `before`, the text before a match, is empty or ends with a `.` or `;` and
+/// whitespace.
+#[must_use]
+pub(in crate::code_lint) fn is_clause_start(before: &str) -> bool {
+    let trimmed = before.trim_end();
+    trimmed.is_empty() || (trimmed.len() < before.len() && trimmed.ends_with(['.', ';']))
+}
+
+/// Returns true if `after`, the text after a match, is empty or starts with a `.` or `;`
+/// followed by whitespace or the end.
+#[must_use]
+pub(in crate::code_lint) fn is_clause_end(after: &str) -> bool {
+    after.is_empty()
+        || after
+            .strip_prefix(['.', ';'])
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+}
+
 /// Parses the Google-style sections of docstring `text`.
 ///
 /// A section starts at a line that is only a recognized header followed by a colon, and ends at
 /// the next non-blank line indented no deeper than its header. Entries are the body lines at the
 /// body's first indentation level; deeper lines continue the previous entry.
 #[must_use]
-pub fn parse_google_sections(text: &str) -> Vec<DocstringSection> {
+fn parse_google_sections(text: &str) -> Vec<DocstringSection> {
     let lines: Vec<&str> = text.lines().collect();
     let mut sections = Vec::new();
     let mut index = 0;
@@ -507,95 +596,6 @@ pub fn parse_google_sections(text: &str) -> Vec<DocstringSection> {
         });
     }
     sections
-}
-
-/// Returns the opening word of `text` if it is in `verbs` (case-insensitive) and is not a
-/// `noun_stems` + `noun_followers` noun phrase (`Return code of …` or `Return-code …`).
-#[must_use]
-pub fn leading_verb<'a>(
-    text: &'a str,
-    verbs: &[&str],
-    noun_stems: &[&str],
-    noun_followers: &[&str],
-) -> Option<&'a str> {
-    let word = leading_word(text);
-    let lowercase = word.to_ascii_lowercase();
-    if !verbs.contains(&lowercase.as_str()) {
-        return None;
-    }
-    let after_first = text[word.len()..]
-        .trim_start_matches(|character: char| character.is_whitespace() || character == '-');
-    let next_word = leading_word(after_first).to_ascii_lowercase();
-    let is_noun_phrase =
-        noun_stems.contains(&lowercase.as_str()) && noun_followers.contains(&next_word.as_str());
-    (!is_noun_phrase).then_some(word)
-}
-
-/// Byte ranges of the nullability markers in `description`: a word `None` (optionally
-/// backticked, then optionally followed by `)`) at a clause end, with its leading words from
-/// `leads`.
-#[must_use]
-pub fn nullability_markers(description: &str, leads: &[&str]) -> Vec<Range<usize>> {
-    none_words(description)
-        .filter_map(|word| {
-            let after = &description[word.end..];
-            if !is_clause_end(after.strip_prefix(')').unwrap_or(after)) {
-                return None;
-            }
-            let before = description[..word.start].trim_end();
-            let lowercase = before.to_ascii_lowercase();
-            let lead = leads.iter().find(|lead| {
-                lowercase.strip_suffix(**lead).is_some_and(|preceding| {
-                    !lead.starts_with(char::is_alphabetic) || !preceding.ends_with(is_word_char)
-                })
-            })?;
-            Some(before.len() - lead.len()..word.end)
-        })
-        .collect()
-}
-
-/// `text` with all characters whose byte offset falls inside any range in `ranges` removed.
-#[must_use]
-pub fn without_byte_ranges(text: &str, ranges: &[Range<usize>]) -> String {
-    text.char_indices()
-        .filter(|(offset, _)| !ranges.iter().any(|range| range.contains(offset)))
-        .map(|(_, character)| character)
-        .collect()
-}
-
-/// Byte ranges of each whole word `None` in `text`, including enclosing backticks.
-pub fn none_words(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
-    text.match_indices(NONE).filter_map(move |(start, _)| {
-        let end = start + NONE.len();
-        let (before, after) = (&text[..start], &text[end..]);
-        if before.ends_with(is_word_char) || after.starts_with(is_word_char) {
-            return None;
-        }
-        let is_backticked = before.ends_with('`') && after.starts_with('`');
-        Some(if is_backticked {
-            start - 1..end + 1
-        } else {
-            start..end
-        })
-    })
-}
-
-/// Returns true if `before`, the text before a match, is empty or ends with a `.` or `;` and
-/// whitespace.
-#[must_use]
-pub fn is_clause_start(before: &str) -> bool {
-    let trimmed = before.trim_end();
-    trimmed.is_empty() || (trimmed.len() < before.len() && trimmed.ends_with(['.', ';']))
-}
-
-/// Returns true if `after`, the text after a match, is empty or starts with a `.` or `;`
-/// followed by whitespace or the end.
-#[must_use]
-pub fn is_clause_end(after: &str) -> bool {
-    after.is_empty()
-        || after
-            .strip_prefix(['.', ';'])
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
 }
 
 /// A recognized Google-style section header line.
@@ -848,9 +848,7 @@ mod tests {
     fn function_docstring(source: &str) -> Option<String> {
         let file = ParsedFile::new(source, Language::Python);
         let signatures = super::super::extract_function_signatures(&file);
-        signatures[0]
-            .docstring()
-            .map(|docstring| docstring.text().to_owned())
+        signatures[0].docstring().map(|docstring| docstring.text)
     }
 
     #[rstest]
@@ -925,7 +923,10 @@ mod tests {
         let file = ParsedFile::new("class C:\n    '''Doc.'''\n", Language::Python);
         let classes = super::super::extract_classes(&file);
         assert_eq!(
-            classes[0].docstring.as_ref().map(PythonDocstring::text),
+            classes[0]
+                .docstring
+                .as_ref()
+                .map(|docstring| docstring.text.as_str()),
             Some("Doc.")
         );
     }

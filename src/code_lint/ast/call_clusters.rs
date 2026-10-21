@@ -9,7 +9,7 @@ mod scope_graph;
 
 use self::scope_graph::Ownership;
 pub(super) use self::scope_graph::ScopeGraph;
-pub use self::scope_graph::{
+pub(in crate::code_lint) use self::scope_graph::{
     OrderingEdge, OrderingReason, RelationFact, RelationKind, levels, strongly_connected_components,
 };
 
@@ -19,7 +19,7 @@ use std::collections::HashSet;
 
 /// Visibility tier of a declaration within its scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Visibility {
+pub(in crate::code_lint) enum Visibility {
     /// Public or dunder (`__name__`) item in Python; exported (`pub`, `pub(crate)`, `pub(super)`,
     /// `pub(in ...)`) item or `fn main` in Rust.
     Public,
@@ -31,7 +31,7 @@ pub enum Visibility {
 /// Whether a [`ScopeItem`] is a callable (`fn` / `def`) or a type definition (`struct`, `enum`,
 /// `union`, `trait`, `class`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ScopeItemKind {
+pub(in crate::code_lint) enum ScopeItemKind {
     /// A function or method definition.
     Callable,
     /// A class, struct, enum, union, or trait definition.
@@ -107,7 +107,7 @@ pub(super) fn extend_references(
 
 /// Which syntactic container a [`DeclarationScope`] covers.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DeclarationScopeKind {
+pub(in crate::code_lint) enum DeclarationScopeKind {
     /// Top-level items of a module (or of an inline Rust `mod`).
     Module,
     /// Direct methods of a Python `class`.
@@ -171,17 +171,20 @@ pub(super) fn extend_unique<T: PartialEq>(vec: &mut Vec<T>, items: impl IntoIter
 /// A sibling declaration next to which a misplaced item belongs, along with its 1-based boundary
 /// line number (its starting line when moving above it, or its ending line when moving below it).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlacementAnchor {
+pub(in crate::code_lint) struct PlacementAnchor {
     /// Identifier name of the anchor declaration (`{anchor}`).
-    pub name: String,
+    pub(in crate::code_lint) name: String,
     /// 1-based boundary line number of the anchor declaration (`{line}`).
-    pub line: usize,
+    pub(in crate::code_lint) line: usize,
 }
 
 impl PlacementAnchor {
     /// Anchor for moving an item directly above `declaration_node` (records `start_line()`).
     #[must_use]
-    pub fn before(name: impl Into<String>, declaration_node: AstNode<'_>) -> Self {
+    pub(in crate::code_lint) fn before(
+        name: impl Into<String>,
+        declaration_node: AstNode<'_>,
+    ) -> Self {
         Self {
             name: name.into(),
             line: declaration_node.start_line(),
@@ -190,7 +193,7 @@ impl PlacementAnchor {
 
     /// Anchor for moving an item immediately below a declaration ending at `end_line`.
     #[must_use]
-    pub fn after(name: impl Into<String>, end_line: usize) -> Self {
+    pub(in crate::code_lint) fn after(name: impl Into<String>, end_line: usize) -> Self {
         Self {
             name: name.into(),
             line: end_line,
@@ -201,7 +204,7 @@ impl PlacementAnchor {
 /// A call-cluster placement rule, in priority order: an item violating several rules is
 /// reported only under the first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum CallClusterRule {
+pub(in crate::code_lint) enum CallClusterRule {
     /// A constructor sits above every non-constructor method in its class or `impl`.
     ConstructorAfterMethod,
     /// A private item sits below every public item that reaches it, and an unreached private item
@@ -213,7 +216,7 @@ pub enum CallClusterRule {
     /// A private item sits below the private items above it in the abstraction order.
     CalleeBeforeCaller,
 }
-
+// TODO: What is this hardcoded set of string?
 impl CallClusterRule {
     /// The rule's name.
     #[must_use]
@@ -228,17 +231,17 @@ impl CallClusterRule {
 }
 
 /// A misplaced declaration reported by a call-cluster placement rule.
-pub struct CallOrderFinding<'a> {
+pub(in crate::code_lint) struct CallOrderFinding<'a> {
     /// Identifier AST node of the misplaced declaration.
-    pub name_node: AstNode<'a>,
+    pub(in crate::code_lint) name_node: AstNode<'a>,
     /// Name of the misplaced declaration.
-    pub item: String,
+    pub(in crate::code_lint) item: String,
     /// Name of the declaration or enclosing type the violated placement refers to.
-    pub related: String,
+    pub(in crate::code_lint) related: String,
     /// Why `related` sits above `item` in the abstraction order (`callee-before-caller` only).
-    pub reason: Option<OrderingReason>,
+    pub(in crate::code_lint) reason: Option<OrderingReason>,
     /// Sibling declaration next to which `item` belongs.
-    pub anchor: PlacementAnchor,
+    pub(in crate::code_lint) anchor: PlacementAnchor,
 }
 
 /// A [`CallOrderFinding`] cached on its file without lifetime ties to it.
@@ -267,7 +270,7 @@ pub(super) struct ScopeFinding {
 /// Computes and memoizes the call-cluster placement findings across all module and class/`impl`
 /// scopes in `file`, and returns those of `rule`.
 #[must_use]
-pub fn collect_call_cluster_findings(
+pub(in crate::code_lint) fn collect_call_cluster_findings(
     file: &ParsedFile,
     rule: CallClusterRule,
 ) -> Vec<CallOrderFinding<'_>> {

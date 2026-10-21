@@ -16,20 +16,20 @@ use std::sync::Arc;
 const ENVIRON_NAME: &str = "environ";
 
 /// A Python subscript reading the `os.environ` (or bare `environ`) mapping.
-pub struct PythonEnvironSubscript<'a> {
+pub(in crate::code_lint) struct PythonEnvironSubscript<'a> {
     /// The whole subscript (`os.environ["HOST"]`).
-    pub node: AstNode<'a>,
+    pub(in crate::code_lint) node: AstNode<'a>,
     /// The mapping expression being indexed (`os.environ` or `environ`).
-    pub mapping: AstNode<'a>,
+    pub(in crate::code_lint) mapping: AstNode<'a>,
     /// The functions enclosing the subscript, innermost first (see
     /// [`CallSiteContext::enclosing_functions`](crate::code_lint::ast::CallSiteContext::enclosing_functions)).
-    pub enclosing_functions: Arc<[EnclosingFunction]>,
+    pub(in crate::code_lint) enclosing_functions: Arc<[EnclosingFunction]>,
 }
 
 /// The callee of `call` if it is a `call` node, without the type arguments of a generic
 /// instantiation (`list[str]()` has callee `list`).
 #[must_use]
-pub fn call_callee<'a>(call: &AstNode<'a>) -> Option<AstNode<'a>> {
+pub(in crate::code_lint) fn call_callee<'a>(call: &AstNode<'a>) -> Option<AstNode<'a>> {
     let Expr::Call(call_expr) = find_expr(call)? else {
         return None;
     };
@@ -158,7 +158,9 @@ pub(in crate::code_lint::ast) fn collect_call_candidates(
 
 /// Collects all Python subscript expressions indexing into `os.environ` or `environ`.
 #[must_use]
-pub fn collect_environ_subscripts(file: &ParsedFile) -> Vec<PythonEnvironSubscript<'_>> {
+pub(in crate::code_lint) fn collect_environ_subscripts(
+    file: &ParsedFile,
+) -> Vec<PythonEnvironSubscript<'_>> {
     struct EnvironSubscriptCollector<'a> {
         file: &'a ParsedFile,
         enclosing_functions: EnclosingFunctionTracker,

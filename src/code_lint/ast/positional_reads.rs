@@ -5,13 +5,13 @@ use std::collections::HashSet;
 
 /// A read of one positional element through an integer literal: `receiver[1]` or
 /// `receiver[-1]` in Python, `receiver.1` in Rust.
-pub struct PositionalRead<'a> {
+pub(in crate::code_lint) struct PositionalRead<'a> {
     /// The whole indexing expression (`point[0]`, `span.0`).
-    pub node: AstNode<'a>,
+    pub(in crate::code_lint) node: AstNode<'a>,
     /// Source text of the indexed value (`point`, `self.pair`, `rows[i]`).
-    pub receiver: String,
+    pub(in crate::code_lint) receiver: String,
     /// The literal position; negative for Python end-relative indices.
-    pub position: i64,
+    pub(in crate::code_lint) position: i64,
 }
 
 /// Positional reads of one scope (a function body, or the Python module top level), in source
@@ -19,11 +19,11 @@ pub struct PositionalRead<'a> {
 #[derive(Default)]
 pub struct ScopePositionalReads<'a> {
     /// Literal-position reads whose receiver contains no call.
-    pub reads: Vec<PositionalRead<'a>>,
+    pub(in crate::code_lint) reads: Vec<PositionalRead<'a>>,
     /// Receivers for which unpacking would not be equivalent. Python: receivers the scope writes
     /// to or uses as a collection (iterated, sized, indexed by a non-literal, sliced, mutated).
     /// Rust: receivers with a field assigned or mutably borrowed.
-    pub non_unpackable_receivers: HashSet<String>,
+    pub(in crate::code_lint) non_unpackable_receivers: HashSet<String>,
 }
 
 /// Collects positional reads in `file` grouped by scope.
