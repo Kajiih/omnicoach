@@ -215,7 +215,7 @@ fn summarize_rust_node(
     }
 
     for child in node.children() {
-        if child.kind() != SyntaxKind::TOKEN_TREE {
+        if !matches!(child.kind(), SyntaxKind::TOKEN_TREE | SyntaxKind::VISIBILITY) {
             summarize_rust_node(&child, file, defined_macros, summary);
         }
     }
@@ -529,7 +529,7 @@ mod tests {
             mod fake_tests {}
             ";
 
-            pub fn run(input: super::ParentType) {
+            pub(in crate::code_lint) fn run(input: super::ParentType) {
                 let _ = crate::a::b::Foo::<crate::c::d::Bar>::baz();
                 assert!(super::detail::check(input));
             }
