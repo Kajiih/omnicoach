@@ -25,7 +25,7 @@ const COW_TYPE_NAME: &str = "Cow";
 const BOOL_TYPE_NAME: &str = "bool";
 
 /// The payload `T` of an optional return type, as classified by [`nullable_return_payload`].
-pub(in crate::code_lint) enum NullableReturnPayload {
+pub enum NullableReturnPayload {
     /// A slice or unsized array type (`[T]`), with its source text.
     Slice(String),
     /// A generic path type (`std::vec::Vec<T>`).
@@ -41,9 +41,7 @@ pub(in crate::code_lint) enum NullableReturnPayload {
 
 /// See [`crate::code_lint::ast::collect_function_returns`]: trait items, trait implementations and
 /// inline tests are skipped.
-pub(in crate::code_lint::ast) fn collect_function_returns(
-    file: &ParsedFile,
-) -> Vec<FunctionReturn<'_>> {
+pub fn collect_function_returns(file: &ParsedFile) -> Vec<FunctionReturn<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -126,9 +124,7 @@ fn return_shape(return_type: Option<ast::Type>, file: &ParsedFile) -> ReturnShap
 /// `Arc<T>`, `Cow<'_, T>`) around `T`. Returns `None` if there is no `Option` or `T` is neither a
 /// slice nor a generic path type.
 #[must_use]
-pub(in crate::code_lint) fn nullable_return_payload(
-    return_type: &AstNode<'_>,
-) -> Option<NullableReturnPayload> {
+pub fn nullable_return_payload(return_type: &AstNode<'_>) -> Option<NullableReturnPayload> {
     let file = return_type.file;
     let source = &file.source;
     let return_type = cast_at_span::<ast::Type>(return_type)?;

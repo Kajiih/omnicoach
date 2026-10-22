@@ -8,7 +8,7 @@ use ruff_text_size::Ranged as _;
 
 /// Collects `(line, imported_path)` references for all imports and imported-name usages in `file`.
 #[must_use]
-pub(in crate::code_lint) fn collect_path_references(file: &ParsedFile) -> Vec<(usize, String)> {
+pub fn collect_path_references(file: &ParsedFile) -> Vec<(usize, String)> {
     struct PathRefVisitor<'a> {
         file: &'a ParsedFile,
         out: Vec<(usize, String)>,

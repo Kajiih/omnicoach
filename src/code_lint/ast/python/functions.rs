@@ -13,7 +13,7 @@ use ruff_text_size::Ranged as _;
 
 /// Parameter classification in a Python function signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::code_lint) enum PythonParameterKind {
+pub enum PythonParameterKind {
     /// Method receiver (`self` or `cls`).
     Receiver,
     /// Standard positional or positional-or-keyword parameter.
@@ -330,7 +330,7 @@ pub(super) fn has_override_decorator(decorators: &[Decorator], file: &ParsedFile
 /// Finds all nested Python function definitions (`def ...` inside another `def ...`) and returns
 /// `(function_node, function_name)` pairs.
 #[must_use]
-pub(in crate::code_lint) fn find_nested_functions(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
+pub fn find_nested_functions(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
     struct NestedFunctionVisitor<'a> {
         file: &'a ParsedFile,
         in_function: bool,
@@ -378,7 +378,7 @@ pub(in crate::code_lint) fn find_nested_functions(file: &ParsedFile) -> Vec<(Ast
 /// Finds all Python class definitions inside a function or method body (`class ...` inside `def ...`)
 /// and returns `(class_node, class_name)` pairs.
 #[must_use]
-pub(in crate::code_lint) fn find_nested_classes(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
+pub fn find_nested_classes(file: &ParsedFile) -> Vec<(AstNode<'_>, String)> {
     struct NestedClassVisitor<'a> {
         file: &'a ParsedFile,
         in_function: bool,

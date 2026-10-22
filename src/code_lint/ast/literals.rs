@@ -33,7 +33,7 @@ impl LiteralValue {
 
 /// Whether a literal defines a named constant or is used inline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::code_lint) enum LiteralRole {
+pub enum LiteralRole {
     /// The whole value of a named scalar constant (`MAX_RETRIES = 3`, `const JJ: &str = "jj";`).
     ConstantDefinition,
     /// Any other position.

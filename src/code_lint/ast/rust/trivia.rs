@@ -5,7 +5,7 @@ use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::{AstNode as _, SyntaxKind, SyntaxToken};
 
 /// Collects the spans of all comment tokens in `file` in source order.
-pub(in crate::code_lint::ast) fn collect_comment_spans(file: &ParsedFile) -> Vec<SourceSpan> {
+pub fn collect_comment_spans(file: &ParsedFile) -> Vec<SourceSpan> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -30,7 +30,7 @@ pub(super) fn is_rust_non_doc_trivia(token: &SyntaxToken) -> bool {
 ///
 /// Per the Rust Reference, `////...`, `/***...`, and `/**/` are ordinary non-doc comments.
 #[must_use]
-pub(in crate::code_lint) fn is_rust_doc_comment(text: &str) -> bool {
+pub fn is_rust_doc_comment(text: &str) -> bool {
     (text.starts_with("///") && !text.starts_with("////"))
         || text.starts_with("//!")
         || (text.starts_with("/**") && !text.starts_with("/***") && text != "/**/")

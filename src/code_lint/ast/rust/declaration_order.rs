@@ -17,22 +17,20 @@ use std::collections::{HashMap, HashSet};
 
 /// An associated `type` or `const` item declared after at least one `fn` item inside a Rust
 /// `impl` or `trait` block.
-pub(in crate::code_lint) struct RustAssociatedItemAfterMethod<'a> {
+pub struct RustAssociatedItemAfterMethod<'a> {
     /// Name of the enclosing `impl` self-type or `trait`.
-    pub(in crate::code_lint) container_name: String,
+    pub container_name: String,
     /// Identifier of the misplaced `type` or `const` item.
-    pub(in crate::code_lint) name: String,
+    pub name: String,
     /// First `fn` in the same block before which the item should move.
-    pub(in crate::code_lint) first_method: PlacementAnchor,
+    pub first_method: PlacementAnchor,
     /// AST node of the misplaced item's name.
-    pub(in crate::code_lint) node: AstNode<'a>,
+    pub node: AstNode<'a>,
 }
 
 /// Collects all module and inherent `impl` [`DeclarationScope`]s in a Rust `file`.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_declaration_scopes(
-    file: &ParsedFile,
-) -> Vec<DeclarationScope<'_>> {
+pub fn collect_declaration_scopes(file: &ParsedFile) -> Vec<DeclarationScope<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -934,7 +932,7 @@ fn rust_fields_summary(fields: Option<ast::FieldList>, include_visibility: bool)
 /// Collects associated `type` and `const` items declared after `fn` items inside Rust `impl`
 /// (inherent or trait) and `trait` blocks across `file`.
 #[must_use]
-pub(in crate::code_lint) fn collect_associated_items_after_methods(
+pub fn collect_associated_items_after_methods(
     file: &ParsedFile,
 ) -> Vec<RustAssociatedItemAfterMethod<'_>> {
     let Some(parsed) = file.rs_parsed() else {

@@ -26,30 +26,28 @@ const PYTHON_CONSTRUCTOR_NAMES: &[&str] = &[
 
 /// A type-annotated class-body attribute declaration (`Stmt::AnnAssign` with an identifier target)
 /// appearing after at least one direct method definition in the same Python `class`.
-pub(in crate::code_lint) struct PythonFieldAfterMethod<'a> {
+pub struct PythonFieldAfterMethod<'a> {
     /// Name of the enclosing class.
-    pub(in crate::code_lint) class_name: String,
+    pub class_name: String,
     /// Identifier of the misplaced field.
-    pub(in crate::code_lint) name: String,
+    pub name: String,
     /// First direct method in the class before which the field should move.
-    pub(in crate::code_lint) first_method: PlacementAnchor,
+    pub first_method: PlacementAnchor,
     /// AST node of the misplaced attribute declaration.
-    pub(in crate::code_lint) node: AstNode<'a>,
+    pub node: AstNode<'a>,
 }
 
 /// A top-level Python statement appearing after the `if __name__ == "__main__":` guard block.
-pub(in crate::code_lint) struct PythonStatementAfterMainGuard<'a> {
+pub struct PythonStatementAfterMainGuard<'a> {
     /// AST node of the trailing statement.
-    pub(in crate::code_lint) node: AstNode<'a>,
+    pub node: AstNode<'a>,
     /// 1-based starting line of the `if __name__ == "__main__":` guard block.
-    pub(in crate::code_lint) guard_line: usize,
+    pub guard_line: usize,
 }
 
 /// Collects all module and `class` [`DeclarationScope`]s in a Python `file`.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_declaration_scopes(
-    file: &ParsedFile,
-) -> Vec<DeclarationScope<'_>> {
+pub fn collect_declaration_scopes(file: &ParsedFile) -> Vec<DeclarationScope<'_>> {
     struct ScopeCollector<'a> {
         file: &'a ParsedFile,
         future_annotations: bool,
@@ -86,9 +84,7 @@ pub(in crate::code_lint::ast) fn collect_declaration_scopes(
 /// Collects type-annotated class-body attribute declarations (`Stmt::AnnAssign` with an
 /// identifier target) that appear after at least one direct method definition in the same class.
 #[must_use]
-pub(in crate::code_lint) fn collect_fields_after_methods(
-    file: &ParsedFile,
-) -> Vec<PythonFieldAfterMethod<'_>> {
+pub fn collect_fields_after_methods(file: &ParsedFile) -> Vec<PythonFieldAfterMethod<'_>> {
     struct FieldAfterMethodVisitor<'a> {
         file: &'a ParsedFile,
         out: Vec<PythonFieldAfterMethod<'a>>,
@@ -149,7 +145,7 @@ pub(in crate::code_lint) fn collect_fields_after_methods(
 /// Collects top-level module statements that appear after an `if __name__ == "__main__":`
 /// guard block.
 #[must_use]
-pub(in crate::code_lint) fn collect_statements_after_main_guard(
+pub fn collect_statements_after_main_guard(
     file: &ParsedFile,
 ) -> Vec<PythonStatementAfterMainGuard<'_>> {
     let Some(parsed) = file.py_module() else {

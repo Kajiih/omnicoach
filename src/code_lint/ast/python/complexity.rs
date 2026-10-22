@@ -15,7 +15,7 @@ const COGNITIVE_COMPLEXITY_METRIC: &str = "cognitive complexity";
 
 /// A complexity threshold reached by a function, with the function's value for that metric.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::code_lint) enum PythonComplexityMetric {
+pub enum PythonComplexityMetric {
     /// The function's statement count ([`PythonFunctionSignature::statement_count`]).
     StatementCount(usize),
     /// The function's cognitive complexity ([`PythonFunctionSignature::cognitive_complexity`]).
@@ -25,7 +25,7 @@ pub(in crate::code_lint) enum PythonComplexityMetric {
 impl PythonComplexityMetric {
     /// The metric's name (`"statement count"` or `"cognitive complexity"`).
     #[must_use]
-    pub(in crate::code_lint) const fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::StatementCount(_) => STATEMENT_COUNT_METRIC,
             Self::CognitiveComplexity(_) => COGNITIVE_COMPLEXITY_METRIC,
@@ -34,7 +34,7 @@ impl PythonComplexityMetric {
 
     /// The function's value for the metric.
     #[must_use]
-    pub(in crate::code_lint) const fn value(self) -> usize {
+    pub const fn value(self) -> usize {
         match self {
             Self::StatementCount(value) | Self::CognitiveComplexity(value) => value,
         }

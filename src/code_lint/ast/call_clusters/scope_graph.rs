@@ -6,18 +6,18 @@ use std::collections::BTreeMap;
 
 /// A syntactic reference from one declaration in a scope to a sibling declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(in crate::code_lint) struct RelationFact {
+pub struct RelationFact {
     /// Index of the declaration that contains the reference.
-    pub(in crate::code_lint) source: usize,
+    pub source: usize,
     /// Index of the referenced sibling declaration.
-    pub(in crate::code_lint) target: usize,
+    pub target: usize,
     /// Where in `source` the reference appears.
-    pub(in crate::code_lint) kind: RelationKind,
+    pub kind: RelationKind,
 }
 
 /// Which syntactic region of a declaration contains a reference to a sibling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(in crate::code_lint) enum RelationKind {
+pub enum RelationKind {
     /// A callable's parameter type annotation.
     Parameter,
     /// A callable's return type annotation.
@@ -32,7 +32,7 @@ pub(in crate::code_lint) enum RelationKind {
 
 /// Why an ordering edge places its higher item above its lower item (ADR 011 §3.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(in crate::code_lint) enum OrderingReason {
+pub enum OrderingReason {
     /// `Callable -> Callable`: the higher callable calls the lower one.
     Call,
     /// `Type -> Type`: the higher type's own fields, variants, or bases contain the lower one.
@@ -49,13 +49,13 @@ pub(in crate::code_lint) enum OrderingReason {
 
 /// A downward abstraction edge: `items[higher]` reads before `items[lower]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(in crate::code_lint) struct OrderingEdge {
+pub struct OrderingEdge {
     /// Index of the item that reads first (caller, composite type, or contract type).
-    pub(in crate::code_lint) higher: usize,
+    pub higher: usize,
     /// Index of the item that reads after it (callee, component, or encapsulated detail).
-    pub(in crate::code_lint) lower: usize,
+    pub lower: usize,
     /// Why `higher` sits above `lower`.
-    pub(in crate::code_lint) reason: OrderingReason,
+    pub reason: OrderingReason,
 }
 
 /// Which public entrypoint unit an item belongs to.
@@ -63,7 +63,7 @@ pub(in crate::code_lint) struct OrderingEdge {
 /// A unit is a public item, except that all constructors of a scope form one unit identified by
 /// the first constructor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(in crate::code_lint::ast) enum Ownership {
+pub(super) enum Ownership {
     /// A public item of unit `unit`, or a private item reached only from that unit.
     Owner(usize),
     /// A private item reached from two or more units.
@@ -73,26 +73,26 @@ pub(in crate::code_lint::ast) enum Ownership {
 }
 
 /// The abstraction graph of one declaration scope, indexed like its items.
-pub(in crate::code_lint::ast) struct ScopeGraph {
+pub struct ScopeGraph {
     /// Downward ordering edges, sorted.
-    pub(in crate::code_lint::ast) edges: Vec<OrderingEdge>,
+    pub edges: Vec<OrderingEdge>,
     /// `Roots(f)`: sorted public items that reach `f` through private references only.
-    pub(in crate::code_lint::ast) roots: Vec<Vec<usize>>,
+    pub(super) roots: Vec<Vec<usize>>,
     /// Sorted public entrypoint unit indices of each item (`Roots(f)` with constructors collapsed
     /// to the first constructor).
-    pub(in crate::code_lint::ast) unit_owners: Vec<Vec<usize>>,
+    pub unit_owners: Vec<Vec<usize>>,
     /// Strongly connected component of each item over `edges`.
-    pub(in crate::code_lint::ast) recursion_group: Vec<usize>,
+    pub recursion_group: Vec<usize>,
     /// Strongly connected component of each item over the `edges` between private items: items
     /// that recurse into each other without going through a public entrypoint.
-    pub(in crate::code_lint::ast) private_recursion_group: Vec<usize>,
+    pub(super) private_recursion_group: Vec<usize>,
     /// Level of each item over `edges`: `0` for leaves, one above the highest group below.
-    pub(in crate::code_lint::ast) level: Vec<usize>,
+    pub level: Vec<usize>,
 }
 
 impl ScopeGraph {
     /// Builds the abstraction graph of a scope's items.
-    pub(in crate::code_lint::ast) fn new(items: &[ScopeItem<'_>]) -> Self {
+    pub fn new(items: &[ScopeItem<'_>]) -> Self {
         let edges = ordering_edges(items);
         let is_private = |idx: usize| items[idx].visibility == Visibility::Private;
         let mut lowers = vec![Vec::new(); items.len()];
@@ -119,7 +119,7 @@ impl ScopeGraph {
     }
 
     /// Returns the [`Ownership`] of item `idx`, derived from [`Self::unit_owners`].
-    pub(in crate::code_lint::ast) fn ownership(&self, idx: usize) -> Ownership {
+    pub(super) fn ownership(&self, idx: usize) -> Ownership {
         match self.unit_owners[idx].as_slice() {
             [] => Ownership::Unowned,
             [unit] => Ownership::Owner(*unit),
@@ -130,7 +130,7 @@ impl ScopeGraph {
 
 /// Computes strongly connected component ids over `successors` with Tarjan's algorithm.
 #[must_use]
-pub(in crate::code_lint) fn strongly_connected_components(successors: &[Vec<usize>]) -> Vec<usize> {
+pub fn strongly_connected_components(successors: &[Vec<usize>]) -> Vec<usize> {
     struct Tarjan<'a> {
         successors: &'a [Vec<usize>],
         next_index: usize,
@@ -196,7 +196,7 @@ pub(in crate::code_lint) fn strongly_connected_components(successors: &[Vec<usiz
 /// Levelizes `successors`: each component of `component` is one unit, at level `0` when nothing
 /// is below it, otherwise one above the highest component below it.
 #[must_use]
-pub(in crate::code_lint) fn levels(successors: &[Vec<usize>], component: &[usize]) -> Vec<usize> {
+pub fn levels(successors: &[Vec<usize>], component: &[usize]) -> Vec<usize> {
     let component_count = component.iter().copied().max().map_or(0, |max| max + 1);
     let mut component_level = vec![0; component_count];
     // Tarjan numbers components in reverse topological order: every component below another

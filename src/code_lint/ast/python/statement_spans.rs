@@ -8,10 +8,7 @@ use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
 use ruff_text_size::Ranged as _;
 
 /// Resolves the byte span of the header of the innermost Python statement enclosing `span`.
-pub(in crate::code_lint::ast) fn enclosing_statement_header_span(
-    file: &ParsedFile,
-    span: SourceSpan,
-) -> Option<SourceSpan> {
+pub fn enclosing_statement_header_span(file: &ParsedFile, span: SourceSpan) -> Option<SourceSpan> {
     struct StatementFinder<'a> {
         target_span: SourceSpan,
         found: Option<&'a Stmt>,
@@ -78,7 +75,7 @@ fn python_statement_body_start(statement: &Stmt) -> Option<ruff_text_size::TextS
 }
 
 /// Records the byte span of every Python decorator in `file`.
-pub(in crate::code_lint::ast) fn record_decorator_and_attribute_spans(
+pub fn record_decorator_and_attribute_spans(
     file: &ParsedFile,
     record: &mut impl FnMut(SourceSpan),
 ) {

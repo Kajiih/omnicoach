@@ -15,7 +15,7 @@ const PRINTF_CONVERSIONS: &[u8] = b"diouxXeEfFgGcrsa";
 
 /// How a Python string literal is formatted at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::code_lint) enum PythonFormatStyle {
+pub enum PythonFormatStyle {
     /// An `f` / `F` prefixed literal (`f"... {x} ..."`).
     FString,
     /// The template of `.format(...)`, `.format_map(...)` or `str.format(...)`.
@@ -26,44 +26,42 @@ pub(in crate::code_lint) enum PythonFormatStyle {
 
 /// One replacement field of a format string.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::code_lint) struct PythonFormatPlaceholder {
+pub struct PythonFormatPlaceholder {
     /// The field as written in source (`{name!r:>8}`, `%(key)s`, `%5d`).
-    pub(in crate::code_lint) text: String,
+    pub text: String,
     /// The f-string expression, `str.format` field name or `%` mapping key; empty when absent
     /// (`{}`, `%s`).
-    pub(in crate::code_lint) field: String,
+    pub field: String,
     /// The conversion after `!` in braces (`r`, `s`, `a`), or the `%` conversion type (`s`, `d`).
-    pub(in crate::code_lint) conversion: Option<String>,
+    pub conversion: Option<String>,
     /// The format spec after `:` in braces, or the `%` flags, width, precision and length.
-    pub(in crate::code_lint) format_spec: Option<String>,
+    pub format_spec: Option<String>,
     /// Whether an f-string field is self-documenting (`{value=}`).
-    pub(in crate::code_lint) is_self_documenting: bool,
+    pub is_self_documenting: bool,
 }
 
 /// A formatted Python `string` literal, split into literal text and replacement fields.
 ///
 /// All text is source text: escape sequences are not decoded.
-pub(in crate::code_lint) struct PythonFormatString<'a> {
+pub struct PythonFormatString<'a> {
     /// The `string` node.
-    pub(in crate::code_lint) node: AstNode<'a>,
+    pub node: AstNode<'a>,
     /// How the literal is formatted.
-    pub(in crate::code_lint) style: PythonFormatStyle,
+    pub style: PythonFormatStyle,
     /// Literal text of the strings before `node` in an implicit concatenation
     /// (`"Failed for " f"'{name}'"`), without f-string fields.
-    pub(in crate::code_lint) preceding_text: String,
+    pub preceding_text: String,
     /// Literal text around the fields of `node`: `literals[i]` precedes `placeholders[i]` and
     /// the last entry follows the last field, so there is one more literal than placeholders.
-    pub(in crate::code_lint) literals: Vec<String>,
+    pub literals: Vec<String>,
     /// The replacement fields of `node`, in source order.
-    pub(in crate::code_lint) placeholders: Vec<PythonFormatPlaceholder>,
+    pub placeholders: Vec<PythonFormatPlaceholder>,
 }
 
 /// Collects the formatted string literals in `file`, in source order. Raw, byte and
 /// unformatted string literals are skipped.
 #[must_use]
-pub(in crate::code_lint) fn collect_format_strings(
-    file: &ParsedFile,
-) -> Vec<PythonFormatString<'_>> {
+pub fn collect_format_strings(file: &ParsedFile) -> Vec<PythonFormatString<'_>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
@@ -472,7 +470,7 @@ fn skip_printf_count(bytes: &[u8], cursor: &mut usize) {
 /// Roots come in source order (`order` for `{order.id}`, `width` for `{:>{width}}`); the result
 /// is `None` if `message` has unbalanced braces. Positional fields (`{}`, `{0}`) have no named root.
 #[must_use]
-pub(in crate::code_lint) fn named_format_field_roots(message: &str) -> Option<Vec<String>> {
+pub fn named_format_field_roots(message: &str) -> Option<Vec<String>> {
     let mut cursor = 0;
     let mut roots = Vec::new();
     while cursor < message.len() {
@@ -501,7 +499,7 @@ pub(in crate::code_lint) fn named_format_field_roots(message: &str) -> Option<Ve
 /// Validates a PEP 3101 `field_name` (`arg_name("." attribute | "[" index "]")*`) and returns
 /// its root `arg_name` slice.
 #[must_use]
-pub(in crate::code_lint) fn extract_valid_field_root(field_name: &str) -> Option<&str> {
+pub fn extract_valid_field_root(field_name: &str) -> Option<&str> {
     let split_at = field_name.find(['.', '[']).unwrap_or(field_name.len());
     let root = &field_name[..split_at];
     let valid_root = root.is_empty()

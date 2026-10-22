@@ -74,9 +74,7 @@ fn is_conditional_test_attribute(attribute: &ast::Attr) -> bool {
 
 /// Collects all outermost Rust test functions together with their identifier node, name, and assertion count.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_test_function_assertion_counts(
-    file: &ParsedFile,
-) -> Vec<TestAssertionCount<'_>> {
+pub fn collect_test_function_assertion_counts(file: &ParsedFile) -> Vec<TestAssertionCount<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -106,9 +104,7 @@ pub(in crate::code_lint::ast) fn collect_test_function_assertion_counts(
 
 /// Collects control-flow and conditional constructs directly inside outermost Rust test functions.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_test_logic_constructs(
-    file: &ParsedFile,
-) -> Vec<TestLogicConstruct<'_>> {
+pub fn collect_test_logic_constructs(file: &ParsedFile) -> Vec<TestLogicConstruct<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -163,9 +159,7 @@ fn collect_rust_test_logic_rec<'a>(
 /// Collects outermost Rust test functions that interleave non-assertion statements between
 /// behavioral assertions.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_multi_phase_test_functions(
-    file: &ParsedFile,
-) -> Vec<MultiPhaseTest<'_>> {
+pub fn collect_multi_phase_test_functions(file: &ParsedFile) -> Vec<MultiPhaseTest<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -259,9 +253,7 @@ fn is_rust_projection_expr(expr: &ast::Expr) -> bool {
 /// Collects Rust test functions grouped by enclosing file root or `mod` scope (segmented on
 /// duplicate function names) along with their leading non-assertion setup statements.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_test_setup_scopes(
-    file: &ParsedFile,
-) -> Vec<Vec<TestFunctionSetup<'_>>> {
+pub fn collect_test_setup_scopes(file: &ParsedFile) -> Vec<Vec<TestFunctionSetup<'_>>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -335,9 +327,7 @@ fn extract_rust_leading_setup_statements(
 
 /// Collects all Rust assertion macro invocations in `file` with their condition-packing properties.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_assertion_checks(
-    file: &ParsedFile,
-) -> Vec<AssertionCheck<'_>> {
+pub fn collect_assertion_checks(file: &ParsedFile) -> Vec<AssertionCheck<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
@@ -487,9 +477,7 @@ fn is_standalone_collection_token_tree(token_tree: &ast::TokenTree) -> bool {
 /// Collects calls in a Rust test file where a function calls a `#[test]` function defined in the
 /// same file.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_test_to_test_calls(
-    file: &ParsedFile,
-) -> Vec<TestToTestCall<'_>> {
+pub fn collect_test_to_test_calls(file: &ParsedFile) -> Vec<TestToTestCall<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };

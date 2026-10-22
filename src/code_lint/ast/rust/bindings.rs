@@ -75,7 +75,7 @@ pub(super) fn collect_rust_fn_local_names(function: &ast::Fn) -> HashSet<String>
 /// Collects all binding definitions (variables, functions, structs, named struct fields, etc.)
 /// within `file`, with what introduced each.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_bindings(file: &ParsedFile) -> Vec<Binding<'_>> {
+pub fn collect_bindings(file: &ParsedFile) -> Vec<Binding<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };

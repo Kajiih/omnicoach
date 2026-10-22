@@ -4,7 +4,7 @@ use super::tree::{AstNode, ParsedFile};
 
 /// What introduced a binding name, recorded by the walk that collects the binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::code_lint) enum BindingKind {
+pub enum BindingKind {
     /// A name introduced by an import (`import x`, `from m import y`, `use a::b`).
     Import,
     /// The name of a member mandated by a contract: a function, type alias, or constant defined

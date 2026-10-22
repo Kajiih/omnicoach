@@ -22,9 +22,7 @@ const ISINSTANCE_NAME: &str = "isinstance";
 
 /// Collects all Python `Stmt::Assert` nodes in `file` with their condition-packing properties.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_assertion_checks(
-    file: &ParsedFile,
-) -> Vec<AssertionCheck<'_>> {
+pub fn collect_assertion_checks(file: &ParsedFile) -> Vec<AssertionCheck<'_>> {
     struct AssertCollector<'a> {
         file: &'a ParsedFile,
         out: Vec<AssertionCheck<'a>>,
@@ -102,9 +100,7 @@ const fn is_multi_element_collection_expr(expr: &Expr) -> bool {
 
 /// Collects all outermost Python test functions along with their identifier node, name, and assertion count.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_test_function_assertion_counts(
-    file: &ParsedFile,
-) -> Vec<TestAssertionCount<'_>> {
+pub fn collect_test_function_assertion_counts(file: &ParsedFile) -> Vec<TestAssertionCount<'_>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
@@ -129,9 +125,7 @@ pub(in crate::code_lint::ast) fn collect_test_function_assertion_counts(
 
 /// Collects control-flow and conditional constructs directly inside outermost Python test functions.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_test_logic_constructs(
-    file: &ParsedFile,
-) -> Vec<TestLogicConstruct<'_>> {
+pub fn collect_test_logic_constructs(file: &ParsedFile) -> Vec<TestLogicConstruct<'_>> {
     struct TestLogicCollector<'a> {
         file: &'a ParsedFile,
         func_name: &'a str,
@@ -231,9 +225,7 @@ pub(in crate::code_lint::ast) fn collect_test_logic_constructs(
 /// Collects outermost Python test functions that interleave non-assertion statements between
 /// behavioral assertions.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_multi_phase_test_functions(
-    file: &ParsedFile,
-) -> Vec<MultiPhaseTest<'_>> {
+pub fn collect_multi_phase_test_functions(file: &ParsedFile) -> Vec<MultiPhaseTest<'_>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
@@ -341,9 +333,7 @@ fn is_pytest_readouterr_call(call: &ruff_python_ast::ExprCall) -> bool {
 /// Collects Python test functions grouped by enclosing module or class scope (segmented on
 /// duplicate function names) along with their leading non-assertion setup statements.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_test_setup_scopes(
-    file: &ParsedFile,
-) -> Vec<Vec<TestFunctionSetup<'_>>> {
+pub fn collect_test_setup_scopes(file: &ParsedFile) -> Vec<Vec<TestFunctionSetup<'_>>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
@@ -416,9 +406,7 @@ fn extract_python_leading_setup_statements(
 /// Collects calls in a Python test file where a function calls a test function defined in the same
 /// file.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_test_to_test_calls(
-    file: &ParsedFile,
-) -> Vec<TestToTestCall<'_>> {
+pub fn collect_test_to_test_calls(file: &ParsedFile) -> Vec<TestToTestCall<'_>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };

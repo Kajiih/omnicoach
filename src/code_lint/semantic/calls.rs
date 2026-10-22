@@ -8,15 +8,15 @@ use crate::code_lint::ast::{self, AstNode, CallSiteContext, ParsedFile, Resolved
 use std::collections::HashSet;
 
 /// A matched call expression together with its resolved callee string and argument nodes.
-pub(in crate::code_lint) struct CallMatch<'a> {
+pub struct CallMatch<'a> {
     /// The matched call expression node (e.g. `time.sleep(1)`).
-    pub(in crate::code_lint) node: AstNode<'a>,
+    pub node: AstNode<'a>,
     /// The source text of the invoked function/callee node (e.g. `time.sleep` or `asyncio.get_event_loop().create_task`).
-    pub(in crate::code_lint) callee: String,
+    pub callee: String,
     /// The semantic argument nodes (excluding punctuation and comments).
-    pub(in crate::code_lint) arguments: Vec<AstNode<'a>>,
+    pub arguments: Vec<AstNode<'a>>,
     /// Syntactic context surrounding the call expression.
-    pub(in crate::code_lint) context: CallSiteContext,
+    pub context: CallSiteContext,
 }
 
 impl std::ops::Deref for CallMatch<'_> {
@@ -47,7 +47,7 @@ impl std::ops::Deref for CallMatch<'_> {
 /// Matches are sorted by byte span `(start, end)` and deduplicated so that overlapping
 /// patterns or `HashSet` iteration order never produce non-deterministic or duplicate matches.
 #[must_use]
-pub(in crate::code_lint) fn find_banned_calls<'a, S: std::hash::BuildHasher>(
+pub fn find_banned_calls<'a, S: std::hash::BuildHasher>(
     file: &'a ParsedFile,
     banned_callees: &HashSet<String, S>,
 ) -> Vec<CallMatch<'a>> {

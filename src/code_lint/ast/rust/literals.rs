@@ -53,9 +53,7 @@ const LITERAL_REQUIRED_MACROS: &[&str] = &[
 
 /// Collects Rust literal occurrences (see [`super::collect_literal_occurrences`]).
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_literal_occurrences(
-    file: &ParsedFile,
-) -> Vec<LiteralOccurrence<'_>> {
+pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };

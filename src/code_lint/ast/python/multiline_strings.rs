@@ -10,7 +10,7 @@ use ruff_text_size::Ranged as _;
 /// Finds all multiline string literals in a Python file that are not docstrings
 /// and not wrapped in a call matching `is_wrapper`.
 #[must_use]
-pub(in crate::code_lint::ast) fn find_unwrapped_multiline_strings(
+pub fn find_unwrapped_multiline_strings(
     file: &ParsedFile,
     is_wrapper: impl Fn(&str) -> bool,
 ) -> Vec<AstNode<'_>> {

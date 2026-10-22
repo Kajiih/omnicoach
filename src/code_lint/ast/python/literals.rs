@@ -24,9 +24,7 @@ const TYPE_NAME_FIRST_ARGUMENT_CALLS: &[&str] = &[
 
 /// Collects Python literal occurrences (see [`crate::code_lint::ast::collect_literal_occurrences`]).
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_literal_occurrences(
-    file: &ParsedFile,
-) -> Vec<LiteralOccurrence<'_>> {
+pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'_>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };

@@ -10,9 +10,7 @@ use ruff_text_size::Ranged as _;
 
 /// Collects Python positional reads grouped by scope (see [`crate::code_lint::ast::collect_positional_reads`]).
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_positional_reads(
-    file: &ParsedFile,
-) -> Vec<ScopePositionalReads<'_>> {
+pub fn collect_positional_reads(file: &ParsedFile) -> Vec<ScopePositionalReads<'_>> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };

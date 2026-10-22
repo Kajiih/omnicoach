@@ -8,7 +8,7 @@ use ruff_python_ast::{ExceptHandler, Stmt};
 /// Collects the file-level imports and `def` / `class` definitions of `file` (see
 /// [`crate::code_lint::ast::resolve_name`]).
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_import_map(file: &ParsedFile) -> ImportMap {
+pub fn collect_import_map(file: &ParsedFile) -> ImportMap {
     let mut map = ImportMap::default();
     if let Some(parsed) = file.py_module() {
         collect_python_import_bindings(&parsed.syntax().body, &file.line_index, &mut map);

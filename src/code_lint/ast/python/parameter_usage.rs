@@ -120,7 +120,7 @@ impl ParameterUsage {
 /// Minimum read-only `collections.abc` capability required by a parameter's usages inside
 /// its function body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(in crate::code_lint) enum ParameterCollectionCapability {
+pub enum ParameterCollectionCapability {
     /// Parameter is never referenced in the function body.
     Unused,
     /// Parameter is only iterated once at top-level depth (`Iterable` suffices).

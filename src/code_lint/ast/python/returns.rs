@@ -17,14 +17,14 @@ use std::collections::{HashMap, HashSet};
 
 /// What a function's own body returns or yields, nested functions, classes and lambdas excluded.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(in crate::code_lint) struct PythonBodyResults {
+pub struct PythonBodyResults {
     /// True if the body has a `return <value>` whose value is not the `None` literal.
-    pub(in crate::code_lint) returns_value: bool,
+    pub returns_value: bool,
     /// True if the body has a `yield` or `yield from`.
-    pub(in crate::code_lint) yields: bool,
+    pub yields: bool,
     /// The largest element count among the tuple displays of at least two elements that the body
     /// returns or yields (`return low, high`); displays with a starred element are not counted.
-    pub(in crate::code_lint) tuple_display_arity: Option<usize>,
+    pub tuple_display_arity: Option<usize>,
 }
 
 impl<'a> PythonFunctionSignature<'a> {
@@ -81,9 +81,7 @@ impl<'a> PythonFunctionSignature<'a> {
 /// See [`crate::code_lint::ast::collect_function_returns`]: functions whose signature is imposed
 /// ([`PythonFunctionSignature::has_imposed_signature`]) or that are methods of an interface class
 /// ([`is_interface_method`]) are skipped.
-pub(in crate::code_lint::ast) fn collect_function_returns(
-    file: &ParsedFile,
-) -> Vec<FunctionReturn<'_>> {
+pub fn collect_function_returns(file: &ParsedFile) -> Vec<FunctionReturn<'_>> {
     extract_function_signatures(file)
         .into_iter()
         .filter(|signature| !signature.has_imposed_signature() && !is_interface_method(signature))

@@ -6,18 +6,18 @@ use std::sync::Arc;
 
 /// A function enclosing a collected node, recorded by the walk that collected the node.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::code_lint) struct EnclosingFunction {
+pub struct EnclosingFunction {
     /// The function's name.
-    pub(in crate::code_lint) name: String,
+    pub name: String,
     /// Byte span of the function's declared name identifier.
-    pub(in crate::code_lint) name_span: SourceSpan,
+    pub name_span: SourceSpan,
     /// True if the function is defined at file scope: a statement of the Python module body or
     /// an item of the Rust source file (not nested in a class, `impl`, `mod`, or block).
-    pub(in crate::code_lint) is_top_level: bool,
+    pub is_top_level: bool,
     /// Name of the immediately enclosing top-level Python `class`, if this function is a direct
     /// method of that class. `None` for module-level functions, nested functions, methods of
     /// nested classes, and all Rust functions.
-    pub(in crate::code_lint) enclosing_class: Option<String>,
+    pub enclosing_class: Option<String>,
 }
 
 /// Returns `outer` (innermost first) with `function` prepended as the new innermost function.

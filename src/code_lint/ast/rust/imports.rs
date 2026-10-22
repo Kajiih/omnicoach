@@ -9,7 +9,7 @@ use ra_ap_syntax::ast::{self, HasModuleItem as _, HasName as _};
 /// Collects the root-level `use` trees and item definitions of `file` (see
 /// [`crate::code_lint::ast::resolve_name`]).
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_import_map(file: &ParsedFile) -> ImportMap {
+pub fn collect_import_map(file: &ParsedFile) -> ImportMap {
     let mut map = ImportMap::default();
     let Some(parsed) = file.rs_parsed() else {
         return map;

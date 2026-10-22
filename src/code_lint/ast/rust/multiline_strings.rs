@@ -10,7 +10,7 @@ use ra_ap_syntax::{AstNode as _, SyntaxElement, SyntaxKind, SyntaxToken};
 /// Collects all Rust multiline string literal nodes in `file` that are not doc attributes,
 /// `insta` inline snapshots, or enclosed in a macro matching `is_wrapper`.
 #[must_use]
-pub(in crate::code_lint::ast) fn find_unwrapped_multiline_strings(
+pub fn find_unwrapped_multiline_strings(
     file: &ParsedFile,
     is_wrapper: impl Fn(&str) -> bool,
 ) -> Vec<AstNode<'_>> {

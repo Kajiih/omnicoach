@@ -13,69 +13,69 @@ use super::tree::ParsedFile;
 
 /// Everything the analyzer knows about one scope (`Module`, `Class`, or `Impl`) in a file.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::code_lint) struct ScopeFacts {
+pub struct ScopeFacts {
     /// Which syntactic container this scope covers.
-    pub(in crate::code_lint) scope: DeclarationScopeKind,
+    pub scope: DeclarationScopeKind,
     /// Declarations in source order. Every index in [`ScopeFacts`] (`roots`, `source`, `target`,
     /// `higher`, `lower`) indexes into this slice.
-    pub(in crate::code_lint) items: Vec<ItemFacts>,
+    pub items: Vec<ItemFacts>,
     /// Direct intra-scope references, labeled by where the reference occurs.
-    pub(in crate::code_lint) relations: Vec<RelationFact>,
+    pub relations: Vec<RelationFact>,
     /// Downward `callee-before-caller` ordering edges (`higher -> lower`), labeled by why `higher`
     /// sits above `lower`.
-    pub(in crate::code_lint) ordering: Vec<OrderingEdge>,
+    pub ordering: Vec<OrderingEdge>,
 }
 
 /// One declaration in [`ScopeFacts::items`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::code_lint) struct ItemFacts {
+pub struct ItemFacts {
     /// Identifier name of the declaration.
-    pub(in crate::code_lint) name: String,
+    pub name: String,
     /// Callable (`fn` / `def`) or type (`struct`, `enum`, `union`, `trait`, `class`).
-    pub(in crate::code_lint) kind: ScopeItemKind,
+    pub kind: ScopeItemKind,
     /// Public or private visibility tier.
-    pub(in crate::code_lint) visibility: Visibility,
+    pub visibility: Visibility,
     /// True if this callable is a lifecycle constructor (`__init__`, `pub fn new`, etc.).
-    pub(in crate::code_lint) is_constructor: bool,
+    pub is_constructor: bool,
     /// 1-based line of the declaration's name identifier.
-    pub(in crate::code_lint) line: usize,
+    pub line: usize,
     /// 1-based last line of the declaration, including its attached `impl` blocks or grouped
     /// overloads and accessors.
-    pub(in crate::code_lint) end_line: usize,
+    pub end_line: usize,
     /// 1-based column of the declaration's name identifier.
-    pub(in crate::code_lint) column: usize,
+    pub column: usize,
     /// Compact one-line signature header (parameters + return type for callables; public fields or
     /// variants for types), when available.
-    pub(in crate::code_lint) signature: Option<String>,
+    pub signature: Option<String>,
     /// Sorted indices in [`ScopeFacts::items`] of the public entrypoint units that reach this item
     /// through private references (`Roots(f)` with constructors collapsed to the scope's first
     /// constructor).
-    pub(in crate::code_lint) roots: Vec<usize>,
+    pub roots: Vec<usize>,
     /// Strongly connected component id over [`ScopeFacts::ordering`]. Mutual recursion shares an id.
-    pub(in crate::code_lint) recursion_group: usize,
+    pub recursion_group: usize,
     /// Topological level in [`ScopeFacts::ordering`]: `0` for leaves, `1 + max(callee.level)` above
     /// them, with a recursion group sharing one level.
-    pub(in crate::code_lint) level: usize,
+    pub level: usize,
     /// Call-cluster ordering findings reported on this declaration, in rule priority order.
-    pub(in crate::code_lint) findings: Vec<FindingFact>,
+    pub findings: Vec<FindingFact>,
 }
 
 /// A call-cluster lint finding attached to an [`ItemFacts`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::code_lint) struct FindingFact {
+pub struct FindingFact {
     /// Call-cluster placement rule violated by this item.
-    pub(in crate::code_lint) rule: CallClusterRule,
+    pub rule: CallClusterRule,
     /// Name of the owning or calling declaration the finding relates to.
-    pub(in crate::code_lint) related: String,
+    pub related: String,
     /// Why `related` sits above this item (`callee-before-caller` only).
-    pub(in crate::code_lint) reason: Option<OrderingReason>,
+    pub reason: Option<OrderingReason>,
     /// Sibling declaration next to which this item belongs.
-    pub(in crate::code_lint) anchor: PlacementAnchor,
+    pub anchor: PlacementAnchor,
 }
 
 /// Collects [`ScopeFacts`] for every declaration scope in `file`, in source order.
 #[must_use]
-pub(in crate::code_lint) fn collect_scope_facts(file: &ParsedFile) -> Vec<ScopeFacts> {
+pub fn collect_scope_facts(file: &ParsedFile) -> Vec<ScopeFacts> {
     collect_declaration_scopes(file)
         .iter()
         .map(scope_facts)

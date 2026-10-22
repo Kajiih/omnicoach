@@ -8,10 +8,7 @@ use ra_ap_syntax::ast;
 use ra_ap_syntax::{AstNode as _, SyntaxElement, SyntaxKind, SyntaxNode};
 
 /// Resolves the byte span of the header of the innermost Rust statement enclosing `span`.
-pub(in crate::code_lint::ast) fn enclosing_statement_header_span(
-    file: &ParsedFile,
-    span: SourceSpan,
-) -> Option<SourceSpan> {
+pub fn enclosing_statement_header_span(file: &ParsedFile, span: SourceSpan) -> Option<SourceSpan> {
     let start_node = syntax_node_at_span(file, span)?;
     let statement = start_node.ancestors().find(|candidate| {
         candidate
@@ -75,7 +72,7 @@ const fn is_rust_body_container(kind: SyntaxKind) -> bool {
 }
 
 /// Records the byte span of every Rust attribute in `file`.
-pub(in crate::code_lint::ast) fn record_decorator_and_attribute_spans(
+pub fn record_decorator_and_attribute_spans(
     file: &ParsedFile,
     record: &mut impl FnMut(SourceSpan),
 ) {

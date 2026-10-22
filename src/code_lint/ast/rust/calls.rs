@@ -9,9 +9,7 @@ use std::sync::Arc;
 
 /// Collects all direct call and method-call expressions in a Rust file using `ra_ap_syntax`.
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_call_candidates(
-    file: &ParsedFile,
-) -> Vec<CachedCallCandidate> {
+pub fn collect_call_candidates(file: &ParsedFile) -> Vec<CachedCallCandidate> {
     use ra_ap_syntax::ast::{self, HasArgList as _};
 
     let Some(parsed) = file.rs_parsed() else {

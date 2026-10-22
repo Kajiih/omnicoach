@@ -5,13 +5,13 @@ use std::collections::HashSet;
 
 /// A read of one positional element through an integer literal: `receiver[1]` or
 /// `receiver[-1]` in Python, `receiver.1` in Rust.
-pub(in crate::code_lint) struct PositionalRead<'a> {
+pub struct PositionalRead<'a> {
     /// The whole indexing expression (`point[0]`, `span.0`).
-    pub(in crate::code_lint) node: AstNode<'a>,
+    pub node: AstNode<'a>,
     /// Source text of the indexed value (`point`, `self.pair`, `rows[i]`).
-    pub(in crate::code_lint) receiver: String,
+    pub receiver: String,
     /// The literal position; negative for Python end-relative indices.
-    pub(in crate::code_lint) position: i64,
+    pub position: i64,
 }
 
 /// Positional reads of one scope (a function body, or the Python module top level), in source

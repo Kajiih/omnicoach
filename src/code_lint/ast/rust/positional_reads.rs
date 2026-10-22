@@ -8,9 +8,7 @@ use ra_ap_syntax::{AstNode as _, SyntaxKind, SyntaxNode};
 
 /// Collects Rust tuple-field reads grouped by function (see [`crate::code_lint::ast::collect_positional_reads`]).
 #[must_use]
-pub(in crate::code_lint::ast) fn collect_positional_reads(
-    file: &ParsedFile,
-) -> Vec<ScopePositionalReads<'_>> {
+pub fn collect_positional_reads(file: &ParsedFile) -> Vec<ScopePositionalReads<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
