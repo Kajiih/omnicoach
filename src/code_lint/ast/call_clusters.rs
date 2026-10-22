@@ -203,7 +203,8 @@ impl PlacementAnchor {
 
 /// A call-cluster placement rule, in priority order: an item violating several rules is
 /// reported only under the first.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, strum::Display)]
+#[strum(serialize_all = "kebab-case")]
 pub(in crate::code_lint) enum CallClusterRule {
     /// A constructor sits above every non-constructor method in its class or `impl`.
     ConstructorAfterMethod,
@@ -215,19 +216,6 @@ pub(in crate::code_lint) enum CallClusterRule {
     UncolocatedHelper,
     /// A private item sits below the private items above it in the abstraction order.
     CalleeBeforeCaller,
-}
-// TODO: What is this hardcoded set of string?
-impl CallClusterRule {
-    /// The rule's name.
-    #[must_use]
-    pub(super) const fn name(self) -> &'static str {
-        match self {
-            Self::ConstructorAfterMethod => "constructor-after-method",
-            Self::PrivateBeforePublic => "private-before-public",
-            Self::UncolocatedHelper => "uncolocated-helper",
-            Self::CalleeBeforeCaller => "callee-before-caller",
-        }
-    }
 }
 
 /// A misplaced declaration reported by a call-cluster placement rule.

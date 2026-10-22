@@ -5,9 +5,9 @@
 //! parsed file. Multi-file project resolution lives in `crate::code_lint::graph`.
 
 use super::call_clusters::{
-    DeclarationScope, DeclarationScopeKind, OrderingEdge, OrderingReason, PlacementAnchor,
-    RelationFact, ScopeGraph, ScopeItem, ScopeItemKind, Visibility, collect_declaration_scopes,
-    scope_findings,
+    CallClusterRule, DeclarationScope, DeclarationScopeKind, OrderingEdge, OrderingReason,
+    PlacementAnchor, RelationFact, ScopeGraph, ScopeItem, ScopeItemKind, Visibility,
+    collect_declaration_scopes, scope_findings,
 };
 use super::tree::ParsedFile;
 
@@ -63,9 +63,8 @@ pub(in crate::code_lint) struct ItemFacts {
 /// A call-cluster lint finding attached to an [`ItemFacts`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::code_lint) struct FindingFact {
-    /// Rule name (`constructor-after-method`, `private-before-public`, `uncolocated-helper`, or
-    /// `callee-before-caller`).
-    pub(in crate::code_lint) rule: &'static str,
+    /// Call-cluster placement rule violated by this item.
+    pub(in crate::code_lint) rule: CallClusterRule,
     /// Name of the owning or calling declaration the finding relates to.
     pub(in crate::code_lint) related: String,
     /// Why `related` sits above this item (`callee-before-caller` only).
@@ -109,7 +108,7 @@ fn scope_facts(scope: &DeclarationScope<'_>) -> ScopeFacts {
         .collect();
     for finding in scope_findings(scope, &graph) {
         item_facts[finding.item].findings.push(FindingFact {
-            rule: finding.rule.name(),
+            rule: finding.rule,
             related: items[finding.related].name.clone(),
             reason: finding.reason,
             anchor: finding.anchor,
@@ -313,7 +312,7 @@ mod tests {
         assert_eq!(
             facts.items[2].findings,
             [FindingFact {
-                rule: "callee-before-caller",
+                rule: CallClusterRule::CalleeBeforeCaller,
                 related: "Frame".to_owned(),
                 reason: Some(OrderingReason::SignatureContract),
                 anchor: PlacementAnchor {

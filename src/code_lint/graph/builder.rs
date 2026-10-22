@@ -1325,7 +1325,8 @@ mod tests {
     use super::super::project_facts::{ComponentFact, CrossModuleRefFact};
     use super::*;
     use crate::code_lint::ast::{
-        FindingFact, OrderingEdge as AstOrderingEdge, OrderingReason, PlacementAnchor, RelationFact,
+        CallClusterRule, FindingFact, OrderingEdge as AstOrderingEdge, OrderingReason,
+        PlacementAnchor, RelationFact,
     };
 
     fn sample_scopes() -> Vec<ScopeFacts> {
@@ -1356,7 +1357,7 @@ mod tests {
                 ),
                 ItemFacts {
                     findings: vec![FindingFact {
-                        rule: "callee-before-caller",
+                        rule: CallClusterRule::CalleeBeforeCaller,
                         related: "entry_a".to_owned(),
                         reason: Some(OrderingReason::Encapsulation),
                         anchor: PlacementAnchor {

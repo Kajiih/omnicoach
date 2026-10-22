@@ -435,7 +435,7 @@ mod tests {
         GraphParts, OrderingEdge, ReferenceEdge, SourceLocation, SummaryEdge,
     };
     use super::*;
-    use crate::code_lint::ast::{OrderingReason, PlacementAnchor};
+    use crate::code_lint::ast::{CallClusterRule, OrderingReason, PlacementAnchor};
 
     fn fixture_graph() -> AbstractionGraph {
         let entry = DeclarationNode {
@@ -475,7 +475,7 @@ mod tests {
             recursion_group: 0,
             level: 0,
             findings: vec![FindingFact {
-                rule: "callee-before-caller",
+                rule: CallClusterRule::CalleeBeforeCaller,
                 related: "entry".to_owned(),
                 reason: Some(OrderingReason::Call),
                 anchor: PlacementAnchor {
