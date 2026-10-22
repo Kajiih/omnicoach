@@ -574,6 +574,29 @@ pub fn inherited_method_docstring<'c, 'a>(
         })
 }
 
+/// The field names declared by `TypedDict` classes in `file`, including subclasses of an
+/// in-file `TypedDict`.
+#[must_use]
+pub(super) fn typed_dict_keys(file: &ParsedFile) -> HashSet<String> {
+    let classes = extract_classes(file);
+    classes
+        .iter()
+        .enumerate()
+        .filter(|&(index, class)| {
+            class.is_typed_dict()
+                || local_ancestors(&classes, index)
+                    .into_iter()
+                    .any(|ancestor| classes[ancestor].is_typed_dict())
+        })
+        .flat_map(|(_, class)| {
+            class
+                .annotated_attributes()
+                .into_iter()
+                .map(|attribute| attribute.name)
+        })
+        .collect()
+}
+
 /// The first definition of a Python class attribute, from
 /// [`PythonClassInfo::attribute_definitions`].
 #[derive(Clone)]
@@ -1322,6 +1345,24 @@ mod tests {
                 name: "default_port".to_string(),
                 line: 2,
             }
+        );
+    }
+
+    #[test]
+    fn typed_dict_keys_reads_typed_dict_classes_and_local_subclasses() {
+        let source = indoc::indoc! {r"
+            import typing
+            class BaseFill(typing.TypedDict):
+                symbol: str
+            class TradeFill(BaseFill, total=False):
+                price: float
+            class RegularClass:
+                ignored: int
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        assert_eq!(
+            typed_dict_keys(&file),
+            HashSet::from(["symbol".to_owned(), "price".to_owned()])
         );
     }
 }

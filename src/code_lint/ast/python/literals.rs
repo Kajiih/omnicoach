@@ -1,17 +1,20 @@
 //! Python literal occurrences.
 
 use super::bindings::constant_assignment_value;
+use super::classes::typed_dict_keys;
 use super::names::written_name;
 use crate::code_lint::ast::literals::{
     LiteralOccurrence, LiteralRole, LiteralValue, parse_float_literal, parse_integer_literal,
 };
 use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
-use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
+use ruff_python_ast::visitor::source_order::{
+    SourceOrderVisitor, walk_expr, walk_pattern, walk_stmt,
+};
 use ruff_python_ast::{ExceptHandler, Expr, Stmt};
 use ruff_text_size::Ranged as _;
+use std::collections::HashSet;
 
-/// Calls whose first argument is a name or type the language requires as a string
-/// (`TypeVar("T")`, `cast("Node", value)`).
+/// Calls whose first argument is the declared type's name (`TypeVar("T")`, `cast("Node", x)`).
 const TYPE_NAME_FIRST_ARGUMENT_CALLS: &[&str] = &[
     "TypeVar",
     "NewType",
@@ -22,6 +25,9 @@ const TYPE_NAME_FIRST_ARGUMENT_CALLS: &[&str] = &[
     "cast",
 ];
 
+/// Dictionary methods whose first argument is a key lookup (`d.get("k")`, `d.pop("k")`).
+const DICT_KEY_FIRST_ARGUMENT_METHODS: &[&str] = &["get", "pop", "setdefault"];
+
 /// Collects Python literal occurrences (see [`crate::code_lint::ast::collect_literal_occurrences`]).
 #[must_use]
 pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'_>> {
@@ -30,6 +36,7 @@ pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'
     };
     let mut collector = LiteralOccurrenceCollector {
         file,
+        typed_dict_keys: typed_dict_keys(file),
         in_constant_scope: true,
         out: Vec::new(),
     };
@@ -39,6 +46,7 @@ pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'
 
 struct LiteralOccurrenceCollector<'a> {
     file: &'a ParsedFile,
+    typed_dict_keys: HashSet<String>,
     in_constant_scope: bool,
     out: Vec<LiteralOccurrence<'a>>,
 }
@@ -54,6 +62,42 @@ impl<'a> LiteralOccurrenceCollector<'a> {
         self.in_constant_scope = false;
         self.visit_expr(expr);
         self.in_constant_scope = prev;
+    }
+
+    fn visit_call(&mut self, call: &'a ruff_python_ast::ExprCall) {
+        self.visit_expr(&call.func);
+        let mut args = call.arguments.args.iter();
+        if let Some(first_arg) = args.next()
+            && !TYPE_NAME_FIRST_ARGUMENT_CALLS.contains(
+                &written_name(&call.func, &self.file.source)
+                    .terminal
+                    .as_str(),
+            )
+        {
+            if let Expr::Attribute(attr) = call.func.as_ref()
+                && DICT_KEY_FIRST_ARGUMENT_METHODS.contains(&attr.attr.as_str())
+            {
+                self.visit_dict_key(first_arg);
+            } else {
+                self.visit_expr(first_arg);
+            }
+        }
+        for arg in args {
+            self.visit_expr(arg);
+        }
+        for keyword in &call.arguments.keywords {
+            self.visit_keyword(keyword);
+        }
+    }
+
+    fn visit_dict_key(&mut self, expr: &'a Expr) {
+        if let Expr::StringLiteral(str_lit) = expr
+            && let [part] = str_lit.value.as_slice()
+            && self.typed_dict_keys.contains(part.as_str())
+        {
+            return;
+        }
+        self.visit_expr(expr);
     }
 
     fn visit_fstring(&mut self, fstr: &'a ruff_python_ast::ExprFString) {
@@ -165,29 +209,42 @@ impl<'a> SourceOrderVisitor<'a> for LiteralOccurrenceCollector<'a> {
 
     fn visit_expr(&mut self, expr: &'a Expr) {
         match expr {
-            Expr::Subscript(sub)
-                if written_name(&sub.value, &self.file.source).terminal == "Literal" =>
-            {
+            Expr::Dict(dict) => {
+                for item in &dict.items {
+                    if let Some(key) = &item.key {
+                        self.visit_dict_key(key);
+                    }
+                    self.visit_expr(&item.value);
+                }
+                return;
+            }
+            Expr::Subscript(sub) => {
+                if written_name(&sub.value, &self.file.source).terminal != "Literal" {
+                    self.visit_expr(&sub.value);
+                    self.visit_dict_key(&sub.slice);
+                }
+                return;
+            }
+            Expr::Compare(cmp) => {
+                let mut operands = cmp.operands.iter();
+                if let Some(left) = operands.next() {
+                    if matches!(
+                        cmp.ops.first(),
+                        Some(ruff_python_ast::CmpOp::In | ruff_python_ast::CmpOp::NotIn)
+                    ) {
+                        self.visit_dict_key(left);
+                    } else {
+                        self.visit_expr(left);
+                    }
+                }
+                for comparator in operands {
+                    self.visit_expr(comparator);
+                }
                 return;
             }
             Expr::Call(call) => {
-                let terminal = written_name(&call.func, &self.file.source).terminal;
-                if TYPE_NAME_FIRST_ARGUMENT_CALLS.contains(&terminal.as_str()) {
-                    self.visit_expr(&call.func);
-                    if call.arguments.args.is_empty() {
-                        for kw in call.arguments.keywords.iter().skip(1) {
-                            self.visit_keyword(kw);
-                        }
-                    } else {
-                        for arg in call.arguments.args.iter().skip(1) {
-                            self.visit_expr(arg);
-                        }
-                        for kw in &call.arguments.keywords {
-                            self.visit_keyword(kw);
-                        }
-                    }
-                    return;
-                }
+                self.visit_call(call);
+                return;
             }
             Expr::UnaryOp(unary) if unary.op == ruff_python_ast::UnaryOp::USub => {
                 if let Some(val) = number_literal_value(&unary.operand, &self.file.source)
@@ -240,6 +297,19 @@ impl<'a> SourceOrderVisitor<'a> for LiteralOccurrenceCollector<'a> {
             _ => {}
         }
         walk_expr(self, expr);
+    }
+
+    fn visit_pattern(&mut self, pattern: &'a ruff_python_ast::Pattern) {
+        if let ruff_python_ast::Pattern::MatchMapping(mapping) = pattern {
+            for key in &mapping.keys {
+                self.visit_dict_key(key);
+            }
+            for sub_pattern in &mapping.patterns {
+                self.visit_pattern(sub_pattern);
+            }
+            return;
+        }
+        walk_pattern(self, pattern);
     }
 }
 
@@ -357,6 +427,35 @@ mod tests {
     #[case::docstring_skipped("def f():\n    '''Doc.'''\n    return 'rv'", &[("'rv'", Inline)])]
     #[case::annotations_skipped("def f(a: 'T' = 'dv') -> 'R':\n    v: 'V' = 'vv'", &[("'dv'", Inline), ("'vv'", Inline)])]
     #[case::literal_type_skipped("v = Literal['y']", &[])]
+    #[case::cast_skips_type_argument_only(
+        "v = f('rx').cast('Node', 'vv')",
+        &[("'rx'", Inline), ("'vv'", Inline)]
+    )]
+    #[case::typed_dict_keys_skipped_only_in_dict_key_positions(
+        indoc::indoc! {r"
+            class Fill(TypedDict):
+                symbol: str
+                price: float
+            f = {'symbol': 'symbol', 'other': 'val'}
+            _ = f['price'], f.get('symbol', 'fb'), f.pop('price'), f.setdefault('symbol', 'df')
+            _ = 'price' in f, 'symbol' not in f, 'price' == 'other', get('symbol')
+            match f:
+                case {'symbol': _, 'other': 'mv'}:
+                    pass
+        "},
+        &[
+            ("'symbol'", Inline),
+            ("'other'", Inline),
+            ("'val'", Inline),
+            ("'fb'", Inline),
+            ("'df'", Inline),
+            ("'price'", Inline),
+            ("'other'", Inline),
+            ("'symbol'", Inline),
+            ("'other'", Inline),
+            ("'mv'", Inline),
+        ]
+    )]
     #[case::interpolated_fstring_walked("print(f\"{row['st']} and\", f'plain')", &[("'st'", Inline), ("f'plain'", Inline)])]
     #[case::imaginary_skipped("z = 2j", &[])]
     fn test_collect_literal_occurrences_python(
@@ -376,24 +475,26 @@ mod tests {
     }
 
     #[rstest::rstest]
-    fn test_collect_literal_occurrences_python_skips_type_name_argument(
+    fn test_collect_literal_occurrences_python_skips_type_name_first_argument(
         #[values(
             "TypeVar",
             "NewType",
             "ParamSpec",
             "TypeVarTuple",
             "NamedTuple",
-            "TypedDict",
-            "typing.cast"
+            "typing.TypedDict"
         )]
         callee: &str,
     ) {
-        let file = ParsedFile::new(&format!("t = {callee}('Nm', 'vv')"), Language::Python);
-        let texts: Vec<String> = collect_literal_occurrences(&file)
+        let file = ParsedFile::new(
+            &format!("t = {callee}('Nm', 'A', bound='Bd')"),
+            Language::Python,
+        );
+        let collected: Vec<String> = collect_literal_occurrences(&file)
             .into_iter()
             .map(|occurrence| occurrence.node.text().into_owned())
             .collect();
-        assert_eq!(texts, vec!["'vv'"]);
+        assert_eq!(collected, vec!["'A'", "'Bd'"]);
     }
 
     #[rstest::rstest]

@@ -45,10 +45,11 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                 values match whatever their spelling (`'id'` and `"id"`, `1_000` and `1000`), and
                 trivial values such as `0`, `1` or `", "` are ignored. When a constant already
                 holds the value, every inline use is flagged, otherwise every use after the first.
-                Literals the language requires (such as `Literal[...]` values, a `TypeVar` name or
-                Rust attributes), interpolated Python f-strings (outside their `{...}` expressions),
-                arguments of formatting and assertion macros (`format!`, `assert_eq!`) and Rust
-                `#[cfg(test)]` code are not checked."#},
+                Literals the language requires (such as `Literal[...]` values, `TypeVar` names,
+                dictionary keys declared by an in-file `TypedDict` class, or Rust attributes),
+                interpolated Python f-strings (outside their `{...}` expressions), arguments of
+                formatting and assertion macros (`format!`, `assert_eq!`) and Rust `#[cfg(test)]`
+                code are not checked."#},
             why_is_this_bad: indoc::indoc! {r#"
                 A literal copied across a file is a value without a name: the reader must guess what
                 `"primary-db"` or `30` stands for, and changing it means finding every copy. Missing
@@ -58,12 +59,17 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                 Extract the value into one named constant and reference it at every site, or reuse
                 the constant that already holds it. In a Python `case` pattern, match an `Enum`
                 member or class constant by dotted name (`case Mode.READ:`): a bare name captures
-                any value instead of comparing."#},
+                any value instead of comparing. For repeated dictionary keys in Python, declare a
+                `TypedDict` class for the payload schema or extract a `Final` key constant
+                (`PRICE_KEY: Final = "price"`)."#},
             known_problems: Some(indoc::indoc! {r"
                 - A negative number written as a bare `-` token inside a Rust macro, such as
                   `vec![-42]`, is skipped.
                 - Python constants defined by unpacking or chaining (`A, B = 3, 4`, `A = B = 3`)
-                  are not recognized, so their values count as inline uses."}),
+                  are not recognized, so their values count as inline uses.
+                - Keys of a Python `TypedDict` imported from another module or defined with the
+                  functional `TypedDict('Name', {...})` call syntax are not resolved, so repeating
+                  them as inline string keys is still flagged."}),
             references: &[
                 Reference {
                     title: "SonarSource RSPEC-1192: String literals should not be duplicated",
@@ -265,6 +271,19 @@ crate::test_utils::rule_test!(
                     first = cast("Node", a)
                     second = cast("Node", b)
                 "#,
+                repeated_typed_dict_keys_in_key_positions => r#"
+                    class TradeFillPayload(TypedDict):
+                        symbol: str
+                        price: float
+
+                    def build_fill(symbol: str, price: float) -> TradeFillPayload:
+                        return {"symbol": symbol, "price": price}
+
+                    def read_price(fill: TradeFillPayload) -> float:
+                        if "symbol" in fill:
+                            return fill.get("price", fill["price"])
+                        return fill["price"]
+                "#,
                 repeated_interpolated_fstrings => r#"
                     log(f"user {name} logged in")
                     log(f"user {name} logged in")
@@ -336,6 +355,13 @@ crate::test_utils::rule_test!(
                     send(b"ping")
                     expect(b"ping")
                 "# => r#"b"ping""#,
+                typed_dict_key_repeated_in_non_key_position => r#"
+                    class TradeFillPayload(TypedDict):
+                        symbol: str
+
+                    log("symbol")
+                    log("symbol")
+                "# => r#""symbol""#,
             ],
         },
         Rust => {

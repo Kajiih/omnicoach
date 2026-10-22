@@ -52,8 +52,9 @@ pub struct LiteralOccurrence<'a> {
 
 /// Collects the literals in `file` that could be replaced by a named constant, in source order.
 ///
-/// Literals the language requires (annotations, attributes, ABI strings, format strings) and
-/// the parts of composite constant initializers are not collected.
+/// Literals the language or type system requires (annotations, attributes, ABI strings, format
+/// strings, type-declaration names, in-file `TypedDict` keys in dictionary-key positions) and the
+/// parts of composite constant initializers are not collected.
 #[must_use]
 pub fn collect_literal_occurrences(file: &ParsedFile) -> Vec<LiteralOccurrence<'_>> {
     dispatch_lang!(file.lang(), collect_literal_occurrences(file))
