@@ -1,26 +1,11 @@
-//! Binding and enclosing-function extraction for Rust (`ra_ap_syntax`).
+//! Binding extraction for Rust (`ra_ap_syntax`).
 
 use super::names::SELF_KEYWORD;
 use crate::code_lint::ast::bindings::{Binding, BindingKind, push_bindings};
-use crate::code_lint::ast::calls::EnclosingFunction;
 use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_rowan_range};
 use ra_ap_syntax::ast::{self, HasName as _};
 use ra_ap_syntax::{AstNode as _, SyntaxKind, SyntaxNode};
 use std::collections::HashSet;
-
-/// Returns `node` as an [`EnclosingFunction`] if it is a named function or method item; top level
-/// if it is an item of the source file.
-pub(super) fn named_function(node: &SyntaxNode) -> Option<EnclosingFunction> {
-    let name = ast::Fn::cast(node.clone())?.name()?;
-    Some(EnclosingFunction {
-        name: name.text().to_string(),
-        name_span: span_from_rowan_range(name.syntax().text_range()),
-        is_top_level: node
-            .parent()
-            .is_some_and(|parent| ast::SourceFile::can_cast(parent.kind())),
-        enclosing_class: None,
-    })
-}
 
 /// Collects the type and const generic parameter names declared directly on `node`.
 pub(super) fn collect_rust_generic_param_names(node: &SyntaxNode) -> HashSet<String> {

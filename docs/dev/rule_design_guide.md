@@ -5,6 +5,7 @@ This guide outlines principles for designing high-signal, actionable lint rules 
 ---
 
 ## 1. Rule Granularity: 1 Rule = 1 Antipattern
+
 A lint rule is not a broad category (e.g. avoid rules like `async-hygiene` or `test-cleanliness`). A rule must target **one specific antipattern**.
 
 * **Why Granularity Matters**: Configuration, CI blocking, and suppressions operate at the rule level. If two distinct antipatterns share a rule name, teams cannot suppress or configure one without affecting the other.
@@ -15,9 +16,11 @@ A lint rule is not a broad category (e.g. avoid rules like `async-hygiene` or `t
 ---
 
 ## 2. Actionability: Why & How, Not Just What
+
 A diagnostic that only says "X is banned" causes frustration. Developers need to understand the harm and the idiomatic path forward.
 
 Every rule diagnostic is split into three strictly orthogonal fields—**never repeat information across them**:
+
 1. **What (`summary`)**: State the factual syntactic or semantic condition observed on the flagged construct (e.g., `"Name `{name}` is a single letter."` or `"Multiline string literal is not wrapped in a dedent helper."`). Do **not** embed the rationale (e.g., *"obscures intent"*, *"bypasses type checking"*) or filler judgment (*"is discouraged"*, *"is prohibited"*) in `summary`.
 2. **Why (`rationale`)**: Explain the concrete failure mode or maintenance hazard (flakiness, hidden tracebacks, corrupted runtime values, broken searchability). Do **not** restate what construct was matched or explain how to fix it.
 3. **How (`suggestion`)**: Prescribe a **single canonical pit-of-success replacement** per language so a developer or AI agent can fix the violation autonomously (e.g., `inspect.cleandoc(...)` in Python, `indoc::indoc!` in Rust). Do **not** repeat `"instead of <bad construct>"` or re-state why the original code was harmful.
@@ -27,6 +30,7 @@ The wording of each field (sentence form, tense, quoting, placeholders) and the 
 ---
 
 ## 3. Anticipate Perverse Incentives
+
 Developers under pressure will take the path of least resistance to satisfy a linter. A poorly designed rule often incentivizes worse code.
 
 * **Assertion Limits**: Limiting assertions per test can tempt developers to pack multiple conditions into boolean tuples (`assert (a, b) == (1, 2)`) or wrap assertions in obscure closures solely to bypass the count. Anticipate this by pairing limits with rules against assertion packing, and encourage domain assertions or snapshot testing instead.
@@ -35,6 +39,7 @@ Developers under pressure will take the path of least resistance to satisfy a li
 ---
 
 ## 4. Universal Concepts, Idiomatic Guidance
+
 The architectural antipattern is usually language-agnostic; the solution is almost always language-specific.
 
 * **Unify the concept**: Antipatterns like unstructured concurrency, arbitrary test delays, or Hungarian notation exist across languages.
@@ -43,6 +48,7 @@ The architectural antipattern is usually language-agnostic; the solution is almo
 ---
 
 ## 5. Extensibility Over Dogma
+
 Static rules should establish sane defaults while respecting domain vocabulary.
 
 * **Allowlists & Denylists**: Name-checking rules (abbreviations, type suffixes) must let a project replace, extend, or remove items from the default list. Certain terms may be primitive keywords in one language or valid domain acronyms in a specific codebase (e.g., `str` is a primitive in Rust, not an abbreviation).
@@ -57,6 +63,7 @@ Static rules should establish sane defaults while respecting domain vocabulary.
 ---
 
 ## 6. Predictable Documentation
+
 A rule's documentation exists so that a reader can **predict whether the rule flags their code** without reading its implementation. A rule that surprises its users loses their trust, whether it fires where they did not expect or stays silent where they did.
 
 * **The Prediction Test**: Read the `--explain` output as a user would and ask, for common code: *would I guess right whether this is flagged?* Every sentence must help answer that question; one that does not is noise and hides the behavior that matters.

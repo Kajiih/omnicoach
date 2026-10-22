@@ -1,20 +1,5 @@
-//! Syntax-tree representation and opaque node handles: [`ParsedFile`], [`AstNode`], byte-span
-//! conversions, and language dispatch.
-
-/// Dispatches `$func(args...)` to `ast::python` or `ast::rust` by `$lang`.
-macro_rules! dispatch_lang {
-    ($lang:expr, $func:ident ( $($arg:expr),* $(,)? )) => {
-        match $lang {
-            $crate::diagnostic::Language::Python => {
-                $crate::code_lint::ast::python::$func($($arg),*)
-            }
-            $crate::diagnostic::Language::Rust => {
-                $crate::code_lint::ast::rust::$func($($arg),*)
-            }
-        }
-    };
-}
-pub(crate) use dispatch_lang;
+//! Syntax-tree representation and opaque node handles: [`ParsedFile`], [`AstNode`], and byte-span
+//! conversions.
 
 use super::bindings::BindingKind;
 use super::call_clusters::CachedCallOrderFinding;

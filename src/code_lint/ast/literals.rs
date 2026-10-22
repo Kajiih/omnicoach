@@ -1,6 +1,6 @@
 //! Normalized literal values, roles, and literal occurrence extraction across languages.
 
-use super::tree::{AstNode, ParsedFile, dispatch_lang};
+use super::tree::{AstNode, ParsedFile};
 
 /// A literal's normalized value: equal values are the same literal whatever their spelling.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

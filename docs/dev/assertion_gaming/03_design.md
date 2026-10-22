@@ -33,6 +33,7 @@ Markers: **[V]** verified in code, corpus, or a primary source; **[U]** not veri
   - Skip counting `assert <name> is not None` and `assert isinstance(<name>, ...)` when `<name>` (`Expr::Name`) is loaded in a subsequent statement of the test body, and treat those guards as neutral in `multi-phase-test`.
 
 - **D4 — Suggestion wording in `too-many-assertions`.**
+
   ```rust
   suggestion: {
       Python => "Split distinct scenarios into separate `test_*` functions, parameterize variations with `@pytest.mark.parametrize`, or compare one domain object directly.",
@@ -58,4 +59,3 @@ Markers: **[V]** verified in code, corpus, or a primary source; **[U]** not veri
 - **D8 — `yield-loop-in-tests` loop-scoped yield matching and orthogonality with `sleep-in-tests`.**
   - Matches calls inside a loop body (`in_loop` on `CallContext` in Python and `CallCandidate` in Rust, reset across nested function/closure/class boundaries) against `BANNED` (`yield_now`, `sched_yield`, `checkpoint`, `os.sched_yield`, `trio.lowlevel.checkpoint`, `anyio.lowlevel.checkpoint`, `std::thread::yield_now`, `thread::yield_now`, `tokio::task::yield_now`) and zero-duration `asyncio.sleep(0)` / `trio.sleep(0)` / `anyio.sleep(0)` (`has_only_zero_arg` in `sleep_calls.rs`).
   - Single-shot yield calls outside loops (e.g., pumping an event loop once) and non-zero sleeps (`sleep-in-tests`) are exempt.
-

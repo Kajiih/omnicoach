@@ -84,6 +84,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
   - `Python Typing Specification — Protocols` (`https://typing.python.org/en/latest/spec/protocol.html`)
 - **`examples`:**
   - Flagged (`flagged_span: "MemoryStore"`):
+
     ```python
     from typing import Protocol
 
@@ -98,7 +99,9 @@ const TEMPLATE: ViolationTemplate = violation_template! {
         def put(self, key: str, value: bytes) -> None:
             pass
     ```
+
   - Fixed:
+
     ```python
     from typing import Protocol
 

@@ -1,6 +1,6 @@
 //! Statement header line ranges and leading decorator or attribute line extents.
 
-use super::tree::{ParsedFile, dispatch_lang};
+use super::tree::ParsedFile;
 use crate::diagnostic::SourceSpan;
 use std::collections::HashMap;
 use std::ops::RangeInclusive;

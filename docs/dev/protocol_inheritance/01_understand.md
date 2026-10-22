@@ -88,6 +88,7 @@ When a **first-party class** (especially one colocated in the same module as a m
 ## 4. Split test
 
 Per [rule_design_guide.md](../rule_design_guide.md) §1:
+
 - **Why it is bad:** Every flagged class implements all public methods of an in-file `Protocol` without listing that `Protocol` as a base class, losing class-definition signature verification, abstract-member instantiation checks, `@override` support, and docstring inheritance.
 - **How to fix it:** Every violation has the same fix — add the `Protocol` class to the class's base class list.
 - **Conclusion:** One defect, one fix, one `ViolationTemplate` → **one rule** (`uninherited-protocol`).

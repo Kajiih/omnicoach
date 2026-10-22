@@ -20,4 +20,3 @@ Markers: **[V]** verified in code, corpus, or a primary source; **[U]** not veri
    - Rare legitimate exceptions (such as multi-step concurrency stress tests) use `# omni:ignore[logic-in-tests] -- <reason>`, which is audited by `missing-suppression-reason` and `stale-suppression`.
 4. **Multi-phase tests (`multi-phase-test`)** [V]:
    - Interleaving actions and assertions ($\text{Assert} \to \text{Action} \to \text{Assert}$) in a single test function couples multiple scenarios into one test, making failures harder to localize and violating the single Arrange-Act-Assert structure.
-

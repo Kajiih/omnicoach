@@ -50,6 +50,7 @@ pub struct Example {
 ### 2.2. Discovery CLI Flags (`DI8`, `DI9`, `DI14`, `D50`)
 
 `omnicoach` (and its `code` / `command` subcommands) provides symmetric rule discovery for all registered rules:
+
 - `--list-rules`: Lists every rule sorted by name, displaying its name, languages/input, and single-sentence summary.
 - `--list-rules --tag <LABEL>`: Filters the list to rules matched by `select = ["<LABEL>"]` (topics, subtopics, facet values, or synonyms).
 - `--list-tags`: Renders the topic tree as a Markdown table (topic, parent, synonyms, description, and scope note), with children listed under their parent.
@@ -60,6 +61,7 @@ pub struct Example {
 ### 2.3. Active Configuration Status in `explain` (`DI13`)
 
 `--explain <rule>` checks the current project's `.omnicoach.toml` and displays:
+
 ```markdown
 # <rule-name>
 
@@ -68,11 +70,13 @@ Status: enabled (default)
 # or: Status: enabled by `select = ["testing"]` (via testing > test-timing)
 # or: Status: disabled by `ignore = ["test-doubles"]`
 ```
+
 This directly resolves the user question "Why is this rule on or off?" by reporting the winning selector and its branch hierarchy.
 
 ### 2.4. Strongly-Typed Diagnostic Output Format (`D51`)
 
 `--format` on diagnostic execution uses `OutputFormat`:
+
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum OutputFormat {

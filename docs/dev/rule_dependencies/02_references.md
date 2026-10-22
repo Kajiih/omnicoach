@@ -28,22 +28,22 @@ Takeaways:
 
 ## 2. Formal frameworks
 
-- **Term rewriting and modularity** (Baader and Nipkow, *Term Rewriting and All That*, Cambridge University Press, 1998; Newman, "On theories with a combinatorial definition of 'equivalence'", *Annals of Mathematics* 43(2): 223–243, 1942, https://doi.org/10.2307/1968867; Huet, "Confluent reductions: abstract properties and applications to term rewriting systems", *JACM* 27(4): 797–821, 1980, https://doi.org/10.1145/322217.322230).
+- **Term rewriting and modularity** (Baader and Nipkow, *Term Rewriting and All That*, Cambridge University Press, 1998; Newman, "On theories with a combinatorial definition of 'equivalence'", *Annals of Mathematics* 43(2): 223–243, 1942, <https://doi.org/10.2307/1968867>; Huet, "Confluent reductions: abstract properties and applications to term rewriting systems", *JACM* 27(4): 797–821, 1980, <https://doi.org/10.1145/322217.322230>).
   - Fixes are rewrite rules. A `Cycle` is non-termination; `Divergent advice` is a non-joinable critical pair ($y \leftarrow_a x \to_b z$ with no common normal form), while "They meet" (`01_understand.md` §2.1) is a joinable critical pair.
   - **Modularity of confluence (Hindley–Rosen lemma):** two confluent reduction relations have a confluent union if they commute, which for terminating rules reduces to local commutation at overlapping redexes.
-  - **Modularity of termination (Bachmair and Dershowitz, "Commutation, transformation, and termination", *CADE-8*, LNCS 230, pp. 5–20, 1986, https://doi.org/10.1007/3-540-16780-3_76):** two individually terminating rules terminate when combined if the enablement graph of introduced redexes is acyclic (quasi-commutation). Because each lint rule terminates on its own, requiring the `Chain` graph to be a DAG guarantees that combined rules have no cycles (P2).
-- **Created versus residual redexes** (Lévy, *Réductions correctes et optimales dans le lambda-calcul*, Thèse d'État, Univ. Paris VII, 1978; Terese, *Term Rewriting Systems*, Cambridge Tracts in Theoretical Computer Science 55, 2003, Ch. 4 and Ch. 8; Baeten, Bergstra, Klop, "Priority rewrite systems", *RTA 1987*, LNCS 256, pp. 83–94, https://doi.org/10.1007/3-540-17220-3_8).
+  - **Modularity of termination (Bachmair and Dershowitz, "Commutation, transformation, and termination", *CADE-8*, LNCS 230, pp. 5–20, 1986, <https://doi.org/10.1007/3-540-16780-3_76>):** two individually terminating rules terminate when combined if the enablement graph of introduced redexes is acyclic (quasi-commutation). Because each lint rule terminates on its own, requiring the `Chain` graph to be a DAG guarantees that combined rules have no cycles (P2).
+- **Created versus residual redexes** (Lévy, *Réductions correctes et optimales dans le lambda-calcul*, Thèse d'État, Univ. Paris VII, 1978; Terese, *Term Rewriting Systems*, Cambridge Tracts in Theoretical Computer Science 55, 2003, Ch. 4 and Ch. 8; Baeten, Bergstra, Klop, "Priority rewrite systems", *RTA 1987*, LNCS 256, pp. 83–94, <https://doi.org/10.1007/3-540-17220-3_8>).
   - After a rewrite step $u \xrightarrow{a} v$, every redex for rule $b$ in $v$ is either *created* by the step (constructed from tokens in $a$'s replacement template, with no ancestor in $u$) or a *residual* of $u$ (user-written tokens already present in $u$, previously masked by surrounding context that $a$ removed).
   - This backs the split in `01_understand.md` §2.1 between *introduced* chains (created redexes: F1 `Sequence`, T1 `y`, T5 `contextlib.suppress`) and *revealed* chains (residual redexes uncovered when a suffix is stripped: `t` in `t_ms`, `res` in `res_list`).
-- **Graph transformation critical-pair analysis** (Habel, Heckel, Taentzer, "Graph grammars with negative application conditions", *Fundamenta Informaticae* 26(3–4): 287–313, 1996, https://doi.org/10.3233/FI-1996-263404; Mens, Taentzer, Runge, "Analysing refactoring dependencies using graph transformation", *SoSyM* 6(3): 269–285, 2007, https://doi.org/10.1007/s10270-006-0044-6).
+- **Graph transformation critical-pair analysis** (Habel, Heckel, Taentzer, "Graph grammars with negative application conditions", *Fundamenta Informaticae* 26(3–4): 287–313, 1996, <https://doi.org/10.3233/FI-1996-263404>; Mens, Taentzer, Runge, "Analysing refactoring dependencies using graph transformation", *SoSyM* 6(3): 269–285, 2007, <https://doi.org/10.1007/s10270-006-0044-6>).
   - Models refactorings as graph rewrite rules with Negative Application Conditions (NACs). Sequential dependencies split into *produce–use* ($a$'s RHS creates what $b$'s LHS matches = introduced chain) and *delete–forbid* ($a$ deletes what triggered $b$'s negative guard = revealed chain). Parallel conflicts split into *delete–use* (divergent advice when not joinable) and *produce–forbid* (contradiction or cycle).
-- **Precondition/postcondition composition and assume-guarantee reasoning** (Kniesel and Koch, "Static composition of refactorings", *Science of Computer Programming* 52(1–3): 9–51, 2004, https://doi.org/10.1016/j.scico.2004.03.002; Cousot and Cousot, "Systematic design of program analysis frameworks", *POPL '79*, pp. 269–282, 1979, https://doi.org/10.1145/567752.567778; Christakis, Müller, Wüstholz, "Guiding dynamic symbolic execution toward unverified program executions", *ICSE '16*, pp. 144–155, 2016, https://doi.org/10.1145/2884781.2884843).
+- **Precondition/postcondition composition and assume-guarantee reasoning** (Kniesel and Koch, "Static composition of refactorings", *Science of Computer Programming* 52(1–3): 9–51, 2004, <https://doi.org/10.1016/j.scico.2004.03.002>; Cousot and Cousot, "Systematic design of program analysis frameworks", *POPL '79*, pp. 269–282, 1979, <https://doi.org/10.1145/567752.567778>; Christakis, Müller, Wüstholz, "Guiding dynamic symbolic execution toward unverified program executions", *ICSE '16*, pp. 144–155, 2016, <https://doi.org/10.1145/2884781.2884843>).
   - Distinguishes `Relies on` (P4 Safe) from `Delegates` and `Partitions` (P5 Complete). In `Relies on`, rule $a$'s transformation is only safe under a contextual assumption (e.g., the f-string is not a SQL query) that $a$ does not check itself (D8) and instead discharges to companion rule $b$ (S608). In `Delegates` and `Partitions`, a concern's domain is split across detectors without $a$'s fix introducing a new hazard when $b$ is off.
-- **Feature models** (Kang et al., FODA, CMU/SEI-90-TR-21, 1990; Batory, "Feature models, grammars, and propositional formulas", *SPLC 2005*, LNCS 3714, pp. 7–20, https://doi.org/10.1007/11554844_3).
+- **Feature models** (Kang et al., FODA, CMU/SEI-90-TR-21, 1990; Batory, "Feature models, grammars, and propositional formulas", *SPLC 2005*, LNCS 3714, pp. 7–20, <https://doi.org/10.1007/11554844_3>).
   - `requires` ($a \Rightarrow b$) matches `Relies on` / `Delegates`; `excludes` ($\neg(a \wedge b)$) matches `Contradiction`. Lint relations need soft constraints (warnings), since ADR 007 rules out auto-enabling.
-- **Policy conflict and firewall anomaly analysis** (Moffett and Sloman, "Policy conflict analysis in distributed system management", *Journal of Organizational Computing* 4(1): 1–22, 1994, https://doi.org/10.1080/10919399409540214; Lupu and Sloman, "Conflicts in policy-based distributed systems management", *IEEE TSE* 25(6): 852–869, 1999, https://doi.org/10.1109/32.824414; Al-Shaer and Hamed, "Discovery of policy anomalies in distributed firewalls", *IEEE INFOCOM 2004*, Vol. 4, pp. 2605–2616, https://doi.org/10.1109/INFCOM.2004.1354680).
+- **Policy conflict and firewall anomaly analysis** (Moffett and Sloman, "Policy conflict analysis in distributed system management", *Journal of Organizational Computing* 4(1): 1–22, 1994, <https://doi.org/10.1080/10919399409540214>; Lupu and Sloman, "Conflicts in policy-based distributed systems management", *IEEE TSE* 25(6): 852–869, 1999, <https://doi.org/10.1109/32.824414>; Al-Shaer and Hamed, "Discovery of policy anomalies in distributed firewalls", *IEEE INFOCOM 2004*, Vol. 4, pp. 2605–2616, <https://doi.org/10.1109/INFCOM.2004.1354680>).
   - Separates modality conflict (what $a$ obligates, $b$ forbids: $F_a \cap V_b \neq \emptyset$) from detector overlap ($V_a \cap V_b \neq \emptyset$). Redundancy (same match, compatible action) is `Duplicates`; correlation (overlapping match, incompatible actions) is `Divergent advice`.
-- **Empirical work** (Rutar, Almazan, Foster, "A comparison of bug finding tools for Java", *15th IEEE ISSRE 2004*, pp. 245–256, https://doi.org/10.1109/ISSRE.2004.1).
+- **Empirical work** (Rutar, Almazan, Foster, "A comparison of bug finding tools for Java", *15th IEEE ISSRE 2004*, pp. 245–256, <https://doi.org/10.1109/ISSRE.2004.1>).
   - Bug-finder comparisons report little overlap between tools; no paper found defines a taxonomy of lint-rule interactions.
 
 ## 3. How relations and symmetric partitions are implemented in code
@@ -63,33 +63,32 @@ Takeaways for Omni:
 ## 4. Sources
 
 - Ruff:
-  - https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules
-  - https://docs.astral.sh/ruff/settings/#lint_pydocstyle_convention
-  - https://docs.astral.sh/ruff/linter/#fix-safety
-  - https://github.com/astral-sh/ruff/blob/main/crates/ruff_linter/src/rule_redirects.rs
-  - https://github.com/astral-sh/ruff/blob/main/crates/ruff_workspace/src/configuration.rs (`INCOMPATIBLE_RULES`)
+  - <https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules>
+  - <https://docs.astral.sh/ruff/settings/#lint_pydocstyle_convention>
+  - <https://docs.astral.sh/ruff/linter/#fix-safety>
+  - <https://github.com/astral-sh/ruff/blob/main/crates/ruff_linter/src/rule_redirects.rs>
+  - <https://github.com/astral-sh/ruff/blob/main/crates/ruff_workspace/src/configuration.rs> (`INCOMPATIBLE_RULES`)
 - ESLint:
-  - https://eslint.org/docs/latest/extend/custom-rules#rule-structure
-  - https://github.com/prettier/eslint-config-prettier#cli-helper-tool
+  - <https://eslint.org/docs/latest/extend/custom-rules#rule-structure>
+  - <https://github.com/prettier/eslint-config-prettier#cli-helper-tool>
 - Clippy:
-  - https://rust-lang.github.io/rust-clippy/master/index.html#blanket_clippy_restriction_lints
-  - https://rust-lang.github.io/rust-clippy/master/index.html#min_ident_chars
+  - <https://rust-lang.github.io/rust-clippy/master/index.html#blanket_clippy_restriction_lints>
+  - <https://rust-lang.github.io/rust-clippy/master/index.html#min_ident_chars>
 - RuboCop:
-  - https://github.com/rubocop/rubocop/blob/master/lib/rubocop/cop/base.rb (`autocorrect_incompatible_with`)
-  - https://github.com/rubocop/rubocop/blob/master/lib/rubocop/runner.rb (infinite-loop detection)
-  - https://github.com/rubocop/rubocop/blob/master/config/obsoletion.yml
-  - https://docs.rubocop.org/rubocop/configuration.html
+  - <https://github.com/rubocop/rubocop/blob/master/lib/rubocop/cop/base.rb> (`autocorrect_incompatible_with`)
+  - <https://github.com/rubocop/rubocop/blob/master/lib/rubocop/runner.rb> (infinite-loop detection)
+  - <https://github.com/rubocop/rubocop/blob/master/config/obsoletion.yml>
+  - <https://docs.rubocop.org/rubocop/configuration.html>
 - Biome:
-  - https://biomejs.dev/linter/rules-sources/
-  - https://biomejs.dev/linter/domains/
-  - https://github.com/biomejs/biome/blob/main/crates/biome_analyze/src/rule.rs (`RuleMetadata`, `RuleSourceWithKind`)
+  - <https://biomejs.dev/linter/rules-sources/>
+  - <https://biomejs.dev/linter/domains/>
+  - <https://github.com/biomejs/biome/blob/main/crates/biome_analyze/src/rule.rs> (`RuleMetadata`, `RuleSourceWithKind`)
 - Equivalence classes and partitions:
-  - W3C OWL 2 Web Ontology Language Structural Specification, §9.1.4 (`DisjointUnion`) and §9.1.2 (`DisjointClasses`), https://www.w3.org/TR/owl2-syntax/#Disjoint_Union_of_Class_Expressions
-  - Debian Policy Manual, §7.5.2 "Replacing whole packages, forcing their removal" (virtual packages), https://www.debian.org/doc/debian-policy/ch-relationships.html
-- PMD: https://docs.pmd-code.org/latest/pmd_userdocs_making_rulesets.html
+  - W3C OWL 2 Web Ontology Language Structural Specification, §9.1.4 (`DisjointUnion`) and §9.1.2 (`DisjointClasses`), <https://www.w3.org/TR/owl2-syntax/#Disjoint_Union_of_Class_Expressions>
+  - Debian Policy Manual, §7.5.2 "Replacing whole packages, forcing their removal" (virtual packages), <https://www.debian.org/doc/debian-policy/ch-relationships.html>
+- PMD: <https://docs.pmd-code.org/latest/pmd_userdocs_making_rulesets.html>
 - Pylint:
-  - https://pylint.readthedocs.io/en/latest/user_guide/messages/information/useless-suppression.html
-  - https://pylint.readthedocs.io/en/stable/user_guide/messages/warning/dangerous-default-value.html
-- golangci-lint: https://golangci-lint.run/usage/linters/
-- Semgrep: https://semgrep.dev/docs/writing-rules/rule-syntax
-
+  - <https://pylint.readthedocs.io/en/latest/user_guide/messages/information/useless-suppression.html>
+  - <https://pylint.readthedocs.io/en/stable/user_guide/messages/warning/dangerous-default-value.html>
+- golangci-lint: <https://golangci-lint.run/usage/linters/>
+- Semgrep: <https://semgrep.dev/docs/writing-rules/rule-syntax>

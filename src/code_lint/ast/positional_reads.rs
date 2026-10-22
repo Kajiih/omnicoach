@@ -1,6 +1,6 @@
 //! Positional element read extraction (`receiver[0]`, `receiver.0`) grouped by scope.
 
-use super::tree::{AstNode, ParsedFile, dispatch_lang};
+use super::tree::{AstNode, ParsedFile};
 use std::collections::HashSet;
 
 /// A read of one positional element through an integer literal: `receiver[1]` or

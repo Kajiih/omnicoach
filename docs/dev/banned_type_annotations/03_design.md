@@ -95,6 +95,7 @@ If you prefer to keep a narrowed version of Pattern 6 (`Coroutine[Yield, Send, R
 ### 4.4 Planned Test Grid (Fallback Only)
 
 #### `fail` Cases
+
 - `coroutine_object_object_return`: `def fetch() -> Coroutine[object, object, int]: ...`
 - `coroutine_any_any_return`: `def fetch() -> Coroutine[Any, Any, str]: ...`
 - `coroutine_none_none_return`: `def fetch() -> Coroutine[None, None, None]: ...`
@@ -103,6 +104,7 @@ If you prefer to keep a narrowed version of Pattern 6 (`Coroutine[Yield, Send, R
 - `annotated_coroutine_return`: `def fetch() -> Annotated[Coroutine[Any, Any, int], "meta"]: ...`
 
 #### `pass` Cases (1-to-1 with `E1..E9`)
+
 - `awaitable_return_exempt` (**E1**): `def fetch() -> Awaitable[int]: ...`
 - `typed_yield_send_coroutine_exempt` (**E2**): `def gen_coro() -> Coroutine[int, str, bool]: ...`
 - `override_method_exempt` (**E3**): `@override\ndef fetch(self) -> Coroutine[Any, Any, int]: ...`

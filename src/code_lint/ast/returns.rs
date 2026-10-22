@@ -1,7 +1,7 @@
 //! Function return contracts ([`ReturnShape`], [`FunctionReturn`]) and predicate-name
 //! classification.
 
-use super::tree::{AstNode, ParsedFile, dispatch_lang};
+use super::tree::{AstNode, ParsedFile};
 use crate::diagnostic::Language;
 
 /// Verbs that read as a yes/no question alone or as a prefix, such as `text.contains(word)` or

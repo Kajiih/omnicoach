@@ -1,7 +1,6 @@
 //! Comment node extraction across languages.
-// TODO: Why is this module/file called trivial..?
 
-use super::tree::{AstNode, ParsedFile, dispatch_lang};
+use super::tree::{AstNode, ParsedFile};
 
 /// Collects all comment nodes in `file` in source order.
 ///

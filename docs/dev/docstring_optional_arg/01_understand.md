@@ -53,9 +53,9 @@ R2 is a "type information in the docstring" rule, the territory of the `redundan
 
 | # | Defect | Effect | Example |
 | :-- | :--- | :--- | :--- |
-| P1 | Each indented line with `:` is tested on its own, so wrapped continuation lines are treated as entries | False positive | `keys: Keys to fetch.` / `    Format: Optional prefix then id.` |
-| P2 | A description on the line after the name (Google's second `Args:` form, pyguide line ~2180) is never tested: the name line has an empty description and the next line has no `:` | False negative | `timeout:` / `    Optional timeout.` |
-| P3 | A marker wrapped onto a continuation line without `:` is never tested | False negative | `parent: The parent node` / `    or None.` |
+| P1 | Each indented line with `:` is tested on its own, so wrapped continuation lines are treated as entries | False positive | `keys: Keys to fetch.` / `Format: Optional prefix then id.` |
+| P2 | A description on the line after the name (Google's second `Args:` form, pyguide line ~2180) is never tested: the name line has an empty description and the next line has no `:` | False negative | `timeout:` / `Optional timeout.` |
+| P3 | A marker wrapped onto a continuation line without `:` is never tested | False negative | `parent: The parent node` / `or None.` |
 | P4 | `re.IGNORECASE` also applies to `None`, so English "none" matches | False positive | `tags: Tags to keep, or none.` |
 | P5 | `\b(?:…\|\s*None)` needs a word character right before `\|`, so the spaced form is missed | False negative | `x: A float \| None.` (only `float\|None` matches) |
 | P6 | Explained descriptions are flagged when they start with `Optional` | False positive under R1 | `Optional timeout. If None, waits forever.` |

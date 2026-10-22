@@ -11,7 +11,7 @@ Sources read verbatim: Google pyguide §3.8.3 / §3.8.4 (`scratch/pyguide.md` in
 | :--- | :--- | :--- |
 | Google §3.8.4 | "Public attributes, excluding properties, should be documented here in an `Attributes` section". Example: `Args:` in the `__init__` docstring; `likes_spam` is under both `Args:` (of `__init__`) and `Attributes:` (of the class); both attributes are `self.x` in `__init__`. | Attributes go in the class docstring; constructor `Args:` may go in `__init__`; instance attributes count; init parameters stored on `self` are attributes too. |
 | Google §3.8.3 | "List each parameter by name." `*foo` / `**bar` are listed with their stars. Sections "can be omitted" when a one-line docstring suffices. | Variadics count; one-line docstrings may omit `Args:`. |
-| PEP 257 | "The docstring for a class should summarize its behavior and list the public methods and instance variables. […] The class constructor should be documented in the docstring for its `__init__` method." (https://peps.python.org/pep-0257/#multi-line-docstrings) **[U]**: quoted from memory of the PEP, not from a verified copy. | Same split as Google: constructor in `__init__`, instance variables in the class. |
+| PEP 257 | "The docstring for a class should summarize its behavior and list the public methods and instance variables. […] The class constructor should be documented in the docstring for its `__init__` method." (<https://peps.python.org/pep-0257/#multi-line-docstrings>) **[U]**: quoted from memory of the PEP, not from a verified copy. | Same split as Google: constructor in `__init__`, instance variables in the class. |
 
 ## 2. pydoclint
 
@@ -52,7 +52,7 @@ Gaps: Pylint has no attribute check at all. Whether missing parameters are repor
 ## 4. Ruff
 
 - DOC rules: only `DOC102`, `DOC201`, `DOC202`, `DOC402`, `DOC403`, `DOC501`, `DOC502`, all preview (lead's gate). None checks class attributes or class-docstring `Args:`.
-- `D417` (undocumented-param): function docstrings, and only when an `Args:` section exists (research report `fe0ab7c6`, from https://docs.astral.sh/ruff/rules/undocumented-param/). It sees the `__init__` docstring, not the class docstring **[U]**.
+- `D417` (undocumented-param): function docstrings, and only when an `Args:` section exists (research report `fe0ab7c6`, from <https://docs.astral.sh/ruff/rules/undocumented-param/>). It sees the `__init__` docstring, not the class docstring **[U]**.
 - `D101` (undocumented-public-class), `D107` (undocumented-public-init): missing docstrings.
 
 ## 5. Configuration that replaces the legacy linter's check with external tools

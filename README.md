@@ -7,11 +7,13 @@ Lightweight, high-signal static analysis engine and command coach designed to en
 ## 📦 Installation
 
 Prebuilt binaries are published to PyPI:
+
 ```bash
 uv tool install omnicoach   # or: pipx install omnicoach
 ```
 
 From crates.io:
+
 ```bash
 cargo install omnicoach --locked
 ```
@@ -23,27 +25,32 @@ Both install the `omnicoach` binary.
 ## 🚀 Quickstart
 
 Scan the entire repository:
+
 ```bash
 omnicoach code .   # or simply: omnicoach
 ```
 
 Scan only modified lines/files (VCS aware):
+
 ```bash
 omnicoach code --diff
 ```
 
 Validate an intercepted workflow command:
+
 ```bash
 omnicoach command --cmd "jj edit @"
 ```
 
 Try `omnicoach` in the browser or call its WebAssembly request/response module directly at **[kajiih.github.io/omnicoach](https://kajiih.github.io/omnicoach/)**:
+
 ```javascript
 import { loadOmnicoach } from "https://kajiih.github.io/omnicoach/omnicoach.js";
 
 const omni = await loadOmnicoach("https://kajiih.github.io/omnicoach/omnicoach_playground.wasm");
 const result = omni.lint({ path: "tests/test_app.py", code: "import time\ndef test_a(): time.sleep(1)\n", config: "" });
 ```
+
 To pin a release, load `wasm/<tag>/omnicoach_playground.wasm` instead.
 
 ---
@@ -55,6 +62,7 @@ Create a `.omnicoach.toml` file at the root of your project workspace.
 ### Framework Rule Design: Enforcement Modes
 
 Every rule in Omnicoach is built on a unified enforcement framework:
+
 - **`enforcement-mode = "ban"`** (default for most rules): Prohibits the pattern. Violations can only be bypassed using explicit `# omni:ignore[rule] -- <reason>` (or `# omnicoach:ignore[rule] -- <reason>`) directives.
 - **`enforcement-mode = "require-explanation"`**: Permits the pattern as long as it is accompanied by an adjacent or inline substantive explanatory comment.
 
@@ -112,14 +120,17 @@ omnicoach --explain sleep-in-tests  # one rule: what it does, why, configuration
 Suppression directives accept either `omni:` or `omnicoach:` and require explicit bracketed rule targets and a `-- <reason>` explanation:
 
 ### Inline Suppression (`omni:ignore` / `omnicoach:ignore`)
+
 ```python
 task = asyncio.create_task(loop())  # omni:ignore [unstructured-task] -- top-level daemon lifecycle
 ```
+
 ```rust
 let x = 1; // omni:ignore [single-letter-name] -- 2D vector coordinate
 ```
 
 ### Preceding-Line Suppression (`omni:ignore` / `omnicoach:ignore`)
+
 ```python
 # omni:ignore [nested-function] -- factory requires localized closure
 @dataclass
@@ -129,6 +140,7 @@ def make_handler():
 ```
 
 ### File-Level Suppression (`omni:disable-file` / `omnicoach:disable-file`)
+
 ```python
 # omni:disable-file [nested-function, single-letter-name] -- generated schema
 ```

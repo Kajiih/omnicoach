@@ -1,7 +1,7 @@
 //! Per-file import map: resolves names through Python `import` / `from … import` and Rust `use`
 //! declarations, with file-level definitions shadowing imports.
 
-use super::tree::{ParsedFile, dispatch_lang};
+use super::tree::ParsedFile;
 use crate::diagnostic::Language;
 use std::collections::{HashMap, HashSet};
 

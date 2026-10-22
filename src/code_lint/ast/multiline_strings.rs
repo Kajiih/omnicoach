@@ -1,6 +1,6 @@
 //! Unwrapped multiline string literal detection across languages.
 
-use super::tree::{AstNode, ParsedFile, dispatch_lang};
+use super::tree::{AstNode, ParsedFile};
 
 /// Finds all multiline string literals in `file` that are not docstrings/doc-attributes/snapshots
 /// and are not wrapped in a call or macro matching `is_wrapper`.

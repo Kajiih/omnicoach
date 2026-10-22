@@ -9,7 +9,7 @@ None of them flags a pointer, copied or incomplete override docstring. They matt
 
 | Tool | Behaviour on overrides | Source |
 | :--- | :--- | :--- |
-| Ruff `D102` (undocumented-public-method) | "This rule exempts methods decorated with `@typing.override`, since it is a common practice to document a method on a superclass but not on an overriding method in a subclass." | https://docs.astral.sh/ruff/rules/undocumented-public-method/ |
+| Ruff `D102` (undocumented-public-method) | "This rule exempts methods decorated with `@typing.override`, since it is a common practice to document a method on a superclass but not on an overriding method in a subclass." | <https://docs.astral.sh/ruff/rules/undocumented-public-method/> |
 | Ruff (any rule) | No rule requires `@override` on an implicit override (lead probe). | lead probe, `explicit_override.py` |
 | Ruff DOC rules (`DOC201`, `DOC202`, `DOC402`, `DOC403`, `DOC501`, `DOC502`, `DOC102`, preview) | Check sections against the body; nothing compares an override with its base. | lead's gate (`batch_d_status.md`) |
 | pydoclint | No code targets duplicated, pointer or incomplete override docstrings (categories DOC0xx–DOC6xx are parsing, args, returns, class/constructor, yields, raises, class attributes). With the default `--skip-checking-short-docstrings = True`, a one-line `"""See base class."""` or `"""Creates a session."""` is skipped entirely, so pydoclint stays silent on exactly the pointer and the summary-only override. | `pydoclint_violation_codes.md`, `pydoclint_config_options.md` §6 |

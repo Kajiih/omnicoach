@@ -6,7 +6,7 @@
 
 ## 1. Google Python Style Guide
 
-URL: https://google.github.io/styleguide/pyguide.html#383-functions-and-methods
+URL: <https://google.github.io/styleguide/pyguide.html#383-functions-and-methods>
 
 - §3.8.3 *Args*: "List each parameter by name. A description should follow the name, and be separated by a colon followed by either a space or newline. […] The description should include required type(s) if the code does not contain a corresponding type annotation. If a function accepts `*foo` (variable length argument lists) and/or `**bar` (arbitrary keyword arguments), they should be listed as `*foo` and `**bar`."
 - §3.8.3 *Returns*: "Describe the semantics of the return value, including any type information that the type annotation does not provide."
@@ -23,7 +23,7 @@ What this gives the rule:
 
 ## 2. pydoclint
 
-URLs: https://jsh9.github.io/pydoclint/violation_codes.html, https://jsh9.github.io/pydoclint/config_options.html, https://jsh9.github.io/pydoclint/checking_class_attributes.html
+URLs: <https://jsh9.github.io/pydoclint/violation_codes.html>, <https://jsh9.github.io/pydoclint/config_options.html>, <https://jsh9.github.io/pydoclint/checking_class_attributes.html>
 
 Violation codes (verbatim):
 
@@ -79,11 +79,11 @@ Gaps and defects relative to Google style (improvements this rule makes):
 | G5 | DOC111 is one global switch; it cannot express "types only where the signature has none". | Gradually typed codebase | Granularity |
 | G6 | Class-level `Args:` is checked against `__init__` (default `allow-init-docstring = false`); Google puts `Args:` in the `__init__` docstring. | §3.8.4 example | Placement conflict (not this rule's concern; the rule checks both places, D9) |
 
-Ruff implements none of DOC105–DOC111, DOC203, DOC404 or DOC605: its DOC set is DOC102, DOC201, DOC202, DOC402, DOC403, DOC501, DOC502, all preview (https://docs.astral.sh/ruff/rules/#pydoclint-doc).
+Ruff implements none of DOC105–DOC111, DOC203, DOC404 or DOC605: its DOC set is DOC102, DOC201, DOC202, DOC402, DOC403, DOC501, DOC502, all preview (<https://docs.astral.sh/ruff/rules/#pydoclint-doc>).
 
 ## 3. Pylint docparams
 
-URL: https://pylint.readthedocs.io/en/latest/user_guide/checkers/extensions.html#parameter-documentation-checker
+URL: <https://pylint.readthedocs.io/en/latest/user_guide/checkers/extensions.html#parameter-documentation-checker>
 
 - `missing-type-doc (W9016)`: "\"%s\" missing in parameter type documentation. Please add parameter type declarations for all parameters."
 - `missing-return-type-doc (W9012)`: "Missing return type documentation. Please document the type returned by this method."
@@ -94,7 +94,7 @@ All three go the opposite way: they ask for docstring types. [U] Whether a signa
 
 ## 4. Sphinx Napoleon (the origin of the `name (type):` form)
 
-URL: https://www.sphinx-doc.org/en/master/usage/extensions/example_google.html [U: page fetch was denied; content from the prior research report]
+URL: <https://www.sphinx-doc.org/en/master/usage/extensions/example_google.html> [U: page fetch was denied; content from the prior research report]
 
 - Napoleon's Google example writes `param1 (int): The first parameter.`, `param2 (:obj:`str`, optional): The second parameter.`, and `Returns:\n    bool: The return value. True for success, False otherwise.` It documents that the type may be omitted when the signature is annotated (PEP 484) [U].
 - This is why the parenthesized slot and the `Returns:` `type:` prefix are common in Google-style code, and why `optional` appears inside the parentheses (D7, E3).
@@ -102,7 +102,7 @@ URL: https://www.sphinx-doc.org/en/master/usage/extensions/example_google.html [
 
 ## 5. Ruff
 
-- No rule inspects docstring types. `D417` (`undocumented-param`) checks that parameters are listed, not their types (https://docs.astral.sh/ruff/rules/undocumented-param/).
+- No rule inspects docstring types. `D417` (`undocumented-param`) checks that parameters are listed, not their types (<https://docs.astral.sh/ruff/rules/undocumented-param/>).
 - Complement: `ANN001` / `ANN201` (flake8-annotations) require the annotations that make docstring types redundant.
 
 ## 6. Configuration that replaces the legacy check today

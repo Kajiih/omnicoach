@@ -22,6 +22,7 @@ A rule is described by **facets**. Each facet answers one question. Its **values
 | **File scope** | Tests only, sources only? | `tests-only`, `source-only` | Derived from `RuleTarget` (**0 or 1**; none when the rule runs on all files) |
 
 Rules of the namespace:
+
 - **Facet labels are never selectors**. `select = ["precision"]` or `select = ["impacted-quality"]` is an error that lists the values.
 - **Every label is globally unique**: rule names, topic labels, facet values and synonyms share one namespace. That is why values are bare (`heuristic`, not `precision:heuristic`).
 - **Derived facets cannot be declared.** The rule has no field for them.

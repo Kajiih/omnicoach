@@ -15,6 +15,7 @@
 A relation target names another rule. Rule files cannot import each other (`src/architecture.rs:14–15`, enforced by `tests/architecture_conformance.rs:399–420`). The registries (`CODE_RULES`, `REGISTERED_RULES`) are built from every rule, so a rule cannot refer to them either without creating a module cycle.
 
 Relaxing sibling isolation is not RICR:
+
 - Rules would start reusing each other's private helpers instead of extracting shared domain logic into `code_lint::policy` or `code_lint::semantic`.
 - A `code_lint` rule still could not name a suppression audit or a `command_lint` rule, which live in separate architecture components.
 
@@ -135,4 +136,3 @@ Upcoming work on the roadmap will expand the rule corpus and introduce new kinds
 - **Q2.** Should rule references use an exhaustive enum, associated constants on `RuleName`, or plain `RuleName(&'static str)` strings validated by a registry test? (An enum is exhaustive at compile time, but test-only rule names in `config.rs`, `rule_selection.rs`, `contract.rs`, and `diagnostic.rs` would need a separate test variant or type; plain strings require zero central-list churn if directed edges stay rare.)
 - **Q3.** Which partition axes add real value in `--explain` ("by abstraction level" vs. "by position" on collection rules), and which are taxonomy noise best left to `Topic`?
 - **Q4.** Can witness verification (§3) be unified with the Option D `Example.fixed` harness so that declaring an unconditional `triggers` edge needs no extra witness snippet beyond the rule's existing `Example`s?
-

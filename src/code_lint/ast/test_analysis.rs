@@ -1,7 +1,7 @@
 //! Shared data structures and language-agnostic algorithms for test-function and assertion analysis.
 
 use super::rust;
-use super::tree::{AstNode, ParsedFile, dispatch_lang};
+use super::tree::{AstNode, ParsedFile};
 use crate::diagnostic::Language;
 use std::collections::HashSet;
 

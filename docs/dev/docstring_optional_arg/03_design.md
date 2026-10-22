@@ -86,7 +86,7 @@ These override the rest of this document where they differ.
 | E5 | `optional` only counts as the first word | `strict: Whether a missing field is optional.` |
 | E6 | `Optionally` is not a marker | `sort: Optionally sorts the output.` |
 | E7 | Napoleon `(type, optional)` slot not read | `retries (int, optional): Number of attempts before giving up.` |
-| E8 | `Returns:` / `Yields:` / `Raises:` not read | `Returns:` / `    The row, or None.` |
+| E8 | `Returns:` / `Yields:` / `Raises:` not read | `Returns:` / `The row, or None.` |
 | E9 | Only if Q2 is accepted: omission marker on a parameter with a non-`None` default | `retries: Optional number of retries.` with `retries: int = 3` |
 
 Regression cases, not exemptions (the shared parser owns the behavior, so a rule-side mutation cannot disable them): the legacy linter's P1 (`Format: Optional prefix.` on a continuation line passes), P2 and P3 (fail cases below).

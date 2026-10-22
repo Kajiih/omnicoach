@@ -1,6 +1,6 @@
 //! Binding definitions and binding-kind classification across languages.
 
-use super::tree::{AstNode, ParsedFile, dispatch_lang};
+use super::tree::{AstNode, ParsedFile};
 
 /// What introduced a binding name, recorded by the walk that collects the binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

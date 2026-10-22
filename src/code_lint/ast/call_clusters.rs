@@ -13,7 +13,7 @@ pub(in crate::code_lint) use self::scope_graph::{
     OrderingEdge, OrderingReason, RelationFact, RelationKind, levels, strongly_connected_components,
 };
 
-use super::tree::{AstNode, ParsedFile, dispatch_lang};
+use super::tree::{AstNode, ParsedFile};
 use crate::diagnostic::SourceSpan;
 use std::collections::HashSet;
 

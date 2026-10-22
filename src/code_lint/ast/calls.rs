@@ -1,6 +1,6 @@
 //! Call expression candidates, call-site syntactic context, and enclosing function chains.
 
-use super::tree::{AstNode, ParsedFile, dispatch_lang};
+use super::tree::{AstNode, ParsedFile};
 use crate::diagnostic::SourceSpan;
 use std::sync::Arc;
 

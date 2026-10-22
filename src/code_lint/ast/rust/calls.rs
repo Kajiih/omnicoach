@@ -1,11 +1,10 @@
 //! Rust call and method-call candidate extraction (`ra_ap_syntax`).
 
-use super::bindings::named_function;
 use crate::code_lint::ast::calls::{
     CachedCallCandidate, CallSiteContext, EnclosingFunction, with_innermost_function,
 };
 use crate::code_lint::ast::tree::{ParsedFile, span_from_rowan_range};
-use ra_ap_syntax::AstNode as _;
+use ra_ap_syntax::{AstNode as _, SyntaxNode};
 use std::sync::Arc;
 
 /// Collects all direct call and method-call expressions in a Rust file using `ra_ap_syntax`.
@@ -96,9 +95,25 @@ pub(in crate::code_lint::ast) fn collect_call_candidates(
     out
 }
 
+/// Returns `node` as an [`EnclosingFunction`] if it is a named function or method item; top level
+/// if it is an item of the source file.
+fn named_function(node: &SyntaxNode) -> Option<EnclosingFunction> {
+    use ra_ap_syntax::ast::{self, HasName as _};
+
+    let name = ast::Fn::cast(node.clone())?.name()?;
+    Some(EnclosingFunction {
+        name: name.text().to_string(),
+        name_span: span_from_rowan_range(name.syntax().text_range()),
+        is_top_level: node
+            .parent()
+            .is_some_and(|parent| ast::SourceFile::can_cast(parent.kind())),
+        enclosing_class: None,
+    })
+}
+
 /// Returns true if `node` lies inside a Rust `loop`, `while`, or `for` body without an intervening
 /// `fn` or closure boundary.
-fn is_in_rust_loop(node: &ra_ap_syntax::SyntaxNode) -> bool {
+fn is_in_rust_loop(node: &SyntaxNode) -> bool {
     use ra_ap_syntax::ast::{self, HasLoopBody as _};
 
     let range = node.text_range();
