@@ -444,7 +444,10 @@ mod tests {
     #[rstest::rstest]
     #[case::unused("def f(x):\n    return 1", ParameterCollectionCapability::Unused)]
     #[case::single_for(
-        "def f(x):\n    for i in x:\n        print(i)",
+        indoc::indoc! {r"
+            def f(x):
+                for i in x:
+                    print(i)"},
         ParameterCollectionCapability::Iterable
     )]
     #[case::single_comprehension(
@@ -469,7 +472,10 @@ mod tests {
         ParameterCollectionCapability::Collection
     )]
     #[case::truthiness(
-        "def f(x):\n    if x:\n        return 1",
+        indoc::indoc! {r"
+            def f(x):
+                if x:
+                    return 1"},
         ParameterCollectionCapability::Collection
     )]
     #[case::negation(
@@ -477,7 +483,10 @@ mod tests {
         ParameterCollectionCapability::Collection
     )]
     #[case::assert_truthiness(
-        "def f(x):\n    assert x\n    return 1",
+        indoc::indoc! {r"
+            def f(x):
+                assert x
+                return 1"},
         ParameterCollectionCapability::Collection
     )]
     #[case::two_passes(
@@ -485,7 +494,11 @@ mod tests {
         ParameterCollectionCapability::Collection
     )]
     #[case::iteration_inside_loop(
-        "def f(x):\n    for _ in range(3):\n        for i in x:\n            print(i)",
+        indoc::indoc! {r"
+            def f(x):
+                for _ in range(3):
+                    for i in x:
+                        print(i)"},
         ParameterCollectionCapability::Collection
     )]
     #[case::index("def f(x):\n    return x[0]", ParameterCollectionCapability::Sequence)]
@@ -498,7 +511,11 @@ mod tests {
         ParameterCollectionCapability::Sequence
     )]
     #[case::pattern_matching(
-        "def f(x):\n    match x:\n        case [a]:\n            return a",
+        indoc::indoc! {r"
+            def f(x):
+                match x:
+                    case [a]:
+                        return a"},
         ParameterCollectionCapability::Sequence
     )]
     #[case::passed_to_unknown_function(
@@ -506,7 +523,11 @@ mod tests {
         ParameterCollectionCapability::Sequence
     )]
     #[case::shadowing_nested_def_default(
-        "def f(x):\n    def g(x=x[0]):\n        return x\n    return g",
+        indoc::indoc! {r"
+            def f(x):
+                def g(x=x[0]):
+                    return x
+                return g"},
         ParameterCollectionCapability::Sequence
     )]
     fn test_parameter_collection_capability(
@@ -526,29 +547,57 @@ mod tests {
     #[case::subscript_write("def f(x):\n    x[0] = 1", true)]
     #[case::subscript_delete("def f(x):\n    del x[0]", true)]
     #[case::augmented_assignment("def f(x):\n    x += [1]", true)]
-    #[case::alias("def f(x):\n    y = x\n    return len(y)", true)]
-    #[case::stored_in_container("def f(x):\n    y = [x]\n    return len(y)", true)]
+    #[case::alias(indoc::indoc! {r"
+        def f(x):
+            y = x
+            return len(y)"}, true)]
+    #[case::stored_in_container(indoc::indoc! {r"
+        def f(x):
+            y = [x]
+            return len(y)"}, true)]
     #[case::returned("def f(x):\n    return x", true)]
     #[case::yielded("def f(x):\n    yield x", true)]
     #[case::passed_to_unknown_function("def f(x):\n    helper(x)", true)]
     #[case::passed_to_method("def f(x):\n    registry.register(x)", true)]
-    #[case::mutated_in_closure("def f(x):\n    def g():\n        x.append(1)\n    g()", true)]
+    #[case::mutated_in_closure(indoc::indoc! {r"
+        def f(x):
+            def g():
+                x.append(1)
+            g()"}, true)]
     #[case::shadowing_nested_def_default(
-        "def f(x):\n    def g(x=x):\n        x.append(1)\n    g()",
+        indoc::indoc! {r"
+            def f(x):
+                def g(x=x):
+                    x.append(1)
+                g()"},
         true
     )]
-    #[case::read_only_iteration("def f(x):\n    for i in x:\n        print(i)", false)]
+    #[case::read_only_iteration(indoc::indoc! {r"
+        def f(x):
+            for i in x:
+                print(i)"}, false)]
     #[case::read_only_len("def f(x):\n    return len(x)", false)]
     #[case::shadowed_by_nested_def(
-        "def f(x):\n    def g(x):\n        x.append(1)\n    g([])",
+        indoc::indoc! {r"
+            def f(x):
+                def g(x):
+                    x.append(1)
+                g([])"},
         false
     )]
     #[case::shadowed_by_lambda(
-        "def f(x):\n    g = lambda x: x.append(1)\n    return len(x)",
+        indoc::indoc! {r"
+            def f(x):
+                g = lambda x: x.append(1)
+                return len(x)"},
         false
     )]
     #[case::shadowed_while_sibling_mutated(
-        "def f(x, y):\n    def g(x):\n        y.append(x)\n    return len(x)",
+        indoc::indoc! {r"
+            def f(x, y):
+                def g(x):
+                    y.append(x)
+                return len(x)"},
         false
     )]
     fn test_parameter_mutated_or_escaping(#[case] source: &str, #[case] expected: bool) {

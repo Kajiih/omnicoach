@@ -715,25 +715,53 @@ mod tests {
         2
     )]
     #[case::skips_python_decorator_and_comment(
-        "# omni:ignore [nested-function] -- required for fixture\n@decorator\n# note\ndef inner(): pass",
+        indoc::indoc! {r"
+            # omni:ignore [nested-function] -- required for fixture
+            @decorator
+            # note
+            def inner(): pass"},
         Language::Python,
         2,
         4
     )]
     #[case::skips_multiline_python_decorators_and_comment(
-        "# omni:ignore [nested-function] -- required for fixture\n@decorator_one(\n    \"a\",\n    \"b\",\n)\n# note\n@decorator_two(\n    \"c\",\n)\ndef inner(): pass",
+        indoc::indoc! {r#"
+            # omni:ignore [nested-function] -- required for fixture
+            @decorator_one(
+                "a",
+                "b",
+            )
+            # note
+            @decorator_two(
+                "c",
+            )
+            def inner(): pass"#},
         Language::Python,
         2,
         10
     )]
     #[case::skips_rust_attribute_and_comment(
-        "// omni:ignore [single-letter-name] -- math\n#[allow(dead_code)]\n// note\nfn f(a: i32) {}",
+        indoc::indoc! {r"
+            // omni:ignore [single-letter-name] -- math
+            #[allow(dead_code)]
+            // note
+            fn f(a: i32) {}"},
         Language::Rust,
         2,
         4
     )]
     #[case::skips_multiline_rust_attributes_and_comment(
-        "// omni:ignore [single-letter-name] -- math\n#[cfg_attr(\n    test,\n    allow(dead_code)\n)]\n// note\n#[derive(\n    Debug\n)]\nfn f(a: i32) {}",
+        indoc::indoc! {r"
+            // omni:ignore [single-letter-name] -- math
+            #[cfg_attr(
+                test,
+                allow(dead_code)
+            )]
+            // note
+            #[derive(
+                Debug
+            )]
+            fn f(a: i32) {}"},
         Language::Rust,
         2,
         10
@@ -827,7 +855,10 @@ mod tests {
 
     #[rstest]
     #[case::omni_standalone(
-        "# The fixture needs a closure over the client.\n# omni:ignore [nested-function]\ndef inner(): pass",
+        indoc::indoc! {r"
+            # The fixture needs a closure over the client.
+            # omni:ignore [nested-function]
+            def inner(): pass"},
         true
     )]
     #[case::omni_trailing(
@@ -835,7 +866,10 @@ mod tests {
         true
     )]
     #[case::omni_too_short_above(
-        "# why\n# omni:ignore [nested-function]\ndef inner(): pass",
+        indoc::indoc! {r"
+            # why
+            # omni:ignore [nested-function]
+            def inner(): pass"},
         false
     )]
     #[case::omni_trailing_comment_above_is_not_standalone(

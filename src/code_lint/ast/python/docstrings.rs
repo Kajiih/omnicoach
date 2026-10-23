@@ -735,7 +735,21 @@ mod tests {
 
     #[test]
     fn parses_google_example_sections_and_entries() {
-        let text = "Fetches rows.\n\n    Args:\n        table_handle: An open table.\n        keys (Sequence[str]): Keys of each\n          row to fetch.\n        *args: Extra.\n\n    Returns:\n        A dict mapping keys to rows.\n\n    Raises:\n        IOError: An error occurred.\n    ";
+        let text = indoc::indoc! {"
+            Fetches rows.
+
+                Args:
+                    table_handle: An open table.
+                    keys (Sequence[str]): Keys of each
+                      row to fetch.
+                    *args: Extra.
+
+                Returns:
+                    A dict mapping keys to rows.
+
+                Raises:
+                    IOError: An error occurred.
+        "};
         let expected = [
             DocstringSection {
                 kind: DocstringSectionKind::Args,
@@ -778,7 +792,14 @@ mod tests {
 
     #[test]
     fn description_on_next_line_joins_continuation() {
-        let text = "Doc.\n\nArgs:\n  keys:\n    A sequence\n    of keys.\n";
+        let text = indoc::indoc! {"
+            Doc.
+
+            Args:
+              keys:
+                A sequence
+                of keys.
+        "};
         let sections = parse_google_sections(text);
         assert_eq!(
             sections[0].entries,
@@ -787,17 +808,37 @@ mod tests {
     }
 
     #[rstest]
-    #[case::prose_ending_in_colon("Doc.\n\nFor example:\n    x = 1\n")]
-    #[case::header_with_trailing_text("Doc.\n\nArgs: none\n")]
-    #[case::unknown_header("Doc.\n\nDetails:\n    x: y\n")]
+    #[case::prose_ending_in_colon(indoc::indoc! {"
+        Doc.
+
+        For example:
+            x = 1
+    "})]
+    #[case::header_with_trailing_text(indoc::indoc! {"
+        Doc.
+
+        Args: none
+    "})]
+    #[case::unknown_header(indoc::indoc! {"
+        Doc.
+
+        Details:
+            x: y
+    "})]
     fn non_header_lines_are_not_sections(#[case] text: &str) {
         assert_eq!(parse_google_sections(text), []);
     }
 
     #[test]
     fn section_ends_at_dedent() {
-        let text =
-            "Doc.\n\n    Args:\n        x: X.\n    Trailing prose.\n        y: not an entry.\n";
+        let text = indoc::indoc! {"
+            Doc.
+
+                Args:
+                    x: X.
+                Trailing prose.
+                    y: not an entry.
+        "};
         let sections = parse_google_sections(text);
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].entries, [entry("x", None, "X.", 3)]);
@@ -825,7 +866,14 @@ mod tests {
 
     #[test]
     fn header_kinds_are_case_insensitive() {
-        let sections = parse_google_sections("Doc.\n\nKeyword Args:\n  x: X.\nYIELDS:\n  Rows.\n");
+        let sections = parse_google_sections(indoc::indoc! {"
+            Doc.
+
+            Keyword Args:
+              x: X.
+            YIELDS:
+              Rows.
+        "});
         let kinds: Vec<_> = sections
             .iter()
             .map(|section| (section.kind, section.header.as_str()))
@@ -847,7 +895,11 @@ mod tests {
 
     #[rstest]
     #[case::plain("def f():\n    \"\"\"Doc.\"\"\"\n", Some("Doc."))]
-    #[case::not_first_statement("def f():\n    x = 1\n    \"\"\"Doc.\"\"\"\n", None)]
+    #[case::not_first_statement(indoc::indoc! {r#"
+        def f():
+            x = 1
+            """Doc."""
+    "#}, None)]
     #[case::fstring_is_not_a_docstring("def f():\n    f\"\"\"Doc {x}.\"\"\"\n", None)]
     #[case::bytes_is_not_a_docstring("def f():\n    b\"\"\"Doc.\"\"\"\n", None)]
     fn extracts_function_docstring(#[case] source: &str, #[case] expected: Option<&str>) {
@@ -890,7 +942,16 @@ mod tests {
 
     #[test]
     fn summary_accessors_read_the_first_paragraph() {
-        let source = "def f():\n    \"\"\"\n    Fetches rows\n    from a table.\n\n    Args:\n        x: X.\n    \"\"\"\n";
+        let source = indoc::indoc! {r#"
+            def f():
+                """
+                Fetches rows
+                from a table.
+
+                Args:
+                    x: X.
+                """
+        "#};
         let summaries = with_docstring(source, |doc| {
             (doc.summary().map(str::to_owned), doc.summary_paragraph())
         });
@@ -905,10 +966,14 @@ mod tests {
 
     #[test]
     fn normalized_ignores_wrapping_case_and_trailing_period() {
-        let normalized =
-            with_docstring("def f():\n    \"\"\"Runs   the\n    JOB.\"\"\"\n", |doc| {
-                doc.normalized()
-            });
+        let normalized = with_docstring(
+            indoc::indoc! {r#"
+                def f():
+                    """Runs   the
+                    JOB."""
+            "#},
+            |doc: &PythonDocstring<'_>| doc.normalized(),
+        );
         assert_eq!(normalized, normalize_docstring_text("runs the job"));
     }
 
@@ -927,8 +992,14 @@ mod tests {
 
     #[test]
     fn line_node_points_at_entry_source_line() {
-        let source =
-            "def f(x, y):\n    \"\"\"Doc.\n\n    Args:\n        x: X.\n        y: Y.\"\"\"\n";
+        let source = indoc::indoc! {r#"
+            def f(x, y):
+                """Doc.
+
+                Args:
+                    x: X.
+                    y: Y."""
+        "#};
         let file = ParsedFile::new(source, Language::Python);
         let signatures = super::super::extract_function_signatures(&file);
         let docstring = signatures[0].docstring().expect("docstring");
@@ -942,7 +1013,11 @@ mod tests {
 
     #[rstest]
     #[case::escaped_newline("def f(x):\n    \"\"\"Doc.\\n\\nArgs:\\n  x: X.\"\"\"\n")]
-    #[case::implicit_concatenation("def f(x):\n    (\"Doc.\\n\\nArgs:\\n\"\n     \"  x: X.\")\n")]
+    #[case::implicit_concatenation(indoc::indoc! {r#"
+        def f(x):
+            ("Doc.\n\nArgs:\n"
+             "  x: X.")
+    "#})]
     fn line_node_falls_back_to_docstring_when_lines_differ(#[case] source: &str) {
         let file = ParsedFile::new(source, Language::Python);
         let signatures = super::super::extract_function_signatures(&file);
@@ -972,11 +1047,25 @@ mod tests {
 
     #[rstest]
     #[case::returns_section(
-        "def f():\n    \"\"\"Doc.\n\n    Returns:\n        A pair.\n    \"\"\"\n",
+        indoc::indoc! {r#"
+            def f():
+                """Doc.
+
+                Returns:
+                    A pair.
+                """
+        "#},
         true
     )]
     #[case::yields_section(
-        "def f():\n    \"\"\"Doc.\n\n    Yields:\n        Items.\n    \"\"\"\n",
+        indoc::indoc! {r#"
+            def f():
+                """Doc.
+
+                Yields:
+                    Items.
+                """
+        "#},
         true
     )]
     #[case::return_verb_summary("def f():\n    \"\"\"Returns a pair.\"\"\"\n", true)]

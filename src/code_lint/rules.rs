@@ -18,6 +18,7 @@ pub mod duplicated_test_setup;
 pub mod dynamic_attribute_access;
 pub mod environment_variable_in_function;
 pub mod error_log_in_except;
+pub mod escaped_multiline_string;
 pub mod fake_without_protocol;
 pub mod field_after_method;
 pub mod identical_positional_types;
@@ -97,6 +98,7 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &mutable_dataclass::RULE,
     &unslotted_dataclass::RULE,
     &bare_multiline_string::RULE,
+    &escaped_multiline_string::RULE,
     &repeated_index_access::RULE,
     &concrete_collection_parameter::RULE,
     &concrete_collection_return::RULE,

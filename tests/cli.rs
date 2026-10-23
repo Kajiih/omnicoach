@@ -4,7 +4,7 @@
 #![cfg(test)]
 
 use assert_cmd::Command;
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 use std::fs;
 
 fn create_temp_file(file_name: &str, content: &str) -> tempfile::TempDir {
@@ -73,12 +73,17 @@ fn run_cli(args: &[&str], current_dir: Option<&std::path::Path>) -> String {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
 
-    let combined = format!(
-        "--- exit code ---\n{}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+    let combined = formatdoc! {"
+        --- exit code ---
+        {}
+        --- stdout ---
+        {}
+        --- stderr ---
+        {}",
         status.code().unwrap_or(-1),
         stdout,
         stderr
-    );
+    };
 
     // Normalize Windows CRLF line endings and .exe binary suffix in Usage output
     combined.replace("\r\n", "\n").replace(
@@ -242,7 +247,11 @@ fn test_code_lint_unreadable_file_reports_error_and_lints_the_rest() {
     fs::write(temp_dir.path().join("latin1.py"), b"name = '\xe9'\n").unwrap();
     fs::write(
         temp_dir.path().join("nested.py"),
-        "def outer():\n    def inner():\n        pass\n",
+        indoc! {r"
+            def outer():
+                def inner():
+                    pass
+        "},
     )
     .unwrap();
 
@@ -334,7 +343,14 @@ fn test_code_lint_explanation_hint(#[case] format: &str) {
 
 #[test]
 fn test_cli_config_override_and_missing_file_error() {
-    let temp_dir = create_temp_file("test.py", "def outer():\n    def inner():\n        pass\n");
+    let temp_dir = create_temp_file(
+        "test.py",
+        indoc! {r"
+            def outer():
+                def inner():
+                    pass
+        "},
+    );
     fs::write(
         temp_dir.path().join("custom.toml"),
         "ignore = [\"nested-function\"]\n",
@@ -369,7 +385,14 @@ fn test_cli_config_override_and_missing_file_error() {
 
 #[test]
 fn test_cli_select_and_ignore_override_toml_and_explain() {
-    let temp_dir = create_temp_file("test.py", "def outer():\n    def inner():\n        pass\n");
+    let temp_dir = create_temp_file(
+        "test.py",
+        indoc! {r"
+            def outer():
+                def inner():
+                    pass
+        "},
+    );
     fs::write(
         temp_dir.path().join(omnicoach::config::CONFIG_FILE_NAME),
         "select = [\"nested-function\"]\n",
@@ -448,7 +471,11 @@ fn test_graph_project_depth_levels_and_declared_components() {
     fs::create_dir_all(&src_dir).unwrap();
     fs::write(
         temp_dir.path().join("Cargo.toml"),
-        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+        indoc! {r#"
+            [package]
+            name = "demo"
+            version = "0.1.0"
+        "#},
     )
     .unwrap();
     fs::write(
@@ -463,12 +490,24 @@ fn test_graph_project_depth_levels_and_declared_components() {
     .unwrap();
     fs::write(
         src_dir.join("api.rs"),
-        "use crate::core::compute;\npub fn serve() -> usize {\n    compute()\n}\n",
+        indoc! {r"
+            use crate::core::compute;
+            pub fn serve() -> usize {
+                compute()
+            }
+        "},
     )
     .unwrap();
     fs::write(
         src_dir.join("core.rs"),
-        "pub fn compute() -> usize {\n    helper()\n}\nfn helper() -> usize {\n    1\n}\n",
+        indoc! {r"
+            pub fn compute() -> usize {
+                helper()
+            }
+            fn helper() -> usize {
+                1
+            }
+        "},
     )
     .unwrap();
 

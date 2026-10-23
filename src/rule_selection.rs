@@ -631,9 +631,10 @@ mod tests {
     #[test]
     fn per_file_ignores_apply_after_selection_by_rule_name() {
         let rule = rules_tagged("heuristic").unwrap()[0].name.0;
-        let config = parse_config(&format!(
-            "select = [\"{rule}\"]\n[per-file-ignores]\n\"tests/**\" = [\"heuristic\"]"
-        ))
+        let config = parse_config(&indoc::formatdoc! {r#"
+            select = ["{rule}"]
+            [per-file-ignores]
+            "tests/**" = ["heuristic"]"#})
         .unwrap();
         assert!(enabled(&config, "tests/test_module.py").is_empty());
         assert_eq!(enabled(&config, "src/module.py"), BTreeSet::from([rule]));
@@ -717,11 +718,21 @@ mod tests {
     )]
     #[case::unknown_top_level_key(
         r#"selct = ["testing"]"#,
-        "TOML parse error at line 1, column 1\n  |\n1 | selct = [\"testing\"]\n  | ^^^^^\nunknown field `selct`, expected one of `select`, `ignore`, `per-file-ignores`, `rules`, `context`"
+        indoc::indoc! {r#"
+            TOML parse error at line 1, column 1
+              |
+            1 | selct = ["testing"]
+              | ^^^^^
+            unknown field `selct`, expected one of `select`, `ignore`, `per-file-ignores`, `rules`, `context`"#}
     )]
     #[case::unknown_context_key(
         "[context]\ntest-paterns = []",
-        "TOML parse error at line 2, column 1\n  |\n2 | test-paterns = []\n  | ^^^^^^^^^^^^\nunknown field `test-paterns`, expected `test-patterns`"
+        indoc::indoc! {r"
+            TOML parse error at line 2, column 1
+              |
+            2 | test-paterns = []
+              | ^^^^^^^^^^^^
+            unknown field `test-paterns`, expected `test-patterns`"}
     )]
     fn invalid_configs_are_rejected_loudly(#[case] config_toml: &str, #[case] message: &str) {
         let error = parse_config(config_toml).unwrap_err().to_string();
@@ -730,11 +741,13 @@ mod tests {
 
     #[test]
     fn valid_rule_options_are_stored_per_rule() {
-        let config = parse_config(
-            "[rules.too-many-assertions]\nmax-assertions = 6\n\
-             [rules.too-many-assertions.rust]\nmax-assertions = 8\n\
-             [rules.abbreviated-name]\nextend-banned = [\"ctx\"]",
-        )
+        let config = parse_config(indoc::indoc! {r#"
+            [rules.too-many-assertions]
+            max-assertions = 6
+            [rules.too-many-assertions.rust]
+            max-assertions = 8
+            [rules.abbreviated-name]
+            extend-banned = ["ctx"]"#})
         .unwrap();
         let mut configured: Vec<_> = config.rule_overrides.keys().map(|name| name.0).collect();
         configured.sort_unstable();

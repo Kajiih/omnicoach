@@ -312,12 +312,21 @@ mod tests {
     #[case::unannotated_value("def f(x):\n    return x", ReturnShape::Unknown)]
     #[case::unannotated_generator("def f(x):\n    yield x", ReturnShape::Unknown)]
     #[case::unannotated_none_return(
-        "def f(x):\n    if x:\n        return None\n    print(x)",
+        indoc::indoc! {r"
+            def f(x):
+                if x:
+                    return None
+                print(x)"},
         ReturnShape::Unit
     )]
     #[case::unannotated_stub("def f(x):\n    ...", ReturnShape::Unknown)]
     #[case::nested_scopes_not_entered(
-        "def f(x):\n    def g():\n        return x, x\n    h = lambda: (x, x)\n    print(g, h)",
+        indoc::indoc! {r"
+            def f(x):
+                def g():
+                    return x, x
+                h = lambda: (x, x)
+                print(g, h)"},
         ReturnShape::Unit
     )]
     fn return_shape_reads_annotation_then_body(
@@ -329,16 +338,35 @@ mod tests {
 
     #[rstest]
     #[case::direct_call_mutation("make().append(1)", &["make"])]
-    #[case::assigned_then_mutated("def use():\n    items = make()\n    items.append(1)", &["make"])]
-    #[case::walrus_then_mutated("def use():\n    if (items := make()):\n        items.append(1)", &["make"])]
-    #[case::subscript_write("def use():\n    items = make()\n    items[0] = 1", &["make"])]
-    #[case::read_only_use("def use():\n    items = make()\n    return len(items)", &[])]
-    #[case::binding_in_other_function("def a():\n    items = make()\ndef b():\n    items.append(1)", &[])]
+    #[case::assigned_then_mutated(indoc::indoc! {r"
+        def use():
+            items = make()
+            items.append(1)"}, &["make"])]
+    #[case::walrus_then_mutated(indoc::indoc! {r"
+        def use():
+            if (items := make()):
+                items.append(1)"}, &["make"])]
+    #[case::subscript_write(indoc::indoc! {r"
+        def use():
+            items = make()
+            items[0] = 1"}, &["make"])]
+    #[case::read_only_use(indoc::indoc! {r"
+        def use():
+            items = make()
+            return len(items)"}, &[])]
+    #[case::binding_in_other_function(indoc::indoc! {r"
+        def a():
+            items = make()
+        def b():
+            items.append(1)"}, &[])]
     fn test_collect_locally_mutated_return_functions(
         #[case] usage: &str,
         #[case] expected: &[&str],
     ) {
-        let source = format!("def make():\n    return []\n{usage}");
+        let source = indoc::formatdoc! {"
+            def make():
+                return []
+            {usage}"};
         let file = ParsedFile::new(&source, Language::Python);
         let expected: HashSet<String> = expected.iter().map(|name| (*name).to_string()).collect();
         assert_eq!(*collect_locally_mutated_return_functions(&file), expected);

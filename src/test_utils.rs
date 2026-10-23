@@ -104,9 +104,18 @@ pub fn assert_rule_pass<Options: OptionsDeclaration>(
     let diags = run_code_rule(rule, code, filename);
     assert!(
         diags.is_empty(),
-        "rule_test! [{rule_name}] ({lang:?}) PASS case '{case_name}' failed:\nExpected 0 diagnostics, got {}:\n{}\nSource:\n{code}",
+        indoc::indoc! {"
+            rule_test! [{}] ({:?}) PASS case '{}' failed:
+            Expected 0 diagnostics, got {}:
+            {}
+            Source:
+            {}"},
+        rule_name,
+        lang,
+        case_name,
         diags.len(),
         format_diagnostics_for_test(&diags),
+        code,
     );
 }
 
@@ -145,9 +154,18 @@ pub fn assert_rule_fail<Options: OptionsDeclaration>(
 
     let [diagnostic] = diags.as_slice() else {
         panic!(
-            "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}' diagnostic count mismatch:\nExpected exactly 1 diagnostic, got {}:\n{}\nSource:\n{code}",
+            indoc::indoc! {"
+                rule_test! [{}] ({:?}) FAIL case '{}' diagnostic count mismatch:
+                Expected exactly 1 diagnostic, got {}:
+                {}
+                Source:
+                {}"},
+            rule_name,
+            lang,
+            case_name,
             diags.len(),
             format_diagnostics_for_test(&diags),
+            code,
         );
     };
 
@@ -161,7 +179,14 @@ pub fn assert_rule_fail<Options: OptionsDeclaration>(
     let actual_slice = normalize_span_indentation(code, diagnostic.location.span.start, raw_slice);
     assert_eq!(
         actual_slice, expected_slice,
-        "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}' flagged span mismatch:\nExpected flagged slice:\n{expected_slice}\nActual flagged slice:\n{actual_slice}\n(Tip: if the flagged AST node is a sub-expression of the test code, add `=> r#\"...\"#` to specify the inner slice.)",
+        indoc::indoc! {r##"
+            rule_test! [{}] ({:?}) FAIL case '{}' flagged span mismatch:
+            Expected flagged slice:
+            {}
+            Actual flagged slice:
+            {}
+            (Tip: if the flagged AST node is a sub-expression of the test code, add `=> r#"..."#` to specify the inner slice.)"##},
+        rule_name, lang, case_name, expected_slice, actual_slice,
     );
 
     let span = diagnostic.location.span.start..diagnostic.location.span.end;
@@ -238,7 +263,11 @@ fn assert_every_occurrence_reported<Options: OptionsDeclaration>(
         RepeatCheck::SameCode => code.to_owned(),
         RepeatCheck::DistinctLiterals => with_distinct_literals(code, lang).unwrap_or_else(|reason| {
             panic!(
-                "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': cannot give the second copy distinct literals ({reason}); rename a literal in this case.\nSource:\n{code}"
+                indoc::indoc! {"
+                    rule_test! [{}] ({:?}) FAIL case '{}': cannot give the second copy distinct literals ({}); rename a literal in this case.
+                    Source:
+                    {}"},
+                rule_name, lang, case_name, reason, code
             )
         }),
     };
@@ -255,8 +284,16 @@ fn assert_every_occurrence_reported<Options: OptionsDeclaration>(
     assert_eq!(
         actual,
         expected,
-        "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}' did not report every occurrence when the code is repeated twice in one file:\n{}\nSource:\n{repeated}",
+        indoc::indoc! {"
+            rule_test! [{}] ({:?}) FAIL case '{}' did not report every occurrence when the code is repeated twice in one file:
+            {}
+            Source:
+            {}"},
+        rule_name,
+        lang,
+        case_name,
         format_diagnostics_for_test(&diags),
+        repeated,
     );
 }
 
@@ -407,8 +444,15 @@ fn assert_no_comment_in_explanation_position(
             comment_line >= first_code_line
                 && comment_line != flagged_line
                 && comment_line + 1 != flagged_line,
-            "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': comment `{}` sits where `require-explanation` reads explanations; cases run in `ban` mode, so it cannot affect the verdict. Test explanation handling in `semantic::comments`, not in a rule (see `rule_test!` \"Writing cases\").\nSource:\n{code}",
-            comment.text()
+            indoc::indoc! {r#"
+                rule_test! [{}] ({:?}) FAIL case '{}': comment `{}` sits where `require-explanation` reads explanations; cases run in `ban` mode, so it cannot affect the verdict. Test explanation handling in `semantic::comments`, not in a rule (see `rule_test!` "Writing cases").
+                Source:
+                {}"#},
+            rule_name,
+            lang,
+            case_name,
+            comment.text(),
+            code,
         );
     }
 }

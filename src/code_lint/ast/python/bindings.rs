@@ -803,7 +803,11 @@ mod tests {
         &[("ALLOWED", Some("list[str]"), Some("(\"a\",)"), true)]
     )]
     #[case::parenthesized_value_with_comment(
-        "ALLOWED = (\n    # Default roles\n    [\"admin\"]\n)",
+        indoc::indoc! {r#"
+            ALLOWED = (
+                # Default roles
+                ["admin"]
+            )"#},
         &[("ALLOWED", None, Some("[\"admin\"]"), true)]
     )]
     #[case::bare_annotation("NAME: str", &[("NAME", Some("str"), None, true)])]
@@ -814,7 +818,13 @@ mod tests {
     #[case::lowercase_variable("cache = {}", &[("cache", None, Some("{}"), false)])]
     #[case::inside_top_level_if("if FLAG:\n    HOSTS = []", &[("HOSTS", None, Some("[]"), true)])]
     #[case::other_targets_and_scopes_not_collected(
-        "config.X = 1\nA, B = 1, 2\ndef f():\n    LOCAL = 1\nclass C:\n    ATTR = 1",
+        indoc::indoc! {r"
+            config.X = 1
+            A, B = 1, 2
+            def f():
+                LOCAL = 1
+            class C:
+                ATTR = 1"},
         &[]
     )]
     fn test_collect_module_assignments(

@@ -811,8 +811,14 @@ mod tests {
     #[case::python_default("", Language::Python, 4)]
     #[case::rust_default("", Language::Rust, 6)]
     #[case::rule_table("max-items = 5", Language::Rust, 5)]
-    #[case::other_language_table("max-items = 5\n[rust]\nmax-items = 10", Language::Python, 5)]
-    #[case::language_table("max-items = 5\n[rust]\nmax-items = 10", Language::Rust, 10)]
+    #[case::other_language_table(indoc::indoc! {r"
+        max-items = 5
+        [rust]
+        max-items = 10"}, Language::Python, 5)]
+    #[case::language_table(indoc::indoc! {r"
+        max-items = 5
+        [rust]
+        max-items = 10"}, Language::Rust, 10)]
     fn count_prefers_language_then_rule_table_then_default(
         #[case] toml_content: &str,
         #[case] language: Language,
@@ -827,7 +833,10 @@ mod tests {
     #[case::rust_default("", Language::Rust, EnforcementMode::RequireExplanation)]
     #[case::rule_table("enforcement-mode = \"ban\"", Language::Rust, EnforcementMode::Ban)]
     #[case::language_table(
-        "enforcement-mode = \"ban\"\n[python]\nenforcement-mode = \"require-explanation\"",
+        indoc::indoc! {r#"
+            enforcement-mode = "ban"
+            [python]
+            enforcement-mode = "require-explanation""#},
         Language::Python,
         EnforcementMode::RequireExplanation
     )]

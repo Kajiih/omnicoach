@@ -2,10 +2,6 @@
 
 use super::tree::{AstNode, ParsedFile};
 
-/// Minimum number of non-blank lines for a single-line literal with `\n` escapes to be
-/// multiline text rather than a single line with leading or trailing line feeds.
-const MIN_MULTILINE_NON_BLANK_LINES: usize = 2;
-
 /// How a string literal spans multiple lines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MultilineKind {
@@ -19,7 +15,9 @@ pub enum MultilineKind {
     /// The literal is written on one logical source line and embeds `\n` line breaks across at
     /// least two non-blank lines.
     Escaped {
-        /// Number of decoded `\n` line breaks in the literal's value.
+        /// Number of decoded `\n` line breaks between the first and last non-blank lines of the
+        /// literal's value. Leading and trailing line breaks are not counted, so the count
+        /// reflects the text's line structure and not whether it ends with a line feed.
         newlines: usize,
     },
 }
@@ -42,15 +40,16 @@ pub fn collect_multiline_strings(file: &ParsedFile) -> Vec<MultilineString<'_>> 
     dispatch_lang!(file.lang(), collect_multiline_strings(file))
 }
 
-/// Returns the number of `\n` line breaks in `decoded` when `decoded` spans at least two
-/// non-blank `\n`-separated lines.
+/// Returns the number of `\n` line breaks between the first and last non-blank lines of
+/// `decoded` when `decoded` spans at least two non-blank `\n`-separated lines.
 pub(super) fn escaped_multiline_newlines(decoded: &[u8]) -> Option<usize> {
-    let non_blank_lines = decoded
+    let is_blank = |line: &&[u8]| line.iter().all(u8::is_ascii_whitespace);
+    let lines: Vec<&[u8]> = decoded
         .split(|&byte| byte == b'\n')
-        .filter(|line| line.iter().any(|byte| !byte.is_ascii_whitespace()))
-        .count();
-    (non_blank_lines >= MIN_MULTILINE_NON_BLANK_LINES)
-        .then(|| decoded.split(|&byte| byte == b'\n').count() - 1)
+        .skip_while(is_blank)
+        .collect();
+    let newlines = lines.iter().rposition(|line| !is_blank(line))?;
+    (newlines > 0).then_some(newlines)
 }
 
 #[cfg(test)]
@@ -71,8 +70,9 @@ mod tests {
             line 1
             line 2
         "},
-        Some(2),
+        Some(1),
     )]
+    #[case::two_lines_leading_and_trailing_newlines(b"\n\nline 1\nline 2\n\n", Some(1))]
     #[case::two_lines_with_blank_line_between(
         indoc::indoc! {b"
             line 1
@@ -130,11 +130,11 @@ mod tests {
             ),
             (
                 "b\"bytes 1\\nbytes 2\\n\"",
-                MultilineKind::Escaped { newlines: 2 },
+                MultilineKind::Escaped { newlines: 1 },
             ),
             (
                 "f\"head {x}\\ntail {y}\\n\"",
-                MultilineKind::Escaped { newlines: 2 },
+                MultilineKind::Escaped { newlines: 1 },
             ),
         ],
     )]
@@ -155,11 +155,11 @@ mod tests {
             ),
             (
                 "b\"bytes 1\\nbytes 2\\n\"",
-                MultilineKind::Escaped { newlines: 2 },
+                MultilineKind::Escaped { newlines: 1 },
             ),
             (
                 "c\"cstr 1\\ncstr 2\\n\"",
-                MultilineKind::Escaped { newlines: 2 },
+                MultilineKind::Escaped { newlines: 1 },
             ),
         ],
     )]

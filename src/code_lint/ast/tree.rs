@@ -197,7 +197,11 @@ mod tests {
 
     #[test]
     fn test_source_location_from_node() {
-        let source = "fn main() {\n    let value = 42;\n}\n";
+        let source = indoc::indoc! {r"
+            fn main() {
+                let value = 42;
+            }
+        "};
         let file = ParsedFile::new(source, Language::Rust);
         let node = AstNode::from_span(&file, SourceSpan::new(16, 31));
         assert_eq!(

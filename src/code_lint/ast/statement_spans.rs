@@ -118,7 +118,10 @@ mod tests {
                 };
             }
         "},
-        Language::Rust, "{\n        compute()\n    }", 2..=2
+        Language::Rust, indoc::indoc! {r"
+            {
+                    compute()
+                }"}, 2..=2
     )]
     #[case::rust_simple_let(
         indoc::indoc! {r"

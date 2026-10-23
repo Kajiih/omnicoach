@@ -537,9 +537,14 @@ pub fn format_plain(diagnostics: &[Diagnostic]) -> String {
             .map(|hint| format!("  Or: {hint}\n"))
             .unwrap_or_default();
 
-        let _ = writeln!(
+        let _ = indoc::writedoc!(
             output,
-            "{}: [{}] {}\n  Rationale: {}\n  Suggestion: {}\n{}",
+            "
+            {}: [{}] {}
+              Rationale: {}
+              Suggestion: {}
+            {}
+            ",
             location_header,
             diagnostic.rule_name,
             diagnostic.message.summary,

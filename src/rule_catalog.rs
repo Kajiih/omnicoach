@@ -59,8 +59,20 @@ impl DiscoveryArgs {
     }
 }
 
-/// The footer printed after plain `code` diagnostics, adding the suppression note when any
-/// reported rule is `heuristic` or `opinionated`.
+/// The footer note on how to fix findings, printed after every plain `code` report.
+const FIX_NOTE: &str = "Note: Fix each finding by applying its suggestion. Do not reshape the \
+                        code or change its values only to fall under a rule's limit or outside \
+                        its pattern.";
+
+/// The footer note on suppressing findings, printed when a reported rule is `heuristic` or
+/// `opinionated`.
+const SUPPRESSION_NOTE: &str = "Note: Some rules use heuristics. When a finding conflicts with \
+                                the clearest, most robust design, suppress it with \
+                                `omni:ignore [<rule>] -- <reason>` rather than working around \
+                                the linter and degrading the design.";
+
+/// The footer printed after plain `code` diagnostics: [`FIX_NOTE`], [`SUPPRESSION_NOTE`] when
+/// any reported rule is `heuristic` or `opinionated`, and the `--explain` pointer.
 #[must_use]
 pub fn code_report_footer(binary: &str, diagnostics: &[Diagnostic]) -> String {
     let has_heuristic_or_opinionated = diagnostics.iter().any(|diagnostic| {
@@ -70,15 +82,12 @@ pub fn code_report_footer(binary: &str, diagnostics: &[Diagnostic]) -> String {
         })
     });
     let explain = explain_footer(binary);
+    let mut lines = vec![FIX_NOTE];
     if has_heuristic_or_opinionated {
-        format!(
-            "Note: Some rules use heuristics. When a finding conflicts with the clearest, most \
-             robust design, suppress it with `omni:ignore [<rule>] -- <reason>` rather than \
-             working around the linter and degrading the design.\n{explain}"
-        )
-    } else {
-        explain
+        lines.push(SUPPRESSION_NOTE);
     }
+    lines.push(&explain);
+    lines.join("\n")
 }
 
 /// The line printed after plain diagnostics, pointing at `--explain`.
@@ -459,7 +468,10 @@ mod tests {
         &["`why_is_this_bad` is empty"]
     )]
     #[case::heading(
-        RuleDoc { why_is_this_bad: "Bad.\n\n## Example", ..GOOD },
+        RuleDoc { why_is_this_bad: indoc::indoc! {r"
+            Bad.
+
+            ## Example"}, ..GOOD },
         &["`why_is_this_bad` has a `#` heading; the renderer owns headings"]
     )]
     #[case::empty_known_problems(
@@ -543,8 +555,11 @@ mod tests {
             let round_tripped = configuration_toml_block(&rendered).map(|toml_block| {
                 let config = parse_config(toml_block).unwrap_or_else(|error| {
                     panic!(
-                        "Rule {} rendered invalid TOML block:\n{toml_block}\nError: {error}",
-                        rule.name
+                        indoc::indoc! {"
+                            Rule {} rendered invalid TOML block:
+                            {}
+                            Error: {}"},
+                        rule.name, toml_block, error
                     )
                 });
                 let overrides = config.rule_overrides.get(&rule.name).unwrap_or_else(|| {
@@ -586,7 +601,8 @@ mod tests {
             ),
         );
         let footer = code_report_footer("omnicoach", &[diagnostic]);
-        assert_eq!(footer.contains("omni:ignore"), expects_note, "{footer}");
+        assert!(footer.starts_with(FIX_NOTE), "{footer}");
+        assert_eq!(footer.contains(SUPPRESSION_NOTE), expects_note, "{footer}");
         assert!(
             footer.ends_with(
                 "For details on a rule (including known limitations), run: omnicoach --explain <rule>"

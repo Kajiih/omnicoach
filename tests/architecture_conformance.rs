@@ -958,12 +958,19 @@ fn test_namespace_validator_accepts_pure_routers_and_rejects_code_or_orphan_rout
         SourceFileEntry::from_source(
             "src/code_lint.rs",
             "code_lint",
-            "pub mod ast;\n#[cfg(test)]\nmod tests { fn allowed() {} }\n",
+            indoc::indoc! {r"
+                pub mod ast;
+                #[cfg(test)]
+                mod tests { fn allowed() {} }
+            "},
         ),
         SourceFileEntry::from_source(
             "src/code_lint/ast.rs",
             "code_lint::ast",
-            "architecture_component!(CodeLintAst);\npub struct ParsedFile;\n",
+            indoc::indoc! {r"
+                architecture_component!(CodeLintAst);
+                pub struct ParsedFile;
+            "},
         ),
     ];
 
@@ -971,7 +978,11 @@ fn test_namespace_validator_accepts_pure_routers_and_rejects_code_or_orphan_rout
         SourceFileEntry::from_source(
             "src/code_lint.rs",
             "code_lint",
-            "pub mod ast;\nuse crate::config::Config;\npub const SNEAKY: usize = 1;\n",
+            indoc::indoc! {r"
+                pub mod ast;
+                use crate::config::Config;
+                pub const SNEAKY: usize = 1;
+            "},
         ),
         SourceFileEntry::from_source(
             "src/code_lint/ast.rs",

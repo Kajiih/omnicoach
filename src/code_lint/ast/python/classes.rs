@@ -941,7 +941,15 @@ mod tests {
 
     #[test]
     fn methods_are_direct_definitions_in_source_order() {
-        let source = "class Outer:\n    def b(self): pass\n    x = 1\n    def a(self):\n        def nested(): pass\n    class Inner:\n        def inner(self): pass\n";
+        let source = indoc::indoc! {r"
+            class Outer:
+                def b(self): pass
+                x = 1
+                def a(self):
+                    def nested(): pass
+                class Inner:
+                    def inner(self): pass
+        "};
         let file = ParsedFile::new(source, Language::Python);
         let method_names: Vec<String> = extract_classes(&file)[0]
             .methods()
@@ -990,7 +998,17 @@ mod tests {
 
     #[test]
     fn attribute_definitions_read_class_body_targets() {
-        let source = "from dataclasses import InitVar\nclass C:\n    a = b = 1\n    c, (d, *e) = f()\n    g: int\n    h: InitVar[int] = 0\n    a: str = ''\n    if x:\n        hidden = 1\n";
+        let source = indoc::indoc! {r"
+            from dataclasses import InitVar
+            class C:
+                a = b = 1
+                c, (d, *e) = f()
+                g: int
+                h: InitVar[int] = 0
+                a: str = ''
+                if x:
+                    hidden = 1
+        "};
         assert_eq!(
             attribute_facts(source),
             owned_facts(&[
@@ -1007,7 +1025,23 @@ mod tests {
 
     #[test]
     fn attribute_definitions_read_initializers_without_nested_scopes() {
-        let source = "class C:\n    def __init__(self, host, port):\n        self.host = host\n        self.port: int = int(port)\n        self.a, self.b = host, port\n        other.x = 1\n        if host:\n            self.flag = True\n        def bind():\n            self.leak = 1\n        f = lambda: setattr(self, 'y', 1)\n    def __post_init__(self, host):\n        self.later = host\n    def connect(self):\n        self.socket = 1\n";
+        let source = indoc::indoc! {r"
+            class C:
+                def __init__(self, host, port):
+                    self.host = host
+                    self.port: int = int(port)
+                    self.a, self.b = host, port
+                    other.x = 1
+                    if host:
+                        self.flag = True
+                    def bind():
+                        self.leak = 1
+                    f = lambda: setattr(self, 'y', 1)
+                def __post_init__(self, host):
+                    self.later = host
+                def connect(self):
+                    self.socket = 1
+        "};
         assert_eq!(
             attribute_facts(source),
             owned_facts(&[
@@ -1023,7 +1057,13 @@ mod tests {
 
     #[test]
     fn attribute_definitions_keep_the_first_definition_in_source_order() {
-        let source = "class C:\n    def __init__(self, x):\n        self.x = 0\n        self.x: int = x\n    x: int\n";
+        let source = indoc::indoc! {r"
+            class C:
+                def __init__(self, x):
+                    self.x = 0
+                    self.x: int = x
+                x: int
+        "};
         assert_eq!(
             attribute_facts(source),
             owned_facts(&[("x", None, false, false)])
@@ -1032,7 +1072,16 @@ mod tests {
 
     #[test]
     fn constructor_skips_overloads_and_nested_definitions() {
-        let source = "from typing import overload\nclass C:\n    @overload\n    def __init__(self, x: int) -> None: ...\n    def __init__(self, x, y=0):\n        pass\n    class Inner:\n        def __init__(self): pass\n";
+        let source = indoc::indoc! {r"
+            from typing import overload
+            class C:
+                @overload
+                def __init__(self, x: int) -> None: ...
+                def __init__(self, x, y=0):
+                    pass
+                class Inner:
+                    def __init__(self): pass
+        "};
         let file = ParsedFile::new(source, Language::Python);
         let classes = extract_classes(&file);
         let parameter_names: Option<Vec<String>> = classes[0].constructor().map(|constructor| {
@@ -1079,7 +1128,14 @@ mod tests {
 
     #[test]
     fn is_enum_resolves_direct_enum_bases() {
-        let source = "import enum\nfrom enum import IntEnum as Code\nclass A(enum.Enum): pass\nclass B(Code): pass\nclass C(A): pass\nclass D: pass\n";
+        let source = indoc::indoc! {r"
+            import enum
+            from enum import IntEnum as Code
+            class A(enum.Enum): pass
+            class B(Code): pass
+            class C(A): pass
+            class D: pass
+        "};
         let file = ParsedFile::new(source, Language::Python);
         let enum_names: Vec<String> = extract_classes(&file)
             .into_iter()
@@ -1091,7 +1147,13 @@ mod tests {
 
     #[test]
     fn defines_function_reads_direct_definitions_only() {
-        let source = "class C:\n    @property\n    def area(self): pass\n    def m(self):\n        def inner(): pass\n";
+        let source = indoc::indoc! {r"
+            class C:
+                @property
+                def area(self): pass
+                def m(self):
+                    def inner(): pass
+        "};
         let file = ParsedFile::new(source, Language::Python);
         let class = &extract_classes(&file)[0];
         let defined: Vec<&str> = ["area", "m", "inner"]
@@ -1103,24 +1165,31 @@ mod tests {
 
     #[test]
     fn base_binds_to_last_class_of_that_name_defined_before() {
-        let source = "class Base: pass\nclass Base: pass\nclass Sub(Base, mod.Base, Later): pass\nclass Later: pass\n";
+        let source = indoc::indoc! {r"
+            class Base: pass
+            class Base: pass
+            class Sub(Base, mod.Base, Later): pass
+            class Later: pass
+        "};
         let file = ParsedFile::new(source, Language::Python);
         assert_eq!(local_base_classes(&extract_classes(&file), 2), [1]);
     }
 
     #[test]
     fn ancestors_are_depth_first_left_to_right_without_repeats() {
-        let source = "class Root: pass\nclass Left(Root): pass\nclass Right(Root): pass\nclass Sub(Left, Right): pass\n";
+        let source = indoc::indoc! {r"
+            class Root: pass
+            class Left(Root): pass
+            class Right(Root): pass
+            class Sub(Left, Right): pass
+        "};
         let file = ParsedFile::new(source, Language::Python);
         assert_eq!(local_ancestors(&extract_classes(&file), 3), [1, 0, 2]);
     }
 
     #[test]
     fn test_extract_classes_bases_metadata() {
-        let source = indoc::indoc! {r"
-            class FakeService(abc.ABC, Protocol):
-                pass
-        "};
+        let source = "class FakeService(abc.ABC, Protocol):\n    pass";
         let file = ParsedFile::new(source, Language::Python);
         let classes = extract_classes(&file);
         let cls = &classes[0];
@@ -1150,11 +1219,31 @@ mod tests {
     #[rstest::rstest]
     #[case::class_level("class C:\n    items: list[int]", &[("items", false, false)])]
     #[case::private_included("class C:\n    _items: list[int]", &[("_items", false, false)])]
-    #[case::init_attribute("class C:\n    def __init__(self):\n        self.items: list[int] = []", &[("items", false, false)])]
-    #[case::self_mutation("class C:\n    items: list[int]\n    def add(self):\n        self.items.append(1)", &[("items", true, false)])]
-    #[case::cls_mutation("class C:\n    items: list[int]\n    @classmethod\n    def add(cls):\n        cls.items.append(1)", &[("items", true, false)])]
-    #[case::class_name_mutation("class C:\n    items: list[int]\n    def add(self):\n        C.items.append(1)", &[("items", true, false)])]
-    #[case::subscript_delete("class C:\n    items: list[int]\n    def pop(self):\n        del self.items[0]", &[("items", true, false)])]
+    #[case::init_attribute(indoc::indoc! {r"
+        class C:
+            def __init__(self):
+                self.items: list[int] = []"}, &[("items", false, false)])]
+    #[case::self_mutation(indoc::indoc! {r"
+        class C:
+            items: list[int]
+            def add(self):
+                self.items.append(1)"}, &[("items", true, false)])]
+    #[case::cls_mutation(indoc::indoc! {r"
+        class C:
+            items: list[int]
+            @classmethod
+            def add(cls):
+                cls.items.append(1)"}, &[("items", true, false)])]
+    #[case::class_name_mutation(indoc::indoc! {r"
+        class C:
+            items: list[int]
+            def add(self):
+                C.items.append(1)"}, &[("items", true, false)])]
+    #[case::subscript_delete(indoc::indoc! {r"
+        class C:
+            items: list[int]
+            def pop(self):
+                del self.items[0]"}, &[("items", true, false)])]
     #[case::protocol_member("class P(Protocol):\n    items: list[int]", &[("items", false, true)])]
     fn test_annotated_attributes(#[case] source: &str, #[case] expected: &[(&str, bool, bool)]) {
         let file = ParsedFile::new(source, Language::Python);
@@ -1234,15 +1323,35 @@ mod tests {
 
     #[rstest::rstest]
     #[case::init_and_method(
-        "class C:\n    def __init__(self):\n        self.x: int = 1\n    async def reset(self):\n        if True:\n            self.y: str",
+        indoc::indoc! {r"
+            class C:
+                def __init__(self):
+                    self.x: int = 1
+                async def reset(self):
+                    if True:
+                        self.y: str"},
         &[("C", "__init__", "x", "int"), ("C", "reset", "y", "str")]
     )]
     #[case::private_collected_unannotated_skipped(
-        "class C:\n    def __init__(self):\n        self._p: int = 1\n        self.pub = 2",
+        indoc::indoc! {r"
+            class C:
+                def __init__(self):
+                    self._p: int = 1
+                    self.pub = 2"},
         &[("C", "__init__", "_p", "int")]
     )]
     #[case::staticmethod_classmethod_and_nested_func_skipped(
-        "class C:\n    @staticmethod\n    def sm(self):\n        self.a: int = 1\n    @classmethod\n    def cm(cls):\n        cls.b: int = 2\n    def run(self):\n        def inner(self):\n            self.c: int = 3",
+        indoc::indoc! {r"
+            class C:
+                @staticmethod
+                def sm(self):
+                    self.a: int = 1
+                @classmethod
+                def cm(cls):
+                    cls.b: int = 2
+                def run(self):
+                    def inner(self):
+                        self.c: int = 3"},
         &[]
     )]
     fn test_instance_attribute_annotations(
@@ -1282,27 +1391,46 @@ mod tests {
 
     #[rstest::rstest]
     #[case::bare_final(
-        "class C:\n    def __init__(self):\n        self.a: Final = 1",
+        indoc::indoc! {r"
+            class C:
+                def __init__(self):
+                    self.a: Final = 1"},
         (true, false)
     )]
     #[case::qualified_bare_final(
-        "class C:\n    def __init__(self):\n        self.a: typing.Final = 1",
+        indoc::indoc! {r"
+            class C:
+                def __init__(self):
+                    self.a: typing.Final = 1"},
         (true, false)
     )]
     #[case::annotated_bare_final(
-        "class C:\n    def __init__(self):\n        self.a: Annotated[Final, 'm'] = 1",
+        indoc::indoc! {r"
+            class C:
+                def __init__(self):
+                    self.a: Annotated[Final, 'm'] = 1"},
         (true, false)
     )]
     #[case::parameterized_final(
-        "class C:\n    def __init__(self):\n        self.a: Final[int] = 1",
+        indoc::indoc! {r"
+            class C:
+                def __init__(self):
+                    self.a: Final[int] = 1"},
         (false, false)
     )]
     #[case::dataclass(
-        "@dataclass\nclass C:\n    def __post_init__(self):\n        self.a: int = 1",
+        indoc::indoc! {r"
+            @dataclass
+            class C:
+                def __post_init__(self):
+                    self.a: int = 1"},
         (false, true)
     )]
     #[case::pydantic_model(
-        "class C(BaseModel):\n    def model_post_init(self, context):\n        self.a: int = 1",
+        indoc::indoc! {r"
+            class C(BaseModel):
+                def model_post_init(self, context):
+                    self.a: int = 1"},
         (false, true)
     )]
     fn test_instance_attribute_annotation_facts(

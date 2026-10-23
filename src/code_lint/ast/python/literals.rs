@@ -416,15 +416,38 @@ mod tests {
     #[case::aliased_final_defines("import typing as t\ntimeout: t.Final = 30", &[("30", ConstantDefinition)])]
     #[case::class_lowercase_is_inline("class C:\n    name = 'cc'", &[("'cc'", Inline)])]
     #[case::function_level_upper_name_is_inline("def f():\n    MAX = 30", &[("30", Inline)])]
-    #[case::module_if_body_defines("if WIN:\n    RETRIES = 3\nelse:\n    RETRIES = 5", &[("3", ConstantDefinition), ("5", ConstantDefinition)])]
-    #[case::module_except_body_defines("try:\n    import x\nexcept ImportError:\n    LIMIT = 9", &[("9", ConstantDefinition)])]
-    #[case::function_if_body_is_inline("def f():\n    if a:\n        MAX = 30", &[("30", Inline)])]
-    #[case::parenthesized_constant_defines("MSG = (\n    'refused'\n)", &[("'refused'", ConstantDefinition)])]
+    #[case::module_if_body_defines(indoc::indoc! {r"
+        if WIN:
+            RETRIES = 3
+        else:
+            RETRIES = 5"}, &[("3", ConstantDefinition), ("5", ConstantDefinition)])]
+    #[case::module_except_body_defines(indoc::indoc! {r"
+        try:
+            import x
+        except ImportError:
+            LIMIT = 9"}, &[("9", ConstantDefinition)])]
+    #[case::function_if_body_is_inline(indoc::indoc! {r"
+        def f():
+            if a:
+                MAX = 30"}, &[("30", Inline)])]
+    #[case::parenthesized_constant_defines(indoc::indoc! {r"
+        MSG = (
+            'refused'
+        )"}, &[("'refused'", ConstantDefinition)])]
     #[case::composite_constant_not_collected("URLS = ['u1', 'u2']\nPAIR = 'aa' 'bb'", &[])]
     #[case::negation_anchored_on_operator("f(-42, 7 - 42)", &[("-42", Inline), ("7", Inline), ("42", Inline)])]
-    #[case::negative_case_pattern("match m:\n    case [-42, 'xx']:\n        pass", &[("-42", Inline), ("'xx'", Inline)])]
-    #[case::signed_numbers_in_patterns_collected("match m:\n    case {-404: _} | Resp(code=-404) | -7:\n        pass", &[("-404", Inline), ("-404", Inline), ("-7", Inline)])]
-    #[case::docstring_skipped("def f():\n    '''Doc.'''\n    return 'rv'", &[("'rv'", Inline)])]
+    #[case::negative_case_pattern(indoc::indoc! {r"
+        match m:
+            case [-42, 'xx']:
+                pass"}, &[("-42", Inline), ("'xx'", Inline)])]
+    #[case::signed_numbers_in_patterns_collected(indoc::indoc! {r"
+        match m:
+            case {-404: _} | Resp(code=-404) | -7:
+                pass"}, &[("-404", Inline), ("-404", Inline), ("-7", Inline)])]
+    #[case::docstring_skipped(indoc::indoc! {r"
+        def f():
+            '''Doc.'''
+            return 'rv'"}, &[("'rv'", Inline)])]
     #[case::annotations_skipped("def f(a: 'T' = 'dv') -> 'R':\n    v: 'V' = 'vv'", &[("'dv'", Inline), ("'vv'", Inline)])]
     #[case::literal_type_skipped("v = Literal['y']", &[])]
     #[case::cast_skips_type_argument_only(

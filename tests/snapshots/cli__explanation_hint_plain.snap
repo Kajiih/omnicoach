@@ -14,6 +14,7 @@ test.py:6:10: [suppressed-exception] An exception is silenced with `contextlib.s
   Suggestion: Replace the block with an explicit `except` handler.
   Or: Explain why in a comment at the end of the flagged line or directly above it.
 
+Note: Fix each finding by applying its suggestion. Do not reshape the code or change its values only to fall under a rule's limit or outside its pattern.
 Note: Some rules use heuristics. When a finding conflicts with the clearest, most robust design, suppress it with `omni:ignore [<rule>] -- <reason>` rather than working around the linter and degrading the design.
 For details on a rule (including known limitations), run: omnicoach --explain <rule>
 

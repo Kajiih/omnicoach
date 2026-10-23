@@ -580,7 +580,11 @@ mod tests {
     #[case::bare_override("@override", true)]
     #[case::qualified_override("@typing_extensions.override", true)]
     fn test_has_override_decorator(#[case] decorator: &str, #[case] expected: bool) {
-        let source = format!("{decorator}\ndef foo():\n    pass\n");
+        let source = indoc::formatdoc! {"
+            {decorator}
+            def foo():
+                pass
+        "};
         let file = ParsedFile::new(&source, Language::Python);
         let parsed = file.py_module().expect("source should parse");
         let Some(Stmt::FunctionDef(func_def)) = parsed.syntax().body.first() else {
@@ -624,7 +628,10 @@ mod tests {
     #[case::ellipsis_stub("def f(x: list[int]) -> None: ...", true)]
     #[case::pass_stub("def f(x: list[int]) -> None:\n    pass", true)]
     #[case::docstring_and_ellipsis(
-        "def f(x: list[int]) -> None:\n    \"\"\"Doc.\"\"\"\n    ...",
+        indoc::indoc! {r#"
+            def f(x: list[int]) -> None:
+                """Doc."""
+                ..."#},
         true
     )]
     #[case::raise_not_implemented_bare(

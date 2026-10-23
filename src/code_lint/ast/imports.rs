@@ -274,7 +274,11 @@ mod tests {
 
     #[test]
     fn test_rust_local_items_shadow_imports() {
-        let source = "use std::thread::sleep;\nfn sleep() {}\nstruct Config;\n";
+        let source = indoc::indoc! {r"
+            use std::thread::sleep;
+            fn sleep() {}
+            struct Config;
+        "};
         assert_eq!(
             resolve(source, Language::Rust, "sleep"),
             ResolvedName::Local

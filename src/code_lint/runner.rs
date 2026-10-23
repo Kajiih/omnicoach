@@ -604,7 +604,10 @@ mod tests {
     #[rstest]
     #[case::direct("# omni:ignore [single-letter-name] -- math variable\na = 1")]
     #[case::across_decorator(
-        "# omni:ignore [single-letter-name] -- math function\n@decorator\ndef func(a): pass"
+        indoc::indoc! {r"
+            # omni:ignore [single-letter-name] -- math function
+            @decorator
+            def func(a): pass"}
     )]
     fn test_valid_preceding_line_suppression_silences_violation(#[case] content: &str) {
         let config = config_enabling(&["single-letter-name"]);
