@@ -63,7 +63,7 @@ pub(in crate::code_lint) use self::functions::{
 pub(super) use self::imports::collect_import_map;
 pub(super) use self::literals::collect_literal_occurrences;
 pub(in crate::code_lint) use self::logging::collect_logger_calls;
-pub(super) use self::multiline_strings::find_unwrapped_multiline_strings;
+pub(super) use self::multiline_strings::collect_multiline_strings;
 pub(in crate::code_lint) use self::names::collect_path_references;
 pub(in crate::code_lint) use self::parameter_usage::ParameterCollectionCapability;
 pub use self::parameter_usage::{ParameterUsage, summarize_parameter_usages};

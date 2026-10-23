@@ -147,16 +147,19 @@ fn check_file(
     file: &ParsedFile,
     allowed: &HashSet<String>,
 ) -> Vec<Diagnostic> {
-    ast::find_unwrapped_multiline_strings(file, |full_path| {
-        match ast::resolve_name(file, full_path) {
-            ast::ResolvedName::Imported(resolved) => allowed.contains(resolved.as_str()),
-            ast::ResolvedName::Local => false,
-            ast::ResolvedName::Unbound => allowed.contains(full_path),
-        }
-    })
-    .iter()
-    .map(|node| rule.diagnostic_at_node(path, node, &[]))
-    .collect()
+    ast::collect_multiline_strings(file)
+        .into_iter()
+        .filter(|literal| {
+            matches!(
+                &literal.kind,
+                ast::MultilineKind::Source { enclosing_calls }
+                    if !enclosing_calls
+                        .iter()
+                        .any(|call_path| allowed.contains(call_path))
+            )
+        })
+        .map(|literal| rule.diagnostic_at_node(path, &literal.node, &[]))
+        .collect()
 }
 
 #[cfg(test)]
@@ -266,6 +269,18 @@ line 2
                         line 2
                     """
                 "#,
+                lambda_inside_cleandoc_resets_wrapper => r#"
+                    import inspect
+                    f = inspect.cleandoc((lambda: """
+                        line 1
+                        line 2
+                    """)())
+                "# => r#"
+                    """
+                        line 1
+                        line 2
+                    """
+                "#,
             ],
         },
         Rust => {
@@ -329,6 +344,32 @@ line 2
                     }
                 "# => r#"
                     r"
+                        alpha
+                        beta
+                    "
+                "#,
+                local_raw_byte_string_flagged => r#"
+                    fn build() {
+                        let bad_bytes = br"
+                            alpha
+                            beta
+                        ";
+                    }
+                "# => r#"
+                    br"
+                        alpha
+                        beta
+                    "
+                "#,
+                local_raw_c_string_flagged => r#"
+                    fn build() {
+                        let bad_cstr = cr"
+                            alpha
+                            beta
+                        ";
+                    }
+                "# => r#"
+                    cr"
                         alpha
                         beta
                     "

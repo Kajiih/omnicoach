@@ -50,7 +50,7 @@ pub use self::imports::{ResolvedName, resolve_name};
 pub(in crate::code_lint) use self::literals::LiteralRole;
 pub(crate) use self::literals::LiteralValue;
 pub use self::literals::{LiteralOccurrence, collect_literal_occurrences};
-pub(in crate::code_lint) use self::multiline_strings::find_unwrapped_multiline_strings;
+pub(in crate::code_lint) use self::multiline_strings::{MultilineKind, collect_multiline_strings};
 pub use self::positional_reads::{ScopePositionalReads, collect_positional_reads};
 pub(in crate::code_lint) use self::returns::{
     ReturnShape, collect_function_returns, is_predicate_name,
