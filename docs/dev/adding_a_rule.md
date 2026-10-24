@@ -25,4 +25,4 @@ The Rust items below are documented in Rustdoc: hover them in your IDE, or run `
 
 ## Command rules
 
-A command rule follows the same steps with `CommandRule` in [contract.rs](../../src/command_lint/contract.rs), registered in `COMMAND_RULES` in [rules.rs](../../src/command_lint/rules.rs). It has no `rule_test!` harness yet, so it declares `examples: &[]` (see *Examples for suppression audits and command rules* in [ROADMAP.md](../../ROADMAP.md)).
+A command rule follows the same steps with `CommandRule` and `CommandEnv` in [contract.rs](../../src/command_lint/contract.rs), registered in `COMMAND_RULES` in [rules.rs](../../src/command_lint/rules.rs), documented with one executed `CommandExample` in [documentation.rs](../../src/rule_declaration/documentation.rs), and tested with `command_rule_test!` in [test_utils.rs](../../src/test_utils.rs).
