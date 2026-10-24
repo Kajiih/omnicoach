@@ -970,6 +970,52 @@ fn public_attributes(body: &[Stmt], source: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::diagnostic::Language;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::eager_annotations("", [Some(4), Some(4), Some(4), Some(4)])]
+    #[case::postponed_annotations(
+        "from __future__ import annotations\n",
+        [Some(4), None, None, None]
+    )]
+    fn test_direct_evaluated_before_signature_parts(
+        #[case] header: &str,
+        #[case] expected: [Option<usize>; 4],
+    ) {
+        let body = indoc::indoc! {r"
+            def _default() -> int:
+                return 1
+
+            class _VarArg:
+                pass
+
+            class _KwArg:
+                pass
+
+            class _Return:
+                pass
+
+            def entrypoint(x: int = _default(), *args: _VarArg, **kwargs: _KwArg) -> _Return:
+                pass
+        "};
+        let file = ParsedFile::new(&format!("{header}{body}"), Language::Python);
+        let scopes = collect_declaration_scopes(&file);
+        let module_scope = scopes
+            .iter()
+            .find(|scope| matches!(scope.kind, DeclarationScopeKind::Module))
+            .expect("module scope");
+        let actual: Vec<Option<usize>> = ["_default", "_VarArg", "_KwArg", "_Return"]
+            .into_iter()
+            .map(|name| {
+                module_scope
+                    .items
+                    .iter()
+                    .find(|item| item.name == name)
+                    .and_then(|item| item.evaluated_before)
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
 
     #[test]
     fn test_collect_class_declaration_scopes_python() {
@@ -1003,6 +1049,12 @@ mod tests {
         "};
         let file = ParsedFile::new(source, Language::Python);
         let scopes = collect_declaration_scopes(&file);
+        let module_signatures: Vec<_> = scopes
+            .iter()
+            .filter(|scope| matches!(scope.kind, DeclarationScopeKind::Module))
+            .flat_map(|scope| &scope.items)
+            .map(|item| (item.name.as_str(), item.signature.as_deref()))
+            .collect();
         let summary: Vec<_> = scopes
             .iter()
             .filter_map(|scope| {
@@ -1017,24 +1069,121 @@ mod tests {
                             method.name.as_str(),
                             method.visibility,
                             method.is_constructor,
+                            method.signature.as_deref(),
                         )
                     })
                     .collect();
                 Some((name.as_str(), methods))
             })
             .collect();
+        assert_eq!(module_signatures, vec![("Service", Some("class Service"))]);
         assert_eq!(
             summary,
             vec![(
                 "Service",
                 vec![
-                    ("__init__", Public, true),
-                    ("_token", Private, false),
-                    ("execute", Public, false),
-                    ("__repr__", Public, false),
-                    ("__secret", Private, false),
+                    (
+                        "__init__",
+                        Public,
+                        true,
+                        Some("def __init__(self, port: int) -> None"),
+                    ),
+                    (
+                        "_token",
+                        Private,
+                        false,
+                        Some("@property def _token(self) -> str"),
+                    ),
+                    ("execute", Public, false, Some("def execute(self) -> None")),
+                    ("__repr__", Public, false, Some("def __repr__(self) -> str")),
+                    (
+                        "__secret",
+                        Private,
+                        false,
+                        Some("def __secret(self) -> None"),
+                    ),
                 ],
             )]
+        );
+    }
+
+    #[test]
+    fn test_class_method_call_receivers() {
+        let source = indoc::indoc! {r"
+            class Service:
+                def _helper(self) -> None:
+                    pass
+
+                def self_receiver(self) -> None:
+                    self._helper()
+
+                def self_rebound_without_self_param(other) -> None:
+                    self = other
+                    self._helper()
+
+                def self_param_reassigned(self) -> None:
+                    self = self
+                    self._helper()
+
+                @classmethod
+                def cls_receiver(cls) -> None:
+                    cls._helper()
+
+                @staticmethod
+                def cls_rebound_without_cls_param(other) -> None:
+                    cls = other
+                    cls._helper()
+
+                @classmethod
+                def cls_param_reassigned(cls) -> None:
+                    cls = cls
+                    cls._helper()
+
+                @staticmethod
+                def class_name_receiver() -> None:
+                    Service._helper(None)
+
+                @staticmethod
+                def class_name_shadowed() -> None:
+                    Service = object()
+                    Service._helper(None)
+
+                def unrelated_receiver(self) -> None:
+                    registry._helper()
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        let scopes = collect_declaration_scopes(&file);
+        let class_scope = scopes
+            .iter()
+            .find(|scope| matches!(scope.kind, DeclarationScopeKind::Class { .. }))
+            .expect("class scope");
+        let helper_idx = class_scope
+            .items
+            .iter()
+            .position(|item| item.name == "_helper")
+            .expect("_helper method");
+        let calls_helper: Vec<(&str, bool)> = class_scope
+            .items
+            .iter()
+            .filter(|item| item.name != "_helper")
+            .map(|item| {
+                let calls = item.references.contains(&(helper_idx, RelationKind::Body));
+                (item.name.as_str(), calls)
+            })
+            .collect();
+        assert_eq!(
+            calls_helper,
+            vec![
+                ("self_receiver", true),
+                ("self_rebound_without_self_param", false),
+                ("self_param_reassigned", true),
+                ("cls_receiver", true),
+                ("cls_rebound_without_cls_param", false),
+                ("cls_param_reassigned", true),
+                ("class_name_receiver", true),
+                ("class_name_shadowed", false),
+                ("unrelated_receiver", false),
+            ]
         );
     }
 
@@ -1157,7 +1306,10 @@ mod tests {
             def _alias_check(v: int) -> int:
                 return v
 
-            type CheckedInt = Annotated[int, _alias_check]
+            class _AliasTarget:
+                pass
+
+            type CheckedInt = Annotated[_AliasTarget, _alias_check]
 
             def entrypoint() -> None:
                 pass
@@ -1181,6 +1333,7 @@ mod tests {
             "_SubModel",
             "_UnpinnedReturn",
             "_alias_check",
+            "_AliasTarget",
         ]
         .into_iter()
         .map(|name| (name, evaluated_before.get(name).copied().flatten()))
@@ -1193,7 +1346,8 @@ mod tests {
                 ("_clean_host", Some(2)),
                 ("_SubModel", None),
                 ("_UnpinnedReturn", None),
-                ("_alias_check", Some(6)),
+                ("_alias_check", Some(7)),
+                ("_AliasTarget", None),
             ]
         );
     }

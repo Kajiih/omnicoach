@@ -439,6 +439,7 @@ mod tests {
                 pass
 
             def _late_caller() -> int:
+                SecondPublic()
                 return _cycle_a()
 
             Y = _late_caller()
@@ -469,6 +470,7 @@ mod tests {
             ("_param_type", None),
             ("_PinnedBase", Some(7)),
             ("_method_helper", None),
+            ("SecondPublic", None),
         ];
         let actual: Vec<(&str, Option<usize>)> = expected
             .iter()
