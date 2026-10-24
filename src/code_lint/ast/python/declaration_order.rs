@@ -1,5 +1,6 @@
 //! Python declaration-order scope builders and field-after-method extraction.
 
+use super::annotations::annotated_metadata_exprs;
 use super::bindings::{collect_local_bound_names, parameters_shadow_name};
 use super::functions::{CLS_RECEIVER, SELF_RECEIVER, is_overload_def, is_property_accessor_def};
 use crate::code_lint::ast::call_clusters::{
@@ -233,6 +234,7 @@ fn build_module_declaration_scopes<'a>(
             &first_stmt_indices,
             &item_by_name,
             future_annotations,
+            file,
         );
         for (item, evaluated) in items.iter_mut().zip(evaluated_before) {
             item.evaluated_before = evaluated;
@@ -306,6 +308,7 @@ fn build_class_declaration_scope<'a>(
         &first_stmt_indices,
         &method_by_name,
         future_annotations,
+        file,
     );
     for (item, evaluated) in items.iter_mut().zip(evaluated_before) {
         item.evaluated_before = evaluated;
@@ -591,13 +594,15 @@ impl SourceOrderVisitor<'_> for ModuleRefVisitor<'_, '_> {
 
 /// Collects the direct `evaluated_before` bound for each scope item by walking definition-time
 /// evaluations in `scope_body[stmt_range]` (outside `Stmt::FunctionDef` bodies and postponed
-/// type annotations).
+/// type annotations, while including PEP 593 `Annotated` metadata expressions resolved by runtime
+/// introspection).
 fn direct_evaluated_before(
     scope_body: &[Stmt],
     stmt_range: std::ops::Range<usize>,
     first_stmt_indices: &[usize],
     item_by_name: &HashMap<String, usize>,
     future_annotations: bool,
+    file: &ParsedFile,
 ) -> Vec<Option<usize>> {
     let count = first_stmt_indices.len();
     let mut bounds: Vec<Option<usize>> = vec![None; count];
@@ -619,6 +624,7 @@ fn direct_evaluated_before(
         }
         let mut refs = Vec::new();
         let mut visitor = DefinitionTimeRefVisitor {
+            file,
             item_by_name,
             future_annotations,
             refs: &mut refs,
@@ -636,11 +642,25 @@ fn direct_evaluated_before(
 }
 
 /// Collects the scope items a statement references when the scope body is evaluated at
-/// definition time, skipping function bodies and postponed annotations.
+/// definition time, skipping function bodies and postponed annotations, while including
+/// PEP 593 `Annotated` metadata expressions resolved by runtime introspection.
 struct DefinitionTimeRefVisitor<'map, 'out> {
+    file: &'map ParsedFile,
     item_by_name: &'map HashMap<String, usize>,
     future_annotations: bool,
     refs: &'out mut Vec<usize>,
+}
+
+impl DefinitionTimeRefVisitor<'_, '_> {
+    fn visit_type_annotation(&mut self, annotation: &Expr, postponed: bool) {
+        if postponed {
+            for metadata in annotated_metadata_exprs(annotation, self.file) {
+                self.visit_expr(metadata);
+            }
+        } else {
+            self.visit_expr(annotation);
+        }
+    }
 }
 
 impl SourceOrderVisitor<'_> for DefinitionTimeRefVisitor<'_, '_> {
@@ -650,7 +670,7 @@ impl SourceOrderVisitor<'_> for DefinitionTimeRefVisitor<'_, '_> {
                 for dec in &func_def.decorator_list {
                     self.visit_decorator(dec);
                 }
-                let eval_annotations = !self.future_annotations && func_def.type_params.is_none();
+                let postponed = self.future_annotations || func_def.type_params.is_some();
                 for param in func_def
                     .parameters
                     .posonlyargs
@@ -658,27 +678,25 @@ impl SourceOrderVisitor<'_> for DefinitionTimeRefVisitor<'_, '_> {
                     .chain(&func_def.parameters.args)
                     .chain(&func_def.parameters.kwonlyargs)
                 {
-                    if eval_annotations && let Some(ann) = &param.parameter.annotation {
-                        self.visit_expr(ann);
+                    if let Some(ann) = &param.parameter.annotation {
+                        self.visit_type_annotation(ann, postponed);
                     }
                     if let Some(default) = &param.default {
                         self.visit_expr(default);
                     }
                 }
-                if eval_annotations {
-                    if let Some(vararg) = &func_def.parameters.vararg
-                        && let Some(ann) = &vararg.annotation
-                    {
-                        self.visit_expr(ann);
-                    }
-                    if let Some(kwarg) = &func_def.parameters.kwarg
-                        && let Some(ann) = &kwarg.annotation
-                    {
-                        self.visit_expr(ann);
-                    }
-                    if let Some(returns) = &func_def.returns {
-                        self.visit_expr(returns);
-                    }
+                if let Some(vararg) = &func_def.parameters.vararg
+                    && let Some(ann) = &vararg.annotation
+                {
+                    self.visit_type_annotation(ann, postponed);
+                }
+                if let Some(kwarg) = &func_def.parameters.kwarg
+                    && let Some(ann) = &kwarg.annotation
+                {
+                    self.visit_type_annotation(ann, postponed);
+                }
+                if let Some(returns) = &func_def.returns {
+                    self.visit_type_annotation(returns, postponed);
                 }
             }
             Stmt::ClassDef(class_def) => {
@@ -692,14 +710,14 @@ impl SourceOrderVisitor<'_> for DefinitionTimeRefVisitor<'_, '_> {
             }
             Stmt::AnnAssign(ann_assign) => {
                 self.visit_expr(&ann_assign.target);
-                if !self.future_annotations {
-                    self.visit_expr(&ann_assign.annotation);
-                }
+                self.visit_type_annotation(&ann_assign.annotation, self.future_annotations);
                 if let Some(value) = &ann_assign.value {
                     self.visit_expr(value);
                 }
             }
-            Stmt::TypeAlias(_) => {}
+            Stmt::TypeAlias(type_alias) => {
+                self.visit_type_annotation(&type_alias.value, true);
+            }
             _ => walk_stmt(self, stmt),
         }
     }
@@ -1109,5 +1127,74 @@ mod tests {
         let after_guard = collect_statements_after_main_guard(&guard_file);
         assert_eq!(after_guard.len(), 1);
         assert_eq!(after_guard[0].guard_line, 3);
+    }
+
+    #[test]
+    fn test_direct_evaluated_before_with_annotated_metadata() {
+        let source = indoc::indoc! {r"
+            from __future__ import annotations
+            from typing import Annotated
+
+            def _validator(v: str) -> str:
+                return v
+
+            def _clean_host(h: str) -> str:
+                return h.strip()
+
+            class _SubModel:
+                host: str = _clean_host('localhost')
+
+            class _UnpinnedReturn:
+                pass
+
+            class Config:
+                name: Annotated[str, _validator]
+                sub: _SubModel
+
+                def check(self) -> _UnpinnedReturn:
+                    return _UnpinnedReturn()
+
+            def _alias_check(v: int) -> int:
+                return v
+
+            type CheckedInt = Annotated[int, _alias_check]
+
+            def entrypoint() -> None:
+                pass
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        let scopes = collect_declaration_scopes(&file);
+        let module_scope = scopes
+            .iter()
+            .find(|scope| matches!(scope.kind, DeclarationScopeKind::Module))
+            .expect("module scope");
+
+        let evaluated_before: HashMap<&str, Option<usize>> = module_scope
+            .items
+            .iter()
+            .map(|item| (item.name.as_str(), item.evaluated_before))
+            .collect();
+
+        let actual: Vec<(&str, Option<usize>)> = [
+            "_validator",
+            "_clean_host",
+            "_SubModel",
+            "_UnpinnedReturn",
+            "_alias_check",
+        ]
+        .into_iter()
+        .map(|name| (name, evaluated_before.get(name).copied().flatten()))
+        .collect();
+
+        assert_eq!(
+            actual,
+            vec![
+                ("_validator", Some(4)),
+                ("_clean_host", Some(2)),
+                ("_SubModel", None),
+                ("_UnpinnedReturn", None),
+                ("_alias_check", Some(6)),
+            ]
+        );
     }
 }

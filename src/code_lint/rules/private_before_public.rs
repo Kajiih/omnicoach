@@ -35,12 +35,13 @@ pub const RULE: CodeRule = CodeRule {
                 `struct`, `enum`, `union`, or `trait` in Rust) in a module, Python `class`, or Rust
                 inherent `impl` block declared above a public declaration that references it, or,
                 when no public declaration reaches it, above the last public one. In Python, items
-                evaluated at import or class-definition time (such as top-level calls, decorators,
-                parameter defaults, base classes, or runtime annotations without
-                `from __future__ import annotations`) and their transitive callees are exempt when
-                pinned above a consumer. Helpers below their callers are checked by
-                `uncolocated-helper` and private-only call order by `callee-before-caller`, so each
-                misplaced declaration is reported once."},
+                evaluated when the module or class body executes (such as top-level calls, decorators,
+                parameter defaults, base classes, eager annotations without
+                `from __future__ import annotations`), or PEP 593 `Annotated` metadata expressions
+                resolved by runtime introspection (such as Pydantic or FastAPI), and their transitive
+                body callees are exempt when defined before a consumer. Helpers below their callers
+                are checked by `uncolocated-helper` and private-only call order by `callee-before-caller`,
+                so each misplaced declaration is reported once."},
             why_is_this_bad: indoc::indoc! {r"
                 A private helper function or type is a lower-abstraction building block than the
                 public entrypoint that uses it, and a helper shared across multiple public
@@ -237,8 +238,75 @@ crate::test_utils::rule_test!(
                     def configure(cfg: _Config) -> None:
                         pass
                 "#,
+                annotated_validator_on_pydantic_model_pinned_with_future_annotations => r#"
+                    from __future__ import annotations
+                    from typing import Annotated
+                    from pydantic import BaseModel, AfterValidator
+
+                    def _strip_whitespace(v: str) -> str:
+                        return v.strip()
+
+                    def _validate(v: str) -> str:
+                        return _strip_whitespace(v)
+
+                    class User(BaseModel):
+                        name: Annotated[str, AfterValidator(_validate)]
+                "#,
+                annotated_validator_in_function_signature_pinned_with_future_annotations => r#"
+                    from __future__ import annotations
+                    from typing import Annotated
+
+                    def _check(v: str) -> str:
+                        return v
+
+                    def endpoint(param: Annotated[str, _check]) -> None:
+                        pass
+                "#,
+                annotated_validator_in_pep695_type_alias_pinned => r#"
+                    from __future__ import annotations
+                    from typing import Annotated
+
+                    def _check(v: int) -> int:
+                        return v
+
+                    type Checked = Annotated[int, _check]
+
+                    def public_fn() -> None:
+                        pass
+                "#,
             ],
             fail: [
+                method_helper_on_pinned_base_class_still_flagged => r#"
+                    def _helper() -> int:
+                        return 1
+
+                    class _Base:
+                        def method(self) -> int:
+                            return _helper()
+
+                    class Public(_Base):
+                        pass
+                "# => "_helper",
+                postponed_submodel_type_above_parent_model => r#"
+                    from __future__ import annotations
+
+                    class _SubConfig:
+                        host: str
+
+                    class AppConfig:
+                        sub: _SubConfig
+                "# => "_SubConfig",
+                unpinned_method_return_type_still_flagged => r#"
+                    from __future__ import annotations
+                    from pydantic import BaseModel
+
+                    class _Result:
+                        pass
+
+                    class Service(BaseModel):
+                        def run(self) -> _Result:
+                            return _Result()
+                "# => "_Result",
                 exclusive_helper_before_owning_public_function => r#"
                     def _prepare(value: int) -> int:
                         return value + 1

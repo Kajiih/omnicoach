@@ -170,6 +170,21 @@ pub(super) fn is_bare_final_annotation_expr(type_expr: &Expr, file: &ParsedFile)
         .is_some_and(|name| is_std_type_constructor(&name.path, &name.terminal, &[TYPE_FINAL]))
 }
 
+/// Returns the runtime value expressions embedded as metadata (`args[1..]`) inside any
+/// `typing.Annotated[T, ...]` or `typing_extensions.Annotated[T, ...]` subscript in
+/// `annotation`, in source order.
+///
+/// Per PEP 593, the first argument `T` of `Annotated[T, x, ...]` is a type expression (which
+/// may itself contain nested `Annotated` subscripts), whereas `x, ...` are value expressions.
+pub(super) fn annotated_metadata_exprs<'a>(
+    annotation: &'a Expr,
+    file: &ParsedFile,
+) -> Vec<&'a Expr> {
+    let mut out = Vec::new();
+    collect_annotated_metadata_exprs(annotation, file, &mut out);
+    out
+}
+
 /// Collects the standard-library collection types in `type_node` according to `depth`, in
 /// source order and deduplicated by path.
 ///
@@ -634,6 +649,51 @@ fn unwrap_annotated_expr<'a>(mut current: &'a Expr, file: &ParsedFile) -> &'a Ex
     current
 }
 
+/// Recursively collects the runtime metadata value expressions (`args[1..]`) of all `Annotated`
+/// subscripts in `expr`.
+fn collect_annotated_metadata_exprs<'a>(
+    expr: &'a Expr,
+    file: &ParsedFile,
+    out: &mut Vec<&'a Expr>,
+) {
+    match expr {
+        Expr::Subscript(_) => {
+            let Some(GenericType { base, arguments }) = extract_generic_base_and_args(expr) else {
+                return;
+            };
+            if let Some(QualifiedName { path, terminal }) =
+                written_name(base, &file.source).resolve(file)
+                && is_std_type_constructor(&path, &terminal, &[TYPE_ANNOTATED])
+            {
+                if let Some(&first_arg) = arguments.first() {
+                    collect_annotated_metadata_exprs(first_arg, file, out);
+                }
+                out.extend(arguments.into_iter().skip(1));
+            } else {
+                collect_annotated_metadata_exprs(base, file, out);
+                for argument in arguments {
+                    collect_annotated_metadata_exprs(argument, file, out);
+                }
+            }
+        }
+        Expr::BinOp(bin_op) if bin_op.op == Operator::BitOr => {
+            collect_annotated_metadata_exprs(&bin_op.left, file, out);
+            collect_annotated_metadata_exprs(&bin_op.right, file, out);
+        }
+        Expr::Tuple(tuple) => {
+            for element in &tuple.elts {
+                collect_annotated_metadata_exprs(element, file, out);
+            }
+        }
+        Expr::List(list) => {
+            for element in &list.elts {
+                collect_annotated_metadata_exprs(element, file, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// See [`collection_type`].
 fn collection_type_expr(expr: &Expr, file: &ParsedFile) -> Option<PythonCollectionType> {
     if !matches!(expr, Expr::Name(_) | Expr::Attribute(_)) {
@@ -782,6 +842,7 @@ mod tests {
     use super::*;
     use crate::diagnostic::Language;
     use rstest::rstest;
+    use ruff_python_ast::Stmt;
 
     #[rstest]
     #[case::iterator(
@@ -1090,5 +1151,56 @@ mod tests {
         assert_eq!(args.len(), 2);
         assert_eq!(args[0].text(), "int");
         assert_eq!(args[1].text(), "...");
+    }
+
+    #[rstest]
+    #[case::top_level(
+        "from typing import Annotated\nx: Annotated[str, _upper, min_length(1)] = ''",
+        &["_upper", "min_length(1)"]
+    )]
+    #[case::nested_in_union(
+        "from typing import Annotated\nx: Annotated[str, _upper] | None = None",
+        &["_upper"]
+    )]
+    #[case::nested_in_container(
+        "import typing\nx: list[typing.Annotated[int, _gt_zero]] = []",
+        &["_gt_zero"]
+    )]
+    #[case::nested_annotated(
+        "from typing import Annotated\nx: Annotated[Annotated[str, _inner], _outer] = ''",
+        &["_inner", "_outer"]
+    )]
+    #[case::callable_param(
+        "from typing import Annotated, Callable\nx: Callable[[Annotated[int, _validate]], str]",
+        &["_validate"]
+    )]
+    #[case::aliased(
+        "from typing import Annotated as Ann\nx: Ann[str, _fn] = ''",
+        &["_fn"]
+    )]
+    #[case::local_shadow(
+        indoc::indoc! {r"
+            class Annotated:
+                pass
+            x: Annotated[str, _fn] = ''
+        "},
+        &[]
+    )]
+    fn test_annotated_metadata_exprs(#[case] source: &str, #[case] expected: &[&str]) {
+        let file = ParsedFile::new(source, Language::Python);
+        let annotation = last_assignment_annotation(&file);
+        let actual: Vec<&str> = annotated_metadata_exprs(annotation, &file)
+            .into_iter()
+            .map(|expr| &file.source[expr.range()])
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    fn last_assignment_annotation(file: &ParsedFile) -> &Expr {
+        let parsed = file.py_module().expect("parsed module");
+        let Some(Stmt::AnnAssign(ann_assign)) = parsed.syntax().body.last() else {
+            panic!("expected AnnAssign");
+        };
+        &ann_assign.annotation
     }
 }
