@@ -35,7 +35,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// The rule's declaration: blocks running `jj edit <revision>` if the target revision has a
-/// non-empty description.
+/// non-empty description and has no unresolved conflicts.
 pub const RULE: CommandRule = CommandRule {
     declaration: Declaration {
         name: RuleName("edit-of-described-commit"),
@@ -52,7 +52,7 @@ pub const RULE: CommandRule = CommandRule {
             summary: "Flags `jj edit` on a commit that already has a description.",
             what_it_does: indoc::indoc! {r"
                 Checks shell commands before they run and flags `jj edit <revision>` when the
-                target revision already has a description."},
+                target revision already has a description and has no unresolved conflicts."},
             why_is_this_bad: indoc::indoc! {r"
                 In Jujutsu, a described commit is usually finished work, often already reviewed.
                 Editing it makes every later file change part of that commit, silently: unrelated
@@ -75,32 +75,32 @@ pub const RULE: CommandRule = CommandRule {
 
 fn check_command(
     rule: &CommandRule,
-    cmd: &InterceptedCommand,
+    command: &InterceptedCommand,
     jj_client: &dyn JjClient,
 ) -> Vec<Diagnostic> {
-    if cmd.program_base_name() != JJ_CLI_SCHEMA.program_name {
+    if command.program_base_name() != JJ_CLI_SCHEMA.program_name {
         return Vec::new();
     }
 
-    let Some(revision) = extract_jj_edit_revision(cmd) else {
+    let Some(revision) = extract_jj_edit_revision(command) else {
         return Vec::new();
     };
 
-    // Guard: Query target revision description
+    // Guard: Query target revision description and conflict status
     // TODO(roadmap): Propagate or report VCS client query errors rather than silently returning empty diagnostics.
-    let Ok(desc) = jj_client.get_commit_description(&revision) else {
+    let Ok(commit_info) = jj_client.get_commit_info(&revision) else {
         return Vec::new();
     };
-    if desc.is_empty() {
+    if commit_info.conflict || commit_info.description.trim().is_empty() {
         return Vec::new();
     }
 
-    let (start, end) = cmd.span;
+    let (start, end) = command.span;
     vec![rule.declaration.render_diagnostic(
         &[("revision", &revision)],
         SourceLocation::virtual_span(
             crate::diagnostic::VCS_CONTEXT_NAME,
-            &cmd.raw_string,
+            &command.raw_string,
             SourceSpan::new(start, end),
         ),
     )]
@@ -111,8 +111,8 @@ fn check_command(
 /// Understands global options (such as `-R .` or `--ignore-working-copy`) and the `-r` /
 /// `--revision` option accepted by `jj edit`.
 #[must_use]
-fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
-    let args = cmd.parse_args(&JJ_CLI_SCHEMA);
+fn extract_jj_edit_revision(command: &InterceptedCommand) -> Option<String> {
+    let args = command.parse_args(&JJ_CLI_SCHEMA);
     if !args.has_subcommand_sequence(&["edit"]) {
         return None;
     }
@@ -126,15 +126,16 @@ fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::command_lint::vcs::CommitInfo;
     use std::collections::HashMap;
 
     struct FakeJjClient {
-        descriptions: HashMap<String, String>,
+        commits: HashMap<String, CommitInfo>,
     }
 
     impl JjClient for FakeJjClient {
-        fn get_commit_description(&self, revision: &str) -> Result<String, String> {
-            self.descriptions
+        fn get_commit_info(&self, revision: &str) -> Result<CommitInfo, String> {
+            self.commits
                 .get(revision)
                 .cloned()
                 .ok_or_else(|| format!("unknown revision: {revision}"))
@@ -155,16 +156,42 @@ mod tests {
         "[edit-of-described-commit] Line 1, Col 1: `jj edit @` targets a described commit."
     )]
     #[case::empty_commit_allowed("jj edit a456", "")]
+    #[case::conflicted_described_commit_allowed("jj edit c789", "")]
     #[case::unknown_revision_error_ignored("jj edit unknown_rev", "")]
     #[case::unrelated_jj_subcommand_allowed("jj log -r d123", "")]
     #[case::non_jj_command_allowed("git commit -m msg", "")]
     fn test_check_command(#[case] command_line: &str, #[case] expected: &str) {
-        let descriptions = HashMap::from([
-            ("@".to_string(), "Described working copy".to_string()),
-            ("d123".to_string(), "Implement feature X".to_string()),
-            ("a456".to_string(), String::new()),
+        let commits = HashMap::from([
+            (
+                "@".to_string(),
+                CommitInfo {
+                    description: "Described working copy".to_string(),
+                    conflict: false,
+                },
+            ),
+            (
+                "d123".to_string(),
+                CommitInfo {
+                    description: "Implement feature X".to_string(),
+                    conflict: false,
+                },
+            ),
+            (
+                "a456".to_string(),
+                CommitInfo {
+                    description: String::new(),
+                    conflict: false,
+                },
+            ),
+            (
+                "c789".to_string(),
+                CommitInfo {
+                    description: "Conflicted commit".to_string(),
+                    conflict: true,
+                },
+            ),
         ]);
-        let jj_client = FakeJjClient { descriptions };
+        let jj_client = FakeJjClient { commits };
 
         let output =
             crate::test_utils::assert_command_rule_snapshot(&RULE, command_line, &jj_client);
@@ -185,9 +212,9 @@ mod tests {
         #[case] command_line: &str,
         #[case] expected_revision: Option<&str>,
     ) {
-        let cmd = InterceptedCommand::parse_all(command_line).remove(0);
+        let command = InterceptedCommand::parse_all(command_line).remove(0);
         assert_eq!(
-            extract_jj_edit_revision(&cmd),
+            extract_jj_edit_revision(&command),
             expected_revision.map(ToString::to_string)
         );
     }
