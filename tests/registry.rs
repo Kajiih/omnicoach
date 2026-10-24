@@ -170,13 +170,13 @@ fn test_code_rules_declare_supported_languages() {
 /// Code rule examples are executed by `rule_test!`, so each declared language gets exactly one.
 #[test]
 fn test_code_rules_document_one_example_per_language() {
+    use omnicoach::rule_declaration::DeclaredExamples;
+
     for rule in CODE_RULES.iter().map(|rule| rule.declaration()) {
-        let example_languages: Vec<_> = rule
-            .doc
-            .examples
-            .iter()
-            .map(|example| example.language)
-            .collect();
+        let DeclaredExamples::Code(examples) = rule.doc.examples else {
+            panic!("Code rule {} must declare code examples", rule.name);
+        };
+        let example_languages: Vec<_> = examples.iter().map(|example| example.language).collect();
         assert_eq!(
             example_languages.len(),
             rule.languages.len(),

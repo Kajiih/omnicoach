@@ -6,8 +6,8 @@ use strum::IntoEnumIterator as _;
 
 use crate::diagnostic::Diagnostic;
 use crate::rule_declaration::{
-    Consensus, DeclaredOptions, EnforcementMode, FilterListDefaults, LanguageDefaults, OptionSpec,
-    Precision,
+    Consensus, DeclaredExamples, DeclaredOptions, EnforcementMode, FilterListDefaults,
+    LanguageDefaults, OptionSpec, Precision,
 };
 use crate::rule_selection::{
     ConfigError, ConfigOverrides, Facet, RegisteredRule, RuleStatus, UnknownLabel, find_rule,
@@ -207,24 +207,7 @@ fn render_rule(rule: &RegisteredRule, status_result: &Result<RuleStatus, ConfigE
             String::new(),
         ]);
     }
-    if !doc.examples.is_empty() {
-        lines.extend(["## Example".to_owned(), String::new()]);
-        for example in doc.examples {
-            let fence = format!("```{}", example.language.as_str());
-            lines.extend([
-                fence.clone(),
-                example.flagged.trim_end().to_owned(),
-                "```".to_owned(),
-                String::new(),
-                "Use instead:".to_owned(),
-                String::new(),
-                fence,
-                example.fixed.trim_end().to_owned(),
-                "```".to_owned(),
-                String::new(),
-            ]);
-        }
-    }
+    lines.extend(example_lines(doc.examples));
     lines.extend(["## Message".to_owned(), String::new()]);
     for (label, text) in [
         ("Summary", template.summary),
@@ -279,6 +262,39 @@ fn render_rule(rule: &RegisteredRule, status_result: &Result<RuleStatus, ConfigE
             .map(|(facet, tags)| format!("- {}: {tags}", facet.label())),
     );
     lines.join("\n") + "\n"
+}
+
+fn example_lines(examples: DeclaredExamples) -> Vec<String> {
+    if examples.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec!["## Example".to_owned(), String::new()];
+    let example_blocks: Vec<(&str, &str, &str)> = match examples {
+        DeclaredExamples::Code(items) => items
+            .iter()
+            .map(|example| (example.language.as_str(), example.flagged, example.fixed))
+            .collect(),
+        DeclaredExamples::Command(items) => items
+            .iter()
+            .map(|example| ("sh", example.flagged, example.fixed))
+            .collect(),
+    };
+    for (fence_lang, flagged, fixed) in example_blocks {
+        let fence = format!("```{fence_lang}");
+        lines.extend([
+            fence.clone(),
+            flagged.trim_end().to_owned(),
+            "```".to_owned(),
+            String::new(),
+            "Use instead:".to_owned(),
+            String::new(),
+            fence,
+            fixed.trim_end().to_owned(),
+            "```".to_owned(),
+            String::new(),
+        ]);
+    }
+    lines
 }
 
 /// One bullet per accepted key: its type, default and meaning, as declared by the rule.
@@ -387,7 +403,7 @@ mod tests {
     use crate::rule_declaration::{Reference, RuleDoc};
 
     /// The style problems of one doc.
-    fn doc_problems(doc: &RuleDoc) -> Vec<String> {
+    fn doc_problems<Examples>(doc: &RuleDoc<Examples>) -> Vec<String> {
         let mut problems = Vec::new();
         let summary = doc.summary;
         if summary.contains('\n')

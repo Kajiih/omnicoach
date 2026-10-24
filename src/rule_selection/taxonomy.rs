@@ -12,8 +12,8 @@ use crate::code_lint::suppression::SUPPRESSION_AUDITS;
 use crate::command_lint::rules::COMMAND_RULES;
 use crate::diagnostic::{Language, RuleName, ViolationTemplate};
 use crate::rule_declaration::{
-    Classification, Consensus, DeclaredOptions, DeclaredRule, ImpactedQuality, Precision, RuleDoc,
-    Topic, closest_match,
+    Classification, Consensus, DeclaredExamples, DeclaredOptions, DeclaredRule, ImpactedQuality,
+    Precision, RuleDoc, Topic, closest_match,
 };
 
 /// A value of a derived facet, computed from the rule and never declared.
@@ -155,7 +155,7 @@ pub struct RegisteredRule {
     /// The rule's name.
     pub name: RuleName,
     /// The rule's user-facing doc.
-    pub doc: RuleDoc,
+    pub doc: RuleDoc<DeclaredExamples>,
     /// The rule's raw violation template.
     pub template: &'static ViolationTemplate,
     /// What the rule accepts under `[rules.<name>]`.
@@ -268,7 +268,7 @@ impl RegisteredRule {
         static TEMPLATE: ViolationTemplate = ViolationTemplate::from_static("", "", "");
         Self {
             name: RuleName(name),
-            doc: RuleDoc::TODO,
+            doc: RuleDoc::TODO.map_examples(DeclaredExamples::Code(&[])),
             template: &TEMPLATE,
             options: crate::rule_declaration::RuleOptions::none().declared(),
             languages: &[],

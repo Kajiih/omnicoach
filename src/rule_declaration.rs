@@ -11,7 +11,7 @@ mod documentation;
 mod options;
 mod taxonomy;
 
-pub use self::documentation::{Example, Reference, RuleDoc};
+pub use self::documentation::{CommandExample, DeclaredExamples, Example, Reference, RuleDoc};
 pub use self::options::{
     CountOption, DeclaredOptions, EnforcementMode, FilterListDefaults, LanguageDefaults, ListKind,
     ListOption, OptionProblem, OptionSpec, OptionsDeclaration, RuleOptions, RuleOptionsError,
@@ -71,7 +71,7 @@ fn edit_distance(left: &str, right: &str) -> usize {
 /// `Options` is the type of the declared options (`()` when there are none); it fixes the
 /// type of the values a code rule's check function receives.
 #[derive(Debug, Clone, Copy)]
-pub struct Declaration<Options: OptionsDeclaration = ()> {
+pub struct Declaration<Options: OptionsDeclaration = (), Examples = &'static [Example]> {
     /// The rule's name, e.g. `RuleName("too-many-assertions")`.
     pub name: RuleName,
     /// The single message template of the rule's findings.
@@ -83,20 +83,23 @@ pub struct Declaration<Options: OptionsDeclaration = ()> {
     /// The rule's classification.
     pub classification: Classification,
     /// The rule's user-facing doc.
-    pub doc: RuleDoc,
+    pub doc: RuleDoc<Examples>,
 }
 
-impl<Options: OptionsDeclaration> Declaration<Options> {
-    /// The declaration with its options listed rather than typed.
+impl<Options: OptionsDeclaration, Examples> Declaration<Options, Examples> {
+    /// The declaration with its options and examples listed rather than typed.
     #[must_use]
-    pub fn declared(&self) -> DeclaredRule {
+    pub fn declared(&self) -> DeclaredRule
+    where
+        Examples: Copy + Into<DeclaredExamples>,
+    {
         DeclaredRule {
             name: self.name,
             template: self.template,
             languages: self.languages,
             options: self.options.declared(),
             classification: self.classification,
-            doc: self.doc,
+            doc: self.doc.map_examples(self.doc.examples.into()),
         }
     }
 
@@ -141,7 +144,7 @@ pub struct DeclaredRule {
     /// The rule's classification.
     pub classification: Classification,
     /// The rule's user-facing doc.
-    pub doc: RuleDoc,
+    pub doc: RuleDoc<DeclaredExamples>,
 }
 
 #[cfg(test)]

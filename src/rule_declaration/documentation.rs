@@ -49,6 +49,53 @@ pub struct Example {
     pub fixed: &'static str,
 }
 
+/// A flagged shell command and its replacement for a command rule.
+///
+/// Executed by `command_rule_test!` and rendered by `--explain` under `## Example` with
+/// ```` ```sh ```` code fences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandExample {
+    /// Shell command the rule flags once.
+    pub flagged: &'static str,
+    /// The part of `flagged` the finding spans; not rendered.
+    pub flagged_span: &'static str,
+    /// Replacement shell command that satisfies the rule with zero findings.
+    pub fixed: &'static str,
+}
+
+/// Type-erased example list carried by [`crate::rule_declaration::DeclaredRule`] and
+/// [`crate::rule_selection::RegisteredRule`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclaredExamples {
+    /// Language-tagged source-code examples declared by a code rule or suppression audit.
+    Code(&'static [Example]),
+    /// Shell command examples declared by a command rule.
+    Command(&'static [CommandExample]),
+}
+
+impl DeclaredExamples {
+    /// Returns `true` if no examples are declared.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        match self {
+            Self::Code(examples) => examples.is_empty(),
+            Self::Command(examples) => examples.is_empty(),
+        }
+    }
+}
+
+impl From<&'static [Example]> for DeclaredExamples {
+    fn from(examples: &'static [Example]) -> Self {
+        Self::Code(examples)
+    }
+}
+
+impl From<&'static [CommandExample]> for DeclaredExamples {
+    fn from(examples: &'static [CommandExample]) -> Self {
+        Self::Command(examples)
+    }
+}
+
 /// A rule's user-facing documentation, rendered by `--explain`. A missing section does not
 /// compile (`E0063`).
 ///
@@ -66,7 +113,7 @@ pub struct Example {
 /// wrapped at the source line width, closed on their last line. They are Markdown: a single
 /// line break is a space, and a blank line separates paragraphs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuleDoc {
+pub struct RuleDoc<Examples = &'static [Example]> {
     /// One sentence for rule lists, opening with `Flags` (pattern rules) or `Requires`
     /// (rules whose fix adds something) and ending with a period.
     pub summary: &'static str,
@@ -81,9 +128,9 @@ pub struct RuleDoc {
     pub known_problems: Option<&'static str>,
     /// Links to backing or related documents.
     pub references: &'static [Reference],
-    /// Exactly one [`Example`] per analyzed language (checked by `tests/registry.rs`);
-    /// empty for rules without a code harness.
-    pub examples: &'static [Example],
+    /// Verified examples (one [`Example`] per analyzed language for code rules; one
+    /// [`CommandExample`] for command rules).
+    pub examples: Examples,
 }
 
 impl RuleDoc {
@@ -96,11 +143,33 @@ impl RuleDoc {
         references: &[],
         examples: &[],
     };
+}
 
-    /// Whether this is the [`Self::TODO`] placeholder.
+impl<Examples> RuleDoc<Examples> {
+    /// Whether this is the [`RuleDoc::TODO`] placeholder.
     #[must_use]
     pub fn is_placeholder(&self) -> bool {
-        *self == Self::TODO
+        self.summary == RuleDoc::TODO.summary
+            && self.what_it_does == RuleDoc::TODO.what_it_does
+            && self.why_is_this_bad == RuleDoc::TODO.why_is_this_bad
+            && self.known_problems.is_none()
+            && self.references.is_empty()
+    }
+
+    /// Replaces `self.examples` with `examples`, preserving all prose fields.
+    #[must_use]
+    pub const fn map_examples<Target>(self, examples: Target) -> RuleDoc<Target>
+    where
+        Examples: Copy,
+    {
+        RuleDoc {
+            summary: self.summary,
+            what_it_does: self.what_it_does,
+            why_is_this_bad: self.why_is_this_bad,
+            known_problems: self.known_problems,
+            references: self.references,
+            examples,
+        }
     }
 }
 
