@@ -159,7 +159,7 @@ impl<'a> PythonFunctionSignature<'a> {
         is_data_model_dunder(&self.name)
             || self.decorators.iter().any(|decorator| {
                 decorator.matches_any(OVERRIDE_DECORATOR_PATHS)
-                    || decorator.is_attribute_named(&[SETTER_ATTRIBUTE, "deleter"])
+                    || decorator.is_attribute_named(&[SETTER_ATTRIBUTE, DELETER_ATTRIBUTE])
             })
     }
 
@@ -181,13 +181,17 @@ impl<'a> PythonFunctionSignature<'a> {
 
 pub(super) const SELF_RECEIVER: &str = "self";
 pub(super) const CLS_RECEIVER: &str = "cls";
-pub(super) const OVERLOAD_DECORATOR_PATHS: &[&str] =
+const OVERLOAD_DECORATOR_PATHS: &[&str] =
     &["overload", "typing.overload", "typing_extensions.overload"];
 const INIT_METHOD: &str = "__init__";
 const NEW_METHOD: &str = "__new__";
 const NOT_IMPLEMENTED_ERROR: &str = "NotImplementedError";
 /// The attribute of a property setter decorator (`@<property>.setter`).
 const SETTER_ATTRIBUTE: &str = "setter";
+const DELETER_ATTRIBUTE: &str = "deleter";
+const GETTER_ATTRIBUTE: &str = "getter";
+const PROPERTY_ACCESSOR_ATTRIBUTES: &[&str] =
+    &[GETTER_ATTRIBUTE, SETTER_ATTRIBUTE, DELETER_ATTRIBUTE];
 const PROPERTY_DECORATOR_PATHS: &[&str] = &[
     "property",
     "builtins.property",
@@ -325,6 +329,21 @@ pub(super) fn has_override_decorator(decorators: &[Decorator], file: &ParsedFile
     extract_decorators_from_slice(decorators, file)
         .iter()
         .any(|decorator| decorator.matches_any(OVERRIDE_DECORATOR_PATHS))
+}
+
+/// Returns true if `func_def` carries an `@overload` decorator.
+pub(super) fn is_overload_def(func_def: &StmtFunctionDef, file: &ParsedFile) -> bool {
+    extract_decorators_from_slice(&func_def.decorator_list, file)
+        .iter()
+        .any(|decorator| decorator.matches_any(OVERLOAD_DECORATOR_PATHS))
+}
+
+/// Returns true if `func_def` carries a property accessor decorator (`@<prop>.getter`,
+/// `@<prop>.setter`, or `@<prop>.deleter`).
+pub(super) fn is_property_accessor_def(func_def: &StmtFunctionDef, file: &ParsedFile) -> bool {
+    extract_decorators_from_slice(&func_def.decorator_list, file)
+        .iter()
+        .any(|decorator| decorator.is_attribute_named(PROPERTY_ACCESSOR_ATTRIBUTES))
 }
 
 /// Finds all nested Python function definitions (`def ...` inside another `def ...`) and returns
@@ -651,5 +670,34 @@ mod tests {
         let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
         assert_eq!(sigs[0].has_stub_body, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::overload(
+        indoc::indoc! {r"
+            from typing import overload
+
+            @overload
+            def get(key: int) -> int: ...
+        "},
+        true,
+        false
+    )]
+    #[case::property_setter("@prop.setter\ndef prop(self, value: str) -> None: pass", false, true)]
+    #[case::property_getter("@prop.getter\ndef prop(self) -> str: return ''", false, true)]
+    #[case::property_deleter("@prop.deleter\ndef prop(self) -> None: pass", false, true)]
+    #[case::plain_function("def get(key: int) -> int: return key", false, false)]
+    fn test_is_overload_and_property_accessor_def(
+        #[case] source: &str,
+        #[case] expected_overload: bool,
+        #[case] expected_accessor: bool,
+    ) {
+        let file = ParsedFile::new(source, Language::Python);
+        let parsed = file.py_module().expect("parsed module");
+        let Some(Stmt::FunctionDef(func_def)) = parsed.syntax().body.last() else {
+            panic!("expected FunctionDef");
+        };
+        assert_eq!(is_overload_def(func_def, &file), expected_overload);
+        assert_eq!(is_property_accessor_def(func_def, &file), expected_accessor);
     }
 }

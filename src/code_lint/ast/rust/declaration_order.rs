@@ -324,7 +324,7 @@ fn build_rust_module_scope_item<'a>(
         is_constructor: false,
         kind,
         references,
-        pinned_before: None,
+        evaluated_before: None,
     }
 }
 
@@ -758,7 +758,7 @@ fn collect_rust_impl_methods<'a>(
                 is_constructor,
                 kind: ScopeItemKind::Callable,
                 references: Vec::new(),
-                pinned_before: None,
+                evaluated_before: None,
             },
             function,
         ));

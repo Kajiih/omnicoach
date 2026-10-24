@@ -63,9 +63,9 @@ pub(super) struct ScopeItem<'a> {
     /// Direct references from this declaration to sibling items in [`DeclarationScope::items`],
     /// paired with the [`RelationKind`] where each reference occurs.
     pub(super) references: Vec<(usize, RelationKind)>,
-    /// Smallest index in [`DeclarationScope::items`] before which this item must remain due to
-    /// top-to-bottom runtime evaluation (e.g. Python import-time or class-definition-time uses).
-    pub(super) pinned_before: Option<usize>,
+    /// Earliest sibling index in [`DeclarationScope::items`] before which this item is
+    /// directly referenced when the scope body runs (`None` in Rust).
+    pub(super) evaluated_before: Option<usize>,
 }
 
 impl ScopeItem<'_> {
@@ -473,12 +473,12 @@ fn generate_placements(items: &[ScopeItem<'_>], graph: &ScopeGraph) -> Vec<Place
         }
     }
     for subject in (0..items.len()).filter(|&idx| is_private(idx)) {
-        if let Some(pin) = items[subject].pinned_before {
+        if let Some(bound) = graph.evaluated_before[subject] {
             placements.push(Placement {
                 subject,
-                constraint: Constraint::Above(pin),
+                constraint: Constraint::Above(bound),
                 strength: Strength::Hard,
-                related: pin,
+                related: bound,
                 reason: None,
             });
         }

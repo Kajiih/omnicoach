@@ -88,6 +88,9 @@ pub struct ScopeGraph {
     pub(super) private_recursion_group: Vec<usize>,
     /// Level of each item over `edges`: `0` for leaves, one above the highest group below.
     pub level: Vec<usize>,
+    /// Earliest sibling index before which each item (or a caller that reaches it through
+    /// [`RelationKind::Body`]) is referenced when the scope body runs.
+    pub(super) evaluated_before: Vec<Option<usize>>,
 }
 
 impl ScopeGraph {
@@ -108,6 +111,7 @@ impl ScopeGraph {
         let level = levels(&lowers, &recursion_group);
         let roots = public_roots(items);
         let unit_owners = unit_owners(items, &roots);
+        let evaluated_before = evaluated_before(items);
         Self {
             edges,
             roots,
@@ -115,6 +119,7 @@ impl ScopeGraph {
             recursion_group,
             private_recursion_group,
             level,
+            evaluated_before,
         }
     }
 
@@ -364,4 +369,111 @@ fn unit_owners(items: &[ScopeItem<'_>], roots: &[Vec<usize>]) -> Vec<Vec<usize>>
             units
         })
         .collect()
+}
+
+/// Propagates each item's direct `evaluated_before` bound through [`RelationKind::Body`]
+/// edges: if `u` must be defined before `bound`, any sibling `v < bound` reachable through
+/// callable bodies from `u` must also be defined before `bound`.
+fn evaluated_before(items: &[ScopeItem<'_>]) -> Vec<Option<usize>> {
+    let count = items.len();
+    let mut bounds: Vec<Option<usize>> = items.iter().map(|item| item.evaluated_before).collect();
+    for start in 0..count {
+        let Some(bound) = bounds[start] else {
+            continue;
+        };
+        let mut stack = vec![start];
+        let mut visited = vec![false; count];
+        while let Some(current) = stack.pop() {
+            if std::mem::replace(&mut visited[current], true) {
+                continue;
+            }
+            for callee in items[current].references_in(&[RelationKind::Body]) {
+                if callee < bound {
+                    bounds[callee] = Some(bounds[callee].map_or(bound, |prev| prev.min(bound)));
+                    stack.push(callee);
+                }
+            }
+        }
+    }
+    bounds
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::code_lint::ast::call_clusters::{DeclarationScopeKind, collect_declaration_scopes};
+    use crate::code_lint::ast::tree::ParsedFile;
+    use crate::diagnostic::Language;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_evaluated_before_propagates_body_edges_and_skips_behavior_and_signatures() {
+        let source = indoc::indoc! {r"
+            from __future__ import annotations
+
+            def _cycle_a() -> int:
+                return _cycle_b()
+
+            def _cycle_b() -> int:
+                return _cycle_a() + _shared()
+
+            def _shared() -> int:
+                return 1
+
+            def _param_type() -> int:
+                return 2
+
+            def _method_helper() -> int:
+                return 3
+
+            def _early_caller(x: _param_type) -> None:
+                _shared()
+
+            X = _early_caller(0)
+
+            class _PinnedBase:
+                def method(self) -> int:
+                    return _method_helper()
+
+            class FirstPublic(_PinnedBase):
+                pass
+
+            def _late_caller() -> int:
+                return _cycle_a()
+
+            Y = _late_caller()
+
+            class SecondPublic:
+                pass
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        let scopes = collect_declaration_scopes(&file);
+        let module_scope = scopes
+            .iter()
+            .find(|scope| matches!(scope.kind, DeclarationScopeKind::Module))
+            .expect("module scope");
+        let graph = ScopeGraph::new(&module_scope.items);
+        let bounds: HashMap<&str, Option<usize>> = module_scope
+            .items
+            .iter()
+            .zip(&graph.evaluated_before)
+            .map(|(item, &bound)| (item.name.as_str(), bound))
+            .collect();
+
+        let expected = vec![
+            ("_early_caller", Some(6)),
+            ("_late_caller", Some(9)),
+            ("_cycle_a", Some(9)),
+            ("_cycle_b", Some(9)),
+            ("_shared", Some(6)),
+            ("_param_type", None),
+            ("_PinnedBase", Some(7)),
+            ("_method_helper", None),
+        ];
+        let actual: Vec<(&str, Option<usize>)> = expected
+            .iter()
+            .map(|&(name, _)| (name, bounds.get(name).copied().flatten()))
+            .collect();
+        assert_eq!(actual, expected);
+    }
 }

@@ -1,8 +1,7 @@
 //! Python declaration-order scope builders and field-after-method extraction.
 
 use super::bindings::{collect_local_bound_names, parameters_shadow_name};
-use super::decorators::extract_decorators_from_slice;
-use super::functions::{CLS_RECEIVER, OVERLOAD_DECORATOR_PATHS, SELF_RECEIVER};
+use super::functions::{CLS_RECEIVER, SELF_RECEIVER, is_overload_def, is_property_accessor_def};
 use crate::code_lint::ast::call_clusters::{
     DeclarationScope, DeclarationScopeKind, PlacementAnchor, RelationKind, ScopeItem,
     ScopeItemKind, Visibility, collapse_whitespace, extend_references, extend_unique, push_unique,
@@ -14,7 +13,7 @@ use ruff_python_ast::{Decorator, Expr, Stmt, StmtClassDef, StmtFunctionDef};
 use ruff_text_size::{Ranged as _, TextRange};
 use std::collections::{HashMap, HashSet};
 
-const PYTHON_CONSTRUCTOR_NAMES: &[&str] = &[
+const CONSTRUCTOR_NAMES: &[&str] = &[
     "__prepare__",
     "__init_subclass__",
     "__new__",
@@ -190,7 +189,7 @@ fn build_module_declaration_scopes<'a>(
     future_annotations: bool,
     file: &'a ParsedFile,
 ) -> Vec<DeclarationScope<'a>> {
-    let grouped = group_python_scope_items(module_body, false, file);
+    let grouped = group_scope_items(module_body, false, file);
     if grouped.is_empty() {
         return Vec::new();
     }
@@ -222,27 +221,21 @@ fn build_module_declaration_scopes<'a>(
         let mut items: Vec<ScopeItem<'a>> = segment
             .iter()
             .map(|group| {
-                build_python_module_scope_item(group, &item_by_name, &external_class_callees, file)
+                build_module_scope_item(group, &item_by_name, &external_class_callees, file)
             })
             .collect();
 
         let first_stmt_indices: Vec<usize> =
             segment.iter().map(|item| item.first_stmt_idx).collect();
-        let is_callable: Vec<bool> = segment
-            .iter()
-            .map(|item| matches!(item.item, PythonScopeItem::Callable(_)))
-            .collect();
-        let pinned = compute_python_pinned_before(
+        let evaluated_before = direct_evaluated_before(
             module_body,
             seg_start..seg_end,
             &first_stmt_indices,
             &item_by_name,
-            &items,
-            &is_callable,
             future_annotations,
         );
-        for (item, pin) in items.iter_mut().zip(pinned) {
-            item.pinned_before = pin;
+        for (item, evaluated) in items.iter_mut().zip(evaluated_before) {
+            item.evaluated_before = evaluated;
         }
 
         scopes.push(DeclarationScope {
@@ -260,45 +253,7 @@ fn build_class_declaration_scope<'a>(
     future_annotations: bool,
     file: &'a ParsedFile,
 ) -> Option<DeclarationScope<'a>> {
-    struct ClassMethodCallVisitor<'map, 'local> {
-        class_name: &'map str,
-        method_by_name: &'map HashMap<String, usize>,
-        local_names: &'local HashSet<String>,
-        has_self_param: bool,
-        has_cls_param: bool,
-        callees: &'local mut Vec<usize>,
-    }
-
-    impl SourceOrderVisitor<'_> for ClassMethodCallVisitor<'_, '_> {
-        fn visit_stmt(&mut self, statement: &Stmt) {
-            if matches!(statement, Stmt::ClassDef(_)) {
-                return;
-            }
-            walk_stmt(self, statement);
-        }
-
-        fn visit_expr(&mut self, expr: &Expr) {
-            if let Expr::Attribute(attr) = expr
-                && attr.ctx.is_load()
-                && let Expr::Name(recv) = attr.value.as_ref()
-            {
-                let recv_name = recv.id.as_str();
-                let is_valid_receiver = (recv_name == SELF_RECEIVER
-                    && (self.has_self_param || !self.local_names.contains(SELF_RECEIVER)))
-                    || (recv_name == CLS_RECEIVER
-                        && (self.has_cls_param || !self.local_names.contains(CLS_RECEIVER)))
-                    || (recv_name == self.class_name && !self.local_names.contains(recv_name));
-                if is_valid_receiver
-                    && let Some(&idx) = self.method_by_name.get(attr.attr.id.as_str())
-                {
-                    push_unique(self.callees, idx);
-                }
-            }
-            walk_expr(self, expr);
-        }
-    }
-
-    let grouped = group_python_scope_items(&class_def.body, true, file);
+    let grouped = group_scope_items(&class_def.body, true, file);
     if grouped.is_empty() {
         return None;
     }
@@ -314,7 +269,7 @@ fn build_class_declaration_scope<'a>(
         .into_iter()
         .map(|group| {
             let mut body_callees = Vec::new();
-            if let PythonScopeItem::Callable(defs) = &group.item {
+            if let ScopeItemAst::Callable(defs) = &group.item {
                 for def in defs {
                     let local_names = collect_local_bound_names(def, file);
                     ClassMethodCallVisitor {
@@ -340,23 +295,20 @@ fn build_class_declaration_scope<'a>(
                 is_constructor: group.is_constructor,
                 kind: ScopeItemKind::Callable,
                 references,
-                pinned_before: None,
+                evaluated_before: None,
             }
         })
         .collect();
 
-    let is_callable = vec![true; items.len()];
-    let pinned = compute_python_pinned_before(
+    let evaluated_before = direct_evaluated_before(
         &class_def.body,
         0..class_def.body.len(),
         &first_stmt_indices,
         &method_by_name,
-        &items,
-        &is_callable,
         future_annotations,
     );
-    for (item, pin) in items.iter_mut().zip(pinned) {
-        item.pinned_before = pin;
+    for (item, evaluated) in items.iter_mut().zip(evaluated_before) {
+        item.evaluated_before = evaluated;
     }
 
     let kind = DeclarationScopeKind::Class {
@@ -365,7 +317,44 @@ fn build_class_declaration_scope<'a>(
     Some(DeclarationScope { kind, items })
 }
 
-struct GroupedPythonScopeItem<'a, 'ast> {
+struct ClassMethodCallVisitor<'map, 'local> {
+    class_name: &'map str,
+    method_by_name: &'map HashMap<String, usize>,
+    local_names: &'local HashSet<String>,
+    has_self_param: bool,
+    has_cls_param: bool,
+    callees: &'local mut Vec<usize>,
+}
+
+impl SourceOrderVisitor<'_> for ClassMethodCallVisitor<'_, '_> {
+    fn visit_stmt(&mut self, statement: &Stmt) {
+        if matches!(statement, Stmt::ClassDef(_)) {
+            return;
+        }
+        walk_stmt(self, statement);
+    }
+
+    fn visit_expr(&mut self, expr: &Expr) {
+        if let Expr::Attribute(attr) = expr
+            && attr.ctx.is_load()
+            && let Expr::Name(recv) = attr.value.as_ref()
+        {
+            let recv_name = recv.id.as_str();
+            let is_valid_receiver = (recv_name == SELF_RECEIVER
+                && (self.has_self_param || !self.local_names.contains(SELF_RECEIVER)))
+                || (recv_name == CLS_RECEIVER
+                    && (self.has_cls_param || !self.local_names.contains(CLS_RECEIVER)))
+                || (recv_name == self.class_name && !self.local_names.contains(recv_name));
+            if is_valid_receiver && let Some(&idx) = self.method_by_name.get(attr.attr.id.as_str())
+            {
+                push_unique(self.callees, idx);
+            }
+        }
+        walk_expr(self, expr);
+    }
+}
+
+struct GroupedScopeItem<'a, 'ast> {
     name_node: AstNode<'a>,
     name: String,
     start_line: usize,
@@ -374,7 +363,7 @@ struct GroupedPythonScopeItem<'a, 'ast> {
     visibility: Visibility,
     is_constructor: bool,
     first_stmt_idx: usize,
-    item: PythonScopeItem<'ast>,
+    item: ScopeItemAst<'ast>,
 }
 
 /// Collects sibling module item indices referenced inside each class that is not itself a scope
@@ -392,7 +381,7 @@ fn collect_external_class_callees<'body>(
             && !item_by_name.contains_key(class_def.name.id.as_str())
         {
             let mut callees = Vec::new();
-            collect_python_class_module_refs(
+            collect_class_module_refs(
                 class_def,
                 item_by_name,
                 &empty_classes,
@@ -410,8 +399,8 @@ fn collect_external_class_callees<'body>(
 
 /// Builds the [`ScopeItem`] for `group` from the sibling references in its signatures, bodies,
 /// or class definition.
-fn build_python_module_scope_item<'a>(
-    group: &GroupedPythonScopeItem<'a, '_>,
+fn build_module_scope_item<'a>(
+    group: &GroupedScopeItem<'a, '_>,
     item_by_name: &HashMap<String, usize>,
     external_class_callees: &HashMap<&str, Vec<usize>>,
     file: &ParsedFile,
@@ -419,7 +408,7 @@ fn build_python_module_scope_item<'a>(
     let empty_locals = HashSet::new();
     let mut references = Vec::new();
     let kind = match &group.item {
-        PythonScopeItem::Callable(defs) => {
+        ScopeItemAst::Callable(defs) => {
             let mut param_callees = Vec::new();
             let mut return_callees = Vec::new();
             let mut body_callees = Vec::new();
@@ -457,17 +446,17 @@ fn build_python_module_scope_item<'a>(
             extend_references(&mut references, body_callees, RelationKind::Body);
             ScopeItemKind::Callable
         }
-        PythonScopeItem::Type(class_def) => {
+        ScopeItemAst::Type(class_def) => {
             let mut definition_callees = Vec::new();
             let mut all_callees = Vec::new();
-            collect_python_class_definition_refs(
+            collect_class_definition_refs(
                 class_def,
                 item_by_name,
                 external_class_callees,
                 &empty_locals,
                 &mut definition_callees,
             );
-            collect_python_class_module_refs(
+            collect_class_module_refs(
                 class_def,
                 item_by_name,
                 external_class_callees,
@@ -494,11 +483,11 @@ fn build_python_module_scope_item<'a>(
         is_constructor: group.is_constructor,
         kind,
         references,
-        pinned_before: None,
+        evaluated_before: None,
     }
 }
 
-fn collect_python_class_module_refs<'map>(
+fn collect_class_module_refs<'map>(
     class_def: &StmtClassDef,
     item_by_name: &'map HashMap<String, usize>,
     external_class_callees: &'map HashMap<&'map str, Vec<usize>>,
@@ -506,7 +495,7 @@ fn collect_python_class_module_refs<'map>(
     file: &ParsedFile,
     callees: &mut Vec<usize>,
 ) {
-    collect_python_class_definition_refs(
+    collect_class_definition_refs(
         class_def,
         item_by_name,
         external_class_callees,
@@ -542,7 +531,7 @@ fn collect_python_class_module_refs<'map>(
 
 /// Collects sibling module item references in the class header (decorators, bases) and non-method
 /// class-body statements (such as field annotations).
-fn collect_python_class_definition_refs<'map>(
+fn collect_class_definition_refs<'map>(
     class_def: &StmtClassDef,
     item_by_name: &'map HashMap<String, usize>,
     external_class_callees: &'map HashMap<&'map str, Vec<usize>>,
@@ -600,20 +589,18 @@ impl SourceOrderVisitor<'_> for ModuleRefVisitor<'_, '_> {
     }
 }
 
-/// Computes `pinned_before` for each scope item in `items` by walking top-to-bottom runtime
-/// evaluations in `scope_body[stmt_range]` (outside `Stmt::FunctionDef` bodies) and propagating
-/// constraints through callable call edges.
-fn compute_python_pinned_before(
+/// Collects the direct `evaluated_before` bound for each scope item by walking definition-time
+/// evaluations in `scope_body[stmt_range]` (outside `Stmt::FunctionDef` bodies and postponed
+/// type annotations).
+fn direct_evaluated_before(
     scope_body: &[Stmt],
     stmt_range: std::ops::Range<usize>,
     first_stmt_indices: &[usize],
     item_by_name: &HashMap<String, usize>,
-    items: &[ScopeItem<'_>],
-    is_callable: &[bool],
     future_annotations: bool,
 ) -> Vec<Option<usize>> {
-    let count = items.len();
-    let mut pinned: Vec<Option<usize>> = vec![None; count];
+    let count = first_stmt_indices.len();
+    let mut bounds: Vec<Option<usize>> = vec![None; count];
 
     for (stmt_idx, stmt) in scope_body
         .iter()
@@ -630,60 +617,33 @@ fn compute_python_pinned_before(
         if bound_idx == 0 {
             continue;
         }
-        let mut imm_refs = Vec::new();
-        let mut visitor = ImmediateRefVisitor {
+        let mut refs = Vec::new();
+        let mut visitor = DefinitionTimeRefVisitor {
             item_by_name,
             future_annotations,
-            refs: &mut imm_refs,
+            refs: &mut refs,
         };
         visitor.visit_stmt(stmt);
-        for target_idx in imm_refs {
+        for target_idx in refs {
             if target_idx < bound_idx {
-                pinned[target_idx] =
-                    Some(pinned[target_idx].map_or(bound_idx, |prev| prev.min(bound_idx)));
+                bounds[target_idx] =
+                    Some(bounds[target_idx].map_or(bound_idx, |prev| prev.min(bound_idx)));
             }
         }
     }
 
-    // Propagate runtime pins through callable callees: if a function `u` is evaluated before
-    // `pin`, any sibling item `v < pin` reachable from `u` must also be defined before `pin`.
-    for start in 0..count {
-        let Some(pin) = pinned[start] else {
-            continue;
-        };
-        if !is_callable[start] {
-            continue;
-        }
-        let mut stack = vec![start];
-        let mut visited = vec![false; count];
-        while let Some(cur) = stack.pop() {
-            if visited[cur] {
-                continue;
-            }
-            visited[cur] = true;
-            for &(callee, _) in &items[cur].references {
-                if callee < pin {
-                    pinned[callee] = Some(pinned[callee].map_or(pin, |prev| prev.min(pin)));
-                    if is_callable[callee] {
-                        stack.push(callee);
-                    }
-                }
-            }
-        }
-    }
-
-    pinned
+    bounds
 }
 
-/// Collects the scope items a statement references when the scope body is evaluated, skipping
-/// function bodies and postponed annotations.
-struct ImmediateRefVisitor<'map, 'out> {
+/// Collects the scope items a statement references when the scope body is evaluated at
+/// definition time, skipping function bodies and postponed annotations.
+struct DefinitionTimeRefVisitor<'map, 'out> {
     item_by_name: &'map HashMap<String, usize>,
     future_annotations: bool,
     refs: &'out mut Vec<usize>,
 }
 
-impl SourceOrderVisitor<'_> for ImmediateRefVisitor<'_, '_> {
+impl SourceOrderVisitor<'_> for DefinitionTimeRefVisitor<'_, '_> {
     fn visit_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::FunctionDef(func_def) => {
@@ -757,11 +717,11 @@ impl SourceOrderVisitor<'_> for ImmediateRefVisitor<'_, '_> {
 
 /// Collects direct functions and classes in `scope_body` in source order, grouping `@overload`
 /// signatures and `@<prop>.setter` / `@<prop>.deleter` accessors with their first definition.
-fn group_python_scope_items<'a, 'ast>(
+fn group_scope_items<'a, 'ast>(
     scope_body: &'ast [Stmt],
     is_class_scope: bool,
     file: &'a ParsedFile,
-) -> Vec<GroupedPythonScopeItem<'a, 'ast>> {
+) -> Vec<GroupedScopeItem<'a, 'ast>> {
     struct SeenCallable {
         index: usize,
         last_stmt_idx: usize,
@@ -769,20 +729,15 @@ fn group_python_scope_items<'a, 'ast>(
         has_non_overload: bool,
     }
 
-    let mut items: Vec<GroupedPythonScopeItem<'a, 'ast>> = Vec::new();
+    let mut items: Vec<GroupedScopeItem<'a, 'ast>> = Vec::new();
     let mut seen_by_name: HashMap<String, SeenCallable> = HashMap::new();
 
     for (stmt_idx, stmt) in scope_body.iter().enumerate() {
         match stmt {
             Stmt::FunctionDef(function_def) => {
                 let name = function_def.name.id.to_string();
-                let decorators = extract_decorators_from_slice(&function_def.decorator_list, file);
-                let is_overload = decorators
-                    .iter()
-                    .any(|decorator| decorator.matches_any(OVERLOAD_DECORATOR_PATHS));
-                let is_property_accessor = decorators.iter().any(|decorator| {
-                    decorator.is_attribute_named(&["getter", "setter", "deleter"])
-                });
+                let is_overload = is_overload_def(function_def, file);
+                let is_property_accessor = is_property_accessor_def(function_def, file);
 
                 if let Some(seen) = seen_by_name.get_mut(&name) {
                     let continues_overload =
@@ -796,7 +751,7 @@ fn group_python_scope_items<'a, 'ast>(
                                 AstNode::from_span(file, span_from_ruff_range(function_def.range))
                                     .end_line();
                         }
-                        if let PythonScopeItem::Callable(defs) = &mut items[seen.index].item {
+                        if let ScopeItemAst::Callable(defs) = &mut items[seen.index].item {
                             defs.push(function_def);
                             continue;
                         }
@@ -813,11 +768,10 @@ fn group_python_scope_items<'a, 'ast>(
                         has_non_overload: !is_overload,
                     },
                 );
-                let visibility = python_visibility(&name);
-                let is_constructor =
-                    is_class_scope && PYTHON_CONSTRUCTOR_NAMES.contains(&name.as_str());
+                let visibility = visibility_of(&name);
+                let is_constructor = is_class_scope && CONSTRUCTOR_NAMES.contains(&name.as_str());
                 let def_node = AstNode::from_span(file, span_from_ruff_range(function_def.range));
-                items.push(GroupedPythonScopeItem {
+                items.push(GroupedScopeItem {
                     name_node: AstNode::from_span(
                         file,
                         span_from_ruff_range(function_def.name.range),
@@ -825,28 +779,28 @@ fn group_python_scope_items<'a, 'ast>(
                     name,
                     start_line: def_node.start_line(),
                     end_line: def_node.end_line(),
-                    signature: python_function_signature(function_def, &file.source),
+                    signature: function_signature_text(function_def, &file.source),
                     visibility,
                     is_constructor,
                     first_stmt_idx: stmt_idx,
-                    item: PythonScopeItem::Callable(vec![function_def]),
+                    item: ScopeItemAst::Callable(vec![function_def]),
                 });
             }
             Stmt::ClassDef(class_def) if !is_class_scope => {
                 let name = class_def.name.id.to_string();
                 seen_by_name.remove(&name);
-                let visibility = python_visibility(&name);
+                let visibility = visibility_of(&name);
                 let class_node = AstNode::from_span(file, span_from_ruff_range(class_def.range));
-                items.push(GroupedPythonScopeItem {
+                items.push(GroupedScopeItem {
                     name_node: AstNode::from_span(file, span_from_ruff_range(class_def.name.range)),
                     name,
                     start_line: class_node.start_line(),
                     end_line: class_node.end_line(),
-                    signature: python_class_signature(class_def, &file.source),
+                    signature: class_signature_text(class_def, &file.source),
                     visibility,
                     is_constructor: false,
                     first_stmt_idx: stmt_idx,
-                    item: PythonScopeItem::Type(class_def),
+                    item: ScopeItemAst::Type(class_def),
                 });
             }
             _ => {}
@@ -856,7 +810,7 @@ fn group_python_scope_items<'a, 'ast>(
     items
 }
 
-enum PythonScopeItem<'ast> {
+enum ScopeItemAst<'ast> {
     Callable(Vec<&'ast StmtFunctionDef>),
     Type(&'ast StmtClassDef),
 }
@@ -864,7 +818,7 @@ enum PythonScopeItem<'ast> {
 /// Classifies the visibility tier of a Python declaration identifier: public or `__dunder__`
 /// names are `Public`; single-underscore (`_name`) and name-mangled (`__name`) names are
 /// `Private`.
-fn python_visibility(name: &str) -> Visibility {
+fn visibility_of(name: &str) -> Visibility {
     let is_dunder = name.starts_with("__") && name.ends_with("__") && name.len() > 4;
     if is_dunder || !name.starts_with('_') {
         Visibility::Public
@@ -900,7 +854,7 @@ fn is_dunder_main_literal(expr: &Expr) -> bool {
 
 /// Renders the compact signature of a `def`: its header without the trailing colon, prefixed by a
 /// `@classmethod`, `@staticmethod`, or `@property` decorator.
-fn python_function_signature(function_def: &StmtFunctionDef, source: &str) -> String {
+fn function_signature_text(function_def: &StmtFunctionDef, source: &str) -> String {
     let decorators: String = function_def
         .decorator_list
         .iter()
@@ -910,7 +864,7 @@ fn python_function_signature(function_def: &StmtFunctionDef, source: &str) -> St
                 .then(|| format!("@{text} "))
         })
         .collect();
-    let header = python_header(
+    let header = header_text(
         function_def.range(),
         &function_def.decorator_list,
         &function_def.body,
@@ -921,14 +875,14 @@ fn python_function_signature(function_def: &StmtFunctionDef, source: &str) -> St
 
 /// Renders the compact signature of a `class`: its header followed by its public annotated or
 /// constructor-assigned attributes.
-fn python_class_signature(class_def: &StmtClassDef, source: &str) -> String {
-    let header = python_header(
+fn class_signature_text(class_def: &StmtClassDef, source: &str) -> String {
+    let header = header_text(
         class_def.range(),
         &class_def.decorator_list,
         &class_def.body,
         source,
     );
-    let attributes = python_public_attributes(&class_def.body, source);
+    let attributes = public_attributes(&class_def.body, source);
     if attributes.is_empty() {
         header
     } else {
@@ -938,12 +892,7 @@ fn python_class_signature(class_def: &StmtClassDef, source: &str) -> String {
 
 /// The header of a `def` or `class` spanning `range`: the text between its decorators and its
 /// body, joined into one line without comments or the trailing colon.
-fn python_header(
-    range: TextRange,
-    decorators: &[Decorator],
-    body: &[Stmt],
-    source: &str,
-) -> String {
+fn header_text(range: TextRange, decorators: &[Decorator], body: &[Stmt], source: &str) -> String {
     let start = decorators
         .last()
         .map_or_else(|| range.start(), |decorator| decorator.range().end());
@@ -960,7 +909,7 @@ fn python_header(
 
 /// Public class attributes: annotated class-body names and `self.` / `cls.` attributes assigned
 /// in `__init__` or `__new__`, in first-seen order.
-fn python_public_attributes(body: &[Stmt], source: &str) -> Vec<String> {
+fn public_attributes(body: &[Stmt], source: &str) -> Vec<String> {
     let mut attributes = Vec::new();
     let mut seen = HashSet::new();
     for statement in body {
