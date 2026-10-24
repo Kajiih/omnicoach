@@ -108,7 +108,8 @@ fn run_hook<E: std::fmt::Display>(handle: impl FnOnce(&str) -> Result<String, E>
         }
     };
     match handle(&input) {
-        Ok(output) => println!("{output}"),
+        Ok(output) if !output.is_empty() => println!("{output}"),
+        Ok(_) => {}
         Err(error) => eprintln!("[omnicoach hook] ignoring invalid hook input: {error}"),
     }
 }

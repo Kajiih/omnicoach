@@ -601,7 +601,7 @@ fn test_hook_pre_tool_use_allows_safe_command_and_denies_described_commit_edit()
     );
 
     assert!(describe_output.status.success());
-    assert_eq!(safe_stdout.trim(), r#"{"decision":"allow"}"#);
+    assert_eq!(safe_stdout.trim(), "");
     assert!(
         edit_stdout.contains(r#"{"decision":"deny","reason":"#),
         "{edit_stdout}"
@@ -636,7 +636,7 @@ fn test_hook_queues_code_lint_warning_and_drains_on_pre_invocation() {
     let first_invoke_stdout = run_pre_invocation_hook(temp_dir.path(), &artifact_dir);
     let second_invoke_stdout = run_pre_invocation_hook(temp_dir.path(), &artifact_dir);
 
-    assert_eq!(write_stdout.trim(), r#"{"decision":"allow"}"#);
+    assert_eq!(write_stdout.trim(), "");
     assert!(
         first_invoke_stdout.contains("injectSteps"),
         "{first_invoke_stdout}"
@@ -645,7 +645,7 @@ fn test_hook_queues_code_lint_warning_and_drains_on_pre_invocation() {
         first_invoke_stdout.contains("abbreviated-name"),
         "{first_invoke_stdout}"
     );
-    assert_eq!(second_invoke_stdout.trim(), "{}");
+    assert_eq!(second_invoke_stdout.trim(), "");
 }
 
 #[test]

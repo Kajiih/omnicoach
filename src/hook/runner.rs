@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::event::{PreToolDecision, PreToolUseEvent, ToolCallPayload};
+use super::event::{FileEdit, PreToolDecision, PreToolUseEvent, ToolCallPayload};
 use super::virtual_edit::apply_virtual_edit;
 use crate::code_lint::runner::lint_file;
 use crate::command_lint::runner::run_command_lint_with_client;
@@ -27,7 +27,7 @@ pub(super) struct ToolCallOutcome {
 
 /// Evaluates a tool call against the repository on disk.
 pub(super) fn evaluate_pre_tool_use(event: &PreToolUseEvent) -> ToolCallOutcome {
-    evaluate_pre_tool_use_with(event, &|dir| Box::new(JjCliClient::in_dir(dir)))
+    evaluate_pre_tool_use_with(event, &|directory| Box::new(JjCliClient::in_dir(directory)))
 }
 
 fn evaluate_pre_tool_use_with(
@@ -44,12 +44,12 @@ fn evaluate_pre_tool_use_with(
             ),
             warnings: Vec::new(),
         },
-        ToolCallPayload::WriteFile { .. } | ToolCallPayload::EditFile { .. } => ToolCallOutcome {
-            decision: PreToolDecision::Allow,
-            warnings: lint_proposed_edit(event),
+        ToolCallPayload::FileEdit { path, edit } => ToolCallOutcome {
+            decision: PreToolDecision::NoObjection,
+            warnings: lint_proposed_edit(event, path, edit),
         },
-        ToolCallPayload::Other { .. } => ToolCallOutcome {
-            decision: PreToolDecision::Allow,
+        ToolCallPayload::Other => ToolCallOutcome {
+            decision: PreToolDecision::NoObjection,
             warnings: Vec::new(),
         },
     }
@@ -67,7 +67,7 @@ fn check_command(
 
     let diagnostics = run_command_lint_with_client(command_line, &config, client.as_ref());
     if diagnostics.is_empty() {
-        PreToolDecision::Allow
+        PreToolDecision::NoObjection
     } else {
         let reasons: Vec<String> = diagnostics
             .iter()
@@ -104,11 +104,11 @@ fn resolve_command_working_directory(cwd: Option<&Path>, workspace_paths: &[Path
     )
 }
 
-fn lint_proposed_edit(event: &PreToolUseEvent) -> Vec<String> {
-    let Some(raw_target_path) = event.payload.target_file_path() else {
-        return Vec::new();
-    };
-
+fn lint_proposed_edit(
+    event: &PreToolUseEvent,
+    raw_target_path: &Path,
+    edit: &FileEdit,
+) -> Vec<String> {
     let target_file_path = resolve_target_file_path(raw_target_path, &event.workspace_paths);
 
     let is_agent_owned_file = event
@@ -122,7 +122,7 @@ fn lint_proposed_edit(event: &PreToolUseEvent) -> Vec<String> {
     }
 
     let original_content = std::fs::read_to_string(&target_file_path).ok();
-    let Ok(virtual_file) = apply_virtual_edit(original_content.as_deref(), &event.payload) else {
+    let Ok(virtual_file) = apply_virtual_edit(original_content.as_deref(), edit) else {
         return Vec::new();
     };
 
@@ -166,11 +166,11 @@ fn resolve_lint_root(target_file_path: &Path, workspace_paths: &[PathBuf]) -> Pa
         return matching_workspace.clone();
     }
 
-    let parent_dir = target_file_path
+    let parent_directory = target_file_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    discover_project_root(parent_dir).unwrap_or_else(|| parent_dir.to_path_buf())
+    discover_project_root(parent_directory).unwrap_or_else(|| parent_directory.to_path_buf())
 }
 
 fn load_hook_config(directory: &Path) -> Config {
@@ -227,7 +227,7 @@ mod tests {
                 conflict: false,
             })
         });
-        assert_eq!(outcome.decision, PreToolDecision::Allow);
+        assert_eq!(outcome.decision, PreToolDecision::NoObjection);
     }
 
     #[test]
@@ -254,10 +254,9 @@ mod tests {
         let event = PreToolUseEvent {
             workspace_paths: Vec::new(),
             agent_owned_dir: None,
-            payload: ToolCallPayload::WriteFile {
+            payload: ToolCallPayload::FileEdit {
                 path: PathBuf::from("src/test.rs"),
-                content: "fn test() {}\n".to_owned(),
-                append: false,
+                edit: FileEdit::Overwrite("fn test() {}\n".to_owned()),
             },
         };
         let outcome = evaluate_pre_tool_use_with(&event, &|_| {
@@ -266,6 +265,6 @@ mod tests {
                 conflict: false,
             })
         });
-        assert_eq!(outcome.decision, PreToolDecision::Allow);
+        assert_eq!(outcome.decision, PreToolDecision::NoObjection);
     }
 }

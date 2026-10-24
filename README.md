@@ -56,7 +56,7 @@ Wire into `~/.gemini/config/hooks.json`:
   "omnicoach": {
     "PreToolUse": [
       {
-        "matcher": "run_command|write_file|edit_file",
+        "matcher": "run_command|write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content",
         "hooks": [
           {
             "type": "command",

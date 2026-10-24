@@ -4,11 +4,12 @@
 //! the model. Code lint warnings on a file edit are therefore queued in the conversation's
 //! artifact directory and injected as an ephemeral message on the next `PreInvocation`.
 
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::event::{PreToolDecision, PreToolUseEvent, ToolCallPayload};
+use super::event::{FileEdit, PreToolDecision, PreToolUseEvent, TextReplacement, ToolCallPayload};
 use super::runner::evaluate_pre_tool_use;
 use super::warning_queue::WarningQueue;
 
@@ -106,31 +107,26 @@ fn artifact_warning_queue(artifact_directory_path: &Path) -> WarningQueue {
 fn serialize_pre_tool_decision(
     decision: &PreToolDecision,
 ) -> Result<String, AntigravityProtocolError> {
-    let wire = match decision {
-        PreToolDecision::Allow => WirePreToolResult {
-            decision: "allow",
-            reason: None,
-        },
-        PreToolDecision::Deny { reason } => WirePreToolResult {
+    match decision {
+        PreToolDecision::NoObjection => Ok(String::new()),
+        PreToolDecision::Deny { reason } => Ok(serde_json::to_string(&WirePreToolResult {
             decision: "deny",
-            reason: Some(reason.clone()),
-        },
-    };
-    Ok(serde_json::to_string(&wire)?)
+            reason,
+        })?),
+    }
 }
 
 fn serialize_pre_invocation(warnings: &[String]) -> Result<String, AntigravityProtocolError> {
-    let inject_steps = if warnings.is_empty() {
-        Vec::new()
-    } else {
-        let warnings = warnings.join("\n\n");
-        vec![WireInjectStep {
-            ephemeral_message: indoc::formatdoc! {"
-                [omnicoach] The previous file modification introduced code lint warnings on modified lines. Please review and fix them if appropriate:
+    if warnings.is_empty() {
+        return Ok(String::new());
+    }
+    let warnings = warnings.join("\n\n");
+    let inject_steps = vec![WireInjectStep {
+        ephemeral_message: indoc::formatdoc! {"
+            [omnicoach] Proposed file modification(s) introduced code lint warnings on modified lines. Please review and fix them if appropriate:
 
-                {warnings}"},
-        }]
-    };
+            {warnings}"},
+    }];
     Ok(serde_json::to_string(&WirePreInvocationResult {
         inject_steps,
     })?)
@@ -163,45 +159,160 @@ struct RawPreInvocation {
 
 fn parse_tool_payload(tool_call: Option<RawToolCall>) -> ToolCallPayload {
     let Some(call) = tool_call else {
-        return ToolCallPayload::Other {
-            tool_name: String::new(),
-        };
+        return ToolCallPayload::Other;
     };
 
     match call.name.as_str() {
-        "run_command" => serde_json::from_value::<RunCommandArgs>(call.args).map_or_else(
-            |_| ToolCallPayload::Other {
-                tool_name: call.name,
-            },
-            |args| ToolCallPayload::RunCommand {
-                command_line: args.command_line,
-                cwd: non_empty_trimmed(args.cwd).map(PathBuf::from),
-            },
-        ),
-        "write_file" => serde_json::from_value::<WriteFileArgs>(call.args).map_or_else(
-            |_| ToolCallPayload::Other {
-                tool_name: call.name,
-            },
-            |args| ToolCallPayload::WriteFile {
-                path: args.path,
-                content: args.content,
-                append: args.append,
-            },
-        ),
-        "edit_file" => serde_json::from_value::<EditFileArgs>(call.args).map_or_else(
-            |_| ToolCallPayload::Other {
-                tool_name: call.name,
-            },
-            |args| ToolCallPayload::EditFile {
-                path: args.path,
-                target: args.target,
-                replacement: args.replacement,
-            },
-        ),
-        _ => ToolCallPayload::Other {
-            tool_name: call.name,
+        "run_command" => parse_run_command_args(&call.args, &call.name),
+        "write_file" => parse_write_file_args(&call.args, &call.name),
+        "write_to_file" => parse_write_to_file_args(&call.args, &call.name),
+        "edit_file" => parse_edit_file_args(&call.args, &call.name),
+        "replace_file_content" | "multi_replace_file_content" => {
+            parse_replace_content_args(&call.args, &call.name)
+        }
+        _ => ToolCallPayload::Other,
+    }
+}
+
+fn parse_run_command_args(args: &serde_json::Value, tool_name: &str) -> ToolCallPayload {
+    let Some(parsed) = deserialize_tool_args::<RunCommandArgs>(args, tool_name) else {
+        return ToolCallPayload::Other;
+    };
+    ToolCallPayload::RunCommand {
+        command_line: parsed.command_line,
+        cwd: non_empty_trimmed(parsed.cwd).map(PathBuf::from),
+    }
+}
+
+fn parse_write_file_args(args: &serde_json::Value, tool_name: &str) -> ToolCallPayload {
+    let Some(parsed) = deserialize_tool_args::<WriteFileArgs>(args, tool_name) else {
+        return ToolCallPayload::Other;
+    };
+    ToolCallPayload::FileEdit {
+        path: parsed.path,
+        edit: if parsed.append {
+            FileEdit::Append(parsed.content)
+        } else {
+            FileEdit::Overwrite(parsed.content)
         },
     }
+}
+
+fn parse_write_to_file_args(args: &serde_json::Value, tool_name: &str) -> ToolCallPayload {
+    let Some(parsed) = deserialize_tool_args::<WriteToFileArgs>(args, tool_name) else {
+        return ToolCallPayload::Other;
+    };
+    ToolCallPayload::FileEdit {
+        path: parsed.target_file,
+        edit: FileEdit::Overwrite(parsed.code_content),
+    }
+}
+
+fn parse_edit_file_args(args: &serde_json::Value, tool_name: &str) -> ToolCallPayload {
+    let Some(parsed) = deserialize_tool_args::<EditFileArgs>(args, tool_name) else {
+        return ToolCallPayload::Other;
+    };
+
+    let replacements = if !parsed.edits.is_empty() {
+        parsed
+            .edits
+            .into_iter()
+            .map(|hunk| TextReplacement {
+                target: hunk.target,
+                replacement: hunk.replacement,
+                line_range: None,
+                allow_multiple: true,
+            })
+            .collect()
+    } else if !parsed.target.is_empty() || !parsed.replacement.is_empty() {
+        vec![TextReplacement {
+            target: parsed.target,
+            replacement: parsed.replacement,
+            line_range: None,
+            allow_multiple: true,
+        }]
+    } else {
+        eprintln!(
+            "[omnicoach hook] ignoring malformed {tool_name} args: missing target/replacement"
+        );
+        return ToolCallPayload::Other;
+    };
+
+    ToolCallPayload::FileEdit {
+        path: parsed.path,
+        edit: FileEdit::Replace(replacements),
+    }
+}
+
+fn parse_replace_content_args(args: &serde_json::Value, tool_name: &str) -> ToolCallPayload {
+    let Some(parsed) = deserialize_tool_args::<ReplaceContentArgs>(args, tool_name) else {
+        return ToolCallPayload::Other;
+    };
+
+    let replacements = if !parsed.replacement_chunks.is_empty() {
+        parsed
+            .replacement_chunks
+            .into_iter()
+            .map(|chunk| TextReplacement {
+                target: chunk.target_content,
+                replacement: chunk.replacement_content,
+                line_range: optional_line_range(chunk.start_line, chunk.end_line),
+                allow_multiple: chunk.allow_multiple,
+            })
+            .collect()
+    } else if !parsed.target_content.is_empty() || !parsed.replacement_content.is_empty() {
+        vec![TextReplacement {
+            target: parsed.target_content,
+            replacement: parsed.replacement_content,
+            line_range: optional_line_range(parsed.start_line, parsed.end_line),
+            allow_multiple: parsed.allow_multiple,
+        }]
+    } else {
+        eprintln!(
+            "[omnicoach hook] ignoring malformed {tool_name} args: missing target_content/replacement_content"
+        );
+        return ToolCallPayload::Other;
+    };
+
+    ToolCallPayload::FileEdit {
+        path: parsed.target_file,
+        edit: FileEdit::Replace(replacements),
+    }
+}
+
+fn deserialize_tool_args<T: serde::de::DeserializeOwned>(
+    args: &serde_json::Value,
+    tool_name: &str,
+) -> Option<T> {
+    match T::deserialize(args) {
+        Ok(parsed) => Some(parsed),
+        Err(error) => {
+            eprintln!("[omnicoach hook] ignoring malformed {tool_name} args: {error}");
+            None
+        }
+    }
+}
+
+const fn optional_line_range(
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+) -> Option<RangeInclusive<usize>> {
+    match (start_line, end_line) {
+        (Some(start), Some(end)) if start > 0 && end >= start => Some(start..=end),
+        (Some(line), None) | (None, Some(line)) if line > 0 => Some(line..=line),
+        _ => None,
+    }
+}
+
+fn non_empty_trimmed(value: Option<String>) -> Option<String> {
+    value.and_then(|text| {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_owned())
+        }
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -223,35 +334,71 @@ struct WriteFileArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
+struct WriteToFileArgs {
+    target_file: PathBuf,
+    code_content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
 struct EditFileArgs {
     path: PathBuf,
+    #[serde(default)]
+    target: String,
+    #[serde(default)]
+    replacement: String,
+    #[serde(default)]
+    edits: Vec<EditHunkArgs>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct EditHunkArgs {
     target: String,
     replacement: String,
 }
 
-fn non_empty_trimmed(value: Option<String>) -> Option<String> {
-    value.and_then(|text| {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_owned())
-        }
-    })
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ReplaceContentArgs {
+    target_file: PathBuf,
+    #[serde(default)]
+    target_content: String,
+    #[serde(default)]
+    replacement_content: String,
+    #[serde(default)]
+    allow_multiple: bool,
+    #[serde(default)]
+    start_line: Option<usize>,
+    #[serde(default)]
+    end_line: Option<usize>,
+    #[serde(default)]
+    replacement_chunks: Vec<ReplacementChunkArgs>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ReplacementChunkArgs {
+    target_content: String,
+    replacement_content: String,
+    #[serde(default)]
+    allow_multiple: bool,
+    #[serde(default)]
+    start_line: Option<usize>,
+    #[serde(default)]
+    end_line: Option<usize>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WirePreToolResult {
+struct WirePreToolResult<'a> {
     decision: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<String>,
+    reason: &'a str,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WirePreInvocationResult {
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     inject_steps: Vec<WireInjectStep>,
 }
 
@@ -316,10 +463,9 @@ mod tests {
                 tool_call: PreToolUseEvent {
                     workspace_paths: Vec::new(),
                     agent_owned_dir: None,
-                    payload: ToolCallPayload::WriteFile {
+                    payload: ToolCallPayload::FileEdit {
                         path: PathBuf::from("src/main.rs"),
-                        content: "fn main() {}\n".to_owned(),
-                        append: true,
+                        edit: FileEdit::Append("fn main() {}\n".to_owned()),
                     },
                 },
                 warning_queue: None,
@@ -328,7 +474,36 @@ mod tests {
     }
 
     #[test]
-    fn parse_pre_tool_use_edit_file() {
+    fn parse_pre_tool_use_write_to_file() {
+        let json_text = indoc::indoc! {r#"
+            {
+                "toolCall": {
+                    "name": "write_to_file",
+                    "args": {
+                        "TargetFile": "src/main.rs",
+                        "CodeContent": "fn main() {}\n"
+                    }
+                }
+            }
+        "#};
+        assert_eq!(
+            parse_pre_tool_use(json_text).expect("parse succeeds"),
+            PreToolUseInput {
+                tool_call: PreToolUseEvent {
+                    workspace_paths: Vec::new(),
+                    agent_owned_dir: None,
+                    payload: ToolCallPayload::FileEdit {
+                        path: PathBuf::from("src/main.rs"),
+                        edit: FileEdit::Overwrite("fn main() {}\n".to_owned()),
+                    },
+                },
+                warning_queue: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_pre_tool_use_edit_file_single() {
         let json_text = indoc::indoc! {r#"
             {
                 "toolCall": {
@@ -347,14 +522,161 @@ mod tests {
                 tool_call: PreToolUseEvent {
                     workspace_paths: Vec::new(),
                     agent_owned_dir: None,
-                    payload: ToolCallPayload::EditFile {
+                    payload: ToolCallPayload::FileEdit {
                         path: PathBuf::from("src/main.rs"),
-                        target: "old".to_owned(),
-                        replacement: "new".to_owned(),
+                        edit: FileEdit::Replace(vec![TextReplacement {
+                            target: "old".to_owned(),
+                            replacement: "new".to_owned(),
+                            line_range: None,
+                            allow_multiple: true,
+                        }]),
                     },
                 },
                 warning_queue: None,
             }
+        );
+    }
+
+    #[test]
+    fn parse_pre_tool_use_edit_file_edits_array() {
+        let json_text = indoc::indoc! {r#"
+            {
+                "toolCall": {
+                    "name": "edit_file",
+                    "args": {
+                        "Path": "src/main.rs",
+                        "Edits": [
+                            { "Target": "old1", "Replacement": "new1" },
+                            { "Target": "old2", "Replacement": "new2" }
+                        ]
+                    }
+                }
+            }
+        "#};
+        assert_eq!(
+            parse_pre_tool_use(json_text).expect("parse succeeds"),
+            PreToolUseInput {
+                tool_call: PreToolUseEvent {
+                    workspace_paths: Vec::new(),
+                    agent_owned_dir: None,
+                    payload: ToolCallPayload::FileEdit {
+                        path: PathBuf::from("src/main.rs"),
+                        edit: FileEdit::Replace(vec![
+                            TextReplacement {
+                                target: "old1".to_owned(),
+                                replacement: "new1".to_owned(),
+                                line_range: None,
+                                allow_multiple: true,
+                            },
+                            TextReplacement {
+                                target: "old2".to_owned(),
+                                replacement: "new2".to_owned(),
+                                line_range: None,
+                                allow_multiple: true,
+                            },
+                        ]),
+                    },
+                },
+                warning_queue: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_pre_tool_use_replace_file_content() {
+        let json_text = indoc::indoc! {r#"
+            {
+                "toolCall": {
+                    "name": "replace_file_content",
+                    "args": {
+                        "TargetFile": "src/main.rs",
+                        "TargetContent": "old",
+                        "ReplacementContent": "new",
+                        "StartLine": 3,
+                        "EndLine": 7,
+                        "AllowMultiple": true
+                    }
+                }
+            }
+        "#};
+        assert_eq!(
+            parse_pre_tool_use(json_text).expect("parse succeeds"),
+            PreToolUseInput {
+                tool_call: PreToolUseEvent {
+                    workspace_paths: Vec::new(),
+                    agent_owned_dir: None,
+                    payload: ToolCallPayload::FileEdit {
+                        path: PathBuf::from("src/main.rs"),
+                        edit: FileEdit::Replace(vec![TextReplacement {
+                            target: "old".to_owned(),
+                            replacement: "new".to_owned(),
+                            line_range: Some(3..=7),
+                            allow_multiple: true,
+                        }]),
+                    },
+                },
+                warning_queue: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_pre_tool_use_multi_replace_file_content() {
+        let json_text = indoc::indoc! {r#"
+            {
+                "toolCall": {
+                    "name": "multi_replace_file_content",
+                    "args": {
+                        "TargetFile": "src/main.rs",
+                        "ReplacementChunks": [
+                            {
+                                "TargetContent": "chunk1",
+                                "ReplacementContent": "repl1",
+                                "StartLine": 10,
+                                "EndLine": 12
+                            }
+                        ]
+                    }
+                }
+            }
+        "#};
+        assert_eq!(
+            parse_pre_tool_use(json_text).expect("parse succeeds"),
+            PreToolUseInput {
+                tool_call: PreToolUseEvent {
+                    workspace_paths: Vec::new(),
+                    agent_owned_dir: None,
+                    payload: ToolCallPayload::FileEdit {
+                        path: PathBuf::from("src/main.rs"),
+                        edit: FileEdit::Replace(vec![TextReplacement {
+                            target: "chunk1".to_owned(),
+                            replacement: "repl1".to_owned(),
+                            line_range: Some(10..=12),
+                            allow_multiple: false,
+                        }]),
+                    },
+                },
+                warning_queue: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_pre_tool_use_malformed_args_falls_back_to_other() {
+        let json_text = indoc::indoc! {r#"
+            {
+                "toolCall": {
+                    "name": "run_command",
+                    "args": { "WrongField": 123 }
+                }
+            }
+        "#};
+        assert_eq!(
+            parse_pre_tool_use(json_text)
+                .expect("parse succeeds")
+                .tool_call
+                .payload,
+            ToolCallPayload::Other
         );
     }
 
@@ -375,17 +697,17 @@ mod tests {
                 "workspacePaths": ["", "  "]
             }
         "#};
-        assert_eq!(
-            parse_pre_invocation(json_text).expect("parse succeeds"),
-            None
-        );
+        let input = parse_pre_tool_use(json_text).expect("parse succeeds");
+        assert_eq!(input.tool_call.workspace_paths, Vec::<PathBuf>::new());
+        assert_eq!(input.tool_call.agent_owned_dir, None);
+        assert_eq!(input.warning_queue, None);
     }
 
     #[test]
-    fn serialize_pre_tool_decision_allow() {
-        let serialized =
-            serialize_pre_tool_decision(&PreToolDecision::Allow).expect("serialization succeeds");
-        assert_eq!(serialized, r#"{"decision":"allow"}"#);
+    fn serialize_pre_tool_decision_no_objection() {
+        let serialized = serialize_pre_tool_decision(&PreToolDecision::NoObjection)
+            .expect("serialization succeeds");
+        assert_eq!(serialized, "");
     }
 
     #[test]
@@ -405,7 +727,7 @@ mod tests {
         let serialized = serialize_pre_invocation(&["first".to_owned(), "second".to_owned()])
             .expect("serialization succeeds");
         let expected_message = indoc::indoc! {"
-            [omnicoach] The previous file modification introduced code lint warnings on modified lines. Please review and fix them if appropriate:
+            [omnicoach] Proposed file modification(s) introduced code lint warnings on modified lines. Please review and fix them if appropriate:
 
             first
 
@@ -420,6 +742,6 @@ mod tests {
     #[test]
     fn serialize_pre_invocation_without_warnings_is_empty() {
         let serialized = serialize_pre_invocation(&[]).expect("serialization succeeds");
-        assert_eq!(serialized, "{}");
+        assert_eq!(serialized, "");
     }
 }
