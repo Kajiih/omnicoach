@@ -5,7 +5,7 @@ use super::bindings::{collect_local_bound_names, parameters_shadow_name};
 use super::functions::{CLS_RECEIVER, SELF_RECEIVER, is_overload_def, is_property_accessor_def};
 use crate::code_lint::ast::call_clusters::{
     DeclarationScope, DeclarationScopeKind, PlacementAnchor, RelationKind, ScopeItem,
-    ScopeItemKind, Visibility, collapse_whitespace, extend_references, extend_unique, push_unique,
+    ScopeItemKind, Visibility, collapse_whitespace, extend_references, push_unique,
     split_at_redefinitions,
 };
 use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
@@ -216,14 +216,9 @@ fn build_module_declaration_scopes<'a>(
             .enumerate()
             .map(|(idx, item)| (item.name.clone(), idx))
             .collect();
-        let external_class_callees =
-            collect_external_class_callees(&module_body[seg_start..seg_end], &item_by_name, file);
-
         let mut items: Vec<ScopeItem<'a>> = segment
             .iter()
-            .map(|group| {
-                build_module_scope_item(group, &item_by_name, &external_class_callees, file)
-            })
+            .map(|group| build_module_scope_item(group, &item_by_name, file))
             .collect();
 
         let first_stmt_indices: Vec<usize> =
@@ -369,43 +364,11 @@ struct GroupedScopeItem<'a, 'ast> {
     item: ScopeItemAst<'ast>,
 }
 
-/// Collects sibling module item indices referenced inside each class that is not itself a scope
-/// item (such as a class redefined later in the module), keyed by class name.
-fn collect_external_class_callees<'body>(
-    statements: &'body [Stmt],
-    item_by_name: &HashMap<String, usize>,
-    file: &ParsedFile,
-) -> HashMap<&'body str, Vec<usize>> {
-    let empty_classes = HashMap::new();
-    let empty_locals = HashSet::new();
-    let mut external_class_callees = HashMap::new();
-    for statement in statements {
-        if let Stmt::ClassDef(class_def) = statement
-            && !item_by_name.contains_key(class_def.name.id.as_str())
-        {
-            let mut callees = Vec::new();
-            collect_class_module_refs(
-                class_def,
-                item_by_name,
-                &empty_classes,
-                &empty_locals,
-                file,
-                &mut callees,
-            );
-            if !callees.is_empty() {
-                external_class_callees.insert(class_def.name.id.as_str(), callees);
-            }
-        }
-    }
-    external_class_callees
-}
-
 /// Builds the [`ScopeItem`] for `group` from the sibling references in its signatures, bodies,
 /// or class definition.
 fn build_module_scope_item<'a>(
     group: &GroupedScopeItem<'a, '_>,
     item_by_name: &HashMap<String, usize>,
-    external_class_callees: &HashMap<&str, Vec<usize>>,
     file: &ParsedFile,
 ) -> ScopeItem<'a> {
     let empty_locals = HashSet::new();
@@ -418,7 +381,6 @@ fn build_module_scope_item<'a>(
             for def in defs {
                 let mut param_visitor = ModuleRefVisitor {
                     fn_by_name: item_by_name,
-                    class_callees: external_class_callees,
                     local_names: &empty_locals,
                     callees: &mut param_callees,
                 };
@@ -429,7 +391,6 @@ fn build_module_scope_item<'a>(
                 if let Some(returns) = &def.returns {
                     let mut ret_visitor = ModuleRefVisitor {
                         fn_by_name: item_by_name,
-                        class_callees: external_class_callees,
                         local_names: &empty_locals,
                         callees: &mut return_callees,
                     };
@@ -438,7 +399,6 @@ fn build_module_scope_item<'a>(
                 let local_names = collect_local_bound_names(def, file);
                 let mut body_visitor = ModuleRefVisitor {
                     fn_by_name: item_by_name,
-                    class_callees: external_class_callees,
                     local_names: &local_names,
                     callees: &mut body_callees,
                 };
@@ -455,14 +415,12 @@ fn build_module_scope_item<'a>(
             collect_class_definition_refs(
                 class_def,
                 item_by_name,
-                external_class_callees,
                 &empty_locals,
                 &mut definition_callees,
             );
             collect_class_module_refs(
                 class_def,
                 item_by_name,
-                external_class_callees,
                 &empty_locals,
                 file,
                 &mut all_callees,
@@ -490,26 +448,18 @@ fn build_module_scope_item<'a>(
     }
 }
 
-fn collect_class_module_refs<'map>(
+fn collect_class_module_refs(
     class_def: &StmtClassDef,
-    item_by_name: &'map HashMap<String, usize>,
-    external_class_callees: &'map HashMap<&'map str, Vec<usize>>,
+    item_by_name: &HashMap<String, usize>,
     empty_locals: &HashSet<String>,
     file: &ParsedFile,
     callees: &mut Vec<usize>,
 ) {
-    collect_class_definition_refs(
-        class_def,
-        item_by_name,
-        external_class_callees,
-        empty_locals,
-        callees,
-    );
+    collect_class_definition_refs(class_def, item_by_name, empty_locals, callees);
     for class_statement in &class_def.body {
         if let Stmt::FunctionDef(method_def) = class_statement {
             let mut sig_visitor = ModuleRefVisitor {
                 fn_by_name: item_by_name,
-                class_callees: external_class_callees,
                 local_names: empty_locals,
                 callees,
             };
@@ -523,7 +473,6 @@ fn collect_class_module_refs<'map>(
             let method_locals = collect_local_bound_names(method_def, file);
             let mut body_visitor = ModuleRefVisitor {
                 fn_by_name: item_by_name,
-                class_callees: external_class_callees,
                 local_names: &method_locals,
                 callees,
             };
@@ -534,16 +483,14 @@ fn collect_class_module_refs<'map>(
 
 /// Collects sibling module item references in the class header (decorators, bases) and non-method
 /// class-body statements (such as field annotations).
-fn collect_class_definition_refs<'map>(
+fn collect_class_definition_refs(
     class_def: &StmtClassDef,
-    item_by_name: &'map HashMap<String, usize>,
-    external_class_callees: &'map HashMap<&'map str, Vec<usize>>,
+    item_by_name: &HashMap<String, usize>,
     empty_locals: &HashSet<String>,
     callees: &mut Vec<usize>,
 ) {
     let mut header_visitor = ModuleRefVisitor {
         fn_by_name: item_by_name,
-        class_callees: external_class_callees,
         local_names: empty_locals,
         callees,
     };
@@ -557,7 +504,6 @@ fn collect_class_definition_refs<'map>(
         if !matches!(class_statement, Stmt::FunctionDef(_)) {
             let mut stmt_visitor = ModuleRefVisitor {
                 fn_by_name: item_by_name,
-                class_callees: external_class_callees,
                 local_names: empty_locals,
                 callees,
             };
@@ -568,7 +514,6 @@ fn collect_class_definition_refs<'map>(
 
 struct ModuleRefVisitor<'map, 'local> {
     fn_by_name: &'map HashMap<String, usize>,
-    class_callees: &'map HashMap<&'map str, Vec<usize>>,
     local_names: &'local HashSet<String>,
     callees: &'local mut Vec<usize>,
 }
@@ -579,13 +524,10 @@ impl SourceOrderVisitor<'_> for ModuleRefVisitor<'_, '_> {
             && name.ctx.is_load()
         {
             let ident = name.id.as_str();
-            if !self.local_names.contains(ident) {
-                if let Some(&idx) = self.fn_by_name.get(ident) {
-                    push_unique(self.callees, idx);
-                }
-                if let Some(bridged) = self.class_callees.get(ident) {
-                    extend_unique(self.callees, bridged.iter().copied());
-                }
+            if !self.local_names.contains(ident)
+                && let Some(&idx) = self.fn_by_name.get(ident)
+            {
+                push_unique(self.callees, idx);
             }
         }
         walk_expr(self, expr);
