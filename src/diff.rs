@@ -94,6 +94,18 @@ pub fn detect_vcs_diff(custom_rev: Option<&str>) -> Result<DetectedDiff, DiffErr
     Ok((vcs_type, resolved_rev.to_string(), absolute_diff))
 }
 
+/// Detects the VCS marker in `directory` itself without traversing parent directories.
+#[must_use]
+pub fn detect_vcs_at(directory: &Path) -> Option<VcsType> {
+    if directory.join(".jj").is_dir() {
+        Some(VcsType::Jujutsu)
+    } else if directory.join(".git").exists() {
+        Some(VcsType::Git)
+    } else {
+        None
+    }
+}
+
 /// A version-controlled repository enclosing the current working directory.
 struct Repository {
     /// The repository root directory.
@@ -106,25 +118,14 @@ struct Repository {
 /// and determine the active VCS type.
 #[must_use]
 fn find_repo_root() -> Option<Repository> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        if dir.join(".jj").is_dir() {
-            return Some(Repository {
-                root: dir,
-                vcs_type: VcsType::Jujutsu,
-            });
-        }
-        if dir.join(".git").exists() {
-            return Some(Repository {
-                root: dir,
-                vcs_type: VcsType::Git,
-            });
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    None
+    let current_directory = std::env::current_dir().ok()?;
+    current_directory.ancestors().find_map(|ancestor| {
+        let vcs_type = detect_vcs_at(ancestor)?;
+        Some(Repository {
+            root: ancestor.to_path_buf(),
+            vcs_type,
+        })
+    })
 }
 
 /// Jujutsu CLI binary, both spawned and named in errors.

@@ -22,6 +22,7 @@ pub use self::taxonomy::{Derived, Facet, RegisteredRule, Tag, registered_topics}
 use self::taxonomy::{REGISTERED_RULES, Selector};
 use crate::config::{CONFIG_FILE_NAME, Config, ContextConfig, compile_glob};
 use crate::diagnostic::RuleName;
+use crate::diff::detect_vcs_at;
 use crate::rule_declaration::{RuleOptionsError, RuleOverrides};
 
 /// Command-line overrides for configuration loading and rule selection: `--config`, `--select`
@@ -197,23 +198,18 @@ pub fn load_config(overrides: &ConfigOverrides) -> Result<Config, ConfigError> {
     parse_config_with_overrides(&content, overrides)
 }
 
-/// Loads configuration for a specific directory by discovering `.omnicoach.toml` in `start_directory`
-/// or its ancestors, applying `overrides`.
-///
-/// If no `.omnicoach.toml` is found in `start_directory` or its ancestors (and no explicit `--config`
-/// was provided), defaults are used with `overrides` applied.
+/// Loads `.omnicoach.toml` from `project_root` (or `overrides.config_path`), or the default
+/// config if `.omnicoach.toml` is absent in `project_root`, and applies `overrides`.
 ///
 /// # Errors
 ///
 /// Returns [`ConfigError`] if the discovered config file cannot be read or parsed.
-pub(crate) fn load_config_for_dir(
-    start_directory: &Path,
+pub(crate) fn load_config_from_root(
+    project_root: &Path,
     overrides: &ConfigOverrides,
 ) -> Result<Config, ConfigError> {
     let config_path = overrides.config_path.clone().or_else(|| {
-        discover_project_root(start_directory)
-            .map(|root| root.join(CONFIG_FILE_NAME))
-            .filter(|candidate| candidate.is_file())
+        Some(project_root.join(CONFIG_FILE_NAME)).filter(|candidate| candidate.is_file())
     });
     let content = config_path
         .as_deref()
@@ -232,7 +228,7 @@ pub(crate) fn discover_project_root(start_directory: &Path) -> Option<PathBuf> {
         .ancestors()
         .find(|ancestor| {
             !ancestor.as_os_str().is_empty()
-                && (ancestor.join(CONFIG_FILE_NAME).is_file() || has_vcs_marker(ancestor))
+                && (ancestor.join(CONFIG_FILE_NAME).is_file() || detect_vcs_at(ancestor).is_some())
         })
         .map(Path::to_path_buf)
 }
@@ -396,10 +392,6 @@ struct RawConfig {
     rules: toml::Table,
     #[serde(default)]
     context: ContextConfig,
-}
-
-fn has_vcs_marker(directory: &Path) -> bool {
-    directory.join(".jj").exists() || directory.join(".git").exists()
 }
 
 fn read_config_file(config_path: Option<&Path>) -> Result<String, ConfigError> {
@@ -866,7 +858,7 @@ mod tests {
     }
 
     #[test]
-    fn load_config_for_dir_discovers_parent_config() {
+    fn discover_project_root_and_load_config_from_root_finds_parent_config() {
         let temp_dir = tempfile::tempdir().expect("tempdir creation should succeed");
         let project_root = temp_dir.path().join("project");
         let nested_dir = project_root.join("src").join("nested");
@@ -877,10 +869,12 @@ mod tests {
         )
         .expect("write config");
 
-        let overrides = ConfigOverrides::default();
-        let config =
-            load_config_for_dir(&nested_dir, &overrides).expect("load config should succeed");
+        let discovered_root =
+            discover_project_root(&nested_dir).expect("should discover parent project root");
+        let config = load_config_from_root(&discovered_root, &ConfigOverrides::default())
+            .expect("load config should succeed");
         let rule = find_rule("sleep-in-tests").expect("rule exists");
+        assert_eq!(discovered_root, project_root);
         assert!(!config.is_rule_enabled(rule.name));
     }
 }
