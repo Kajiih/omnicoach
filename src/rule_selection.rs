@@ -197,47 +197,6 @@ pub fn load_config(overrides: &ConfigOverrides) -> Result<Config, ConfigError> {
     parse_config_with_overrides(&content, overrides)
 }
 
-/// Loads configuration for a specific directory by discovering `.omnicoach.toml` in `start_directory`
-/// or its ancestors, applying `overrides`.
-///
-/// If no `.omnicoach.toml` is found in `start_directory` or its ancestors (and no explicit `--config`
-/// was provided), defaults are used with `overrides` applied.
-///
-/// # Errors
-///
-/// Returns [`ConfigError`] if the discovered config file cannot be read or parsed.
-pub fn load_config_for_dir(
-    start_directory: &Path,
-    overrides: &ConfigOverrides,
-) -> Result<Config, ConfigError> {
-    let config_path = overrides
-        .config_path
-        .clone()
-        .or_else(|| discover_config_path(start_directory));
-    let content = config_path
-        .as_deref()
-        .map(read_config_at)
-        .transpose()?
-        .unwrap_or_default();
-    parse_config_with_overrides(&content, overrides)
-}
-
-/// Discovers the project root directory starting at `start_directory` and traversing up parent directories.
-///
-/// A directory is considered a project root if it contains `.omnicoach.toml`, `.jj`, or `.git`.
-#[must_use]
-pub fn discover_project_root(start_directory: &Path) -> Option<PathBuf> {
-    let resolved = resolve_search_directory(start_directory);
-    for ancestor in resolved.ancestors() {
-        if !ancestor.as_os_str().is_empty()
-            && (ancestor.join(CONFIG_FILE_NAME).is_file() || has_vcs_marker(ancestor))
-        {
-            return Some(ancestor.to_path_buf());
-        }
-    }
-    None
-}
-
 /// Whether `rule` is on under `.omnicoach.toml` in the current directory (or
 /// `overrides.config_path`) with `overrides` applied, and why.
 ///
@@ -399,41 +358,12 @@ struct RawConfig {
     context: ContextConfig,
 }
 
-fn discover_config_path(start_directory: &Path) -> Option<PathBuf> {
-    let resolved = resolve_search_directory(start_directory);
-    for ancestor in resolved.ancestors() {
-        if ancestor.as_os_str().is_empty() {
-            continue;
-        }
-        let candidate = ancestor.join(CONFIG_FILE_NAME);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        if has_vcs_marker(ancestor) {
-            break;
-        }
-    }
-    None
-}
-
-fn resolve_search_directory(directory: &Path) -> PathBuf {
-    if directory.as_os_str().is_empty() || directory.is_relative() {
-        std::env::current_dir().map_or_else(
-            |_| PathBuf::from("."),
-            |current_dir| current_dir.join(directory),
-        )
-    } else {
-        directory.to_path_buf()
-    }
-}
-
-fn has_vcs_marker(directory: &Path) -> bool {
-    directory.join(".jj").exists() || directory.join(".git").exists()
-}
-
 fn read_config_file(config_path: Option<&Path>) -> Result<String, ConfigError> {
     if let Some(path) = config_path {
-        return read_config_at(path);
+        return std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
+            path: path.display().to_string(),
+            source,
+        });
     }
     match std::fs::read_to_string(CONFIG_FILE_NAME) {
         Ok(content) => Ok(content),
@@ -443,13 +373,6 @@ fn read_config_file(config_path: Option<&Path>) -> Result<String, ConfigError> {
             source,
         }),
     }
-}
-
-fn read_config_at(path: &Path) -> Result<String, ConfigError> {
-    std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
-        path: path.display().to_string(),
-        source,
-    })
 }
 
 fn rule_names(mut predicate: impl FnMut(&RegisteredRule) -> bool) -> HashSet<RuleName> {
@@ -892,24 +815,5 @@ mod tests {
             "`jj` is both selected and ignored (synonyms count as the same selector); remove it \
              from one list"
         );
-    }
-
-    #[test]
-    fn load_config_for_dir_discovers_parent_config() {
-        let temp_dir = tempfile::tempdir().expect("tempdir creation should succeed");
-        let project_root = temp_dir.path().join("project");
-        let nested_dir = project_root.join("src").join("nested");
-        std::fs::create_dir_all(&nested_dir).expect("create nested dirs");
-        std::fs::write(
-            project_root.join(CONFIG_FILE_NAME),
-            "ignore = [\"sleep-in-tests\"]\n",
-        )
-        .expect("write config");
-
-        let overrides = ConfigOverrides::default();
-        let config =
-            load_config_for_dir(&nested_dir, &overrides).expect("load config should succeed");
-        let rule = find_rule("sleep-in-tests").expect("rule exists");
-        assert!(!config.is_rule_enabled(rule.name));
     }
 }

@@ -75,14 +75,14 @@ pub const RULE: CommandRule = CommandRule {
 
 fn check_command(
     rule: &CommandRule,
-    command: &InterceptedCommand,
+    cmd: &InterceptedCommand,
     jj_client: &dyn JjClient,
 ) -> Vec<Diagnostic> {
-    if command.program_base_name() != JJ_CLI_SCHEMA.program_name {
+    if cmd.program_base_name() != JJ_CLI_SCHEMA.program_name {
         return Vec::new();
     }
 
-    let Some(revision) = extract_jj_edit_revision(command) else {
+    let Some(revision) = extract_jj_edit_revision(cmd) else {
         return Vec::new();
     };
 
@@ -95,12 +95,12 @@ fn check_command(
         return Vec::new();
     }
 
-    let (start, end) = command.span;
+    let (start, end) = cmd.span;
     vec![rule.declaration.render_diagnostic(
         &[("revision", &revision)],
         SourceLocation::virtual_span(
             crate::diagnostic::VCS_CONTEXT_NAME,
-            &command.raw_string,
+            &cmd.raw_string,
             SourceSpan::new(start, end),
         ),
     )]
@@ -111,8 +111,8 @@ fn check_command(
 /// Understands global options (such as `-R .` or `--ignore-working-copy`) and the `-r` /
 /// `--revision` option accepted by `jj edit`.
 #[must_use]
-fn extract_jj_edit_revision(command: &InterceptedCommand) -> Option<String> {
-    let args = command.parse_args(&JJ_CLI_SCHEMA);
+fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
+    let args = cmd.parse_args(&JJ_CLI_SCHEMA);
     if !args.has_subcommand_sequence(&["edit"]) {
         return None;
     }
@@ -212,9 +212,9 @@ mod tests {
         #[case] command_line: &str,
         #[case] expected_revision: Option<&str>,
     ) {
-        let command = InterceptedCommand::parse_all(command_line).remove(0);
+        let cmd = InterceptedCommand::parse_all(command_line).remove(0);
         assert_eq!(
-            extract_jj_edit_revision(&command),
+            extract_jj_edit_revision(&cmd),
             expected_revision.map(ToString::to_string)
         );
     }
