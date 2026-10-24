@@ -76,16 +76,56 @@ pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic]) -> String {
     output
 }
 
-/// Helper to execute `check_command` on a [`CommandRule`] and return its formatted diagnostics snapshot.
+/// In-memory [`JjClient`] fake for [`command_rule_test!`].
+#[derive(Debug, Default)]
+pub struct FakeJjClient {
+    commits: std::collections::HashMap<String, crate::command_lint::vcs::CommitInfo>,
+}
+
+impl FakeJjClient {
+    /// Creates a [`FakeJjClient`] populated with `entries`.
+    #[must_use]
+    pub fn from_entries(entries: &[(&str, crate::command_lint::vcs::CommitInfo)]) -> Self {
+        Self {
+            commits: entries
+                .iter()
+                .map(|(revision, info)| ((*revision).to_string(), info.clone()))
+                .collect(),
+        }
+    }
+}
+
+impl JjClient for FakeJjClient {
+    fn get_commit_info(
+        &self,
+        revision: &str,
+    ) -> Result<crate::command_lint::vcs::CommitInfo, String> {
+        self.commits
+            .get(revision)
+            .cloned()
+            .ok_or_else(|| format!("unknown revision: {revision}"))
+    }
+}
+
+/// Executes `rule` on `command_line`, asserting that `command_line` is valid shell syntax.
+///
+/// # Panics
+/// Panics if `command_line` has a shell syntax error.
 #[must_use]
-pub fn assert_command_rule_snapshot(
+#[track_caller]
+pub fn run_command_rule(
     rule: &CommandRule,
-    command_input: &str,
+    command_line: &str,
     client: &dyn JjClient,
-) -> String {
-    let cmd = crate::command_lint::command::InterceptedCommand::parse_all(command_input).remove(0);
-    let diags = rule.check_command(&cmd, client);
-    format_diagnostics_for_test(&diags)
+) -> Vec<Diagnostic> {
+    let parsed = crate::command_lint::command::ParsedCommand::new(command_line);
+    assert!(
+        !parsed.has_syntax_error(),
+        "run_command_rule [{}]: test command has a shell syntax error:\n{command_line}",
+        rule.declaration.name.0,
+    );
+    let env = crate::command_lint::contract::CommandEnv::new(client);
+    rule.check_command(&parsed, &env)
 }
 
 /// Asserts that a `pass` test case produces zero diagnostics.
@@ -194,6 +234,9 @@ pub fn assert_rule_fail<Options: OptionsDeclaration>(
     assert_every_occurrence_reported(rule, lang, case_name, code, span, repeat);
 }
 
+const DOCUMENTED_EXAMPLE_CASE: &str = "documented example";
+const DOCUMENTED_FIX_CASE: &str = "documented fix";
+
 /// Asserts each of the rule's documented examples exactly like a `rule_test!` case: the flagged
 /// snippet as a `fail` case expecting its `flagged_span`, the fixed snippet as a `pass` case.
 ///
@@ -211,12 +254,12 @@ pub fn assert_documented_examples<Options: OptionsDeclaration>(
         assert_rule_fail(
             rule,
             example.language,
-            "documented example",
+            DOCUMENTED_EXAMPLE_CASE,
             example.flagged,
             Some(example.flagged_span),
             repeat,
         );
-        assert_rule_pass(rule, example.language, "documented fix", example.fixed);
+        assert_rule_pass(rule, example.language, DOCUMENTED_FIX_CASE, example.fixed);
     }
 }
 
@@ -244,6 +287,142 @@ pub fn assert_language_completeness<Options: OptionsDeclaration>(
             tested_languages.contains(lang),
             "rule_test! [{rule_name}]: Rule supports {lang:?}, but it is missing from rule_test!."
         );
+    }
+}
+
+/// Asserts that a command rule `pass` test case produces zero diagnostics (both standalone and
+/// when repeated in a `&&` chain).
+///
+/// # Panics
+/// Panics if `rule` emits any diagnostics on `command_line` or `"{command_line}\n{command_line}"`.
+#[track_caller]
+pub fn assert_command_rule_pass(
+    rule: &CommandRule,
+    case_name: &str,
+    command_line: &str,
+    client: &dyn JjClient,
+) {
+    let rule_name = rule.declaration.name.0;
+    let diagnostics = run_command_rule(rule, command_line, client);
+    assert!(
+        diagnostics.is_empty(),
+        indoc::indoc! {"
+            command_rule_test! [{}] PASS case '{}' failed:
+            Expected 0 diagnostics, got {}:
+            {}
+            Command:
+            {}"},
+        rule_name,
+        case_name,
+        diagnostics.len(),
+        format_diagnostics_for_test(&diagnostics),
+        command_line,
+    );
+
+    let repeated = format!("{command_line}\n{command_line}");
+    let repeated_diagnostics = run_command_rule(rule, &repeated, client);
+    assert!(
+        repeated_diagnostics.is_empty(),
+        indoc::indoc! {"
+            command_rule_test! [{}] PASS case '{}' failed when repeated:
+            Expected 0 diagnostics, got {}:
+            {}
+            Command:
+            {}"},
+        rule_name,
+        case_name,
+        repeated_diagnostics.len(),
+        format_diagnostics_for_test(&repeated_diagnostics),
+        repeated,
+    );
+}
+
+/// Asserts that a command rule `fail` test case produces exactly one matching diagnostic whose
+/// span matches `expected_snippet` (or `command_line.trim()` when `None`), and reports both
+/// copies when `command_line` is repeated on two lines.
+///
+/// # Panics
+/// Panics if diagnostic count, `rule_name`, span slice, or repeated-occurrence spans do not match.
+#[track_caller]
+pub fn assert_command_rule_fail(
+    rule: &CommandRule,
+    case_name: &str,
+    command_line: &str,
+    expected_snippet: Option<&str>,
+    client: &dyn JjClient,
+) {
+    let rule_name = rule.declaration.name.0;
+    let diagnostics = run_command_rule(rule, command_line, client);
+    let expected_slice = expected_snippet.unwrap_or(command_line).trim();
+
+    let [diagnostic] = diagnostics.as_slice() else {
+        panic!(
+            indoc::indoc! {"
+                command_rule_test! [{}] FAIL case '{}' diagnostic count mismatch:
+                Expected exactly 1 diagnostic, got {}:
+                {}
+                Command:
+                {}"},
+            rule_name,
+            case_name,
+            diagnostics.len(),
+            format_diagnostics_for_test(&diagnostics),
+            command_line,
+        );
+    };
+
+    assert_eq!(
+        diagnostic.rule_name.0, rule_name,
+        "command_rule_test! [{rule_name}] FAIL case '{case_name}': diagnostic rule_name '{}' does not match rule name.",
+        diagnostic.rule_name.0,
+    );
+
+    let actual_slice = &command_line[diagnostic.location.span.start..diagnostic.location.span.end];
+    assert_eq!(
+        actual_slice, expected_slice,
+        indoc::indoc! {r#"
+            command_rule_test! [{}] FAIL case '{}' flagged span mismatch:
+            Expected flagged slice:
+            {}
+            Actual flagged slice:
+            {}
+            (Tip: if the flagged command is a sub-span of the test line, add `=> "..."` to specify the inner slice.)"#},
+        rule_name, case_name, expected_slice, actual_slice,
+    );
+
+    let repeated = format!("{command_line}\n{command_line}");
+    let second_offset = command_line.len() + 1;
+    let expected_spans = [
+        diagnostic.location.span.start..diagnostic.location.span.end,
+        (second_offset + diagnostic.location.span.start)
+            ..(second_offset + diagnostic.location.span.end),
+    ];
+    let actual_spans: Vec<_> = run_command_rule(rule, &repeated, client)
+        .into_iter()
+        .map(|item| item.location.span.start..item.location.span.end)
+        .collect();
+    assert_eq!(
+        actual_spans, expected_spans,
+        "command_rule_test! [{rule_name}] FAIL case '{case_name}': repeating the command twice must report both occurrences",
+    );
+}
+
+/// Asserts each of the command rule's documented [`crate::rule_declaration::CommandExample`]s
+/// against `client`.
+///
+/// # Panics
+/// Panics as [`assert_command_rule_fail`] and [`assert_command_rule_pass`] do.
+#[track_caller]
+pub fn assert_command_documented_examples(rule: &CommandRule, client: &dyn JjClient) {
+    for example in rule.declaration.doc.examples {
+        assert_command_rule_fail(
+            rule,
+            DOCUMENTED_EXAMPLE_CASE,
+            example.flagged,
+            Some(example.flagged_span),
+            client,
+        );
+        assert_command_rule_pass(rule, DOCUMENTED_FIX_CASE, example.fixed, client);
     }
 }
 
@@ -661,6 +840,90 @@ macro_rules! rule_test {
     };
 }
 pub(crate) use rule_test;
+
+/// Declarative test-suite generator for [`CommandRule`]s.
+///
+/// Supports both purely syntactic command rules (omitting `jj: [...]`) and repository-aware
+/// command rules (providing `jj: [ "rev" => CommitInfo { ... }, ... ]`).
+macro_rules! command_rule_test {
+    (
+        $rule:ident,
+        {
+            pass: [ $( $pass_name:ident => $pass_cmd:literal ),+ $(,)? ],
+            fail: [ $( $fail_name:ident => $fail_cmd:literal $( => $snippet:literal )? ),+ $(,)? ] $(,)?
+        } $(,)?
+    ) => {
+        $crate::test_utils::command_rule_test!(
+            $rule,
+            jj: [],
+            {
+                pass: [ $( $pass_name => $pass_cmd ),+ ],
+                fail: [ $( $fail_name => $fail_cmd $( => $snippet )? ),+ ],
+            }
+        );
+    };
+    (
+        $rule:ident,
+        jj: [ $( $rev:expr => $commit_info:expr ),* $(,)? ],
+        {
+            pass: [ $( $pass_name:ident => $pass_cmd:literal ),+ $(,)? ],
+            fail: [ $( $fail_name:ident => $fail_cmd:literal $( => $snippet:literal )? ),+ $(,)? ] $(,)?
+        } $(,)?
+    ) => {
+        #[cfg(test)]
+        mod tests {
+            use super::*;
+
+            fn fake_jj_client() -> $crate::test_utils::FakeJjClient {
+                $crate::test_utils::FakeJjClient::from_entries(&[
+                    $( ($rev, $commit_info) ),*
+                ])
+            }
+
+            #[test]
+            fn documented_examples() {
+                let client = fake_jj_client();
+                $crate::test_utils::assert_command_documented_examples(&$rule, &client);
+            }
+
+            #[rstest::rstest]
+            $(
+                #[case::$pass_name(
+                    stringify!($pass_name),
+                    indoc::indoc! { $pass_cmd },
+                )]
+            )+
+            fn pass(#[case] case_name: &str, #[case] command_line: &str) {
+                let client = fake_jj_client();
+                $crate::test_utils::assert_command_rule_pass(&$rule, case_name, command_line, &client);
+            }
+
+            #[rstest::rstest]
+            $(
+                #[case::$fail_name(
+                    stringify!($fail_name),
+                    indoc::indoc! { $fail_cmd },
+                    None $( .or(Some(indoc::indoc! { $snippet })) )?,
+                )]
+            )+
+            fn fail(
+                #[case] case_name: &str,
+                #[case] command_line: &str,
+                #[case] expected_snippet: Option<&str>,
+            ) {
+                let client = fake_jj_client();
+                $crate::test_utils::assert_command_rule_fail(
+                    &$rule,
+                    case_name,
+                    command_line,
+                    expected_snippet,
+                    &client,
+                );
+            }
+        }
+    };
+}
+pub(crate) use command_rule_test;
 
 #[cfg(test)]
 mod tests {

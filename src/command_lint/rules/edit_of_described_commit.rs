@@ -1,14 +1,11 @@
 //! Validation checks for the `jj edit` command.
 
-use crate::command_lint::command::{InterceptedCommand, ProgramCliSchema};
-use crate::command_lint::contract::CommandRule;
-use crate::command_lint::vcs::JjClient;
-use crate::diagnostic::{
-    Diagnostic, RuleName, SourceLocation, SourceSpan, ViolationTemplate, violation_template,
-};
+use crate::command_lint::command::{InterceptedCommand, ParsedCommand, ProgramCliSchema};
+use crate::command_lint::contract::{CommandEnv, CommandRule};
+use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, ImpactedQuality, Precision, Reference, RuleDoc,
-    RuleOptions, Topic,
+    Classification, CommandExample, Consensus, Declaration, ImpactedQuality, Precision, Reference,
+    RuleDoc, RuleOptions, Topic,
 };
 
 /// CLI schema definition for Jujutsu commands.
@@ -67,7 +64,11 @@ pub const RULE: CommandRule = CommandRule {
                 title: "Jujutsu: Working copy",
                 url: "https://jj-vcs.github.io/jj/latest/working-copy/",
             }],
-            examples: &[],
+            examples: &[CommandExample {
+                flagged: "jj edit kpqxywon",
+                flagged_span: "jj edit kpqxywon",
+                fixed: "jj new kpqxywon",
+            }],
         },
     },
     check: check_command,
@@ -75,35 +76,20 @@ pub const RULE: CommandRule = CommandRule {
 
 fn check_command(
     rule: &CommandRule,
-    cmd: &InterceptedCommand,
-    jj_client: &dyn JjClient,
+    parsed: &ParsedCommand,
+    env: &CommandEnv<'_>,
 ) -> Vec<Diagnostic> {
-    if cmd.program_base_name() != JJ_CLI_SCHEMA.program_name {
-        return Vec::new();
-    }
-
-    let Some(revision) = extract_jj_edit_revision(cmd) else {
-        return Vec::new();
-    };
-
-    // Guard: Query target revision description and conflict status
-    // TODO(roadmap): Propagate or report VCS client query errors rather than silently returning empty diagnostics.
-    let Ok(commit_info) = jj_client.get_commit_info(&revision) else {
-        return Vec::new();
-    };
-    if commit_info.conflict || commit_info.description.trim().is_empty() {
-        return Vec::new();
-    }
-
-    let (start, end) = cmd.span;
-    vec![rule.declaration.render_diagnostic(
-        &[("revision", &revision)],
-        SourceLocation::virtual_span(
-            crate::diagnostic::VCS_CONTEXT_NAME,
-            &cmd.raw_string,
-            SourceSpan::new(start, end),
-        ),
-    )]
+    parsed
+        .commands()
+        .iter()
+        .filter_map(|cmd| {
+            let revision = extract_jj_edit_revision(cmd)?;
+            // TODO(roadmap): Propagate or report VCS client query errors rather than silently returning empty diagnostics.
+            let commit_info = env.jj().get_commit_info(&revision).ok()?;
+            (!commit_info.conflict && !commit_info.description.trim().is_empty())
+                .then(|| rule.diagnostic_at(parsed, cmd.span, &[("revision", &revision)]))
+        })
+        .collect()
 }
 
 /// Extracts the target revision from a `jj edit` command, defaulting to `"@"` when omitted.
@@ -112,6 +98,9 @@ fn check_command(
 /// `--revision` option accepted by `jj edit`.
 #[must_use]
 fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
+    if cmd.program_base_name() != JJ_CLI_SCHEMA.program_name {
+        return None;
+    }
     let args = cmd.parse_args(&JJ_CLI_SCHEMA);
     if !args.has_subcommand_sequence(&["edit"]) {
         return None;
@@ -124,98 +113,54 @@ fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::command_lint::vcs::CommitInfo;
-    use std::collections::HashMap;
-
-    struct FakeJjClient {
-        commits: HashMap<String, CommitInfo>,
+crate::test_utils::command_rule_test!(
+    RULE,
+    jj: [
+        "@" => crate::command_lint::vcs::CommitInfo {
+            description: "Described working copy".to_string(),
+            conflict: false,
+        },
+        "kpqxywon" => crate::command_lint::vcs::CommitInfo {
+            description: "feat: add user authentication".to_string(),
+            conflict: false,
+        },
+        "a456" => crate::command_lint::vcs::CommitInfo {
+            description: String::new(),
+            conflict: false,
+        },
+        "ws_only" => crate::command_lint::vcs::CommitInfo {
+            description: "   \n  ".to_string(),
+            conflict: false,
+        },
+        "c789" => crate::command_lint::vcs::CommitInfo {
+            description: "Conflicted commit".to_string(),
+            conflict: true,
+        },
+    ],
+    {
+        pass: [
+            empty_commit_allowed => "jj edit a456",
+            whitespace_only_description_allowed => "jj edit ws_only",
+            conflicted_described_commit_allowed => "jj edit c789",
+            unknown_revision_error_ignored => "jj edit unknown_rev",
+            unrelated_jj_subcommand_allowed => "jj log -r kpqxywon",
+            non_jj_command_allowed => "git commit -m msg",
+            redirect_on_empty_commit_not_treated_as_revision => "jj edit a456 > out.txt",
+        ],
+        fail: [
+            described_commit => "jj edit kpqxywon",
+            path_qualified_binary => "/usr/bin/jj edit kpqxywon",
+            bare_edit_when_working_copy_described => "jj edit",
+            short_revision_flag => "jj edit -r kpqxywon",
+            short_glued_revision_flag => "jj edit -rkpqxywon",
+            long_revision_flag => "jj edit --revision kpqxywon",
+            long_equals_revision_flag => "jj edit --revision=kpqxywon",
+            with_global_repository_flag => "jj -R . edit kpqxywon",
+            with_ignore_working_copy_flag => "jj edit --ignore-working-copy kpqxywon",
+            bare_edit_with_output_redirect => "jj edit > out.txt",
+            with_leading_env_assignment => "JJ_USER=alice jj edit kpqxywon",
+            inside_pipeline => "jj log | jj edit kpqxywon" => "jj edit kpqxywon",
+            inside_command_substitution => r#"echo "$(jj edit kpqxywon)""# => "jj edit kpqxywon",
+        ],
     }
-
-    impl JjClient for FakeJjClient {
-        fn get_commit_info(&self, revision: &str) -> Result<CommitInfo, String> {
-            self.commits
-                .get(revision)
-                .cloned()
-                .ok_or_else(|| format!("unknown revision: {revision}"))
-        }
-    }
-
-    #[rstest::rstest]
-    #[case::described_commit(
-        "jj edit d123",
-        "[edit-of-described-commit] Line 1, Col 1: `jj edit d123` targets a described commit."
-    )]
-    #[case::path_qualified_binary(
-        "/usr/bin/jj edit d123",
-        "[edit-of-described-commit] Line 1, Col 1: `jj edit d123` targets a described commit."
-    )]
-    #[case::bare_edit_when_working_copy_described(
-        "jj edit",
-        "[edit-of-described-commit] Line 1, Col 1: `jj edit @` targets a described commit."
-    )]
-    #[case::empty_commit_allowed("jj edit a456", "")]
-    #[case::conflicted_described_commit_allowed("jj edit c789", "")]
-    #[case::unknown_revision_error_ignored("jj edit unknown_rev", "")]
-    #[case::unrelated_jj_subcommand_allowed("jj log -r d123", "")]
-    #[case::non_jj_command_allowed("git commit -m msg", "")]
-    fn test_check_command(#[case] command_line: &str, #[case] expected: &str) {
-        let commits = HashMap::from([
-            (
-                "@".to_string(),
-                CommitInfo {
-                    description: "Described working copy".to_string(),
-                    conflict: false,
-                },
-            ),
-            (
-                "d123".to_string(),
-                CommitInfo {
-                    description: "Implement feature X".to_string(),
-                    conflict: false,
-                },
-            ),
-            (
-                "a456".to_string(),
-                CommitInfo {
-                    description: String::new(),
-                    conflict: false,
-                },
-            ),
-            (
-                "c789".to_string(),
-                CommitInfo {
-                    description: "Conflicted commit".to_string(),
-                    conflict: true,
-                },
-            ),
-        ]);
-        let jj_client = FakeJjClient { commits };
-
-        let output =
-            crate::test_utils::assert_command_rule_snapshot(&RULE, command_line, &jj_client);
-        assert_eq!(output.trim(), expected);
-    }
-
-    #[rstest::rstest]
-    #[case("jj edit", Some("@"))]
-    #[case("jj edit rev", Some("rev"))]
-    #[case("jj edit -r rev", Some("rev"))]
-    #[case("jj edit -rrev", Some("rev"))]
-    #[case("jj edit --revision rev", Some("rev"))]
-    #[case("jj edit --revision=rev", Some("rev"))]
-    #[case("jj -R . edit rev", Some("rev"))]
-    #[case("jj edit --ignore-working-copy rev", Some("rev"))]
-    #[case("jj log", None)]
-    fn test_extract_jj_edit_revision_helper(
-        #[case] command_line: &str,
-        #[case] expected_revision: Option<&str>,
-    ) {
-        let cmd = InterceptedCommand::parse_all(command_line).remove(0);
-        assert_eq!(
-            extract_jj_edit_revision(&cmd),
-            expected_revision.map(ToString::to_string)
-        );
-    }
-}
+);

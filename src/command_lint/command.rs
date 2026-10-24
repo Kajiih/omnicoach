@@ -1,272 +1,74 @@
-//! The intercepted command parser: shell input split into commands ([`InterceptedCommand`])
-//! and their arguments (`ParsedArgs`) under a program's option layout (`ProgramCliSchema`).
+//! The intercepted command parser: shell input parsed into [`ParsedCommand`] and
+//! [`InterceptedCommand`] invocations, plus CLI argument classification ([`ParsedArgs`],
+//! [`ProgramCliSchema`]).
 
 architecture_component!(CommandLintCommand);
 
-#[cfg(not(target_arch = "wasm32"))]
-use ast_grep_core::AstGrep;
-#[cfg(not(target_arch = "wasm32"))]
-use ast_grep_core::tree_sitter::StrDoc;
-#[cfg(not(target_arch = "wasm32"))]
-use ast_grep_language::SupportLang;
+mod cli_args;
+mod shell;
 
-/// Private Bash syntax node type used only to parse intercepted shell commands.
-#[cfg(not(target_arch = "wasm32"))]
-type BashNode<'a> = ast_grep_core::Node<'a, StrDoc<SupportLang>>;
-
-/// Schema defining a program's command-line interface options layout.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ProgramCliSchema {
-    /// The name of the binary/program (e.g. `"jj"`, `"git"`).
-    pub(super) program_name: &'static str,
-    /// List of option flags that accept values (e.g. `["-R", "--repository"]`).
-    pub(super) options_with_values: &'static [&'static str],
-}
-
-/// Representation of an intercepted CLI command.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InterceptedCommand {
-    /// The original full raw CLI input string.
-    pub(super) raw_string: String,
-    /// The name of the binary/program being executed.
-    pub(super) program_name: String,
-    /// The list of arguments parsed from the command string.
-    pub(super) arguments: Vec<String>,
-    /// The byte offsets span of this command in the raw CLI string.
-    pub(super) span: (usize, usize),
-}
-
-impl InterceptedCommand {
-    /// Parses a raw CLI input string into all individual command invocations.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[must_use]
-    pub fn parse_all(raw_string: &str) -> Vec<Self> {
-        let grep = AstGrep::new(raw_string, SupportLang::Bash);
-        grep.root()
-            .dfs()
-            .filter(|node| node.kind() == "command")
-            .filter_map(|node| Self::parse_single(&node, raw_string))
-            .collect()
-    }
-
-    /// Parses a raw CLI input string on `wasm32` (command linting deferred until pure-Rust shell parser).
-    #[cfg(target_arch = "wasm32")]
-    #[must_use]
-    pub const fn parse_all(_raw_string: &str) -> Vec<Self> {
-        Vec::new()
-    }
-
-    /// Extracts positional arguments (skipping option flags and their values) and option key-values.
-    #[must_use]
-    pub(super) fn parse_args(&self, schema: &ProgramCliSchema) -> ParsedArgs {
-        ArgParser::new(&self.arguments, schema.options_with_values).parse()
-    }
-
-    /// Returns the base name of the program (e.g. "jj" from "/usr/bin/jj").
-    #[must_use]
-    pub(super) fn program_base_name(&self) -> &str {
-        std::path::Path::new(&self.program_name)
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .unwrap_or(&self.program_name)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn parse_single(node: &BashNode<'_>, raw_string: &str) -> Option<Self> {
-        let mut children = node.children();
-        let command_name_node = children.find(|child| child.kind() == "command_name")?;
-        let program_name = command_name_node.text().to_string();
-
-        let mut arguments = Vec::new();
-        for child in children {
-            let text = child.text().to_string();
-            if let Ok(words) = shell_words::split(&text) {
-                arguments.extend(words);
-            } else {
-                arguments.push(text);
-            }
-        }
-
-        let range = node.range();
-        Some(Self {
-            raw_string: raw_string.to_string(),
-            program_name,
-            arguments,
-            span: (range.start, range.end),
-        })
-    }
-}
-
-struct ArgParser<'a> {
-    args_iter: std::iter::Peekable<std::slice::Iter<'a, String>>,
-    options_with_values: &'a [&'a str],
-    positionals: Vec<String>,
-    options: std::collections::HashMap<String, Vec<String>>,
-}
-
-impl<'a> ArgParser<'a> {
-    fn new(arguments: &'a [String], options_with_values: &'a [&'a str]) -> Self {
-        Self {
-            args_iter: arguments.iter().peekable(),
-            options_with_values,
-            positionals: Vec::new(),
-            options: std::collections::HashMap::new(),
-        }
-    }
-
-    fn parse(mut self) -> ParsedArgs {
-        let mut options_terminated = false;
-
-        while let Some(arg) = self.args_iter.next() {
-            if options_terminated {
-                self.positionals.push(arg.clone());
-                continue;
-            }
-
-            if arg == "--" {
-                options_terminated = true;
-                continue;
-            }
-
-            if arg.starts_with("--") {
-                self.parse_long_option(arg);
-            } else if arg.starts_with('-') && arg.len() > 1 {
-                self.parse_short_option_cluster(arg);
-            } else {
-                self.positionals.push(arg.clone());
-            }
-        }
-
-        ParsedArgs {
-            positionals: self.positionals,
-            options: self.options,
-        }
-    }
-
-    fn parse_long_option(&mut self, arg: &str) {
-        if let Some((flag, val)) = arg.split_once('=') {
-            if self.options_with_values.contains(&flag) {
-                self.options
-                    .entry(flag.to_string())
-                    .or_default()
-                    .push(val.to_string());
-            } else {
-                self.options.entry(arg.to_string()).or_default();
-            }
-        } else if self.options_with_values.contains(&arg)
-            && self
-                .args_iter
-                .peek()
-                .is_some_and(|next_val| !next_val.starts_with('-'))
-        {
-            if let Some(val) = self.args_iter.next() {
-                self.options
-                    .entry(arg.to_string())
-                    .or_default()
-                    .push(val.clone());
-            }
-        } else {
-            self.options.entry(arg.to_string()).or_default();
-        }
-    }
-
-    fn parse_short_option_cluster(&mut self, arg: &str) {
-        let mut char_indices = arg.char_indices().skip(1).peekable();
-
-        while let Some((idx, c)) = char_indices.next() {
-            let flag = format!("-{c}");
-            let is_option_with_value = self.options_with_values.contains(&flag.as_str());
-
-            if is_option_with_value {
-                if char_indices.peek().is_some() {
-                    let val = arg[idx + c.len_utf8()..].to_string();
-                    self.options.entry(flag).or_default().push(val);
-                    break;
-                }
-                let next_is_val = self
-                    .args_iter
-                    .peek()
-                    .is_some_and(|next_val| !next_val.starts_with('-'));
-                if next_is_val && let Some(val) = self.args_iter.next() {
-                    self.options.entry(flag).or_default().push(val.clone());
-                    break;
-                }
-            }
-            self.options.entry(flag).or_default();
-        }
-    }
-}
-
-/// Represents parsed command line arguments and options.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ParsedArgs {
-    /// The positional arguments (e.g. `["edit", "@-"]`).
-    pub(super) positionals: Vec<String>,
-    /// Option flags and their values.
-    options: std::collections::HashMap<String, Vec<String>>,
-}
-
-impl ParsedArgs {
-    /// Checks if a boolean or key-value option flag was provided.
-    #[cfg(test)]
-    #[must_use]
-    pub(super) fn has_flag(&self, flag: &str) -> bool {
-        self.options.contains_key(flag)
-    }
-
-    /// Gets the first value associated with an option flag, if present.
-    #[must_use]
-    pub(super) fn get_option(&self, option: &str) -> Option<&str> {
-        self.options
-            .get(option)
-            .and_then(|values| values.first())
-            .map(String::as_str)
-    }
-
-    /// Verifies if the sequence of positional arguments starts with the given subcommands.
-    #[must_use]
-    pub(super) fn has_subcommand_sequence(&self, sequence: &[&str]) -> bool {
-        if self.positionals.len() < sequence.len() {
-            return false;
-        }
-        self.positionals
-            .iter()
-            .zip(sequence)
-            .all(|(arg, expected)| arg == expected)
-    }
-}
+pub use self::cli_args::{ParsedArgs, ProgramCliSchema};
+pub use self::shell::{
+    CommandArg, CommandRedirect, EnvAssignment, InterceptedCommand, ParsedCommand, RedirectKind,
+    RedirectTarget, ShellScope,
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostic::SourceSpan;
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct CommandSummary<'a> {
+        program: &'a str,
+        args: Vec<&'a str>,
+        span: SourceSpan,
+        scopes: &'a [ShellScope],
+    }
+
+    fn summarize(cmd: &InterceptedCommand) -> CommandSummary<'_> {
+        CommandSummary {
+            program: cmd.program_name(),
+            args: cmd.arguments.iter().map(|arg| arg.text.as_str()).collect(),
+            span: cmd.span,
+            scopes: &cmd.enclosing_scopes,
+        }
+    }
 
     #[test]
     fn test_parse_single_command() {
-        let cmds = InterceptedCommand::parse_all("jj edit @-");
-        assert_eq!(cmds.len(), 1);
-        assert_eq!(cmds[0].program_name, "jj");
-        assert_eq!(cmds[0].arguments, vec!["edit", "@-"]);
-        assert_eq!(cmds[0].span, (0, 10));
+        let parsed = ParsedCommand::new("jj edit @-");
+        let summaries: Vec<_> = parsed.commands().iter().map(summarize).collect();
+        assert!(!parsed.has_syntax_error());
+        assert_eq!(
+            summaries,
+            vec![CommandSummary {
+                program: "jj",
+                args: vec!["edit", "@-"],
+                span: SourceSpan::new(0, 10),
+                scopes: &[],
+            }]
+        );
     }
 
     #[test]
     fn test_parse_compound_commands() {
-        let raw = "jj edit @- && jj describe";
-        let cmds = InterceptedCommand::parse_all(raw);
+        let cmds = InterceptedCommand::parse_all("jj edit @- && jj describe");
+        let summaries: Vec<_> = cmds.iter().map(summarize).collect();
         assert_eq!(
-            cmds,
+            summaries,
             vec![
-                InterceptedCommand {
-                    raw_string: raw.to_string(),
-                    program_name: "jj".to_string(),
-                    arguments: vec!["edit".to_string(), "@-".to_string()],
-                    span: (0, 10),
+                CommandSummary {
+                    program: "jj",
+                    args: vec!["edit", "@-"],
+                    span: SourceSpan::new(0, 10),
+                    scopes: &[ShellScope::ChainedList],
                 },
-                InterceptedCommand {
-                    raw_string: raw.to_string(),
-                    program_name: "jj".to_string(),
-                    arguments: vec!["describe".to_string()],
-                    span: (14, 25),
+                CommandSummary {
+                    program: "jj",
+                    args: vec!["describe"],
+                    span: SourceSpan::new(14, 25),
+                    scopes: &[ShellScope::ChainedList],
                 },
             ]
         );
@@ -274,25 +76,108 @@ mod tests {
 
     #[test]
     fn test_parse_nested_subshell() {
-        let raw = "(cd dir && jj edit @-)";
-        let cmds = InterceptedCommand::parse_all(raw);
+        let cmds = InterceptedCommand::parse_all("(cd dir && jj edit @-)");
+        let summaries: Vec<_> = cmds.iter().map(summarize).collect();
         assert_eq!(
-            cmds,
+            summaries,
             vec![
-                InterceptedCommand {
-                    raw_string: raw.to_string(),
-                    program_name: "cd".to_string(),
-                    arguments: vec!["dir".to_string()],
-                    span: (1, 7),
+                CommandSummary {
+                    program: "cd",
+                    args: vec!["dir"],
+                    span: SourceSpan::new(1, 7),
+                    scopes: &[ShellScope::Subshell, ShellScope::ChainedList],
                 },
-                InterceptedCommand {
-                    raw_string: raw.to_string(),
-                    program_name: "jj".to_string(),
-                    arguments: vec!["edit".to_string(), "@-".to_string()],
-                    span: (11, 21),
+                CommandSummary {
+                    program: "jj",
+                    args: vec!["edit", "@-"],
+                    span: SourceSpan::new(11, 21),
+                    scopes: &[ShellScope::Subshell, ShellScope::ChainedList],
                 },
             ]
         );
+    }
+
+    #[test]
+    fn test_redirects_excluded_from_arguments_and_included_in_span() {
+        let cmds = InterceptedCommand::parse_all("jj edit > out.txt 2>&1");
+        let cmd = &cmds[0];
+        let redirects: Vec<_> = cmd
+            .redirects
+            .iter()
+            .map(|redirect| (redirect.fd, redirect.kind, redirect.span))
+            .collect();
+        assert_eq!(
+            summarize(cmd),
+            CommandSummary {
+                program: "jj",
+                args: vec!["edit"],
+                span: SourceSpan::new(0, 22),
+                scopes: &[],
+            }
+        );
+        assert_eq!(
+            redirects,
+            vec![
+                (None, RedirectKind::Write, SourceSpan::new(8, 17)),
+                (
+                    Some(2),
+                    RedirectKind::DuplicateOutput,
+                    SourceSpan::new(18, 22)
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_env_assignments_separated_from_arguments() {
+        let cmds = InterceptedCommand::parse_all("JJ_USER=alice jj edit @-");
+        let cmd = &cmds[0];
+        let envs: Vec<_> = cmd
+            .env_assignments
+            .iter()
+            .map(|env| (env.name.as_str(), env.value.text.as_str(), env.span))
+            .collect();
+        assert_eq!(
+            summarize(cmd),
+            CommandSummary {
+                program: "jj",
+                args: vec!["edit", "@-"],
+                span: SourceSpan::new(0, 24),
+                scopes: &[],
+            }
+        );
+        assert_eq!(envs, vec![("JJ_USER", "alice", SourceSpan::new(0, 13))]);
+    }
+
+    #[test]
+    fn test_command_substitution_inside_double_quotes_preserves_outer_byte_span() {
+        let raw = r#"echo "result: $(jj edit d123)""#;
+        let cmds = InterceptedCommand::parse_all(raw);
+        let inner = &cmds[1];
+        assert_eq!(
+            summarize(inner),
+            CommandSummary {
+                program: "jj",
+                args: vec!["edit", "d123"],
+                span: SourceSpan::new(16, 28),
+                scopes: &[ShellScope::CommandSubstitution],
+            }
+        );
+        assert_eq!(&raw[inner.span.start..inner.span.end], "jj edit d123");
+    }
+
+    #[test]
+    fn test_non_ascii_prefix_maps_to_utf8_byte_offsets() {
+        let raw = r#"echo "héllo" && jj edit d123"#;
+        let cmds = InterceptedCommand::parse_all(raw);
+        assert_eq!(cmds.len(), 2);
+        assert_eq!(&raw[cmds[1].span.start..cmds[1].span.end], "jj edit d123");
+    }
+
+    #[test]
+    fn test_syntax_error_reported_on_unterminated_quote() {
+        let parsed = ParsedCommand::new(r#"jj edit "unterminated"#);
+        assert!(parsed.has_syntax_error());
     }
 
     #[test]
@@ -307,6 +192,18 @@ mod tests {
         assert_eq!(args.get_option("-R"), Some("."));
         assert_eq!(args.get_option("--config"), Some("myconf"));
         assert!(args.has_subcommand_sequence(&["edit"]));
+    }
+
+    #[test]
+    fn test_parse_args_boolean_long_flag_and_stdin_dash() {
+        let cmd = InterceptedCommand::parse_all("jj --no-pager edit -").remove(0);
+        let schema = ProgramCliSchema {
+            program_name: "jj",
+            options_with_values: &["-R"],
+        };
+        let args = cmd.parse_args(&schema);
+        assert_eq!(args.positionals, vec!["edit", "-"]);
+        assert!(args.has_flag("--no-pager"));
     }
 
     #[test]
@@ -370,5 +267,104 @@ mod tests {
         assert_eq!(args_term.positionals, vec!["log", "-R"]);
         assert!(!args_term.has_flag("-R"));
         assert_eq!(args_term.get_option("-R"), None);
+    }
+
+    #[rstest::rstest]
+    #[case::for_loop(
+        "for rev in a b; do jj edit d123; done",
+        "jj edit d123",
+        ShellScope::CompoundBlock
+    )]
+    #[case::if_else(
+        "if true; then jj status; else jj edit d123; fi",
+        "jj edit d123",
+        ShellScope::CompoundBlock
+    )]
+    #[case::while_loop(
+        "while false; do jj edit d123; done",
+        "jj edit d123",
+        ShellScope::CompoundBlock
+    )]
+    #[case::case_clause(
+        "case $x in a) jj edit d123 ;; esac",
+        "jj edit d123",
+        ShellScope::CompoundBlock
+    )]
+    #[case::brace_group("{ jj edit d123; }", "jj edit d123", ShellScope::CompoundBlock)]
+    #[case::function_def(
+        "run_it() { jj edit d123; }",
+        "jj edit d123",
+        ShellScope::CompoundBlock
+    )]
+    #[case::backtick_substitution(
+        "echo `jj edit d123`",
+        "jj edit d123",
+        ShellScope::CommandSubstitution
+    )]
+    #[case::process_substitution(
+        "diff <(jj edit d123) out.txt",
+        "jj edit d123",
+        ShellScope::ProcessSubstitution
+    )]
+    #[case::background_job("jj edit d123 &", "jj edit d123", ShellScope::Background)]
+    fn test_compound_and_nested_scopes(
+        #[case] script: &str,
+        #[case] expected_slice: &str,
+        #[case] expected_scope: ShellScope,
+    ) {
+        let parsed = ParsedCommand::new(script);
+        let matched = parsed
+            .commands()
+            .iter()
+            .find(|cmd| cmd.program_name() == "jj" && cmd.arguments[0].text == "edit")
+            .expect("expected `jj edit` command to be extracted");
+        assert_eq!(
+            &parsed.source()[matched.span.start..matched.span.end],
+            expected_slice
+        );
+        assert!(matched.enclosing_scopes.contains(&expected_scope));
+    }
+
+    #[rstest::rstest]
+    #[case::append("jj log >> out.txt", RedirectKind::Append, ">> out.txt")]
+    #[case::clobber("jj log >| out.txt", RedirectKind::Clobber, ">| out.txt")]
+    #[case::output_and_error("jj log &> out.txt", RedirectKind::OutputAndError, "&> out.txt")]
+    #[case::append_output_and_error(
+        "jj log &>> out.txt",
+        RedirectKind::AppendOutputAndError,
+        "&>> out.txt"
+    )]
+    #[case::read_input("cat < in.txt", RedirectKind::Read, "< in.txt")]
+    #[case::here_string("cat <<< 'hello'", RedirectKind::HereString, "<<< 'hello'")]
+    #[case::duplicate_fd("jj log 2>&1", RedirectKind::DuplicateOutput, "2>&1")]
+    fn test_redirect_kinds_and_spans(
+        #[case] script: &str,
+        #[case] expected_kind: RedirectKind,
+        #[case] expected_redirect_slice: &str,
+    ) {
+        let parsed = ParsedCommand::new(script);
+        let cmd = &parsed.commands()[0];
+        let redirect = &cmd.redirects[0];
+        assert_eq!(redirect.kind, expected_kind);
+        assert_eq!(
+            &parsed.source()[redirect.span.start..redirect.span.end],
+            expected_redirect_slice
+        );
+    }
+
+    #[test]
+    fn test_heredoc_and_word_escapes() {
+        let script = indoc::indoc! {r"
+            cat <<EOF
+            hello
+            EOF
+            echo a\ b $HOME"};
+        let parsed = ParsedCommand::new(script);
+        assert_eq!(
+            parsed.commands()[0].redirects[0].kind,
+            RedirectKind::HereDoc
+        );
+        assert_eq!(parsed.commands()[1].arguments[0].text, "a b");
+        assert!(parsed.commands()[1].arguments[1].has_expansion);
     }
 }

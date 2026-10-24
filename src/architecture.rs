@@ -18,7 +18,7 @@
 //!   allowed only from a private direct child (`mod child; pub use self::child::Item;`), and a
 //!   `macro_rules!` macro declares its path with `pub(crate) use name;` next to its definition
 //!   (`#[macro_export]` only in `src/lib.rs`).
-//! - **Encapsulation**: only `code_lint::ast` uses `ast_grep_core`.
+//! - **Encapsulation**: only `code_lint::ast` and `command_lint::command` use third-party parser crates.
 
 architecture_component!(Architecture);
 
@@ -106,7 +106,7 @@ define_architecture! {
     Config              => [Diagnostic, RuleDeclaration],
 
     // --- Static Code Analysis Domain (`code_lint`) ---
-    /// Parsed files and the syntax queries rules share, with `ast_grep_core` encapsulated behind them (`code_lint::ast`).
+    /// Parsed files and the syntax queries rules share, with parser crates encapsulated behind them (`code_lint::ast`).
     CodeLintAst         => [Diagnostic],
     /// Cross-language facts computed over the AST: bindings, calls, comments (`code_lint::semantic`).
     CodeLintSemantic    => [CodeLintAst],
@@ -127,8 +127,8 @@ define_architecture! {
     /// The jj client: repository state queries for command rules (`command_lint::vcs`).
     CommandLintVcs      => [],
     /// The intercepted command parser: shell input to commands and their arguments (`command_lint::command`).
-    CommandLintCommand  => [],
-    /// The command rule contract: a declaration and a check over one intercepted command (`command_lint::contract`).
+    CommandLintCommand  => [Diagnostic],
+    /// The command rule contract: a declaration and a check over a parsed command (`command_lint::contract`).
     CommandLintContract => [CommandLintCommand, CommandLintVcs, RuleDeclaration],
     /// Concrete command safety linting rules (`command_lint::rules`).
     CommandLintRules    => [CommandLintContract, RuleDeclaration],

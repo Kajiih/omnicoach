@@ -193,12 +193,23 @@ fn test_code_rules_document_one_example_per_language() {
     }
 }
 
-/// Nothing executes the examples of suppression audits and command rules, so they declare none.
+/// Command rule examples are executed by `command_rule_test!`, so each command rule documents one.
+#[test]
+fn test_command_rules_document_one_example() {
+    for rule in COMMAND_RULES {
+        assert_eq!(
+            rule.declaration.doc.examples.len(),
+            1,
+            "Command rule {} must document exactly one example",
+            rule.declaration.name
+        );
+    }
+}
+
+/// Nothing executes the examples of suppression audits, so they declare none.
 #[test]
 fn test_rules_without_an_example_harness_document_no_examples() {
-    let audits = SUPPRESSION_AUDITS.iter().map(Declaration::declared);
-    let command_rules = COMMAND_RULES.iter().map(|rule| rule.declaration.declared());
-    for rule in audits.chain(command_rules) {
+    for rule in SUPPRESSION_AUDITS.iter().map(Declaration::declared) {
         assert!(
             rule.doc.examples.is_empty(),
             "Rule {} has no harness running its examples and must document none",
@@ -225,19 +236,24 @@ fn rule_sources(relative_dir: &str) -> Vec<(std::path::PathBuf, String)> {
 static RULE_SOURCES: std::sync::LazyLock<Vec<(std::path::PathBuf, String)>> =
     std::sync::LazyLock::new(|| rule_sources("src/code_lint/rules"));
 
-fn rule_test_convention_violation(source: &str) -> Option<&'static str> {
-    if !source.contains("rule_test!(") {
-        return Some("must use crate::test_utils::rule_test!(...) for its test suite");
+static COMMAND_RULE_SOURCES: std::sync::LazyLock<Vec<(std::path::PathBuf, String)>> =
+    std::sync::LazyLock::new(|| rule_sources("src/command_lint/rules"));
+
+fn rule_test_convention_violation(source: &str, macro_call: &str) -> Option<&'static str> {
+    if !source.contains(macro_call) {
+        return Some("must use the declarative rule test harness macro for its test suite");
     }
     if source.contains("mod tests") {
         return Some(
-            "must not define a bespoke mod tests block; rule_test!(...) generates it automatically",
+            "must not define a bespoke mod tests block; the test macro generates it automatically",
         );
     }
-    if source.contains("assert_code_rule_snapshot") {
-        return Some("must not use assert_code_rule_snapshot; use rule_test!(...) instead");
+    if source.contains("assert_code_rule_snapshot")
+        || source.contains("assert_command_rule_snapshot")
+    {
+        return Some("must not use legacy snapshot helpers; use the test macro instead");
     }
-    let pre_macro = source.split("rule_test!(").next().unwrap_or(source);
+    let pre_macro = source.split(macro_call).next().unwrap_or(source);
     // Multiline raw strings hold doc example snippets, whose `#[test]` is not a bespoke test.
     let mut in_raw_string = false;
     if pre_macro.lines().any(|line| {
@@ -249,12 +265,13 @@ fn rule_test_convention_violation(source: &str) -> Option<&'static str> {
         in_raw_string = trimmed.ends_with("r\"") || trimmed.ends_with("r#\"");
         trimmed == "#[test]" || trimmed == "#[rstest]" || trimmed.starts_with("#[rstest(")
     }) {
-        return Some("must not define bespoke #[test] functions outside rule_test!(...)");
+        return Some("must not define bespoke #[test] functions outside the test macro");
     }
     None
 }
 
-/// Enforces that all rule test modules use `rule_test!` and never define bespoke tests.
+/// Enforces that all code and command rule test modules use `rule_test!` / `command_rule_test!`
+/// and never define bespoke tests.
 #[test]
 fn test_rule_files_use_rule_test() {
     for (path, source) in &*RULE_SOURCES {
@@ -263,13 +280,23 @@ fn test_rule_files_use_rule_test() {
             .and_then(|name| name.to_str())
             .expect("valid filename");
 
-        if let Some(reason) = rule_test_convention_violation(source) {
+        if let Some(reason) = rule_test_convention_violation(source, "rule_test!(") {
+            panic!("{filename} {reason}");
+        }
+    }
+    for (path, source) in &*COMMAND_RULE_SOURCES {
+        let filename = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("valid filename");
+
+        if let Some(reason) = rule_test_convention_violation(source, "command_rule_test!(") {
             panic!("{filename} {reason}");
         }
     }
 }
 
-/// Names of the `pass` cases in a rule file's `rule_test!` invocation.
+/// Names of the `pass` cases in a rule file's `rule_test!` or `command_rule_test!` invocation.
 fn pass_case_names(source: &str) -> Vec<&str> {
     let mut in_pass_block = false;
     let mut names = Vec::new();
@@ -297,7 +324,7 @@ fn pass_case_names(source: &str) -> Vec<&str> {
 /// The single concept `"logical_and"` (the logical conjunction operator) is allowed.
 #[test]
 fn test_pass_cases_test_one_behaviour() {
-    for (path, source) in &*RULE_SOURCES {
+    for (path, source) in RULE_SOURCES.iter().chain(&*COMMAND_RULE_SOURCES) {
         for name in pass_case_names(source) {
             assert!(
                 !name.replace("logical_and", "").contains("_and_"),

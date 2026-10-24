@@ -2,7 +2,8 @@
 
 architecture_component!(CommandLintRunner);
 
-use crate::command_lint::command::InterceptedCommand;
+use crate::command_lint::command::ParsedCommand;
+use crate::command_lint::contract::CommandEnv;
 use crate::command_lint::rules::COMMAND_RULES;
 use crate::command_lint::vcs::{JjCliClient, JjClient};
 use crate::config::Config;
@@ -22,14 +23,13 @@ pub(crate) fn run_command_lint_with_client(
     config: &Config,
     jj_client: &dyn JjClient,
 ) -> Vec<Diagnostic> {
-    let commands = InterceptedCommand::parse_all(raw_cmd);
+    let parsed = ParsedCommand::new(raw_cmd);
+    let env = CommandEnv::new(jj_client);
     let mut all_diagnostics = Vec::new();
 
-    for cmd in &commands {
-        for rule in COMMAND_RULES {
-            if config.is_rule_enabled(rule.declaration.name) {
-                all_diagnostics.extend(rule.check_command(cmd, jj_client));
-            }
+    for rule in COMMAND_RULES {
+        if config.is_rule_enabled(rule.declaration.name) {
+            all_diagnostics.extend(rule.check_command(&parsed, &env));
         }
     }
 
