@@ -12,6 +12,7 @@ use omnicoach::code_lint::runner::{LintOptions, run_code_lint};
 use omnicoach::command_lint::runner::run_command_lint;
 use omnicoach::config::Config;
 use omnicoach::diagnostic::{OutputFormat, print_diagnostics};
+use omnicoach::hook::{HookEventKind, execute_hook_json};
 use omnicoach::rule_catalog::{DiscoveryArgs, code_report_footer, explain_footer};
 use omnicoach::rule_selection::{ConfigOverrides, load_config};
 
@@ -30,11 +31,25 @@ fn run() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let config = load_config(&cli.config_overrides)
-        .map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
+    let Some(subcommand) = cli.subcommand else {
+        let config = load_config(&cli.config_overrides)
+            .map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
+        let options = LintOptions {
+            paths: vec![PathBuf::from(".")],
+            diff: cli.diff,
+            diff_rev: cli.diff_rev,
+        };
+        return run_code(&options, &config, cli.format);
+    };
 
-    match cli.subcommand {
-        Some(DomainCommand::Code(args)) => {
+    match subcommand {
+        DomainCommand::Hook(args) => {
+            run_hook(args.event);
+            Ok(())
+        }
+        DomainCommand::Code(args) => {
+            let config = load_config(&cli.config_overrides)
+                .map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
             let options = LintOptions {
                 paths: args.paths,
                 diff: args.diff || cli.diff,
@@ -42,21 +57,17 @@ fn run() -> anyhow::Result<()> {
             };
             run_code(&options, &config, cli.format)
         }
-        None => {
-            let options = LintOptions {
-                paths: vec![PathBuf::from(".")],
-                diff: cli.diff,
-                diff_rev: cli.diff_rev,
-            };
-            run_code(&options, &config, cli.format)
-        }
-        Some(DomainCommand::Command(args)) => {
+        DomainCommand::Command(args) => {
+            let config = load_config(&cli.config_overrides)
+                .map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
             let Some(command) = args.cmd else {
                 unreachable!("clap requires --cmd unless a discovery flag is given");
             };
             run_command(&command, &config, cli.format)
         }
-        Some(DomainCommand::Graph(args)) => {
+        DomainCommand::Graph(args) => {
+            let config = load_config(&cli.config_overrides)
+                .map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
             let options = GraphOptions {
                 paths: args.paths,
                 depth: match args.depth {
@@ -79,6 +90,20 @@ fn run() -> anyhow::Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+fn run_hook(event: HookEventKind) {
+    let input = match std::io::read_to_string(std::io::stdin()) {
+        Ok(input) => input,
+        Err(error) => {
+            eprintln!("[omnicoach hook] failed to read stdin: {error}");
+            return;
+        }
+    };
+    match execute_hook_json(event, &input) {
+        Ok(output) => println!("{output}"),
+        Err(error) => eprintln!("[omnicoach hook] ignoring invalid hook input: {error}"),
     }
 }
 
@@ -164,6 +189,15 @@ enum DomainCommand {
     /// [ALPHA — experimental, under active investigation & design; format may change at any time]
     /// Generate a multi-level abstraction graph for files or directories
     Graph(GraphArgs),
+    /// Handle agent lifecycle hook events (`PreToolUse`, `PreInvocation`) from stdin
+    Hook(HookArgs),
+}
+
+#[derive(Args, Debug)]
+struct HookArgs {
+    /// Lifecycle hook event kind (`pre-tool-use` or `pre-invocation`)
+    #[arg(value_enum)]
+    event: HookEventKind,
 }
 
 #[derive(Args, Debug)]

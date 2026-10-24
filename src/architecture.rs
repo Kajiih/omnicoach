@@ -141,9 +141,13 @@ define_architecture! {
     /// Rule list and single-rule Markdown rendering for discovery commands (`rule_catalog`).
     RuleCatalog         => [RuleSelection, RuleDeclaration],
 
+    // --- Agent Lifecycle Hooks (`hook`) ---
+    /// Agent lifecycle hook protocol, in-memory virtual file patching, and orchestration (`hook`).
+    Hook                => [CodeLintRunner, CommandLintRunner, CommandLintVcs, RuleSelection, Diagnostic],
+
     // --- Test Harness & Entrypoints ---
     /// The `rule_test!` harness and snapshot fixtures (`test_utils`).
     TestUtils           => [CodeLintContract, CodeLintPolicy, CommandLintContract],
     /// CLI entrypoints (`bin::*`).
-    Bin                 => [CodeLintRunner, CodeLintGraph, CommandLintRunner, RuleSelection, RuleCatalog],
+    Bin                 => [CodeLintRunner, CodeLintGraph, CommandLintRunner, Hook, RuleSelection, RuleCatalog],
 }

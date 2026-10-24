@@ -25,6 +25,8 @@ pub mod command_lint;
 pub mod config;
 pub mod diagnostic;
 mod diff;
+/// Agent lifecycle hook protocols and runner.
+pub mod hook;
 pub mod rule_catalog;
 pub mod rule_declaration;
 pub mod rule_selection;

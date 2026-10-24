@@ -78,6 +78,7 @@ ruff_text_size = "0.0.16"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 shell-words = "1.1"  # Safe shell tokenization for cmd guard
+similar = "2.7"
 strum = { version = "0.28", features = ["derive"] }
 thiserror = "2.0"
 toml = { version = "1.1", features = ["preserve_order"] }

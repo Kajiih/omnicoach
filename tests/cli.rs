@@ -92,6 +92,52 @@ fn run_cli(args: &[&str], current_dir: Option<&std::path::Path>) -> String {
     )
 }
 
+fn run_hook_stdin(
+    event_arg: &str,
+    stdin_payload: &str,
+    current_dir: Option<&std::path::Path>,
+) -> String {
+    let mut command = Command::cargo_bin(BIN_NAME).unwrap();
+    command.args(["hook", event_arg]).write_stdin(stdin_payload);
+    if let Some(dir) = current_dir {
+        command.current_dir(dir);
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "omnicoach hook failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn run_pre_tool_use_hook(
+    cwd: &std::path::Path,
+    artifact_dir: Option<&std::path::Path>,
+    tool_name: &str,
+    tool_args: &serde_json::Value,
+) -> String {
+    let payload = serde_json::json!({
+        "workspacePaths": [cwd],
+        "artifactDirectoryPath": artifact_dir.unwrap_or_else(|| std::path::Path::new("")),
+        "toolCall": {
+            "name": tool_name,
+            "args": tool_args,
+        },
+    })
+    .to_string();
+    run_hook_stdin("pre-tool-use", &payload, Some(cwd))
+}
+
+fn run_pre_invocation_hook(cwd: &std::path::Path, artifact_dir: &std::path::Path) -> String {
+    let payload = serde_json::json!({
+        "workspacePaths": [cwd],
+        "artifactDirectoryPath": artifact_dir,
+    })
+    .to_string();
+    run_hook_stdin("pre-invocation", &payload, Some(cwd))
+}
+
 #[test]
 fn test_code_lint_help_flag() {
     let output = run_cli(&["--help"], None);
@@ -527,4 +573,118 @@ fn test_graph_project_depth_levels_and_declared_components() {
         "{public_output}"
     );
     assert!(!public_output.contains("fn helper()"), "{public_output}");
+}
+
+#[test]
+fn test_hook_pre_tool_use_allows_safe_command_and_denies_described_commit_edit() {
+    let temp_repo = setup_temp_jj_repo();
+    let repo_dir = temp_repo.path();
+    let describe_output = std::process::Command::new("jj")
+        .args(["describe", "-m", "feat: described working copy"])
+        .current_dir(repo_dir)
+        .output()
+        .unwrap();
+
+    let safe_stdout = run_pre_tool_use_hook(
+        repo_dir,
+        None,
+        "run_command",
+        &serde_json::json!({ "CommandLine": "jj status" }),
+    );
+    let edit_stdout = run_pre_tool_use_hook(
+        repo_dir,
+        None,
+        "run_command",
+        &serde_json::json!({ "CommandLine": "jj edit @" }),
+    );
+
+    assert!(describe_output.status.success());
+    assert_eq!(safe_stdout.trim(), r#"{"decision":"allow"}"#);
+    assert!(
+        edit_stdout.contains(r#"{"decision":"deny","reason":"#),
+        "{edit_stdout}"
+    );
+    assert!(
+        edit_stdout.contains("edit-of-described-commit"),
+        "{edit_stdout}"
+    );
+}
+
+#[test]
+fn test_hook_queues_code_lint_warning_and_drains_on_pre_invocation() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let artifact_dir = temp_dir.path().join("artifacts");
+    let target_file = temp_dir.path().join("sample.rs");
+    let bad_rust_code = indoc! {"
+        pub fn compute() -> i32 {
+            let err = 1;
+            err
+        }
+    "};
+
+    let write_stdout = run_pre_tool_use_hook(
+        temp_dir.path(),
+        Some(&artifact_dir),
+        "write_file",
+        &serde_json::json!({
+            "Path": target_file,
+            "Content": bad_rust_code,
+        }),
+    );
+    let first_invoke_stdout = run_pre_invocation_hook(temp_dir.path(), &artifact_dir);
+    let second_invoke_stdout = run_pre_invocation_hook(temp_dir.path(), &artifact_dir);
+
+    assert_eq!(write_stdout.trim(), r#"{"decision":"allow"}"#);
+    assert!(
+        first_invoke_stdout.contains("injectSteps"),
+        "{first_invoke_stdout}"
+    );
+    assert!(
+        first_invoke_stdout.contains("abbreviated-name"),
+        "{first_invoke_stdout}"
+    );
+    assert_eq!(second_invoke_stdout.trim(), "{}");
+}
+
+#[test]
+fn test_hook_fails_open_on_malformed_stdin() {
+    let malformed_stdout = run_hook_stdin("pre-tool-use", "not valid json", None);
+    assert_eq!(malformed_stdout.trim(), "");
+}
+
+#[test]
+fn test_hook_resolves_workspace_paths_when_current_dir_differs() {
+    let temp_repo = setup_temp_jj_repo();
+    let repo_dir = temp_repo.path();
+    let unrelated_dir = tempfile::tempdir().unwrap();
+
+    let describe_output = std::process::Command::new("jj")
+        .args(["describe", "-m", "feat: described working copy"])
+        .current_dir(repo_dir)
+        .output()
+        .unwrap();
+
+    let payload = serde_json::json!({
+        "workspacePaths": [repo_dir],
+        "artifactDirectoryPath": "",
+        "toolCall": {
+            "name": "run_command",
+            "args": {
+                "CommandLine": "jj edit @"
+            }
+        }
+    })
+    .to_string();
+
+    let edit_stdout = run_hook_stdin("pre-tool-use", &payload, Some(unrelated_dir.path()));
+
+    assert!(describe_output.status.success());
+    assert!(
+        edit_stdout.contains(r#"{"decision":"deny","reason":"#),
+        "{edit_stdout}"
+    );
+    assert!(
+        edit_stdout.contains("edit-of-described-commit"),
+        "{edit_stdout}"
+    );
 }

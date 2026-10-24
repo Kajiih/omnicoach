@@ -42,6 +42,39 @@ Validate an intercepted workflow command:
 omnicoach command --cmd "jj edit @"
 ```
 
+Run as an agent lifecycle hook (Antigravity):
+
+```bash
+omnicoach hook pre-tool-use    # evaluates PreToolUse events from stdin
+omnicoach hook pre-invocation  # injects queued code warnings on PreInvocation
+```
+
+Wire into `~/.gemini/config/hooks.json`:
+
+```json
+{
+  "omnicoach": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command|write_file|edit_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PATH=\"$HOME/.cargo/bin:$HOME/.local/bin:$PATH\" omnicoach hook pre-tool-use"
+          }
+        ]
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "PATH=\"$HOME/.cargo/bin:$HOME/.local/bin:$PATH\" omnicoach hook pre-invocation"
+      }
+    ]
+  }
+}
+```
+
 Try `omnicoach` in the browser or call its WebAssembly request/response module directly at **[kajiih.github.io/omnicoach](https://kajiih.github.io/omnicoach/)**:
 
 ```javascript

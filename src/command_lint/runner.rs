@@ -17,7 +17,7 @@ pub fn run_command_lint(raw_cmd: &str, config: &Config) -> Vec<Diagnostic> {
 
 /// Evaluates all enabled command rules against the provided raw command string using a custom VCS client.
 #[must_use]
-pub fn run_command_lint_with_client(
+pub(crate) fn run_command_lint_with_client(
     raw_cmd: &str,
     config: &Config,
     jj_client: &dyn JjClient,

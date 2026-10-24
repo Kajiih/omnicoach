@@ -15,6 +15,7 @@ Commands:
   command  Validate an intercepted shell command string
   graph    [ALPHA — experimental, under active investigation & design; format may change at any
            time] Generate a multi-level abstraction graph for files or directories
+  hook     Handle agent lifecycle hook events (`PreToolUse`, `PreInvocation`) from stdin
   help     Print this message or the help of the given subcommand(s)
 
 Options:

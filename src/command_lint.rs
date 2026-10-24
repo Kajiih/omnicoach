@@ -4,4 +4,4 @@ pub mod command;
 pub mod contract;
 pub mod rules;
 pub mod runner;
-pub mod vcs;
+pub(crate) mod vcs;
