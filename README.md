@@ -45,8 +45,8 @@ omnicoach command --cmd "jj edit @"
 Run as an agent lifecycle hook (Antigravity):
 
 ```bash
-omnicoach hook pre-tool-use    # evaluates PreToolUse events from stdin
-omnicoach hook pre-invocation  # injects queued code warnings on PreInvocation
+omnicoach hook antigravity pre-tool-use    # evaluates PreToolUse events from stdin
+omnicoach hook antigravity pre-invocation  # injects queued code warnings on PreInvocation
 ```
 
 Wire into `~/.gemini/config/hooks.json`:
@@ -60,7 +60,7 @@ Wire into `~/.gemini/config/hooks.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "PATH=\"$HOME/.cargo/bin:$HOME/.local/bin:$PATH\" omnicoach hook pre-tool-use"
+            "command": "PATH=\"$HOME/.cargo/bin:$HOME/.local/bin:$PATH\" omnicoach hook antigravity pre-tool-use"
           }
         ]
       }
@@ -68,7 +68,7 @@ Wire into `~/.gemini/config/hooks.json`:
     "PreInvocation": [
       {
         "type": "command",
-        "command": "PATH=\"$HOME/.cargo/bin:$HOME/.local/bin:$PATH\" omnicoach hook pre-invocation"
+        "command": "PATH=\"$HOME/.cargo/bin:$HOME/.local/bin:$PATH\" omnicoach hook antigravity pre-invocation"
       }
     ]
   }

@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use similar::{ChangeTag, TextDiff};
 
-use super::protocol::ToolCallPayload;
+use super::event::ToolCallPayload;
 
 /// Errors encountered while applying virtual tool edits to file content.
 #[derive(Debug, thiserror::Error)]

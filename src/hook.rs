@@ -1,10 +1,11 @@
-//! Agent lifecycle hook support (`PreToolUse` and `PreInvocation`).
+//! Agent lifecycle hook support: agent-neutral tool-call evaluation, plus one adapter per agent.
 
 architecture_component!(Hook);
 
-mod protocol;
+mod antigravity;
+mod event;
 mod runner;
 mod virtual_edit;
+mod warning_queue;
 
-pub use self::protocol::{HookEventKind, HookProtocolError};
-pub use self::runner::execute_hook_json;
+pub use self::antigravity::{AntigravityEvent, AntigravityProtocolError, run_antigravity_hook};

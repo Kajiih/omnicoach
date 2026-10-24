@@ -142,7 +142,7 @@ define_architecture! {
     RuleCatalog         => [RuleSelection, RuleDeclaration],
 
     // --- Agent Lifecycle Hooks (`hook`) ---
-    /// Agent lifecycle hook protocol, in-memory virtual file patching, and orchestration (`hook`).
+    /// Agent-neutral tool-call evaluation, per-agent protocol adapters, deferred warning queue, and in-memory virtual file patching (`hook`).
     Hook                => [CodeLintRunner, CommandLintRunner, CommandLintVcs, RuleSelection, Diagnostic],
 
     // --- Test Harness & Entrypoints ---

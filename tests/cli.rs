@@ -98,7 +98,9 @@ fn run_hook_stdin(
     current_dir: Option<&std::path::Path>,
 ) -> String {
     let mut command = Command::cargo_bin(BIN_NAME).unwrap();
-    command.args(["hook", event_arg]).write_stdin(stdin_payload);
+    command
+        .args(["hook", "antigravity", event_arg])
+        .write_stdin(stdin_payload);
     if let Some(dir) = current_dir {
         command.current_dir(dir);
     }

@@ -12,7 +12,7 @@ use omnicoach::code_lint::runner::{LintOptions, run_code_lint};
 use omnicoach::command_lint::runner::run_command_lint;
 use omnicoach::config::Config;
 use omnicoach::diagnostic::{OutputFormat, print_diagnostics};
-use omnicoach::hook::{HookEventKind, execute_hook_json};
+use omnicoach::hook::{AntigravityEvent, run_antigravity_hook};
 use omnicoach::rule_catalog::{DiscoveryArgs, code_report_footer, explain_footer};
 use omnicoach::rule_selection::{ConfigOverrides, load_config};
 
@@ -44,7 +44,11 @@ fn run() -> anyhow::Result<()> {
 
     match subcommand {
         DomainCommand::Hook(args) => {
-            run_hook(args.event);
+            match args.agent {
+                HookAgent::Antigravity { event } => {
+                    run_hook(|input| run_antigravity_hook(event, input));
+                }
+            }
             Ok(())
         }
         DomainCommand::Code(args) => {
@@ -93,7 +97,9 @@ fn run() -> anyhow::Result<()> {
     }
 }
 
-fn run_hook(event: HookEventKind) {
+/// Reads the hook payload from stdin and prints the response, failing open (no output) on any
+/// error so a malformed payload never blocks the agent.
+fn run_hook<E: std::fmt::Display>(handle: impl FnOnce(&str) -> Result<String, E>) {
     let input = match std::io::read_to_string(std::io::stdin()) {
         Ok(input) => input,
         Err(error) => {
@@ -101,7 +107,7 @@ fn run_hook(event: HookEventKind) {
             return;
         }
     };
-    match execute_hook_json(event, &input) {
+    match handle(&input) {
         Ok(output) => println!("{output}"),
         Err(error) => eprintln!("[omnicoach hook] ignoring invalid hook input: {error}"),
     }
@@ -189,15 +195,25 @@ enum DomainCommand {
     /// [ALPHA — experimental, under active investigation & design; format may change at any time]
     /// Generate a multi-level abstraction graph for files or directories
     Graph(GraphArgs),
-    /// Handle agent lifecycle hook events (`PreToolUse`, `PreInvocation`) from stdin
+    /// Handle a coding agent's lifecycle hook event from stdin
     Hook(HookArgs),
 }
 
 #[derive(Args, Debug)]
 struct HookArgs {
-    /// Lifecycle hook event kind (`pre-tool-use` or `pre-invocation`)
-    #[arg(value_enum)]
-    event: HookEventKind,
+    #[command(subcommand)]
+    agent: HookAgent,
+}
+
+/// Agent whose hook protocol the payload on stdin follows.
+#[derive(Subcommand, Debug)]
+enum HookAgent {
+    /// Antigravity (`hooks.json`)
+    Antigravity {
+        /// Lifecycle event that invoked the hook
+        #[arg(value_enum)]
+        event: AntigravityEvent,
+    },
 }
 
 #[derive(Args, Debug)]
