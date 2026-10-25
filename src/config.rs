@@ -3,7 +3,7 @@
 architecture_component!(Config);
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -52,6 +52,8 @@ pub struct Config {
     pub context: ContextConfig,
     /// Per-file rule ignores: glob patterns paired with the rules they disable.
     pub per_file_ignores: Vec<(globset::GlobMatcher, HashSet<RuleName>)>,
+    /// Project or configuration root directory used to anchor `test-patterns` and `per-file-ignores` globs.
+    pub root_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -60,7 +62,7 @@ impl Config {
     pub fn is_test_path(&self, path: &Path) -> bool {
         self.context
             .test_patterns
-            .is_match(normalize_path_for_glob(path))
+            .is_match(self.normalize_path_for_glob(path))
     }
 
     /// Returns true if the given rule is enabled in this configuration.
@@ -79,11 +81,20 @@ impl Config {
             return true;
         }
 
-        let normalized = normalize_path_for_glob(path);
+        let normalized = self.normalize_path_for_glob(path);
         !self
             .per_file_ignores
             .iter()
             .any(|(matcher, rules)| matcher.is_match(&normalized) && rules.contains(&rule))
+    }
+
+    fn normalize_path_for_glob(&self, path: &Path) -> String {
+        let needs_cwd = self.root_dir.as_deref().map_or_else(
+            || path.is_absolute(),
+            |root| !path.is_absolute() || !path.starts_with(root),
+        );
+        let cwd = needs_cwd.then(|| std::env::current_dir().ok()).flatten();
+        normalize_path_with_roots(path, self.root_dir.as_deref(), cwd.as_deref())
     }
 }
 
@@ -96,6 +107,32 @@ pub(crate) fn compile_glob(pattern: &str) -> Result<globset::Glob, globset::Erro
     globset::GlobBuilder::new(pattern)
         .literal_separator(false)
         .build()
+}
+
+pub(crate) fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match components.last() {
+                Some(Component::Normal(_)) => {
+                    components.pop();
+                }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                Some(Component::ParentDir | Component::CurDir) | None => {
+                    components.push(component);
+                }
+            },
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                components.push(component);
+            }
+        }
+    }
+    if components.is_empty() {
+        PathBuf::from(".")
+    } else {
+        components.iter().collect()
+    }
 }
 
 fn default_test_patterns() -> globset::GlobSet {
@@ -121,18 +158,27 @@ fn compile_glob_set<'a>(
     builder.build()
 }
 
-fn normalize_path_for_glob(path: &Path) -> String {
-    let relative = if path.is_absolute() {
-        std::env::current_dir()
+fn normalize_path_with_roots(path: &Path, root_dir: Option<&Path>, cwd: Option<&Path>) -> String {
+    let normalized_input = lexical_normalize(path);
+    let relative = if normalized_input.is_absolute() {
+        root_dir
+            .and_then(|root| normalized_input.strip_prefix(root).ok())
+            .or_else(|| cwd.and_then(|current| normalized_input.strip_prefix(current).ok()))
+            .unwrap_or(&normalized_input)
+            .to_path_buf()
+    } else if let (Some(root), Some(current)) = (root_dir, cwd)
+        && current != root
+        && current.starts_with(root)
+    {
+        lexical_normalize(&current.join(&normalized_input))
+            .strip_prefix(root)
             .ok()
-            .and_then(|cwd| path.strip_prefix(cwd).ok())
-            .unwrap_or(path)
+            .map_or(normalized_input, Path::to_path_buf)
     } else {
-        path
+        normalized_input
     };
 
-    let stripped = relative.strip_prefix("./").unwrap_or(relative);
-    stripped.to_string_lossy().replace('\\', "/")
+    relative.to_string_lossy().replace('\\', "/")
 }
 
 #[cfg(test)]
@@ -190,5 +236,52 @@ mod tests {
     fn test_invalid_glob_is_config_error(#[case] toml_content: &str) {
         let error = toml::from_str::<ContextConfig>(toml_content).unwrap_err();
         assert!(error.to_string().contains("src/["), "{error}");
+    }
+
+    #[rstest::rstest]
+    #[case::absolute_under_root("/repo/tests/cli.rs", Some("/repo"), Some("/repo"), "tests/cli.rs")]
+    #[case::relative_from_root("tests/cli.rs", Some("/repo"), Some("/repo"), "tests/cli.rs")]
+    #[case::relative_from_subdir("cli.rs", Some("/repo"), Some("/repo/tests"), "tests/cli.rs")]
+    #[case::parent_traversal_from_subdir(
+        "../src/lib.rs",
+        Some("/repo"),
+        Some("/repo/tests"),
+        "src/lib.rs"
+    )]
+    #[case::dot_slash_stripped("./tests/cli.rs", None, None, "tests/cli.rs")]
+    fn test_normalize_path_with_roots(
+        #[case] input: &str,
+        #[case] root_dir: Option<&str>,
+        #[case] cwd: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            normalize_path_with_roots(
+                Path::new(input),
+                root_dir.map(Path::new),
+                cwd.map(Path::new),
+            ),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_root_dir_strips_prefix_for_per_file_ignores() {
+        let config = Config {
+            per_file_ignores: vec![(
+                compile_glob("tests/**").unwrap().compile_matcher(),
+                HashSet::from([STYLE_RULE]),
+            )],
+            root_dir: Some(PathBuf::from("/repo")),
+            ..Default::default()
+        };
+
+        // Absolute path under root
+        assert!(!config.is_rule_enabled_for_path(STYLE_RULE, Path::new("/repo/tests/cli.rs")));
+        assert!(config.is_rule_enabled_for_path(STYLE_RULE, Path::new("/repo/src/lib.rs")));
+
+        // Path relative to root
+        assert!(!config.is_rule_enabled_for_path(STYLE_RULE, Path::new("tests/cli.rs")));
+        assert!(config.is_rule_enabled_for_path(STYLE_RULE, Path::new("src/lib.rs")));
     }
 }

@@ -62,9 +62,16 @@ fn setup_temp_jj_repo() -> tempfile::TempDir {
 
 const BIN_NAME: &str = "omnicoach";
 
+fn isolated_xdg_config_home() -> &'static std::path::Path {
+    static CELL: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| tempfile::tempdir().expect("create hermetic test config dir"))
+        .path()
+}
+
 fn run_cli(args: &[&str], current_dir: Option<&std::path::Path>) -> String {
     let mut cmd = Command::cargo_bin(BIN_NAME).unwrap();
     cmd.args(args);
+    cmd.env("XDG_CONFIG_HOME", isolated_xdg_config_home());
     if let Some(dir) = current_dir {
         cmd.current_dir(dir);
     }
@@ -100,6 +107,7 @@ fn run_hook_stdin(
     let mut command = Command::cargo_bin(BIN_NAME).unwrap();
     command
         .args(["hook", "antigravity", event_arg])
+        .env("XDG_CONFIG_HOME", isolated_xdg_config_home())
         .write_stdin(stdin_payload);
     if let Some(dir) = current_dir {
         command.current_dir(dir);
@@ -338,6 +346,7 @@ fn test_self_dogfooding_code_lint() {
     let output = Command::cargo_bin(BIN_NAME)
         .unwrap()
         .args(["code", "."])
+        .env("XDG_CONFIG_HOME", isolated_xdg_config_home())
         .current_dir(&manifest_dir)
         .output()
         .expect("failed to execute omnicoach on workspace");
@@ -697,5 +706,197 @@ fn test_hook_resolves_workspace_paths_when_current_dir_differs() {
     assert!(
         edit_stdout.contains("edit-of-described-commit"),
         "{edit_stdout}"
+    );
+}
+
+#[test]
+fn test_global_config_fallback_for_code_and_repo_precedence() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let global_config_dir = temp_dir.path().join("global");
+    let global_config_file = global_config_dir.join("omnicoach/config.toml");
+    fs::create_dir_all(global_config_dir.join("omnicoach")).unwrap();
+    fs::write(&global_config_file, "ignore = [\"nested-function\"]\n").unwrap();
+
+    let repo_dir = temp_dir.path().join("repo");
+    fs::create_dir_all(&repo_dir).unwrap();
+    let violating_code = indoc! {r"
+        def outer():
+            def inner():
+                pass
+    "};
+    fs::write(repo_dir.join("test.py"), violating_code).unwrap();
+
+    let mut command_fallback = Command::cargo_bin(BIN_NAME).unwrap();
+    command_fallback
+        .args(["code", "test.py"])
+        .current_dir(&repo_dir)
+        .env("XDG_CONFIG_HOME", &global_config_dir);
+    let output_fallback = command_fallback.output().unwrap();
+
+    fs::write(
+        repo_dir.join(omnicoach::config::CONFIG_FILE_NAME),
+        "select = [\"nested-function\"]\n",
+    )
+    .unwrap();
+
+    let mut command_repo_wins = Command::cargo_bin(BIN_NAME).unwrap();
+    command_repo_wins
+        .args(["code", "test.py"])
+        .current_dir(&repo_dir)
+        .env("XDG_CONFIG_HOME", &global_config_dir);
+    let output_repo_wins = command_repo_wins.output().unwrap();
+
+    assert!(output_fallback.status.success());
+    assert_eq!(output_repo_wins.status.code(), Some(1));
+}
+
+#[test]
+fn test_global_config_precedence_for_command() {
+    let temp_repo = setup_temp_jj_repo();
+    let repo_dir = temp_repo.path();
+    let describe_output = std::process::Command::new("jj")
+        .args(["describe", "-m", "feat: described commit"])
+        .current_dir(repo_dir)
+        .output()
+        .expect("failed to run jj describe");
+
+    // Repo config selects only python, which would disable command rules if repo config won
+    fs::write(
+        repo_dir.join(omnicoach::config::CONFIG_FILE_NAME),
+        "select = [\"python\"]\n",
+    )
+    .unwrap();
+
+    let global_config_dir = repo_dir.join("global_config");
+    let global_config_file = global_config_dir.join("omnicoach/config.toml");
+    fs::create_dir_all(global_config_dir.join("omnicoach")).unwrap();
+    fs::write(&global_config_file, "select = [\"command\"]\n").unwrap();
+
+    let mut command_check = Command::cargo_bin(BIN_NAME).unwrap();
+    command_check
+        .args(["command", "--cmd", "jj edit @"])
+        .current_dir(repo_dir)
+        .env("XDG_CONFIG_HOME", &global_config_dir);
+    let output_check = command_check.output().unwrap();
+
+    assert!(describe_output.status.success());
+    assert_eq!(output_check.status.code(), Some(1));
+}
+
+#[test]
+fn test_hook_global_config_precedence_for_command() {
+    let temp_repo = setup_temp_jj_repo();
+    let repo_dir = temp_repo.path();
+    let describe_output = std::process::Command::new("jj")
+        .args(["describe", "-m", "feat: described commit"])
+        .current_dir(repo_dir)
+        .output()
+        .expect("failed to run jj describe");
+
+    // Repo config selects only python, which would disable command rules if repo config won
+    fs::write(
+        repo_dir.join(omnicoach::config::CONFIG_FILE_NAME),
+        "select = [\"python\"]\n",
+    )
+    .unwrap();
+
+    let global_config_dir = repo_dir.join("global_config");
+    let global_config_file = global_config_dir.join("omnicoach/config.toml");
+    fs::create_dir_all(global_config_dir.join("omnicoach")).unwrap();
+    fs::write(&global_config_file, "select = [\"command\"]\n").unwrap();
+
+    let payload = serde_json::json!({
+        "workspacePaths": [repo_dir],
+        "artifactDirectoryPath": "",
+        "toolCall": {
+            "name": "run_command",
+            "args": {
+                "CommandLine": "jj edit @"
+            }
+        }
+    })
+    .to_string();
+
+    let mut hook_cmd = Command::cargo_bin(BIN_NAME).unwrap();
+    hook_cmd
+        .args(["hook", "antigravity", "pre-tool-use"])
+        .current_dir(repo_dir)
+        .env("XDG_CONFIG_HOME", &global_config_dir)
+        .write_stdin(payload);
+    let output = hook_cmd.output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(describe_output.status.success());
+    assert!(output.status.success());
+    assert!(
+        stdout.contains(r#"{"decision":"deny","reason":"#),
+        "{stdout}"
+    );
+    assert!(stdout.contains("edit-of-described-commit"), "{stdout}");
+}
+
+#[test]
+fn test_global_config_precedence_for_explain() {
+    let temp_repo = setup_temp_jj_repo();
+    let repo_dir = temp_repo.path();
+
+    // Repo config selects only python, which would disable command rules if repo config won
+    fs::write(
+        repo_dir.join(omnicoach::config::CONFIG_FILE_NAME),
+        "select = [\"python\"]\n",
+    )
+    .unwrap();
+
+    let global_config_dir = repo_dir.join("global_config");
+    let global_config_file = global_config_dir.join("omnicoach/config.toml");
+    fs::create_dir_all(global_config_dir.join("omnicoach")).unwrap();
+    fs::write(&global_config_file, "select = [\"command\"]\n").unwrap();
+
+    let mut explain_check = Command::cargo_bin(BIN_NAME).unwrap();
+    explain_check
+        .args(["--explain", "edit-of-described-commit"])
+        .current_dir(repo_dir)
+        .env("XDG_CONFIG_HOME", &global_config_dir);
+    let output_explain = explain_check.output().unwrap();
+
+    let explain_text = String::from_utf8(output_explain.stdout).unwrap();
+    assert!(output_explain.status.success());
+    assert!(explain_text.contains("Status: enabled by `select = [\"command\"]`"));
+}
+
+#[test]
+fn test_subdirectory_invocation_discovers_ancestor_config_and_anchors_globs() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let repo_dir = temp_dir.path().join("repo");
+    let tests_dir = repo_dir.join("tests");
+    fs::create_dir_all(&tests_dir).unwrap();
+
+    fs::write(
+        repo_dir.join(omnicoach::config::CONFIG_FILE_NAME),
+        indoc! {r#"
+            [per-file-ignores]
+            "tests/**" = ["single-letter-name"]
+        "#},
+    )
+    .unwrap();
+
+    let python_code = indoc! {r"
+        k = 1
+    "};
+    fs::write(tests_dir.join("sample.py"), python_code).unwrap();
+    fs::write(repo_dir.join("root_sample.py"), python_code).unwrap();
+
+    let output = run_cli(&["code", "sample.py"], Some(&tests_dir));
+    let output_root = run_cli(&["code", "../root_sample.py"], Some(&tests_dir));
+
+    assert!(output.contains("--- exit code ---\n0\n"), "{output}");
+    assert!(output.contains("All checks passed!"), "{output}");
+    assert!(
+        output_root.contains("--- exit code ---\n1\n"),
+        "{output_root}"
+    );
+    assert!(
+        output_root.contains("[single-letter-name]"),
+        "{output_root}"
     );
 }

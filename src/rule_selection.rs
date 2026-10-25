@@ -186,20 +186,34 @@ pub fn find_rule(name: &str) -> Result<&'static RegisteredRule, UnknownLabel> {
         })
 }
 
-/// Loads `.omnicoach.toml` from the current directory (or `overrides.config_path`), or the
-/// default config if `.omnicoach.toml` is absent, and applies `overrides`.
+/// Loads configuration for the code analysis domain starting from the current directory (or
+/// `overrides.config_path`), falling back to global configuration if absent, and applies `overrides`.
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] if the file cannot be read or is rejected by
-/// [`parse_config_with_overrides`].
+/// Returns [`ConfigError`] if the discovered configuration file cannot be read or parsed.
 pub fn load_config(overrides: &ConfigOverrides) -> Result<Config, ConfigError> {
-    let content = read_config_file(overrides.config_path.as_deref())?;
-    parse_config_with_overrides(&content, overrides)
+    let start_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    load_domain_config(&start_directory, overrides, ConfigDomain::Code)
 }
 
-/// Loads `.omnicoach.toml` from `project_root` (or `overrides.config_path`), or the default
-/// config if `.omnicoach.toml` is absent in `project_root`, and applies `overrides`.
+/// Loads configuration for the command workflow safety domain.
+///
+/// Starts from the current directory (or `overrides.config_path`), prioritizing
+/// user-global configuration over repository configuration, and applies `overrides`.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] if the discovered configuration file cannot be read or parsed.
+pub fn load_command_config(overrides: &ConfigOverrides) -> Result<Config, ConfigError> {
+    let start_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    load_domain_config(&start_directory, overrides, ConfigDomain::Command)
+}
+
+/// Loads configuration for the code analysis domain starting from `project_root`.
+///
+/// Discovers ancestor `.omnicoach.toml` up to the VCS root or falls back to user-global
+/// configuration, and applies `overrides`.
 ///
 /// # Errors
 ///
@@ -208,15 +222,21 @@ pub(crate) fn load_config_from_root(
     project_root: &Path,
     overrides: &ConfigOverrides,
 ) -> Result<Config, ConfigError> {
-    let config_path = overrides.config_path.clone().or_else(|| {
-        Some(project_root.join(CONFIG_FILE_NAME)).filter(|candidate| candidate.is_file())
-    });
-    let content = config_path
-        .as_deref()
-        .map(read_config_at)
-        .transpose()?
-        .unwrap_or_default();
-    parse_config_with_overrides(&content, overrides)
+    load_domain_config(project_root, overrides, ConfigDomain::Code)
+}
+
+/// Loads configuration for the command workflow safety domain starting from `project_root`.
+///
+/// Prioritizes user-global configuration over repository configuration, and applies `overrides`.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] if the discovered config file cannot be read or parsed.
+pub(crate) fn load_command_config_from_root(
+    project_root: &Path,
+    overrides: &ConfigOverrides,
+) -> Result<Config, ConfigError> {
+    load_domain_config(project_root, overrides, ConfigDomain::Command)
 }
 
 /// Discovers the project root directory starting at `start_directory` and traversing up parent directories.
@@ -233,8 +253,10 @@ pub(crate) fn discover_project_root(start_directory: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// Whether `rule` is on under `.omnicoach.toml` in the current directory (or
+/// Whether `rule` is on under resolved configuration in the current directory (or
 /// `overrides.config_path`) with `overrides` applied, and why.
+///
+/// Uses command-domain precedence for command rules and code-domain precedence for code rules.
 ///
 /// # Errors
 ///
@@ -244,8 +266,14 @@ pub fn load_rule_status(
     rule: &RegisteredRule,
     overrides: &ConfigOverrides,
 ) -> Result<RuleStatus, ConfigError> {
-    let content = read_config_file(overrides.config_path.as_deref())?;
-    rule_status_with_overrides(&content, overrides, rule)
+    let start_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let domain = if rule.matches(Selector::Tag(Tag::Derived(Derived::Command))) {
+        ConfigDomain::Command
+    } else {
+        ConfigDomain::Code
+    };
+    let resolved = resolve_domain_config(&start_directory, overrides, domain)?;
+    rule_status_with_overrides(&resolved.content, overrides, rule)
 }
 
 /// Whether `rule` is on under `config_toml`'s `select` and `ignore`, and why.
@@ -324,6 +352,7 @@ pub fn parse_config_with_overrides(
         rule_overrides,
         context: raw.context,
         per_file_ignores,
+        root_dir: None,
     })
 }
 
@@ -379,6 +408,126 @@ impl fmt::Display for RuleStatus {
     }
 }
 
+const GLOBAL_CONFIG_RELATIVE_PATH: &str = "omnicoach/config.toml";
+const DEFAULT_CONFIG_DIR_NAME: &str = ".config";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigDomain {
+    Code,
+    Command,
+}
+
+fn load_domain_config(
+    start_directory: &Path,
+    overrides: &ConfigOverrides,
+    domain: ConfigDomain,
+) -> Result<Config, ConfigError> {
+    let resolved = resolve_domain_config(start_directory, overrides, domain)?;
+    let mut config = parse_config_with_overrides(&resolved.content, overrides)?;
+    config.root_dir = Some(resolved.root_dir);
+    Ok(config)
+}
+
+struct ResolvedDomainConfig {
+    content: String,
+    root_dir: PathBuf,
+}
+
+fn resolve_domain_config(
+    start_directory: &Path,
+    overrides: &ConfigOverrides,
+    domain: ConfigDomain,
+) -> Result<ResolvedDomainConfig, ConfigError> {
+    let global_config_path = default_global_config_path();
+    resolve_domain_config_with(
+        start_directory,
+        overrides,
+        domain,
+        global_config_path.as_deref(),
+    )
+}
+
+fn default_global_config_path() -> Option<PathBuf> {
+    if cfg!(test) {
+        return None;
+    }
+    load_env()
+}
+
+fn load_env() -> Option<PathBuf> {
+    resolve_global_config_path(
+        std::env::var_os("XDG_CONFIG_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+}
+
+fn resolve_global_config_path(
+    xdg_config_home: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    if let Some(xdg) = xdg_config_home.filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(xdg).join(GLOBAL_CONFIG_RELATIVE_PATH));
+    }
+    let home = home.filter(|value| !value.is_empty())?;
+    Some(
+        PathBuf::from(home)
+            .join(DEFAULT_CONFIG_DIR_NAME)
+            .join(GLOBAL_CONFIG_RELATIVE_PATH),
+    )
+}
+
+fn resolve_domain_config_with(
+    start_directory: &Path,
+    overrides: &ConfigOverrides,
+    domain: ConfigDomain,
+    global_config_path: Option<&Path>,
+) -> Result<ResolvedDomainConfig, ConfigError> {
+    let discovered_root = discover_project_root(start_directory);
+    let local_config_path = discovered_root
+        .as_deref()
+        .map(|root| root.join(CONFIG_FILE_NAME));
+    let root_dir = discovered_root.unwrap_or_else(|| start_directory.to_path_buf());
+
+    if let Some(explicit_path) = overrides.config_path.as_deref() {
+        let content = read_config_at(explicit_path)?;
+        return Ok(ResolvedDomainConfig { content, root_dir });
+    }
+
+    let candidate_paths: &[Option<&Path>] = match domain {
+        ConfigDomain::Code => &[local_config_path.as_deref(), global_config_path],
+        ConfigDomain::Command => &[global_config_path, local_config_path.as_deref()],
+    };
+
+    for candidate in candidate_paths.iter().flatten() {
+        if let Some(content) = read_optional_config_at(candidate)? {
+            return Ok(ResolvedDomainConfig { content, root_dir });
+        }
+    }
+
+    Ok(ResolvedDomainConfig {
+        content: String::new(),
+        root_dir,
+    })
+}
+
+fn read_config_at(path: &Path) -> Result<String, ConfigError> {
+    std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+fn read_optional_config_at(path: &Path) -> Result<Option<String>, ConfigError> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(ConfigError::Io {
+            path: path.display().to_string(),
+            source,
+        }),
+    }
+}
+
 /// The raw `.omnicoach.toml` table before selector and rule-option validation.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
@@ -392,27 +541,6 @@ struct RawConfig {
     rules: toml::Table,
     #[serde(default)]
     context: ContextConfig,
-}
-
-fn read_config_file(config_path: Option<&Path>) -> Result<String, ConfigError> {
-    if let Some(path) = config_path {
-        return read_config_at(path);
-    }
-    match std::fs::read_to_string(CONFIG_FILE_NAME) {
-        Ok(content) => Ok(content),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(source) => Err(ConfigError::Io {
-            path: CONFIG_FILE_NAME.to_owned(),
-            source,
-        }),
-    }
-}
-
-fn read_config_at(path: &Path) -> Result<String, ConfigError> {
-    std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
-        path: path.display().to_string(),
-        source,
-    })
 }
 
 fn rule_names(mut predicate: impl FnMut(&RegisteredRule) -> bool) -> HashSet<RuleName> {
@@ -855,6 +983,112 @@ mod tests {
             "`jj` is both selected and ignored (synonyms count as the same selector); remove it \
              from one list"
         );
+    }
+
+    #[rstest::rstest]
+    #[case::xdg_config_home(
+        Some("/tmp/xdg"),
+        Some("/tmp/home"),
+        Some("/tmp/xdg/omnicoach/config.toml")
+    )]
+    #[case::home_fallback(
+        None,
+        Some("/tmp/home"),
+        Some("/tmp/home/.config/omnicoach/config.toml")
+    )]
+    #[case::empty_xdg_falls_back_to_home(
+        Some(""),
+        Some("/tmp/home"),
+        Some("/tmp/home/.config/omnicoach/config.toml")
+    )]
+    #[case::empty_home_returns_none(None, Some(""), None)]
+    #[case::all_unset(None, None, None)]
+    fn test_resolve_global_config_path_variants(
+        #[case] xdg_config_home: Option<&str>,
+        #[case] home: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(
+            resolve_global_config_path(
+                xdg_config_home.map(std::ffi::OsStr::new),
+                home.map(std::ffi::OsStr::new),
+            ),
+            expected.map(PathBuf::from)
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::code_domain_prefers_repo_config(ConfigDomain::Code, true, "sleep-in-tests")]
+    #[case::command_domain_prefers_global_config(ConfigDomain::Command, true, "nested-function")]
+    #[case::command_domain_without_global_falls_back_to_repo(
+        ConfigDomain::Command,
+        false,
+        "sleep-in-tests"
+    )]
+    fn test_domain_scoped_config_resolution(
+        #[case] domain: ConfigDomain,
+        #[case] has_global_config: bool,
+        #[case] expected_substring: &str,
+    ) {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let root = temp_dir.path();
+        let global_dir = root.join("global_dir");
+        let global_config = global_dir.join("omnicoach/config.toml");
+        std::fs::create_dir_all(global_dir.join("omnicoach")).expect("create global dir");
+        std::fs::write(&global_config, "ignore = [\"nested-function\"]\n").expect("write global");
+
+        let repo_dir = root.join("repo");
+        let repo_nested = repo_dir.join("src");
+        std::fs::create_dir_all(&repo_nested).expect("create repo dir");
+        std::fs::write(
+            repo_dir.join(CONFIG_FILE_NAME),
+            "ignore = [\"sleep-in-tests\"]\n",
+        )
+        .expect("write repo config");
+
+        let resolved = resolve_domain_config_with(
+            &repo_nested,
+            &ConfigOverrides::default(),
+            domain,
+            has_global_config.then_some(global_config.as_path()),
+        )
+        .expect("resolve config");
+
+        assert!(resolved.content.contains(expected_substring));
+        assert_eq!(resolved.root_dir, repo_dir);
+    }
+
+    #[test]
+    fn test_code_domain_stops_at_vcs_boundary_and_uses_global_config() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let parent_dir = temp_dir.path();
+        std::fs::write(
+            parent_dir.join(CONFIG_FILE_NAME),
+            "ignore = [\"escaped-multiline-string\"]\n",
+        )
+        .expect("write parent config");
+
+        let repo_dir = parent_dir.join("repo");
+        let nested_dir = repo_dir.join("sub");
+        std::fs::create_dir_all(repo_dir.join(".git")).expect("create fake .git dir");
+        std::fs::create_dir_all(&nested_dir).expect("create nested dir");
+
+        let global_dir = parent_dir.join("global_dir");
+        let global_config = global_dir.join("omnicoach/config.toml");
+        std::fs::create_dir_all(global_dir.join("omnicoach")).expect("create global dir");
+        std::fs::write(&global_config, "ignore = [\"nested-function\"]\n").expect("write global");
+
+        let resolved = resolve_domain_config_with(
+            &nested_dir,
+            &ConfigOverrides::default(),
+            ConfigDomain::Code,
+            Some(&global_config),
+        )
+        .expect("resolve config");
+
+        assert_eq!(resolved.root_dir, repo_dir);
+        assert!(resolved.content.contains("nested-function"));
+        assert!(!resolved.content.contains("escaped-multiline-string"));
     }
 
     #[test]

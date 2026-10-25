@@ -3,16 +3,18 @@
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use super::event::{FileEdit, PreToolDecision, PreToolUseEvent, ToolCallPayload};
 use super::virtual_edit::{VirtualFile, apply_virtual_edit};
 use crate::code_lint::runner::lint_file;
 use crate::command_lint::runner::run_command_lint_with_client;
 use crate::command_lint::vcs::{JjCliClient, JjClient};
-use crate::config::Config;
+use crate::config::{Config, lexical_normalize};
 use crate::diagnostic::{Diagnostic, Language, RuleName};
-use crate::rule_selection::{ConfigOverrides, discover_project_root, load_config_from_root};
+use crate::rule_selection::{
+    ConfigOverrides, discover_project_root, load_command_config_from_root, load_config_from_root,
+};
 
 type JjClientFactory<'a> = &'a dyn Fn(&Path) -> Box<dyn JjClient>;
 
@@ -66,7 +68,7 @@ fn check_command(
     let working_directory =
         resolve_in_workspace(cwd.unwrap_or_else(|| Path::new("")), workspace_paths);
     let project_root = resolve_project_root(&working_directory, workspace_paths);
-    let Some(config) = load_hook_config(&project_root) else {
+    let Some(config) = load_hook_config(&project_root, load_command_config_from_root) else {
         return PreToolDecision::NoObjection;
     };
     let client = jj_client_for(&working_directory);
@@ -107,7 +109,7 @@ fn lint_proposed_edit(
         .as_ref()
         .is_some_and(|agent_owned_dir| {
             !agent_owned_dir.as_os_str().is_empty()
-                && target_file_path.starts_with(normalize_path(agent_owned_dir))
+                && target_file_path.starts_with(lexical_normalize(agent_owned_dir))
         });
     if is_agent_owned_file {
         return Vec::new();
@@ -141,16 +143,13 @@ fn lint_proposed_edit(
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let project_root = resolve_project_root(parent_directory, &event.workspace_paths);
-    let Some(config) = load_hook_config(&project_root) else {
+    let Some(config) = load_hook_config(&project_root, load_config_from_root) else {
         return Vec::new();
     };
-    let relative_path = target_file_path
-        .strip_prefix(&project_root)
-        .unwrap_or(&target_file_path);
 
-    let post_edit_diagnostics = lint_file(relative_path, &virtual_file.content, &config);
+    let post_edit_diagnostics = lint_file(&target_file_path, &virtual_file.content, &config);
     filter_relevant_diagnostics(
-        relative_path,
+        &target_file_path,
         original_content.as_deref(),
         &virtual_file,
         &config,
@@ -165,7 +164,7 @@ fn is_within_workspace(target_file_path: &Path, workspace_paths: &[PathBuf]) -> 
     workspace_paths.is_empty()
         || workspace_paths
             .iter()
-            .map(|workspace| normalize_path(workspace))
+            .map(|workspace| lexical_normalize(workspace))
             .any(|workspace| target_file_path.starts_with(&workspace))
 }
 
@@ -257,7 +256,7 @@ fn resolve_in_workspace(raw_path: &Path, workspace_paths: &[PathBuf]) -> PathBuf
     } else {
         raw_path.to_path_buf()
     };
-    normalize_path(&joined)
+    lexical_normalize(&joined)
 }
 
 fn resolve_project_root(directory: &Path, workspace_paths: &[PathBuf]) -> PathBuf {
@@ -265,40 +264,17 @@ fn resolve_project_root(directory: &Path, workspace_paths: &[PathBuf]) -> PathBu
         .or_else(|| {
             workspace_paths
                 .iter()
-                .map(|workspace| normalize_path(workspace))
+                .map(|workspace| lexical_normalize(workspace))
                 .find(|workspace| directory.starts_with(workspace))
         })
         .unwrap_or_else(|| directory.to_path_buf())
 }
 
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut components: Vec<Component<'_>> = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => match components.last() {
-                Some(Component::Normal(_)) => {
-                    components.pop();
-                }
-                Some(Component::RootDir | Component::Prefix(_)) => {}
-                Some(Component::ParentDir | Component::CurDir) | None => {
-                    components.push(component);
-                }
-            },
-            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
-                components.push(component);
-            }
-        }
-    }
-    if components.is_empty() {
-        PathBuf::from(".")
-    } else {
-        components.iter().collect()
-    }
-}
-
-fn load_hook_config(project_root: &Path) -> Option<Config> {
-    match load_config_from_root(project_root, &ConfigOverrides::default()) {
+fn load_hook_config<E: std::fmt::Display>(
+    project_root: &Path,
+    load: impl FnOnce(&Path, &ConfigOverrides) -> Result<Config, E>,
+) -> Option<Config> {
+    match load(project_root, &ConfigOverrides::default()) {
         Ok(config) => Some(config),
         Err(error) => {
             eprintln!("[omnicoach hook] ignoring invalid config (failing open): {error}");

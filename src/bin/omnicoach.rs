@@ -14,7 +14,7 @@ use omnicoach::config::Config;
 use omnicoach::diagnostic::{OutputFormat, print_diagnostics};
 use omnicoach::hook::{AntigravityEvent, run_antigravity_hook};
 use omnicoach::rule_catalog::{DiscoveryArgs, code_report_footer, explain_footer};
-use omnicoach::rule_selection::{ConfigOverrides, load_config};
+use omnicoach::rule_selection::{ConfigOverrides, load_command_config, load_config};
 
 fn main() {
     if let Err(error) = run() {
@@ -62,7 +62,7 @@ fn run() -> anyhow::Result<()> {
             run_code(&options, &config, cli.format)
         }
         DomainCommand::Command(args) => {
-            let config = load_config(&cli.config_overrides)
+            let config = load_command_config(&cli.config_overrides)
                 .map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
             let Some(command) = args.cmd else {
                 unreachable!("clap requires --cmd unless a discovery flag is given");
