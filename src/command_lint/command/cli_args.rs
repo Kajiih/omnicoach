@@ -20,8 +20,6 @@ pub struct ProgramCliSchema {
 pub struct ParsedArgs {
     /// Positional arguments in order (e.g. `["edit", "@-"]`), excluding options and their values.
     pub positionals: Vec<String>,
-    /// Positional arguments with their original [`CommandArg`] source spans.
-    pub positional_args: Vec<CommandArg>,
     options: HashMap<String, Vec<String>>,
 }
 
@@ -63,7 +61,6 @@ struct ArgParser<'a> {
     arguments_iter: Peekable<Iter<'a, CommandArg>>,
     options_with_values: &'a [&'a str],
     positionals: Vec<String>,
-    positional_args: Vec<CommandArg>,
     options: HashMap<String, Vec<String>>,
 }
 
@@ -73,7 +70,6 @@ impl<'a> ArgParser<'a> {
             arguments_iter: arguments.iter().peekable(),
             options_with_values,
             positionals: Vec::new(),
-            positional_args: Vec::new(),
             options: HashMap::new(),
         }
     }
@@ -85,7 +81,6 @@ impl<'a> ArgParser<'a> {
             let text = argument.text.as_str();
             if options_terminated {
                 self.positionals.push(argument.text.clone());
-                self.positional_args.push(argument.clone());
                 continue;
             }
 
@@ -100,13 +95,11 @@ impl<'a> ArgParser<'a> {
                 self.parse_short_option_cluster(text);
             } else {
                 self.positionals.push(argument.text.clone());
-                self.positional_args.push(argument.clone());
             }
         }
 
         ParsedArgs {
             positionals: self.positionals,
-            positional_args: self.positional_args,
             options: self.options,
         }
     }

@@ -52,7 +52,7 @@ impl CommandRule {
 
     /// Renders a [`Diagnostic`] at `span` in `parsed` using this rule's violation template.
     #[must_use]
-    pub fn diagnostic_at(
+    pub(super) fn diagnostic_at(
         &self,
         parsed: &ParsedCommand,
         span: SourceSpan,

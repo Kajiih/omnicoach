@@ -268,7 +268,7 @@ impl RegisteredRule {
         static TEMPLATE: ViolationTemplate = ViolationTemplate::from_static("", "", "");
         Self {
             name: RuleName(name),
-            doc: RuleDoc::TODO.map_examples(DeclaredExamples::Code(&[])),
+            doc: RuleDoc::TODO.declared(),
             template: &TEMPLATE,
             options: crate::rule_declaration::RuleOptions::none().declared(),
             languages: &[],

@@ -99,7 +99,7 @@ impl<Options: OptionsDeclaration, Examples> Declaration<Options, Examples> {
             languages: self.languages,
             options: self.options.declared(),
             classification: self.classification,
-            doc: self.doc.map_examples(self.doc.examples.into()),
+            doc: self.doc.declared(),
         }
     }
 

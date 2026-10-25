@@ -135,7 +135,14 @@ mod tests {
         let envs: Vec<_> = cmd
             .env_assignments
             .iter()
-            .map(|env| (env.name.as_str(), env.value.text.as_str(), env.span))
+            .map(|env| {
+                (
+                    env.name.as_str(),
+                    env.value.text.as_str(),
+                    env.value.span,
+                    env.span,
+                )
+            })
             .collect();
         assert_eq!(
             summarize(cmd),
@@ -146,7 +153,15 @@ mod tests {
                 scopes: &[],
             }
         );
-        assert_eq!(envs, vec![("JJ_USER", "alice", SourceSpan::new(0, 13))]);
+        assert_eq!(
+            envs,
+            vec![(
+                "JJ_USER",
+                "alice",
+                SourceSpan::new(8, 13),
+                SourceSpan::new(0, 13)
+            )]
+        );
     }
 
     #[test]
@@ -301,6 +316,11 @@ mod tests {
         "jj edit d123",
         ShellScope::CommandSubstitution
     )]
+    #[case::env_assignment_substitution(
+        "JJ_USER=$(jj edit d123) jj status",
+        "jj edit d123",
+        ShellScope::CommandSubstitution
+    )]
     #[case::process_substitution(
         "diff <(jj edit d123) out.txt",
         "jj edit d123",
@@ -326,6 +346,7 @@ mod tests {
     }
 
     #[rstest::rstest]
+    #[case::write_without_space("jj log>out.txt", RedirectKind::Write, ">out.txt")]
     #[case::append("jj log >> out.txt", RedirectKind::Append, ">> out.txt")]
     #[case::clobber("jj log >| out.txt", RedirectKind::Clobber, ">| out.txt")]
     #[case::output_and_error("jj log &> out.txt", RedirectKind::OutputAndError, "&> out.txt")]
@@ -363,6 +384,10 @@ mod tests {
         assert_eq!(
             parsed.commands()[0].redirects[0].kind,
             RedirectKind::HereDoc
+        );
+        assert_eq!(
+            parsed.commands()[0].redirects[0].span,
+            SourceSpan::new(4, 20)
         );
         assert_eq!(parsed.commands()[1].arguments[0].text, "a b");
         assert!(parsed.commands()[1].arguments[1].has_expansion);

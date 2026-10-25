@@ -291,7 +291,7 @@ pub fn assert_language_completeness<Options: OptionsDeclaration>(
 }
 
 /// Asserts that a command rule `pass` test case produces zero diagnostics (both standalone and
-/// when repeated in a `&&` chain).
+/// when repeated on two lines).
 ///
 /// # Panics
 /// Panics if `rule` emits any diagnostics on `command_line` or `"{command_line}\n{command_line}"`.
@@ -846,21 +846,8 @@ pub(crate) use rule_test;
 /// Supports both purely syntactic command rules (omitting `jj: [...]`) and repository-aware
 /// command rules (providing `jj: [ "rev" => CommitInfo { ... }, ... ]`).
 macro_rules! command_rule_test {
-    (
-        $rule:ident,
-        {
-            pass: [ $( $pass_name:ident => $pass_cmd:literal ),+ $(,)? ],
-            fail: [ $( $fail_name:ident => $fail_cmd:literal $( => $snippet:literal )? ),+ $(,)? ] $(,)?
-        } $(,)?
-    ) => {
-        $crate::test_utils::command_rule_test!(
-            $rule,
-            jj: [],
-            {
-                pass: [ $( $pass_name => $pass_cmd ),+ ],
-                fail: [ $( $fail_name => $fail_cmd $( => $snippet )? ),+ ],
-            }
-        );
+    ($rule:ident, { $($body:tt)* } $(,)?) => {
+        $crate::test_utils::command_rule_test!($rule, jj: [], { $($body)* });
     };
     (
         $rule:ident,
@@ -870,7 +857,6 @@ macro_rules! command_rule_test {
             fail: [ $( $fail_name:ident => $fail_cmd:literal $( => $snippet:literal )? ),+ $(,)? ] $(,)?
         } $(,)?
     ) => {
-        #[cfg(test)]
         mod tests {
             use super::*;
 

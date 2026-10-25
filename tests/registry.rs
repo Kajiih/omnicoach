@@ -339,8 +339,7 @@ fn test_pass_cases_test_one_behaviour() {
 /// The file name and the registry already carry a rule's name, so its module doc only describes it.
 #[test]
 fn test_rule_module_docs_do_not_repeat_the_rule_name() {
-    let command_sources = rule_sources("src/command_lint/rules");
-    for (path, source) in RULE_SOURCES.iter().chain(&command_sources) {
+    for (path, source) in RULE_SOURCES.iter().chain(COMMAND_RULE_SOURCES.iter()) {
         let module_doc: Vec<&str> = source
             .lines()
             .take_while(|line| line.starts_with("//!"))
@@ -410,8 +409,7 @@ fn declared_rule_names(source: &str) -> Vec<&str> {
 /// exposes each as the `SCREAMING_SNAKE_CASE` of its name.
 #[test]
 fn test_rule_files_and_consts_are_named_after_their_rule() {
-    let command_sources = rule_sources("src/command_lint/rules");
-    for (path, source) in RULE_SOURCES.iter().chain(&command_sources) {
+    for (path, source) in RULE_SOURCES.iter().chain(COMMAND_RULE_SOURCES.iter()) {
         let stem = path
             .file_stem()
             .and_then(|stem| stem.to_str())

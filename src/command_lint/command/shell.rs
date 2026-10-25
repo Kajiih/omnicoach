@@ -109,13 +109,11 @@ impl InterceptedCommand {
     }
 }
 
-/// A single shell word (program name or CLI argument) with unquoted text, raw source, and span.
+/// A single shell word (program name or CLI argument) with unquoted text and span.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandArg {
     /// Unquoted text value (e.g. `feat: msg` for `"feat: msg"`).
     pub text: String,
-    /// Exact raw slice from the command line (e.g. `"feat: msg"`).
-    pub raw: String,
     /// UTF-8 byte span in [`ParsedCommand::source`].
     pub span: SourceSpan,
     /// `true` if the word contains dynamic expansions (`$VAR`, `$(...)`, `$((...))`).
@@ -341,11 +339,7 @@ impl ScriptWalker<'_> {
             Command::Simple(simple) => self.walk_simple_command(simple, scopes, out),
             Command::Compound(compound, redirects) => {
                 self.walk_compound_command(compound, scopes, out);
-                if let Some(RedirectList(list)) = redirects {
-                    for redirect in list {
-                        self.walk_io_redirect_substitutions(redirect, scopes, out);
-                    }
-                }
+                self.walk_redirect_list(redirects.as_ref(), scopes, out);
             }
             Command::Function(FunctionDefinition {
                 body: FunctionBody(compound, redirects),
@@ -353,21 +347,13 @@ impl ScriptWalker<'_> {
             }) => {
                 let pushed = push_unique_scope(scopes, ShellScope::CompoundBlock);
                 self.walk_compound_command(compound, scopes, out);
-                if let Some(RedirectList(list)) = redirects {
-                    for redirect in list {
-                        self.walk_io_redirect_substitutions(redirect, scopes, out);
-                    }
-                }
+                self.walk_redirect_list(redirects.as_ref(), scopes, out);
                 if pushed {
                     scopes.pop();
                 }
             }
             Command::ExtendedTest(_, redirects) => {
-                if let Some(RedirectList(list)) = redirects {
-                    for redirect in list {
-                        self.walk_io_redirect_substitutions(redirect, scopes, out);
-                    }
-                }
+                self.walk_redirect_list(redirects.as_ref(), scopes, out);
             }
         }
     }
@@ -458,6 +444,19 @@ impl ScriptWalker<'_> {
                 }
             }
             CompoundCommand::Arithmetic(_) | CompoundCommand::Coprocess(_) => {}
+        }
+    }
+
+    fn walk_redirect_list(
+        &self,
+        redirects: Option<&RedirectList>,
+        scopes: &mut Vec<ShellScope>,
+        out: &mut Vec<InterceptedCommand>,
+    ) {
+        if let Some(RedirectList(list)) = redirects {
+            for redirect in list {
+                let _ = self.parse_io_redirect(redirect, scopes, out);
+            }
         }
     }
 
@@ -558,7 +557,6 @@ impl ScriptWalker<'_> {
                 let span = self.char_offsets.map_span(&subshell.loc);
                 arguments.push(CommandArg {
                     text: String::new(),
-                    raw: String::new(),
                     span,
                     has_expansion: true,
                 });
@@ -583,20 +581,38 @@ impl ScriptWalker<'_> {
             AssignmentName::ArrayElementName(var, subscript) => format!("{var}[{subscript}]"),
         };
         let full_span = self.word_span(full_word);
+        let value_offset = full_word.value.find('=').map_or(0, |index| index + 1);
+        let value_span = SourceSpan::new(full_span.start + value_offset, full_span.end);
         let value = match &assignment.value {
-            AssignmentValue::Scalar(val_word) => self.parse_word(val_word, scopes, nested_commands),
+            AssignmentValue::Scalar(val_word) => {
+                self.parse_word_at_span(&val_word.value, value_span, scopes, nested_commands)
+            }
             AssignmentValue::Array(elements) => {
+                let mut has_expansion = false;
                 for (key, element_value) in elements {
                     if let Some(key_word) = key {
-                        let _ = self.parse_word(key_word, scopes, nested_commands);
+                        has_expansion |= self
+                            .parse_word_at_span(
+                                &key_word.value,
+                                value_span,
+                                scopes,
+                                nested_commands,
+                            )
+                            .has_expansion;
                     }
-                    let _ = self.parse_word(element_value, scopes, nested_commands);
+                    has_expansion |= self
+                        .parse_word_at_span(
+                            &element_value.value,
+                            value_span,
+                            scopes,
+                            nested_commands,
+                        )
+                        .has_expansion;
                 }
                 CommandArg {
                     text: String::new(),
-                    raw: full_word.value.clone(),
-                    span: full_span,
-                    has_expansion: false,
+                    span: value_span,
+                    has_expansion,
                 }
             }
         };
@@ -626,53 +642,46 @@ impl ScriptWalker<'_> {
                     IoFileRedirectKind::DuplicateInput => RedirectKind::DuplicateInput,
                     IoFileRedirectKind::DuplicateOutput => RedirectKind::DuplicateOutput,
                 };
-                match target {
+                let (resolved_target, target_span) = match target {
                     IoFileRedirectTarget::Filename(word) => {
                         let arg = self.parse_word(word, scopes, nested_commands);
-                        let span = self.extend_redirect_span_left(arg.span);
-                        Some(CommandRedirect {
-                            fd,
-                            kind: redirect_kind,
-                            target: RedirectTarget::File(arg),
-                            span,
-                        })
+                        let span = arg.span;
+                        (RedirectTarget::File(arg), span)
                     }
                     IoFileRedirectTarget::Duplicate(word) => {
                         let arg = self.parse_word(word, scopes, nested_commands);
-                        let span = self.extend_redirect_span_left(arg.span);
-                        let resolved_target = arg
+                        let span = arg.span;
+                        let dup_target = arg
                             .text
                             .parse::<u32>()
                             .map_or(RedirectTarget::File(arg), RedirectTarget::Fd);
-                        Some(CommandRedirect {
-                            fd,
-                            kind: redirect_kind,
-                            target: resolved_target,
-                            span,
-                        })
+                        (dup_target, span)
                     }
                     IoFileRedirectTarget::ProcessSubstitution(_, subshell) => {
                         let sub_span = self.char_offsets.map_span(&subshell.loc);
-                        let span = self.extend_redirect_span_left(sub_span);
                         let pushed = push_unique_scope(scopes, ShellScope::ProcessSubstitution);
                         self.walk_compound_list(&subshell.list, scopes, nested_commands);
                         if pushed {
                             scopes.pop();
                         }
-                        Some(CommandRedirect {
-                            fd,
-                            kind: redirect_kind,
-                            target: RedirectTarget::ProcessSubstitution { span: sub_span },
-                            span,
-                        })
+                        (
+                            RedirectTarget::ProcessSubstitution { span: sub_span },
+                            sub_span,
+                        )
                     }
                     // Synthesized by brush_parser for `|&` pipelines; not a source-level redirect.
-                    IoFileRedirectTarget::Fd(_) => None,
-                }
+                    IoFileRedirectTarget::Fd(_) => return None,
+                };
+                Some(CommandRedirect {
+                    fd,
+                    kind: redirect_kind,
+                    target: resolved_target,
+                    span: self.extend_redirect_span_left(target_span, raw_fd.is_some()),
+                })
             }
             IoRedirect::OutputAndError(word, append) => {
                 let arg = self.parse_word(word, scopes, nested_commands);
-                let span = self.extend_redirect_span_left(arg.span);
+                let span = self.extend_redirect_span_left(arg.span, false);
                 Some(CommandRedirect {
                     fd: None,
                     kind: if *append {
@@ -687,7 +696,7 @@ impl ScriptWalker<'_> {
             IoRedirect::HereString(raw_fd, word) => {
                 let fd = raw_fd.and_then(|value| u32::try_from(value).ok());
                 let arg = self.parse_word(word, scopes, nested_commands);
-                let span = self.extend_redirect_span_left(arg.span);
+                let span = self.extend_redirect_span_left(arg.span, raw_fd.is_some());
                 Some(CommandRedirect {
                     fd,
                     kind: RedirectKind::HereString,
@@ -698,16 +707,22 @@ impl ScriptWalker<'_> {
             IoRedirect::HereDocument(raw_fd, IoHereDocument { here_end, doc, .. }) => {
                 let fd = raw_fd.and_then(|value| u32::try_from(value).ok());
                 let end_span = self.word_span(here_end);
-                let doc_span = self.word_span(doc);
-                let combined = hull_span(end_span, doc_span);
-                let span = self.extend_redirect_span_left(combined);
+                let header_span = self.extend_redirect_span_left(end_span, raw_fd.is_some());
+                let doc_span = doc
+                    .location()
+                    .map(|loc| self.char_offsets.map_span(&loc))
+                    .filter(|span| span.end > span.start);
+                let target_span =
+                    doc_span.map_or(end_span, |body_span| hull_span(end_span, body_span));
+                let span =
+                    doc_span.map_or(header_span, |body_span| hull_span(header_span, body_span));
                 Some(CommandRedirect {
                     fd,
                     kind: RedirectKind::HereDoc,
                     target: RedirectTarget::HereDoc {
                         delimiter: here_end.value.clone(),
                         body: doc.value.clone(),
-                        span: combined,
+                        span: target_span,
                     },
                     span,
                 })
@@ -715,18 +730,13 @@ impl ScriptWalker<'_> {
         }
     }
 
-    fn walk_io_redirect_substitutions(
-        &self,
-        io_redirect: &IoRedirect,
-        scopes: &mut Vec<ShellScope>,
-        out: &mut Vec<InterceptedCommand>,
-    ) {
-        let _ = self.parse_io_redirect(io_redirect, scopes, out);
-    }
-
     /// Includes the preceding redirection operator token (and optional explicit file-descriptor
     /// token, such as `2` in `2>&1`) in a redirection's span.
-    fn extend_redirect_span_left(&self, target_span: SourceSpan) -> SourceSpan {
+    fn extend_redirect_span_left(
+        &self,
+        target_span: SourceSpan,
+        has_explicit_fd: bool,
+    ) -> SourceSpan {
         let target_token_position = self
             .token_spans
             .partition_point(|span| span.start < target_span.start);
@@ -734,7 +744,8 @@ impl ScriptWalker<'_> {
             return target_span;
         }
         let op_span = self.token_spans[target_token_position - 1];
-        let start = if target_token_position >= 2
+        let start = if has_explicit_fd
+            && target_token_position >= 2
             && self.token_spans[target_token_position - 2].end == op_span.start
         {
             self.token_spans[target_token_position - 2].start
@@ -750,12 +761,19 @@ impl ScriptWalker<'_> {
         scopes: &mut Vec<ShellScope>,
         nested_commands: &mut Vec<InterceptedCommand>,
     ) -> CommandArg {
-        let span = self.word_span(word);
-        let raw = word.value.clone();
-        let Ok(pieces) = brush_parser::word::parse(&raw, self.parser_options) else {
+        self.parse_word_at_span(&word.value, self.word_span(word), scopes, nested_commands)
+    }
+
+    fn parse_word_at_span(
+        &self,
+        raw: &str,
+        span: SourceSpan,
+        scopes: &mut Vec<ShellScope>,
+        nested_commands: &mut Vec<InterceptedCommand>,
+    ) -> CommandArg {
+        let Ok(pieces) = brush_parser::word::parse(raw, self.parser_options) else {
             return CommandArg {
-                text: raw.clone(),
-                raw,
+                text: raw.to_owned(),
                 span,
                 has_expansion: false,
             };
@@ -766,7 +784,7 @@ impl ScriptWalker<'_> {
         Self::collect_word_pieces(
             &pieces,
             span.start,
-            &raw,
+            raw,
             &mut unquoted,
             &mut has_expansion,
             scopes,
@@ -775,7 +793,6 @@ impl ScriptWalker<'_> {
 
         CommandArg {
             text: unquoted,
-            raw,
             span,
             has_expansion,
         }

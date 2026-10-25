@@ -626,4 +626,55 @@ mod tests {
             "{footer}"
         );
     }
+
+    #[rstest]
+    #[case::empty_code(DeclaredExamples::Code(&[]), "")]
+    #[case::empty_command(DeclaredExamples::Command(&[]), "")]
+    #[case::code_example(
+        DeclaredExamples::Code(&[crate::rule_declaration::Example {
+            language: crate::diagnostic::Language::Python,
+            flagged: "time.sleep(1)\n",
+            flagged_span: "time.sleep(1)",
+            fixed: "clock.advance(1)\n",
+        }]),
+        indoc::indoc! {"
+            ## Example
+
+            ```python
+            time.sleep(1)
+            ```
+
+            Use instead:
+
+            ```python
+            clock.advance(1)
+            ```
+        "}
+    )]
+    #[case::command_example(
+        DeclaredExamples::Command(&[crate::rule_declaration::CommandExample {
+            flagged: "jj edit kpqxywon\n",
+            flagged_span: "jj edit kpqxywon",
+            fixed: "jj new kpqxywon\n",
+        }]),
+        indoc::indoc! {"
+            ## Example
+
+            ```sh
+            jj edit kpqxywon
+            ```
+
+            Use instead:
+
+            ```sh
+            jj new kpqxywon
+            ```
+        "}
+    )]
+    fn example_lines_renders_code_and_command_fences(
+        #[case] examples: DeclaredExamples,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(example_lines(examples).join("\n"), expected);
+    }
 }

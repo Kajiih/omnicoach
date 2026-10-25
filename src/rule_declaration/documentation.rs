@@ -156,11 +156,11 @@ impl<Examples> RuleDoc<Examples> {
             && self.references.is_empty()
     }
 
-    /// Replaces `self.examples` with `examples`, preserving all prose fields.
+    /// The doc with its `examples` erased into [`DeclaredExamples`].
     #[must_use]
-    pub const fn map_examples<Target>(self, examples: Target) -> RuleDoc<Target>
+    pub fn declared(self) -> RuleDoc<DeclaredExamples>
     where
-        Examples: Copy,
+        Examples: Into<DeclaredExamples>,
     {
         RuleDoc {
             summary: self.summary,
@@ -168,7 +168,7 @@ impl<Examples> RuleDoc<Examples> {
             why_is_this_bad: self.why_is_this_bad,
             known_problems: self.known_problems,
             references: self.references,
-            examples,
+            examples: self.examples.into(),
         }
     }
 }

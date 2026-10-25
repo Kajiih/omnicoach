@@ -105,11 +105,13 @@ fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
     if !args.has_subcommand_sequence(&["edit"]) {
         return None;
     }
-    args.get_option("-r")
-        .or_else(|| args.get_option("--revision"))
-        .or_else(|| args.positionals.get(1).map(String::as_str))
-        .or(Some("@"))
-        .map(ToString::to_string)
+    Some(
+        args.get_option("-r")
+            .or_else(|| args.get_option("--revision"))
+            .or_else(|| args.positionals.get(1).map(String::as_str))
+            .unwrap_or("@")
+            .to_string(),
+    )
 }
 
 #[cfg(test)]

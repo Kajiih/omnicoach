@@ -102,13 +102,11 @@ pub struct InterceptedCommand {
     pub enclosing_scopes: Vec<ShellScope>,
 }
 
-/// A single shell word (program name or CLI argument) with unquoted text, raw source, and span.
+/// A single shell word (program name or CLI argument) with unquoted text and span.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandArg {
     /// Unquoted text value (e.g. `feat: msg` for `"feat: msg"`).
     pub text: String,
-    /// Exact raw slice from the command line (e.g. `"feat: msg"`).
-    pub raw: String,
     /// UTF-8 byte span in `ParsedCommand::source`.
     pub span: SourceSpan,
     /// True if the word contains dynamic expansions (`$VAR`, `$(...)`, `$((...))`).
