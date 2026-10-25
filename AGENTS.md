@@ -8,6 +8,7 @@ Run the narrowest checks that cover what you changed.
 - When adding or modifying a rule or AST helper, verify branch and test adequacy scoped to what you changed:
   - Diff-scoped or file-scoped mutation testing: `cargo mutants --cap-lints=true --in-diff -- --lib` or `cargo mutants --cap-lints=true -f <path> -- --lib`.
   - Single-build branch coverage across the library: `cargo +nightly llvm-cov --lib --branch`.
+- When testing that a rule is suppressed by configuration (`ignore`, `per-file-ignores`) or an inline directive, use a fixture that triggers the rule when unsuppressed (avoid identifiers in a rule's default allowlist such as `x`, `i`, `j`, `f` in `single-letter-name`) and pair the check with an unignored positive control.
 
 ## Fixing Lint Findings
 

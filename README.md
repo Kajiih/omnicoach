@@ -90,7 +90,12 @@ To pin a release, load `wasm/<tag>/omnicoach_playground.wasm` instead.
 
 ## ⚙️ Configuration (`.omnicoach.toml`)
 
-Create a `.omnicoach.toml` file at the root of your project workspace.
+Omnicoach resolves configuration across two scopes:
+
+- **Project configuration (`.omnicoach.toml`)**: Discovered by walking up ancestor directories from the target path (or current directory), stopping at `.git` or `.jj` repository boundaries. Relative `[per-file-ignores]` globs are anchored to the directory containing `.omnicoach.toml`.
+- **Global user configuration (`$XDG_CONFIG_HOME/omnicoach/config.toml` or `~/.config/omnicoach/config.toml`)**:
+  - **`code` & `graph` (repo-first fallback)**: Used only when no ancestor `.omnicoach.toml` is found for a target, preserving team-shared repository configs.
+  - **`command` & non-project queries (global-first precedence)**: User-level shell and VCS guardrails in global config take precedence over repository `.omnicoach.toml`.
 
 ### Framework Rule Design: Enforcement Modes
 
@@ -144,7 +149,7 @@ omnicoach --list-tags               # the topic tree: parents, synonyms, descrip
 omnicoach --explain sleep-in-tests  # one rule: what it does, why, configuration, tags, status
 ```
 
-`--explain` also reports whether the rule is on under the `.omnicoach.toml` of the current directory, and which selector decided it.
+`--explain` also reports whether the rule is on under the active `.omnicoach.toml` (or global `config.toml`), and which selector decided it.
 
 ---
 
