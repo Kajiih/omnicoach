@@ -21,7 +21,7 @@ Instead of writing complex traversal or parsing logic from scratch, the modules 
 
 ### 3. Command Validation (`src/command_lint.rs`)
 
-* **`ast-grep-core` / `tree-sitter-bash` & `shell-words`**: Currently used by `InterceptedCommand::parse_all` to extract shell commands and split arguments safely (scheduled to be replaced by a pure-Rust shell AST per `ROADMAP.md`).
+* **`brush-parser`**: Parses shell command lines into a typed POSIX/Bash AST in pure Rust (no C grammar build step). Only `command_lint::command` uses it, lowering its AST into `ParsedCommand` (design: `docs/dev/command_ast/03_design.md`).
 
 ### 4. Environment & Context Guards (`src/command_lint/rules/`)
 

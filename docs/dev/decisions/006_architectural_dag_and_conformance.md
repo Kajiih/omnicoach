@@ -119,7 +119,7 @@ The graph definition is verified at compile time (`const` topological-order asse
 3. `test_architecture_rules_detect_forbidden_dependencies`: Guards against vacuous conformance passes by injecting upward, cross-domain, turbofish, macro-argument, direct-child sibling (via `super::`), and multi-root sibling dependencies.
 4. `test_subtree_inheritance_resolves_leaf_modules_and_rejects_namespace_routers`: Verifies ancestor component inheritance for leaf files and `None` resolution for pure namespace routers.
 5. `test_namespace_validator_accepts_pure_routers_and_rejects_code_or_orphan_routers`: Guards against production items, imports, or orphan namespace routers sneaking into `src/`.
-6. `test_ast_grep_is_encapsulated`: Ensures only designated adapter modules handle `ast_grep_core`.
+6. `test_parser_crates_are_encapsulated`: Ensures each parser crate is used only by its owner modules: `brush_parser` by `SHELL_AST_OWNERS`, and `ruff_python_*`, `ruff_text_size`, and `ra_ap_syntax` by `DEDICATED_AST_OWNERS`.
 7. `test_items_have_a_single_path`: Enforces single public paths while permitting private-child facade re-exports (`mod child; pub use self::child::Item;`).
 8. `test_second_path_detection_allows_private_child_facades_and_rejects_duplicates`: Guards against vacuous second-path passes, duplicate public paths (`pub mod` + `pub use`), and cross-component re-exports.
 9. `test_relative_paths_stay_within_component`: Enforces that `super::` and `self::` stay within their enclosing component root subtree while cross-component references use `crate::`.

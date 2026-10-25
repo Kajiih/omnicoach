@@ -12,3 +12,5 @@ scratch/
 
 # Generated playground WebAssembly binary
 playground/www/*.wasm
+
+mutants.out/

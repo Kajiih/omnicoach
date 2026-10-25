@@ -424,7 +424,7 @@ static ARCHITECTURE_CONFORMANCE_RULES: LazyLock<Vec<ForbiddenDependencyRule>> =
         rules
     });
 
-fn ast_grep_encapsulation_rules() -> Vec<ForbiddenDependencyRule> {
+fn parser_encapsulation_rules() -> Vec<ForbiddenDependencyRule> {
     vec![
         ForbiddenDependencyRule {
             subject_prefix: String::new(),
@@ -726,8 +726,8 @@ fn test_architecture_conformance() {
 }
 
 #[test]
-fn test_ast_grep_is_encapsulated() {
-    assert_src_complies_with(&ast_grep_encapsulation_rules());
+fn test_parser_crates_are_encapsulated() {
+    assert_src_complies_with(&parser_encapsulation_rules());
 }
 
 #[test]

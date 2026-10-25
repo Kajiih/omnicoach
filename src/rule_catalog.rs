@@ -71,7 +71,7 @@ const SUPPRESSION_NOTE: &str = "Note: Some rules use heuristics. When a finding 
                                 `omni:ignore [<rule>] -- <reason>` rather than working around \
                                 the linter and degrading the design.";
 
-/// The footer printed after plain `code` diagnostics: [`FIX_NOTE`], [`SUPPRESSION_NOTE`] when
+/// The footer printed after plain `code` diagnostics: `FIX_NOTE`, `SUPPRESSION_NOTE` when
 /// any reported rule is `heuristic` or `opinionated`, and the `--explain` pointer.
 #[must_use]
 pub fn code_report_footer(binary: &str, diagnostics: &[Diagnostic]) -> String {
