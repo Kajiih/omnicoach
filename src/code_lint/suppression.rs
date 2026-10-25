@@ -43,10 +43,12 @@ const MISSING_SUPPRESSION_REASON: Declaration = Declaration {
             `# omni:ignore [nested-function] -- required for fixture` is not.
 
             Checked directives are `omni:ignore` and `omni:disable-file` in Python and Rust, plus
-            Python comments starting with a third-party directive: `noqa`, `type: ignore`,
-            `pyright: ignore`, `ty: ignore`, `pyrefly: ignore`, `ruff: noqa`, `ruff: ignore`,
-            `ruff: disable`, `ruff: file-ignore`, `flake8: noqa`, `pylint: disable` and
-            `pylint: skip-file`. One `-- <reason>` covers every directive chained in the same
+            the Python third-party directives `noqa`, `type: ignore`, `pyright: ignore`,
+            `ty: ignore`, `pyrefly: ignore`, `ruff: noqa`, `ruff: ignore`, `ruff: disable`,
+            `ruff: file-ignore`, `flake8: noqa`, `pylint: disable` and `pylint: skip-file`, at the
+            start of the comment or after a later `#` in it, as in `# see below  # noqa: E501`.
+            Bare `noqa` matches in any case, as Ruff and flake8 accept `# NOQA`; the others only
+            in lowercase. One `-- <reason>` covers every directive chained in the same
             comment, as in `# noqa: F401  # type: ignore[attr-defined] -- <reason>`. Rust
             `#[allow]` attributes are left to Clippy's `allow_attributes_without_reason`."},
         why_is_this_bad: indoc::indoc! {r"
@@ -57,8 +59,10 @@ const MISSING_SUPPRESSION_REASON: Declaration = Declaration {
         known_problems: Some(indoc::indoc! {r"
             Any substantive comment block directly above the directive's line counts as its
             reason, including an unrelated one such as a license header above a file-level
-            directive. A third-party directive is recognized only at the start of a comment and in
-            lowercase, so `# see below  # noqa: E501` and `# NOQA: E501` are not checked."}),
+            directive. Text before the directive in the same comment, as in
+            `# URL cannot wrap  # noqa: E501`, does not count as a reason. Two rare spellings that
+            a tool honors are not checked: `# FLAKE8: NOQA` (flake8), and a `pylint:` pragma after
+            text without its own `#`, as in `# note pylint: disable=...` (pylint)."}),
         references: &[
             Reference {
                 title: "Ruff: Error suppression",
@@ -214,8 +218,12 @@ pub struct SuppressionTracker {
 
 const DIRECTIVE_NAMESPACES: &[&str] = &["omnicoach:", "omni:"];
 
-/// Substrings of which every third-party Python suppression directive contains at least one.
-const TOOL_DIRECTIVE_MARKERS: &[&str] = &["noqa", "ignore", "disable", "skip-file"];
+/// The bare `# noqa` directive, honored by Ruff and flake8 in any case.
+const NOQA: &str = "noqa";
+
+/// Substrings, besides `noqa` in any case, of which every other third-party Python suppression
+/// directive contains at least one.
+const TOOL_DIRECTIVE_MARKERS: &[&str] = &["ignore", "disable", "skip-file"];
 
 /// Returns `true` if `content` may contain a suppression directive: an `omni:` or `omnicoach:`
 /// one in any language, or a third-party one in Python.
@@ -225,9 +233,13 @@ pub(super) fn contains_directive_prefix(content: &str, lang: Language) -> bool {
         .iter()
         .any(|namespace| content.contains(namespace))
         || (lang == Language::Python
-            && TOOL_DIRECTIVE_MARKERS
+            && (TOOL_DIRECTIVE_MARKERS
                 .iter()
-                .any(|marker| content.contains(marker)))
+                .any(|marker| content.contains(marker))
+                || content
+                    .as_bytes()
+                    .windows(NOQA.len())
+                    .any(|window| window.eq_ignore_ascii_case(NOQA.as_bytes()))))
 }
 
 impl SuppressionTracker {
@@ -427,17 +439,29 @@ const TOOL_DIRECTIVES: &[ToolDirective] = &[
     },
 ];
 
-/// Returns true if a Python comment starts with a third-party suppression directive and has no
+/// Returns true if a Python comment holds a third-party suppression directive and has no
 /// non-empty `-- <reason>`.
 ///
-/// The reason may follow any directive chained in the same comment, as in
-/// `# noqa: F401  # type: ignore[attr-defined] -- <reason>`.
+/// A directive may start the comment or follow a later `#` in it, as in
+/// `# see below  # noqa: E501`, and the reason may follow any directive chained in the same
+/// comment, as in `# noqa: F401  # type: ignore[attr-defined] -- <reason>`.
 fn is_unexplained_tool_directive(text: &str) -> bool {
     let Some(body) = strip_comment_delimiters(text) else {
         return false;
     };
-    let is_directive = starts_with_keyword(body, "noqa")
-        || body.split_once(':').is_some_and(|(tool, rest)| {
+    body.split('#')
+        .any(|segment| starts_with_tool_directive(segment.trim_start()))
+        && body
+            .split_once("--")
+            .is_none_or(|(_, reason)| reason.trim().is_empty())
+}
+
+/// Returns true if `segment` starts with a third-party directive as its tool accepts it: bare
+/// `noqa` in any case (Ruff and flake8 honor `# NOQA`), the others in lowercase only (mypy,
+/// pyright, ty, pyrefly, Ruff and pylint ignore `# TYPE: IGNORE` or `# PYLINT: DISABLE`).
+fn starts_with_tool_directive(segment: &str) -> bool {
+    starts_with_keyword(&segment.to_ascii_lowercase(), NOQA)
+        || segment.split_once(':').is_some_and(|(tool, rest)| {
             TOOL_DIRECTIVES.iter().any(|directive| {
                 directive.tool == tool
                     && directive
@@ -445,11 +469,7 @@ fn is_unexplained_tool_directive(text: &str) -> bool {
                         .iter()
                         .any(|keyword| starts_with_keyword(rest.trim_start(), keyword))
             })
-        });
-    is_directive
-        && body
-            .split_once("--")
-            .is_none_or(|(_, reason)| reason.trim().is_empty())
+        })
 }
 
 /// Returns true if `text` starts with `keyword` as a whole word, so `ignore` matches
@@ -836,6 +856,11 @@ mod tests {
     #[case::pylint_skip_file("# pylint: skip-file")]
     #[case::empty_reason("# type: ignore[attr-defined] --   ")]
     #[case::chained_without_reason("# noqa: F401  # type: ignore[attr-defined]")]
+    #[case::noqa_uppercase("# NOQA: E501")]
+    #[case::noqa_mixed_case("# Noqa")]
+    #[case::noqa_mid_comment("# see below  # noqa: E501")]
+    #[case::type_ignore_mid_comment("# see below  # type: ignore[attr-defined]")]
+    #[case::pylint_mid_comment("# see below  # pylint: disable=unused-import")]
     fn test_unexplained_tool_directive_detected(#[case] comment: &str) {
         assert!(is_unexplained_tool_directive(comment));
     }
@@ -843,11 +868,15 @@ mod tests {
     #[rstest]
     #[case::inline_reason("# type: ignore[attr-defined] -- set by the plugin loader")]
     #[case::chained_shared_reason("# noqa: F401  # type: ignore[attr-defined] -- re-exported")]
+    #[case::mid_comment_reason("# see below  # noqa: E501 -- the URL cannot be wrapped")]
     #[case::reenable("# pylint: enable=protected-access")]
     #[case::type_comment("# type: int")]
     #[case::keyword_prefix("# noquality checks below")]
     #[case::keyword_suffix("# type: ignored on purpose")]
-    #[case::directive_mid_comment("# see below  # noqa: E501")]
+    #[case::type_ignore_uppercase("# TYPE: IGNORE")]
+    #[case::ruff_noqa_uppercase("# RUFF: NOQA")]
+    #[case::pylint_uppercase("# PYLINT: DISABLE=unused-import")]
+    #[case::keyword_in_prose("# we disable caching here")]
     #[case::omni_directive("# omni:ignore [nested-function]")]
     fn test_explained_or_non_tool_directive_not_detected(#[case] comment: &str) {
         assert!(!is_unexplained_tool_directive(comment));
@@ -886,6 +915,7 @@ mod tests {
 
     #[rstest]
     #[case::unexplained("import os  # noqa: F401", Language::Python, 1)]
+    #[case::unexplained_uppercase("import os  # NOQA: F401", Language::Python, 1)]
     #[case::explained_above(
         "# Re-exported so plugins can import it from here.\nimport os  # noqa: F401",
         Language::Python,

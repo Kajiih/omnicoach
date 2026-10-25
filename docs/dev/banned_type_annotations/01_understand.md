@@ -30,7 +30,7 @@ This investigation covers the legacy linter's `BannedTypeAnnotationsRule` (`lega
 
 ### 1.2 `BannedTypeAnnotationsRule` (`lines 3165–3387`)
 
-For every inspected parameter, return, and attribute annotation, `BannedTypeAnnotationsRule._check_annotation` runs `ast.walk(annotation)` and checks every `ast.Subscript` subnode (at any nesting depth) against six hardcoded `_SubscriptMatcher` predicates:
+For every inspected parameter, return, and attribute annotation, `BannedTypeAnnotationsRule._check_annotation` runs `ast.walk(annotation)` and checks every `ast.Subscript` subnode (at any nesting depth) against six hardcoded `_SubscriptMatcher` predicates. The domain type names in patterns 1–5 are anonymized placeholders for the downstream project's own types, and their messages are paraphrased; the shapes (arity, unions, nesting) match the legacy code.
 
 | # | Matcher | AST Pattern Matched | Replacement Message |
 |---|---|---|---|
@@ -61,8 +61,8 @@ For every inspected parameter, return, and attribute annotation, `BannedTypeAnno
 
 ### 1.5 `DecimalZeroFormattingRule` (`lines 1312–1341`)
 
-- **Trigger**: Walks all `ast.Call` nodes where `func` is `Name("Decimal")` or `Attribute(attr="Decimal")`, `len(args) == 1`, `len(keywords) == 0`, and `args[0]` is a string `ast.Constant` matching `^0+(\.0+)?$` (e.g. `Decimal("0")`, `Decimal("0.00")`).
-- **Message**: `'Use Decimal(0) instead of Decimal("0.00") for zero values.'`
+- **Trigger**: Walks all `ast.Call` nodes where `func` is `Name("Decimal")` or `Attribute(attr="Decimal")` (unresolved), `len(args) == 1` (keyword arguments are not checked), and `args[0]` is a string `ast.Constant` that `decimal.Decimal(...)` parses to a value equal to zero. Every zero spelling is flagged: `"0"`, `"0.00"`, `"-0"`, `"0E+3"`, `" 0 "`.
+- **Message**: ``f"Use `Decimal(0)` instead of `Decimal({arg.value!r})` to represent zero."``
 
 ---
 
