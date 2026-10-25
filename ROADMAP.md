@@ -220,6 +220,10 @@ Candidates and known-gap follow-ups to prioritize, not commitments. Evaluated ca
 Design rationale: [ADR 007](docs/dev/decisions/007_rule_taxonomy_and_selection.md) (taxonomy and selection) and [ADR 008](docs/dev/decisions/008_rule_documentation_and_discovery.md) (rule docs and discovery). Contributor guide: [docs/dev/tag_guide.md](docs/dev/tag_guide.md).
 
 - **Shadowed-selector config warning**: warn when a `select` or `ignore` entry changes no rule's outcome (needs config warning plumbing).
+- **Global Fallback Configuration (`$XDG_CONFIG_HOME/omnicoach/config.toml`)**:
+  - *Context*: In large monorepos and external team codebases, checking `.omnicoach.toml` into a team directory is not permitted, yet users still want customized baseline rules, test patterns, and per-file ignores across both CLI (`omnicoach code`) and agent lifecycle hooks (`omnicoach hook`).
+  - *Resolution Hierarchy*: (1) explicit `--config <PATH>` override $\to$ (2) nearest `.omnicoach.toml` discovered walking up ancestor directories (e.g. `monorepo/experimental/users/<user>/.omnicoach.toml` or `custom_lints/.omnicoach.toml`, which wins completely without merging to maintain reproducibility) $\to$ (3) user-level global fallback at `$XDG_CONFIG_HOME/omnicoach/config.toml` (defaulting to `~/.config/omnicoach/config.toml`, managed in `chezmoi`) $\to$ (4) built-in `Config::default()`.
+  - *Target*: Implement the global fallback path resolution in `src/rule_selection.rs` (`load_config` and `load_config_from_root`) with hermetic test isolation in `tests/cli.rs` (setting `XDG_CONFIG_HOME` to a temporary or empty path).
 - **Examples for suppression audits**:
   - *Current*: Code rules document one executed `Example` per language (`RuleDoc.examples`, run by `rule_test!`) and command rules document one executed `CommandExample` (run by `command_rule_test!`). Suppression audits have no harness that could run an example, so they declare `examples: &[]` (enforced empty in `tests/registry.rs`).
   - *Target*: Give suppression audits executed examples once a harness exists (`Example` can be reused directly).
