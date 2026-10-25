@@ -75,8 +75,22 @@ const SUPPRESSION_NOTE: &str = "Note: Some rules use heuristics. When a finding 
 /// any reported rule is `heuristic` or `opinionated`, and the `--explain` pointer.
 #[must_use]
 pub fn code_report_footer(binary: &str, diagnostics: &[Diagnostic]) -> String {
-    let has_heuristic_or_opinionated = diagnostics.iter().any(|diagnostic| {
-        find_rule(diagnostic.rule_name.0).is_ok_and(|rule| {
+    code_report_footer_for_rules(
+        binary,
+        diagnostics.iter().map(|diagnostic| diagnostic.rule_name.0),
+    )
+}
+
+/// The footer printed after diagnostics for a collection of rule names: [`FIX_NOTE`],
+/// [`SUPPRESSION_NOTE`] when any named rule is `heuristic` or `opinionated`, and the
+/// `--explain` pointer.
+#[must_use]
+pub fn code_report_footer_for_rules<'a>(
+    binary: &str,
+    rule_names: impl IntoIterator<Item = &'a str>,
+) -> String {
+    let has_heuristic_or_opinionated = rule_names.into_iter().any(|rule_name| {
+        find_rule(rule_name).is_ok_and(|rule| {
             rule.classification.precision == Precision::Heuristic
                 || rule.classification.consensus == Consensus::Opinionated
         })

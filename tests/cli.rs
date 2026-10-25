@@ -636,13 +636,22 @@ fn test_hook_queues_code_lint_warning_and_drains_on_pre_invocation() {
     let first_invoke_stdout = run_pre_invocation_hook(temp_dir.path(), &artifact_dir);
     let second_invoke_stdout = run_pre_invocation_hook(temp_dir.path(), &artifact_dir);
 
+    let required_snippets = [
+        "abbreviated-name",
+        "Rationale:",
+        "Suggestion:",
+        "omni:ignore [<rule>] -- <reason>",
+        "omnicoach --explain <rule>",
+    ];
+    let missing_snippets: Vec<&str> = required_snippets
+        .into_iter()
+        .filter(|snippet| !first_invoke_stdout.contains(snippet))
+        .collect();
+
     assert_eq!(write_stdout.trim(), "");
-    assert!(
-        first_invoke_stdout.contains("injectSteps"),
-        "{first_invoke_stdout}"
-    );
-    assert!(
-        first_invoke_stdout.contains("abbreviated-name"),
+    assert_eq!(
+        missing_snippets,
+        Vec::<&str>::new(),
         "{first_invoke_stdout}"
     );
     assert_eq!(second_invoke_stdout.trim(), "");

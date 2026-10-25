@@ -1,15 +1,17 @@
 //! Agent-neutral evaluation of an intercepted tool call: command lint for shell commands and
 //! diff-scoped code lint for file edits.
 
+use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
 
 use super::event::{FileEdit, PreToolDecision, PreToolUseEvent, ToolCallPayload};
-use super::virtual_edit::apply_virtual_edit;
+use super::virtual_edit::{VirtualFile, apply_virtual_edit};
 use crate::code_lint::runner::lint_file;
 use crate::command_lint::runner::run_command_lint_with_client;
 use crate::command_lint::vcs::{JjCliClient, JjClient};
 use crate::config::Config;
-use crate::diagnostic::{Diagnostic, Language};
+use crate::diagnostic::{Diagnostic, Language, RuleName};
 use crate::rule_selection::{ConfigOverrides, discover_project_root, load_config_from_root};
 
 type JjClientFactory<'a> = &'a dyn Fn(&Path) -> Box<dyn JjClient>;
@@ -19,9 +21,9 @@ type JjClientFactory<'a> = &'a dyn Fn(&Path) -> Box<dyn JjClient>;
 pub(super) struct ToolCallOutcome {
     /// Whether the tool call may run.
     pub(super) decision: PreToolDecision,
-    /// Code lint warnings on the lines a file edit adds or modifies, one formatted warning per
-    /// diagnostic. How and when they reach the model depends on what the agent's hooks support,
-    /// so delivering them is the adapter's job.
+    /// Code lint warnings introduced by a file edit (on modified lines or net-new on unmodified
+    /// lines), one formatted warning per diagnostic. How and when they reach the model depends on
+    /// what the agent's hooks support, so delivering them is the adapter's job.
     pub(super) warnings: Vec<String>,
 }
 
@@ -76,10 +78,15 @@ fn check_command(
         let reasons: Vec<String> = diagnostics
             .iter()
             .map(|diagnostic| {
-                format!(
-                    "[{}] {}\nsuggestion: {}",
-                    diagnostic.rule_name, diagnostic.message.summary, diagnostic.message.suggestion
-                )
+                indoc::formatdoc! {"
+                    [{}] {}
+                      Rationale: {}
+                      Suggestion: {}",
+                    diagnostic.rule_name,
+                    diagnostic.message.summary,
+                    diagnostic.message.rationale,
+                    diagnostic.message.suggestion
+                }
             })
             .collect();
         PreToolDecision::Deny {
@@ -103,6 +110,10 @@ fn lint_proposed_edit(
                 && target_file_path.starts_with(normalize_path(agent_owned_dir))
         });
     if is_agent_owned_file {
+        return Vec::new();
+    }
+
+    if !is_within_workspace(&target_file_path, &event.workspace_paths) {
         return Vec::new();
     }
 
@@ -137,15 +148,100 @@ fn lint_proposed_edit(
         .strip_prefix(&project_root)
         .unwrap_or(&target_file_path);
 
-    lint_file(relative_path, &virtual_file.content, &config)
-        .iter()
+    let post_edit_diagnostics = lint_file(relative_path, &virtual_file.content, &config);
+    filter_relevant_diagnostics(
+        relative_path,
+        original_content.as_deref(),
+        &virtual_file,
+        &config,
+        post_edit_diagnostics,
+    )
+    .iter()
+    .map(|diagnostic| format_code_warning(&target_file_path, diagnostic))
+    .collect()
+}
+
+fn is_within_workspace(target_file_path: &Path, workspace_paths: &[PathBuf]) -> bool {
+    workspace_paths.is_empty()
+        || workspace_paths
+            .iter()
+            .map(|workspace| normalize_path(workspace))
+            .any(|workspace| target_file_path.starts_with(&workspace))
+}
+
+/// Keeps diagnostics on lines touched by the edit, plus net-new spillover onto unmodified
+/// lines whose `(rule_name, summary)` multiplicity exceeds the pre-edit baseline.
+///
+/// Modified-line diagnostics bypass `baseline_counts` without decrementing it so adding a
+/// violation on a modified line never unmasks a matching pre-existing violation on an
+/// unmodified line.
+fn filter_relevant_diagnostics(
+    relative_path: &Path,
+    original_content: Option<&str>,
+    virtual_file: &VirtualFile,
+    config: &Config,
+    post_edit_diagnostics: Vec<Diagnostic>,
+) -> Vec<Diagnostic> {
+    if post_edit_diagnostics.iter().all(|diagnostic| {
+        virtual_file
+            .modified_lines
+            .contains(&diagnostic.location.line)
+    }) {
+        return post_edit_diagnostics;
+    }
+
+    let Some(before_source) = original_content else {
+        return post_edit_diagnostics;
+    };
+
+    let mut baseline_counts: HashMap<(RuleName, String), usize> = HashMap::new();
+    for diagnostic in lint_file(relative_path, before_source, config) {
+        *baseline_counts
+            .entry((diagnostic.rule_name, diagnostic.message.summary))
+            .or_default() += 1;
+    }
+
+    post_edit_diagnostics
+        .into_iter()
         .filter(|diagnostic| {
-            virtual_file
+            if virtual_file
                 .modified_lines
                 .contains(&diagnostic.location.line)
+            {
+                return true;
+            }
+            let key = (diagnostic.rule_name, diagnostic.message.summary.clone());
+            if let Some(count) = baseline_counts.get_mut(&key)
+                && *count > 0
+            {
+                *count -= 1;
+                false
+            } else {
+                true
+            }
         })
-        .map(|diagnostic| format_code_warning(&target_file_path, diagnostic))
         .collect()
+}
+
+/// Formats a diagnostic for warning delivery. The first-line `<path>:<line>:<col>: [<rule>] <summary>`
+/// layout is parsed by [`super::antigravity::extract_rule_name`] to resolve rule classifications.
+fn format_code_warning(target_path: &Path, diagnostic: &Diagnostic) -> String {
+    let mut warning = indoc::formatdoc! {"
+        {}:{}:{}: [{}] {}
+          Rationale: {}
+          Suggestion: {}",
+        target_path.display(),
+        diagnostic.location.line,
+        diagnostic.location.column,
+        diagnostic.rule_name,
+        diagnostic.message.summary,
+        diagnostic.message.rationale,
+        diagnostic.message.suggestion
+    };
+    if let Some(hint) = &diagnostic.message.explanation_hint {
+        let _ = write!(warning, "\n  Or: {hint}");
+    }
+    warning
 }
 
 fn resolve_in_workspace(raw_path: &Path, workspace_paths: &[PathBuf]) -> PathBuf {
@@ -209,18 +305,6 @@ fn load_hook_config(project_root: &Path) -> Option<Config> {
             None
         }
     }
-}
-
-fn format_code_warning(target_path: &Path, diagnostic: &Diagnostic) -> String {
-    format!(
-        "{}:{}:{}: [{}] {}\nsuggestion: {}",
-        target_path.display(),
-        diagnostic.location.line,
-        diagnostic.location.column,
-        diagnostic.rule_name,
-        diagnostic.message.summary,
-        diagnostic.message.suggestion
-    )
 }
 
 #[cfg(test)]
@@ -358,5 +442,140 @@ mod tests {
             })
         });
         assert_eq!(outcome.warnings, Vec::<String>::new());
+    }
+
+    #[test]
+    fn evaluate_pre_tool_use_skips_file_outside_workspace_paths() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let workspace = temp_dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let bad_code = indoc::indoc! {"
+            pub fn compute() -> i32 {
+                let err = 1;
+                err
+            }
+        "};
+        let outside_file = temp_dir.path().join("scratch.rs");
+
+        let event = PreToolUseEvent {
+            workspace_paths: vec![workspace],
+            agent_owned_dir: None,
+            payload: ToolCallPayload::FileEdit {
+                path: outside_file,
+                edit: FileEdit::Overwrite(bad_code.to_owned()),
+            },
+        };
+        let outcome = evaluate_pre_tool_use(&event);
+        assert_eq!(outcome.warnings, Vec::<String>::new());
+    }
+
+    #[test]
+    fn evaluate_pre_tool_use_reports_net_new_spillover_on_unmodified_line_and_suppresses_legacy_debt()
+     {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("billing.py");
+        let initial_code = indoc::indoc! {r#"
+            def legacy():
+                x = 1
+                return x
+
+            def check_status(status: str) -> bool:
+                return status == "settled"
+        "#};
+        std::fs::write(&file_path, initial_code).unwrap();
+
+        let edit_code = indoc::indoc! {r#"
+            STATUS_SETTLED = "settled"
+
+            def is_settled(status: str) -> bool:
+                return status == STATUS_SETTLED
+        "#};
+
+        let event = PreToolUseEvent {
+            workspace_paths: vec![temp_dir.path().to_path_buf()],
+            agent_owned_dir: None,
+            payload: ToolCallPayload::FileEdit {
+                path: file_path,
+                edit: FileEdit::Append(edit_code.to_owned()),
+            },
+        };
+        let outcome = evaluate_pre_tool_use(&event);
+
+        assert_eq!(outcome.warnings.len(), 1);
+        assert!(outcome.warnings[0].contains("repeated-literal"));
+        assert!(outcome.warnings[0].contains("\"settled\""));
+        assert!(
+            !outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("single-letter-name"))
+        );
+    }
+
+    #[test]
+    fn evaluate_pre_tool_use_does_not_unmask_unmodified_violation_when_same_violation_added_above()
+    {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("logic.py");
+        let initial_code = indoc::indoc! {r"
+            def legacy():
+                k = 1
+                return k
+        "};
+        std::fs::write(&file_path, initial_code).unwrap();
+
+        let replacement_code = indoc::indoc! {r"
+            def new_worker():
+                k = 2
+                return k
+
+            def legacy():
+                k = 1
+                return k
+        "};
+
+        let event = PreToolUseEvent {
+            workspace_paths: vec![temp_dir.path().to_path_buf()],
+            agent_owned_dir: None,
+            payload: ToolCallPayload::FileEdit {
+                path: file_path,
+                edit: FileEdit::Overwrite(replacement_code.to_owned()),
+            },
+        };
+        let outcome = evaluate_pre_tool_use(&event);
+
+        let single_letter_warnings: Vec<&String> = outcome
+            .warnings
+            .iter()
+            .filter(|warning| warning.contains("single-letter-name"))
+            .collect();
+        assert_eq!(single_letter_warnings.len(), 1);
+        assert!(single_letter_warnings[0].contains("logic.py:2:"));
+    }
+
+    #[test]
+    fn format_code_warning_includes_rationale_suggestion_and_optional_hint() {
+        use crate::diagnostic::{LineColumn, SourceLocation, SourceSpan, ViolationMessage};
+
+        let location = SourceLocation::file_span(
+            "sample.rs",
+            SourceSpan::new(0, 10),
+            LineColumn { line: 1, column: 1 },
+        );
+        let mut message = ViolationMessage::new(
+            "Summary message.",
+            "Rationale explanation.",
+            "Suggestion fix.",
+        );
+        message.explanation_hint = Some("Comment hint.".to_owned());
+
+        let diagnostic = Diagnostic::new(RuleName("sample-rule"), message, location);
+        let warning = format_code_warning(Path::new("sample.rs"), &diagnostic);
+
+        assert!(warning.contains("sample.rs:1:1: [sample-rule] Summary message."));
+        assert!(warning.contains("Rationale: Rationale explanation."));
+        assert!(warning.contains("Suggestion: Suggestion fix."));
+        assert!(warning.contains("Or: Comment hint."));
     }
 }
