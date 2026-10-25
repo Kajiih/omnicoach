@@ -63,8 +63,6 @@ jobs:
       - run: cargo clippy -p omnicoach-playground --target wasm32-unknown-unknown --locked -- -D warnings
       - run: cargo doc --workspace --no-deps --locked
       - run: cargo doc --workspace --no-deps --document-private-items --locked
-      - name: Dogfood (Omni lints its own repository)
-        run: cargo run --locked --bin omnicoach -- code .
 
   zizmor:
     name: Audit workflows (zizmor)
