@@ -597,8 +597,9 @@ fn resolve_directive_placement(
     if is_file {
         return DirectivePlacement::File;
     }
-    let line_start_offset = content[..span.start].rfind('\n').map_or(0, |idx| idx + 1);
-    let prefix_on_line = &content[line_start_offset..span.start];
+    let prefix_on_line = content[..span.start]
+        .rsplit_once('\n')
+        .map_or(&content[..span.start], |(_, prefix)| prefix);
     if prefix_on_line.trim().is_empty() {
         DirectivePlacement::PrecedingLine {
             target_line: raw_line + 1,
@@ -627,11 +628,7 @@ fn compute_effective_target_line(
         let trimmed = line_text.trim();
         if let Some(&end_line) = decorator_end_lines.get(&line_number) {
             current_line = end_line + 1;
-        } else if trimmed.starts_with("#[")
-            || trimmed.starts_with('@')
-            || trimmed.starts_with("//")
-            || trimmed.starts_with('#')
-        {
+        } else if trimmed.starts_with("//") || trimmed.starts_with('#') {
             current_line += 1;
         } else {
             break;
@@ -711,9 +708,23 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case::omni("let a = 1; // omni:ignore [single-letter-name] -- math variable")]
-    #[case::omnicoach("let a = 1; // omnicoach:ignore [single-letter-name] -- math variable")]
-    fn test_parse_valid_inline_directive_same_line(#[case] content: &str) {
+    #[case::omni("let a = 1; // omni:ignore [single-letter-name] -- math variable", 1)]
+    #[case::omnicoach(
+        "let a = 1; // omnicoach:ignore [single-letter-name] -- math variable",
+        1
+    )]
+    #[case::no_space_before_brackets(
+        "let a = 1; // omni:ignore[single-letter-name] -- math variable",
+        1
+    )]
+    #[case::second_line(
+        "let x = 1;\nlet a = 1; // omni:ignore [single-letter-name] -- math variable",
+        2
+    )]
+    fn test_parse_valid_inline_directive_same_line(
+        #[case] content: &str,
+        #[case] expected_line: usize,
+    ) {
         let file = ParsedFile::new(content, Language::Rust);
         let tracker = SuppressionTracker::from_file(&file, content);
         let directive = &tracker.directives[0];
@@ -723,8 +734,19 @@ mod tests {
         assert!(directive.is_explained);
         assert_eq!(
             directive.placement,
-            DirectivePlacement::SameLine { line: 1 }
+            DirectivePlacement::SameLine {
+                line: expected_line
+            }
         );
+    }
+
+    #[test]
+    fn test_non_delimiter_after_omni_prefix_is_ignored() {
+        let content = "// omni:ignored by compiler\nlet a = 1;";
+        let file = ParsedFile::new(content, Language::Rust);
+        let tracker = SuppressionTracker::from_file(&file, content);
+
+        assert!(tracker.directives.is_empty());
     }
 
     #[rstest]
@@ -830,6 +852,7 @@ mod tests {
 
     #[rstest]
     #[case::missing_brackets("let a = 1; // omni:ignore -- missing brackets")]
+    #[case::no_space_before_separator("let a = 1; // omni:ignore-- missing brackets")]
     #[case::empty_brackets("let a = 1; // omni:ignore [] -- empty brackets")]
     #[case::unclosed_bracket("let a = 1; // omni:ignore [single-letter-name -- unclosed bracket")]
     fn test_blanket_directive_detected(#[case] content: &str) {
@@ -838,6 +861,53 @@ mod tests {
 
         assert_eq!(tracker.directives.len(), 1);
         assert!(tracker.directives[0].is_blanket);
+    }
+
+    #[rstest]
+    #[case::same_line_matches(DirectivePlacement::SameLine { line: 3 }, 3, true)]
+    #[case::same_line_misses_other_line(DirectivePlacement::SameLine { line: 3 }, 4, false)]
+    #[case::preceding_matches_start(
+        DirectivePlacement::PrecedingLine {
+            target_line: 2,
+            end_target_line: 4,
+        },
+        2,
+        true
+    )]
+    #[case::preceding_matches_end(
+        DirectivePlacement::PrecedingLine {
+            target_line: 2,
+            end_target_line: 4,
+        },
+        4,
+        true
+    )]
+    #[case::preceding_misses_before(
+        DirectivePlacement::PrecedingLine {
+            target_line: 2,
+            end_target_line: 4,
+        },
+        1,
+        false
+    )]
+    #[case::preceding_misses_after(
+        DirectivePlacement::PrecedingLine {
+            target_line: 2,
+            end_target_line: 4,
+        },
+        5,
+        false
+    )]
+    #[case::file_matches_any_line(DirectivePlacement::File, 42, true)]
+    fn test_directive_matches_line(
+        #[case] placement: DirectivePlacement,
+        #[case] diagnostic_line: usize,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            directive_matches_line(&placement, diagnostic_line),
+            expected
+        );
     }
 
     #[rstest]
