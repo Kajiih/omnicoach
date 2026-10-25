@@ -53,12 +53,27 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Use `logging.exception(...)`, which logs at error level and attaches the active
                 traceback by default."},
             known_problems: Some(indoc::indoc! {r"
-                Calls on a logger object, such as `logger.error(...)`, are not flagged unless the
-                deny list includes them."}),
+                - Calls on a logger object, such as `logger.error(...)`, are not flagged unless
+                  the deny list includes them.
+                - With the default deny list, every call this rule flags is also flagged by Ruff,
+                  by `TRY400` or, with `exc_info=True`, by `G201`, so enabling both reports each
+                  call twice. Ruff also
+                  flags calls on objects it guesses are loggers from their name (such as
+                  `logger.error(...)` or `response.log.error(...)`) or lists in `logger-objects`,
+                  and calls in a function or lambda defined inside the `except` block, which
+                  usually run after the block, where `logging.exception` logs no traceback."}),
             references: &[
                 Reference {
                     title: "Python docs: logging.exception",
                     url: "https://docs.python.org/3/library/logging.html#logging.exception",
+                },
+                Reference {
+                    title: "Ruff rule `error-instead-of-exception` (TRY400)",
+                    url: "https://docs.astral.sh/ruff/rules/error-instead-of-exception/",
+                },
+                Reference {
+                    title: "Ruff rule `logging-exc-info` (G201)",
+                    url: "https://docs.astral.sh/ruff/rules/logging-exc-info/",
                 },
                 Reference::NAME_RESOLUTION,
             ],
