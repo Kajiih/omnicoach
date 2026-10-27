@@ -1,6 +1,6 @@
 # Phase 1: Understand — `BannedTypeAnnotationsRule` & Adjacent Type/Decimal Checks
 
-> **Status:** VALIDATED — DROPPED (user decision: no rule; see 03_design.md §0).
+> **Status:** VALIDATED — REOPENED FOR CONFIGURABLE & STRUCTURAL COVERAGE (`positional-tuple-parameter`, `positional-tuple-attribute`, and `adhoc-type-annotation` across Python and Rust; `PrimitiveTypeSuggestionsRule`, `FloatToDecimalSuggestionsRule`, and `DecimalZeroFormattingRule` remain dropped).
 
 ## 1. Original Checks in the Legacy Linter
 
@@ -38,7 +38,7 @@ For every inspected parameter, return, and attribute annotation, `BannedTypeAnno
 | 2 | `_is_value_range` | `tuple[Bound \| None, Bound \| None]` | `"Use 'ValueRange' instead of 'tuple[Bound \| None, Bound \| None]'."` |
 | 3 | `_is_merge_inputs` | `tuple[Iterator[Dimensions], Iterator[Dimensions], SortOrder, SortOrder]` | `"Use 'MergeInputs' instead of 'tuple[Iterator[Dimensions], ...]'."` |
 | 4 | `_is_client_setup` | `tuple[HttpClient \| FakeClient, Credentials \| None]` | `"Use 'ClientSetup' instead of 'tuple[HttpClient \| FakeClient, Credentials \| None]'."` |
-| 5 | `_is_pending_request` | `tuple[anyio.Event, list[IPCResponse \| BaseException]]` | `"Use 'PendingRequest' instead of 'tuple[anyio.Event, list[IPCResponse \| BaseException]]'."` |
+| 5 | `_is_pending_request` | `tuple[anyio.Event, list[Response \| BaseException]]` | `"Use 'PendingRequest' instead of 'tuple[anyio.Event, list[Response \| BaseException]]'."` |
 | 6 | `_is_coroutine_object` | `Coroutine[object, object, ...]` (`len(elts) >= 2` with `elts[0] == Name("object")` and `elts[1] == Name("object")`) | `"Avoid 'Coroutine[object, object, ...]'. Consider 'Awaitable[...]', 'Coroutine[None, None, ...]', or refactoring."` |
 
 ---
@@ -71,7 +71,7 @@ For every inspected parameter, return, and attribute annotation, `BannedTypeAnno
 ### 2.1 Patterns 1–5 of `BannedTypeAnnotationsRule`: Project-Specific Domain Tuples
 
 - **What problem they solved in the legacy linter**: The legacy linter lacked a general rule against unnamed positional tuple returns. Developers and LLM agents repeatedly returned ad-hoc tuples like `tuple[Width, Height]` or `tuple[HttpClient | FakeClient, Credentials | None]` instead of existing domain dataclasses/NamedTuples (`Dimensions`, `ValueRange`, `MergeInputs`, `ClientSetup`, `PendingRequest`).
-- **Why they cannot be ported as-is**: Every single type name (`Width`, `Height`, `Bound`, `Dimensions`, `ValueRange`, `SortOrder`, `HttpClient`, `FakeClient`, `Credentials`, `IPCResponse`, `PendingRequest`) is proprietary to the legacy linter's project domain.
+- **Why they cannot be ported as-is**: Every single type name (`Width`, `Height`, `Bound`, `Dimensions`, `ValueRange`, `SortOrder`, `HttpClient`, `FakeClient`, `Credentials`, `Response`, `PendingRequest`) is proprietary to the legacy linter's project domain.
 - **What Omni already covers**: [positional_tuple_return.rs](../../../src/code_lint/rules/positional_tuple_return.rs) already bans **all** fixed-length `tuple[T1, T2, ...]` (`arity >= 2`) in return and generator yield/return positions—catching all five shapes (and any other multi-element tuple return) structurally without hardcoding project-specific class names.
 
 ---
@@ -120,13 +120,42 @@ For every inspected parameter, return, and attribute annotation, `BannedTypeAnno
 
 ---
 
-## 3. Sub-Pattern Triage Summary
+## 3. Sub-Pattern Triage Summary & Reopened Scope
 
 | Sub-Pattern | Source Rule | Triage Decision | Reason |
 |---|---|---|---|
-| 5 domain tuple shapes (`Dimensions`, `ValueRange`, `MergeInputs`, `ClientSetup`, `PendingRequest`) | `BannedTypeAnnotationsRule` | **Drop (already covered)** | Domain-specific to the legacy linter's project; general structural principle is already enforced by `positional-tuple-return`. |
-| User-configurable banned AST type matcher | `BannedTypeAnnotationsRule` | **Drop** | Empty default list violates `every_tag_has_a_rule` and `Simplicity First` (no speculative configurability); `RuleOptions` does not support `(pattern -> message)` maps. |
-| `Coroutine[object, object, T]` annotation check | `BannedTypeAnnotationsRule` | **Drop (or narrow to return/callback `Awaitable[T]` only if requested)** | Replacing `Coroutine[_, _, T]` with `Awaitable[T]` breaks `mypy`/`pyright` whenever the coroutine is passed to `asyncio.create_task()` or `asyncio.run()`, which require `Coroutine[Any, Any, T]`. |
+| 5 domain tuple shapes (`Dimensions`, `ValueRange`, `MergeInputs`, `ClientSetup`, `PendingRequest`) | `BannedTypeAnnotationsRule` | **Reopened (see §4)** | Return positions are covered by `positional-tuple-return`, but parameters (`def f(x: tuple[Width, Height])`), attributes (`bounds: tuple[Bound \| None, Bound \| None]`), and nested type arguments (`list[tuple[Width, Height]]`) are not yet covered, nor can downstream projects configure custom banned type shapes or domain replacement hints. |
+| User-configurable banned AST type matcher | `BannedTypeAnnotationsRule` | **Reopened (see §4)** | Downstream codebases need a way to replace bespoke `BannedTypeAnnotationsRule` AST visitors with an Omni rule, subject to resolving the architectural questions in §4. |
+| `Coroutine[object, object, T]` annotation check | `BannedTypeAnnotationsRule` | **Drop** | Replacing `Coroutine[_, _, T]` with `Awaitable[T]` is unsound in the general case because `asyncio.create_task()` and `asyncio.run()` require `Coroutine[Any, Any, T]` and reject `Awaitable[T]`. |
 | Bare `str` / `int` / `float` warning | `PrimitiveTypeSuggestionsRule` | **Drop (already disabled & superseded)** | Disabled in the legacy linter due to noise; high-signal cases already covered by `primitive-duration`, `identical-positional-types`, and `positional-tuple-return`. |
 | `float` → `Decimal` suggestion | `FloatToDecimalSuggestionsRule` | **Drop** | Monetary domain-specific; `float` is standard for non-monetary data. |
 | `Decimal("0")` / `Decimal("0.00")` → `Decimal(0)` | `DecimalZeroFormattingRule` | **Drop** | Semantically unsound for `Decimal("0.00")` (destroys IEEE 754 decimal exponent `-2` used by `.quantize()` and `str()`); micro-style for `Decimal("0")`. |
+
+---
+
+## 4. Architectural Constraints & Resolved Phase 1 Decisions (`Q1..Q4`)
+
+To replace `BannedTypeAnnotationsRule` cleanly in `omnicoach` without violating repository invariants (`tests/registry.rs`, `rule_test!`, `OptionsDeclaration`), four design questions were aligned and validated with the user:
+
+### Q1. Core Mechanism: Configurable Type-Annotation Matcher + Structural Positional-Tuple Rules
+
+- **Decision (Option 1C — Both)**:
+  1. Complete the structural `positional-tuple-*` family by adding **`positional-tuple-parameter`** and **`positional-tuple-attribute`** alongside `positional-tuple-return`, flagging fixed-length positional tuples (`arity >= min-elements`, default `2`) in function parameters and class/struct attributes/fields without requiring project-specific configuration.
+  2. Add the configurable **`adhoc-type-annotation`** rule (`ListOption` `banned` / `extend-banned` / `remove-banned`) so downstream projects can flag project-specific ad-hoc type shapes (such as `tuple[Width, Height] => Dimensions` or `Generator[_, None, None] => collections.abc.Iterator`) across parameter, return, and attribute annotations.
+
+### Q2. Pattern Syntax & Replacement Hints (`adhoc-type-annotation`)
+
+- **Decision**:
+  - Support `"<pattern> => <replacement>"` entries in `banned` / `extend-banned` (with a fallback replacement phrase when `=>` is omitted).
+  - Match type annotations structurally on the parsed AST rather than by raw substring: normalize union branch order (`A | B`, `B | A`, `Optional[A]`, `Union[A, B]`), support `_` and `...` wildcards for type arguments, resolve imported type constructors through `ast::resolve_name`, and match at any subscript/generic nesting depth inside parameter, return, and attribute annotations.
+
+### Q3. Default `BANNED` List & `tests/registry.rs` / `rule_test!` Contract
+
+- **Decision (Option 3B — Empty default `base: &[]` + `rule_test!` option override support)**:
+  - Default `BANNED` on `adhoc-type-annotation` to `base: &[]` so the rule is 100% sound out-of-the-box with zero false positives when unconfigured.
+  - Extend `src/test_utils.rs` (`rule_test!`) to accept optional `options:` overrides so opt-in rules with an empty default list run their `Example`s and `pass`/`fail` cases against explicit test options.
+
+### Q4. Language Scope
+
+- **Decision (Python + Rust)**:
+  - Support both `Language::Python` and `Language::Rust` across all three rules (`positional-tuple-parameter`, `positional-tuple-attribute`, and `adhoc-type-annotation`).
