@@ -78,7 +78,7 @@ pub fn collect_format_strings(file: &ParsedFile) -> Vec<PythonFormatString<'_>> 
 struct FormatStringVisitor<'a> {
     file: &'a ParsedFile,
     context_style: Option<PythonFormatStyle>,
-    call_arg_target: Option<(TextRange, PythonFormatStyle)>,
+    call_arg_target: Option<CallArgTarget>,
     out: Vec<PythonFormatString<'a>>,
 }
 
@@ -157,11 +157,17 @@ impl FormatStringVisitor<'_> {
                 .args
                 .iter()
                 .find(|arg| !matches!(arg, Expr::Starred(_)))
-                .map(|arg| (arg.range(), PythonFormatStyle::StrFormat))
+                .map(|arg| CallArgTarget {
+                    range: arg.range(),
+                    style: PythonFormatStyle::StrFormat,
+                })
         } else {
             extract_logger_call(call, self.file)
                 .filter(|lc| lc.uses_printf && lc.has_trailing_positional_args)
-                .map(|lc| (lc.message_range, PythonFormatStyle::Printf))
+                .map(|lc| CallArgTarget {
+                    range: lc.message_range,
+                    style: PythonFormatStyle::Printf,
+                })
         };
 
         let prev_target = self.call_arg_target;
@@ -204,8 +210,8 @@ impl SourceOrderVisitor<'_> for FormatStringVisitor<'_> {
     fn visit_expr(&mut self, expr: &Expr) {
         let current_style = self.context_style.take().or_else(|| {
             self.call_arg_target
-                .filter(|(range, _)| *range == expr.range())
-                .map(|(_, style)| style)
+                .filter(|target| target.range == expr.range())
+                .map(|target| target.style)
         });
 
         match expr {
@@ -231,6 +237,12 @@ impl SourceOrderVisitor<'_> for FormatStringVisitor<'_> {
             }
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct CallArgTarget {
+    range: TextRange,
+    style: PythonFormatStyle,
 }
 
 /// Describes an f-string `InterpolatedElement` node.

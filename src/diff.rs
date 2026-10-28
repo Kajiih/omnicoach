@@ -197,7 +197,7 @@ fn run_vcs_command(
 #[must_use]
 fn parse_git_diff(content: &str) -> HashMap<PathBuf, HashSet<usize>> {
     let mut changed_lines = HashMap::new();
-    let mut current_file: Option<(PathBuf, HashSet<usize>)> = None;
+    let mut current_file: Option<PendingFileChanges> = None;
     let mut line_counter = 0;
     let mut is_deleted = false;
     let mut expecting_file_header = true;
@@ -210,19 +210,22 @@ fn parse_git_diff(content: &str) -> HashMap<PathBuf, HashSet<usize>> {
             expecting_file_header = true;
         } else if line.starts_with("+++ ") && expecting_file_header {
             if let Some(parsed_path) = extract_diff_header_path(line) {
-                current_file = Some((parsed_path, HashSet::new()));
+                current_file = Some(PendingFileChanges {
+                    path: parsed_path,
+                    lines: HashSet::new(),
+                });
             } else {
                 is_deleted = true;
             }
             expecting_file_header = false;
         } else if line.starts_with("@@ ") {
             line_counter = parse_hunk_header(line).unwrap_or(0);
-        } else if let Some((_, lines)) = current_file.as_mut() {
+        } else if let Some(pending) = current_file.as_mut() {
             if is_deleted || line_counter == 0 {
                 continue;
             }
             if line.starts_with('+') {
-                lines.insert(line_counter);
+                pending.lines.insert(line_counter);
                 line_counter += 1;
             } else if line.starts_with(' ') || line.is_empty() {
                 line_counter += 1;
@@ -235,17 +238,23 @@ fn parse_git_diff(content: &str) -> HashMap<PathBuf, HashSet<usize>> {
     changed_lines
 }
 
+/// Changed line numbers accumulated for the file currently being parsed in a unified diff.
+struct PendingFileChanges {
+    path: PathBuf,
+    lines: HashSet<usize>,
+}
+
 /// Commits a parsed file's changed line numbers into `changed_lines` if the file was not deleted.
 fn commit_file_changes(
-    current_file: &mut Option<(PathBuf, HashSet<usize>)>,
+    current_file: &mut Option<PendingFileChanges>,
     is_deleted: bool,
     changed_lines: &mut ChangedLines,
 ) {
-    if let Some((path, lines)) = current_file.take()
+    if let Some(pending) = current_file.take()
         && !is_deleted
-        && !lines.is_empty()
+        && !pending.lines.is_empty()
     {
-        changed_lines.insert(path, lines);
+        changed_lines.insert(pending.path, pending.lines);
     }
 }
 
