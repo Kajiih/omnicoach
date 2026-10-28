@@ -13,10 +13,20 @@ use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality,
-    LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
+    LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic, rule_options,
 };
 use std::collections::BTreeSet;
 use std::path::Path;
+
+rule_options! {
+    /// Declared options for `repeated-index-access`.
+    pub struct IndexAccessOptions =>
+    /// Resolved thresholds for `repeated-index-access`.
+    pub struct IndexAccessThresholds {
+        min_positions: CountOption,
+        max_placeholders: CountOption,
+    }
+}
 
 const MIN_POSITIONS: CountOption = CountOption {
     key: "min-positions",
@@ -41,12 +51,15 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// The rule's declaration.
-pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
+pub const RULE: CodeRule<IndexAccessOptions> = CodeRule {
     declaration: Declaration {
         name: RuleName("repeated-index-access"),
         template: &TEMPLATE,
         languages: &[Language::Python, Language::Rust],
-        options: RuleOptions::code_rule((MIN_POSITIONS, MAX_PLACEHOLDERS)),
+        options: RuleOptions::code_rule(IndexAccessOptions {
+            min_positions: MIN_POSITIONS,
+            max_placeholders: MAX_PLACEHOLDERS,
+        }),
         classification: Classification {
             topics: &[Topic::POSITIONAL_INDEXING],
             precision: Precision::Heuristic,
@@ -121,17 +134,17 @@ pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
 };
 
 fn check_file(
-    rule: &CodeRule<(CountOption, CountOption)>,
+    rule: &CodeRule<IndexAccessOptions>,
     path: &Path,
     file: &ParsedFile,
-    (min_positions, max_placeholders): (usize, usize),
+    thresholds: IndexAccessThresholds,
 ) -> Vec<Diagnostic> {
     ast::collect_positional_reads(file)
         .into_iter()
         .flat_map(group_reads_by_receiver)
         .filter(|group| {
-            group.positions.len() >= min_positions
-                && placeholder_count(&group.positions) <= max_placeholders
+            group.positions.len() >= thresholds.min_positions
+                && placeholder_count(&group.positions) <= thresholds.max_placeholders
         })
         .map(|group| {
             let positions = group

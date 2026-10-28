@@ -5,10 +5,20 @@ use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality,
-    LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
+    LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic, rule_options,
 };
 use std::collections::HashMap;
 use std::path::Path;
+
+rule_options! {
+    /// Declared options for `duplicated-test-setup`.
+    pub struct SetupOptions =>
+    /// Resolved thresholds for `duplicated-test-setup`.
+    pub struct SetupThresholds {
+        min_tests: CountOption,
+        min_statements: CountOption,
+    }
+}
 
 const MIN_TESTS: CountOption = CountOption {
     key: "min-tests",
@@ -34,12 +44,15 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// The rule's declaration.
-pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
+pub const RULE: CodeRule<SetupOptions> = CodeRule {
     declaration: Declaration {
         name: RuleName("duplicated-test-setup"),
         template: &TEMPLATE,
         languages: &[Language::Python, Language::Rust],
-        options: RuleOptions::code_rule((MIN_TESTS, MIN_STATEMENTS)),
+        options: RuleOptions::code_rule(SetupOptions {
+            min_tests: MIN_TESTS,
+            min_statements: MIN_STATEMENTS,
+        }),
         classification: Classification {
             topics: &[Topic::TESTING],
             precision: Precision::Heuristic,
@@ -184,13 +197,13 @@ pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
 };
 
 fn check_file(
-    rule: &CodeRule<(CountOption, CountOption)>,
+    rule: &CodeRule<SetupOptions>,
     path: &Path,
     file: &ParsedFile,
-    (min_tests, min_statements): (usize, usize),
+    thresholds: SetupThresholds,
 ) -> Vec<Diagnostic> {
-    let effective_min_tests = min_tests.max(2);
-    let effective_min_statements = min_statements.max(1);
+    let effective_min_tests = thresholds.min_tests.max(2);
+    let effective_min_statements = thresholds.min_statements.max(1);
     let mut diagnostics = Vec::new();
 
     for scope in ast::collect_test_setup_scopes(file) {
