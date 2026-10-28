@@ -18,7 +18,10 @@ mod test_analysis;
 mod tree;
 mod trivia;
 
-pub(super) use self::annotations::{collect_attribute_annotations, collect_parameter_annotations};
+pub(super) use self::annotations::{
+    collect_attribute_annotations, collect_parameter_annotations,
+    collect_type_annotation_candidates,
+};
 pub(super) use self::bindings::collect_bindings;
 pub(super) use self::calls::collect_call_candidates;
 pub(in crate::code_lint) use self::declaration_order::collect_associated_items_after_methods;

@@ -7,6 +7,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 0
 --- stdout ---
 - `abbreviated-name` (python, rust): Flags names that contain an abbreviation such as `ctx` or `msg`.
+- `adhoc-type-annotation` (python, rust): Flags type annotations matching project-configured composite type patterns.
 - `annotated-type-in-docstring` (python): Flags docstring entries that state a type the code already annotates.
 - `associated-item-after-method` (rust): Flags Rust associated `type` and `const` items declared after `fn` items in an `impl` or `trait` block.
 - `bare-multiline-string` (python, rust): Flags multiline string literals that are not wrapped in a dedent helper.

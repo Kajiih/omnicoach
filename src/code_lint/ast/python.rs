@@ -29,7 +29,10 @@ pub(in crate::code_lint) use self::annotations::{
     PythonReturnTypeBranch, collect_collection_types, collection_display, collection_type,
     generator_yield_type, includes_none_bool_or_callable, return_type_union,
 };
-pub(super) use self::annotations::{collect_attribute_annotations, collect_parameter_annotations};
+pub(super) use self::annotations::{
+    collect_attribute_annotations, collect_parameter_annotations,
+    collect_type_annotation_candidates,
+};
 pub(super) use self::bindings::collect_bindings;
 pub(in crate::code_lint) use self::bindings::{PythonModuleAssignment, collect_module_assignments};
 pub(super) use self::calls::collect_call_candidates;

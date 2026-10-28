@@ -1,10 +1,13 @@
-//! Parameter and field type contracts and type annotation unwrapping for Rust (`ra_ap_syntax`).
+//! Parameter and field type contracts and structural [`TypeShape`] extraction for Rust (`ra_ap_syntax`).
 
 use super::names::compact_path_text;
 use super::returns::is_trait_or_trait_impl_function;
+use super::tree::cast_at_span;
 use crate::code_lint::ast::imports::QualifiedName;
 use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_rowan_range};
-use crate::code_lint::ast::type_annotations::{AttributeAnnotation, ParameterAnnotation};
+use crate::code_lint::ast::type_annotations::{
+    AttributeAnnotation, ParameterAnnotation, TypeAnnotationCandidate, TypeShape,
+};
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::AstNode as _;
 use ra_ap_syntax::ast::{self, HasGenericArgs as _, HasName as _};
@@ -101,6 +104,22 @@ pub fn collect_attribute_annotations(file: &ParsedFile) -> Vec<AttributeAnnotati
         }
     }
     out
+}
+
+/// See [`crate::code_lint::ast::collect_type_annotation_candidates`].
+pub fn collect_type_annotation_candidates<'a>(
+    file: &'a ParsedFile,
+    roots: &[AstNode<'a>],
+) -> Vec<TypeAnnotationCandidate<'a>> {
+    let mut candidates = Vec::new();
+    for root in roots {
+        let Some(type_ast) = cast_at_span::<ast::Type>(root) else {
+            continue;
+        };
+        let expression = root.text().into_owned();
+        collect_rust_candidates_type(&type_ast, file, &expression, &mut candidates);
+    }
+    candidates
 }
 
 /// A path type whose terminal segment has a `<...>` generic argument list (`io::Result<T>`).
@@ -293,6 +312,112 @@ fn collect_record_fields<'a>(
             positional_tuple_arity,
         });
     }
+}
+
+/// Recursively emits [`TypeAnnotationCandidate`]s in pre-order for `type_ast` and its nested type
+/// arguments.
+fn collect_rust_candidates_type<'a>(
+    type_ast: &ast::Type,
+    file: &'a ParsedFile,
+    expression: &str,
+    out: &mut Vec<TypeAnnotationCandidate<'a>>,
+) {
+    if let ast::Type::ParenType(paren_type) = type_ast {
+        if let Some(inner) = paren_type.ty() {
+            collect_rust_candidates_type(&inner, file, expression, out);
+        }
+        return;
+    }
+
+    let node = AstNode::from_span(file, span_from_rowan_range(type_ast.syntax().text_range()));
+    let shape = build_rust_type_shape(type_ast, file);
+    out.push(TypeAnnotationCandidate {
+        node,
+        expression: expression.to_owned(),
+        shape,
+    });
+
+    match type_ast {
+        ast::Type::RefType(ref_type) => {
+            if let Some(inner) = ref_type.ty() {
+                collect_rust_candidates_type(&inner, file, expression, out);
+            }
+        }
+        ast::Type::TupleType(tuple_type) => {
+            for field in tuple_type.fields() {
+                collect_rust_candidates_type(&field, file, expression, out);
+            }
+        }
+        ast::Type::SliceType(slice_type) => {
+            if let Some(inner) = slice_type.ty() {
+                collect_rust_candidates_type(&inner, file, expression, out);
+            }
+        }
+        ast::Type::ArrayType(array_type) => {
+            if let Some(inner) = array_type.ty() {
+                collect_rust_candidates_type(&inner, file, expression, out);
+            }
+        }
+        ast::Type::PathType(path_type) => {
+            if let Some(GenericPathType { arguments, .. }) =
+                extract_path_type_generics(path_type, file)
+            {
+                for argument in &arguments {
+                    collect_rust_candidates_type(argument, file, expression, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Builds the structural [`TypeShape`] of a Rust [`ast::Type`].
+fn build_rust_type_shape(type_ast: &ast::Type, file: &ParsedFile) -> TypeShape {
+    match type_ast {
+        ast::Type::TupleType(tuple_type) => TypeShape::Tuple(
+            tuple_type
+                .fields()
+                .map(|field| build_rust_type_shape(&field, file))
+                .collect(),
+        ),
+        ast::Type::RefType(ref_type) => {
+            ref_type
+                .ty()
+                .map_or(TypeShape::Other, |inner| TypeShape::Reference {
+                    mutable: ref_type.mut_token().is_some(),
+                    inner: Box::new(build_rust_type_shape(&inner, file)),
+                })
+        }
+        ast::Type::ParenType(paren_type) => paren_type.ty().map_or(TypeShape::Other, |inner| {
+            build_rust_type_shape(&inner, file)
+        }),
+        ast::Type::PathType(path_type) => {
+            build_path_type_shape(path_type, file).unwrap_or(TypeShape::Other)
+        }
+        _ => TypeShape::Other,
+    }
+}
+
+/// Builds the [`TypeShape`] of a Rust [`ast::PathType`].
+fn build_path_type_shape(path_type: &ast::PathType, file: &ParsedFile) -> Option<TypeShape> {
+    let path = path_type.path()?;
+    let segment = path.segment()?;
+    let name_ref = segment.name_ref()?;
+    let base_start: usize = path.syntax().text_range().start().into();
+    let base_end: usize = name_ref.syntax().text_range().end().into();
+    let written = normalize_type_path_text(&file.source[base_start..base_end])?;
+    let arguments = segment
+        .generic_arg_list()
+        .into_iter()
+        .flat_map(|generics| generics.generic_args())
+        .filter_map(|generic_arg| match generic_arg {
+            ast::GenericArg::TypeArg(type_arg) => type_arg
+                .ty()
+                .map(|argument| build_rust_type_shape(&argument, file)),
+            _ => None,
+        })
+        .collect();
+    Some(TypeShape::named(written, arguments, file))
 }
 
 /// Normalizes a raw type path string by stripping whitespace and any leading `::`.

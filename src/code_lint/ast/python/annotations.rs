@@ -6,7 +6,9 @@ use super::names::written_name;
 use super::tree::find_expr;
 use crate::code_lint::ast::imports::QualifiedName;
 use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
-use crate::code_lint::ast::type_annotations::{AttributeAnnotation, ParameterAnnotation};
+use crate::code_lint::ast::type_annotations::{
+    AttributeAnnotation, ParameterAnnotation, TypeAnnotationCandidate, TypeShape,
+};
 use ruff_python_ast::{Expr, Operator};
 use ruff_text_size::Ranged as _;
 
@@ -582,6 +584,22 @@ pub fn collect_attribute_annotations(file: &ParsedFile) -> Vec<AttributeAnnotati
     out
 }
 
+/// See [`crate::code_lint::ast::collect_type_annotation_candidates`].
+pub fn collect_type_annotation_candidates<'a>(
+    file: &'a ParsedFile,
+    roots: &[AstNode<'a>],
+) -> Vec<TypeAnnotationCandidate<'a>> {
+    let mut candidates = Vec::new();
+    for root in roots {
+        let Some(expr) = find_expr(root) else {
+            continue;
+        };
+        let expression = root.text().into_owned();
+        collect_python_candidates_expr(expr, file, &expression, &mut candidates);
+    }
+    candidates
+}
+
 /// The largest element count among the fixed-length tuple branches (`tuple[A, B]`, `Tuple[A, B]`)
 /// of at least two elements after unwrapping `|`, `Optional`, `Union`, `Annotated`, `ClassVar`,
 /// `Final`, `InitVar`, `Required`, `NotRequired`, and `ReadOnly`.
@@ -609,6 +627,139 @@ fn build_return_type_branch<'a>(branch: &Expr, file: &'a ParsedFile) -> PythonRe
         type_arguments: generic.map(|generic| generic.arguments.into_iter().map(node_of).collect()),
         constructor: written_name(constructor, &file.source).resolve(file),
     }
+}
+
+/// Recursively emits [`TypeAnnotationCandidate`]s in pre-order for `expr` and its nested type
+/// arguments, skipping `Annotated` wrappers and their metadata arguments (`args[1..]`).
+fn collect_python_candidates_expr<'a>(
+    expr: &Expr,
+    file: &'a ParsedFile,
+    expression: &str,
+    out: &mut Vec<TypeAnnotationCandidate<'a>>,
+) {
+    match expr {
+        Expr::List(list) => {
+            for element in &list.elts {
+                collect_python_candidates_expr(element, file, expression, out);
+            }
+            return;
+        }
+        Expr::Tuple(tuple) => {
+            for element in &tuple.elts {
+                collect_python_candidates_expr(element, file, expression, out);
+            }
+            return;
+        }
+        Expr::Subscript(_) => {
+            if let Some(GenericType { base, arguments }) = extract_generic_base_and_args(expr)
+                && is_annotated_constructor(base, file)
+            {
+                if let Some(&first_arg) = arguments.first() {
+                    collect_python_candidates_expr(first_arg, file, expression, out);
+                }
+                return;
+            }
+        }
+        _ => {}
+    }
+
+    let shape = build_python_type_shape(expr, file);
+    let is_union = matches!(shape, TypeShape::Union(_));
+    let node = AstNode::from_span(file, span_from_ruff_range(expr.range()));
+    out.push(TypeAnnotationCandidate {
+        node,
+        expression: expression.to_owned(),
+        shape,
+    });
+
+    if is_union {
+        let mut has_none = false;
+        let mut branches = Vec::new();
+        collect_union_branches_expr(expr, file, &mut has_none, &mut branches);
+        for branch in branches {
+            collect_python_candidates_expr(branch, file, expression, out);
+        }
+    } else if let Some(GenericType { arguments, .. }) = extract_generic_base_and_args(expr) {
+        for argument in arguments {
+            collect_python_candidates_expr(argument, file, expression, out);
+        }
+    }
+}
+
+/// Builds the structural [`TypeShape`] of a Python type expression `expr`.
+fn build_python_type_shape(expr: &Expr, file: &ParsedFile) -> TypeShape {
+    match expr {
+        Expr::NoneLiteral(_) => TypeShape::None,
+        Expr::EllipsisLiteral(_) => TypeShape::Ellipsis,
+        Expr::BinOp(bin_op) if bin_op.op == Operator::BitOr => build_union_python_shape(expr, file),
+        Expr::Name(_) | Expr::Attribute(_) => {
+            TypeShape::named(written_name(expr, &file.source), Vec::new(), file)
+        }
+        Expr::Subscript(_) => {
+            let Some(GenericType { base, arguments }) = extract_generic_base_and_args(expr) else {
+                return TypeShape::Other;
+            };
+            if is_annotated_constructor(base, file)
+                && let Some(&first_arg) = arguments.first()
+            {
+                return build_python_type_shape(first_arg, file);
+            }
+            if let Some(QualifiedName { path, terminal }) =
+                written_name(base, &file.source).resolve(file)
+            {
+                if is_std_type_constructor(&path, &terminal, TRANSPARENT_UNION_WRAPPERS) {
+                    return build_union_python_shape(expr, file);
+                }
+                if is_std_type_constructor(
+                    &path,
+                    &terminal,
+                    &[TUPLE_CONSTRUCTOR, TYPING_TUPLE_CONSTRUCTOR],
+                ) {
+                    let arg_shapes = arguments
+                        .into_iter()
+                        .map(|arg| build_python_type_shape(arg, file))
+                        .collect();
+                    return TypeShape::Tuple(arg_shapes);
+                }
+            }
+            let arg_shapes = arguments
+                .into_iter()
+                .map(|arg| build_python_type_shape(arg, file))
+                .collect();
+            TypeShape::named(written_name(base, &file.source), arg_shapes, file)
+        }
+        _ => TypeShape::Other,
+    }
+}
+
+/// Flattens `|`, `Optional[...]`, `Union[...]`, and transparent qualifiers into a
+/// [`TypeShape::Union`], preserving `TypeShape::None` once when `None` or `Optional` is present.
+fn build_union_python_shape(expr: &Expr, file: &ParsedFile) -> TypeShape {
+    let mut has_none = false;
+    let mut branch_exprs = Vec::new();
+    collect_union_branches_expr(expr, file, &mut has_none, &mut branch_exprs);
+    let mut branches = Vec::new();
+    for branch_expr in branch_exprs {
+        push_unique_shape(&mut branches, build_python_type_shape(branch_expr, file));
+    }
+    if has_none {
+        push_unique_shape(&mut branches, TypeShape::None);
+    }
+    TypeShape::Union(branches)
+}
+
+/// Pushes `shape` into `out` if `out` does not already contain an equal [`TypeShape`].
+fn push_unique_shape(out: &mut Vec<TypeShape>, shape: TypeShape) {
+    if !out.contains(&shape) {
+        out.push(shape);
+    }
+}
+
+/// Returns true if `base` resolves to `typing.Annotated` or `typing_extensions.Annotated`.
+fn is_annotated_constructor(base: &Expr, file: &ParsedFile) -> bool {
+    written_name(base, &file.source)
+        .resolve(file)
+        .is_some_and(|name| is_std_type_constructor(&name.path, &name.terminal, &[TYPE_ANNOTATED]))
 }
 
 /// Unwraps outer return-annotation envelopes (`Annotated[T, ...]`, `Awaitable[T]`, and

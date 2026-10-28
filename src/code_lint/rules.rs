@@ -4,6 +4,7 @@ architecture_component!(CodeLintRules);
 use crate::code_lint::contract::AnyCodeRule;
 
 pub mod abbreviated_name;
+pub mod adhoc_type_annotation;
 pub mod annotated_type_in_docstring;
 pub mod associated_item_after_method;
 pub mod bare_multiline_string;
@@ -137,6 +138,7 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &positional_tuple_return::RULE,
     &positional_tuple_parameter::RULE,
     &positional_tuple_attribute::RULE,
+    &adhoc_type_annotation::RULE,
     &non_boolean_predicate::RULE,
     &uninherited_protocol::RULE,
 ];
