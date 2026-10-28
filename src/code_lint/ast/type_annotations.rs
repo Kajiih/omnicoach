@@ -1,4 +1,4 @@
-//! Parameter type contracts ([`ParameterAnnotation`]).
+//! Parameter and attribute type contracts ([`ParameterAnnotation`], [`AttributeAnnotation`]).
 
 use super::tree::{AstNode, ParsedFile};
 
@@ -22,9 +22,33 @@ pub struct ParameterAnnotation<'a> {
     pub positional_tuple_arity: Option<usize>,
 }
 
+/// The type contract of a class attribute (Python) or named `struct` / `enum` field (Rust).
+///
+/// Members of Python `Protocol` and `ABC` interface classes and Rust inline tests are not
+/// collected.
+#[derive(Clone)]
+pub struct AttributeAnnotation<'a> {
+    /// Attribute or field identifier name.
+    pub name: String,
+    /// Enclosing class, `struct`, or `enum` name.
+    pub class: String,
+    /// The declared attribute or field type annotation node.
+    pub type_node: AstNode<'a>,
+    /// The element count if the attribute or field type is a non-empty fixed-length positional
+    /// tuple (alone or inside an optional, union, qualifier, or Rust reference / pointer wrapper).
+    pub positional_tuple_arity: Option<usize>,
+}
+
 /// Collects the parameter type contracts of every function and method in `file` whose signature
 /// its author chose, in source order.
 #[must_use]
 pub fn collect_parameter_annotations(file: &ParsedFile) -> Vec<ParameterAnnotation<'_>> {
     dispatch_lang!(file.lang(), collect_parameter_annotations(file))
+}
+
+/// Collects the attribute / field type contracts of every non-interface class, `struct`, and
+/// `enum` in `file`, in source order.
+#[must_use]
+pub fn collect_attribute_annotations(file: &ParsedFile) -> Vec<AttributeAnnotation<'_>> {
+    dispatch_lang!(file.lang(), collect_attribute_annotations(file))
 }

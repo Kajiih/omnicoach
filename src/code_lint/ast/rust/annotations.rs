@@ -1,10 +1,10 @@
-//! Parameter type contracts and type annotation unwrapping for Rust (`ra_ap_syntax`).
+//! Parameter and field type contracts and type annotation unwrapping for Rust (`ra_ap_syntax`).
 
 use super::names::compact_path_text;
 use super::returns::is_trait_or_trait_impl_function;
 use crate::code_lint::ast::imports::QualifiedName;
 use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_rowan_range};
-use crate::code_lint::ast::type_annotations::ParameterAnnotation;
+use crate::code_lint::ast::type_annotations::{AttributeAnnotation, ParameterAnnotation};
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::AstNode as _;
 use ra_ap_syntax::ast::{self, HasGenericArgs as _, HasName as _};
@@ -61,6 +61,43 @@ pub fn collect_parameter_annotations(file: &ParsedFile) -> Vec<ParameterAnnotati
                 type_node,
                 positional_tuple_arity,
             });
+        }
+    }
+    out
+}
+
+/// See [`crate::code_lint::ast::collect_attribute_annotations`].
+pub fn collect_attribute_annotations(file: &ParsedFile) -> Vec<AttributeAnnotation<'_>> {
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for element in parsed.tree().syntax().descendants() {
+        let node = AstNode::from_span(file, span_from_rowan_range(element.text_range()));
+        if node.is_in_rust_inline_test() {
+            continue;
+        }
+        if let Some(struct_item) = ast::Struct::cast(element.clone()) {
+            let Some(name_node) = struct_item.name() else {
+                continue;
+            };
+            let struct_name = name_node.text().trim().to_owned();
+            if let Some(ast::FieldList::RecordFieldList(fields)) = struct_item.field_list() {
+                collect_record_fields(&fields, &struct_name, file, &mut out);
+            }
+        } else if let Some(enum_item) = ast::Enum::cast(element) {
+            let Some(name_node) = enum_item.name() else {
+                continue;
+            };
+            let enum_name = name_node.text().trim().to_owned();
+            let Some(variants) = enum_item.variant_list() else {
+                continue;
+            };
+            for variant in variants.variants() {
+                if let Some(ast::FieldList::RecordFieldList(fields)) = variant.field_list() {
+                    collect_record_fields(&fields, &enum_name, file, &mut out);
+                }
+            }
         }
     }
     out
@@ -230,6 +267,32 @@ fn parameter_pattern_name(pattern: &ast::Pat) -> String {
         return name.text().trim().to_owned();
     }
     pattern.syntax().text().to_string().trim().to_owned()
+}
+
+/// Appends [`AttributeAnnotation`]s for each named field in `fields`.
+fn collect_record_fields<'a>(
+    fields: &ast::RecordFieldList,
+    enclosing_name: &str,
+    file: &'a ParsedFile,
+    out: &mut Vec<AttributeAnnotation<'a>>,
+) {
+    for field in fields.fields() {
+        let Some(name_node) = field.name() else {
+            continue;
+        };
+        let Some(type_ast) = field.ty() else {
+            continue;
+        };
+        let positional_tuple_arity = positional_tuple_type_arity(&type_ast, file);
+        let type_node =
+            AstNode::from_span(file, span_from_rowan_range(type_ast.syntax().text_range()));
+        out.push(AttributeAnnotation {
+            name: name_node.text().trim().to_owned(),
+            class: enclosing_name.to_owned(),
+            type_node,
+            positional_tuple_arity,
+        });
+    }
 }
 
 /// Normalizes a raw type path string by stripping whitespace and any leading `::`.

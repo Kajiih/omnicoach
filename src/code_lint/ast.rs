@@ -69,4 +69,6 @@ pub(in crate::code_lint) use self::test_analysis::{
 };
 pub use self::tree::{AstNode, ParsedFile};
 pub use self::trivia::collect_comment_nodes;
-pub(in crate::code_lint) use self::type_annotations::collect_parameter_annotations;
+pub(in crate::code_lint) use self::type_annotations::{
+    collect_attribute_annotations, collect_parameter_annotations,
+};

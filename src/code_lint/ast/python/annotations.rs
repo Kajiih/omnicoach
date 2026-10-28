@@ -1,12 +1,12 @@
 //! Python type annotation unwrapping, constructor resolution, union flattening, and collection type vocabularies.
 
-use super::classes::is_interface_method;
+use super::classes::{extract_classes, is_interface_method};
 use super::functions::{PythonParameterKind, extract_function_signatures};
 use super::names::written_name;
 use super::tree::find_expr;
 use crate::code_lint::ast::imports::QualifiedName;
 use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
-use crate::code_lint::ast::type_annotations::ParameterAnnotation;
+use crate::code_lint::ast::type_annotations::{AttributeAnnotation, ParameterAnnotation};
 use ruff_python_ast::{Expr, Operator};
 use ruff_text_size::Ranged as _;
 
@@ -549,6 +549,36 @@ pub fn collect_parameter_annotations(file: &ParsedFile) -> Vec<ParameterAnnotati
             });
         }
     }
+    out
+}
+
+/// See [`crate::code_lint::ast::collect_attribute_annotations`].
+pub fn collect_attribute_annotations(file: &ParsedFile) -> Vec<AttributeAnnotation<'_>> {
+    let mut out = Vec::new();
+    for class in extract_classes(file) {
+        if class.is_interface() {
+            continue;
+        }
+        for (name, type_node) in class.class_body_attribute_annotations() {
+            let positional_tuple_arity = positional_tuple_type_arity(&type_node);
+            out.push(AttributeAnnotation {
+                name,
+                class: class.name.clone(),
+                type_node,
+                positional_tuple_arity,
+            });
+        }
+        for instance_attr in class.instance_attribute_annotations() {
+            let positional_tuple_arity = positional_tuple_type_arity(&instance_attr.annotation);
+            out.push(AttributeAnnotation {
+                name: instance_attr.name,
+                class: class.name.clone(),
+                type_node: instance_attr.annotation,
+                positional_tuple_arity,
+            });
+        }
+    }
+    out.sort_by_key(|attribute| attribute.type_node.span());
     out
 }
 
