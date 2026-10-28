@@ -11,12 +11,12 @@ use crate::command_lint::contract::CommandRule;
 use crate::command_lint::vcs::JjClient;
 use crate::diagnostic::{Diagnostic, Language};
 use crate::rule_declaration::{
-    Declaration, EnforcementMode, LanguageDefaults, OptionsDeclaration, RuleOptions,
+    Declaration, EnforcementMode, LanguageDefaults, OptionsDeclaration, RuleOptions, RuleOverrides,
 };
 use std::fmt::Write;
 use std::path::Path;
 
-/// Executes the rule's `check_file` in `ban` mode with its default options, so `rule_test!`
+/// Executes the rule's `check_file` in `ban` mode with optional [`RuleOverrides`], so `rule_test!`
 /// cases test the rule's own logic rather than `require-explanation` comment filtering.
 ///
 /// # Panics
@@ -28,6 +28,7 @@ pub fn run_code_rule<Options: OptionsDeclaration>(
     rule: &CodeRule<Options>,
     source: &str,
     filename: &str,
+    overrides: Option<&RuleOverrides>,
 ) -> Vec<Diagnostic> {
     let path = Path::new(filename);
     let lang = Language::from_path(path).unwrap_or_else(|| {
@@ -53,7 +54,39 @@ pub fn run_code_rule<Options: OptionsDeclaration>(
         },
         ..*rule
     };
-    banned.check_file(path, &parsed, None)
+    banned.check_file(path, &parsed, overrides)
+}
+
+/// Builds a [`RuleOverrides`] setting `banned` to `entries` on `rule`, or `None` when `entries`
+/// is empty.
+///
+/// # Panics
+/// Panics if `entries` is non-empty and `rule` does not declare a `banned` list option.
+// TODO: Investigate if this is ricr to add banned list override.
+#[must_use]
+#[track_caller]
+pub fn banned_list_overrides<Options: OptionsDeclaration>(
+    rule: &CodeRule<Options>,
+    entries: &[&str],
+) -> Option<RuleOverrides> {
+    if entries.is_empty() {
+        return None;
+    }
+    let items: Vec<toml::Value> = entries
+        .iter()
+        .map(|entry| toml::Value::String((*entry).to_owned()))
+        .collect();
+    let mut table = toml::Table::new();
+    table.insert("banned".to_owned(), toml::Value::Array(items));
+    Some(
+        RuleOverrides::parse(
+            rule.declaration.name.0,
+            &rule.declaration.options.declared(),
+            rule.declaration.languages,
+            &toml::Value::Table(table),
+        )
+        .expect("banned_list_overrides must be valid for rule"),
+    )
 }
 
 /// Formats a list of diagnostics to a clean, human-readable simplified snapshot string.
@@ -138,10 +171,11 @@ pub fn assert_rule_pass<Options: OptionsDeclaration>(
     lang: Language,
     case_name: &str,
     code: &str,
+    overrides: Option<&RuleOverrides>,
 ) {
     let rule_name = rule.declaration.name.0;
     let filename = dummy_filename(lang);
-    let diags = run_code_rule(rule, code, filename);
+    let diags = run_code_rule(rule, code, filename, overrides);
     assert!(
         diags.is_empty(),
         indoc::indoc! {"
@@ -186,10 +220,11 @@ pub fn assert_rule_fail<Options: OptionsDeclaration>(
     code: &str,
     expected_snippet: Option<&str>,
     repeat: RepeatCheck,
+    overrides: Option<&RuleOverrides>,
 ) {
     let rule_name = rule.declaration.name.0;
     let filename = dummy_filename(lang);
-    let diags = run_code_rule(rule, code, filename);
+    let diags = run_code_rule(rule, code, filename, overrides);
     let expected_slice = expected_snippet.unwrap_or(code).trim();
 
     let [diagnostic] = diags.as_slice() else {
@@ -231,7 +266,7 @@ pub fn assert_rule_fail<Options: OptionsDeclaration>(
 
     let span = diagnostic.location.span.start..diagnostic.location.span.end;
     assert_no_comment_in_explanation_position(rule_name, lang, case_name, code, span.start);
-    assert_every_occurrence_reported(rule, lang, case_name, code, span, repeat);
+    assert_every_occurrence_reported(rule, lang, case_name, code, span, repeat, overrides);
 }
 
 const DOCUMENTED_EXAMPLE_CASE: &str = "documented example";
@@ -249,6 +284,7 @@ const DOCUMENTED_FIX_CASE: &str = "documented fix";
 pub fn assert_documented_examples<Options: OptionsDeclaration>(
     rule: &CodeRule<Options>,
     repeat: RepeatCheck,
+    overrides: Option<&RuleOverrides>,
 ) {
     for example in rule.declaration.doc.examples {
         assert_rule_fail(
@@ -258,8 +294,15 @@ pub fn assert_documented_examples<Options: OptionsDeclaration>(
             example.flagged,
             Some(example.flagged_span),
             repeat,
+            overrides,
         );
-        assert_rule_pass(rule, example.language, DOCUMENTED_FIX_CASE, example.fixed);
+        assert_rule_pass(
+            rule,
+            example.language,
+            DOCUMENTED_FIX_CASE,
+            example.fixed,
+            overrides,
+        );
     }
 }
 
@@ -436,6 +479,7 @@ fn assert_every_occurrence_reported<Options: OptionsDeclaration>(
     code: &str,
     span: std::ops::Range<usize>,
     repeat: RepeatCheck,
+    overrides: Option<&RuleOverrides>,
 ) {
     let rule_name = rule.declaration.name.0;
     let second_copy = match repeat {
@@ -452,7 +496,7 @@ fn assert_every_occurrence_reported<Options: OptionsDeclaration>(
     };
     let repeated = format!("{code}\n{second_copy}");
     let offset = code.len() + 1;
-    let diags = run_code_rule(rule, &repeated, dummy_filename(lang));
+    let diags = run_code_rule(rule, &repeated, dummy_filename(lang), overrides);
 
     let mut actual: Vec<_> = diags
         .iter()
@@ -720,6 +764,9 @@ fn dummy_filename(lang: Language) -> &'static str {
 ///   groups and the check stays as strict. Write `rule_test!(RULE, repeat: DistinctLiterals, { ... })`.
 ///   The case panics when no such rewrite exists (equal values spelled differently such as
 ///   `0xFF` and `255`, binary or octal digits); unit-test those values on the `ast` helper.
+/// - Rules with an empty default `banned` [`crate::rule_declaration::ListOption`] pass
+///   `banned: &["..."]` so cases and documented examples run with an active deny list:
+///   `rule_test!(RULE, banned: &["..."], { ... })`.
 ///
 /// # Writing cases
 ///
@@ -749,17 +796,31 @@ fn dummy_filename(lang: Language) -> &'static str {
 ///   change cannot hide regressions.
 macro_rules! rule_test {
     ($rule:expr, repeat: $repeat:ident, { $($body:tt)* }) => {
-        $crate::test_utils::rule_test!(tests: $rule, repeat: $repeat, { $($body)* });
+        $crate::test_utils::rule_test!(tests: $rule, repeat: $repeat, banned: &[], { $($body)* });
+    };
+    ($rule:expr, banned: &[ $( $banned_entry:expr ),+ $(,)? ], { $($body:tt)* }) => {
+        $crate::test_utils::rule_test!(
+            tests: $rule,
+            repeat: SameCode,
+            banned: &[ $( $banned_entry ),+ ],
+            { $($body)* }
+        );
     };
     ($rule:expr, { $($body:tt)* }) => {
-        $crate::test_utils::rule_test!(tests: $rule, repeat: SameCode, { $($body)* });
+        $crate::test_utils::rule_test!(tests: $rule, repeat: SameCode, banned: &[], { $($body)* });
     };
     ($mod_name:ident : $rule:expr, { $($body:tt)* }) => {
-        $crate::test_utils::rule_test!($mod_name: $rule, repeat: SameCode, { $($body)* });
+        $crate::test_utils::rule_test!(
+            $mod_name: $rule,
+            repeat: SameCode,
+            banned: &[],
+            { $($body)* }
+        );
     };
     (
         $mod_name:ident : $rule:expr,
         repeat: $repeat:ident,
+        banned: &[ $( $banned_entry:expr ),* $(,)? ],
         {
             $(
                 $lang:ident => {
@@ -776,6 +837,10 @@ macro_rules! rule_test {
         mod $mod_name {
             use super::*;
 
+            fn test_overrides() -> Option<$crate::rule_declaration::RuleOverrides> {
+                $crate::test_utils::banned_list_overrides(&$rule, &[ $( $banned_entry ),* ])
+            }
+
             #[test]
             fn language_completeness() {
                 $crate::test_utils::assert_language_completeness(
@@ -786,9 +851,11 @@ macro_rules! rule_test {
 
             #[test]
             fn documented_examples() {
+                let overrides = test_overrides();
                 $crate::test_utils::assert_documented_examples(
                     &$rule,
                     $crate::test_utils::RepeatCheck::$repeat,
+                    overrides.as_ref(),
                 );
             }
 
@@ -807,7 +874,14 @@ macro_rules! rule_test {
                 #[case] case_name: &str,
                 #[case] code: &str,
             ) {
-                $crate::test_utils::assert_rule_pass(&$rule, lang, case_name, code);
+                let overrides = test_overrides();
+                $crate::test_utils::assert_rule_pass(
+                    &$rule,
+                    lang,
+                    case_name,
+                    code,
+                    overrides.as_ref(),
+                );
             }
 
             #[rstest::rstest]
@@ -827,6 +901,7 @@ macro_rules! rule_test {
                 #[case] code: &str,
                 #[case] expected_snippet: Option<&str>,
             ) {
+                let overrides = test_overrides();
                 $crate::test_utils::assert_rule_fail(
                     &$rule,
                     lang,
@@ -834,6 +909,7 @@ macro_rules! rule_test {
                     code,
                     expected_snippet,
                     $crate::test_utils::RepeatCheck::$repeat,
+                    overrides.as_ref(),
                 );
             }
         }
