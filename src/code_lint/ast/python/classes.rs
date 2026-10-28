@@ -236,48 +236,45 @@ impl<'a> PythonClassInfo<'a> {
         collector.definitions
     }
 
+    /// The class-body attribute annotations (`x: T` in the class body, not nested in compound
+    /// statements or methods) the class declares, in source order, as `(name, type_node)`.
+    #[must_use]
+    pub(super) fn class_body_attribute_annotations(&self) -> Vec<(String, AstNode<'a>)> {
+        let file = self.name_node.file;
+        let mut attributes = Vec::new();
+        for statement in &self.definition.body {
+            if let Stmt::AnnAssign(annotated) = statement
+                && let Expr::Name(target) = annotated.target.as_ref()
+            {
+                attributes.push((
+                    target.id.to_string(),
+                    AstNode::from_span(file, span_from_ruff_range(annotated.annotation.range())),
+                ));
+            }
+        }
+        attributes
+    }
+
     /// The annotated attributes the class declares, in source order: class-body annotations
     /// (`x: T`), then `self.<name>: T` annotations in `__init__`, each recording whether a method
     /// of the class mutates it in place.
     #[must_use]
     pub fn annotated_attributes(&self) -> Vec<PythonAnnotatedAttribute<'a>> {
-        let file = self.name_node.file;
-        let body = &self.definition.body;
-        let mutated = collect_mutated_class_attr_names(body, &self.name);
-        let mut attributes = Vec::new();
-        for statement in body {
-            if let Stmt::AnnAssign(annotated) = statement
-                && let Expr::Name(target) = annotated.target.as_ref()
-            {
-                let name = target.id.to_string();
-                attributes.push(PythonAnnotatedAttribute {
-                    is_mutated_in_class: mutated.contains(&name),
-                    name,
-                    type_node: AstNode::from_span(
-                        file,
-                        span_from_ruff_range(annotated.annotation.range()),
-                    ),
-                });
-            }
-        }
-        for function_def in direct_function_definitions(body) {
-            if function_def.name.id == INIT_METHOD
-                && method_receiver_name_ast(function_def, false, file).is_some()
-            {
-                for (_, name, annotation) in collect_self_annotated_assignments(&function_def.body)
-                {
-                    attributes.push(PythonAnnotatedAttribute {
-                        is_mutated_in_class: mutated.contains(&name),
-                        name,
-                        type_node: AstNode::from_span(
-                            file,
-                            span_from_ruff_range(annotation.range()),
-                        ),
-                    });
-                }
-            }
-        }
-        attributes
+        let mutated = collect_mutated_class_attr_names(&self.definition.body, &self.name);
+        self.class_body_attribute_annotations()
+            .into_iter()
+            .chain(
+                self.instance_attribute_annotations()
+                    .into_iter()
+                    .filter(|attr| attr.method_name == INIT_METHOD)
+                    .map(|attr| (attr.name, attr.annotation)),
+            )
+            .map(|(name, type_node)| PythonAnnotatedAttribute {
+                is_mutated_in_class: mutated.contains(&name),
+                name,
+                type_node,
+            })
+            .collect()
     }
 
     /// Inline type annotations on instance attributes (`self.<attr>: <type>`) inside the direct

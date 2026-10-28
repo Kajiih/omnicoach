@@ -1,5 +1,6 @@
 //! AST helper predicates and structural extractors for Rust (`ra_ap_syntax`).
 
+mod annotations;
 mod attributes;
 mod bindings;
 mod calls;

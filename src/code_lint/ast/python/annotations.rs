@@ -39,15 +39,18 @@ const TUPLE_CONSTRUCTOR: &str = "tuple";
 const TYPING_TUPLE_CONSTRUCTOR: &str = "Tuple";
 const TYPE_CALLABLE: &str = "Callable";
 const BOOL_CONSTRUCTOR: &str = "bool";
+const TYPE_OPTIONAL: &str = "Optional";
+const TYPE_UNION: &str = "Union";
 
 /// Transparent type wrappers whose all type arguments preserve the enclosing variance.
-const TRANSPARENT_UNION_WRAPPERS: &[&str] = &["Optional", "Union"];
+const TRANSPARENT_UNION_WRAPPERS: &[&str] = &[TYPE_OPTIONAL, TYPE_UNION];
 
 /// Transparent type qualifiers whose first type argument (`arg 0`) preserves the enclosing variance.
 const TRANSPARENT_FIRST_ARG_WRAPPERS: &[&str] = &[
     TYPE_ANNOTATED,
     "ClassVar",
     TYPE_FINAL,
+    "InitVar",
     "Required",
     "NotRequired",
     "ReadOnly",
@@ -362,8 +365,9 @@ impl PythonReturnTypeUnion<'_> {
             .is_some_and(|branch| branch.is_std_type(OPAQUE_TYPES))
     }
 
-    /// The largest element count among the fixed-length tuple branches of at least two elements
-    /// (`tuple[str, int]`, `Tuple[a, b, c]`; not `tuple[int, ...]` or `tuple[int]`).
+    /// The largest element count among the non-empty fixed-length tuple branches (`tuple[int]`,
+    /// `tuple[str, int]`, `Tuple[a, b, c]`; not `tuple[int, ...]`, `tuple[()]`, or unsubscripted
+    /// `tuple`).
     #[must_use]
     pub fn positional_tuple_arity(&self) -> Option<usize> {
         self.branches
@@ -404,7 +408,9 @@ pub struct PythonReturnTypeBranch<'a> {
 }
 
 impl PythonReturnTypeBranch<'_> {
-    /// The element count if the branch is a fixed-length tuple of at least two elements.
+    /// The element count if the branch is a non-empty fixed-length tuple (`tuple[int]`,
+    /// `tuple[str, int]`, `Tuple[a, b, c]`; not `tuple[int, ...]`, `tuple[()]`, or unsubscripted
+    /// `tuple`).
     #[must_use]
     pub fn positional_tuple_arity(&self) -> Option<usize> {
         let collection = self.collection.as_ref()?;
@@ -415,10 +421,12 @@ impl PythonReturnTypeBranch<'_> {
             return None;
         }
         let arguments = self.type_arguments.as_ref()?;
-        let is_fixed_length = arguments
-            .iter()
-            .all(|argument| argument.text().trim() != "...");
-        (arguments.len() >= 2 && is_fixed_length).then_some(arguments.len())
+        let is_empty_tuple = matches!(arguments.as_slice(), [arg] if arg.text().trim() == "()");
+        let is_fixed_length = !is_empty_tuple
+            && arguments
+                .iter()
+                .all(|argument| argument.text().trim() != "...");
+        (!arguments.is_empty() && is_fixed_length).then_some(arguments.len())
     }
 
     /// Returns true if the branch's constructor is one of the standard-library types `names`.
@@ -444,23 +452,11 @@ pub fn return_type_union<'a>(return_type_node: &AstNode<'a>) -> PythonReturnType
     let mut has_none = false;
     let mut branches = Vec::new();
     collect_union_branches_expr(unwrapped, file, &mut has_none, &mut branches);
-    let node_of = |expr: &Expr| AstNode::from_span(file, span_from_ruff_range(expr.range()));
     PythonReturnTypeUnion {
         has_none,
         branches: branches
             .into_iter()
-            .map(|branch| {
-                let generic = extract_generic_base_and_args(branch);
-                let constructor = generic.as_ref().map_or(branch, |generic| generic.base);
-                PythonReturnTypeBranch {
-                    #[cfg(test)]
-                    node: node_of(branch),
-                    collection: collection_type_expr(constructor, file),
-                    type_arguments: generic
-                        .map(|generic| generic.arguments.into_iter().map(node_of).collect()),
-                    constructor: written_name(constructor, &file.source).resolve(file),
-                }
-            })
+            .map(|branch| build_return_type_branch(branch, file))
             .collect(),
     }
 }
@@ -527,6 +523,20 @@ pub fn positional_tuple_return_arity(return_type_node: &AstNode<'_>) -> Option<u
     return_type_union(&target).positional_tuple_arity()
 }
 
+/// Builds a [`PythonReturnTypeBranch`] for a single non-`None` union branch expression `branch`.
+fn build_return_type_branch<'a>(branch: &Expr, file: &'a ParsedFile) -> PythonReturnTypeBranch<'a> {
+    let node_of = |expr: &Expr| AstNode::from_span(file, span_from_ruff_range(expr.range()));
+    let generic = extract_generic_base_and_args(branch);
+    let constructor = generic.as_ref().map_or(branch, |generic| generic.base);
+    PythonReturnTypeBranch {
+        #[cfg(test)]
+        node: node_of(branch),
+        collection: collection_type_expr(constructor, file),
+        type_arguments: generic.map(|generic| generic.arguments.into_iter().map(node_of).collect()),
+        constructor: written_name(constructor, &file.source).resolve(file),
+    }
+}
+
 /// Unwraps outer return-annotation envelopes (`Annotated[T, ...]`, `Awaitable[T]`, and
 /// `Coroutine[YieldT, SendT, ReturnT]`).
 fn unwrap_return_envelope_expr<'a>(mut current: &'a Expr, file: &ParsedFile) -> &'a Expr {
@@ -556,8 +566,10 @@ fn unwrap_return_envelope_expr<'a>(mut current: &'a Expr, file: &ParsedFile) -> 
     current
 }
 
-/// Flattens top-level union constructs (`|`, `Optional[...]`, `Union[...]`, and `Annotated[T, ...]`)
-/// into `branches` and sets `*has_none = true` if `None` (`none`) or `Optional[...]` is part of the union.
+/// Flattens top-level union constructs (`|`, `Optional[...]`, `Union[...]`, and transparent
+/// qualifiers `Annotated`, `ClassVar`, `Final`, `InitVar`, `Required`, `NotRequired`, `ReadOnly`)
+/// into `branches` and sets `*has_none = true` if `None` (`none`) or `Optional[...]` is part of
+/// the union.
 fn collect_union_branches_expr<'a>(
     expr: &'a Expr,
     file: &ParsedFile,
@@ -589,20 +601,20 @@ fn collect_union_branches_expr<'a>(
                 branches.push(expr);
                 return;
             };
-            if is_std_type_constructor(&base_path, &base_terminal, &["Optional"]) {
+            if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_OPTIONAL]) {
                 *has_none = true;
                 for argument in type_args {
                     collect_union_branches_expr(argument, file, has_none, branches);
                 }
                 return;
             }
-            if is_std_type_constructor(&base_path, &base_terminal, &["Union"]) {
+            if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_UNION]) {
                 for argument in type_args {
                     collect_union_branches_expr(argument, file, has_none, branches);
                 }
                 return;
             }
-            if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_ANNOTATED]) {
+            if is_std_type_constructor(&base_path, &base_terminal, TRANSPARENT_FIRST_ARG_WRAPPERS) {
                 if let Some(&first_arg) = type_args.first() {
                     collect_union_branches_expr(first_arg, file, has_none, branches);
                 }
@@ -823,13 +835,17 @@ fn is_concrete_collection_constructor(path: &str, terminal: &str) -> bool {
 }
 
 /// Returns true if `(path, terminal)` refers to an unqualified or standard-library (`typing`,
-/// `typing_extensions`, `collections.abc`, `builtins`) type constructor.
+/// `typing_extensions`, `collections.abc`, `dataclasses`, `builtins`) type constructor.
 fn is_std_type_constructor_prefix(path: &str, terminal: &str) -> bool {
     path == terminal
         || path.strip_suffix(terminal).is_some_and(|prefix| {
             matches!(
                 prefix,
-                TYPING_PREFIX | TYPING_EXTENSIONS_PREFIX | "collections.abc." | "builtins."
+                TYPING_PREFIX
+                    | TYPING_EXTENSIONS_PREFIX
+                    | "collections.abc."
+                    | "dataclasses."
+                    | "builtins."
             )
         })
 }
