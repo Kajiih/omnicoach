@@ -115,7 +115,7 @@ define_architecture! {
     /// Inline comment suppression tracker and directive policies (`code_lint::suppression`).
     CodeLintSuppression => [CodeLintContract, CodeLintSemantic, RuleDeclaration, Config],
     /// Policy shared by several code rules or by a rule and the test harness, built from AST facts (`code_lint::policy`).
-    CodeLintPolicy      => [CodeLintAst],
+    CodeLintPolicy      => [CodeLintAst, RuleDeclaration],
     /// Concrete static analysis linter rules (`code_lint::rules`).
     CodeLintRules       => [CodeLintContract, CodeLintPolicy, RuleDeclaration],
     /// Static code linting multi-file orchestration runner (`code_lint::runner`).

@@ -241,30 +241,6 @@ impl OptionsDeclaration for ListOption {
     }
 }
 
-impl<First: OptionsDeclaration, Second: OptionsDeclaration> OptionsDeclaration for (First, Second) {
-    type Resolved = (First::Resolved, Second::Resolved);
-    type Param<'a> = (First::Param<'a>, Second::Param<'a>);
-
-    fn as_param((first, second): &Self::Resolved) -> Self::Param<'_> {
-        (First::as_param(first), Second::as_param(second))
-    }
-
-    fn specs(self) -> Vec<OptionSpec> {
-        let (first, second) = self;
-        let mut specs = first.specs();
-        specs.extend(second.specs());
-        specs
-    }
-
-    fn resolve(self, language: Language, overrides: Option<&RuleOverrides>) -> Self::Resolved {
-        let (first, second) = self;
-        (
-            first.resolve(language, overrides),
-            second.resolve(language, overrides),
-        )
-    }
-}
-
 /// Declares a multi-option [`OptionsDeclaration`] struct paired with the named `Copy` value
 /// struct received by a rule's check function, binding options and resolved values by field name
 /// rather than tuple position.

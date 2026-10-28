@@ -20,6 +20,103 @@ use crate::code_lint::ast::LiteralValue;
 use crate::code_lint::ast::python::{
     CollectionShape, PythonCollectionType, PythonFunctionSignature, is_interface_method,
 };
+use crate::rule_declaration::{CountOption, LanguageDefaults, rule_options};
+
+const MIN_STATEMENTS_KEY: &str = "min-statements";
+const DEFAULT_MIN_STATEMENTS: usize = 12;
+const MIN_COGNITIVE_COMPLEXITY_KEY: &str = "min-cognitive-complexity";
+const DEFAULT_MIN_COGNITIVE_COMPLEXITY: usize = 6;
+const STATEMENT_COUNT_METRIC: &str = "statement count";
+const COGNITIVE_COMPLEXITY_METRIC: &str = "cognitive complexity";
+
+rule_options! {
+    /// Declared threshold options for the Python function-complexity gate shared by docstring
+    /// rules (`min-statements` and `min-cognitive-complexity`).
+    pub struct ComplexityGateOptions =>
+    /// Resolved statement-count and cognitive-complexity thresholds for the Python complexity gate.
+    pub struct ComplexityGate {
+        /// Minimum statement count; `0` disables this trigger.
+        pub(super) min_statements: CountOption,
+        /// Minimum cognitive complexity; `0` disables this trigger.
+        pub(super) min_cognitive_complexity: CountOption,
+    }
+}
+
+impl ComplexityGateOptions {
+    /// Declares the `min-statements` [`CountOption`] (default `12`) with `doc`.
+    #[must_use]
+    pub(super) const fn min_statements(doc: &'static str) -> CountOption {
+        CountOption {
+            key: MIN_STATEMENTS_KEY,
+            doc,
+            default: LanguageDefaults::new(DEFAULT_MIN_STATEMENTS, &[]),
+        }
+    }
+
+    /// Declares the `min-cognitive-complexity` [`CountOption`] (default `6`) with `doc`.
+    #[must_use]
+    pub(super) const fn min_cognitive_complexity(doc: &'static str) -> CountOption {
+        CountOption {
+            key: MIN_COGNITIVE_COMPLEXITY_KEY,
+            doc,
+            default: LanguageDefaults::new(DEFAULT_MIN_COGNITIVE_COMPLEXITY, &[]),
+        }
+    }
+}
+
+/// A complexity threshold reached by a Python function, paired with the function's measured value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ComplexityMetric {
+    /// The function's statement count ([`PythonFunctionSignature::statement_count`]).
+    StatementCount(usize),
+    /// The function's cognitive complexity ([`PythonFunctionSignature::cognitive_complexity`]).
+    CognitiveComplexity(usize),
+}
+
+impl ComplexityMetric {
+    /// The metric's display name (`"statement count"` or `"cognitive complexity"`).
+    #[must_use]
+    pub(super) const fn name(self) -> &'static str {
+        match self {
+            Self::StatementCount(_) => STATEMENT_COUNT_METRIC,
+            Self::CognitiveComplexity(_) => COGNITIVE_COMPLEXITY_METRIC,
+        }
+    }
+
+    /// The function's measured value for the metric.
+    #[must_use]
+    pub(super) const fn value(self) -> usize {
+        match self {
+            Self::StatementCount(value) | Self::CognitiveComplexity(value) => value,
+        }
+    }
+}
+
+impl ComplexityGate {
+    /// Returns the first complexity threshold reached by `signature` (statement count first, then
+    /// cognitive complexity), or `None` if neither threshold is reached. A threshold of `0`
+    /// disables that trigger.
+    #[must_use]
+    pub(super) fn triggered_metric(
+        self,
+        signature: &PythonFunctionSignature<'_>,
+    ) -> Option<ComplexityMetric> {
+        let statements = signature.statement_count();
+        if self.min_statements > 0 && statements >= self.min_statements {
+            return Some(ComplexityMetric::StatementCount(statements));
+        }
+        let complexity = signature.cognitive_complexity();
+        (self.min_cognitive_complexity > 0 && complexity >= self.min_cognitive_complexity)
+            .then_some(ComplexityMetric::CognitiveComplexity(complexity))
+    }
+
+    /// Returns true if `signature` reaches `min_statements` or `min_cognitive_complexity` (`0`
+    /// disables a trigger).
+    #[must_use]
+    pub(super) fn is_nontrivial(self, signature: &PythonFunctionSignature<'_>) -> bool {
+        self.triggered_metric(signature).is_some()
+    }
+}
 
 /// Returns true if the function of `signature` is exempt from signature annotation rules.
 ///
@@ -108,7 +205,9 @@ pub(super) fn replacements_by_shape(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::code_lint::ast::python::CollectionKind;
+    use crate::code_lint::ast::ParsedFile;
+    use crate::code_lint::ast::python::{CollectionKind, extract_function_signatures};
+    use crate::diagnostic::Language;
 
     fn collection_type(
         path: &str,
@@ -121,6 +220,47 @@ mod tests {
             kind,
             shape,
         }
+    }
+
+    #[rstest::rstest]
+    #[case::statements_first(
+        ComplexityGate { min_statements: 2, min_cognitive_complexity: 1 },
+        Some(("statement count", 3))
+    )]
+    #[case::statements_exact_boundary(
+        ComplexityGate { min_statements: 3, min_cognitive_complexity: 5 },
+        Some(("statement count", 3))
+    )]
+    #[case::complexity_when_statements_below(
+        ComplexityGate { min_statements: 10, min_cognitive_complexity: 1 },
+        Some(("cognitive complexity", 1))
+    )]
+    #[case::zero_disables_trigger(
+        ComplexityGate { min_statements: 0, min_cognitive_complexity: 0 },
+        None
+    )]
+    #[case::below_both(
+        ComplexityGate { min_statements: 10, min_cognitive_complexity: 5 },
+        None
+    )]
+    fn complexity_gate_orders_thresholds(
+        #[case] gate: ComplexityGate,
+        #[case] expected: Option<(&str, usize)>,
+    ) {
+        let source = indoc::indoc! {"
+            def f(x):
+                if x:
+                    return 1
+                return 0
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        let signature = &extract_function_signatures(&file)[0];
+        assert_eq!(
+            gate.triggered_metric(signature)
+                .map(|metric| (metric.name(), metric.value())),
+            expected
+        );
+        assert_eq!(gate.is_nontrivial(signature), expected.is_some());
     }
 
     #[rstest::rstest]

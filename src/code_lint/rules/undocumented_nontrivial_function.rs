@@ -7,25 +7,23 @@
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
+use crate::code_lint::policy::{ComplexityGate, ComplexityGateOptions};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality,
-    LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
+    RuleDoc, RuleOptions, Topic,
 };
 use std::path::Path;
 
-const MIN_STATEMENTS: CountOption = CountOption {
-    key: "min-statements",
-    doc: "Minimum statements in a function body for a docstring to be required; 0 disables this \
-          trigger.",
-    default: LanguageDefaults::new(12, &[]),
-};
-
-const MIN_COGNITIVE_COMPLEXITY: CountOption = CountOption {
-    key: "min-cognitive-complexity",
-    doc: "Minimum cognitive complexity of a function for a docstring to be required; 0 disables \
-          this trigger.",
-    default: LanguageDefaults::new(6, &[]),
+const OPTIONS: ComplexityGateOptions = ComplexityGateOptions {
+    min_statements: ComplexityGateOptions::min_statements(
+        "Minimum statements in a function body for a docstring to be required; 0 disables this \
+         trigger.",
+    ),
+    min_cognitive_complexity: ComplexityGateOptions::min_cognitive_complexity(
+        "Minimum cognitive complexity of a function for a docstring to be required; 0 disables \
+         this trigger.",
+    ),
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -35,12 +33,12 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// The rule's declaration.
-pub const RULE: CodeRule<(CountOption, CountOption)> = CodeRule {
+pub const RULE: CodeRule<ComplexityGateOptions> = CodeRule {
     declaration: Declaration {
         name: RuleName("undocumented-nontrivial-function"),
         template: &TEMPLATE,
         languages: &[Language::Python],
-        options: RuleOptions::code_rule((MIN_STATEMENTS, MIN_COGNITIVE_COMPLEXITY)),
+        options: RuleOptions::code_rule(OPTIONS),
         classification: Classification {
             topics: &[Topic::DOCSTRINGS],
             precision: Precision::Heuristic,
@@ -136,10 +134,10 @@ const METRIC: &str = "metric";
 const COUNT: &str = "count";
 
 fn check_file(
-    rule: &CodeRule<(CountOption, CountOption)>,
+    rule: &CodeRule<ComplexityGateOptions>,
     path: &Path,
     file: &ParsedFile,
-    (min_statements, min_cognitive_complexity): (usize, usize),
+    gate: ComplexityGate,
 ) -> Vec<Diagnostic> {
     ast::python::extract_function_signatures(file)
         .into_iter()
@@ -150,7 +148,7 @@ fn check_file(
                 && !ast::python::is_documented_by_enclosing_class(signature)
         })
         .filter_map(|signature| {
-            let metric = signature.nontrivial_metric(min_statements, min_cognitive_complexity)?;
+            let metric = gate.triggered_metric(&signature)?;
             Some(rule.diagnostic_at_node(
                 path,
                 &signature.name_node,

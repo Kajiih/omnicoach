@@ -32,8 +32,9 @@ pub enum RuleTarget {
 ///
 /// `check` receives the rule's options already resolved for the file, typed by the
 /// declaration: `()` without options, `usize` for a [`crate::rule_declaration::CountOption`],
-/// `&HashSet<String>` for a [`crate::rule_declaration::ListOption`], a tuple for a pair. A check function
-/// whose last parameter does not match the declared options does not compile.
+/// `&HashSet<String>` for a [`crate::rule_declaration::ListOption`], or a named struct from
+/// `rule_options!`. A check function whose last parameter does not match the declared options
+/// does not compile.
 ///
 /// Rules express policy, not plumbing. `check` queries the [`ParsedFile`] through named
 /// `code_lint::ast` and `code_lint::semantic` helpers (or `Self::check_banned_calls`) and

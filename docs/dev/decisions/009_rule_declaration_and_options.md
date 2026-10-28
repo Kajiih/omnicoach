@@ -46,12 +46,12 @@ const MAX_ASSERTIONS: CountOption = CountOption {
 };
 ```
 
-Two option structs exist in `rule_declaration`, and together with `()` and `(First, Second)` they implement `OptionsDeclaration`:
+Two primitive option structs exist in `rule_declaration`, and together with `()` and named structs declared via `rule_options!` they implement `OptionsDeclaration`:
 
 - `()` — no rule-specific options (`Resolved = ()`, `Param<'a> = ()`).
 - `CountOption { key, doc, default: LanguageDefaults<usize> }` (`Resolved = usize`, `Param<'a> = usize`). Keys name what is counted (`max-assertions`, `min-positional-parameters`), never a bare `max` or `min`.
 - `ListOption { kind: ListKind, doc, default: FilterListDefaults }` (`Resolved = HashSet<String>`, `Param<'a> = &'a HashSet<String>`). `ListKind::Deny` fixes the keys `banned`, `extend-banned`, `remove-banned`; `ListKind::Allow` fixes `allowed`, `extend-allowed`, `remove-allowed`. Because the kind fixes the keys, a rule declares at most one list; a registry test enforces it.
-- `(First, Second)` — a pair of option declarations (`Resolved = (First::Resolved, Second::Resolved)`, `Param<'a> = (First::Param<'a>, Second::Param<'a>)`).
+- `rule_options! { struct Options => struct Thresholds { ... } }` — a named multi-option declaration struct paired with a named `Copy` value struct, binding options and resolved values by field name rather than tuple position.
 
 `RuleOptions<Options> { enforcement_mode: Option<LanguageDefaults<EnforcementMode>>, options: Options }` is the rule's whole surface under `[rules.<name>]` and `[rules.<name>.<language>]`. `RuleOptions::code_rule(options)` wraps `options` with `enforcement-mode` defaulting to `ban`; `RuleOptions::none()` rejects every key, including `enforcement-mode`, and is used by suppression audits and command rules, whose runners never honour a mode. `RuleOptions::declared(&self) -> DeclaredOptions` converts the typed `Options` into a `Vec<OptionSpec>` for config validation and `--explain`.
 
@@ -76,7 +76,7 @@ The result is `Config.rule_overrides: HashMap<RuleName, RuleOverrides>`, typed v
 
 - a rule with `Options = ()` receives `(): ()` by value;
 - a rule with `Options = CountOption` receives `usize` by value;
-- a rule with `Options = (CountOption, CountOption)` receives `(usize, usize)` by value;
+- a rule with a named `rule_options!` struct receives its paired value struct by value;
 - a rule with `Options = ListOption` receives `&HashSet<String>` by reference.
 
 For scalar options (`enforcement-mode` and `CountOption`), precedence is language table, then rule table, then the declared per-language default. For `ListOption`, resolution starts with the declared default for the language and applies the rule table and then the language table in order (`replace`, then `extend`, then `remove` within each table). Because the check function receives only `Options::Param<'a>`, a rule cannot read an option it did not declare, and a signature mismatch fails to compile with `E0308` at `check: check_file`.
