@@ -38,6 +38,7 @@ pub mod non_boolean_predicate;
 pub mod nullable_collection_return;
 pub mod packed_assertion;
 pub mod partial_override_docstring;
+pub mod positional_tuple_parameter;
 pub mod positional_tuple_return;
 pub mod primitive_duration;
 pub mod private_before_public;
@@ -133,6 +134,7 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &unexplained_parameter::RULE,
     &unexplained_return::RULE,
     &positional_tuple_return::RULE,
+    &positional_tuple_parameter::RULE,
     &non_boolean_predicate::RULE,
     &uninherited_protocol::RULE,
 ];

@@ -1,9 +1,12 @@
 //! Python type annotation unwrapping, constructor resolution, union flattening, and collection type vocabularies.
 
+use super::classes::is_interface_method;
+use super::functions::{PythonParameterKind, extract_function_signatures};
 use super::names::written_name;
 use super::tree::find_expr;
 use crate::code_lint::ast::imports::QualifiedName;
 use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
+use crate::code_lint::ast::type_annotations::ParameterAnnotation;
 use ruff_python_ast::{Expr, Operator};
 use ruff_text_size::Ranged as _;
 
@@ -521,6 +524,47 @@ pub fn includes_none_bool_or_callable(type_node: &AstNode<'_>) -> bool {
 pub fn positional_tuple_return_arity(return_type_node: &AstNode<'_>) -> Option<usize> {
     let target = generator_yield_type(return_type_node).unwrap_or(*return_type_node);
     return_type_union(&target).positional_tuple_arity()
+}
+
+/// See [`crate::code_lint::ast::collect_parameter_annotations`].
+pub fn collect_parameter_annotations(file: &ParsedFile) -> Vec<ParameterAnnotation<'_>> {
+    let mut out = Vec::new();
+    for signature in extract_function_signatures(file) {
+        if signature.has_imposed_signature() || is_interface_method(&signature) {
+            continue;
+        }
+        for parameter in signature.parameters {
+            if parameter.is_variadic() || parameter.kind == PythonParameterKind::Receiver {
+                continue;
+            }
+            let Some(type_node) = parameter.type_node else {
+                continue;
+            };
+            let positional_tuple_arity = positional_tuple_type_arity(&type_node);
+            out.push(ParameterAnnotation {
+                name: parameter.name,
+                function: signature.name.clone(),
+                type_node,
+                positional_tuple_arity,
+            });
+        }
+    }
+    out
+}
+
+/// The largest element count among the fixed-length tuple branches (`tuple[A, B]`, `Tuple[A, B]`)
+/// of at least two elements after unwrapping `|`, `Optional`, `Union`, `Annotated`, `ClassVar`,
+/// `Final`, `InitVar`, `Required`, `NotRequired`, and `ReadOnly`.
+fn positional_tuple_type_arity(type_node: &AstNode<'_>) -> Option<usize> {
+    let expr = find_expr(type_node)?;
+    let file = type_node.file;
+    let mut has_none = false;
+    let mut branches = Vec::new();
+    collect_union_branches_expr(expr, file, &mut has_none, &mut branches);
+    branches
+        .into_iter()
+        .filter_map(|branch| build_return_type_branch(branch, file).positional_tuple_arity())
+        .max()
 }
 
 /// Builds a [`PythonReturnTypeBranch`] for a single non-`None` union branch expression `branch`.

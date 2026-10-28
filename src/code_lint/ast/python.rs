@@ -24,6 +24,7 @@ mod test_analysis;
 mod tree;
 mod trivia;
 
+pub(super) use self::annotations::collect_parameter_annotations;
 pub(in crate::code_lint) use self::annotations::{
     AnnotationTraversalDepth, CollectionKind, CollectionShape, PythonCollectionType,
     PythonReturnTypeBranch, collect_collection_types, collection_display, collection_type,

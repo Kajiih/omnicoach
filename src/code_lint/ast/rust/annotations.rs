@@ -1,11 +1,13 @@
-//! Rust type annotation unwrapping and generic path extraction (`ra_ap_syntax`).
+//! Parameter type contracts and type annotation unwrapping for Rust (`ra_ap_syntax`).
 
 use super::names::compact_path_text;
+use super::returns::is_trait_or_trait_impl_function;
 use crate::code_lint::ast::imports::QualifiedName;
-use crate::code_lint::ast::tree::ParsedFile;
+use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_rowan_range};
+use crate::code_lint::ast::type_annotations::ParameterAnnotation;
 use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::AstNode as _;
-use ra_ap_syntax::ast::{self, HasGenericArgs as _};
+use ra_ap_syntax::ast::{self, HasGenericArgs as _, HasName as _};
 
 /// Unqualified name of `std::option::Option`.
 const OPTION_TYPE_NAME: &str = "Option";
@@ -17,6 +19,52 @@ const RC_TYPE_NAME: &str = "Rc";
 const ARC_TYPE_NAME: &str = "Arc";
 /// Unqualified name of `std::borrow::Cow`.
 const COW_TYPE_NAME: &str = "Cow";
+
+/// See [`crate::code_lint::ast::collect_parameter_annotations`].
+pub fn collect_parameter_annotations(file: &ParsedFile) -> Vec<ParameterAnnotation<'_>> {
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for function in parsed
+        .tree()
+        .syntax()
+        .descendants()
+        .filter_map(ast::Fn::cast)
+    {
+        let node = AstNode::from_span(file, span_from_rowan_range(function.syntax().text_range()));
+        let is_trait_or_trait_impl = is_trait_or_trait_impl_function(&function);
+        if is_trait_or_trait_impl || node.is_in_rust_inline_test() {
+            continue;
+        }
+        let Some(name_node) = function.name() else {
+            continue;
+        };
+        let function_name = name_node.text().trim().to_owned();
+        let Some(parameters) = function.param_list() else {
+            continue;
+        };
+        for parameter in parameters.params() {
+            let Some(pattern) = parameter.pat() else {
+                continue;
+            };
+            let Some(type_ast) = parameter.ty() else {
+                continue;
+            };
+            let name = parameter_pattern_name(&pattern);
+            let positional_tuple_arity = positional_tuple_type_arity(&type_ast, file);
+            let type_node =
+                AstNode::from_span(file, span_from_rowan_range(type_ast.syntax().text_range()));
+            out.push(ParameterAnnotation {
+                name,
+                function: function_name.clone(),
+                type_node,
+                positional_tuple_arity,
+            });
+        }
+    }
+    out
+}
 
 /// A path type whose terminal segment has a `<...>` generic argument list (`io::Result<T>`).
 pub(super) struct GenericPathType {
@@ -172,6 +220,16 @@ pub(super) fn extract_path_type_generics(
         base: base_resolved,
         arguments: type_arguments,
     })
+}
+
+/// Extracts the identifier or pattern text of a parameter pattern `pattern` (`mut point` -> `"point"`).
+fn parameter_pattern_name(pattern: &ast::Pat) -> String {
+    if let ast::Pat::IdentPat(ident_pattern) = pattern
+        && let Some(name) = ident_pattern.name()
+    {
+        return name.text().trim().to_owned();
+    }
+    pattern.syntax().text().to_string().trim().to_owned()
 }
 
 /// Normalizes a raw type path string by stripping whitespace and any leading `::`.

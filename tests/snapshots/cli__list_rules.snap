@@ -44,6 +44,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `nullable-collection-return` (python, rust): Flags function return annotations that wrap a collection type in `| None`, `Optional`, or `Option`.
 - `packed-assertion` (python, rust): Flags assertions that pack several checks into one condition.
 - `partial-override-docstring` (python): Flags `@override` method docstrings that omit an `Args:`, `Returns:`, `Yields:` or `Raises:` section of the inherited docstring.
+- `positional-tuple-parameter` (python, rust): Flags function and method parameters typed as a positional tuple instead of a named record.
 - `positional-tuple-return` (python, rust): Flags functions that return a positional tuple instead of a named record.
 - `primitive-duration` (python, rust): Flags durations held as plain numbers, detected by a time-unit suffix such as `timeout_secs` or `delay_ms`.
 - `private-before-public` (python, rust): Flags private functions, methods, and types defined above their owning or calling public entrypoints.
