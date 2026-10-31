@@ -82,11 +82,10 @@ Following the validated Phase 1 decisions ([01_understand.md](01_understand.md) 
     - Every `tests/registry.rs` rule is satisfied (`summary`, `rationale`, `suggestion`, `PLACEHOLDERS`: `expression`, `token`, `replacement`).
 
 - **D6 — Structural AST pattern grammar & matching for `adhoc-type-annotation`**:
-  - Both pattern strings and target source annotations are normalized into a language-neutral structural **`TypePattern`** / **`TypeShape`** tree in `code_lint::ast::type_annotations` (and matched in `code_lint::semantic::type_annotations` or `code_lint::ast::type_annotations`):
-    1. **Wildcards**: `_` or `...` in a pattern matches any single type subtree at that position (and a trailing `...` in `tuple[Iterator[Dimensions], ...]` matches one or more remaining arguments at the end of a subscript/tuple argument list!).
-       - Note on Python variadic `tuple[T, ...]`: in a target Python annotation `tuple[int, ...]`, `...` is the literal `Ellipsis` variadic marker (`TypeShape::Ellipsis`). A pattern `tuple[int, ...]` matches `tuple[int, ...]`, whereas a pattern with 3+ elements ending in `...` (like `tuple[Iterator[Dimensions], ...]`) or `_` (`Generator[_, None, None]`) matches fixed-length tuples/generics! To make this completely unambiguous:
-         - `_` in a pattern is always a single-argument wildcard (`TypePattern::Wildcard`).
-         - `...` in a pattern matches either a literal `Ellipsis` in the target annotation (`tuple[int, ...]`) OR a trailing prefix wildcard when the target has $\ge \text{pattern.args.len()}$ arguments.
+  - Both pattern strings and target source annotations are normalized into a language-neutral structural **`TypePattern`** / **`TypeShape`** tree in `code_lint::ast::type_annotations` (and matched in `code_lint::semantic::type_annotations`):
+    1. **Wildcards and Ellipsis (`_` and `...`)**:
+       - `_` in a pattern is a single-argument wildcard (`TypePattern::Wildcard`) matching any single type subtree at that position (e.g. `Generator[_, None, None]` or `Result<_, String>`).
+       - `...` in a pattern (`TypePattern::Ellipsis`) matches a literal `Ellipsis` (`TypeShape::Ellipsis`) in the target annotation, such as variadic `tuple[Segment, ...]` or `Callable[..., httpx.Response]` (and does not match fixed-length tuples like `tuple[Segment, Segment]`).
     2. **Unions (`A | B`, `Optional[A]`, `Union[A, B]`)**:
        - Flattened into a set/multiset of branch shapes (with `Optional[A]` normalized to `A | None`, and `Annotated[T, ...]` unwrapped to `T`).
        - Matching two unions is **order-independent** and deduplicated: pattern `Bound | None` matches target `Bound | None`, `None | Bound`, `Optional[Bound]`, and `typing.Union[Bound, None]`.
@@ -96,38 +95,14 @@ Following the validated Phase 1 decisions ([01_understand.md](01_understand.md) 
        - Thus `"tuple[Width, Height]"` (or `"(Width, Height)"`) matches fixed-length 2-element tuples of `Width` and `Height`!
     4. **Generic / Subscripted Types (`Base[Arg1, Arg2]` in Python, `Base<Arg1, Arg2>` in Rust) and Bare Named Types (`Base`)**:
        - The constructor name is resolved in the target file via `ast::resolve_name`:
-         - If the target constructor's first segment is `ResolvedName::Local` (a class/type defined in the same file):
-           - Wait: what about domain types like `Width`, `Height`, `Bound`, `Dimensions`, `HttpClient`? In a file that defines `class Width:` or imports `from .models import Width`, how should constructor names in patterns match?
-           - Let's check this carefully!
-           - In `BannedTypeAnnotationsRule`, `Width`, `Height`, `Bound`, `HttpClient`, `FakeClient`, `Credentials`, `Response` are **domain classes** (either imported from another module in the project, e.g. `from myproj.types import Width`, or defined in the current file, or unqualified in snippets), while `anyio.Event`, `Generator`, `Iterator`, `list` are stdlib/third-party types!
-           - If a user writes `"tuple[Width, Height] => Dimensions"` in `.omnicoach.toml`:
-             - In a real codebase, `Width` might be imported via `from app.geometry import Width` (so `resolve_name(file, "Width")` is `ResolvedName::Imported("app.geometry.Width")` with terminal `"Width"`), OR defined locally in `geometry.py` (`ResolvedName::Local` with written text `"Width"`), OR unbound in a test snippet (`ResolvedName::Unbound` with written text `"Width"`).
-             - Meanwhile, for stdlib/qualified patterns like `"anyio.Event"` or `"collections.abc.Generator[_, None, None]"`: if `from anyio import Event` is in the file, `Event` resolves to `ResolvedName::Imported("anyio.Event")` (path `"anyio.Event"`, terminal `"Event"`).
-             - What if a local class shadows a stdlib type, e.g., `class Generator:` defined locally when the pattern is `"collections.abc.Generator[_, None, None]"`? A qualified pattern `"collections.abc.Generator"` has a module prefix `"collections.abc"`, so a local `class Generator` does NOT match `"collections.abc.Generator"`. And what if the pattern is unqualified `"Generator[_, None, None]"`? In Python stdlib, `Generator` comes from `typing` or `collections.abc`.
-             - Therefore, how should a pattern constructor `P` match a target type constructor `T`?
-               - Let `T` have:
-                 - `written`: the compact source text as written at the annotation site (e.g. `"Width"`, `"anyio.Event"`, `"t.Generator"`),
-                 - `resolved`: `resolve_name(file, written)`:
-                   - `Imported(canonical_path)` (with `terminal` = last segment of `canonical_path`),
-                   - `Unbound` (with `canonical_path = written`, `terminal` = last segment of `written`),
-                   - `Local` (defined in `file`).
-               - Case A: Pattern constructor `P` is **qualified** (contains `.` in Python or `::` in Rust, e.g. `"anyio.Event"`, `"typing.Generator"`, `"crate::net::HostPort"`):
-                 - Matches when `T` is not `Local` and `T`'s `canonical_path == P` (or, for stdlib typing aliases in Python where `P` is in `typing` / `typing_extensions` / `collections.abc`, matches any of those standard typing namespaces with the same terminal!).
-               - Case B: Pattern constructor `P` is **unqualified** (a bare identifier like `"Width"`, `"Generator"`, `"Iterator"`, `"list"`):
-                 - If `P` is a Python stdlib typing/collection constructor (`Generator`, `Iterator`, `Iterable`, `Awaitable`, `Sequence`, `Mapping`, `list`, `dict`, `set`, `tuple`, `Tuple`, `List`, `Dict`, `Set`, `Callable`, `Any`, `object`, `BaseException`, etc.), it matches when `T` is not `Local` and `T` resolves to that stdlib constructor (unqualified or imported from `typing`, `typing_extensions`, `collections.abc`, or `builtins`).
-                 - Otherwise (`P` is a domain type name like `"Width"`, `"Height"`, `"Bound"`, `"SortOrder"`, `"HttpClient"`), it matches when `T`'s written name is `P` OR `T` is `Imported(path)` whose terminal segment is `P`!
-               - Let's verify this!
-                 - If pattern is `"tuple[Width, Height]"`:
-                   - `tuple` is a stdlib constructor → matches `tuple[...]` or `typing.Tuple[...]` (unless `class Tuple:` is defined locally!).
-                   - `Width` is a domain name → matches `Width` whether `Width` is unbound, imported (`from pkg.types import Width`), or defined in the file!
-                 - If pattern is `"tuple[anyio.Event, list[Response | BaseException]]"`:
-                   - `anyio.Event` is qualified → matches `anyio.Event` or `Event` after `from anyio import Event` (and does NOT match `threading.Event` or a local `class Event:`!).
-                   - `list` and `BaseException` are stdlib names → match builtin `list` / `typing.List` and builtin `BaseException`.
-                   - `Response` is a domain name → matches `Response` (unbound, imported, or local).
-                 - If pattern is `"Generator[_, None, None]"`:
-                   - `Generator` is a stdlib name → matches `Generator`, `typing.Generator`, `collections.abc.Generator`, `t.Generator` (and does NOT match a locally defined `class Generator:`!).
-                 - In Rust:
-                   - Same rule! Standard library prelude/wrapper names (`Option`, `Result`, `Vec`, `Box`, `Arc`, `Rc`, `Cow`, `String`, primitives `u8`..`usize`, `bool`, `str`) match when `T` is not `Local` and resolves to the stdlib name; qualified paths (`tokio::sync::Notify`, `std::collections::HashMap`) match when `T` is not `Local` and `T`'s resolved path matches; unqualified domain names (`Width`, `Height`, `Bound`) match when `T`'s written name or imported terminal is that name.
+         - In `BannedTypeAnnotationsRule`, `Width`, `Height`, `Bound`, `Segment`, `Dimensions`, `ValueRange` are **domain classes** (either imported from another module in the project, e.g. `from myproj.types import Width`, or defined in the current file, or unqualified in snippets), while `httpx.Response`, `Generator`, `Iterator`, `Callable`, `dict`, `list` are stdlib/third-party types:
+           - Case A: Pattern constructor `P` is **qualified** (contains `.` in Python or `::` in Rust, e.g. `"httpx.Response"`, `"typing.Generator"`, `"crate::net::HostPort"`):
+             - Matches when `T` is not `Local` and `T`'s `canonical_path == P` (or, for stdlib typing aliases in Python where `P` is in `typing` / `typing_extensions` / `collections.abc`, matches any of those standard typing namespaces with the same terminal).
+           - Case B: Pattern constructor `P` is **unqualified** (a bare identifier like `"Width"`, `"Generator"`, `"Iterator"`, `"dict"`, `"list"`):
+             - If `P` is a Python stdlib typing/collection constructor (`Generator`, `Iterator`, `Iterable`, `Awaitable`, `Sequence`, `Mapping`, `list`, `dict`, `set`, `tuple`, `Tuple`, `List`, `Dict`, `Set`, `Callable`, `Any`, `object`, `BaseException`, etc.), it matches when `T` is not `Local` and `T` resolves to that stdlib constructor (unqualified or imported from `typing`, `typing_extensions`, `collections.abc`, or `builtins`).
+             - Otherwise (`P` is a domain type name like `"Width"`, `"Height"`, `"Bound"`, `"Segment"`), it matches when `T`'s written name is `P` OR `T` is `Imported(path)` whose terminal segment is `P`.
+           - In Rust:
+             - Same rule: standard library prelude/wrapper names (`Option`, `Result`, `Vec`, `Box`, `Arc`, `Rc`, `Cow`, `String`, primitives `u8`..`usize`, `bool`, `str`) match when `T` is not `Local` and resolves to the stdlib name; qualified paths (`tokio::sync::Notify`, `std::collections::HashMap`) match when `T` is not `Local` and `T`'s resolved path matches; unqualified domain names (`Width`, `Height`, `Bound`) match when `T`'s written name or imported terminal is that name.
     5. **Reference & Pointer Transparency in Rust**:
        - In Rust, if a pattern is `(Width, Height)` (without `&`), and a parameter is `size: &(Width, Height)`, since `adhoc-type-annotation` walks all nested type nodes (see D7), `(Width, Height)` inside `&(Width, Height)` is visited and flagged at `(Width, Height)`—and if a pattern explicitly starts with `&` (e.g. `&Vec<u8>`), it matches the `RefType` `&Vec<u8>` directly!
 
@@ -403,19 +378,20 @@ Following the validated Phase 1 decisions ([01_understand.md](01_understand.md) 
   banned: &[
       "tuple[Width, Height] => Dimensions",
       "tuple[Bound | None, Bound | None] => ValueRange",
-      "tuple[Iterator[Dimensions], ...] => MergeInputs",
-      "tuple[HttpClient | FakeClient, Credentials | None] => ClientSetup",
-      "tuple[anyio.Event, list[Response | BaseException]] => PendingRequest",
+      "tuple[Segment, ...] => RoutePath",
+      "dict[str, object] => TypedDict",
+      "Callable[..., httpx.Response] => ResponseFactory",
       "Generator[_, None, None] => collections.abc.Iterator",
       "(Width, Height) => Dimensions",
       "(Option<Bound>, Option<Bound>) => ValueRange",
+      "Result<_, String> => AppError",
   ]
   ```
 
-- **Python `pass`**: `domain_types_used`, `different_tuple_element_types`, `unbanned_generator_send_type`, `override_method_exempt` (E3), `protocol_class_exempt` (E5), `local_variable_annotation_exempt` (E7), `annotated_metadata_ignored` (E9), `local_class_shadowing_stdlib_generator_exempt` (E10), `unrelated_event_module_exempt`.
-- **Python `fail`**: `dimensions_tuple_parameter`, `typing_tuple_dimensions_return`, `value_range_reversed_union_order_attribute`, `value_range_typing_optional_return`, `merge_inputs_ellipsis_wildcard_return`, `client_setup_union_parameter`, `pending_request_nested_subscript_attribute`, `generator_yield_only_wildcard_return`, `qualified_collections_abc_generator_parameter`, `nested_inside_list_parameter`, `instance_attribute_in_method`.
-- **Rust `pass`**: `domain_structs_used`, `different_tuple_types`, `trait_impl_exempt` (E4), `inline_test_exempt` (E8), `local_let_binding_exempt` (E7).
-- **Rust `fail`**: `dimensions_tuple_parameter`, `dimensions_tuple_return`, `dimensions_tuple_struct_field`, `value_range_option_tuple_return`, `nested_vec_of_dimensions_parameter`, `enum_variant_dimensions_field`.
+- **Python `pass`**: `domain_types_used`, `different_tuple_element_types`, `fixed_length_segment_tuple_exempt`, `unbanned_generator_send_type`, `override_method_exempt` (E3), `protocol_class_exempt` (E5), `local_variable_annotation_exempt` (E7), `annotated_metadata_ignored` (E9), `local_class_shadowing_stdlib_generator_exempt` (E10), `unrelated_response_module_exempt`.
+- **Python `fail`**: `dimensions_tuple_parameter`, `typing_tuple_dimensions_return`, `value_range_reversed_union_order_attribute`, `value_range_typing_optional_return`, `variadic_segment_tuple_return`, `untyped_string_dict_parameter`, `callable_ellipsis_qualified_return_attribute`, `generator_yield_only_wildcard_return`, `qualified_collections_abc_generator_parameter`, `nested_inside_list_parameter`, `instance_attribute_in_method`.
+- **Rust `pass`**: `domain_structs_used`, `different_tuple_types`, `typed_error_result_exempt`, `trait_impl_exempt` (E4), `inline_test_exempt` (E8), `local_let_binding_exempt` (E7).
+- **Rust `fail`**: `dimensions_tuple_parameter`, `dimensions_tuple_return`, `dimensions_tuple_struct_field`, `value_range_option_tuple_return`, `string_error_result_return`, `nested_vec_of_dimensions_parameter`, `enum_variant_dimensions_field`.
 - **Unit tests in `semantic::type_annotations`**:
   - Verify empty `banned` set (`base: &[]`) returns zero matches (E11).
   - Verify pattern without `=>` formats `{replacement}` as `"a dedicated domain type"`.

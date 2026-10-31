@@ -53,9 +53,10 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 `"tuple[Width, Height] => Dimensions"`,
                 `"Generator[_, None, None] => collections.abc.Iterator"`, or
                 `"(Width, Height) => Dimensions"`. Patterns are matched structurally: `_` matches
-                any single type argument, a trailing `...` matches remaining type arguments, unions
-                (`A | B`, `Optional[A]`, `Union[A, B]`) match regardless of branch order, and type
-                constructors are resolved through the file's imports."#},
+                any single type argument, `...` matches a literal ellipsis in variadic
+                `tuple[T, ...]` or `Callable[..., R]` annotations, unions (`A | B`, `Optional[A]`,
+                `Union[A, B]`) match regardless of branch order, and type constructors are resolved
+                through the file's imports."#},
             why_is_this_bad: indoc::indoc! {r"
                 Recurring composite annotations such as `tuple[Width, Height]` or
                 `Generator[T, None, None]` encode a domain concept or protocol by repeating its
@@ -132,12 +133,13 @@ crate::test_utils::rule_test!(
     banned: &[
         "tuple[Width, Height] => Dimensions",
         "tuple[Bound | None, Bound | None] => ValueRange",
-        "tuple[Iterator[Dimensions], ...] => MergeInputs",
-        "tuple[HttpClient | FakeClient, Credentials | None] => ClientSetup",
-        "tuple[anyio.Event, list[Response | BaseException]] => PendingRequest",
+        "tuple[Segment, ...] => RoutePath",
+        "dict[str, object] => TypedDict",
+        "Callable[..., httpx.Response] => ResponseFactory",
         "Generator[_, None, None] => collections.abc.Iterator",
         "(Width, Height) => Dimensions",
         "(Option<Bound>, Option<Bound>) => ValueRange",
+        "Result<_, String> => AppError",
     ],
     {
         Python => {
@@ -150,6 +152,10 @@ crate::test_utils::rule_test!(
                 ",
                 different_tuple_element_types => r"
                     def scale(factors: tuple[float, float]) -> None:
+                        pass
+                ",
+                fixed_length_segment_tuple_exempt => r"
+                    def pair_segments(pair: tuple[Segment, Segment]) -> None:
                         pass
                 ",
                 unbanned_generator_send_type => r"
@@ -189,11 +195,12 @@ crate::test_utils::rule_test!(
                     def run(stream: Generator[int, None, None]) -> None:
                         pass
                 ",
-                unrelated_event_module_exempt => r"
-                    import asyncio
+                unrelated_response_module_exempt => r"
+                    from collections.abc import Callable
+                    import urllib.response
 
-                    class Worker:
-                        pending: tuple[asyncio.Event, list[Response | BaseException]]
+                    class Client:
+                        factory: Callable[..., urllib.response.Response]
                 ",
             ],
             fail: [
@@ -217,22 +224,21 @@ crate::test_utils::rule_test!(
                     def axis_bounds() -> Tuple[Optional[Bound], Optional[Bound]]:
                         return None, None
                 " => "Tuple[Optional[Bound], Optional[Bound]]",
-                merge_inputs_ellipsis_wildcard_return => r"
-                    from collections.abc import Iterator
-
-                    def prepare_merge() -> tuple[Iterator[Dimensions], Iterator[Dimensions], SortOrder, SortOrder]:
+                variadic_segment_tuple_return => r"
+                    def split_route() -> tuple[Segment, ...]:
                         raise NotImplementedError
-                " => "tuple[Iterator[Dimensions], Iterator[Dimensions], SortOrder, SortOrder]",
-                client_setup_union_parameter => r"
-                    def connect(setup: tuple[FakeClient | HttpClient, None | Credentials]) -> None:
+                " => "tuple[Segment, ...]",
+                untyped_string_dict_parameter => r"
+                    def configure(settings: dict[str, object]) -> None:
                         pass
-                " => "tuple[FakeClient | HttpClient, None | Credentials]",
-                pending_request_nested_subscript_attribute => r"
-                    from anyio import Event
+                " => "dict[str, object]",
+                callable_ellipsis_qualified_return_attribute => r"
+                    from collections.abc import Callable
+                    from httpx import Response
 
-                    class Channel:
-                        pending: tuple[Event, list[BaseException | Response]]
-                " => "tuple[Event, list[BaseException | Response]]",
+                    class Client:
+                        factory: Callable[..., Response]
+                " => "Callable[..., Response]",
                 generator_yield_only_wildcard_return => r"
                     from collections.abc import Generator
 
@@ -274,6 +280,11 @@ crate::test_utils::rule_test!(
                         factors.0 * factors.1
                     }
                 ",
+                typed_error_result_exempt => r"
+                    fn load() -> Result<Config, AppError> {
+                        todo!()
+                    }
+                ",
                 trait_impl_exempt => r"
                     impl Resizable for Canvas {
                         fn resize(&mut self, target: (Width, Height)) {}
@@ -312,6 +323,11 @@ crate::test_utils::rule_test!(
                         (None, None)
                     }
                 " => "(Option<Bound>, Option<Bound>)",
+                string_error_result_return => r"
+                    fn load() -> Result<Config, String> {
+                        todo!()
+                    }
+                " => "Result<Config, String>",
                 nested_vec_of_dimensions_parameter => r"
                     fn batch_resize(targets: Vec<(Width, Height)>) {
                         let _ = targets;

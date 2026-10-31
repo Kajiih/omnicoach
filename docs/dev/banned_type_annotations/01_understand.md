@@ -36,9 +36,9 @@ For every inspected parameter, return, and attribute annotation, `BannedTypeAnno
 |---|---|---|---|
 | 1 | `_is_dimensions` | `tuple[Width, Height]` | `"Use 'Dimensions' instead of 'tuple[Width, Height]'."` |
 | 2 | `_is_value_range` | `tuple[Bound \| None, Bound \| None]` | `"Use 'ValueRange' instead of 'tuple[Bound \| None, Bound \| None]'."` |
-| 3 | `_is_merge_inputs` | `tuple[Iterator[Dimensions], Iterator[Dimensions], SortOrder, SortOrder]` | `"Use 'MergeInputs' instead of 'tuple[Iterator[Dimensions], ...]'."` |
-| 4 | `_is_client_setup` | `tuple[HttpClient \| FakeClient, Credentials \| None]` | `"Use 'ClientSetup' instead of 'tuple[HttpClient \| FakeClient, Credentials \| None]'."` |
-| 5 | `_is_pending_request` | `tuple[anyio.Event, list[Response \| BaseException]]` | `"Use 'PendingRequest' instead of 'tuple[anyio.Event, list[Response \| BaseException]]'."` |
+| 3 | `_is_route_path` | `tuple[Segment, ...]` | `"Use 'RoutePath' instead of 'tuple[Segment, ...]'."` |
+| 4 | `_is_endpoint` | `tuple[Host, Port \| None]` | `"Use 'Endpoint' instead of 'tuple[Host, Port \| None]'."` |
+| 5 | `_is_response_factory` | `Callable[..., httpx.Response]` | `"Use 'ResponseFactory' instead of 'Callable[..., httpx.Response]'."` |
 | 6 | `_is_coroutine_object` | `Coroutine[object, object, ...]` (`len(elts) >= 2` with `elts[0] == Name("object")` and `elts[1] == Name("object")`) | `"Avoid 'Coroutine[object, object, ...]'. Consider 'Awaitable[...]', 'Coroutine[None, None, ...]', or refactoring."` |
 
 ---
@@ -70,8 +70,8 @@ For every inspected parameter, return, and attribute annotation, `BannedTypeAnno
 
 ### 2.1 Patterns 1–5 of `BannedTypeAnnotationsRule`: Project-Specific Domain Tuples
 
-- **What problem they solved in the legacy linter**: The legacy linter lacked a general rule against unnamed positional tuple returns. Developers and LLM agents repeatedly returned ad-hoc tuples like `tuple[Width, Height]` or `tuple[HttpClient | FakeClient, Credentials | None]` instead of existing domain dataclasses/NamedTuples (`Dimensions`, `ValueRange`, `MergeInputs`, `ClientSetup`, `PendingRequest`).
-- **Why they cannot be ported as-is**: Every single type name (`Width`, `Height`, `Bound`, `Dimensions`, `ValueRange`, `SortOrder`, `HttpClient`, `FakeClient`, `Credentials`, `Response`, `PendingRequest`) is proprietary to the legacy linter's project domain.
+- **What problem they solved in the legacy linter**: The legacy linter lacked a general rule against unnamed positional tuple returns. Developers and LLM agents repeatedly returned ad-hoc tuples like `tuple[Width, Height]` or `tuple[Host, Port | None]` instead of existing domain dataclasses/NamedTuples (`Dimensions`, `ValueRange`, `RoutePath`, `Endpoint`, `ResponseFactory`).
+- **Why they cannot be ported as-is**: Every single type name (`Width`, `Height`, `Bound`, `Dimensions`, `ValueRange`, `Segment`, `RoutePath`, `Host`, `Port`, `Endpoint`, `ResponseFactory`) is proprietary to the legacy linter's project domain.
 - **What Omni already covers**: [positional_tuple_return.rs](../../../src/code_lint/rules/positional_tuple_return.rs) already bans **all** fixed-length `tuple[T1, T2, ...]` (`arity >= 2`) in return and generator yield/return positions—catching all five shapes (and any other multi-element tuple return) structurally without hardcoding project-specific class names.
 
 ---
@@ -124,7 +124,7 @@ For every inspected parameter, return, and attribute annotation, `BannedTypeAnno
 
 | Sub-Pattern | Source Rule | Triage Decision | Reason |
 |---|---|---|---|
-| 5 domain tuple shapes (`Dimensions`, `ValueRange`, `MergeInputs`, `ClientSetup`, `PendingRequest`) | `BannedTypeAnnotationsRule` | **Reopened (see §4)** | Return positions are covered by `positional-tuple-return`, but parameters (`def f(x: tuple[Width, Height])`), attributes (`bounds: tuple[Bound \| None, Bound \| None]`), and nested type arguments (`list[tuple[Width, Height]]`) are not yet covered, nor can downstream projects configure custom banned type shapes or domain replacement hints. |
+| 5 domain composite shapes (`Dimensions`, `ValueRange`, `RoutePath`, `Endpoint`, `ResponseFactory`) | `BannedTypeAnnotationsRule` | **Reopened (see §4)** | Return positions are covered by `positional-tuple-return`, but parameters (`def f(x: tuple[Width, Height])`), attributes (`bounds: tuple[Bound \| None, Bound \| None]`), and nested type arguments (`list[tuple[Width, Height]]`) are not yet covered, nor can downstream projects configure custom banned type shapes or domain replacement hints. |
 | User-configurable banned AST type matcher | `BannedTypeAnnotationsRule` | **Reopened (see §4)** | Downstream codebases need a way to replace bespoke `BannedTypeAnnotationsRule` AST visitors with an Omni rule, subject to resolving the architectural questions in §4. |
 | `Coroutine[object, object, T]` annotation check | `BannedTypeAnnotationsRule` | **Drop** | Replacing `Coroutine[_, _, T]` with `Awaitable[T]` is unsound in the general case because `asyncio.create_task()` and `asyncio.run()` require `Coroutine[Any, Any, T]` and reject `Awaitable[T]`. |
 | Bare `str` / `int` / `float` warning | `PrimitiveTypeSuggestionsRule` | **Drop (already disabled & superseded)** | Disabled in the legacy linter due to noise; high-signal cases already covered by `primitive-duration`, `identical-positional-types`, and `positional-tuple-return`. |

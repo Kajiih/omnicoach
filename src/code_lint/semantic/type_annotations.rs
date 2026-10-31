@@ -153,13 +153,13 @@ struct ParsedBannedRule {
 enum TypePattern {
     /// Single-slot wildcard `_`.
     Wildcard,
-    /// Ellipsis `...` (matches literal `...` or trailing remaining arguments).
+    /// Ellipsis `...` (matches literal `...` in variadic `tuple[T, ...]` or `Callable[..., R]`).
     Ellipsis,
     /// Python `None`.
     None,
     /// Order-independent union (`A | B`, `Optional[A]`, `Union[A, B]`).
     Union(Vec<Self>),
-    /// Fixed or prefix tuple (`tuple[A, B]`, `Tuple[A, B]`, `(A, B)`).
+    /// Tuple (`tuple[A, B]`, `Tuple[A, B]`, `tuple[A, ...]`, `(A, B)`).
     Tuple(Vec<Self>),
     /// Rust reference (`&T` or `&mut T`).
     Reference { mutable: bool, inner: Box<Self> },
@@ -502,16 +502,8 @@ fn pair_union_branches(
     false
 }
 
-/// Matches a pattern's type argument list against a target's type argument list, supporting a
-/// trailing `...` wildcard (`tuple[A, ...]`, `tuple[Iterator[Dimensions], ...]`).
+/// Matches a pattern's type argument list element-by-element against a target's type argument list.
 fn matches_argument_list(pat_args: &[TypePattern], target_args: &[TypeShape]) -> bool {
-    if let Some((TypePattern::Ellipsis, prefix)) = pat_args.split_last() {
-        return target_args.len() >= prefix.len()
-            && prefix
-                .iter()
-                .zip(target_args)
-                .all(|(pat, target)| matches_pattern(pat, target));
-    }
     pat_args.len() == target_args.len()
         && pat_args
             .iter()
