@@ -106,7 +106,7 @@ impl Tag {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Self::Topic(value) => value.label,
+            Self::Topic(value) => value.label(),
             Self::Precision(value) => value.into(),
             Self::Consensus(value) => value.into(),
             Self::ImpactedQuality(value) => value.into(),
@@ -219,7 +219,7 @@ impl Topic {
 
     /// The topic's ancestors, nearest first.
     fn ancestors(self) -> impl Iterator<Item = Self> {
-        std::iter::successors(self.parent.copied(), |topic| topic.parent.copied())
+        std::iter::successors(self.parent(), |topic| topic.parent())
     }
 }
 
@@ -302,7 +302,7 @@ pub fn registered_topics() -> Vec<Topic> {
         topic
             .path()
             .into_iter()
-            .map(|step| step.label)
+            .map(Topic::label)
             .collect::<Vec<_>>()
     });
     topics
@@ -317,7 +317,7 @@ fn labels() -> impl Iterator<Item = (&'static str, Selector)> {
     let synonyms = all_topics().flat_map(|topic| {
         let selector = Selector::Tag(Tag::Topic(topic));
         topic
-            .synonyms
+            .synonyms()
             .iter()
             .map(move |&synonym| (synonym, selector))
     });
@@ -362,13 +362,19 @@ mod tests {
             let topics = rule.classification.topics;
             for (index, &topic) in topics.iter().enumerate() {
                 if topics[..index].contains(&topic) {
-                    failures.push(format!("{}: `{}` is listed twice", rule.name, topic.label));
+                    failures.push(format!(
+                        "{}: `{}` is listed twice",
+                        rule.name,
+                        topic.label()
+                    ));
                 }
                 if let Some(ancestor) = topic.ancestors().find(|ancestor| topics.contains(ancestor))
                 {
                     failures.push(format!(
                         "{}: remove `{}`, it is implied by `{}`",
-                        rule.name, ancestor.label, topic.label
+                        rule.name,
+                        ancestor.label(),
+                        topic.label()
                     ));
                 }
             }
@@ -394,9 +400,9 @@ mod tests {
         // Facet value enums are covered by the crate's `missing_docs` lint.
         let undocumented: Vec<_> = all_topics()
             .filter(|topic| {
-                topic.description.trim().is_empty() || topic.scope_note.trim().is_empty()
+                topic.description().trim().is_empty() || topic.scope_note().trim().is_empty()
             })
-            .map(|topic| topic.label)
+            .map(Topic::label)
             .collect();
         assert!(undocumented.is_empty(), "document {undocumented:?}");
     }
@@ -445,18 +451,12 @@ mod tests {
 
     #[test]
     fn a_topic_branch_is_its_path_from_the_root() {
-        const PARENT: Topic = Topic {
-            label: "parent",
-            parent: None,
-            description: "",
-            scope_note: "",
-            synonyms: &[],
+        const DOC: crate::rule_declaration::TopicDoc = crate::rule_declaration::TopicDoc {
+            description: "Doc.",
+            scope_note: "Doc.",
         };
-        const CHILD: Topic = Topic {
-            label: "child",
-            parent: Some(&PARENT),
-            ..PARENT
-        };
+        const PARENT: Topic = Topic::root("parent", DOC);
+        const CHILD: Topic = Topic::sub("child", &PARENT, DOC);
         let rule = RegisteredRule::synthetic(
             "rule",
             Classification {

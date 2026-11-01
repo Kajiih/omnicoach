@@ -18,7 +18,7 @@ pub use self::options::{
     ListOption, OptionProblem, OptionSpec, OptionsDeclaration, RuleOptions, RuleOptionsError,
     RuleOverrides,
 };
-pub use self::taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic};
+pub use self::taxonomy::{Classification, Consensus, ImpactedQuality, Precision, Topic, TopicDoc};
 
 use crate::diagnostic::{Diagnostic, Language, RuleName, SourceLocation, ViolationTemplate};
 

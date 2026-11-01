@@ -678,24 +678,17 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::rule_declaration::{Classification, Consensus, ImpactedQuality, Precision, Topic};
+    use crate::rule_declaration::{
+        Classification, Consensus, ImpactedQuality, Precision, Topic, TopicDoc,
+    };
 
-    const PARENT: Topic = Topic {
-        label: "parent",
-        parent: None,
-        description: "",
-        scope_note: "",
-        synonyms: &[],
+    const DOC: TopicDoc = TopicDoc {
+        description: "Doc.",
+        scope_note: "Doc.",
     };
-    const CHILD: Topic = Topic {
-        label: "child",
-        parent: Some(&PARENT),
-        ..PARENT
-    };
-    const OTHER: Topic = Topic {
-        label: "other",
-        ..PARENT
-    };
+    const PARENT: Topic = Topic::root("parent", DOC);
+    const CHILD: Topic = Topic::sub("child", &PARENT, DOC);
+    const OTHER: Topic = Topic::root("other", DOC);
 
     const RULE: Selector = Selector::Rule(RuleName("rule"));
     const PARENT_TAG: Selector = Selector::Tag(Tag::Topic(PARENT));

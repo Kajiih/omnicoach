@@ -43,25 +43,28 @@ pub struct Classification {
 - **Single Global Namespace (`DI5`)**: Rule names, canonical topic labels, facet value labels, and topic synonyms share one flat selector namespace (`heuristic`, not `precision:heuristic`). Facet display labels (`Topic`, `Precision`, `Consensus`, `Impacted quality`, `Languages`, `Analyzed input`, `File scope`) are never valid selectors (`D19`).
 - **Orthogonal Boundary Between Topic and Impacted Quality (`D38`)**: Topics name the *code construct, API, or domain inspected* (`testing`, `static-typing`, `async`), whereas `ImpactedQuality` names the *ISO/IEC 25010 software quality that suffers when violated* (`reliability`, `maintainability`, and future ISO values when first needed by a rule). Quality words (`security`, `performance`, `reliability`, `maintainability`, `safety`) are never topics.
 
-### 2.2. Topic Tree as Plain `const` Structs (`D16`, `D24`, `D25`, `D32`–`D34`)
+### 2.2. Topic Tree as Plain `const` Declarations (`D16`, `D24`, `D25`, `D32`–`D34`)
 
-`Topic` is a plain `struct` (`label`, `parent: Option<&'static Topic>`, `description`, `scope_note`, `synonyms`), with each topic declared in **one spot** as an associated `const` on `Topic` (`Topic::NAMING`, `Topic::JJ`, …):
+`Topic` is a `struct` with private fields (`label`, `parent: Option<&'static Topic>`, `description`, `scope_note`, `synonyms`), constructed via `Topic::root` or `Topic::sub`, with each topic declared in **one spot** as an associated `const` on `Topic` (`Topic::NAMING`, `Topic::JJ`, …):
 
 ```rust
-pub struct Topic {
-    pub label: &'static str,
-    pub parent: Option<&'static Self>,
-    pub description: &'static str,
-    pub scope_note: &'static str,
-    pub synonyms: &'static [&'static str],
-}
+pub(crate) const JJ: Self = Self::sub(
+    "jj",
+    &Self::VCS,
+    TopicDoc {
+        description: "Rules specific to Jujutsu.",
+        scope_note: "Commands and workflows specific to Jujutsu. Not generic VCS behaviour.",
+    },
+)
+.aliases(&["jujutsu"]);
 ```
 
-1. **Single-Spot Declaration & Mandatory Documentation (`C2`, `D32`)**: Every topic's `label`, `parent`, `description`, `scope_note`, and `synonyms` (`version-control` → `vcs`, `jujutsu` → `jj`) live in a single struct literal. Omitting `description` or `scope_note` is a compile error (`E0063`).
-2. **Native Compile-Time Cycle Prevention (`D34`, `E0391`)**: Because each topic is a `const` and `parent` is `Option<&'static Topic>`, any cycle in `parent` links fails to compile with `rustc`'s native `E0391` (`cycle detected when const-evaluating`), regardless of declaration order. There is no arbitrary maximum depth limit.
-3. **Active Topics Derived from Rules & Unused-Topic Detection (`M10`)**: `RuleSelection` collects `all_topics()` by walking registered rules' `classification.topics` and their `.ancestors()` (no second `ALL` list or macro). In production, `pub(crate) const` topic declarations that are not referenced by any rule or child topic are caught at compile time by `rustc`'s `dead_code` lint.
-4. **Encapsulated Hierarchy Traversal (`D33`)**: Selection and description callers in `RuleSelection` read hierarchy exclusively through `ancestors()` and `path()`, never reading `Topic::parent` directly.
-5. **Most-Specific Rule Tagging**: A rule lists only its most specific topics (`&[Topic::TEST_TIMING]`, never `&[Topic::TESTING, Topic::TEST_TIMING]`), enforced by unit test.
+1. **Single-Spot Declaration & Mandatory Documentation (`C2`, `D32`)**: Every topic's `label`, parent (`Topic::root` vs. `Topic::sub`), `description`, `scope_note`, and synonyms (`.aliases(&[...])`: `version-control` → `vcs`, `jujutsu` → `jj`) live in a single `const` expression. `TopicDoc` is a struct literal, so omitting `description` or `scope_note` is a compile error (`E0063`); an empty description or scope note fails `every_topic_is_documented`. Single-valued facet enums (`Precision`, `Consensus`, `ImpactedQuality`) derive `strum::IntoStaticStr` and `strum::EnumMessage`, so their tag label and description come directly from the variant and its doc comment (enforced by `missing_docs`).
+2. **Native Compile-Time Cycle Prevention (`D34`, `E0391`)**: Because each topic is a `const` and `Topic::sub` stores `parent: Some(parent)` (`Option<&'static Topic>`), any cycle in `parent` links fails to compile with `rustc`'s native `E0391` (`cycle detected when const-evaluating`), regardless of declaration order. There is no arbitrary maximum depth limit.
+3. **A Tree Checked at Compile Time**: `Topic`'s fields are private, and `Topic::root` (no parent) and `Topic::sub` (one `&'static Topic` parent) enforce at compile time that a topic has at most one parent, itself a topic (`E0308` otherwise).
+4. **Active Topics Derived from Rules & Unused-Topic Detection (`M10`)**: `RuleSelection` collects `all_topics()` by walking registered rules' `classification.topics` and their `.ancestors()` (no second `ALL` list or macro). In production, `pub(crate) const` topic declarations that are not referenced by any rule or child topic are caught at compile time by `rustc`'s `dead_code` lint.
+5. **Encapsulated Hierarchy Traversal (`D33`)**: Selection and description callers in `RuleSelection` read hierarchy through `ancestors()`, `path()`, and `Topic::parent()`.
+6. **Most-Specific Rule Tagging**: A rule lists only its most specific topics (`&[Topic::TEST_TIMING]`, never `&[Topic::TESTING, Topic::TEST_TIMING]`), enforced by unit test.
 
 ### 2.3. Selection Precedence Model B and Config Validation (`D15`, `D18`, `D35`)
 
@@ -72,7 +75,7 @@ Every rule has a set of **branches**: one root-to-leaf path per declared topic (
 3. **Default When Unmatched**: When no branch matches any selector, the rule is enabled iff `select` is absent from the configuration.
 4. **Per-File Ignores**: `per_file_ignores` is evaluated after main selection as a subtract-only stage. `D15` (rule name beats tag) applies within main selection, not across stages: a tag in `per_file_ignores` subtracts matching rules on that path even if globally selected by rule name.
 5. **Loud Config Validation**: String parsing occurs only in the config adapter. It rejects:
-   - unknown selector labels (reporting the closest registered label via case-insensitive Levenshtein edit distance when within `max(1, len / 3)`);
+   - unknown selector labels (reporting the closest registered label via case-insensitive optimal string alignment edit distance when within `max(1, len / 3)`);
    - facet display labels used as selectors, matched case-insensitively in both space-separated (`"Impacted quality"`) and `kebab-case` (`"impacted-quality"`) forms (listing the facet's valid values);
    - the same canonical selector appearing in both `select` and `ignore` (after resolving synonyms).
    If cheap to surface from `Config::load`, a warning is emitted when a selector entry changes no rule's outcome (`D35`).
@@ -97,13 +100,15 @@ Rules and runners must never branch on tags (`M13`):
 
 The verification suite lives in production: `compile_fail` doctests on `Classification` in `src/rule_declaration/taxonomy.rs` and invariant tests in `src/rule_selection/taxonomy.rs`:
 
-- **Compile-Time Checks (7 `compile_fail` Doctests)**:
+- **Compile-Time Checks (8 `compile_fail` Doctests)**:
   - Missing or duplicate single-valued facet field (`M1`: `E0063`, `M2`: `E0062`)
-  - Facet value in `topics` or non-topic parent (`M5`: `E0308`, `M11`: `E0308`)
+  - Facet value in `topics` (`M5`: `E0308`)
+  - Non-topic parent in `Topic::sub` (`M11`: `E0308`)
+  - Topic missing its `scope_note` (`E0063`)
   - Hand-declared derived facet (`M6`: `E0560`)
   - Unknown topic constant (`M7`: `E0599`)
   - Cycle in `Topic` parent links (`M8`: `E0391`, `D34`)
-  - Tag-free `Rule` contract (`M13`, `D37`)
+- **Architecture Graph**: tag-free `Rule` contract (`M13`, `D37`; §2.4)
 - **Taxonomy Invariant Tests**:
   - `every_rule_has_a_topic` (`M3`)
   - `no_rule_lists_a_topic_with_its_ancestor_or_twice` (`M4`)

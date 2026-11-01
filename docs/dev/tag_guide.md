@@ -142,10 +142,10 @@ A topic is admitted when **all** of these hold. The number of rules it has is **
 
 ### 4.2 Structure
 
-- **A single-spot `const` struct**: each topic is declared once as an associated `const` on `Topic` (`Topic { label, parent, description, scope_note, synonyms }`).
-- **A tree**: one parent at most (`parent: Option<&'static Topic>`), read by callers through `ancestors()` and `path()`. Several parents (a DAG) may come later as a data change.
+- **A single-spot `const` declaration**: each topic is declared once as an associated `const` on `Topic`: `Topic::root("...", TopicDoc { description, scope_note })` or `Topic::sub("...", &Self::..., TopicDoc { description, scope_note })`, optionally followed by `.aliases(&[...])`.
+- **A tree**: one parent at most, enforced by `Topic::root` (no parent) and `Topic::sub` (one `&'static Topic` parent), read by callers through `ancestors()`, `path()`, and `Topic::parent()`.
 - **Compile-time acyclicity**: because topics are `const`s referencing `Option<&'static Topic>`, any cycle in `parent` links fails to compile with `E0391` (`cycle detected when const-evaluating`).
-- **Topics only**: a topic's parent is a topic, never a facet value.
+- **Topics only**: `Topic::sub` takes `&'static Topic`, so a parent from another facet fails to compile with `E0308`.
 
 ### 4.3 Synonyms
 
@@ -173,7 +173,7 @@ Compiler checks are pinned by `compile_fail` doctests on `Classification` in `sr
 | §4.2: a tree without cycles | Compiler (`E0391` `const` evaluation cycle on `parent: Option<&'static Topic>`) |
 | §1, §4.1.4: labels are globally unique, `kebab-case`, and not facet labels | Test `labels_are_globally_unique_and_not_facet_labels` |
 | §2.4, §4.1.5: every topic and facet value has at least one rule | Test `every_tag_has_a_rule` + `dead_code` lint on unused `pub(crate) const` topics |
-| §4.2: a topic's parent is a topic | Compiler (`E0308` type mismatch) |
+| §4.2: a topic's parent is a topic | Compiler (`E0308` type mismatch on `Topic::sub`) |
 | §1: behaviour never depends on a tag | Architecture graph (`src/architecture.rs`: rules and runners cannot depend on `RuleSelection`) checked by `test_architecture_conformance` in `tests/architecture_conformance.rs` |
-| §4.1.3: every tag has a description and every topic has a scope note | `missing_docs` lint (facet values) + compiler (`E0063` missing struct field on `Topic`) + test `every_topic_is_documented` (non-empty); **Review** (meaning) |
+| §4.1.3: every tag has a description and every topic has a scope note | `missing_docs` lint (`strum::EnumMessage` derives facet value descriptions from their doc comments) + compiler (`E0063` if a `TopicDoc` field is missing) + test `every_topic_is_documented` (non-empty); **Review** (meaning) |
 | §2.2–§2.4, §4.1.1–4.1.2: the yes/no questions | **Review.** A test cannot judge meaning; the worked examples are the reference. |

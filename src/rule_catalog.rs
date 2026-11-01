@@ -142,18 +142,18 @@ pub fn list_tags() -> String {
         "|---|---|---|---|---|".to_owned(),
     ];
     for topic in registered_topics() {
-        let parent = topic.parent.map_or("—", |parent| parent.label);
+        let parent = topic.parent().map_or("—", |parent| parent.label());
         let synonyms: Vec<String> = topic
-            .synonyms
+            .synonyms()
             .iter()
             .map(|synonym| format!("`{synonym}`"))
             .collect();
         lines.push(format!(
             "| `{}` | {parent} | {} | {} | {} |",
-            topic.label,
+            topic.label(),
             synonyms.join(", "),
-            topic.description,
-            topic.scope_note,
+            topic.description(),
+            topic.scope_note(),
         ));
     }
     lines.join("\n") + "\n"
