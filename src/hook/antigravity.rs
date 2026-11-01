@@ -141,7 +141,7 @@ fn serialize_pre_invocation(warnings: &[String]) -> Result<String, AntigravityPr
     })?)
 }
 
-/// Extracts the rule name from a warning formatted by [`super::runner::format_code_warning`],
+/// Extracts the rule name from a warning formatted by `super::runner::format_code_warning`,
 /// which starts with `<path>:<line>:<col>: [<rule_name>] <summary>`.
 fn extract_rule_name(warning: &str) -> Option<&str> {
     let first_line = warning.lines().next()?;

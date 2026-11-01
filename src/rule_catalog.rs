@@ -81,8 +81,8 @@ pub fn code_report_footer(binary: &str, diagnostics: &[Diagnostic]) -> String {
     )
 }
 
-/// The footer printed after diagnostics for a collection of rule names: [`FIX_NOTE`],
-/// [`SUPPRESSION_NOTE`] when any named rule is `heuristic` or `opinionated`, and the
+/// The footer printed after diagnostics for a collection of rule names: `FIX_NOTE`,
+/// `SUPPRESSION_NOTE` when any named rule is `heuristic` or `opinionated`, and the
 /// `--explain` pointer.
 #[must_use]
 pub fn code_report_footer_for_rules<'a>(

@@ -223,7 +223,7 @@ fn filter_relevant_diagnostics(
 }
 
 /// Formats a diagnostic for warning delivery. The first-line `<path>:<line>:<col>: [<rule>] <summary>`
-/// layout is parsed by [`super::antigravity::extract_rule_name`] to resolve rule classifications.
+/// layout is parsed by `super::antigravity::extract_rule_name` to resolve rule classifications.
 fn format_code_warning(target_path: &Path, diagnostic: &Diagnostic) -> String {
     let mut warning = indoc::formatdoc! {"
         {}:{}:{}: [{}] {}
