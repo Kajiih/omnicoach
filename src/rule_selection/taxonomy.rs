@@ -148,8 +148,8 @@ impl Selector {
     }
 }
 
-/// A registered rule as the taxonomy sees it: its name, declared and derived facets, doc and
-/// raw message template.
+/// A registered rule as the taxonomy sees it: its name, declared and derived facets, doc,
+/// raw message template and the input it analyzes.
 #[derive(Debug)]
 pub struct RegisteredRule {
     /// The rule's name.
@@ -164,16 +164,32 @@ pub struct RegisteredRule {
     pub languages: &'static [Language],
     /// The rule's declared classification facets.
     pub classification: Classification,
+    /// What the rule analyzes, from the registry it is registered in; the source of its
+    /// analyzed-input tag.
+    pub input: AnalyzedInput,
     derived: Vec<Derived>,
 }
 
+/// What a rule analyzes, given by the registry it is registered in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalyzedInput {
+    /// Source files: code rules and suppression audits.
+    Code,
+    /// Shell commands: command rules.
+    Command,
+}
+
 impl RegisteredRule {
-    /// The rule declared by `declared`, with its language facets and the `registry` facets.
-    fn new(declared: DeclaredRule, registry: impl IntoIterator<Item = Derived>) -> Self {
+    /// The rule declared by `declared`, with its language, analyzed-input and file-scope facets.
+    fn new(declared: DeclaredRule, input: AnalyzedInput, scope: Option<Derived>) -> Self {
         let languages = declared.languages.iter().map(|language| match language {
             Language::Python => Derived::Python,
             Language::Rust => Derived::Rust,
         });
+        let input_tag = match input {
+            AnalyzedInput::Code => Derived::Code,
+            AnalyzedInput::Command => Derived::Command,
+        };
         Self {
             name: declared.name,
             doc: declared.doc,
@@ -181,7 +197,8 @@ impl RegisteredRule {
             options: declared.options,
             languages: declared.languages,
             classification: declared.classification,
-            derived: languages.chain(registry).collect(),
+            input,
+            derived: languages.chain([input_tag]).chain(scope).collect(),
         }
     }
 }
@@ -194,17 +211,14 @@ pub static REGISTERED_RULES: LazyLock<Vec<RegisteredRule>> = LazyLock::new(|| {
             RuleTarget::TestsOnly => Some(Derived::TestsOnly),
             RuleTarget::SourceOnly => Some(Derived::SourceOnly),
         };
-        RegisteredRule::new(
-            rule.declaration(),
-            std::iter::once(Derived::Code).chain(scope),
-        )
+        RegisteredRule::new(rule.declaration(), AnalyzedInput::Code, scope)
     });
     let audits = SUPPRESSION_AUDITS
         .iter()
-        .map(|audit| RegisteredRule::new(audit.declared(), [Derived::Code]));
+        .map(|audit| RegisteredRule::new(audit.declared(), AnalyzedInput::Code, None));
     let commands = COMMAND_RULES
         .iter()
-        .map(|rule| RegisteredRule::new(rule.declaration.declared(), [Derived::Command]));
+        .map(|rule| RegisteredRule::new(rule.declaration.declared(), AnalyzedInput::Command, None));
     code.chain(audits).chain(commands).collect()
 });
 
@@ -237,15 +251,19 @@ impl RegisteredRule {
     /// The rule's branches: each root-to-leaf tag path it sits on. A topic branch is the
     /// topic's path; every other facet value is a one-tag branch. The rule is the implicit leaf.
     pub fn branches(&self) -> Vec<Vec<Tag>> {
-        let declared = self.classification;
-        let topic_paths = declared
-            .topics
+        let Classification {
+            topics,
+            precision,
+            consensus,
+            impacted_quality,
+        } = self.classification;
+        let topic_paths = topics
             .iter()
             .map(|topic| topic.path().into_iter().map(Tag::Topic).collect());
         let values = [
-            Tag::Precision(declared.precision),
-            Tag::Consensus(declared.consensus),
-            Tag::ImpactedQuality(declared.impacted_quality),
+            Tag::Precision(precision),
+            Tag::Consensus(consensus),
+            Tag::ImpactedQuality(impacted_quality),
         ]
         .into_iter()
         .chain(self.derived.iter().copied().map(Tag::Derived))
@@ -273,6 +291,7 @@ impl RegisteredRule {
             options: crate::rule_declaration::RuleOptions::none().declared(),
             languages: &[],
             classification,
+            input: AnalyzedInput::Code,
             derived: Vec::new(),
         }
     }
@@ -474,6 +493,16 @@ mod tests {
                 vec![Tag::Consensus(Consensus::Unopinionated)],
                 vec![Tag::ImpactedQuality(ImpactedQuality::Reliability)],
             ]
+        );
+    }
+
+    #[test]
+    fn registered_topics_list_ancestors_before_their_subtopics() {
+        let labels: Vec<_> = registered_topics().into_iter().map(Topic::label).collect();
+        let testing_subtree = ["testing", "test-assertions", "test-doubles", "test-timing"];
+        assert!(
+            labels.windows(4).any(|window| window == testing_subtree),
+            "{labels:?}"
         );
     }
 }

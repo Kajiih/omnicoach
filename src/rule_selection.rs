@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use strum::IntoEnumIterator as _;
 
-pub use self::taxonomy::{Derived, Facet, RegisteredRule, Tag, registered_topics};
+pub use self::taxonomy::{AnalyzedInput, Derived, Facet, RegisteredRule, Tag, registered_topics};
 use self::taxonomy::{REGISTERED_RULES, Selector};
 use crate::config::{CONFIG_FILE_NAME, Config, ContextConfig, compile_glob};
 use crate::diagnostic::RuleName;
@@ -267,10 +267,9 @@ pub fn load_rule_status(
     overrides: &ConfigOverrides,
 ) -> Result<RuleStatus, ConfigError> {
     let start_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let domain = if rule.matches(Selector::Tag(Tag::Derived(Derived::Command))) {
-        ConfigDomain::Command
-    } else {
-        ConfigDomain::Code
+    let domain = match rule.input {
+        AnalyzedInput::Code => ConfigDomain::Code,
+        AnalyzedInput::Command => ConfigDomain::Command,
     };
     let resolved = resolve_domain_config(&start_directory, overrides, domain)?;
     rule_status_with_overrides(&resolved.content, overrides, rule)
