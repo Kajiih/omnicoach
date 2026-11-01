@@ -81,7 +81,7 @@ Two seams inside `src/` currently couple foundational layers to higher-level `om
     - Trait or descriptor for facet values and classified items (mapping an item to its leaf identifier and root-to-leaf tag branches).
   - **Selection & explanation engine**:
     - Precedence Model B resolver (`Plan::decide` $\to$ `RuleStatus` / `SelectionStatus` from [src/rule_selection.rs](../../src/rule_selection.rs)): nearest selector wins along each branch, `ignore` beats `select` across branches, item name is the implicit leaf of every branch.
-    - Loud selector parser: global label lookup, synonym canonicalization, `select` $\cap$ `ignore` conflict detection, facet-label rejection (listing valid facet values), and case-insensitive Levenshtein `closest_match` typo suggestions ([src/rule_declaration.rs](../../src/rule_declaration.rs)).
+    - Loud selector parser: global label lookup, synonym canonicalization, `select` $\cap$ `ignore` conflict detection, facet-label rejection (listing valid facet values), and case-insensitive optimal string alignment `closest_match` typo suggestions ([src/rule_declaration.rs](../../src/rule_declaration.rs)).
   - **Reusable taxonomy verification suite**:
     - Invariant checks from [src/rule_selection/taxonomy.rs](../../src/rule_selection/taxonomy.rs): every item has at least one topic, no item lists a topic together with its ancestor or twice, every tag matches at least one item, every topic has non-empty documentation, and all canonical labels/synonyms/item names are globally unique `kebab-case` and never collide with facet labels.
 - **What stays in `omnicoach`**:

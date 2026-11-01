@@ -41,29 +41,10 @@ pub fn closest_match(
     let normalized = label.to_ascii_lowercase();
     let tolerance = (normalized.chars().count() / 3).max(1);
     candidates
-        .map(|known| (edit_distance(&normalized, known), known))
+        .map(|known| (strsim::osa_distance(&normalized, known), known))
         .filter(|&(distance, _)| distance <= tolerance)
         .min()
         .map(|(_, known)| known)
-}
-
-/// Levenshtein distance over characters.
-fn edit_distance(left: &str, right: &str) -> usize {
-    let right: Vec<char> = right.chars().collect();
-    let mut previous: Vec<usize> = (0..=right.len()).collect();
-    for (row, left_char) in left.chars().enumerate() {
-        let mut current = vec![row + 1];
-        for (column, &right_char) in right.iter().enumerate() {
-            let substitution = previous[column] + usize::from(left_char != right_char);
-            current.push(
-                substitution
-                    .min(previous[column + 1] + 1)
-                    .min(current[column] + 1),
-            );
-        }
-        previous = current;
-    }
-    previous[right.len()]
 }
 
 /// What a rule states about itself: name, message template, languages, options,
@@ -154,6 +135,7 @@ mod tests {
 
     #[rstest::rstest]
     #[case::missing_letter("alpa", Some("alpha"))]
+    #[case::transposed_letters("alhpa", Some("alpha"))]
     #[case::case_folded("ALPHA", Some("alpha"))]
     #[case::nearest_wins("alphabe", Some("alphabet"))]
     #[case::at_tolerance("alphaxy", Some("alpha"))]
@@ -161,10 +143,5 @@ mod tests {
     fn closest_match_suggests_typos_only(#[case] label: &str, #[case] expected: Option<&str>) {
         let candidates = ["alpha", "alphabet", "omega"];
         assert_eq!(closest_match(label, candidates.into_iter()), expected);
-    }
-
-    #[test]
-    fn edit_distance_is_levenshtein() {
-        assert_eq!(edit_distance("kitten", "sitting"), 3);
     }
 }
