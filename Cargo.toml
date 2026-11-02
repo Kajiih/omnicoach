@@ -13,8 +13,8 @@ default-run = "omnicoach"
 autobins = false
 
 [workspace]
-members = [".", "playground"]
-default-members = ["."]
+members = [".", "crates/tagonomy", "playground"]
+default-members = [".", "crates/tagonomy"]
 
 [workspace.lints.clippy]
 allow_attributes = "deny"

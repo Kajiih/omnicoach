@@ -1,0 +1,20 @@
+[package]
+name = "tagonomy"
+version = "0.0.1"
+edition = "2024"
+description = "Compile-time tag vocabularies with polyhierarchies, tag groups and specificity-ordered include/exclude selection"
+readme = "README.md"
+repository = "https://github.com/Kajiih/omnicoach"
+license = "MIT"
+keywords = ["classification", "faceted", "selector", "tags", "taxonomy"]
+categories = ["config", "data-structures"]
+
+[dependencies]
+fixedbitset = "0.5"
+thiserror = "2.0"
+
+[dev-dependencies]
+rstest = "0.27"
+
+[lints]
+workspace = true
