@@ -11,6 +11,7 @@ architecture_component!(RuleSelection);
 
 mod taxonomy;
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -291,7 +292,7 @@ pub fn rule_status_with_overrides(
     rule: &RegisteredRule,
 ) -> Result<RuleStatus, ConfigError> {
     let raw: RawConfig = toml::from_str(config_toml)?;
-    Ok(parse_plan_with_overrides(raw.select, raw.ignore, overrides)?.decide(rule))
+    Ok(apply_overrides(parse_plan(raw.select, raw.ignore)?, overrides)?.decide(rule))
 }
 
 /// Parses a TOML config and resolves its selectors into rule names.
@@ -313,7 +314,9 @@ pub fn parse_config_with_overrides(
     overrides: &ConfigOverrides,
 ) -> Result<Config, ConfigError> {
     let raw: RawConfig = toml::from_str(config_toml)?;
-    let plan = parse_plan_with_overrides(raw.select, raw.ignore, overrides)?;
+    let file = parse_plan(raw.select, raw.ignore)?;
+    let warnings = ineffective_selector_warnings(&file);
+    let plan = apply_overrides(file, overrides)?;
     let disabled_rules = rule_names(|rule| !plan.decide(rule).enabled());
     let per_file_ignores = raw
         .per_file_ignores
@@ -348,6 +351,7 @@ pub fn parse_config_with_overrides(
         context: raw.context,
         per_file_ignores,
         root_dir: None,
+        warnings,
     })
 }
 
@@ -547,11 +551,39 @@ struct Plan {
 }
 
 impl Plan {
+    /// Selectors in `self` whose removal, with the others kept, changes no registered rule's
+    /// outcome.
+    fn ineffective(&self) -> Vec<Selector> {
+        let verdicts = OnceCell::new();
+        let selectors = self.select.iter().flatten().chain(&self.ignore).copied();
+        selectors
+            .filter(|&selector| {
+                let verdicts = verdicts.get_or_init(|| {
+                    REGISTERED_RULES
+                        .iter()
+                        .map(|rule| self.decide(rule).enabled())
+                        .collect::<Vec<_>>()
+                });
+                REGISTERED_RULES
+                    .iter()
+                    .zip(verdicts)
+                    .all(|(rule, &enabled)| {
+                        self.decide_skipping(rule, Some(selector)).enabled() == enabled
+                    })
+            })
+            .collect()
+    }
+
     /// Model B: nearest selector per branch, then ignore wins across branches.
     fn decide(&self, rule: &RegisteredRule) -> RuleStatus {
+        self.decide_skipping(rule, None)
+    }
+
+    fn decide_skipping(&self, rule: &RegisteredRule, skipped: Option<Selector>) -> RuleStatus {
         let decisions = rule.branches().into_iter().filter_map(|branch| {
             let (selector, verdict) = std::iter::once(Selector::Rule(rule.name))
                 .chain(branch.iter().rev().map(|&tag| Selector::Tag(tag)))
+                .filter(|&selector| Some(selector) != skipped)
                 .find_map(|selector| Some((selector, self.verdict(selector)?)))?;
             Some(Decision {
                 verdict,
@@ -577,12 +609,27 @@ impl Plan {
     }
 }
 
-fn parse_plan_with_overrides(
-    select: Option<Vec<String>>,
-    ignore: Vec<String>,
-    overrides: &ConfigOverrides,
-) -> Result<Plan, ConfigError> {
-    let mut plan = parse_plan(select, ignore)?;
+/// One warning per entry of the config file's `select` and `ignore` whose removal changes
+/// no rule's outcome. Command-line overrides are left out: they are not in the file.
+fn ineffective_selector_warnings(file: &Plan) -> Vec<String> {
+    file.ineffective()
+        .into_iter()
+        .map(|selector| {
+            let location = if file.ignore.contains(&selector) {
+                Location::Ignore
+            } else {
+                Location::Select
+            };
+            format!(
+                "`{}` in {location} changes no rule's outcome; remove it",
+                selector.label()
+            )
+        })
+        .collect()
+}
+
+/// The file's plan with the command-line `--select` and `--ignore` applied.
+fn apply_overrides(mut plan: Plan, overrides: &ConfigOverrides) -> Result<Plan, ConfigError> {
     let cli = parse_plan(overrides.select.clone(), overrides.ignore.clone())?;
     if cli.select.is_some() {
         plan = cli;
@@ -761,6 +808,53 @@ mod tests {
             ignore: ignore.iter().copied().collect(),
         };
         assert_eq!(plan.decide(&rule).to_string(), expected);
+    }
+
+    #[rstest]
+    #[case::implied_by_a_broader_selection(
+        r#"select = ["testing", "test-timing"]"#,
+        &["`test-timing` in `select` changes no rule's outcome; remove it"]
+    )]
+    #[case::already_ignored(
+        r#"ignore = ["testing", "test-timing"]"#,
+        &["`test-timing` in `ignore` changes no rule's outcome; remove it"]
+    )]
+    #[case::an_exception(
+        indoc::indoc! {r#"
+            select = ["testing"]
+            ignore = ["test-timing"]"#},
+        &[]
+    )]
+    fn selectors_that_change_no_outcome_are_warned_about(
+        #[case] config_toml: &str,
+        #[case] expected: &[&str],
+    ) {
+        assert_eq!(parse_config(config_toml).unwrap().warnings, expected);
+    }
+
+    #[rstest]
+    #[case::cli_ignore_removing_a_file_selection(
+        r#"select = ["sleep-in-tests", "nested-function"]"#,
+        None,
+        vec!["sleep-in-tests".to_owned()]
+    )]
+    #[case::cli_selection_without_effect(
+        "",
+        Some(vec!["testing".to_owned(), "test-timing".to_owned()]),
+        vec![]
+    )]
+    fn command_line_overrides_are_not_warned_about(
+        #[case] config_toml: &str,
+        #[case] select: Option<Vec<String>>,
+        #[case] ignore: Vec<String>,
+    ) {
+        let overrides = ConfigOverrides {
+            config_path: None,
+            select,
+            ignore,
+        };
+        let config = parse_config_with_overrides(config_toml, &overrides).unwrap();
+        assert_eq!(config.warnings, Vec::<String>::new());
     }
 
     #[test]

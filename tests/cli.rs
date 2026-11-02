@@ -490,6 +490,25 @@ fn test_cli_select_and_ignore_override_toml_and_explain() {
 }
 
 #[test]
+fn test_selector_without_effect_is_warned_about_on_stderr() {
+    let temp_dir = create_temp_file("test.py", "VALUE = 1\n");
+    fs::write(
+        temp_dir.path().join(omnicoach::config::CONFIG_FILE_NAME),
+        "select = [\"testing\", \"test-timing\"]\n",
+    )
+    .unwrap();
+    let output = run_cli(&["code", "test.py"], Some(temp_dir.path()));
+
+    assert!(
+        output.contains(
+            "--- stderr ---\nWarning: `test-timing` in `select` changes no rule's outcome; \
+             remove it\n"
+        ),
+        "{output}"
+    );
+}
+
+#[test]
 fn test_graph_single_file_and_no_signatures() {
     let source = indoc! {r"
         pub fn run(limit: usize) -> usize {

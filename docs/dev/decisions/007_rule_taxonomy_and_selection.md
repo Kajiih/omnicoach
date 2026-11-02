@@ -78,7 +78,7 @@ Every rule has a set of **branches**: one root-to-leaf path per declared topic (
    - unknown selector labels (reporting the closest registered label via case-insensitive optimal string alignment edit distance when within `max(1, len / 3)`);
    - facet display labels used as selectors, matched case-insensitively in both space-separated (`"Impacted quality"`) and `kebab-case` (`"impacted-quality"`) forms (listing the facet's valid values);
    - the same canonical selector appearing in both `select` and `ignore` (after resolving synonyms).
-   If cheap to surface from `Config::load`, a warning is emitted when a selector entry changes no rule's outcome (`D35`).
+   A `select` or `ignore` entry whose removal changes no rule's outcome is a warning (`D35`): `Config::warnings`, printed on stderr by the `code`, `command` and `graph` commands (hooks stay silent).
 
 ### 2.4. Architectural Isolation of Taxonomy and Suppression Audits (`DI4`, `D37`)
 

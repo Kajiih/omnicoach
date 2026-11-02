@@ -32,8 +32,7 @@ fn run() -> anyhow::Result<()> {
     }
 
     let Some(subcommand) = cli.subcommand else {
-        let config = load_config(&cli.config_overrides)
-            .map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
+        let config = load(load_config, &cli.config_overrides)?;
         let options = LintOptions {
             paths: vec![PathBuf::from(".")],
             diff: cli.diff,
@@ -52,8 +51,7 @@ fn run() -> anyhow::Result<()> {
             Ok(())
         }
         DomainCommand::Code(args) => {
-            let config = load_config(&cli.config_overrides)
-                .map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
+            let config = load(load_config, &cli.config_overrides)?;
             let options = LintOptions {
                 paths: args.paths,
                 diff: args.diff || cli.diff,
@@ -62,16 +60,14 @@ fn run() -> anyhow::Result<()> {
             run_code(&options, &config, cli.format)
         }
         DomainCommand::Command(args) => {
-            let config = load_command_config(&cli.config_overrides)
-                .map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
+            let config = load(load_command_config, &cli.config_overrides)?;
             let Some(command) = args.cmd else {
                 unreachable!("clap requires --cmd unless a discovery flag is given");
             };
             run_command(&command, &config, cli.format)
         }
         DomainCommand::Graph(args) => {
-            let config = load_config(&cli.config_overrides)
-                .map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
+            let config = load(load_config, &cli.config_overrides)?;
             let options = GraphOptions {
                 paths: args.paths,
                 depth: match args.depth {
@@ -95,6 +91,19 @@ fn run() -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+/// Loads the configuration with `loader` and prints its warnings to stderr.
+fn load<E: std::fmt::Display>(
+    loader: impl FnOnce(&ConfigOverrides) -> Result<Config, E>,
+    overrides: &ConfigOverrides,
+) -> anyhow::Result<Config> {
+    let config = loader(overrides)
+        .map_err(|error| anyhow::anyhow!("Failed to load configuration: {error}"))?;
+    for warning in &config.warnings {
+        eprintln!("Warning: {warning}");
+    }
+    Ok(config)
 }
 
 /// Reads the hook payload from stdin and prints the response, failing open (no output) on any

@@ -54,6 +54,9 @@ pub struct Config {
     pub per_file_ignores: Vec<(globset::GlobMatcher, HashSet<RuleName>)>,
     /// Project or configuration root directory used to anchor `test-patterns` and `per-file-ignores` globs.
     pub root_dir: Option<PathBuf>,
+    /// Problems that do not prevent loading, one message each, such as a `select` or
+    /// `ignore` entry that changes no rule's outcome.
+    pub warnings: Vec<String>,
 }
 
 impl Config {

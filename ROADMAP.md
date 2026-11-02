@@ -220,7 +220,10 @@ Candidates and known-gap follow-ups to prioritize, not commitments. Evaluated ca
 
 Design rationale: [ADR 007](docs/dev/decisions/007_rule_taxonomy_and_selection.md) (taxonomy and selection) and [ADR 008](docs/dev/decisions/008_rule_documentation_and_discovery.md) (rule docs and discovery). Contributor guide: [docs/dev/tag_guide.md](docs/dev/tag_guide.md).
 
-- **Shadowed-selector config warning**: warn when a `select` or `ignore` entry changes no rule's outcome (needs config warning plumbing).
+- **Typed config warnings**: `Config::warnings` holds formatted strings, and a warning about a selector names its canonical label even when the user wrote a synonym. A typed `ConfigWarning` (selector as written, list it came from) would let the playground and JSON output show warnings too.
+- **Taxonomy follow-ups**:
+  - *Tree order in facet-label errors*: the "use one of its values" error lists topics alphabetically; tree order, as in `--list-tags`, would match the rest of the output. Sort when the message is changed deliberately.
+  - *`is_kebab_case` negative cases*: `cargo mutants -f src/rule_declaration.rs` reports four surviving mutants in `is_kebab_case` (replacing the body with `true`, and each `&&` with `||`), because its only caller in tests (`tests/registry.rs`) asserts that registered names pass. Unit cases for an empty name, a leading or trailing hyphen, and uppercase or `_` characters would kill them.
 - **Global & Domain-Scoped Configuration (`$XDG_CONFIG_HOME/omnicoach/config.toml`)**:
   - *Status*: **Completed** ([01_understand.md](docs/dev/global_config/01_understand.md), [02_references.md](docs/dev/global_config/02_references.md), [03_design.md](docs/dev/global_config/03_design.md), [04_execution_log.md](docs/dev/global_config/04_execution_log.md), [05_cleanup_and_audit.md](docs/dev/global_config/05_cleanup_and_audit.md)).
   - *Context*: In large monorepos and external team codebases, checking `.omnicoach.toml` into a team directory is not permitted, yet users still want customized baseline rules, test patterns, and per-file ignores across both CLI (`omnicoach code`) and agent lifecycle hooks (`omnicoach hook`). Furthermore, personal command guardrails (such as `edit-of-described-commit`) must remain active even in repositories whose local config focuses solely on code rules.
