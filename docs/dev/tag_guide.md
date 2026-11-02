@@ -136,15 +136,15 @@ A topic is admitted when **all** of these hold. The number of rules it has is **
    - ✅ `jj → vcs`: every jj rule is a vcs rule.
    - ❌ `naming → style`: `primitive-duration` is detected through names but motivated by unit bugs, not taste.
    - "Related to" is not enough. Use a *see also* note instead of a parent link.
-3. **It has a one-line `description` (`Topic::description`) and a `scope_note` (`Topic::scope_note`)** that says what it includes and excludes, and names neighbours with a similar word (`error-handling` includes `contextlib.suppress`; `suppression-directives` covers `omni:` comments only).
+3. **It has a one-line `description` and a `scope_note`** (fields of the topic's `Tag`) that says what it includes and excludes, and names neighbours with a similar word (`error-handling` includes `contextlib.suppress`; `suppression-directives` covers `omni:` comments only).
 4. **Its label is kebab-case, unabbreviated where practical, and unique** across rules, topics, values and synonyms.
 5. **It has at least one rule.** An empty topic is a selector that silently matches nothing.
 
 ### 4.2 Structure
 
 - **A single-spot `const` declaration**: each topic is declared once as an associated `const` on `Topic`: `Topic::root("...", TopicDoc { description, scope_note })` or `Topic::sub("...", &Self::..., TopicDoc { description, scope_note })`, optionally followed by `.aliases(&[...])`.
-- **A tree**: one parent at most, enforced by `Topic::root` (no parent) and `Topic::sub` (one `&'static Topic` parent), read by callers through `ancestors()`, `path()`, and `Topic::parent()`.
-- **Compile-time acyclicity**: because topics are `const`s referencing `Option<&'static Topic>`, any cycle in `parent` links fails to compile with `E0391` (`cycle detected when const-evaluating`).
+- **A tree**: one parent at most, enforced by `Topic::root` (no parent) and `Topic::sub` (one `&'static Topic` parent). Although `tagonomy` supports polyhierarchies, `omnicoach` keeps topics in a single-parent tree by policy, and `--list-tags` and `--explain` render single-parent topic chains accordingly.
+- **Compile-time acyclicity**: because topics are `const`s referencing their parents, any cycle in parent links fails to compile with `E0391` (`cycle detected when const-evaluating`).
 - **Topics only**: `Topic::sub` takes `&'static Topic`, so a parent from another facet fails to compile with `E0308`.
 
 ### 4.3 Synonyms
@@ -160,18 +160,19 @@ There are no aliases for old labels: renaming a topic breaks configs that name i
 
 ## 5. Enforcement map
 
-Compiler checks are pinned by `compile_fail` doctests on `Classification` in `src/rule_declaration/taxonomy.rs`. The named tests live in `src/rule_selection/taxonomy.rs` unless stated otherwise.
+Compiler checks are pinned by `compile_fail` doctests on `Classification` in `src/rule_declaration/taxonomy.rs`. The named tests live in `src/rule_selection/taxonomy.rs` unless stated otherwise; "catalog" means building the `tagonomy` rule catalog, which `the_registered_rules_form_a_valid_catalog` checks.
 
 | Guide rule | Caught by |
 |---|---|
 | §2: each single-valued facet has exactly one value | Compiler (`E0063` missing / `E0062` duplicate field) |
-| §2.1: at least one topic | Test `every_rule_has_a_topic` |
-| §2.1: most specific topics only | Test `no_rule_lists_a_topic_with_its_ancestor_or_twice` |
+| §2.1: at least one topic | Catalog (`Topic` group requires one tag) |
+| §2.1: most specific topics only | Catalog (no tag listed twice or with a tag it implies) |
 | §2.1: topics are topics, not facet values | Compiler (`E0308` type mismatch) |
 | §1: derived facets cannot be declared | Compiler (`E0560` no such field) |
 | §2: topics exist | Compiler (`E0599` no such associated `const`) |
-| §4.2: a tree without cycles | Compiler (`E0391` `const` evaluation cycle on `parent: Option<&'static Topic>`) |
-| §1, §4.1.4: labels are globally unique, `kebab-case`, and not facet labels | Test `labels_are_globally_unique_and_not_facet_labels` |
+| §4.2: a tree without cycles | Compiler (`E0391` `const` evaluation cycle; `Topic::root` and `Topic::sub` accept at most one parent) |
+| §1, §4.1.4: labels are globally unique and not facet labels | Catalog |
+| §4.1.4: labels are `kebab-case` | Test `labels_are_kebab_case` |
 | §2.4, §4.1.5: every topic and facet value has at least one rule | Test `every_tag_has_a_rule` + `dead_code` lint on unused `pub(crate) const` topics |
 | §4.2: a topic's parent is a topic | Compiler (`E0308` type mismatch on `Topic::sub`) |
 | §1: behaviour never depends on a tag | Architecture graph (`src/architecture.rs`: rules and runners cannot depend on `RuleSelection`) checked by `test_architecture_conformance` in `tests/architecture_conformance.rs` |

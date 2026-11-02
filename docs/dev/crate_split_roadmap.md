@@ -14,7 +14,7 @@ Related design documents:
 
 ## 1. Guiding Principles for Crate Extraction
 
-1. **Extract for cross-project reuse or strict dependency isolation, not internal layering**: Inside `omnicoach`, [ADR 006](decisions/006_architectural_dag_and_conformance.md) (`define_architecture!` in [src/architecture.rs](../../src/architecture.rs) and [tests/architecture_conformance.rs](../../tests/architecture_conformance.rs)) already enforces component DAG reachability, sibling subtree isolation, single public paths, and relative-path boundaries. Splitting an internal component into a crate is warranted only when another repository will consume it directly or when isolating heavy third-party parser dependencies (`ruff_python_parser`, `ra_ap_syntax`, `brush-parser`).
+1. **Extract for cross-project reuse or strict dependency isolation, not internal layering**: Inside `omnicoach`, [ADR 006](decisions/006_architectural_dag_and_conformance.md) (`define_architecture!` in [src/architecture.rs](../../src/architecture.rs) and [tests/architecture_conformance.rs](../../tests/architecture_conformance.rs)) already enforces component DAG reachability, sibling subtree isolation, single public paths, and relative-path boundaries. Splitting an internal component into a crate is warranted only when another repository will consume it directly, when isolating heavy third-party parser dependencies (`ruff_python_parser`, `ra_ap_syntax`, `brush-parser`), or, as a recorded exception, when publishing a domain-independent library to crates.io ahead of a second in-repo consumer (`tagonomy`, [ADR 013](decisions/013_tagonomy_crate.md)).
 2. **Separate reusable mechanisms from `omnicoach` domain vocabulary ([ADR 012](decisions/012_module_placement_by_abstraction.md) P1, P7)**: A standalone crate owns the domain-independent data structures, algorithms, and verification checks; `omnicoach`-specific rule registries, concrete lint facets, and `.omnicoach.toml` schema wiring stay in `omnicoach`.
 3. **One derivation per fact across crate boundaries ([ADR 012](decisions/012_module_placement_by_abstraction.md) P6)**: Before extracting a crate, eliminate duplicate fact derivations between test-time conformance and runtime analysis so the extracted crate exposes a single canonical implementation.
 
@@ -75,17 +75,13 @@ Two seams inside `src/` currently couple foundational layers to higher-level `om
 ### 3.3. Faceted Tag & Hierarchical Selector Engine (`tagonomy`)
 
 - **Purpose**: Provide a reusable faceted classification and hierarchical selector resolution engine (`select` / `ignore` / `explain`) with compile-time and test-time taxonomy invariants for any rule, check, test, or plugin registry.
-- **Contents**:
-  - **Taxonomy primitives**:
-    - Hierarchical `Topic` (`label`, `parent: Option<&'static Topic>`, `description`, `scope_note`, `synonyms`, `ancestors()`, `path()`, compile-time cycle prevention via `const` evaluation).
-    - Trait or descriptor for facet values and classified items (mapping an item to its leaf identifier and root-to-leaf tag branches).
-  - **Selection & explanation engine**:
-    - Precedence Model B resolver (`Plan::decide` $\to$ `RuleStatus` / `SelectionStatus` from [src/rule_selection.rs](../../src/rule_selection.rs)): nearest selector wins along each branch, `ignore` beats `select` across branches, item name is the implicit leaf of every branch.
-    - Loud selector parser: global label lookup, synonym canonicalization, `select` $\cap$ `ignore` conflict detection, facet-label rejection (listing valid facet values), and case-insensitive optimal string alignment `closest_match` typo suggestions ([src/rule_declaration.rs](../../src/rule_declaration.rs)).
-  - **Reusable taxonomy verification suite**:
-    - Invariant checks from [src/rule_selection/taxonomy.rs](../../src/rule_selection/taxonomy.rs): every item has at least one topic, no item lists a topic together with its ancestor or twice, every tag matches at least one item, every topic has non-empty documentation, and all canonical labels/synonyms/item names are globally unique `kebab-case` and never collide with facet labels.
+- **Design**: [tag_crate/](tag_crate/01_understand.md) (`01_understand.md` through `05_declaration_prototypes.md`). In short: `const` tags with aliases and a polyhierarchy (`implies: &'static [Tag]`), tag groups with cardinality, a validated `Vocabulary` and `Catalog`, a specificity-ordered include/exclude `Plan` that generalizes Model B to DAGs, structured decision witnesses, and plan hygiene lints.
+- **Status**: extracted to [crates/tagonomy](../../crates/tagonomy) ([ADR 013](decisions/013_tagonomy_crate.md)); `omnicoach`'s taxonomy and selection are built on it. Publishing it to crates.io precedes the next `omnicoach` release.
+- **Deferred extensions** (build only with a real use case):
+  - **Boolean tag expressions** (`Expr`: `python & heuristic & !tests-only`): built together with their first consumer, such as a `--list-rules --filter` flag; design in [tag_crate/03_design.md](tag_crate/03_design.md) §2.
+  - **Conjunctive directive specificity** (`ignore = ["testing & heuristic"]`, ordered by entailment): research and trigger in [tag_crate/03_design.md](tag_crate/03_design.md) §5.
 - **What stays in `omnicoach`**:
-  - Concrete `omnicoach` facets (`Precision`, `Consensus`, `ImpactedQuality`, `Derived`) and `Topic::*` constants in [src/rule_declaration/taxonomy.rs](../../src/rule_declaration/taxonomy.rs).
+  - Concrete `omnicoach` facets (`Precision`, `Consensus`, `ImpactedQuality`) and `Topic::*` constants in [src/rule_declaration/taxonomy.rs](../../src/rule_declaration/taxonomy.rs), and the derived facet tags in [src/rule_selection/taxonomy.rs](../../src/rule_selection/taxonomy.rs).
   - `.omnicoach.toml` `RawConfig` deserialization, `per-file-ignores` glob compilation, and `[rules.<name>]` option override parsing.
 
 ### 3.4. Syntax & Fact Layer (`code_lint::ast`) and Shell Command Parser (`command_lint::command`)
