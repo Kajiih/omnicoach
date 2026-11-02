@@ -3,6 +3,31 @@
 //! Pure, constant metadata with no queries. Rules and runners never branch on it.
 
 use strum::{EnumIter, EnumMessage, IntoStaticStr};
+use tagonomy::{Cardinality, Tag, TagGroup};
+
+/// The topic facet: a rule declares one or more topics.
+const TOPIC_GROUP: TagGroup = TagGroup {
+    name: "Topic",
+    cardinality: Cardinality::AtLeastOne,
+};
+
+/// The precision facet: a rule declares exactly one value.
+const PRECISION_GROUP: TagGroup = TagGroup {
+    name: "Precision",
+    cardinality: Cardinality::ExactlyOne,
+};
+
+/// The consensus facet: a rule declares exactly one value.
+const CONSENSUS_GROUP: TagGroup = TagGroup {
+    name: "Consensus",
+    cardinality: Cardinality::ExactlyOne,
+};
+
+/// The impacted-quality facet: a rule declares exactly one value.
+const IMPACTED_QUALITY_GROUP: TagGroup = TagGroup {
+    name: "Impacted quality",
+    cardinality: Cardinality::ExactlyOne,
+};
 
 /// The subject of a rule: the only multi-valued, hierarchical facet.
 ///
@@ -13,17 +38,13 @@ use strum::{EnumIter, EnumMessage, IntoStaticStr};
 /// all-and-some test under its parent, (3) has a `description` and an includes/excludes
 /// `scope_note`, (4) has a unique `kebab-case` label, and (5) has at least one rule
 /// (`docs/dev/tag_guide.md` §4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Topic {
-    label: &'static str,
-    parent: Option<&'static Self>,
-    description: &'static str,
-    scope_note: &'static str,
-    synonyms: &'static [&'static str],
+    /// The topic's tag; its `implies` holds the parent topic's tag, if any.
+    tag: Tag,
 }
 
-/// What a [`Topic`] covers: both fields are required, so a topic without a scope note does
-/// not compile.
+/// What a [`Topic`] covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TopicDoc {
     /// One-line summary of what the topic covers.
@@ -33,69 +54,50 @@ pub struct TopicDoc {
 }
 
 impl Topic {
+    /// The topic facet.
+    pub const GROUP: &'static TagGroup = &TOPIC_GROUP;
+
     /// A root topic with no broader parent topic.
     #[must_use]
     pub const fn root(label: &'static str, doc: TopicDoc) -> Self {
         Self {
-            label,
-            parent: None,
-            description: doc.description,
-            scope_note: doc.scope_note,
-            synonyms: &[],
+            tag: Tag::new(&TOPIC_GROUP, label, doc.description).scope_note(doc.scope_note),
         }
     }
 
     /// A subtopic under `parent`. Taking a `&'static Topic` keeps parents within the topic
-    /// facet (`E0308`), and `const` evaluation makes a parent cycle a compile error (`E0391`).
+    /// facet (`E0308`), and reading the parent's tag makes a parent cycle a `const`
+    /// evaluation cycle (`E0391`).
     #[must_use]
     pub const fn sub(label: &'static str, parent: &'static Self, doc: TopicDoc) -> Self {
         Self {
-            label,
-            parent: Some(parent),
-            description: doc.description,
-            scope_note: doc.scope_note,
-            synonyms: &[],
+            tag: Tag::new(&TOPIC_GROUP, label, doc.description)
+                .implies(core::slice::from_ref(&parent.tag))
+                .scope_note(doc.scope_note),
         }
     }
 
     /// Sets alternative labels that resolve to this topic.
     #[must_use]
-    pub const fn aliases(mut self, aliases: &'static [&'static str]) -> Self {
-        self.synonyms = aliases;
-        self
+    pub const fn aliases(self, aliases: &'static [&'static str]) -> Self {
+        Self {
+            tag: self.tag.aliases(aliases),
+        }
     }
 
-    /// The topic's canonical `kebab-case` label, e.g. `test-timing`.
+    /// The topic's tag.
     #[must_use]
-    pub const fn label(self) -> &'static str {
-        self.label
+    pub const fn tag(self) -> Tag {
+        self.tag
     }
 
     /// The broader topic, if any.
     #[must_use]
     pub const fn parent(self) -> Option<Self> {
-        match self.parent {
-            Some(parent) => Some(*parent),
-            None => None,
+        match self.tag.implies {
+            [parent, ..] => Some(Self { tag: *parent }),
+            [] => None,
         }
-    }
-
-    /// One-line description of the topic.
-    #[must_use]
-    pub const fn description(self) -> &'static str {
-        self.description
-    }
-
-    /// What belongs under the topic and what does not.
-    #[must_use]
-    pub const fn scope_note(self) -> &'static str {
-        self.scope_note
-    }
-
-    /// Other labels that select the same topic. Only the canonical label is ever displayed.
-    #[must_use]
-    pub const fn synonyms(self) -> &'static [&'static str] {
-        self.synonyms
     }
 }
 
@@ -345,6 +347,14 @@ pub enum Precision {
     Heuristic,
 }
 
+impl Precision {
+    /// The value's tag.
+    #[must_use]
+    pub fn tag(self) -> Tag {
+        facet_tag(&PRECISION_GROUP, self)
+    }
+}
+
 /// Consensus facet: do reasonable people disagree with the rule?
 ///
 /// **Test:** name one ordinary situation where the flagged code is correct and appropriate.
@@ -358,6 +368,14 @@ pub enum Consensus {
     Opinionated,
     /// The flagged code is wrong in every ordinary situation.
     Unopinionated,
+}
+
+impl Consensus {
+    /// The value's tag.
+    #[must_use]
+    pub fn tag(self) -> Tag {
+        facet_tag(&CONSENSUS_GROUP, self)
+    }
 }
 
 /// Impacted quality facet (ISO/IEC 25010): what software quality suffers when violated.
@@ -375,6 +393,14 @@ pub enum ImpactedQuality {
     Reliability,
     /// Keeps code readable and changeable.
     Maintainability,
+}
+
+impl ImpactedQuality {
+    /// The value's tag.
+    #[must_use]
+    pub fn tag(self) -> Tag {
+        facet_tag(&IMPACTED_QUALITY_GROUP, self)
+    }
 }
 
 /// A rule's declared classification: one mandatory field per declared facet.
@@ -497,4 +523,14 @@ pub struct Classification {
     pub consensus: Consensus,
     /// Impacted quality value.
     pub impacted_quality: ImpactedQuality,
+}
+
+/// Builds a [`Tag`] in `group` from a `strum`-annotated enum variant's serialized label and
+/// doc comment.
+fn facet_tag<V>(group: &'static TagGroup, value: V) -> Tag
+where
+    V: Into<&'static str> + EnumMessage,
+{
+    let description = value.get_documentation().unwrap_or_default();
+    Tag::new(group, value.into(), description)
 }

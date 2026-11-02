@@ -1,10 +1,10 @@
-//! Taxonomy queries over the registered rules: derived facets, topic ancestry, branches and
-//! the single global label registry.
+//! Taxonomy queries over the registered rules: derived facets, the unified rule catalog,
+//! root-to-leaf facet chains and the single global label registry.
 
-use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
-use strum::{EnumIter, IntoEnumIterator as _, IntoStaticStr};
+use strum::{EnumIter, IntoEnumIterator as _, VariantArray as _};
+use tagonomy::{Cardinality, Catalog, Item, Selector, Tag, TagGroup, Vocabulary};
 
 use crate::code_lint::contract::RuleTarget;
 use crate::code_lint::rules::CODE_RULES;
@@ -16,139 +16,44 @@ use crate::rule_declaration::{
     Precision, RuleDoc, Topic, closest_match,
 };
 
-/// A value of a derived facet, computed from the rule and never declared.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, EnumIter, IntoStaticStr)]
-#[strum(serialize_all = "kebab-case")]
-pub enum Derived {
-    /// Supports Python sources.
-    Python,
-    /// Supports Rust sources.
-    Rust,
-    /// Analyzes source files (suppression audits included).
-    Code,
-    /// Analyzes shell commands.
-    Command,
-    /// Runs on test files only.
-    TestsOnly,
-    /// Runs on non-test files only.
-    SourceOnly,
-}
+/// The languages facet, derived from the languages a rule analyzes.
+pub const LANGUAGES_GROUP: TagGroup = TagGroup {
+    name: "Languages",
+    cardinality: Cardinality::Any,
+};
 
-/// A facet. Its label is for display only and is never a selector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
-pub enum Facet {
-    /// Declared, multi-valued, hierarchical.
-    Topic,
-    /// Declared, single-valued.
-    Precision,
-    /// Declared, single-valued.
-    Consensus,
-    /// Declared, single-valued.
-    ImpactedQuality,
-    /// Derived from the rule's supported languages.
-    Languages,
-    /// Derived from the rule's registry (code or command).
-    Input,
-    /// Derived from the rule's file target.
-    FileScope,
-}
+/// The analyzed-input facet, derived from the rule's registry.
+pub const INPUT_GROUP: TagGroup = TagGroup {
+    name: "Analyzed input",
+    cardinality: Cardinality::ExactlyOne,
+};
 
-impl Facet {
-    /// The display label.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Topic => "Topic",
-            Self::Precision => "Precision",
-            Self::Consensus => "Consensus",
-            Self::ImpactedQuality => "Impacted quality",
-            Self::Languages => "Languages",
-            Self::Input => "Analyzed input",
-            Self::FileScope => "File scope",
-        }
-    }
+/// The file-scope facet, derived from the rule's file target.
+pub const FILE_SCOPE_GROUP: TagGroup = TagGroup {
+    name: "File scope",
+    cardinality: Cardinality::AtMostOne,
+};
 
-    /// Whether `candidate` names this facet (case-insensitively, spaces/underscores/hyphens
-    /// equivalent).
-    #[must_use]
-    pub fn matches_label(self, candidate: &str) -> bool {
-        let normalize = |byte: u8| match byte {
-            b' ' | b'_' => b'-',
-            other => other.to_ascii_lowercase(),
-        };
-        let label = self.label().as_bytes();
-        let candidate = candidate.as_bytes();
-        label.len() == candidate.len()
-            && label
-                .iter()
-                .zip(candidate)
-                .all(|(&left, &right)| normalize(left) == normalize(right))
-    }
-}
+const PYTHON: Tag = Tag::new(&LANGUAGES_GROUP, "python", "Supports Python sources.");
+const RUST: Tag = Tag::new(&LANGUAGES_GROUP, "rust", "Supports Rust sources.");
+const CODE: Tag = Tag::new(
+    &INPUT_GROUP,
+    "code",
+    "Analyzes source files (suppression audits included).",
+);
+const COMMAND: Tag = Tag::new(&INPUT_GROUP, "command", "Analyzes shell commands.");
+const TESTS_ONLY: Tag = Tag::new(&FILE_SCOPE_GROUP, "tests-only", "Runs on test files only.");
+const SOURCE_ONLY: Tag = Tag::new(
+    &FILE_SCOPE_GROUP,
+    "source-only",
+    "Runs on non-test files only.",
+);
 
-/// One value of one facet: what a tag selector names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Tag {
-    /// A topic.
-    Topic(Topic),
-    /// A precision value.
-    Precision(Precision),
-    /// A consensus value.
-    Consensus(Consensus),
-    /// An impacted-quality value.
-    ImpactedQuality(ImpactedQuality),
-    /// A derived value.
-    Derived(Derived),
-}
+/// The catalog of every registered rule (code rules, suppression audits, command rules), in
+/// registry order.
+pub(super) static CATALOG: LazyLock<Catalog<RegisteredRule>> = LazyLock::new(registered_catalog);
 
-impl Tag {
-    /// The tag's canonical label, e.g. `heuristic`.
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Topic(value) => value.label(),
-            Self::Precision(value) => value.into(),
-            Self::Consensus(value) => value.into(),
-            Self::ImpactedQuality(value) => value.into(),
-            Self::Derived(value) => value.into(),
-        }
-    }
-
-    /// The facet the tag belongs to.
-    #[must_use]
-    pub const fn facet(self) -> Facet {
-        match self {
-            Self::Topic(_) => Facet::Topic,
-            Self::Precision(_) => Facet::Precision,
-            Self::Consensus(_) => Facet::Consensus,
-            Self::ImpactedQuality(_) => Facet::ImpactedQuality,
-            Self::Derived(Derived::Python | Derived::Rust) => Facet::Languages,
-            Self::Derived(Derived::Code | Derived::Command) => Facet::Input,
-            Self::Derived(Derived::TestsOnly | Derived::SourceOnly) => Facet::FileScope,
-        }
-    }
-}
-
-/// A validated, canonical selector: a rule name or a tag (synonyms already resolved).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Selector {
-    /// A rule name: the leaf under every tag the rule carries.
-    Rule(RuleName),
-    /// A tag, with all its descendants.
-    Tag(Tag),
-}
-
-impl Selector {
-    /// The canonical label.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Rule(rule) => rule.0,
-            Self::Tag(tag) => tag.label(),
-        }
-    }
-}
-
-/// A registered rule as the taxonomy sees it: its name, declared and derived facets, doc,
+/// A registered rule: its name, declared classification, supported languages, options, doc,
 /// raw message template and the input it analyzes.
 #[derive(Debug)]
 pub struct RegisteredRule {
@@ -167,11 +72,10 @@ pub struct RegisteredRule {
     /// What the rule analyzes, from the registry it is registered in; the source of its
     /// analyzed-input tag.
     pub input: AnalyzedInput,
-    derived: Vec<Derived>,
 }
 
 /// What a rule analyzes, given by the registry it is registered in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
 pub enum AnalyzedInput {
     /// Source files: code rules and suppression audits.
     Code,
@@ -180,329 +84,305 @@ pub enum AnalyzedInput {
 }
 
 impl RegisteredRule {
-    /// The rule declared by `declared`, with its language, analyzed-input and file-scope facets.
-    fn new(declared: DeclaredRule, input: AnalyzedInput, scope: Option<Derived>) -> Self {
-        let languages = declared.languages.iter().map(|language| match language {
-            Language::Python => Derived::Python,
-            Language::Rust => Derived::Rust,
-        });
-        let input_tag = match input {
-            AnalyzedInput::Code => Derived::Code,
-            AnalyzedInput::Command => Derived::Command,
-        };
-        Self {
-            name: declared.name,
-            doc: declared.doc,
-            template: declared.template,
-            options: declared.options,
-            languages: declared.languages,
-            classification: declared.classification,
-            input,
-            derived: languages.chain([input_tag]).chain(scope).collect(),
-        }
-    }
-}
-
-/// Every registered rule (code rules, suppression audits, command rules).
-pub static REGISTERED_RULES: LazyLock<Vec<RegisteredRule>> = LazyLock::new(|| {
-    let code = CODE_RULES.iter().map(|rule| {
-        let scope = match rule.target() {
-            RuleTarget::All => None,
-            RuleTarget::TestsOnly => Some(Derived::TestsOnly),
-            RuleTarget::SourceOnly => Some(Derived::SourceOnly),
-        };
-        RegisteredRule::new(rule.declaration(), AnalyzedInput::Code, scope)
-    });
-    let audits = SUPPRESSION_AUDITS
-        .iter()
-        .map(|audit| RegisteredRule::new(audit.declared(), AnalyzedInput::Code, None));
-    let commands = COMMAND_RULES
-        .iter()
-        .map(|rule| RegisteredRule::new(rule.declaration.declared(), AnalyzedInput::Command, None));
-    code.chain(audits).chain(commands).collect()
-});
-
-impl Topic {
-    /// The path from the root down to the topic.
-    fn path(self) -> Vec<Self> {
-        let mut path: Vec<_> = self.ancestors().collect();
-        path.reverse();
-        path.push(self);
-        path
-    }
-
-    /// The topic's ancestors, nearest first.
-    fn ancestors(self) -> impl Iterator<Item = Self> {
-        std::iter::successors(self.parent(), |topic| topic.parent())
-    }
-}
-
-/// Every tag of every facet.
-pub fn all_tags() -> impl Iterator<Item = Tag> {
-    all_topics()
-        .map(Tag::Topic)
-        .chain(Precision::iter().map(Tag::Precision))
-        .chain(Consensus::iter().map(Tag::Consensus))
-        .chain(ImpactedQuality::iter().map(Tag::ImpactedQuality))
-        .chain(Derived::iter().map(Tag::Derived))
-}
-
-impl RegisteredRule {
-    /// The rule's branches: each root-to-leaf tag path it sits on. A topic branch is the
-    /// topic's path; every other facet value is a one-tag branch. The rule is the implicit leaf.
-    pub fn branches(&self) -> Vec<Vec<Tag>> {
-        let Classification {
-            topics,
-            precision,
-            consensus,
-            impacted_quality,
-        } = self.classification;
-        let topic_paths = topics
-            .iter()
-            .map(|topic| topic.path().into_iter().map(Tag::Topic).collect());
-        let values = [
-            Tag::Precision(precision),
-            Tag::Consensus(consensus),
-            Tag::ImpactedQuality(impacted_quality),
-        ]
-        .into_iter()
-        .chain(self.derived.iter().copied().map(Tag::Derived))
-        .map(|tag| vec![tag]);
-        topic_paths.chain(values).collect()
-    }
-
-    /// Whether `selector` selects the rule.
+    /// Root-to-leaf label chains of the rule's explicit tags in `facet`, in declaration order.
     #[must_use]
-    pub fn matches(&self, selector: Selector) -> bool {
-        match selector {
-            Selector::Rule(name) => name == self.name,
-            Selector::Tag(tag) => self.branches().iter().flatten().any(|&own| own == tag),
-        }
-    }
-
-    /// A rule outside the registry, with no derived facets.
-    #[cfg(test)]
-    pub(crate) fn synthetic(name: &'static str, classification: Classification) -> Self {
-        static TEMPLATE: ViolationTemplate = ViolationTemplate::from_static("", "", "");
-        Self {
-            name: RuleName(name),
-            doc: RuleDoc::TODO.declared(),
-            template: &TEMPLATE,
-            options: crate::rule_declaration::RuleOptions::none().declared(),
-            languages: &[],
-            classification,
-            input: AnalyzedInput::Code,
-            derived: Vec::new(),
-        }
+    pub fn facet_chains(&self, facet: &TagGroup) -> Vec<Vec<&'static str>> {
+        let Some(item) = CATALOG.item(self.name.0) else {
+            return Vec::new();
+        };
+        let vocabulary = CATALOG.vocabulary();
+        CATALOG
+            .explicit(item)
+            .iter()
+            .copied()
+            .filter(|&tag| vocabulary.tag(tag).belongs_to(facet))
+            .map(|tag| {
+                vocabulary
+                    .root_chain(tag)
+                    .into_iter()
+                    .map(|step| vocabulary.tag(step).label)
+                    .collect()
+            })
+            .collect()
     }
 }
 
-/// Resolves a label (canonical or synonym) to its canonical selector.
-pub fn lookup(label: &str) -> Option<Selector> {
-    labels().find_map(|(known, selector)| (known == label).then_some(selector))
+/// Every facet, in display order: the vocabulary's groups, in the order `catalog` adds
+/// their tags. A facet's name is for display only and is never a selector.
+pub fn facets() -> impl Iterator<Item = &'static TagGroup> {
+    CATALOG.vocabulary().groups()
+}
+
+/// The tags of every topic in use (the topics rules carry and their ancestors), ordered by
+/// root-to-leaf path so each parent precedes its children.
+#[must_use]
+pub fn registered_topics() -> Vec<Tag> {
+    let vocabulary = CATALOG.vocabulary();
+    let mut topics: Vec<_> = vocabulary.members(Topic::GROUP).collect();
+    topics.sort_by_cached_key(|&id| {
+        vocabulary
+            .root_chain(id)
+            .into_iter()
+            .map(|step| vocabulary.tag(step).label)
+            .collect::<Vec<_>>()
+    });
+    topics.into_iter().map(|id| *vocabulary.tag(id)).collect()
+}
+
+/// The canonical label of `selector` in `catalog`: a rule name or a tag label.
+pub(super) fn selector_label(
+    catalog: &Catalog<RegisteredRule>,
+    selector: Selector,
+) -> &'static str {
+    match selector {
+        Selector::Item(item) => catalog.name(item),
+        Selector::Tag(tag) => catalog.vocabulary().tag(tag).label,
+    }
+}
+
+/// The labels of `group`'s tags, comma-separated.
+pub(super) fn group_values(group: &TagGroup) -> String {
+    let vocabulary = CATALOG.vocabulary();
+    let labels: Vec<_> = vocabulary
+        .members(group)
+        .map(|id| vocabulary.tag(id).label)
+        .collect();
+    labels.join(", ")
 }
 
 /// The registered label closest to `label`, if it is close enough to be a typo.
-pub fn closest_label(label: &str) -> Option<&'static str> {
-    closest_match(label, labels().map(|(known, _)| known))
+pub(super) fn closest_label(label: &str) -> Option<&'static str> {
+    closest_match(label, CATALOG.labels())
 }
 
 /// The registered rule name closest to `label`, if it is close enough to be a typo.
-pub fn closest_rule_name(label: &str) -> Option<&'static str> {
-    closest_match(label, REGISTERED_RULES.iter().map(|rule| rule.name.0))
+pub(super) fn closest_rule_name(label: &str) -> Option<&'static str> {
+    closest_match(label, CATALOG.values().iter().map(|rule| rule.name.0))
 }
 
-/// Every topic in use, collected from registered rules and their ancestors, ordered by
-/// root-to-leaf path so each parent precedes its children.
-#[must_use]
-pub fn registered_topics() -> Vec<Topic> {
-    let mut topics: Vec<Topic> = all_topics().collect();
-    topics.sort_by_cached_key(|topic| {
-        topic
-            .path()
-            .into_iter()
-            .map(Topic::label)
-            .collect::<Vec<_>>()
-    });
-    topics
-}
-
-/// The single global label registry: rule names, tag labels and topic synonyms.
-fn labels() -> impl Iterator<Item = (&'static str, Selector)> {
-    let rules = REGISTERED_RULES
+/// Builds a validated [`Catalog`] from `items`, tagged from every topic they use and every
+/// declared and derived facet value; returns formatted error messages otherwise.
+pub(super) fn catalog(
+    items: impl IntoIterator<Item = Item<RegisteredRule>>,
+) -> Result<Catalog<RegisteredRule>, Vec<String>> {
+    let items: Vec<_> = items.into_iter().collect();
+    let mut topics: Vec<Tag> = items
         .iter()
-        .map(|rule| (rule.name.0, Selector::Rule(rule.name)));
-    let tags = all_tags().map(|tag| (tag.label(), Selector::Tag(tag)));
-    let synonyms = all_topics().flat_map(|topic| {
-        let selector = Selector::Tag(Tag::Topic(topic));
-        topic
-            .synonyms()
-            .iter()
-            .map(move |&synonym| (synonym, selector))
-    });
-    rules.chain(tags).chain(synonyms)
-}
-
-/// Every topic in use, collected from registered rules and their ancestors.
-fn all_topics() -> impl Iterator<Item = Topic> {
-    let topics: BTreeSet<Topic> = REGISTERED_RULES
-        .iter()
-        .flat_map(|rule| rule.classification.topics.iter().copied())
-        .flat_map(Topic::path)
+        .flat_map(|item| item.value.classification.topics.iter().copied())
+        .flat_map(|topic| std::iter::successors(Some(topic), |topic| topic.parent()))
+        .map(Topic::tag)
         .collect();
-    topics.into_iter()
+    topics.sort_by_key(|topic| topic.label);
+    topics.dedup();
+    let tags = topics
+        .into_iter()
+        .chain(Precision::iter().map(Precision::tag))
+        .chain(Consensus::iter().map(Consensus::tag))
+        .chain(ImpactedQuality::iter().map(ImpactedQuality::tag))
+        .chain(Language::VARIANTS.iter().copied().map(language_tag))
+        .chain(AnalyzedInput::iter().map(input_tag))
+        .chain(
+            RuleTarget::VARIANTS
+                .iter()
+                .copied()
+                .filter_map(file_scope_tag),
+        );
+    let vocabulary = Vocabulary::new(tags).map_err(messages)?;
+    Catalog::new(vocabulary, items).map_err(messages)
+}
+
+/// A synthetic rule item outside the registry, analyzing code, with no other derived facets.
+#[cfg(test)]
+pub(super) fn synthetic_item(
+    name: &'static str,
+    classification: Classification,
+) -> Item<RegisteredRule> {
+    static TEMPLATE: ViolationTemplate = ViolationTemplate::from_static("", "", "");
+    let declared = DeclaredRule {
+        name: RuleName(name),
+        template: &TEMPLATE,
+        languages: &[],
+        options: crate::rule_declaration::RuleOptions::none().declared(),
+        classification,
+        doc: RuleDoc::TODO.declared(),
+    };
+    rule_item(declared, AnalyzedInput::Code, RuleTarget::All)
+}
+
+/// Builds the static rule catalog, panicking only if a static rule registration is invalid.
+#[expect(
+    clippy::panic,
+    reason = "the registry is static and `the_registered_rules_form_a_valid_catalog` reports \
+              every error in `cargo test`"
+)]
+fn registered_catalog() -> Catalog<RegisteredRule> {
+    catalog(registered_items())
+        .unwrap_or_else(|errors| panic!("invalid rule taxonomy:\n{}", errors.join("\n")))
+}
+
+/// Every registered rule item (code rules, suppression audits, command rules), in registry order.
+fn registered_items() -> Vec<Item<RegisteredRule>> {
+    let code = CODE_RULES
+        .iter()
+        .map(|rule| rule_item(rule.declaration(), AnalyzedInput::Code, rule.target()));
+    let audits = SUPPRESSION_AUDITS
+        .iter()
+        .map(|audit| rule_item(audit.declared(), AnalyzedInput::Code, RuleTarget::All));
+    let commands = COMMAND_RULES.iter().map(|rule| {
+        rule_item(
+            rule.declaration.declared(),
+            AnalyzedInput::Command,
+            RuleTarget::All,
+        )
+    });
+    code.chain(audits).chain(commands).collect()
+}
+
+/// Pairs `declared` with its explicit tags in branch-precedence order: topics, declared facet
+/// values, language tags, the analyzed-input tag, then the file-scope tag.
+fn rule_item(
+    declared: DeclaredRule,
+    input: AnalyzedInput,
+    target: RuleTarget,
+) -> Item<RegisteredRule> {
+    let Classification {
+        topics,
+        precision,
+        consensus,
+        impacted_quality,
+    } = declared.classification;
+    let declared_tags = topics.iter().map(|topic| topic.tag()).chain([
+        precision.tag(),
+        consensus.tag(),
+        impacted_quality.tag(),
+    ]);
+    let languages = declared.languages.iter().copied().map(language_tag);
+    let tags: Vec<Tag> = declared_tags
+        .chain(languages)
+        .chain([input_tag(input)])
+        .chain(file_scope_tag(target))
+        .collect();
+    let rule = RegisteredRule {
+        name: declared.name,
+        doc: declared.doc,
+        template: declared.template,
+        options: declared.options,
+        languages: declared.languages,
+        classification: declared.classification,
+        input,
+    };
+    Item::new(declared.name.0, tags, rule)
+}
+
+/// Formats `errors` as display strings.
+fn messages(errors: Vec<impl ToString>) -> Vec<String> {
+    errors.into_iter().map(|error| error.to_string()).collect()
+}
+
+const fn language_tag(language: Language) -> Tag {
+    match language {
+        Language::Python => PYTHON,
+        Language::Rust => RUST,
+    }
+}
+
+const fn input_tag(input: AnalyzedInput) -> Tag {
+    match input {
+        AnalyzedInput::Code => CODE,
+        AnalyzedInput::Command => COMMAND,
+    }
+}
+
+const fn file_scope_tag(target: RuleTarget) -> Option<Tag> {
+    match target {
+        RuleTarget::All => None,
+        RuleTarget::TestsOnly => Some(TESTS_ONLY),
+        RuleTarget::SourceOnly => Some(SOURCE_ONLY),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
     use crate::rule_declaration::is_kebab_case;
 
     #[test]
-    fn every_rule_has_a_topic() {
-        let untopical: Vec<_> = REGISTERED_RULES
-            .iter()
-            .filter(|rule| rule.classification.topics.is_empty())
-            .map(|rule| rule.name.0)
-            .collect();
-        assert!(
-            untopical.is_empty(),
-            "declare at least one topic for {untopical:?}"
-        );
-    }
-
-    #[test]
-    fn no_rule_lists_a_topic_with_its_ancestor_or_twice() {
-        let mut failures = Vec::new();
-        // omni:ignore[logic-in-tests] -- verifies taxonomy invariants across all registered rules
-        for rule in REGISTERED_RULES.iter() {
-            let topics = rule.classification.topics;
-            for (index, &topic) in topics.iter().enumerate() {
-                if topics[..index].contains(&topic) {
-                    failures.push(format!(
-                        "{}: `{}` is listed twice",
-                        rule.name,
-                        topic.label()
-                    ));
-                }
-                if let Some(ancestor) = topic.ancestors().find(|ancestor| topics.contains(ancestor))
-                {
-                    failures.push(format!(
-                        "{}: remove `{}`, it is implied by `{}`",
-                        rule.name,
-                        ancestor.label(),
-                        topic.label()
-                    ));
-                }
-            }
-        }
-        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    fn the_registered_rules_form_a_valid_catalog() {
+        let errors = catalog(registered_items()).err().unwrap_or_default();
+        assert!(errors.is_empty(), "{}", errors.join("\n"));
     }
 
     #[test]
     fn every_tag_has_a_rule() {
-        let empty: Vec<_> = all_tags()
-            .filter(|&tag| {
-                !REGISTERED_RULES
-                    .iter()
-                    .any(|rule| rule.matches(Selector::Tag(tag)))
-            })
-            .map(Tag::label)
+        let vocabulary = CATALOG.vocabulary();
+        let empty: Vec<_> = CATALOG
+            .unused_tags()
+            .map(|tag| vocabulary.tag(tag).label)
             .collect();
         assert!(empty.is_empty(), "no rule carries {empty:?}: remove them");
     }
 
     #[test]
+    fn registered_topics_list_ancestors_before_their_subtopics() {
+        let labels: Vec<_> = registered_topics().iter().map(|tag| tag.label).collect();
+        let testing_subtree = ["testing", "test-assertions", "test-doubles", "test-timing"];
+        assert!(
+            labels.windows(4).any(|window| window == testing_subtree),
+            "{labels:?}"
+        );
+    }
+
+    #[test]
     fn every_topic_is_documented() {
-        // Facet value enums are covered by the crate's `missing_docs` lint.
-        let undocumented: Vec<_> = all_topics()
-            .filter(|topic| {
-                topic.description().trim().is_empty() || topic.scope_note().trim().is_empty()
+        let undocumented: Vec<_> = registered_topics()
+            .into_iter()
+            .filter(|tag| {
+                tag.description.trim().is_empty()
+                    || tag.scope_note.is_none_or(|note| note.trim().is_empty())
             })
-            .map(Topic::label)
+            .map(|tag| tag.label)
             .collect();
         assert!(undocumented.is_empty(), "document {undocumented:?}");
     }
 
     #[test]
-    fn labels_are_globally_unique_and_not_facet_labels() {
-        let mut owners: BTreeMap<&str, Vec<Selector>> = BTreeMap::new();
-        // omni:ignore[logic-in-tests] -- groups all registered taxonomy labels to check global uniqueness
-        for (label, selector) in labels() {
-            owners.entry(label).or_default().push(selector);
-        }
-        let collisions: Vec<_> = owners
-            .iter()
-            .filter(|(_, selectors)| selectors.len() > 1)
-            .map(|(label, selectors)| format!("`{label}` names {selectors:?}"))
-            .collect();
-        let non_kebab: Vec<_> = owners
-            .keys()
+    fn labels_are_kebab_case() {
+        let non_kebab: Vec<_> = CATALOG
+            .labels()
             .filter(|label| !is_kebab_case(label))
             .collect();
-        let facet_like: Vec<_> = owners
-            .keys()
-            .filter(|label| Facet::iter().any(|facet| facet.matches_label(label)))
-            .collect();
-        assert!(collisions.is_empty(), "{}", collisions.join("\n"));
         assert!(non_kebab.is_empty(), "{non_kebab:?} are not kebab-case");
-        assert!(facet_like.is_empty(), "{facet_like:?} read as facet labels");
     }
 
     #[test]
     fn code_rules_and_only_code_rules_have_a_language() {
+        let vocabulary = CATALOG.vocabulary();
+        let code = vocabulary.id(CODE.label).unwrap();
         // omni:ignore[logic-in-tests] -- verifies language facet invariant across all registered rules
-        for rule in REGISTERED_RULES.iter() {
-            let has_language = rule
-                .derived
-                .iter()
-                .any(|&value| Tag::Derived(value).facet() == Facet::Languages);
+        for item in CATALOG.items() {
+            let has_language = vocabulary
+                .members(&LANGUAGES_GROUP)
+                .any(|language| CATALOG.carries(item, language));
             assert_eq!(
                 has_language,
-                rule.derived.contains(&Derived::Code),
+                CATALOG.carries(item, code),
                 "{}",
-                rule.name
+                CATALOG.name(item)
             );
         }
     }
 
     #[test]
-    fn a_topic_branch_is_its_path_from_the_root() {
-        const DOC: crate::rule_declaration::TopicDoc = crate::rule_declaration::TopicDoc {
-            description: "Doc.",
-            scope_note: "Doc.",
-        };
-        const PARENT: Topic = Topic::root("parent", DOC);
-        const CHILD: Topic = Topic::sub("child", &PARENT, DOC);
-        let rule = RegisteredRule::synthetic(
-            "rule",
-            Classification {
-                topics: &[CHILD],
-                precision: Precision::Exact,
-                consensus: Consensus::Unopinionated,
-                impacted_quality: ImpactedQuality::Reliability,
-            },
+    fn facet_chains_expand_topics_from_root_to_leaf() {
+        let item = CATALOG.item("sleep-in-tests").unwrap();
+        let topic_group = Topic::TEST_TIMING.tag().group;
+        assert_eq!(
+            CATALOG[item].facet_chains(topic_group),
+            [vec!["testing", "test-timing"]]
         );
         assert_eq!(
-            rule.branches(),
-            [
-                vec![Tag::Topic(PARENT), Tag::Topic(CHILD)],
-                vec![Tag::Precision(Precision::Exact)],
-                vec![Tag::Consensus(Consensus::Unopinionated)],
-                vec![Tag::ImpactedQuality(ImpactedQuality::Reliability)],
-            ]
-        );
-    }
-
-    #[test]
-    fn registered_topics_list_ancestors_before_their_subtopics() {
-        let labels: Vec<_> = registered_topics().into_iter().map(Topic::label).collect();
-        let testing_subtree = ["testing", "test-assertions", "test-doubles", "test-timing"];
-        assert!(
-            labels.windows(4).any(|window| window == testing_subtree),
-            "{labels:?}"
+            CATALOG[item].facet_chains(&FILE_SCOPE_GROUP),
+            [vec!["tests-only"]]
         );
     }
 }

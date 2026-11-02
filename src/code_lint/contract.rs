@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 /// Target execution scope for a code rule (source files vs test files).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::VariantArray)]
 pub enum RuleTarget {
     /// Rule runs on all matching files.
     #[default]

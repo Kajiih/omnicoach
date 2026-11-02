@@ -3,6 +3,7 @@
 architecture_component!(RuleCatalog);
 
 use strum::IntoEnumIterator as _;
+use tagonomy::TagGroup;
 
 use crate::diagnostic::Diagnostic;
 use crate::rule_declaration::{
@@ -10,8 +11,9 @@ use crate::rule_declaration::{
     LanguageDefaults, OptionSpec, Precision,
 };
 use crate::rule_selection::{
-    ConfigError, ConfigOverrides, Facet, RegisteredRule, RuleStatus, UnknownLabel, find_rule,
-    load_rule_status, registered_rules, registered_topics, rule_status, rules_tagged,
+    ConfigError, ConfigOverrides, INPUT_GROUP, LANGUAGES_GROUP, RegisteredRule, RuleStatus,
+    UnknownLabel, facets, find_rule, load_rule_status, registered_rules, registered_topics,
+    rule_status, rules_tagged,
 };
 
 /// Why a discovery request failed. The message is what the user sees.
@@ -124,9 +126,9 @@ pub fn list_rules(tag: Option<&str>) -> Result<String, CatalogError> {
     let lines: Vec<String> = rules
         .iter()
         .map(|rule| {
-            let languages = Some(facet_tags(rule, Facet::Languages))
+            let languages = Some(facet_tags(rule, &LANGUAGES_GROUP))
                 .filter(|languages| !languages.is_empty())
-                .unwrap_or_else(|| facet_tags(rule, Facet::Input));
+                .unwrap_or_else(|| facet_tags(rule, &INPUT_GROUP));
             format!("- `{}` ({languages}): {}", rule.name, rule.doc.summary)
         })
         .collect();
@@ -141,19 +143,19 @@ pub fn list_tags() -> String {
         "| Topic | Parent | Synonyms | Description | Scope note |".to_owned(),
         "|---|---|---|---|---|".to_owned(),
     ];
-    for topic in registered_topics() {
-        let parent = topic.parent().map_or("—", |parent| parent.label());
-        let synonyms: Vec<String> = topic
-            .synonyms()
+    for tag in registered_topics() {
+        let parent = tag.implies.first().map_or("—", |parent| parent.label);
+        let synonyms: Vec<String> = tag
+            .aliases
             .iter()
             .map(|synonym| format!("`{synonym}`"))
             .collect();
         lines.push(format!(
             "| `{}` | {parent} | {} | {} | {} |",
-            topic.label(),
+            tag.label,
             synonyms.join(", "),
-            topic.description(),
-            topic.scope_note(),
+            tag.description,
+            tag.scope_note.unwrap_or_default(),
         ));
     }
     lines.join("\n") + "\n"
@@ -270,10 +272,10 @@ fn render_rule(rule: &RegisteredRule, status_result: &Result<RuleStatus, ConfigE
     }
     lines.extend([String::new(), "## Tags".to_owned(), String::new()]);
     lines.extend(
-        Facet::iter()
+        facets()
             .map(|facet| (facet, facet_tags(rule, facet)))
             .filter(|(_, tags)| !tags.is_empty())
-            .map(|(facet, tags)| format!("- {}: {tags}", facet.label())),
+            .map(|(facet, tags)| format!("- {}: {tags}", facet.name)),
     );
     lines.join("\n") + "\n"
 }
@@ -389,22 +391,18 @@ fn list_default(defaults: &FilterListDefaults) -> String {
 
 /// The rule's tags in `facet`, comma-separated; an ancestor topic names the topic it comes
 /// from, e.g. `testing [via test-timing]`.
-fn facet_tags(rule: &RegisteredRule, facet: Facet) -> String {
+fn facet_tags(rule: &RegisteredRule, facet: &TagGroup) -> String {
     let mut labels = Vec::new();
-    for branch in rule.branches() {
-        let Some((leaf, ancestors)) = branch.split_last() else {
-            continue;
-        };
-        if leaf.facet() != facet {
-            continue;
+    for chain in rule.facet_chains(facet) {
+        if let Some((&leaf, ancestors)) = chain.split_last() {
+            labels.push(leaf.to_owned());
+            labels.extend(
+                ancestors
+                    .iter()
+                    .rev()
+                    .map(|ancestor| format!("{ancestor} [via {leaf}]")),
+            );
         }
-        labels.push(leaf.label().to_owned());
-        labels.extend(
-            ancestors
-                .iter()
-                .rev()
-                .map(|ancestor| format!("{} [via {}]", ancestor.label(), leaf.label())),
-        );
     }
     labels.join(", ")
 }
