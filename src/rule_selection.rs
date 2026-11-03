@@ -194,7 +194,7 @@ pub fn find_rule(name: &str) -> Result<&'static RegisteredRule, UnknownLabel> {
 /// Returns [`ConfigError`] if the discovered configuration file cannot be read or parsed.
 pub fn load_config(overrides: &ConfigOverrides) -> Result<Config, ConfigError> {
     let start_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    load_domain_config(&start_directory, overrides, ConfigDomain::Code)
+    load_domain_config(&start_directory, overrides, AnalyzedInput::Code)
 }
 
 /// Loads configuration for the command workflow safety domain.
@@ -207,7 +207,7 @@ pub fn load_config(overrides: &ConfigOverrides) -> Result<Config, ConfigError> {
 /// Returns [`ConfigError`] if the discovered configuration file cannot be read or parsed.
 pub fn load_command_config(overrides: &ConfigOverrides) -> Result<Config, ConfigError> {
     let start_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    load_domain_config(&start_directory, overrides, ConfigDomain::Command)
+    load_domain_config(&start_directory, overrides, AnalyzedInput::Command)
 }
 
 /// Loads configuration for the code analysis domain starting from `project_root`.
@@ -222,7 +222,7 @@ pub(crate) fn load_config_from_root(
     project_root: &Path,
     overrides: &ConfigOverrides,
 ) -> Result<Config, ConfigError> {
-    load_domain_config(project_root, overrides, ConfigDomain::Code)
+    load_domain_config(project_root, overrides, AnalyzedInput::Code)
 }
 
 /// Loads configuration for the command workflow safety domain starting from `project_root`.
@@ -236,7 +236,7 @@ pub(crate) fn load_command_config_from_root(
     project_root: &Path,
     overrides: &ConfigOverrides,
 ) -> Result<Config, ConfigError> {
-    load_domain_config(project_root, overrides, ConfigDomain::Command)
+    load_domain_config(project_root, overrides, AnalyzedInput::Command)
 }
 
 /// Discovers the project root directory starting at `start_directory` and traversing up parent directories.
@@ -267,11 +267,7 @@ pub fn load_rule_status(
     overrides: &ConfigOverrides,
 ) -> Result<RuleStatus, ConfigError> {
     let start_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let domain = match rule.input {
-        AnalyzedInput::Code => ConfigDomain::Code,
-        AnalyzedInput::Command => ConfigDomain::Command,
-    };
-    let resolved = resolve_domain_config(&start_directory, overrides, domain)?;
+    let resolved = resolve_domain_config(&start_directory, overrides, rule.input)?;
     rule_status_with_overrides(&resolved.content, overrides, rule)
 }
 
@@ -410,16 +406,10 @@ impl fmt::Display for RuleStatus {
 const GLOBAL_CONFIG_RELATIVE_PATH: &str = "omnicoach/config.toml";
 const DEFAULT_CONFIG_DIR_NAME: &str = ".config";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConfigDomain {
-    Code,
-    Command,
-}
-
 fn load_domain_config(
     start_directory: &Path,
     overrides: &ConfigOverrides,
-    domain: ConfigDomain,
+    domain: AnalyzedInput,
 ) -> Result<Config, ConfigError> {
     let resolved = resolve_domain_config(start_directory, overrides, domain)?;
     let mut config = parse_config_with_overrides(&resolved.content, overrides)?;
@@ -435,7 +425,7 @@ struct ResolvedDomainConfig {
 fn resolve_domain_config(
     start_directory: &Path,
     overrides: &ConfigOverrides,
-    domain: ConfigDomain,
+    domain: AnalyzedInput,
 ) -> Result<ResolvedDomainConfig, ConfigError> {
     let global_config_path = default_global_config_path();
     resolve_domain_config_with(
@@ -478,7 +468,7 @@ fn resolve_global_config_path(
 fn resolve_domain_config_with(
     start_directory: &Path,
     overrides: &ConfigOverrides,
-    domain: ConfigDomain,
+    domain: AnalyzedInput,
     global_config_path: Option<&Path>,
 ) -> Result<ResolvedDomainConfig, ConfigError> {
     let discovered_root = discover_project_root(start_directory);
@@ -493,8 +483,8 @@ fn resolve_domain_config_with(
     }
 
     let candidate_paths: &[Option<&Path>] = match domain {
-        ConfigDomain::Code => &[local_config_path.as_deref(), global_config_path],
-        ConfigDomain::Command => &[global_config_path, local_config_path.as_deref()],
+        AnalyzedInput::Code => &[local_config_path.as_deref(), global_config_path],
+        AnalyzedInput::Command => &[global_config_path, local_config_path.as_deref()],
     };
 
     for candidate in candidate_paths.iter().flatten() {
@@ -1010,15 +1000,15 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::code_domain_prefers_repo_config(ConfigDomain::Code, true, "sleep-in-tests")]
-    #[case::command_domain_prefers_global_config(ConfigDomain::Command, true, "nested-function")]
+    #[case::code_domain_prefers_repo_config(AnalyzedInput::Code, true, "sleep-in-tests")]
+    #[case::command_domain_prefers_global_config(AnalyzedInput::Command, true, "nested-function")]
     #[case::command_domain_without_global_falls_back_to_repo(
-        ConfigDomain::Command,
+        AnalyzedInput::Command,
         false,
         "sleep-in-tests"
     )]
     fn test_domain_scoped_config_resolution(
-        #[case] domain: ConfigDomain,
+        #[case] domain: AnalyzedInput,
         #[case] has_global_config: bool,
         #[case] expected_substring: &str,
     ) {
@@ -1073,7 +1063,7 @@ mod tests {
         let resolved = resolve_domain_config_with(
             &nested_dir,
             &ConfigOverrides::default(),
-            ConfigDomain::Code,
+            AnalyzedInput::Code,
             Some(&global_config),
         )
         .expect("resolve config");
