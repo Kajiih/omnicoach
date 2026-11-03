@@ -60,8 +60,8 @@ impl Topic {
 
     /// Sets alternative labels that resolve to this topic.
     #[must_use]
-    pub const fn aliases(mut self, synonyms: &'static [&'static str]) -> Self {
-        self.synonyms = synonyms;
+    pub const fn aliases(mut self, aliases: &'static [&'static str]) -> Self {
+        self.synonyms = aliases;
         self
     }
 
