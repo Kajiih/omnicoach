@@ -548,6 +548,7 @@ fn rule_names(mut predicate: impl FnMut(&RegisteredRule) -> bool) -> HashSet<Rul
 struct Plan {
     select: Option<BTreeSet<Selector>>,
     ignore: BTreeSet<Selector>,
+    duplicates: BTreeSet<Selector>,
 }
 
 impl Plan {
@@ -558,18 +559,20 @@ impl Plan {
         let selectors = self.select.iter().flatten().chain(&self.ignore).copied();
         selectors
             .filter(|&selector| {
-                let verdicts = verdicts.get_or_init(|| {
+                self.duplicates.contains(&selector) || {
+                    let verdicts = verdicts.get_or_init(|| {
+                        REGISTERED_RULES
+                            .iter()
+                            .map(|rule| self.decide(rule).enabled())
+                            .collect::<Vec<_>>()
+                    });
                     REGISTERED_RULES
                         .iter()
-                        .map(|rule| self.decide(rule).enabled())
-                        .collect::<Vec<_>>()
-                });
-                REGISTERED_RULES
-                    .iter()
-                    .zip(verdicts)
-                    .all(|(rule, &enabled)| {
-                        self.decide_skipping(rule, Some(selector)).enabled() == enabled
-                    })
+                        .zip(verdicts)
+                        .all(|(rule, &enabled)| {
+                            self.decide_skipping(rule, Some(selector)).enabled() == enabled
+                        })
+                }
             })
             .collect()
     }
@@ -645,10 +648,11 @@ fn apply_overrides(mut plan: Plan, overrides: &ConfigOverrides) -> Result<Plan, 
 }
 
 fn parse_plan(select: Option<Vec<String>>, ignore: Vec<String>) -> Result<Plan, ConfigError> {
+    let mut duplicates = BTreeSet::new();
     let select = select
-        .map(|labels| resolve_all(labels, &Location::Select))
+        .map(|labels| resolve_set(labels, &Location::Select, &mut duplicates))
         .transpose()?;
-    let ignore = resolve_all(ignore, &Location::Ignore)?;
+    let ignore = resolve_set(ignore, &Location::Ignore, &mut duplicates)?;
     if let Some(&both) = select
         .iter()
         .flatten()
@@ -656,7 +660,26 @@ fn parse_plan(select: Option<Vec<String>>, ignore: Vec<String>) -> Result<Plan, 
     {
         return Err(ConfigError::Conflict(both.label()));
     }
-    Ok(Plan { select, ignore })
+    Ok(Plan {
+        select,
+        ignore,
+        duplicates,
+    })
+}
+
+fn resolve_set(
+    labels: Vec<String>,
+    location: &Location,
+    duplicates: &mut BTreeSet<Selector>,
+) -> Result<BTreeSet<Selector>, ConfigError> {
+    let mut unique = BTreeSet::new();
+    for label in labels {
+        let selector = resolve(label, location)?;
+        if !unique.insert(selector) {
+            duplicates.insert(selector);
+        }
+    }
+    Ok(unique)
 }
 
 fn resolve_all(
@@ -806,6 +829,7 @@ mod tests {
         let plan = Plan {
             select: select.map(|selectors| selectors.into_iter().collect()),
             ignore: ignore.iter().copied().collect(),
+            duplicates: BTreeSet::new(),
         };
         assert_eq!(plan.decide(&rule).to_string(), expected);
     }
@@ -818,6 +842,14 @@ mod tests {
     #[case::already_ignored(
         r#"ignore = ["testing", "test-timing"]"#,
         &["`test-timing` in `ignore` changes no rule's outcome; remove it"]
+    )]
+    #[case::duplicate_in_select(
+        r#"select = ["testing", "testing"]"#,
+        &["`testing` in `select` changes no rule's outcome; remove it"]
+    )]
+    #[case::synonym_duplicate_in_ignore(
+        r#"ignore = ["jj", "jujutsu"]"#,
+        &["`jj` in `ignore` changes no rule's outcome; remove it"]
     )]
     #[case::an_exception(
         indoc::indoc! {r#"
