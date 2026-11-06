@@ -10,6 +10,13 @@ Run the narrowest checks that cover what you changed.
   - Single-build branch coverage across the library: `cargo +nightly llvm-cov --lib --branch`.
 - When testing that a rule is suppressed by configuration (`ignore`, `per-file-ignores`) or an inline directive, use a fixture that triggers the rule when unsuppressed (avoid identifiers in a rule's default allowlist such as `x`, `i`, `j`, `f` in `single-letter-name`) and pair the check with an unignored positive control.
 
+## Build Directories
+
+`/tmp` is a RAM-backed tmpfs shared with every other tool on the machine, so total build output there must stay bounded even when cleanup is skipped (for example, when a run is killed).
+
+- Use the default `target/`, or reuse `/tmp/omni_target` when a separate target directory is needed (for example, to avoid waiting on another build's lock). For concurrent builds, reuse `/tmp/omni_target_1` and `/tmp/omni_target_2`; never create a new target directory per task or topic.
+- `cargo mutants` copies the tree into `/tmp/cargo-mutants-*-*.tmp` and deletes it only on a clean exit. Before starting a run, delete any leftover copies, and only once no other `cargo mutants` run is active.
+
 ## Fixing Lint Findings
 
 - Fix a finding by applying its `Suggestion`, not by reshaping the code until it falls under the rule's threshold or outside its pattern (for example, trimming a trailing `\n` so a literal has fewer escaped newlines). Such edits keep the problem the rule targets and only hide it from the linter.

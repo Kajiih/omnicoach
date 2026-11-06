@@ -149,7 +149,7 @@ Candidates and known-gap follow-ups to prioritize, not commitments. Evaluated ca
 - **`abbreviated-name` follow-ups** (Python, Rust):
   - *Positional / boundary matching (`c_` vs `_c`)*: allow entries with a trailing underscore (e.g. `c_`) to match only prefix/infix segments (`c_val`, `foo_c_bar`) while allowing suffix (`foo_c` / `FooC`), and entries with a leading underscore (e.g. `_c`) to match only suffix/infix segments while allowing prefix (`c_val` / `CVal`).
   - *Acronym-to-word CamelCase splitting in `split_segments`*: split uppercase-to-uppercase-followed-by-lowercase transitions (e.g. `DBConnection` → `["db", "connection"]`, `HTTPRequest` → `["http", "request"]`); currently `split_segments` only splits on lowercase/digit → uppercase.
-  - *Default banned abbreviations*: evaluate adding `"db"`, `"mgr"`, `"util"`, `"conn"` to `abbreviated-name`'s default list.
+  - *Default banned abbreviations*: evaluate adding `"db"`, `"mgr"`, `"util"`, `"conn"`, `"expr"` to `abbreviated-name`'s default list.
 - **`jj` history & parallel multi-workspace safety rules (`command_lint` + `hook`)**:
   - *Block file edits when `@` is a described, non-conflicted commit*: when a file-write tool runs in `omnicoach hook` and `@` already has a non-empty description (and no conflicts), deny the edit so the agent creates a new draft change (`jj new`) instead of mutating committed history.
   - *Parallel `jj` workspace safety rules* (sharing read-only revset `(<set>) & mutable() & ::(working_copies() ~ @)` run with `--ignore-working-copy`):
