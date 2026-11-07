@@ -154,6 +154,8 @@ define_architecture! {
     // --- Test Harness & Entrypoints ---
     /// The `rule_test!` harness and snapshot fixtures (`test_utils`).
     TestUtils           => [CodeLintContract, CodeLintProject, CodeLintPolicy, CommandLintContract],
+    /// Command-line argument parsing, dispatch, and BrokenPipe-safe output (`cli`).
+    Cli                 => [CodeLintRunner, CodeLintGraph, CommandLintRunner, Config, Diagnostic, Hook, RuleSelection, RuleCatalog],
     /// CLI entrypoints (`bin::*`).
-    Bin                 => [CodeLintRunner, CodeLintGraph, CommandLintRunner, Hook, RuleSelection, RuleCatalog],
+    Bin                 => [Cli],
 }

@@ -20,6 +20,7 @@ macro_rules! architecture_component {
 }
 
 pub mod architecture;
+pub mod cli;
 pub mod code_lint;
 pub mod command_lint;
 pub mod config;

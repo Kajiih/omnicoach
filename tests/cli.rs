@@ -929,6 +929,27 @@ fn test_subdirectory_invocation_discovers_ancestor_config_and_anchors_globs() {
     );
 }
 
+#[test]
+fn test_in_process_run_from_args_public_entrypoint() {
+    let temp_dir = create_temp_file("sample.py", "k = 1\n");
+    let config_path = temp_dir.path().join(".omnicoach.toml");
+    fs::write(&config_path, "").unwrap();
+    let file_path = temp_dir.path().join("sample.py");
+
+    assert_eq!(
+        omnicoach::cli::run_from_args([
+            "omnicoach",
+            "code",
+            "--config",
+            config_path.to_str().unwrap(),
+            "--select",
+            "single-letter-name",
+            file_path.to_str().unwrap(),
+        ]),
+        omnicoach::cli::EXIT_VIOLATIONS
+    );
+}
+
 #[rstest::rstest]
 #[case::help(&["--help"])]
 #[case::list_rules(&["--list-rules"])]
