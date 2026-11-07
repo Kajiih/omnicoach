@@ -60,6 +60,8 @@ pub struct PythonBaseSummary {
 pub struct PythonClassSummary {
     /// Class identifier.
     pub name: String,
+    /// Byte span of the class name, identifying the class among same-named classes of its file.
+    pub name_span: SourceSpan,
     /// Direct base class expressions in declaration order.
     pub bases: Vec<PythonBaseSummary>,
     /// True if a direct base resolves to `typing.Protocol` or `typing_extensions.Protocol`.
@@ -319,6 +321,7 @@ fn summarize_class(
         .collect();
     PythonClassSummary {
         name: info.name.clone(),
+        name_span: info.name_node.span(),
         bases,
         is_protocol: info.is_protocol(),
         is_abc: info.is_abc(),

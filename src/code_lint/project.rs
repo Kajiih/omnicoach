@@ -1,8 +1,9 @@
-//! Project layout, source abstraction, and architectural DAG conformance (`CodeLintProject`).
+//! Project layout, module header index, cross-module symbol/MRO resolution, and architectural conformance.
 
 architecture_component!(CodeLintProject);
 
 mod architecture;
+mod index;
 mod layout;
 mod source;
 
@@ -12,8 +13,11 @@ pub use self::architecture::{
     InvalidArchitectureComponentKind, PrivateComponentImportFinding,
     SiblingModuleDependencyFinding, UndeclaredComponentDependencyFinding,
     UnmappedArchitectureModuleFinding, UnownedExternalDependencyFinding,
-    evaluate_file_architecture, evaluate_file_architecture_with_summary,
-    evaluate_stray_rust_component_markers, resolve_architecture_spec,
+    evaluate_file_architecture, resolve_architecture_spec,
+};
+pub use self::index::{
+    ImportedProtocolSummary, InheritedDocstringMatch, ProjectIndex, PythonClassId,
+    ResolvedClassAncestors, ResolvedPythonTarget,
 };
 pub use self::layout::{
     InheritedComponent, PathOrigin, ProjectLayout, ROOT_MODULE_TAG, ResolvedPath,
