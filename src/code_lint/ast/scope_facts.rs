@@ -126,9 +126,10 @@ fn scope_facts(scope: &DeclarationScope<'_>) -> ScopeFacts {
         })
         .collect();
     for finding in scope_findings(scope, &graph) {
+        let related = finding.related_name(scope);
         item_facts[finding.item].findings.push(FindingFact {
             rule: finding.rule,
-            related: items[finding.related].name.clone(),
+            related,
             reason: finding.reason,
             anchor: finding.anchor,
         });

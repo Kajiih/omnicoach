@@ -215,6 +215,19 @@ pub enum CallClusterRule {
     CalleeBeforeCaller,
 }
 
+impl CallClusterRule {
+    /// Preposition connecting the moved item to its anchor item (`after` or `before`).
+    #[must_use]
+    pub const fn anchor_preposition(self) -> &'static str {
+        match self {
+            Self::ConstructorAfterMethod => "before",
+            Self::PrivateBeforePublic | Self::UncolocatedHelper | Self::CalleeBeforeCaller => {
+                "after"
+            }
+        }
+    }
+}
+
 /// A misplaced declaration reported by a call-cluster placement rule.
 pub struct CallOrderFinding<'a> {
     /// Identifier AST node of the misplaced declaration.
@@ -252,6 +265,22 @@ pub(super) struct ScopeFinding {
     pub(super) reason: Option<OrderingReason>,
 }
 
+impl ScopeFinding {
+    /// Name of the declaration the finding relates to: the enclosing type for
+    /// `constructor-after-method`, the related sibling item otherwise.
+    #[must_use]
+    pub(super) fn related_name(&self, scope: &DeclarationScope<'_>) -> String {
+        match (self.rule, &scope.kind) {
+            (
+                CallClusterRule::ConstructorAfterMethod,
+                DeclarationScopeKind::Class { name }
+                | DeclarationScopeKind::Impl { type_name: name },
+            ) => name.clone(),
+            _ => scope.items[self.related].name.clone(),
+        }
+    }
+}
+
 /// Computes and memoizes the call-cluster placement findings across all module and class/`impl`
 /// scopes in `file`, and returns those of `rule`.
 #[must_use]
@@ -265,14 +294,7 @@ pub fn collect_call_cluster_findings(
             let graph = ScopeGraph::new(&scope.items);
             for finding in scope_findings(&scope, &graph) {
                 let item = &scope.items[finding.item];
-                let related = match (finding.rule, &scope.kind) {
-                    (
-                        CallClusterRule::ConstructorAfterMethod,
-                        DeclarationScopeKind::Class { name }
-                        | DeclarationScopeKind::Impl { type_name: name },
-                    ) => name.clone(),
-                    _ => scope.items[finding.related].name.clone(),
-                };
+                let related = finding.related_name(&scope);
                 out.push(CachedCallOrderFinding {
                     rule: finding.rule,
                     span: item.name_node.span(),
