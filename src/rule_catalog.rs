@@ -4,7 +4,7 @@ architecture_component!(RuleCatalog);
 
 use strum::IntoEnumIterator as _;
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, Language};
 use crate::rule_declaration::{
     Consensus, DeclaredExamples, DeclaredOptions, EnforcementMode, FilterListDefaults,
     LanguageDefaults, OptionSpec, Precision,
@@ -13,6 +13,7 @@ use crate::rule_selection::{
     ConfigError, ConfigOverrides, Facet, RegisteredRule, RuleStatus, UnknownLabel, find_rule,
     load_rule_status, registered_rules, registered_topics, rule_status, rules_tagged,
 };
+use std::path::Path;
 
 /// Why a discovery request failed. The message is what the user sees.
 #[derive(Debug, thiserror::Error)]
@@ -283,32 +284,74 @@ fn example_lines(examples: DeclaredExamples) -> Vec<String> {
         return Vec::new();
     }
     let mut lines = vec!["## Example".to_owned(), String::new()];
-    let example_blocks: Vec<(&str, &str, &str)> = match examples {
-        DeclaredExamples::Code(items) => items
-            .iter()
-            .map(|example| (example.language.as_str(), example.flagged, example.fixed))
-            .collect(),
-        DeclaredExamples::Command(items) => items
-            .iter()
-            .map(|example| ("sh", example.flagged, example.fixed))
-            .collect(),
-    };
-    for (fence_lang, flagged, fixed) in example_blocks {
-        let fence = format!("```{fence_lang}");
-        lines.extend([
-            fence.clone(),
-            flagged.trim_end().to_owned(),
-            "```".to_owned(),
-            String::new(),
-            "Use instead:".to_owned(),
-            String::new(),
-            fence,
-            fixed.trim_end().to_owned(),
-            "```".to_owned(),
-            String::new(),
-        ]);
+    match examples {
+        DeclaredExamples::Code(items) => {
+            for example in items {
+                lines.extend(single_example_block(
+                    example.language.as_str(),
+                    example.flagged,
+                    example.fixed,
+                ));
+            }
+        }
+        DeclaredExamples::Command(items) => {
+            for example in items {
+                lines.extend(single_example_block("sh", example.flagged, example.fixed));
+            }
+        }
+        DeclaredExamples::Project(items) => {
+            const TOML_FENCE: &str = "toml";
+            for example in items {
+                for &(context_path, context_source) in example.context {
+                    let path_obj = Path::new(context_path);
+                    let context_fence = Language::from_path(path_obj).map_or_else(
+                        || {
+                            if path_obj
+                                .extension()
+                                .is_some_and(|extension| extension == TOML_FENCE)
+                            {
+                                TOML_FENCE
+                            } else {
+                                "text"
+                            }
+                        },
+                        Language::as_str,
+                    );
+                    lines.extend([
+                        format!("Given `{context_path}`:"),
+                        String::new(),
+                        format!("```{context_fence}"),
+                        context_source.trim_end().to_owned(),
+                        "```".to_owned(),
+                        String::new(),
+                    ]);
+                }
+                lines.extend([format!("In `{}`:", example.path), String::new()]);
+                lines.extend(single_example_block(
+                    example.language.as_str(),
+                    example.flagged,
+                    example.fixed,
+                ));
+            }
+        }
     }
     lines
+}
+
+fn single_example_block(fence_language: &str, flagged: &str, fixed: &str) -> [String; 10] {
+    let fence = format!("```{fence_language}");
+    [
+        fence.clone(),
+        flagged.trim_end().to_owned(),
+        "```".to_owned(),
+        String::new(),
+        "Use instead:".to_owned(),
+        String::new(),
+        fence,
+        fixed.trim_end().to_owned(),
+        "```".to_owned(),
+        String::new(),
+    ]
 }
 
 /// One bullet per accepted key: its type, default and meaning, as declared by the rule.
@@ -537,7 +580,7 @@ mod tests {
     }
 
     type ResolvedLanguageOptions = (
-        crate::diagnostic::Language,
+        Language,
         EnforcementMode,
         Vec<usize>,
         Vec<std::collections::BTreeSet<String>>,
@@ -644,9 +687,10 @@ mod tests {
     #[rstest]
     #[case::empty_code(DeclaredExamples::Code(&[]), "")]
     #[case::empty_command(DeclaredExamples::Command(&[]), "")]
+    #[case::empty_project(DeclaredExamples::Project(&[]), "")]
     #[case::code_example(
         DeclaredExamples::Code(&[crate::rule_declaration::Example {
-            language: crate::diagnostic::Language::Python,
+            language: Language::Python,
             flagged: "time.sleep(1)\n",
             flagged_span: "time.sleep(1)",
             fixed: "clock.advance(1)\n",
@@ -682,6 +726,37 @@ mod tests {
 
             ```sh
             jj new kpqxywon
+            ```
+        "}
+    )]
+    #[case::project_example(
+        DeclaredExamples::Project(&[crate::rule_declaration::ProjectExample {
+            language: Language::Python,
+            context: &[("pkg/interfaces.py", "class Store(Protocol): ...\n")],
+            path: "pkg/service.py",
+            flagged: "class MemoryStore: ...\n",
+            flagged_span: "MemoryStore",
+            fixed: "class MemoryStore(Store): ...\n",
+        }]),
+        indoc::indoc! {"
+            ## Example
+
+            Given `pkg/interfaces.py`:
+
+            ```python
+            class Store(Protocol): ...
+            ```
+
+            In `pkg/service.py`:
+
+            ```python
+            class MemoryStore: ...
+            ```
+
+            Use instead:
+
+            ```python
+            class MemoryStore(Store): ...
             ```
         "}
     )]

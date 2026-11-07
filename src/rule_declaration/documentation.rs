@@ -49,6 +49,28 @@ pub struct Example {
     pub fixed: &'static str,
 }
 
+/// A multi-file example for a project-aware code rule (`ProjectCodeRule`).
+///
+/// `context` holds sibling files (`(relative_path, source)`) present in the project alongside
+/// `path`; `flagged` and `fixed` are the before/after contents of `path`. `rule_test!` checks
+/// `context + (path, flagged)` as a `fail` case targeting `path` and `flagged_span`, and
+/// `context + (path, fixed)` as a `pass` case across the whole project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectExample {
+    /// The language of the analyzed target file `path`.
+    pub language: Language,
+    /// Supporting project files `(relative_path, content)` available during analysis.
+    pub context: &'static [(&'static str, &'static str)],
+    /// Relative path of the target file being linted (for example `"pkg/service.py"`).
+    pub path: &'static str,
+    /// Contents of `path` that the rule flags once.
+    pub flagged: &'static str,
+    /// Sub-slice of `flagged` spanned by the diagnostic; not rendered.
+    pub flagged_span: &'static str,
+    /// Rewritten contents of `path` that satisfy the rule with zero findings.
+    pub fixed: &'static str,
+}
+
 /// A flagged shell command and its replacement for a command rule.
 ///
 /// Executed by `command_rule_test!` and rendered by `--explain` under `## Example` with
@@ -67,8 +89,10 @@ pub struct CommandExample {
 /// [`crate::rule_selection::RegisteredRule`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclaredExamples {
-    /// Language-tagged source-code examples declared by a code rule or suppression audit.
+    /// Language-tagged source-code examples declared by a single-file code rule or suppression audit.
     Code(&'static [Example]),
+    /// Multi-file project examples declared by a project-aware code rule.
+    Project(&'static [ProjectExample]),
     /// Shell command examples declared by a command rule.
     Command(&'static [CommandExample]),
 }
@@ -79,6 +103,7 @@ impl DeclaredExamples {
     pub const fn is_empty(self) -> bool {
         match self {
             Self::Code(examples) => examples.is_empty(),
+            Self::Project(examples) => examples.is_empty(),
             Self::Command(examples) => examples.is_empty(),
         }
     }
@@ -87,6 +112,12 @@ impl DeclaredExamples {
 impl From<&'static [Example]> for DeclaredExamples {
     fn from(examples: &'static [Example]) -> Self {
         Self::Code(examples)
+    }
+}
+
+impl From<&'static [ProjectExample]> for DeclaredExamples {
+    fn from(examples: &'static [ProjectExample]) -> Self {
+        Self::Project(examples)
     }
 }
 

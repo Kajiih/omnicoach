@@ -11,7 +11,9 @@ mod documentation;
 mod options;
 mod taxonomy;
 
-pub use self::documentation::{CommandExample, DeclaredExamples, Example, Reference, RuleDoc};
+pub use self::documentation::{
+    CommandExample, DeclaredExamples, Example, ProjectExample, Reference, RuleDoc,
+};
 pub(crate) use self::options::rule_options;
 pub use self::options::{
     CountOption, DeclaredOptions, EnforcementMode, FilterListDefaults, LanguageDefaults, ListKind,
