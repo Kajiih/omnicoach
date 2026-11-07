@@ -624,4 +624,130 @@ mod tests {
         assert!(warning.contains("Suggestion: Suggestion fix."));
         assert!(warning.contains("Or: Comment hint."));
     }
+
+    #[test]
+    fn evaluate_pre_tool_use_handles_cross_file_spillover_and_suppresses_legacy_cross_file_debt() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let pkg_dir = temp_dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            temp_dir.path().join("pyproject.toml"),
+            "[project]\nname = \"demo\"\n",
+        )
+        .unwrap();
+        std::fs::write(pkg_dir.join("__init__.py"), "").unwrap();
+        std::fs::write(
+            pkg_dir.join("interfaces.py"),
+            indoc::indoc! {r"
+                from typing import Protocol
+
+                class Store(Protocol):
+                    def load(self, key: str) -> str: ...
+                    def save(self, key: str, value: str) -> None: ...
+
+                class Codec(Protocol):
+                    def encode(self, item: str) -> bytes: ...
+                    def decode(self, payload: bytes) -> str: ...
+            "},
+        )
+        .unwrap();
+
+        let service_path = pkg_dir.join("service.py");
+        let initial_service = indoc::indoc! {r"
+            from .interfaces import Codec
+
+            class LegacyCodec:
+                def encode(self, item: str) -> bytes:
+                    return item.encode()
+
+                def decode(self, payload: bytes) -> str:
+                    return payload.decode()
+
+            class MemoryStore:
+                def load(self, key: str) -> str:
+                    return key
+
+                def save(self, key: str, value: str) -> None:
+                    pass
+        "};
+        std::fs::write(&service_path, initial_service).unwrap();
+
+        let edited_service = initial_service.replacen(
+            "from .interfaces import Codec",
+            "from .interfaces import Codec, Store",
+            1,
+        );
+        let event = PreToolUseEvent {
+            workspace_paths: vec![temp_dir.path().to_path_buf()],
+            agent_owned_dir: None,
+            payload: ToolCallPayload::FileEdit {
+                path: service_path,
+                edit: FileEdit::Overwrite(edited_service),
+            },
+        };
+        let outcome = evaluate_pre_tool_use(&event);
+
+        assert_eq!(
+            outcome.warnings.len(),
+            1,
+            "warnings: {:?}",
+            outcome.warnings
+        );
+        assert!(outcome.warnings[0].contains("[uninherited-protocol]"));
+        assert!(outcome.warnings[0].contains("MemoryStore"));
+        assert!(!outcome.warnings[0].contains("LegacyCodec"));
+    }
+
+    #[test]
+    fn evaluate_pre_tool_use_fails_open_when_architecture_declarations_conflict() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+        std::fs::write(
+            root.join(".omnicoach.toml"),
+            indoc::indoc! {r#"
+                [[architecture.components]]
+                name = "Core"
+                roots = ["core"]
+            "#},
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/lib.rs"),
+            indoc::indoc! {r"
+                mod architecture;
+                mod core;
+            "},
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/architecture.rs"),
+            indoc::indoc! {r"
+                define_architecture! {
+                    Core => [],
+                }
+            "},
+        )
+        .unwrap();
+        let event = PreToolUseEvent {
+            workspace_paths: vec![root.to_path_buf()],
+            agent_owned_dir: None,
+            payload: ToolCallPayload::FileEdit {
+                path: root.join("src/core.rs"),
+                edit: FileEdit::Overwrite(
+                    indoc::indoc! {r"
+                        pub fn compute() -> i32 {
+                            let err = 1;
+                            err
+                        }
+                    "}
+                    .to_owned(),
+                ),
+            },
+        };
+        let outcome = evaluate_pre_tool_use(&event);
+
+        assert_eq!(outcome.warnings, Vec::<String>::new());
+    }
 }

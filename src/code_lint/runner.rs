@@ -1017,6 +1017,11 @@ mod tests {
         "def test_ok(): assert True  # omni:ignore [nested-function] -- source-only rule",
         Config::default()
     )]
+    #[case::project_rule_without_project_context(
+        "src/service.py",
+        "class MemoryStore: pass  # omni:ignore [uninherited-protocol] -- cross-file rule skipped in isolated buffer",
+        config_enabling(&["uninherited-protocol"])
+    )]
     fn test_unused_suppression_skips_unevaluated_rules(
         #[case] path: &str,
         #[case] content: &str,
@@ -1026,6 +1031,349 @@ mod tests {
         assert!(
             diags.is_empty(),
             "Expected unevaluated rule suppression not to be flagged as unused, got: {diags:?}"
+        );
+    }
+
+    fn write_protocol_project(root: &Path) -> PathBuf {
+        let pkg = root.join("pkg");
+        fs::create_dir_all(&pkg).expect("create pkg");
+        fs::write(root.join("pyproject.toml"), "[project]\nname = 'demo'\n")
+            .expect("write pyproject");
+        fs::write(
+            pkg.join("interfaces.py"),
+            indoc::indoc! {r"
+                from typing import Protocol
+
+                class Store(Protocol):
+                    def load(self, key: str) -> str: ...
+                    def save(self, key: str, value: str) -> None: ...
+            "},
+        )
+        .expect("write interfaces");
+        let service_path = pkg.join("service.py");
+        fs::write(
+            &service_path,
+            indoc::indoc! {r"
+                from .interfaces import Store
+
+                class MemoryStore:
+                    def load(self, key: str) -> str:
+                        return key
+                    def save(self, key: str, value: str) -> None:
+                        pass
+            "},
+        )
+        .expect("write service");
+        service_path
+    }
+
+    #[test]
+    fn test_run_code_lint_evaluates_project_rule_on_disk() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service_path = write_protocol_project(temp.path());
+        let config = config_enabling(&["uninherited-protocol"]);
+        let report = run_code_lint(
+            &LintOptions {
+                paths: vec![service_path],
+                ..LintOptions::default()
+            },
+            &config,
+        )
+        .expect("run_code_lint");
+
+        assert_eq!(report.diagnostics.len(), 1);
+        assert_eq!(report.diagnostics[0].rule_name.0, "uninherited-protocol");
+        assert_eq!(report.diagnostics[0].location.line, 3);
+    }
+
+    #[test]
+    fn test_lint_virtual_file_evaluates_project_rule_over_disk_project() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service_path = write_protocol_project(temp.path());
+        fs::write(&service_path, "# disk version is empty\n").expect("overwrite service");
+        let config = config_enabling(&["uninherited-protocol"]);
+        let virtual_content = indoc::indoc! {r"
+            from .interfaces import Store
+
+            class MemoryStore:
+                def load(self, key: str) -> str:
+                    return key
+                def save(self, key: str, value: str) -> None:
+                    pass
+        "};
+
+        let diagnostics = lint_virtual_file(temp.path(), &service_path, virtual_content, &config)
+            .expect("project without architecture declarations lints");
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].rule_name.0, "uninherited-protocol");
+        assert_eq!(diagnostics[0].location.line, 3);
+    }
+
+    #[rstest]
+    #[case::changed_class_line(3, 1)]
+    #[case::unchanged_body_line(5, 0)]
+    fn test_lint_single_file_filters_project_rule_by_changed_lines(
+        #[case] changed_line: usize,
+        #[case] expected_count: usize,
+    ) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service_path = write_protocol_project(temp.path());
+        let config = config_enabling(&["uninherited-protocol"]);
+        let disk = DiskFileSource;
+        let layout = ProjectLayout::discover(&service_path, &disk, &[]);
+        let index = ProjectIndex::new(layout, &disk);
+        let context = ProjectContext::new(&index);
+
+        let diagnostics = lint_single_file(
+            &service_path,
+            &config,
+            Some(&index),
+            Some(&context),
+            Some(&HashSet::from([changed_line])),
+        )
+        .expect("lint single file");
+
+        assert_eq!(diagnostics.len(), expected_count);
+    }
+
+    #[test]
+    fn test_run_code_lint_supports_multiple_project_roots_and_later_class_shadowing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let proj_a = temp.path().join("proj_a");
+        let proj_b = temp.path().join("proj_b");
+        let _ = write_protocol_project(&proj_a);
+        let service_b = write_protocol_project(&proj_b);
+        fs::write(
+            &service_b,
+            indoc::indoc! {r"
+                from .interfaces import Store
+
+                class MemoryStore:
+                    def load(self, key: str) -> str:
+                        return key
+                    def save(self, key: str, value: str) -> None:
+                        pass
+
+                class Store:
+                    pass
+            "},
+        )
+        .expect("write service_b with later Store class");
+
+        let config = config_enabling(&["uninherited-protocol"]);
+        let report = run_code_lint(
+            &LintOptions {
+                paths: vec![proj_a, proj_b],
+                ..LintOptions::default()
+            },
+            &config,
+        )
+        .expect("run_code_lint across two projects");
+
+        assert_eq!(report.diagnostics.len(), 2);
+    }
+
+    #[test]
+    fn test_run_code_lint_surfaces_conflicting_architecture_declarations_error() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let src = temp.path().join("src");
+        fs::create_dir_all(&src).expect("create src");
+        fs::write(
+            temp.path().join("Cargo.toml"),
+            indoc::indoc! {r#"
+                [package]
+                name = "demo"
+                version = "0.1.0"
+            "#},
+        )
+        .expect("write Cargo.toml");
+        fs::write(
+            temp.path().join(".omnicoach.toml"),
+            indoc::indoc! {r#"
+                [[architecture.components]]
+                name = "Core"
+                roots = ["core"]
+            "#},
+        )
+        .expect("write .omnicoach.toml");
+        fs::write(src.join("lib.rs"), "mod architecture;\n").expect("write lib.rs");
+        let architecture_file = src.join("architecture.rs");
+        fs::write(
+            &architecture_file,
+            indoc::indoc! {r"
+                define_architecture! {
+                    Core => [],
+                }
+            "},
+        )
+        .expect("write architecture.rs");
+
+        let config = config_enabling(&["undeclared-component-dependency"]);
+        let error = run_code_lint(
+            &LintOptions {
+                paths: vec![architecture_file],
+                ..LintOptions::default()
+            },
+            &config,
+        )
+        .expect_err("conflicting TOML and macro architecture declarations must error");
+        assert!(
+            error
+                .to_string()
+                .contains("conflicting architecture declarations"),
+            "unexpected error message: {error}"
+        );
+    }
+    #[test]
+    fn test_run_code_lint_isolates_nested_subproject_root_from_outer_project() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let outer = temp.path();
+        fs::write(outer.join(".omnicoach.toml"), "").expect("write outer marker");
+        let _ = write_protocol_project(outer);
+
+        let nested = outer.join("services").join("nested");
+        fs::create_dir_all(&nested).expect("create nested dir");
+        fs::write(nested.join(".omnicoach.toml"), "").expect("write nested marker");
+        let _ = write_protocol_project(&nested);
+
+        let config = config_enabling(&["uninherited-protocol"]);
+        let report = run_code_lint(
+            &LintOptions {
+                paths: vec![outer.to_path_buf()],
+                ..LintOptions::default()
+            },
+            &config,
+        )
+        .expect("run_code_lint with nested subproject");
+
+        assert_eq!(report.diagnostics.len(), 2);
+    }
+
+    #[test]
+    fn test_lint_virtual_file_honors_per_file_ignores_for_absolute_target_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service_path = write_protocol_project(temp.path());
+        let virtual_content = fs::read_to_string(&service_path).expect("read service.py");
+        let mut config = config_enabling(&["uninherited-protocol"]);
+        config.per_file_ignores = vec![(
+            crate::config::compile_glob("pkg/**")
+                .expect("valid glob")
+                .compile_matcher(),
+            HashSet::from([RuleName("uninherited-protocol")]),
+        )];
+
+        let diagnostics = lint_virtual_file(temp.path(), &service_path, &virtual_content, &config)
+            .expect("project without architecture declarations lints");
+        assert_eq!(diagnostics, Vec::new());
+    }
+
+    #[test]
+    fn test_run_code_lint_merges_python_source_roots_of_targets_in_one_project() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        fs::write(root.join(".omnicoach.toml"), "").expect("write root marker");
+        let alpha_pkg = root.join("alpha").join("src").join("alpha_pkg");
+        fs::create_dir_all(&alpha_pkg).expect("create alpha/src/alpha_pkg");
+        fs::write(alpha_pkg.join("__init__.py"), "").expect("write __init__.py");
+        let alpha_py = alpha_pkg.join("values.py");
+        fs::write(&alpha_py, "VALUE = 1\n").expect("write values.py");
+        let service_pkg = root.join("service").join("src").join("service_pkg");
+        fs::create_dir_all(&service_pkg).expect("create service/src/service_pkg");
+        fs::write(service_pkg.join("__init__.py"), "").expect("write __init__.py");
+        fs::write(
+            service_pkg.join("store.py"),
+            indoc::indoc! {r"
+                from typing import Protocol
+
+                class Store(Protocol):
+                    def load(self, key: str) -> str: ...
+                    def save(self, key: str, value: str) -> None: ...
+            "},
+        )
+        .expect("write store.py");
+        let service_py = service_pkg.join("memory.py");
+        fs::write(
+            &service_py,
+            indoc::indoc! {r"
+                from service_pkg.store import Store
+
+                class MemoryStore:
+                    def load(self, key: str) -> str:
+                        return key
+                    def save(self, key: str, value: str) -> None:
+                        pass
+            "},
+        )
+        .expect("write memory.py");
+
+        let config = config_enabling(&["uninherited-protocol"]);
+        let report = run_code_lint(
+            &LintOptions {
+                paths: vec![alpha_py, service_py],
+                ..LintOptions::default()
+            },
+            &config,
+        )
+        .expect("run_code_lint across two source roots of one project");
+
+        assert_eq!(report.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn test_run_code_lint_applies_root_architecture_config_to_sub_package() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        let app = root.join("packages").join("app");
+        let app_src = app.join("src").join("app");
+        fs::create_dir_all(app_src.join("core")).expect("create app/core");
+        fs::create_dir_all(app_src.join("api")).expect("create app/api");
+        fs::write(app.join("pyproject.toml"), "[project]\nname = \"app\"\n")
+            .expect("write sub-package pyproject.toml");
+        fs::write(app_src.join("__init__.py"), "").expect("write app/__init__.py");
+        fs::write(app_src.join("core/__init__.py"), "").expect("write core/__init__.py");
+        fs::write(app_src.join("api/__init__.py"), "").expect("write api/__init__.py");
+        fs::write(
+            app_src.join("api/handler.py"),
+            "def handle() -> None: ...\n",
+        )
+        .expect("write handler.py");
+        let engine_py = app_src.join("core/engine.py");
+        fs::write(&engine_py, "from app.api.handler import handle\n").expect("write engine.py");
+        let mut config = config_enabling(&["undeclared-component-dependency"]);
+        config.root_dir = Some(root.to_path_buf());
+        config.architecture = Some(
+            toml::from_str(indoc::indoc! {r#"
+                source-roots = ["packages/app/src"]
+
+                [[components]]
+                name = "Core"
+                roots = ["app.core"]
+
+                [[components]]
+                name = "Api"
+                roots = ["app.api"]
+                depends-on = ["Core"]
+            "#})
+            .expect("valid architecture config"),
+        );
+
+        let report = run_code_lint(
+            &LintOptions {
+                paths: vec![engine_py],
+                ..LintOptions::default()
+            },
+            &config,
+        )
+        .expect("run_code_lint on a sub-package under the configuration root");
+
+        assert_eq!(
+            report
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.rule_name.0)
+                .collect::<Vec<_>>(),
+            ["undeclared-component-dependency"]
         );
     }
 }
