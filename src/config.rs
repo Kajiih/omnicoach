@@ -13,13 +13,8 @@ use crate::rule_declaration::RuleOverrides;
 /// The default configuration file name.
 pub const CONFIG_FILE_NAME: &str = ".omnicoach.toml";
 
-const DEFAULT_TEST_PATTERNS: &[&str] = &[
-    "**/tests/**",
-    "**/test_*.py",
-    "**/*_test.py",
-    "**/*_test.rs",
-    "**/tests.rs",
-];
+const DEFAULT_TEST_PATTERNS: &[&str] =
+    &["**/tests/**", "**/test_*.py", "**/*_test.py", "**/tests.rs"];
 
 /// Configuration settings for path context detection (e.g. test paths).
 #[derive(Deserialize, Debug, Clone)]
@@ -197,9 +192,9 @@ mod tests {
     #[case("test_calculator.py", true)]
     #[case("foo/test_calculator.py", true)]
     #[case("foo/calculator_test.py", true)]
-    #[case("src/foo_test.rs", true)]
     #[case("src/tests.rs", true)]
     #[case("src/main.rs", false)]
+    #[case("src/code_lint/rules/multi_phase_test.rs", false)]
     #[case("src/calculator.py", false)]
     fn test_context_test_path_detection(#[case] path: &str, #[case] expected: bool) {
         let config = Config::default();
