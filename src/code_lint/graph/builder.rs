@@ -8,8 +8,8 @@ use super::model::{
 };
 use super::project_facts::{ModuleFact, ProjectFacts};
 use crate::code_lint::ast::{
-    DeclarationScopeKind, ItemFacts, RelationKind, ScopeFacts, ScopeItemKind, Visibility, levels,
-    strongly_connected_components,
+    DeclarationScopeKind, IntraFileReference, ItemFacts, RelationKind, ScopeFacts, ScopeItemKind,
+    Visibility, levels, strongly_connected_components,
 };
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
@@ -138,7 +138,12 @@ fn extract_public_surface_module(
     if module_fact.scopes.is_empty() {
         return Ok(Vec::new());
     }
-    let module_graph = build_scope_graph(Path::new(&module_fact.path), &module_fact.scopes, 0)?;
+    let module_graph = build_scope_graph(
+        Path::new(&module_fact.path),
+        &module_fact.scopes,
+        &module_fact.intra_file_refs,
+        0,
+    )?;
     let prefix = format!("m{module_idx}:");
     let scope_offset = (module_idx + 1) * MODULE_SCOPE_ID_STRIDE;
 
@@ -178,19 +183,17 @@ fn extract_public_surface_module(
         })
         .collect();
 
-    let mut mod_ordering = Vec::new();
-    for edge in module_graph.ordering_edges() {
-        if let (Some(higher), Some(lower)) = (
-            kept_old_to_new.get(&edge.higher),
-            kept_old_to_new.get(&edge.lower),
-        ) {
-            mod_ordering.push(OrderingEdge {
-                higher: higher.clone(),
-                lower: lower.clone(),
+    let mut mod_ordering: Vec<OrderingEdge> = module_graph
+        .ordering_edges()
+        .iter()
+        .filter_map(|edge| {
+            Some(OrderingEdge {
+                higher: kept_old_to_new.get(&edge.higher)?.clone(),
+                lower: kept_old_to_new.get(&edge.lower)?.clone(),
                 reason: edge.reason,
-            });
-        }
-    }
+            })
+        })
+        .collect();
     for summary in module_graph.summary_edges() {
         if let (Some(&higher_root), Some(&lower_root)) = (
             owner_root_by_group.get(&summary.higher),
@@ -210,18 +213,14 @@ fn extract_public_surface_module(
             }
         }
     }
-    for edge in module_graph.reference_edges() {
-        if let (Some(source), Some(target)) = (
-            kept_old_to_new.get(&edge.source),
-            kept_old_to_new.get(&edge.target),
-        ) {
-            acc.reference_edges.push(ReferenceEdge {
-                source: source.clone(),
-                target: target.clone(),
+    acc.reference_edges
+        .extend(module_graph.reference_edges().iter().filter_map(|edge| {
+            Some(ReferenceEdge {
+                source: kept_old_to_new.get(&edge.source)?.clone(),
+                target: kept_old_to_new.get(&edge.target)?.clone(),
                 kind: edge.kind,
-            });
-        }
-    }
+            })
+        }));
 
     let pub_ids: Vec<NodeId> = pub_decls.iter().map(|decl| decl.id.clone()).collect();
     let pairs: Vec<(NodeId, NodeId)> = mod_ordering
@@ -247,18 +246,21 @@ fn extract_full_module(
     if module_fact.scopes.is_empty() {
         return Ok(Vec::new());
     }
-    let module_graph = build_scope_graph(Path::new(&module_fact.path), &module_fact.scopes, 0)?;
+    let module_graph = build_scope_graph(
+        Path::new(&module_fact.path),
+        &module_fact.scopes,
+        &module_fact.intra_file_refs,
+        0,
+    )?;
     let prefix = format!("m{module_idx}:");
     let scope_offset = (module_idx + 1) * MODULE_SCOPE_ID_STRIDE;
 
     for decl in module_graph.declarations() {
         let new_id = prefix_node_id(&prefix, &decl.id);
-        if decl.kind != DeclarationKind::Method {
-            acc.decl_by_mod_and_name.insert(
-                (module_fact.module_path.clone(), decl.name.clone()),
-                new_id.clone(),
-            );
-        }
+        acc.decl_by_mod_and_name.insert(
+            (module_fact.module_path.clone(), decl.name.clone()),
+            new_id.clone(),
+        );
         acc.declarations.push(DeclarationNode {
             id: new_id,
             name: decl.name.clone(),
@@ -368,26 +370,42 @@ fn append_cross_module_decl_edges(project: &ProjectFacts, acc: &mut AccumulatedP
         let Some(source_id) = acc
             .decl_by_mod_and_name
             .get(&(rel.source_module.clone(), src_sym.clone()))
+            .or_else(|| {
+                let owner = src_sym.split("::").next()?;
+                acc.decl_by_mod_and_name
+                    .get(&(rel.source_module.clone(), owner.to_owned()))
+            })
+            .cloned()
         else {
             continue;
         };
-        let Some(target_id) = acc
+        let mut target_ids = Vec::new();
+        if let Some(target_id) = acc
             .decl_by_mod_and_name
             .get(&(rel.target_module.clone(), dst_sym.clone()))
-        else {
-            continue;
-        };
-        if source_id != target_id {
-            acc.reference_edges.push(ReferenceEdge {
-                source: source_id.clone(),
-                target: target_id.clone(),
-                kind: RelationKind::Body,
-            });
-            acc.ordering_edges.push(OrderingEdge {
-                higher: source_id.clone(),
-                lower: target_id.clone(),
-                reason: EdgeReason::CrossModule,
-            });
+        {
+            target_ids.push(target_id.clone());
+        }
+        if let Some((owner, _)) = dst_sym.split_once("::")
+            && let Some(owner_id) = acc
+                .decl_by_mod_and_name
+                .get(&(rel.target_module.clone(), owner.to_owned()))
+        {
+            target_ids.push(owner_id.clone());
+        }
+        for target_id in target_ids {
+            if source_id != target_id {
+                acc.reference_edges.push(ReferenceEdge {
+                    source: source_id.clone(),
+                    target: target_id.clone(),
+                    kind: RelationKind::Body,
+                });
+                acc.ordering_edges.push(OrderingEdge {
+                    higher: source_id.clone(),
+                    lower: target_id,
+                    reason: EdgeReason::CrossModule,
+                });
+            }
         }
     }
     acc.ordering_edges.sort();
@@ -661,13 +679,15 @@ fn build_component_reflexion_summaries(
 pub(super) fn build_file_graph(
     path: &Path,
     scopes: &[ScopeFacts],
+    intra_file_refs: &[IntraFileReference],
 ) -> Result<AbstractionGraph, ModelError> {
-    build_scope_graph(path, scopes, 0)
+    build_scope_graph(path, scopes, intra_file_refs, 0)
 }
 
 fn build_scope_graph(
     path: &Path,
     scopes: &[ScopeFacts],
+    intra_file_refs: &[IntraFileReference],
     scope_index: usize,
 ) -> Result<AbstractionGraph, ModelError> {
     let file_path = path.to_string_lossy().into_owned();
@@ -695,6 +715,27 @@ fn build_scope_graph(
     );
     extracted.declarations.extend(type_members.declarations);
     sort_declarations(&mut extracted.declarations);
+
+    let decl_id_by_name: BTreeMap<&str, NodeId> = extracted
+        .declarations
+        .iter()
+        .map(|decl| (decl.name.as_str(), decl.id.clone()))
+        .collect();
+    for intra_ref in intra_file_refs {
+        if let (Some(source_id), Some(target_id)) = (
+            decl_id_by_name.get(intra_ref.source_symbol.as_str()),
+            decl_id_by_name.get(intra_ref.target_symbol.as_str()),
+        ) && source_id != target_id
+        {
+            extracted.reference_edges.push(ReferenceEdge {
+                source: source_id.clone(),
+                target: target_id.clone(),
+                kind: intra_ref.kind,
+            });
+        }
+    }
+    extracted.reference_edges.sort();
+    extracted.reference_edges.dedup();
 
     AbstractionGraph::new(GraphParts {
         title,
@@ -1490,8 +1531,8 @@ mod tests {
     fn ownership_groups_exclusive_helpers_and_shared_items_with_summaries() {
         let scopes = sample_scopes();
 
-        let graph =
-            build_file_graph(Path::new("src/sample.rs"), &scopes).expect("valid canonical graph");
+        let graph = build_file_graph(Path::new("src/sample.rs"), &scopes, &[])
+            .expect("valid canonical graph");
 
         assert_eq!(
             graph.parent_of(&NodeId::new("s0:i3:only_a")),
@@ -1508,8 +1549,8 @@ mod tests {
     fn attaches_type_methods_group_under_owning_component() {
         let scopes = sample_scopes();
 
-        let graph =
-            build_file_graph(Path::new("src/sample.rs"), &scopes).expect("valid canonical graph");
+        let graph = build_file_graph(Path::new("src/sample.rs"), &scopes, &[])
+            .expect("valid canonical graph");
 
         assert_eq!(graph.declarations().len(), 7);
         assert!(graph.groups().iter().any(|group| {
@@ -1529,7 +1570,8 @@ mod tests {
 
     #[test]
     fn empty_scopes_produce_empty_valid_graph() {
-        let graph = build_file_graph(Path::new("src/lib.rs"), &[]).expect("empty graph is valid");
+        let graph =
+            build_file_graph(Path::new("src/lib.rs"), &[], &[]).expect("empty graph is valid");
 
         assert_eq!(graph.title(), "src/lib.rs");
         assert_eq!(graph.declarations(), []);
@@ -1561,12 +1603,14 @@ mod tests {
                     path: "src/core.rs".to_owned(),
                     component: "Core".to_owned(),
                     scopes: sample_scopes(),
+                    intra_file_refs: Vec::new(),
                 },
                 ModuleFact {
                     module_path: "runner".to_owned(),
                     path: "src/runner.rs".to_owned(),
                     component: "Runner".to_owned(),
                     scopes: sample_scopes(),
+                    intra_file_refs: Vec::new(),
                 },
             ],
             cross_module_refs: vec![CrossModuleRefFact {
@@ -1597,6 +1641,54 @@ mod tests {
             edge.higher == NodeId::new("comp:Runner")
                 && edge.lower == NodeId::new("comp:Unused")
                 && edge.reflexion == Some(ReflexionStatus::Absent)
+        }));
+    }
+
+    #[test]
+    fn project_graph_connects_cross_module_method_declarations() {
+        let project = ProjectFacts {
+            title: "sample".to_owned(),
+            has_declared_architecture: false,
+            components: vec![
+                ComponentFact {
+                    name: "Core".to_owned(),
+                    declared_dependencies: Vec::new(),
+                },
+                ComponentFact {
+                    name: "Runner".to_owned(),
+                    declared_dependencies: Vec::new(),
+                },
+            ],
+            modules: vec![
+                ModuleFact {
+                    module_path: "core".to_owned(),
+                    path: "src/core.rs".to_owned(),
+                    component: "Core".to_owned(),
+                    scopes: sample_scopes(),
+                    intra_file_refs: Vec::new(),
+                },
+                ModuleFact {
+                    module_path: "runner".to_owned(),
+                    path: "src/runner.rs".to_owned(),
+                    component: "Runner".to_owned(),
+                    scopes: sample_scopes(),
+                    intra_file_refs: Vec::new(),
+                },
+            ],
+            cross_module_refs: vec![CrossModuleRefFact {
+                source_module: "runner".to_owned(),
+                source_symbol: Some("Spec::new".to_owned()),
+                target_module: "core".to_owned(),
+                target_symbol: Some("Spec::new".to_owned()),
+                line: 33,
+            }],
+        };
+
+        let full = build_project_graph(&project, ProjectDepth::Full).expect("Full valid");
+
+        assert!(full.reference_edges().iter().any(|edge| {
+            edge.source == NodeId::new("m1:s1:i0:Spec::new")
+                && edge.target == NodeId::new("m0:s1:i0:Spec::new")
         }));
     }
 }

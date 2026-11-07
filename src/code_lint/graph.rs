@@ -18,7 +18,7 @@ use self::builder::{build_file_graph, build_project_graph};
 use self::project_facts::collect_project_facts_from_sources;
 use self::render::render_graph;
 
-use crate::code_lint::ast::{ParsedFile, collect_scope_facts};
+use crate::code_lint::ast::{ParsedFile, collect_intra_file_references, collect_scope_facts};
 use crate::config::Config;
 use crate::diagnostic::Language;
 use std::fs;
@@ -81,8 +81,9 @@ fn generate_single_file_graph(path: &Path, format: OutputFormat) -> anyhow::Resu
     let content = fs::read_to_string(path)?;
     let parsed = ParsedFile::new(&content, lang);
     let scopes = collect_scope_facts(&parsed);
+    let intra_refs = collect_intra_file_references(&parsed, &scopes);
     let display_path = path.strip_prefix("./").unwrap_or(path);
-    let graph = build_file_graph(display_path, &scopes)?;
+    let graph = build_file_graph(display_path, &scopes, &intra_refs)?;
     Ok(render_graph(&graph, format))
 }
 

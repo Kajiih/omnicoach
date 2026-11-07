@@ -2,12 +2,16 @@
 
 use crate::code_lint::ast::python::collect_path_references;
 use crate::code_lint::ast::rust::summarize_rust_file;
-use crate::code_lint::ast::{DeclarationScopeKind, ParsedFile, ScopeFacts, collect_scope_facts};
+use crate::code_lint::ast::{
+    DeclarationScopeKind, IntraFileReference, ParsedFile, ScopeFacts,
+    collect_intra_file_references, collect_scope_facts, enclosing_scope_symbol,
+};
 use crate::diagnostic::Language;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 const INIT_MODULE: &str = "__init__";
 const LIB_MODULE: &str = "lib";
+const MAX_REEXPORT_HOPS: usize = 4;
 const SELF_SEGMENT: &str = "self";
 const SUPER_SEGMENT: &str = "super";
 
@@ -48,6 +52,8 @@ pub(super) struct ModuleFact {
     pub(super) component: String,
     /// Per-scope facts inside this module (`scopes[0]` is the module scope).
     pub(super) scopes: Vec<ScopeFacts>,
+    /// Intra-file references between module declarations and methods in this module.
+    pub(super) intra_file_refs: Vec<IntraFileReference>,
 }
 
 /// A resolved reference from one module (and optional top-level item) to another module in the
@@ -125,6 +131,7 @@ fn collect_rust_project_facts(title: &str, files: &[(&str, &str)]) -> ProjectFac
             path: entry.path.clone(),
             component,
             scopes: entry.scopes.clone(),
+            intra_file_refs: entry.intra_file_refs.clone(),
         });
     }
 
@@ -147,8 +154,9 @@ struct RustModuleEntry {
     external_mods: Vec<String>,
     visible_reexports: Vec<String>,
     has_non_namespace_items: bool,
-    references: Vec<(usize, String)>,
+    references: Vec<(usize, Option<String>, String)>,
     scopes: Vec<ScopeFacts>,
+    intra_file_refs: Vec<IntraFileReference>,
 }
 
 fn parse_rust_module(path: &str, source: &str) -> RustModuleEntry {
@@ -172,12 +180,16 @@ fn parse_rust_module(path: &str, source: &str) -> RustModuleEntry {
         .non_namespace_items
         .iter()
         .any(|(_, text)| !text.starts_with("architecture_component!"));
+    let scopes = collect_scope_facts(&parsed);
+    let intra_file_refs = collect_intra_file_references(&parsed, &scopes);
     let references = summary
         .referenced_paths
         .into_iter()
-        .map(|reference| (reference.line, reference.raw_path))
+        .map(|reference| {
+            let enclosing = enclosing_scope_symbol(&parsed, &scopes, reference.line);
+            (reference.line, enclosing, reference.raw_path)
+        })
         .collect();
-    let scopes = collect_scope_facts(&parsed);
     RustModuleEntry {
         path: path.to_owned(),
         module_path,
@@ -189,6 +201,7 @@ fn parse_rust_module(path: &str, source: &str) -> RustModuleEntry {
         has_non_namespace_items,
         references,
         scopes,
+        intra_file_refs,
     }
 }
 
@@ -237,36 +250,42 @@ fn resolve_rust_cross_module_refs(entries: &[RustModuleEntry]) -> Vec<CrossModul
         .iter()
         .map(|entry| entry.module_path.as_str())
         .collect();
-    let mut module_symbols: HashMap<&str, HashSet<&str>> = HashMap::new();
+    let mut module_symbols: HashMap<&str, HashSet<String>> = HashMap::new();
     for entry in entries {
         let symbols = module_symbols
             .entry(entry.module_path.as_str())
             .or_default();
-        if let Some(module_scope) = entry.scopes.first() {
-            for item in &module_scope.items {
-                symbols.insert(item.name.as_str());
-            }
-        }
+        collect_scope_symbol_names(&entry.scopes, symbols);
     }
     let lib_root_names: HashSet<&str> = entries
         .iter()
         .find(|entry| entry.module_path == LIB_MODULE)
         .into_iter()
         .flat_map(|lib_entry| {
-            lib_entry.external_mods.iter().map(String::as_str).chain(
-                module_symbols
-                    .get(LIB_MODULE)
-                    .into_iter()
-                    .flatten()
-                    .copied(),
-            )
+            lib_entry
+                .external_mods
+                .iter()
+                .map(String::as_str)
+                .chain(
+                    lib_entry
+                        .visible_reexports
+                        .iter()
+                        .filter_map(|target| target.rsplit("::").next()),
+                )
+                .chain(
+                    module_symbols
+                        .get(LIB_MODULE)
+                        .into_iter()
+                        .flatten()
+                        .map(String::as_str),
+                )
         })
         .collect();
     let reexports = collect_rust_reexports(entries, &lib_root_names);
 
     let mut refs = Vec::new();
     for entry in entries {
-        for &(line, ref raw_path) in &entry.references {
+        for &(line, ref source_symbol, ref raw_path) in &entry.references {
             let canonical = normalize_rust_reference_path(
                 &entry.module_path,
                 entry.is_crate_root,
@@ -280,7 +299,7 @@ fn resolve_rust_cross_module_refs(entries: &[RustModuleEntry]) -> Vec<CrossModul
             {
                 refs.push(CrossModuleRefFact {
                     source_module: entry.module_path.clone(),
-                    source_symbol: enclosing_symbol(&entry.scopes, line),
+                    source_symbol: source_symbol.clone(),
                     target_module: target.module,
                     target_symbol: target.symbol,
                     line,
@@ -388,6 +407,7 @@ fn collect_python_project_facts(title: &str, files: &[(&str, &str)]) -> ProjectF
             path: entry.path,
             component,
             scopes: entry.scopes,
+            intra_file_refs: entry.intra_file_refs,
         });
     }
 
@@ -404,22 +424,31 @@ struct PythonModuleEntry {
     path: String,
     module_path: String,
     is_package_init: bool,
-    references: Vec<(usize, String)>,
+    references: Vec<(usize, Option<String>, String)>,
     scopes: Vec<ScopeFacts>,
+    intra_file_refs: Vec<IntraFileReference>,
 }
 
 fn parse_python_module(path: &str, source: &str) -> PythonModuleEntry {
     let is_package_init = path.ends_with("/__init__.py") || path == "__init__.py";
     let module_path = python_module_path(path);
     let parsed = ParsedFile::new(source, Language::Python);
-    let references = collect_path_references(&parsed);
     let scopes = collect_scope_facts(&parsed);
+    let intra_file_refs = collect_intra_file_references(&parsed, &scopes);
+    let references = collect_path_references(&parsed)
+        .into_iter()
+        .map(|(line, raw_path)| {
+            let enclosing = enclosing_scope_symbol(&parsed, &scopes, line);
+            (line, enclosing, raw_path)
+        })
+        .collect();
     PythonModuleEntry {
         path: path.to_owned(),
         module_path,
         is_package_init,
         references,
         scopes,
+        intra_file_refs,
     }
 }
 
@@ -449,17 +478,25 @@ fn resolve_python_cross_module_refs(entries: &[PythonModuleEntry]) -> Vec<CrossM
         .iter()
         .map(|entry| entry.module_path.as_str())
         .collect();
+    let mut module_symbols: HashMap<&str, HashSet<String>> = HashMap::new();
+    for entry in entries {
+        let symbols = module_symbols
+            .entry(entry.module_path.as_str())
+            .or_default();
+        collect_scope_symbol_names(&entry.scopes, symbols);
+    }
     let mut refs = Vec::new();
     for entry in entries {
-        for &(line, ref raw_path) in &entry.references {
+        for &(line, ref source_symbol, ref raw_path) in &entry.references {
             let normalized =
                 normalize_python_import_path(&entry.module_path, entry.is_package_init, raw_path);
-            if let Some(target) = longest_module_prefix(&normalized, ".", &known_modules)
+            if let Some(target) =
+                resolve_python_target(&normalized, &known_modules, &module_symbols)
                 && target.module != entry.module_path
             {
                 refs.push(CrossModuleRefFact {
                     source_module: entry.module_path.clone(),
-                    source_symbol: enclosing_symbol(&entry.scopes, line),
+                    source_symbol: source_symbol.clone(),
                     target_module: target.module,
                     target_symbol: target.symbol,
                     line,
@@ -470,33 +507,6 @@ fn resolve_python_cross_module_refs(entries: &[PythonModuleEntry]) -> Vec<CrossM
     refs.sort();
     refs.dedup();
     refs
-}
-
-fn enclosing_symbol(scopes: &[ScopeFacts], line: usize) -> Option<String> {
-    for scope in scopes {
-        match &scope.scope {
-            DeclarationScopeKind::Module => {
-                if let Some(item) = scope
-                    .items
-                    .iter()
-                    .find(|item| item.line <= line && line <= item.end_line)
-                {
-                    return Some(item.name.clone());
-                }
-            }
-            DeclarationScopeKind::Class { name }
-            | DeclarationScopeKind::Impl { type_name: name } => {
-                if scope
-                    .items
-                    .iter()
-                    .any(|item| item.line <= line && line <= item.end_line)
-                {
-                    return Some(name.clone());
-                }
-            }
-        }
-    }
-    None
 }
 
 fn normalize_python_import_path(
@@ -513,7 +523,7 @@ fn normalize_python_import_path(
     }
     let mut package_parts: Vec<&str> = enclosing_module
         .split('.')
-        .filter(|seg| !seg.is_empty() && *seg != INIT_MODULE)
+        .filter(|segment| !segment.is_empty() && *segment != INIT_MODULE)
         .collect();
     if !is_package_init && !package_parts.is_empty() {
         package_parts.pop();
@@ -523,7 +533,7 @@ fn normalize_python_import_path(
     }
     let rest = &raw_imported[dots..];
     if !rest.is_empty() {
-        for segment in rest.split('.').filter(|seg| !seg.is_empty()) {
+        for segment in rest.split('.').filter(|segment| !segment.is_empty()) {
             package_parts.push(segment);
         }
     }
@@ -538,61 +548,152 @@ struct ResolvedModuleTarget {
 fn resolve_rust_target(
     canonical: &str,
     known_modules: &HashSet<&str>,
-    module_symbols: &HashMap<&str, HashSet<&str>>,
+    module_symbols: &HashMap<&str, HashSet<String>>,
     reexports: &HashMap<(String, String), String>,
 ) -> Option<ResolvedModuleTarget> {
     if canonical.is_empty() {
         return None;
     }
-    if let Some(target) = longest_module_prefix(canonical, "::", known_modules) {
-        if let Some(sym) = &target.symbol
-            && !module_symbols
-                .get(target.module.as_str())
-                .is_some_and(|set| set.contains(sym.as_str()))
-            && let Some(reexported) = reexports.get(&(target.module.clone(), sym.clone()))
-            && let Some(resolved) = longest_module_prefix(reexported, "::", known_modules)
-        {
-            return Some(resolved);
+    let initial = split_module_and_segments(canonical, "::", known_modules).or_else(|| {
+        if known_modules.contains(LIB_MODULE) {
+            let mut segments = canonical.split("::").filter(|segment| !segment.is_empty());
+            let first = segments.next().map(str::to_owned)?;
+            let member = segments.next().map(str::to_owned);
+            let is_known_in_lib = module_symbols
+                .get(LIB_MODULE)
+                .is_some_and(|set| set.contains(&first))
+                || reexports.contains_key(&(LIB_MODULE.to_owned(), first.clone()));
+            is_known_in_lib.then(|| SplitModulePath {
+                module: LIB_MODULE.to_owned(),
+                symbol: Some(first),
+                member,
+            })
+        } else {
+            None
         }
-        return Some(target);
-    }
-    let first_segment = canonical.split("::").next().unwrap_or(canonical);
-    if known_modules.contains(LIB_MODULE)
-        && module_symbols
-            .get(LIB_MODULE)
-            .is_some_and(|set| set.contains(first_segment))
-    {
+    })?;
+    let mut resolved_module = initial.module;
+    let Some(mut resolved_first) = initial.symbol else {
         return Some(ResolvedModuleTarget {
-            module: LIB_MODULE.to_owned(),
-            symbol: Some(first_segment.to_owned()),
+            module: resolved_module,
+            symbol: None,
         });
+    };
+    for _ in 0..MAX_REEXPORT_HOPS {
+        let has_symbol = module_symbols
+            .get(resolved_module.as_str())
+            .is_some_and(|set| set.contains(&resolved_first));
+        if has_symbol {
+            break;
+        }
+        let Some(reexported) = reexports.get(&(resolved_module.clone(), resolved_first.clone()))
+        else {
+            break;
+        };
+        let Some(next) = split_module_and_segments(reexported, "::", known_modules) else {
+            break;
+        };
+        resolved_module = next.module;
+        if let Some(next_symbol) = next.symbol {
+            resolved_first = next_symbol;
+        } else {
+            return Some(ResolvedModuleTarget {
+                module: resolved_module,
+                symbol: None,
+            });
+        }
     }
-    None
+    if let Some(member) = initial.member {
+        let method_candidate = format!("{resolved_first}::{member}");
+        if module_symbols
+            .get(resolved_module.as_str())
+            .is_some_and(|set| set.contains(&method_candidate))
+        {
+            return Some(ResolvedModuleTarget {
+                module: resolved_module,
+                symbol: Some(method_candidate),
+            });
+        }
+    }
+    Some(ResolvedModuleTarget {
+        module: resolved_module,
+        symbol: Some(resolved_first),
+    })
 }
 
-fn longest_module_prefix(
+fn resolve_python_target(
+    normalized: &str,
+    known_modules: &HashSet<&str>,
+    module_symbols: &HashMap<&str, HashSet<String>>,
+) -> Option<ResolvedModuleTarget> {
+    let target = split_module_and_segments(normalized, ".", known_modules)?;
+    if let (Some(first), Some(member)) = (&target.symbol, &target.member) {
+        let method_candidate = format!("{first}::{member}");
+        if module_symbols
+            .get(target.module.as_str())
+            .is_some_and(|set| set.contains(&method_candidate))
+        {
+            return Some(ResolvedModuleTarget {
+                module: target.module,
+                symbol: Some(method_candidate),
+            });
+        }
+    }
+    Some(ResolvedModuleTarget {
+        module: target.module,
+        symbol: target.symbol,
+    })
+}
+
+fn collect_scope_symbol_names(scopes: &[ScopeFacts], out: &mut HashSet<String>) {
+    for scope in scopes {
+        match &scope.scope {
+            DeclarationScopeKind::Module => {
+                for item in &scope.items {
+                    out.insert(item.name.clone());
+                }
+            }
+            DeclarationScopeKind::Class { name }
+            | DeclarationScopeKind::Impl { type_name: name } => {
+                for item in &scope.items {
+                    out.insert(format!("{name}::{}", item.name));
+                }
+            }
+        }
+    }
+}
+
+struct SplitModulePath {
+    module: String,
+    symbol: Option<String>,
+    member: Option<String>,
+}
+
+fn split_module_and_segments(
     path: &str,
     separator: &str,
     known_modules: &HashSet<&str>,
-) -> Option<ResolvedModuleTarget> {
+) -> Option<SplitModulePath> {
     if known_modules.contains(path) {
-        return Some(ResolvedModuleTarget {
+        return Some(SplitModulePath {
             module: path.to_owned(),
             symbol: None,
+            member: None,
         });
     }
     let mut current = path;
     while let Some((prefix, _)) = current.rsplit_once(separator) {
         if known_modules.contains(prefix) {
             let remainder = &path[prefix.len() + separator.len()..];
-            let symbol = remainder
+            let mut segments = remainder
                 .split(separator)
-                .next()
-                .filter(|seg| !seg.is_empty())
-                .map(str::to_owned);
-            return Some(ResolvedModuleTarget {
+                .filter(|segment| !segment.is_empty());
+            let symbol = segments.next().map(str::to_owned);
+            let member = segments.next().map(str::to_owned);
+            return Some(SplitModulePath {
                 module: prefix.to_owned(),
                 symbol,
+                member,
             });
         }
         current = prefix;
@@ -695,6 +796,47 @@ mod tests {
             reference.source_module == "pkg._core"
                 && reference.target_module == "pkg._util"
                 && reference.target_symbol.as_deref() == Some("compute_step")
+        }));
+    }
+
+    #[test]
+    fn rust_cross_module_refs_attribute_method_sources_and_associated_fn_targets() {
+        let files = [
+            (
+                "src/core.rs",
+                indoc::indoc! {r"
+                    pub struct Parser;
+
+                    impl Parser {
+                        pub fn parse() -> Self {
+                            Self
+                        }
+                    }
+                "},
+            ),
+            (
+                "src/runner.rs",
+                indoc::indoc! {r"
+                    use crate::core::Parser;
+
+                    pub struct Runner;
+
+                    impl Runner {
+                        pub fn execute(&self) -> Parser {
+                            Parser::parse()
+                        }
+                    }
+                "},
+            ),
+        ];
+
+        let project = collect_project_facts_from_sources("sample_methods", Language::Rust, &files);
+
+        assert!(project.cross_module_refs.iter().any(|reference| {
+            reference.source_module == "runner"
+                && reference.source_symbol.as_deref() == Some("Runner::execute")
+                && reference.target_module == "core"
+                && reference.target_symbol.as_deref() == Some("Parser::parse")
         }));
     }
 }
