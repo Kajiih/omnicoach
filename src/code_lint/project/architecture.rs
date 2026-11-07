@@ -2,12 +2,16 @@
 //! conformance evaluators (`CodeLintProject`).
 
 use super::layout::{
-    PathOrigin, ProjectLayout, is_in_module_subtree, is_rust_crate_root,
-    resolve_inherited_component_with_root, resolve_rust_reference_path,
+    PathOrigin, ProjectLayout, ROOT_MODULE_TAG, is_in_module_subtree, is_python_package_init,
+    is_rust_crate_root, resolve_inherited_component_with_root, resolve_relative_python_package,
+    resolve_rust_reference_path,
 };
 use super::source::FileSource;
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::ast::python::PythonFileSummary;
+use crate::code_lint::ast::python::{
+    PythonFileSummary, PythonImportReference, collect_python_import_references,
+    summarize_python_file,
+};
 use crate::code_lint::ast::rust::{
     DefinedComponentEntry, RustFileSummary, summarize_rust_file, summarize_rust_module_header,
 };
@@ -24,6 +28,8 @@ pub(super) const RUST_ARCHITECTURE_MODULE: &str = "architecture";
 const EXPORTED_ITEM_PLACEHOLDER: &str = "<exported_item>";
 const RUST_MODULE_SEPARATOR: &str = "::";
 const SELF_PREFIX: &str = "self::";
+const PYTHON_MODULE_SEPARATOR: &str = ".";
+const PREFIX_MATCH_RANK: usize = 3;
 
 /// Errors raised when loading or validating a project's [`ArchitectureSpec`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,7 +175,9 @@ impl ArchitectureSpec {
                 resolve_inherited_component_with_root(module_path, &self.component_roots)
                     .map(|inherited| inherited.component.as_str())
             }
-            Language::Python => None,
+            Language::Python => {
+                resolve_python_component(module_path, self).map(|matched| matched.component_name)
+            }
         }
     }
 
@@ -331,13 +339,15 @@ pub fn evaluate_file_architecture_with_summary(
     file: &ParsedFile,
     path: &Path,
     layout: &ProjectLayout,
-    _source: &dyn FileSource,
+    source: &dyn FileSource,
     spec: &ArchitectureSpec,
-    _python_summary: Option<&PythonFileSummary>,
+    python_summary: Option<&PythonFileSummary>,
 ) -> FileArchitectureFindings {
     match file.lang() {
         Language::Rust => evaluate_rust_file_architecture(file, path, layout, spec),
-        Language::Python => FileArchitectureFindings::default(),
+        Language::Python => {
+            evaluate_python_file_architecture(file, path, layout, source, spec, python_summary)
+        }
     }
 }
 
@@ -789,6 +799,104 @@ fn check_rust_sibling_isolation(
     }
 }
 
+fn evaluate_python_file_architecture(
+    file: &ParsedFile,
+    path: &Path,
+    layout: &ProjectLayout,
+    source: &dyn FileSource,
+    spec: &ArchitectureSpec,
+    python_summary: Option<&PythonFileSummary>,
+) -> FileArchitectureFindings {
+    if path.extension().is_some_and(|extension| extension == "pyi") {
+        return FileArchitectureFindings::default();
+    }
+    let Some(module_path) = layout.python_architecture_module_of_path(path) else {
+        return FileArchitectureFindings::default();
+    };
+    let mut findings = FileArchitectureFindings::default();
+
+    let enclosing = resolve_python_component(&module_path, spec);
+    if spec.require_component_coverage && enclosing.is_none() {
+        collect_python_unmapped_findings(
+            file,
+            path,
+            &module_path,
+            spec,
+            python_summary,
+            &mut findings.unmapped_architecture_modules,
+        );
+    }
+
+    let is_package_init = is_python_package_init(path);
+    for import_ref in collect_python_import_references(file) {
+        if (import_ref.in_function && !spec.check_local_imports)
+            || (import_ref.in_type_checking && spec.ignore_type_checking_imports)
+        {
+            continue;
+        }
+        let Some(resolved) = resolve_python_import_target_with_layout(
+            &module_path,
+            is_package_init,
+            &import_ref,
+            layout,
+            source,
+        ) else {
+            continue;
+        };
+
+        if let Some(ref enclosing_match) = enclosing
+            && import_ref.level > 0
+            && !resolved.stays_within_root(enclosing_match.matched_root)
+        {
+            let dependency = if resolved.module_path == ROOT_MODULE_TAG {
+                resolved.full_target_path.clone()
+            } else {
+                resolved.module_path.clone()
+            };
+            findings
+                .cross_component_relative_paths
+                .push(CrossComponentRelativePathFinding {
+                    span: import_ref.span,
+                    dependency,
+                    component: enclosing_match.component_name.to_owned(),
+                });
+        }
+
+        if !is_first_party_python_import(&resolved.module_path, layout, source, spec) {
+            if import_ref.level == 0 {
+                let top_package = resolved
+                    .module_path
+                    .split(PYTHON_MODULE_SEPARATOR)
+                    .next()
+                    .unwrap_or(&resolved.module_path);
+                check_python_external_owner(
+                    &module_path,
+                    top_package,
+                    import_ref.span,
+                    spec,
+                    &mut findings.unowned_external_dependencies,
+                );
+            }
+            continue;
+        }
+
+        let Some(ref from_match) = enclosing else {
+            continue;
+        };
+        check_python_first_party_edge(
+            &module_path,
+            from_match,
+            &resolved,
+            import_ref.span,
+            spec,
+            &mut findings,
+        );
+    }
+
+    deduplicate_findings(&mut findings);
+    findings
+}
+
 fn deduplicate_findings(findings: &mut FileArchitectureFindings) {
     sort_and_dedup(&mut findings.undeclared_component_dependencies, |f| f.span);
     sort_and_dedup(&mut findings.sibling_module_dependencies, |f| f.span);
@@ -807,10 +915,455 @@ fn sort_and_dedup<T: PartialEq>(items: &mut Vec<T>, span_of: fn(&T) -> SourceSpa
     items.dedup();
 }
 
+#[derive(Debug, Clone, Copy)]
+struct MatchedPythonComponent<'a> {
+    component_name: &'a str,
+    matched_root: &'a str,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedPythonImport {
+    module_path: String,
+    full_target_path: String,
+    imported_member: Option<String>,
+    shallowest_relative_ancestor: Option<String>,
+}
+
+impl ResolvedPythonImport {
+    fn stays_within_root(&self, component_root: &str) -> bool {
+        if component_root == ROOT_MODULE_TAG || component_root == "*" {
+            return self.shallowest_relative_ancestor.is_some();
+        }
+        let Some(ancestor) = self.shallowest_relative_ancestor.as_deref() else {
+            return false;
+        };
+        let target_in_root = python_root_specificity(&self.module_path, component_root).is_some();
+        let floor_base = component_root
+            .strip_suffix(".**")
+            .or_else(|| component_root.strip_suffix(".*"))
+            .unwrap_or(component_root);
+        let floor_in_root = python_root_specificity(ancestor, component_root).is_some()
+            || (!component_root.ends_with(".*") && is_in_python_subtree(ancestor, floor_base));
+        target_in_root && floor_in_root
+    }
+}
+
+fn check_python_first_party_edge(
+    module_path: &str,
+    from_match: &MatchedPythonComponent<'_>,
+    resolved: &ResolvedPythonImport,
+    span: SourceSpan,
+    spec: &ArchitectureSpec,
+    findings: &mut FileArchitectureFindings,
+) {
+    let Some(target_match) = resolve_python_component(&resolved.module_path, spec) else {
+        if spec.require_component_coverage {
+            findings
+                .undeclared_component_dependencies
+                .push(UndeclaredComponentDependencyFinding {
+                    span,
+                    component: from_match.component_name.to_owned(),
+                    dependency: resolved.full_target_path.clone(),
+                });
+        }
+        return;
+    };
+
+    if from_match.component_name == target_match.component_name {
+        if let Some(comp_spec) = spec.component_spec(from_match.component_name)
+            && comp_spec.isolate_children
+            && let Some(sibling_target) = python_sibling_violation(
+                module_path,
+                from_match.matched_root,
+                &resolved.module_path,
+                target_match.matched_root,
+            )
+        {
+            findings
+                .sibling_module_dependencies
+                .push(SiblingModuleDependencyFinding {
+                    span,
+                    module: module_path.to_owned(),
+                    dependency: sibling_target,
+                    component: from_match.component_name.to_owned(),
+                });
+        }
+        return;
+    }
+
+    let is_allowed = spec
+        .allowed_dependencies
+        .get(from_match.component_name)
+        .is_some_and(|set| set.contains(target_match.component_name));
+    if !is_allowed {
+        findings
+            .undeclared_component_dependencies
+            .push(UndeclaredComponentDependencyFinding {
+                span,
+                component: from_match.component_name.to_owned(),
+                dependency: target_match.component_name.to_owned(),
+            });
+    } else if let Some(target_spec) = spec.component_spec(target_match.component_name)
+        && let Some(ref exports) = target_spec.public_exports
+        && !is_python_import_allowed_by_exports(target_match.matched_root, resolved, exports)
+    {
+        let symbol_name = if resolved.imported_member.as_deref() == Some("*")
+            || (resolved.module_path == target_match.matched_root
+                && resolved.imported_member.is_none())
+        {
+            EXPORTED_ITEM_PLACEHOLDER.to_owned()
+        } else {
+            resolved.imported_member.clone().unwrap_or_else(|| {
+                resolved
+                    .full_target_path
+                    .rsplit(PYTHON_MODULE_SEPARATOR)
+                    .next()
+                    .unwrap_or(&resolved.full_target_path)
+                    .to_owned()
+            })
+        };
+        findings
+            .private_component_imports
+            .push(PrivateComponentImportFinding {
+                span,
+                component: from_match.component_name.to_owned(),
+                name: symbol_name,
+                module: target_match.matched_root.to_owned(),
+                dependency: target_match.component_name.to_owned(),
+            });
+    }
+}
+
+fn resolve_python_component<'a>(
+    module_path: &str,
+    spec: &'a ArchitectureSpec,
+) -> Option<MatchedPythonComponent<'a>> {
+    let mut best: Option<(SpecificityRank, MatchedPythonComponent<'a>)> = None;
+    for component in &spec.components {
+        for root in &component.roots {
+            if let Some(rank) = python_root_specificity(module_path, root) {
+                let candidate = MatchedPythonComponent {
+                    component_name: component.name.as_str(),
+                    matched_root: root.as_str(),
+                };
+                if best.as_ref().is_none_or(|(best_rank, _)| rank > *best_rank) {
+                    best = Some((rank, candidate));
+                }
+            }
+        }
+    }
+    best.map(|(_, matched)| matched)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct SpecificityRank {
+    kind_rank: usize,
+    segment_count: usize,
+}
+
+fn python_root_specificity(module_path: &str, root_pattern: &str) -> Option<SpecificityRank> {
+    if root_pattern == ROOT_MODULE_TAG {
+        return (module_path == ROOT_MODULE_TAG || !module_path.contains(PYTHON_MODULE_SEPARATOR))
+            .then_some(SpecificityRank {
+                kind_rank: PREFIX_MATCH_RANK,
+                segment_count: 1,
+            });
+    }
+    if root_pattern == "*" {
+        return (!module_path.contains(PYTHON_MODULE_SEPARATOR)).then_some(SpecificityRank {
+            kind_rank: 1,
+            segment_count: 1,
+        });
+    }
+    if let Some(prefix) = root_pattern.strip_suffix(".**") {
+        let segment_count = prefix.split(PYTHON_MODULE_SEPARATOR).count();
+        return (module_path != prefix && is_in_python_subtree(module_path, prefix)).then_some(
+            SpecificityRank {
+                kind_rank: 2,
+                segment_count,
+            },
+        );
+    }
+    if let Some(prefix) = root_pattern.strip_suffix(".*") {
+        let segment_count = prefix.split(PYTHON_MODULE_SEPARATOR).count();
+        let rest = module_path
+            .strip_prefix(prefix)?
+            .strip_prefix(PYTHON_MODULE_SEPARATOR)?;
+        return (!rest.contains(PYTHON_MODULE_SEPARATOR)).then_some(SpecificityRank {
+            kind_rank: 2,
+            segment_count: segment_count + 1,
+        });
+    }
+    if is_in_python_subtree(module_path, root_pattern) {
+        let segment_count = root_pattern.split(PYTHON_MODULE_SEPARATOR).count();
+        let exact_bonus = usize::from(module_path == root_pattern);
+        return Some(SpecificityRank {
+            kind_rank: PREFIX_MATCH_RANK + exact_bonus,
+            segment_count,
+        });
+    }
+    None
+}
+
+fn resolve_python_import_target_with_layout(
+    enclosing_module: &str,
+    is_package_init: bool,
+    import_ref: &PythonImportReference,
+    layout: &ProjectLayout,
+    source: &dyn FileSource,
+) -> Option<ResolvedPythonImport> {
+    if import_ref.level == 0 {
+        let base_module = import_ref.module.as_deref()?;
+        return Some(resolve_imported_member_on_base(
+            base_module.to_owned(),
+            import_ref.imported_name.as_deref(),
+            Some(base_module.to_owned()),
+            layout,
+            source,
+        ));
+    }
+
+    let resolved_package =
+        resolve_relative_python_package(enclosing_module, is_package_init, import_ref.level)?;
+    let shallowest = Some(resolved_package.shallowest_ancestor);
+    let Some(base_module) = (match (
+        resolved_package.package_prefix,
+        import_ref.module.as_deref(),
+    ) {
+        (Some(prefix), Some(suffix)) => Some(format!("{prefix}.{suffix}")),
+        (Some(prefix), None) => Some(prefix),
+        (None, Some(suffix)) => Some(suffix.to_owned()),
+        (None, None) => None,
+    }) else {
+        let member = import_ref.imported_name.as_ref()?;
+        if layout.python_module_file(member, source).is_some()
+            || layout.is_python_namespace_dir(member, source)
+        {
+            return Some(ResolvedPythonImport {
+                module_path: member.clone(),
+                full_target_path: member.clone(),
+                imported_member: None,
+                shallowest_relative_ancestor: shallowest,
+            });
+        }
+        return Some(ResolvedPythonImport {
+            module_path: ROOT_MODULE_TAG.to_owned(),
+            full_target_path: member.clone(),
+            imported_member: Some(member.clone()),
+            shallowest_relative_ancestor: shallowest,
+        });
+    };
+
+    Some(resolve_imported_member_on_base(
+        base_module,
+        import_ref.imported_name.as_deref(),
+        shallowest,
+        layout,
+        source,
+    ))
+}
+
+fn resolve_imported_member_on_base(
+    base_module: String,
+    imported_name: Option<&str>,
+    shallowest_relative_ancestor: Option<String>,
+    layout: &ProjectLayout,
+    source: &dyn FileSource,
+) -> ResolvedPythonImport {
+    if imported_name == Some("*") {
+        return ResolvedPythonImport {
+            module_path: base_module.clone(),
+            full_target_path: base_module,
+            imported_member: Some("*".to_owned()),
+            shallowest_relative_ancestor,
+        };
+    }
+    if let Some(member) = imported_name {
+        let candidate_submodule = format!("{base_module}.{member}");
+        if layout
+            .python_module_file(&candidate_submodule, source)
+            .is_some()
+            || layout.is_python_namespace_dir(&candidate_submodule, source)
+        {
+            return ResolvedPythonImport {
+                module_path: candidate_submodule.clone(),
+                full_target_path: candidate_submodule,
+                imported_member: None,
+                shallowest_relative_ancestor,
+            };
+        }
+        return ResolvedPythonImport {
+            module_path: base_module,
+            full_target_path: candidate_submodule,
+            imported_member: Some(member.to_owned()),
+            shallowest_relative_ancestor,
+        };
+    }
+    ResolvedPythonImport {
+        module_path: base_module.clone(),
+        full_target_path: base_module,
+        imported_member: None,
+        shallowest_relative_ancestor,
+    }
+}
+
+fn is_python_import_allowed_by_exports(
+    target_root: &str,
+    resolved: &ResolvedPythonImport,
+    exports: &[ExportPattern],
+) -> bool {
+    if resolved.module_path == target_root {
+        return match resolved.imported_member.as_deref() {
+            None | Some("*") => exports
+                .iter()
+                .any(|export_pattern| export_pattern.matches("*")),
+            Some(member) => exports
+                .iter()
+                .any(|export_pattern| export_pattern.matches(member)),
+        };
+    }
+    let Some(subpath) = resolved
+        .full_target_path
+        .strip_prefix(target_root)
+        .and_then(|rest| rest.strip_prefix(PYTHON_MODULE_SEPARATOR))
+    else {
+        return false;
+    };
+    if resolved.imported_member.as_deref() == Some("*") {
+        let star_probe = format!("{subpath}.*");
+        return exports
+            .iter()
+            .any(|export_pattern| export_pattern.matches(&star_probe));
+    }
+    exports
+        .iter()
+        .any(|export_pattern| export_pattern.matches(subpath))
+}
+
+fn is_first_party_python_import(
+    resolved_module_path: &str,
+    layout: &ProjectLayout,
+    source: &dyn FileSource,
+    spec: &ArchitectureSpec,
+) -> bool {
+    let top_package = resolved_module_path
+        .split(PYTHON_MODULE_SEPARATOR)
+        .next()
+        .unwrap_or(resolved_module_path);
+    layout.python_module_file(top_package, source).is_some()
+        || layout.is_python_namespace_dir(top_package, source)
+        || spec.components.iter().any(|comp| {
+            comp.roots
+                .iter()
+                .any(|root| root.split(PYTHON_MODULE_SEPARATOR).next() == Some(top_package))
+        })
+}
+
+fn collect_python_unmapped_findings(
+    file: &ParsedFile,
+    path: &Path,
+    module_path: &str,
+    spec: &ArchitectureSpec,
+    cached_summary: Option<&PythonFileSummary>,
+    out: &mut Vec<UnmappedArchitectureModuleFinding>,
+) {
+    let owned_summary;
+    #[expect(
+        clippy::option_if_let_else,
+        reason = "closure cannot return reference to outer delayed-init binding"
+    )]
+    let py_summary = if let Some(existing) = cached_summary {
+        existing
+    } else {
+        owned_summary = summarize_python_file(file);
+        &owned_summary
+    };
+    if py_summary.non_routing_items.is_empty() {
+        let is_pure_package_router = is_python_package_init(path)
+            && (module_path == ROOT_MODULE_TAG
+                || spec.components.iter().any(|comp| {
+                    comp.roots
+                        .iter()
+                        .any(|root| is_in_python_subtree(root, module_path))
+                }));
+        if !is_pure_package_router {
+            out.push(UnmappedArchitectureModuleFinding {
+                span: default_file_header_span(file),
+                name: module_path.to_owned(),
+                module: module_path.to_owned(),
+            });
+        }
+    } else {
+        for item in &py_summary.non_routing_items {
+            out.push(UnmappedArchitectureModuleFinding {
+                span: item.span,
+                name: item.name.clone(),
+                module: module_path.to_owned(),
+            });
+        }
+    }
+}
+
 fn default_file_header_span(file: &ParsedFile) -> SourceSpan {
     let source = file.source_text();
     let end = source.lines().next().map_or(0, str::len).min(source.len());
     SourceSpan::new(0, end)
+}
+
+fn check_python_external_owner(
+    module_path: &str,
+    top_package: &str,
+    span: SourceSpan,
+    spec: &ArchitectureSpec,
+    out: &mut Vec<UnownedExternalDependencyFinding>,
+) {
+    if let Some(allowed_prefixes) = spec.external_package_owners.get(top_package) {
+        let is_allowed = allowed_prefixes
+            .iter()
+            .any(|prefix| is_in_python_subtree(module_path, prefix));
+        if !is_allowed {
+            let formatted_owners = allowed_prefixes
+                .iter()
+                .map(|prefix| format!("`{prefix}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push(UnownedExternalDependencyFinding {
+                span,
+                module: module_path.to_owned(),
+                dependency: top_package.to_owned(),
+                owner: formatted_owners,
+            });
+        }
+    }
+}
+
+fn python_sibling_violation(
+    source_module: &str,
+    source_root: &str,
+    target_module: &str,
+    target_root: &str,
+) -> Option<String> {
+    if source_root != target_root {
+        return Some(target_root.to_owned());
+    }
+    let source_child = direct_child_in_python_root(source_module, source_root)?;
+    let target_child = direct_child_in_python_root(target_module, target_root)?;
+    (source_child != target_child).then(|| format!("{target_root}.{target_child}"))
+}
+
+fn direct_child_in_python_root<'a>(module_path: &'a str, root: &str) -> Option<&'a str> {
+    let rest = module_path
+        .strip_prefix(root)?
+        .strip_prefix(PYTHON_MODULE_SEPARATOR)?;
+    let child = rest.split(PYTHON_MODULE_SEPARATOR).next()?;
+    (!child.is_empty()).then_some(child)
+}
+
+fn is_in_python_subtree(module_path: &str, prefix: &str) -> bool {
+    module_path == prefix
+        || module_path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with(PYTHON_MODULE_SEPARATOR))
 }
 
 fn is_rust_path_allowed_by_exports(
