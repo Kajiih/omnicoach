@@ -51,6 +51,7 @@ pub(super) use self::declaration_order::{
 pub(in crate::code_lint) use self::declaration_order::{
     collect_fields_after_methods, collect_statements_after_main_guard,
 };
+pub use self::docstrings::OwnedDocstring;
 pub(in crate::code_lint) use self::docstrings::{
     DocstringEntry, DocstringLine, DocstringSection, DocstringSectionKind, PythonDocstring,
     is_clause_end, is_clause_start, leading_verb, none_words, normalize_docstring_text,

@@ -18,28 +18,31 @@ const NONE: &str = "None";
 pub struct PythonDocstring<'a> {
     /// The string literal expression.
     node: AstNode<'a>,
-    /// The literal's value after escape processing.
-    text: String,
-    /// True if each line of [`Self::text`] is the same line of the literal's source, which holds
+    /// The literal's owned docstring content after escape processing.
+    owned: OwnedDocstring,
+    /// True if each line of [`Self::owned`] is the same line of the literal's source, which holds
     /// unless the literal is implicitly concatenated or contains a line-altering escape (`\n`,
     /// line continuation). [`Self::line_node`] relies on it.
     lines_match_source: bool,
 }
 
 impl<'a> PythonDocstring<'a> {
+    /// The owned, AST-lifetime-independent docstring content.
+    #[must_use]
+    pub const fn as_owned(&self) -> &OwnedDocstring {
+        &self.owned
+    }
+
     /// The number of lines that contain non-whitespace text.
     #[must_use]
     pub fn non_blank_line_count(&self) -> usize {
-        self.text
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count()
+        self.as_owned().non_blank_line_count()
     }
 
     /// The Google-style sections (`Args:`, `Returns:`, …) of the docstring, in order.
     #[must_use]
     pub fn sections(&self) -> Vec<DocstringSection> {
-        parse_google_sections(&self.text)
+        self.owned.sections()
     }
 
     /// Returns true if the docstring contains at least one section of `kind`.
@@ -62,49 +65,52 @@ impl<'a> PythonDocstring<'a> {
     /// The first non-blank line, without surrounding whitespace.
     #[must_use]
     pub fn summary(&self) -> Option<&str> {
-        self.text
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
+        self.owned.summary()
     }
 
     /// The first non-blank line, with its 0-based line index and without surrounding whitespace.
     #[must_use]
     pub fn summary_line(&self) -> Option<DocstringLine> {
-        self.text.lines().enumerate().find_map(|(index, line)| {
-            let trimmed = line.trim();
-            (!trimmed.is_empty()).then(|| DocstringLine {
-                index,
-                text: trimmed.to_owned(),
+        self.owned
+            .text()
+            .lines()
+            .enumerate()
+            .find_map(|(index, line)| {
+                let trimmed = line.trim();
+                (!trimmed.is_empty()).then(|| DocstringLine {
+                    index,
+                    text: trimmed.to_owned(),
+                })
             })
-        })
     }
 
     /// The first paragraph (the lines up to the first blank line after the summary), joined by
     /// single spaces.
+    #[cfg(test)]
     #[must_use]
     pub fn summary_paragraph(&self) -> String {
-        self.text
-            .lines()
-            .map(str::trim)
-            .skip_while(|line| line.is_empty())
-            .take_while(|line| !line.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ")
+        self.owned.summary_paragraph()
     }
 
     /// The text compared for equality between docstrings: whitespace runs collapsed to one
     /// space, lowercase, without trailing periods. Indentation and line wrapping do not matter.
     #[must_use]
     pub fn normalized(&self) -> String {
-        normalize_docstring_text(&self.text)
+        self.owned.normalized()
     }
 
     /// Returns true if the docstring, once normalized, equals the normalized summary paragraph of
     /// `other`.
     #[must_use]
     pub fn copies_summary_of(&self, other: &Self) -> bool {
-        self.normalized() == normalize_docstring_text(&other.summary_paragraph())
+        self.copies_owned_summary_of(&other.owned)
+    }
+
+    /// Returns true if the docstring, once normalized, equals the normalized summary paragraph of
+    /// `other`.
+    #[must_use]
+    pub fn copies_owned_summary_of(&self, other: &OwnedDocstring) -> bool {
+        self.normalized() == other.normalized_summary_paragraph()
     }
 
     /// Returns true if the docstring has a `Returns:` or `Yields:` section.
@@ -202,6 +208,76 @@ impl<'a> PythonDocstring<'a> {
     }
 }
 
+/// Owned, AST-lifetime-independent docstring content extracted for cross-file summaries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedDocstring {
+    /// Decoded string literal text.
+    text: String,
+}
+
+impl OwnedDocstring {
+    /// Creates an [`OwnedDocstring`] from decoded docstring text.
+    #[must_use]
+    pub const fn new(text: String) -> Self {
+        Self { text }
+    }
+
+    /// Raw decoded docstring text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The number of lines that contain non-whitespace text.
+    #[must_use]
+    pub fn non_blank_line_count(&self) -> usize {
+        self.text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count()
+    }
+
+    /// The first non-blank line, without surrounding whitespace.
+    #[must_use]
+    pub fn summary(&self) -> Option<&str> {
+        self.text
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+    }
+
+    /// [`Self::summary_paragraph`] normalized with the same whitespace, case, and trailing-period
+    /// rules as [`Self::normalized`].
+    #[must_use]
+    pub fn normalized_summary_paragraph(&self) -> String {
+        normalize_docstring_text(&self.summary_paragraph())
+    }
+
+    /// The first paragraph (lines up to the first blank line after the summary), joined by single spaces.
+    #[must_use]
+    pub fn summary_paragraph(&self) -> String {
+        self.text
+            .lines()
+            .map(str::trim)
+            .skip_while(|line| line.is_empty())
+            .take_while(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Whitespace-collapsed, lowercase text without trailing periods.
+    #[must_use]
+    pub fn normalized(&self) -> String {
+        normalize_docstring_text(&self.text)
+    }
+
+    /// Parsed Google-style sections (`Args:`, `Returns:`, …) in declaration order.
+    #[must_use]
+    pub fn sections(&self) -> Vec<DocstringSection> {
+        parse_google_sections(&self.text)
+    }
+}
+
 /// Returns the docstring of `body` (a module, class, or function body), if its first statement
 /// is a plain string literal. Bytes and f-strings are not docstrings.
 pub(super) fn docstring_of<'a>(
@@ -221,7 +297,7 @@ pub(super) fn docstring_of<'a>(
         && raw.matches('\n').count() == text.matches('\n').count();
     Some(PythonDocstring {
         node: AstNode::from_span(file, span),
-        text,
+        owned: OwnedDocstring::new(text),
         lines_match_source,
     })
 }
@@ -890,7 +966,9 @@ mod tests {
     fn function_docstring(source: &str) -> Option<String> {
         let file = ParsedFile::new(source, Language::Python);
         let signatures = super::super::extract_function_signatures(&file);
-        signatures[0].docstring().map(|docstring| docstring.text)
+        signatures[0]
+            .docstring()
+            .map(|docstring| docstring.as_owned().text().to_owned())
     }
 
     #[rstest]
@@ -985,7 +1063,7 @@ mod tests {
             classes[0]
                 .docstring
                 .as_ref()
-                .map(|docstring| docstring.text.as_str()),
+                .map(|docstring| docstring.as_owned().text()),
             Some("Doc.")
         );
     }
