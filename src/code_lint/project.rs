@@ -3,6 +3,7 @@
 architecture_component!(CodeLintProject);
 
 mod architecture;
+mod context;
 mod index;
 mod layout;
 mod source;
@@ -15,6 +16,7 @@ pub use self::architecture::{
     UnmappedArchitectureModuleFinding, UnownedExternalDependencyFinding,
     evaluate_file_architecture, resolve_architecture_spec,
 };
+pub use self::context::ProjectContext;
 pub use self::index::{
     ImportedProtocolSummary, InheritedDocstringMatch, ProjectIndex, PythonClassId,
     ResolvedClassAncestors, ResolvedPythonTarget,
