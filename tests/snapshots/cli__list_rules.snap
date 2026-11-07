@@ -69,7 +69,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `unexplained-optional-return` (python): Flags docstring `Returns:` and `Yields:` sections that say `or None` or `can be None` without stating when `None` is returned.
 - `unexplained-parameter` (python): Requires an `Args:` section when a nontrivial function has an optional, boolean, callable or variadic parameter.
 - `unexplained-return` (python): Requires a `Returns:` section when a nontrivial function has an optional, boolean, union or unannotated result.
-- `uninherited-protocol` (python): Flags Python classes that implement every method of an in-file Protocol without inheriting from it.
+- `uninherited-protocol` (python): Flags Python classes that implement every method of an in-scope Protocol without inheriting from it.
 - `unknown-suppression-rule` (python, rust): Flags suppression directives that name an unknown or unsuppressible rule.
 - `unmatched-logger-placeholder` (python): Flags logger calls that pass positional arguments to a message with an unmatched named placeholder.
 - `unslotted-dataclass` (python): Requires Python dataclasses to declare `slots=True`.
