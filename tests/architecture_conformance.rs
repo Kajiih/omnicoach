@@ -32,6 +32,7 @@ struct SourceFileEntry {
     path: PathBuf,
     module_path: String,
     is_crate_root: bool,
+    source: String,
     summary: RustFileSummary,
 }
 
@@ -46,6 +47,7 @@ impl SourceFileEntry {
             path,
             module_path,
             is_crate_root,
+            source: source.to_owned(),
             summary,
         }
     }
@@ -182,7 +184,7 @@ static DECLARED_COMPONENTS: LazyLock<BTreeMap<String, ArchitectureComponent>> =
         SOURCE_FILES
             .iter()
             .filter_map(|entry| {
-                let [name] = entry.summary.architecture_components.as_slice() else {
+                let [(_, name)] = entry.summary.architecture_components.as_slice() else {
                     return None;
                 };
                 let component = name.parse::<ArchitectureComponent>().ok()?;
@@ -367,8 +369,8 @@ fn is_private_child_facade_reexport(
 fn second_path_violations_in_entry(entry: &SourceFileEntry) -> Vec<String> {
     let mut violations = Vec::new();
     if !entry.is_crate_root {
-        for export in &entry.summary.macro_exports {
-            violations.push(export.clone());
+        for _ in &entry.summary.macro_exports {
+            violations.push("#[macro_export]".to_owned());
         }
     }
     for visible_use in &entry.summary.visible_uses {
@@ -439,7 +441,7 @@ fn validate_component_declarations_and_routers(
     for entry in entries {
         match entry.summary.architecture_components.as_slice() {
             [] => {}
-            [component_name] => match component_name.parse::<ArchitectureComponent>() {
+            [(_, component_name)] => match component_name.parse::<ArchitectureComponent>() {
                 Err(_) => {
                     violations.push(format!(
                         "{}: unknown component '{component_name}'",
@@ -451,10 +453,11 @@ fn validate_component_declarations_and_routers(
                 }
             },
             multiple => {
+                let names: Vec<&str> = multiple.iter().map(|(_, name)| name.as_str()).collect();
                 violations.push(format!(
                     "{}: multiple architecture_component! declarations found: {}",
                     entry.path.display(),
-                    multiple.join(", ")
+                    names.join(", ")
                 ));
             }
         }
@@ -503,7 +506,11 @@ fn validate_component_declarations_and_routers(
                 } else {
                     entry.summary.macro_definitions.as_slice()
                 });
-        for (line, item) in disallowed_items {
+        for (span, item) in disallowed_items {
+            let line = 1 + entry.source[..span.start]
+                .bytes()
+                .filter(|&byte| byte == b'\n')
+                .count();
             violations.push(format!(
                 "{}:{line}: pure namespace router without 'architecture_component!' may only contain external 'mod' declarations, found: {item}",
                 entry.path.display()

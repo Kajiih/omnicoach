@@ -37,14 +37,7 @@ pub fn collect_inline_test_ranges(file: &ParsedFile) -> &[std::ops::Range<usize>
 }
 
 fn collect_inline_test_ranges_rec(node: &SyntaxNode, ranges: &mut Vec<std::ops::Range<usize>>) {
-    let has_test_attr = node
-        .children()
-        .filter_map(ast::Attr::cast)
-        .any(|attribute| {
-            attribute.kind() == ast::AttrKind::Outer
-                && (is_conditional_test_attribute(&attribute) || is_test_attribute(&attribute))
-        });
-    if has_test_attr {
+    if has_outer_test_attribute(node) {
         let start: usize = node.text_range().start().into();
         let end: usize = node.text_range().end().into();
         ranges.push(start..end);
@@ -55,6 +48,18 @@ fn collect_inline_test_ranges_rec(node: &SyntaxNode, ranges: &mut Vec<std::ops::
             collect_inline_test_ranges_rec(&child, ranges);
         }
     }
+}
+
+/// Returns true if `node` carries an outer `#[cfg(test)]` or test function (`#[test]`, `#[rstest]`,
+/// `#[test_case(...)]`) attribute.
+#[must_use]
+pub(super) fn has_outer_test_attribute(node: &SyntaxNode) -> bool {
+    node.children()
+        .filter_map(ast::Attr::cast)
+        .any(|attribute| {
+            attribute.kind() == ast::AttrKind::Outer
+                && (is_conditional_test_attribute(&attribute) || is_test_attribute(&attribute))
+        })
 }
 
 /// Returns true if `attribute` represents a `#[cfg(test)]` attribute.

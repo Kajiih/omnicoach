@@ -29,8 +29,8 @@ pub(super) use self::declaration_order::{
     collect_declaration_scopes, collect_intra_file_ref_sites, enclosing_impl_self_type,
 };
 pub use self::file_summary::{
-    ExternalModDeclaration, RustFileSummary, RustPathReference, VisibleUseDeclaration,
-    summarize_rust_file,
+    DefinedComponentEntry, ExternalModDeclaration, RustFileSummary, RustPathReference,
+    VisibleUseDeclaration, summarize_rust_file, summarize_rust_module_header,
 };
 pub(super) use self::imports::collect_import_map;
 pub(super) use self::literals::collect_literal_occurrences;

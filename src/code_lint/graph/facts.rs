@@ -171,8 +171,15 @@ fn parse_rust_module(path: &str, source: &str) -> RustModuleEntry {
     let is_crate_root = is_rust_crate_root(&module_path);
     let parsed = ParsedFile::rust(source);
     let summary = summarize_rust_file(&parsed);
-    let declared_component = summary.architecture_components.first().cloned();
-    let defined_architecture = summary.defined_architecture;
+    let declared_component = summary
+        .architecture_components
+        .first()
+        .map(|(_, name)| name.clone());
+    let defined_architecture = summary
+        .defined_architecture
+        .into_iter()
+        .map(|entry| (entry.name, entry.depends_on))
+        .collect();
     let external_mods = summary.external_mods;
     let visible_reexports = summary
         .visible_uses

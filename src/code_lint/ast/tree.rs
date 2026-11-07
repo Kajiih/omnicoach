@@ -73,6 +73,12 @@ impl ParsedFile {
         std::borrow::Cow::Borrowed(&self.source)
     }
 
+    /// Slices the source text covered by `span`, or returns `""` if `span` is out of bounds.
+    #[must_use]
+    pub fn span_text(&self, span: SourceSpan) -> &str {
+        self.source.get(span.start..span.end).unwrap_or_default()
+    }
+
     /// Returns whether the parser had to recover from invalid or missing syntax.
     #[must_use]
     pub fn has_syntax_error(&self) -> bool {
@@ -103,6 +109,16 @@ impl ParsedFile {
             CodeLintAst::Rust(parsed) => Some(parsed),
             CodeLintAst::Python(_) => None,
         }
+    }
+
+    /// Converts a byte `span` within this file into a [`SourceLocation`] for `path`.
+    #[must_use]
+    pub(crate) fn to_source_location(
+        &self,
+        path: impl Into<PathBuf>,
+        span: SourceSpan,
+    ) -> SourceLocation {
+        SourceLocation::file_span(path, span, self.line_index.lookup(span.start))
     }
 }
 
@@ -156,7 +172,7 @@ impl<'a> AstNode<'a> {
         self,
         path: impl Into<PathBuf>,
     ) -> SourceLocation {
-        SourceLocation::file_span(path, self.span, self.start_coordinate())
+        self.file.to_source_location(path, self.span)
     }
 
     /// Resolves the 1-indexed start `(line, column)` coordinate of this node.

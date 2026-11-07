@@ -4,15 +4,20 @@ use super::attributes::attribute_terminal_name;
 use super::names::{
     SELF_KEYWORD, compact_path_text, is_path_segment_token_kind, macro_call_terminal_name,
 };
+use super::test_analysis::has_outer_test_attribute;
 use super::tree::extract_macro_arguments;
 use super::trivia::is_rust_comment_kind;
 use crate::code_lint::ast::imports::{ResolvedName, resolve_name};
 use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_rowan_range};
+use crate::diagnostic::SourceSpan;
 use ra_ap_syntax::ast::{
     self, HasAttrs as _, HasGenericArgs as _, HasModuleItem as _, HasName as _, HasVisibility as _,
 };
 use ra_ap_syntax::{AstNode as _, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 use std::collections::HashSet;
+
+const ARCHITECTURE_COMPONENT_MACRO: &str = "architecture_component";
+const DEFINE_ARCHITECTURE_MACRO: &str = "define_architecture";
 
 /// Visibility and name of a top-level external `mod <name>;` declaration in a Rust file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +28,8 @@ pub struct ExternalModDeclaration {
     pub declaration_text: String,
     /// True when the declaration has no `visibility_modifier` (`mod child;`).
     pub is_private: bool,
+    /// Byte span of the declaration (excluding leading attributes and doc comments).
+    pub span: SourceSpan,
 }
 
 /// A referenced path in production Rust code (from a `use` tree or inline qualified path).
@@ -30,11 +37,15 @@ pub struct ExternalModDeclaration {
 pub struct RustPathReference {
     /// 1-indexed starting line number of the reference or enclosing `use` declaration.
     pub line: usize,
+    /// Byte span of the reference or enclosing `use` declaration.
+    pub span: SourceSpan,
     /// Raw syntactic path segments joined by `::` (e.g. `"crate::code_lint::ast::ParsedFile"`,
     /// `"super::AstNode"`, `"self::rust::collect_bindings"`, `"ra_ap_syntax::SyntaxNode"`).
     pub raw_path: String,
     /// Trimmed source text of the enclosing `use` declaration or inline path node for diagnostics.
     pub statement_text: String,
+    /// True when this reference originates from a glob `use ...::*;` tree.
+    pub is_glob: bool,
 }
 
 /// A visible `use` declaration (`pub use ...`, `pub(crate) use ...`) in production Rust code.
@@ -42,30 +53,42 @@ pub struct RustPathReference {
 pub struct VisibleUseDeclaration {
     /// 1-indexed starting line number.
     pub line: usize,
+    /// Byte span of the `use` declaration (excluding leading attributes and doc comments).
+    pub span: SourceSpan,
     /// Full trimmed source text (e.g. `"pub use self::child::Item;"`).
     pub declaration_text: String,
     /// Expanded target paths imported by this `use` tree (e.g. `["self::child::Item"]`).
     pub target_paths: Vec<String>,
 }
 
+/// Component entry extracted from a `define_architecture! { ... }` macro invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefinedComponentEntry {
+    /// Component variant identifier (e.g. `"CodeLintAst"`).
+    pub name: String,
+    /// Directly permitted dependency component names (`=> [Diagnostic]`).
+    pub depends_on: Vec<String>,
+    /// External crates encapsulated by this component (`(owns_external: ["ra_ap_syntax"])`).
+    pub owns_external: Vec<String>,
+}
+
 /// Structural and dependency summary of the production code in a Rust source file,
 /// extracted in a single CST pass while skipping `#[cfg(test)]` and `#[test]` subtrees.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RustFileSummary {
-    /// Arguments of all `architecture_component!(...)` macro invocations in production code.
-    pub architecture_components: Vec<String>,
-    /// `(component_name, declared_dependencies)` entries from `define_architecture! { ... }` macro
-    /// invocations in production code.
-    pub(in crate::code_lint) defined_architecture: Vec<(String, Vec<String>)>,
+    /// `(span, argument)` pairs of `architecture_component!(...)` macro invocations in production code.
+    pub architecture_components: Vec<(SourceSpan, String)>,
+    /// Component entries extracted from `define_architecture! { ... }` macro invocations in production code.
+    pub defined_architecture: Vec<DefinedComponentEntry>,
     /// Top-level external `mod <name>;` declarations (`mod foo;`, `pub mod foo;`).
     pub external_mods: Vec<ExternalModDeclaration>,
-    /// `(line, item_text)` of top-level production items that are neither external `mod` declarations
+    /// `(span, item_text)` of top-level production items that are neither external `mod` declarations
     /// nor `macro_rules!` definitions.
-    pub non_namespace_items: Vec<(usize, String)>,
-    /// `(line, item_text)` of top-level production `macro_rules!` definitions (`macro_definition`).
-    pub macro_definitions: Vec<(usize, String)>,
-    /// All `#[macro_export]` attribute texts in production code.
-    pub macro_exports: Vec<String>,
+    pub non_namespace_items: Vec<(SourceSpan, String)>,
+    /// `(span, item_text)` of top-level production `macro_rules!` definitions (`macro_definition`).
+    pub macro_definitions: Vec<(SourceSpan, String)>,
+    /// Byte spans of all `#[macro_export]` attributes in production code.
+    pub macro_exports: Vec<SourceSpan>,
     /// Visible `use` declarations (`pub use`, `pub(crate) use`, etc.) excluding `pub(crate) use <local_macro>;`.
     pub visible_uses: Vec<VisibleUseDeclaration>,
     /// All module/item paths referenced in production code (`use` trees, inline qualified paths,
@@ -84,45 +107,29 @@ pub fn summarize_rust_file(file: &ParsedFile) -> RustFileSummary {
     let mut summary = RustFileSummary::default();
     let mut defined_macros = HashSet::new();
 
-    for item in source_file.items() {
-        let start_offset: usize = item.syntax().text_range().start().into();
-        if file.is_in_rust_inline_test(start_offset) {
-            continue;
-        }
-        let ItemDeclaration {
-            line: item_line,
-            text: declaration_text,
-        } = item_line_and_text(file, item.syntax());
-        match &item {
-            ast::Item::Module(module) if module.item_list().is_none() => {
-                if let Some(name_node) = module.name() {
-                    let is_private = module.visibility().is_none();
-                    summary.external_mods.push(ExternalModDeclaration {
-                        name: name_node.text().trim().to_string(),
-                        declaration_text,
-                        is_private,
-                    });
-                }
-            }
-            ast::Item::MacroRules(macro_rules) => {
-                if let Some(name_node) = macro_rules.name() {
-                    defined_macros.insert(name_node.text().to_string());
-                }
-                summary
-                    .macro_definitions
-                    .push((item_line, declaration_text));
-            }
-            _ => {
-                summary
-                    .non_namespace_items
-                    .push((item_line, declaration_text));
-            }
-        }
-    }
+    summarize_top_level_items(&source_file, file, &mut defined_macros, &mut summary, false);
 
     for child in source_file.syntax().children() {
         summarize_rust_node(&child, file, &defined_macros, &mut summary);
     }
+
+    summary
+}
+
+/// Extracts a body-free top-level structural summary of `file`.
+///
+/// Records component declarations, `define_architecture!`, external `mod` declarations, `use`
+/// declarations, and top-level item headers without walking function, impl, or expression bodies.
+#[must_use]
+pub fn summarize_rust_module_header(file: &ParsedFile) -> RustFileSummary {
+    let Some(parsed) = file.rs_parsed() else {
+        return RustFileSummary::default();
+    };
+    let source_file = parsed.tree();
+    let mut summary = RustFileSummary::default();
+    let mut defined_macros = HashSet::new();
+
+    summarize_top_level_items(&source_file, file, &mut defined_macros, &mut summary, true);
 
     summary
 }
@@ -133,17 +140,19 @@ fn summarize_rust_node(
     defined_macros: &HashSet<String>,
     summary: &mut RustFileSummary,
 ) {
-    let start_offset: usize = node.text_range().start().into();
-    if file.is_in_rust_inline_test(start_offset) {
+    if has_outer_test_attribute(node) {
         return;
     }
+    let start_offset: usize = node.text_range().start().into();
 
     if let Some(attribute) = ast::Attr::cast(node.clone()) {
         if attribute.kind() == ast::AttrKind::Outer
             && attribute_terminal_name(&attribute)
                 .is_some_and(|terminal| terminal.text() == "macro_export")
         {
-            summary.macro_exports.push("#[macro_export]".to_string());
+            summary
+                .macro_exports
+                .push(span_from_rowan_range(attribute.syntax().text_range()));
         }
         for child in node.children() {
             if child.kind() != SyntaxKind::TOKEN_TREE {
@@ -154,6 +163,9 @@ fn summarize_rust_node(
     }
 
     if let Some(use_item) = ast::Use::cast(node.clone()) {
+        for attribute in use_item.attrs() {
+            summarize_rust_node(attribute.syntax(), file, defined_macros, summary);
+        }
         summarize_use_item(&use_item, file, defined_macros, summary);
         return;
     }
@@ -166,29 +178,22 @@ fn summarize_rust_node(
     }
 
     if let Some(macro_call) = ast::MacroCall::cast(node.clone()) {
-        let macro_ast_node = AstNode::from_span(
-            file,
-            span_from_rowan_range(macro_call.syntax().text_range()),
-        );
         let terminal_name = macro_call_terminal_name(&macro_call);
-        if terminal_name == "architecture_component" {
-            let component_argument: String = extract_macro_arguments(&macro_ast_node)
-                .into_iter()
-                .map(|argument| argument.text().into_owned())
-                .collect();
-            summary.architecture_components.push(component_argument);
+        if terminal_name == ARCHITECTURE_COMPONENT_MACRO {
+            record_architecture_component(&macro_call, file, &mut summary.architecture_components);
         }
         if let Some(token_tree) = macro_call.token_tree() {
-            if terminal_name == "define_architecture" {
+            if terminal_name == DEFINE_ARCHITECTURE_MACRO {
                 collect_defined_architecture(&token_tree, &mut summary.defined_architecture);
+            } else if token_tree.syntax().text().contains_char(':') {
+                let statement_text = item_line_and_text(file, node).text;
+                collect_token_tree_paths(
+                    &token_tree,
+                    file,
+                    &statement_text,
+                    &mut summary.referenced_paths,
+                );
             }
-            let statement_text = item_line_and_text(file, node).text;
-            collect_token_tree_paths(
-                &token_tree,
-                file,
-                &statement_text,
-                &mut summary.referenced_paths,
-            );
         }
     }
 
@@ -207,8 +212,10 @@ fn summarize_rust_node(
             if let ResolvedName::Imported(imported) = resolve_name(file, trimmed) {
                 summary.referenced_paths.push(RustPathReference {
                     line: file.line_index.line(start_offset),
+                    span: span_from_rowan_range(name_ref.syntax().text_range()),
                     raw_path: imported,
                     statement_text: trimmed.to_string(),
+                    is_glob: false,
                 });
             }
         }
@@ -224,30 +231,135 @@ fn summarize_rust_node(
     }
 }
 
+fn summarize_top_level_items(
+    source_file: &ast::SourceFile,
+    file: &ParsedFile,
+    defined_macros: &mut HashSet<String>,
+    summary: &mut RustFileSummary,
+    include_header_macros_and_uses: bool,
+) {
+    if include_header_macros_and_uses {
+        for item in source_file.items() {
+            if has_outer_test_attribute(item.syntax()) {
+                continue;
+            }
+            if let ast::Item::MacroRules(macro_rules) = item
+                && let Some(name_node) = macro_rules.name()
+            {
+                defined_macros.insert(name_node.text().to_string());
+            }
+        }
+    }
+    for item in source_file.items() {
+        if has_outer_test_attribute(item.syntax()) {
+            continue;
+        }
+        let ItemDeclaration {
+            span: item_span,
+            text: declaration_text,
+            ..
+        } = item_line_and_text(file, item.syntax());
+        match &item {
+            ast::Item::Module(module) if module.item_list().is_none() => {
+                if let Some(name_node) = module.name() {
+                    let is_private = module.visibility().is_none();
+                    summary.external_mods.push(ExternalModDeclaration {
+                        name: name_node.text().trim().to_string(),
+                        declaration_text,
+                        is_private,
+                        span: item_span,
+                    });
+                }
+            }
+            ast::Item::MacroRules(macro_rules) => {
+                if let Some(name_node) = macro_rules.name() {
+                    defined_macros.insert(name_node.text().to_string());
+                }
+                summary
+                    .macro_definitions
+                    .push((item_span, declaration_text));
+            }
+            ast::Item::MacroCall(macro_call) => {
+                let terminal_name = macro_call_terminal_name(macro_call);
+                if terminal_name == ARCHITECTURE_COMPONENT_MACRO {
+                    if include_header_macros_and_uses {
+                        record_architecture_component(
+                            macro_call,
+                            file,
+                            &mut summary.architecture_components,
+                        );
+                    }
+                } else if terminal_name == DEFINE_ARCHITECTURE_MACRO {
+                    if include_header_macros_and_uses
+                        && let Some(token_tree) = macro_call.token_tree()
+                    {
+                        collect_defined_architecture(
+                            &token_tree,
+                            &mut summary.defined_architecture,
+                        );
+                    }
+                } else {
+                    summary
+                        .non_namespace_items
+                        .push((item_span, declaration_text));
+                }
+            }
+            ast::Item::Use(use_item) => {
+                summary
+                    .non_namespace_items
+                    .push((item_span, declaration_text));
+                if include_header_macros_and_uses {
+                    summarize_use_item(use_item, file, defined_macros, summary);
+                }
+            }
+            _ => {
+                summary
+                    .non_namespace_items
+                    .push((item_span, declaration_text));
+            }
+        }
+    }
+}
+
+fn record_architecture_component(
+    macro_call: &ast::MacroCall,
+    file: &ParsedFile,
+    architecture_components: &mut Vec<(SourceSpan, String)>,
+) {
+    let macro_span = span_from_rowan_range(macro_call.syntax().text_range());
+    let macro_ast_node = AstNode::from_span(file, macro_span);
+    let component_argument: String = extract_macro_arguments(&macro_ast_node)
+        .into_iter()
+        .map(|argument| argument.text().into_owned())
+        .collect();
+    architecture_components.push((macro_span, component_argument));
+}
+
 fn summarize_use_item(
     use_item: &ast::Use,
     file: &ParsedFile,
     defined_macros: &HashSet<String>,
     summary: &mut RustFileSummary,
 ) {
-    for attribute in use_item.attrs() {
-        summarize_rust_node(attribute.syntax(), file, defined_macros, summary);
-    }
     let ItemDeclaration {
         line,
+        span,
         text: declaration_text,
     } = item_line_and_text(file, use_item.syntax());
-    let mut target_paths = Vec::new();
+    let mut expanded_targets = Vec::new();
     if let Some(use_tree) = use_item.use_tree() {
-        expand_use_tree(&use_tree, "", &mut target_paths);
+        expand_use_tree(&use_tree, "", &mut expanded_targets);
     }
-    for raw_path in &target_paths {
+    for (raw_path, is_glob) in &expanded_targets {
         summary.referenced_paths.push(RustPathReference {
             line,
+            span,
             raw_path: raw_path.clone(),
             statement_text: declaration_text.clone(),
+            is_glob: *is_glob,
         });
     }
+    let target_paths: Vec<String> = expanded_targets.into_iter().map(|(path, _)| path).collect();
     if let Some(visibility) = use_item.visibility() {
         let is_own_macro_path = visibility.syntax().text().to_string().trim() == "pub(crate)"
             && matches!(
@@ -257,6 +369,7 @@ fn summarize_use_item(
         if !is_own_macro_path {
             summary.visible_uses.push(VisibleUseDeclaration {
                 line,
+                span,
                 declaration_text,
                 target_paths,
             });
@@ -264,7 +377,7 @@ fn summarize_use_item(
     }
 }
 
-fn expand_use_tree(use_tree: &ast::UseTree, prefix: &str, out: &mut Vec<String>) {
+fn expand_use_tree(use_tree: &ast::UseTree, prefix: &str, out: &mut Vec<(String, bool)>) {
     if let Some(sub_trees) = use_tree.use_tree_list() {
         let next_prefix = use_tree.path().map_or_else(
             || prefix.to_string(),
@@ -277,16 +390,19 @@ fn expand_use_tree(use_tree: &ast::UseTree, prefix: &str, out: &mut Vec<String>)
     }
     if use_tree.star_token().is_some() {
         if let Some(path) = use_tree.path() {
-            out.push(join_use_prefix(prefix, &path.syntax().text().to_string()));
+            out.push((
+                join_use_prefix(prefix, &path.syntax().text().to_string()),
+                true,
+            ));
         } else if !prefix.is_empty() {
-            out.push(prefix.to_string());
+            out.push((prefix.to_string(), true));
         }
         return;
     }
     if let Some(path) = use_tree.path() {
         let path_text = path.syntax().text().to_string();
         if compact_path_text(&path_text) != "_" {
-            out.push(join_use_prefix(prefix, &path_text));
+            out.push((join_use_prefix(prefix, &path_text), false));
         }
     }
 }
@@ -329,8 +445,10 @@ fn summarize_qualified_path(
         };
         summary.referenced_paths.push(RustPathReference {
             line: file.line_index.line(start_offset),
+            span: SourceSpan::new(start_offset, end_offset),
             raw_path,
             statement_text: slice_text.to_string(),
+            is_glob: false,
         });
         if let Some(generic_args) = segment.generic_arg_list() {
             summarize_rust_node(generic_args.syntax(), file, defined_macros, summary);
@@ -374,6 +492,8 @@ fn is_simple_path_segment(segment: &ast::PathSegment) -> bool {
 struct ItemDeclaration {
     /// 1-indexed starting line number.
     line: usize,
+    /// Byte span after leading outer attributes and doc comments.
+    span: SourceSpan,
     /// Trimmed source text.
     text: String,
 }
@@ -395,11 +515,12 @@ fn item_line_and_text(file: &ParsedFile, node: &SyntaxNode) -> ItemDeclaration {
         );
     let end_offset: usize = node.text_range().end().into();
     let line = file.line_index.line(start_offset);
-    let text = file.source[start_offset..end_offset].trim().to_string();
-    ItemDeclaration { line, text }
+    let span = SourceSpan::new(start_offset, end_offset);
+    let text = file.span_text(span).trim().to_string();
+    ItemDeclaration { line, span, text }
 }
 
-fn collect_defined_architecture(token_tree: &ast::TokenTree, out: &mut Vec<(String, Vec<String>)>) {
+fn collect_defined_architecture(token_tree: &ast::TokenTree, out: &mut Vec<DefinedComponentEntry>) {
     let mut last_ident: Option<String> = None;
     for element in token_tree.syntax().children_with_tokens() {
         match element {
@@ -409,22 +530,43 @@ fn collect_defined_architecture(token_tree: &ast::TokenTree, out: &mut Vec<(Stri
                 _ => {}
             },
             SyntaxElement::Node(node) if node.kind() == SyntaxKind::TOKEN_TREE => {
-                let starts_with_bracket = node
-                    .first_token()
-                    .is_some_and(|tok| tok.kind() == SyntaxKind::L_BRACK);
-                if starts_with_bracket && let Some(name) = last_ident.take() {
-                    let declared_dependencies = node
+                let first_kind = node.first_token().map(|tok| tok.kind());
+                if first_kind == Some(SyntaxKind::L_BRACK)
+                    && let Some(name) = last_ident.take()
+                {
+                    let depends_on = node
                         .children_with_tokens()
                         .filter_map(SyntaxElement::into_token)
                         .filter(|tok| tok.kind() == SyntaxKind::IDENT)
                         .map(|tok| tok.text().to_string())
                         .collect();
-                    out.push((name, declared_dependencies));
+                    out.push(DefinedComponentEntry {
+                        name,
+                        depends_on,
+                        owns_external: Vec::new(),
+                    });
+                } else if first_kind == Some(SyntaxKind::L_PAREN)
+                    && node
+                        .descendants_with_tokens()
+                        .filter_map(SyntaxElement::into_token)
+                        .find(|tok| tok.kind() == SyntaxKind::IDENT)
+                        .is_some_and(|tok| tok.text() == "owns_external")
+                    && let Some(last_entry) = out.last_mut()
+                {
+                    last_entry.owns_external = extract_string_literals_in_subtree(&node);
                 }
             }
             SyntaxElement::Node(_) => {}
         }
     }
+}
+
+fn extract_string_literals_in_subtree(node: &SyntaxNode) -> Vec<String> {
+    node.descendants_with_tokens()
+        .filter_map(SyntaxElement::into_token)
+        .filter(|tok| tok.kind() == SyntaxKind::STRING)
+        .map(|tok| tok.text().trim_matches('"').to_string())
+        .collect()
 }
 
 fn collect_token_tree_paths(
@@ -453,14 +595,15 @@ fn collect_token_tree_paths(
             && let Some(after_colons) = consume_double_colon(&elements, index + 1)
             && token_segment_at(&elements, after_colons).is_some()
         {
-            let line = file
-                .line_index
-                .line(first_token.text_range().start().into());
+            let start_offset: usize = first_token.text_range().start().into();
+            let line = file.line_index.line(start_offset);
+            let mut end_offset: usize = first_token.text_range().end().into();
             let mut segments = vec![first_token.text().trim().to_string()];
             let mut cursor = index + 1;
             while let Some(next_segment_idx) = consume_double_colon(&elements, cursor)
                 && let Some(segment_token) = token_segment_at(&elements, next_segment_idx)
             {
+                end_offset = segment_token.text_range().end().into();
                 segments.push(segment_token.text().trim().to_string());
                 cursor = next_segment_idx + 1;
             }
@@ -471,8 +614,10 @@ fn collect_token_tree_paths(
             };
             out.push(RustPathReference {
                 line,
+                span: SourceSpan::new(start_offset, end_offset),
                 raw_path,
                 statement_text: statement_text.to_string(),
+                is_glob: false,
             });
             index = cursor;
             continue;
@@ -499,8 +644,10 @@ fn collect_token_tree_paths(
                 if let ResolvedName::Imported(imported) = resolve_name(file, ident) {
                     out.push(RustPathReference {
                         line: file.line_index.line(token.text_range().start().into()),
+                        span: span_from_rowan_range(token.text_range()),
                         raw_path: imported,
                         statement_text: statement_text.to_string(),
+                        is_glob: false,
                     });
                 }
             }
@@ -579,30 +726,42 @@ mod tests {
             .collect();
 
         assert_eq!(
-            summary.architecture_components,
-            vec!["CodeLintAst".to_string()]
+            summary
+                .architecture_components
+                .iter()
+                .map(|(_, name)| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["CodeLintAst"]
         );
         assert_eq!(
-            summary.visible_uses,
-            vec![VisibleUseDeclaration {
-                line: 11,
-                declaration_text: "pub use self::detail::Exported;".to_string(),
-                target_paths: vec!["self::detail::Exported".to_string()],
-            }]
+            summary
+                .visible_uses
+                .iter()
+                .map(|decl| (
+                    decl.line,
+                    decl.declaration_text.as_str(),
+                    decl.target_paths.as_slice()
+                ))
+                .collect::<Vec<_>>(),
+            vec![(
+                11,
+                "pub use self::detail::Exported;",
+                &["self::detail::Exported".to_string()][..]
+            )]
         );
         assert_eq!(
-            summary.external_mods,
+            summary
+                .external_mods
+                .iter()
+                .map(|decl| (
+                    decl.name.as_str(),
+                    decl.declaration_text.as_str(),
+                    decl.is_private
+                ))
+                .collect::<Vec<_>>(),
             vec![
-                ExternalModDeclaration {
-                    name: "detail".to_string(),
-                    declaration_text: "mod detail;".to_string(),
-                    is_private: true,
-                },
-                ExternalModDeclaration {
-                    name: "public_child".to_string(),
-                    declaration_text: "pub mod public_child;".to_string(),
-                    is_private: false,
-                },
+                ("detail", "mod detail;", true),
+                ("public_child", "pub mod public_child;", false),
             ]
         );
         assert_eq!(
@@ -620,5 +779,55 @@ mod tests {
                 "crate::core::Config",
             ]
         );
+    }
+
+    #[test]
+    fn test_summarize_rust_file_marks_glob_use_trees_with_is_glob() {
+        let source = indoc::indoc! {r"
+            use crate::core::tags::*;
+            use crate::core::Config;
+        "};
+        let file = ParsedFile::rust(source);
+        let summary = summarize_rust_file(&file);
+        let flags: Vec<(&str, bool)> = summary
+            .referenced_paths
+            .iter()
+            .map(|reference| (reference.raw_path.as_str(), reference.is_glob))
+            .collect();
+        assert_eq!(
+            flags,
+            vec![("crate::core::tags", true), ("crate::core::Config", false)]
+        );
+    }
+
+    #[test]
+    fn test_summarize_rust_module_header_skips_function_body_paths() {
+        let source = indoc::indoc! {"
+            architecture_component!(CodeLintAst);
+            pub mod child;
+            use crate::core::Config;
+
+            pub fn execute() {
+                let _ = crate::body_only::Call::run();
+            }
+        "};
+        let file = ParsedFile::rust(source);
+        let header = summarize_rust_module_header(&file);
+        let raw_paths: Vec<&str> = header
+            .referenced_paths
+            .iter()
+            .map(|reference| reference.raw_path.as_str())
+            .collect();
+
+        assert_eq!(
+            header
+                .architecture_components
+                .iter()
+                .map(|(_, name)| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["CodeLintAst"]
+        );
+        assert_eq!(header.external_mods.len(), 1);
+        assert_eq!(raw_paths, vec!["crate::core::Config"]);
     }
 }
