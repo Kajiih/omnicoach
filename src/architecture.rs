@@ -111,7 +111,7 @@ define_architecture! {
     /// Cross-language facts computed over the AST: bindings, calls, comments (`code_lint::semantic`).
     CodeLintSemantic    => [CodeLintAst],
     /// Multi-file project facts, cross-module symbol resolution, and component/path conformance (`code_lint::project`).
-    CodeLintProject     => [CodeLintAst],
+    CodeLintProject     => [CodeLintAst, Config, Diagnostic],
     /// The code rule contract: a declaration, a file target and a check function (`code_lint::contract`).
     CodeLintContract    => [CodeLintSemantic, CodeLintAst, RuleDeclaration],
     /// Inline comment suppression tracker and directive policies (`code_lint::suppression`).
