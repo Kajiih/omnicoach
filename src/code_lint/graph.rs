@@ -1,17 +1,18 @@
 //! Alpha / experimental multi-level abstraction graph generator (`omnicoach graph`).
 //!
-//! Under active investigation and design (`docs/dev/abstraction_graph/01_understand.md` ..
-//! `08_stage_c_agent_formats.md`); the graph model, grouping, and output formats may change at any
-//! time.
+//! Under active investigation and design (`docs/dev/abstraction_graph/`); the graph model,
+//! grouping, and output formats may change at any time.
 
 architecture_component!(CodeLintGraph);
 
 mod builder;
 mod model;
 mod project_facts;
+mod query;
 mod render;
 
 pub use self::builder::ProjectDepth;
+pub use self::query::{FindQueryOptions, SliceQueryOptions, run_find_query, run_slice_query};
 pub use self::render::OutputFormat;
 
 use self::builder::{build_file_graph, build_project_graph};
@@ -52,17 +53,7 @@ impl Default for GraphOptions {
 /// Returns an error if any target path does not exist, if no supported source files are found, or
 /// if graph validation fails.
 pub fn generate_graph(options: &GraphOptions, config: &Config) -> anyhow::Result<String> {
-    let effective_paths = if options.paths.is_empty() {
-        vec![PathBuf::from(".")]
-    } else {
-        options.paths.clone()
-    };
-
-    for path in &effective_paths {
-        if !path.exists() {
-            anyhow::bail!("Path does not exist: {}", path.display());
-        }
-    }
+    let effective_paths = resolve_effective_paths(&options.paths)?;
 
     if effective_paths.len() == 1
         && effective_paths[0].is_file()
@@ -191,6 +182,20 @@ fn normalize_relative_path(path: &Path, base_dir: Option<&Path>) -> String {
         }
     });
     relative.to_string_lossy().replace('\\', "/")
+}
+
+fn resolve_effective_paths(paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
+    let effective = if paths.is_empty() {
+        vec![PathBuf::from(".")]
+    } else {
+        paths.to_vec()
+    };
+    for path in &effective {
+        if !path.exists() {
+            anyhow::bail!("Path does not exist: {}", path.display());
+        }
+    }
+    Ok(effective)
 }
 
 fn derive_project_title(paths: &[PathBuf]) -> String {

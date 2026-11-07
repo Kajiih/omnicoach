@@ -6,7 +6,8 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use omnicoach::code_lint::graph::{
-    GraphOptions, OutputFormat as GraphOutputFormat, ProjectDepth, generate_graph,
+    FindQueryOptions, GraphOptions, OutputFormat as GraphOutputFormat, ProjectDepth,
+    SliceQueryOptions, generate_graph, run_find_query, run_slice_query,
 };
 use omnicoach::code_lint::runner::{LintOptions, run_code_lint};
 use omnicoach::command_lint::runner::run_command_lint;
@@ -68,27 +69,7 @@ fn run() -> anyhow::Result<()> {
         }
         DomainCommand::Graph(args) => {
             let config = load(load_config, &cli.config_overrides)?;
-            let options = GraphOptions {
-                paths: args.paths,
-                depth: match args.depth {
-                    GraphDepthArg::Module => ProjectDepth::ModuleOnly,
-                    GraphDepthArg::Public => ProjectDepth::PublicSurface,
-                    GraphDepthArg::Full => ProjectDepth::Full,
-                },
-                format: if args.no_signatures {
-                    GraphOutputFormat::CompactBi
-                } else {
-                    GraphOutputFormat::AnnotatedStubs
-                },
-            };
-            let output = generate_graph(&options, &config)?;
-            if let Err(error) =
-                std::io::Write::write_all(&mut std::io::stdout().lock(), output.as_bytes())
-                && error.kind() != std::io::ErrorKind::BrokenPipe
-            {
-                return Err(error.into());
-            }
-            Ok(())
+            run_graph(args, &config)
         }
     }
 }
@@ -249,7 +230,11 @@ struct CommandArgs {
 }
 
 #[derive(Args, Debug)]
+#[command(args_conflicts_with_subcommands = true)]
 struct GraphArgs {
+    #[command(subcommand)]
+    query: Option<GraphQueryCommand>,
+
     /// Paths to inspect
     #[arg(default_value = ".")]
     paths: Vec<PathBuf>,
@@ -263,6 +248,50 @@ struct GraphArgs {
     no_signatures: bool,
 }
 
+fn run_graph(args: GraphArgs, config: &Config) -> anyhow::Result<()> {
+    let output = match args.query {
+        None => {
+            let options = GraphOptions {
+                paths: args.paths,
+                depth: match args.depth {
+                    GraphDepthArg::Module => ProjectDepth::ModuleOnly,
+                    GraphDepthArg::Public => ProjectDepth::PublicSurface,
+                    GraphDepthArg::Full => ProjectDepth::Full,
+                },
+                format: if args.no_signatures {
+                    GraphOutputFormat::CompactBi
+                } else {
+                    GraphOutputFormat::AnnotatedStubs
+                },
+            };
+            generate_graph(&options, config)?
+        }
+        Some(GraphQueryCommand::Find(find_args)) => run_find_query(
+            &FindQueryOptions {
+                pattern: find_args.pattern,
+                paths: find_args.paths,
+                limit: find_args.limit,
+            },
+            config,
+        )?,
+        Some(GraphQueryCommand::Slice(slice_args)) => run_slice_query(
+            &SliceQueryOptions {
+                symbols: slice_args.symbols,
+                paths: slice_args.paths,
+                hops: slice_args.hops,
+                budget: slice_args.budget,
+            },
+            config,
+        )?,
+    };
+    if let Err(error) = std::io::Write::write_all(&mut std::io::stdout().lock(), output.as_bytes())
+        && error.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        return Err(error.into());
+    }
+    Ok(())
+}
+
 #[derive(ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum GraphDepthArg {
     /// Component and module headers only (`Component -> Module`)
@@ -272,4 +301,45 @@ enum GraphDepthArg {
     /// Full ownership clusters, private helpers, and type methods (`Component -> Module -> Owner -> items`)
     #[default]
     Full,
+}
+
+#[derive(Subcommand, Debug)]
+enum GraphQueryCommand {
+    /// Search declarations by name, path segment, or signature
+    Find(FindArgs),
+    /// Render a 1-hop neighborhood slice (`<-` call sites, `->` stubs, and cluster) around a symbol
+    Slice(SliceArgs),
+}
+
+#[derive(Args, Debug)]
+struct FindArgs {
+    /// Substring or path pattern to match
+    pattern: String,
+
+    /// Paths to search
+    #[arg(default_value = ".")]
+    paths: Vec<PathBuf>,
+
+    /// Maximum number of matches to return
+    #[arg(long, default_value_t = 20)]
+    limit: usize,
+}
+
+#[derive(Args, Debug)]
+struct SliceArgs {
+    /// One or more symbol names (`foo`, `Type::method`, or `module::Type::method`)
+    #[arg(required = true, num_args = 1..)]
+    symbols: Vec<String>,
+
+    /// Paths to search (repeatable; defaults to `.`)
+    #[arg(long = "path", value_name = "PATH")]
+    paths: Vec<PathBuf>,
+
+    /// Neighborhood expansion depth (`1` = direct callers/callees, `2..=4` = multi-hop)
+    #[arg(long, default_value_t = 1)]
+    hops: usize,
+
+    /// Approximate total token budget for the slice invocation (`1 token ~= 4 bytes`)
+    #[arg(long, default_value_t = 2000)]
+    budget: usize,
 }

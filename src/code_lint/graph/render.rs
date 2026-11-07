@@ -55,6 +55,154 @@ const TYPE_KIND: &str = "type";
 const CALL_REASON: &str = "call";
 const CTOR_TAG: &str = " [ctor]";
 
+pub(super) const fn format_short_reason(reason: EdgeReason) -> &'static str {
+    match reason {
+        EdgeReason::Call => CALL_REASON,
+        EdgeReason::Containment => "contain",
+        EdgeReason::ImplBehavior => "impl",
+        EdgeReason::Encapsulation => "encap",
+        EdgeReason::SignatureContract => "sig",
+        EdgeReason::CrossModule => "xmod",
+    }
+}
+
+pub(super) const fn format_short_ref_kind(kind: RelationKind) -> &'static str {
+    match kind {
+        RelationKind::Parameter => "ref:param",
+        RelationKind::Return => "ref:ret",
+        RelationKind::Body => "ref:body",
+        RelationKind::Composition => "ref:comp",
+        RelationKind::Behavior => "ref:behav",
+    }
+}
+
+pub(super) const fn format_short_visibility(visibility: Visibility) -> &'static str {
+    match visibility {
+        Visibility::Public => "pub",
+        Visibility::Private => "priv",
+    }
+}
+
+pub(super) const fn format_short_decl_kind(kind: DeclarationKind) -> &'static str {
+    match kind {
+        DeclarationKind::Callable => "fn",
+        DeclarationKind::Method => METHOD_KIND,
+        DeclarationKind::Type => TYPE_KIND,
+    }
+}
+
+pub(super) struct DeclAncestry<'a> {
+    pub(super) decl_module_path: BTreeMap<&'a NodeId, &'a str>,
+    pub(super) decl_component: BTreeMap<&'a NodeId, &'a str>,
+    pub(super) decl_owner_label: BTreeMap<&'a NodeId, String>,
+    pub(super) decl_by_mod_and_name: BTreeMap<(&'a str, &'a str), &'a NodeId>,
+    pub(super) method_targets_by_type: std::collections::BTreeSet<(&'a NodeId, &'a NodeId)>,
+}
+
+impl<'a> DeclAncestry<'a> {
+    pub(super) fn from_graph(
+        graph: &'a AbstractionGraph,
+        group_by_id: &BTreeMap<&'a NodeId, &'a GroupNode>,
+    ) -> Self {
+        let mut decl_module_path = BTreeMap::new();
+        let mut decl_component = BTreeMap::new();
+        let mut decl_owner_label = BTreeMap::new();
+        let mut decl_by_mod_and_name = BTreeMap::new();
+        let mut method_owner_type = BTreeMap::new();
+        for decl in graph.declarations() {
+            let mut cursor = graph.parent_of(&decl.id);
+            while let Some(parent_id) = cursor {
+                if let Some(group) = group_by_id.get(parent_id) {
+                    match &group.kind {
+                        GroupKind::TypeMembers { type_id }
+                            if !method_owner_type.contains_key(&decl.id) =>
+                        {
+                            method_owner_type.insert(&decl.id, type_id);
+                        }
+                        GroupKind::Owner { .. } | GroupKind::Shared { .. } | GroupKind::Unowned
+                            if !decl_owner_label.contains_key(&decl.id) =>
+                        {
+                            decl_owner_label.insert(&decl.id, group.label.clone());
+                        }
+                        GroupKind::Module { path } if !decl_module_path.contains_key(&decl.id) => {
+                            decl_module_path.insert(&decl.id, path.as_str());
+                            decl_by_mod_and_name
+                                .insert((path.as_str(), decl.name.as_str()), &decl.id);
+                        }
+                        GroupKind::Component { .. } if !decl_component.contains_key(&decl.id) => {
+                            decl_component.insert(&decl.id, group.label.as_str());
+                        }
+                        _ => {}
+                    }
+                }
+                cursor = graph.parent_of(parent_id);
+            }
+        }
+        let mut method_targets_by_type = std::collections::BTreeSet::new();
+        for edge in graph.reference_edges() {
+            if let Some(&type_id) = method_owner_type.get(&edge.source) {
+                method_targets_by_type.insert((type_id, &edge.target));
+            }
+        }
+        Self {
+            decl_module_path,
+            decl_component,
+            decl_owner_label,
+            decl_by_mod_and_name,
+            method_targets_by_type,
+        }
+    }
+}
+
+pub(super) struct DirectedDeclEdge<'a> {
+    pub(super) source_id: &'a NodeId,
+    pub(super) target_id: &'a NodeId,
+    pub(super) tag: &'static str,
+}
+
+pub(super) fn resolve_directed_decl_edges<'a>(
+    graph: &'a AbstractionGraph,
+    ancestry: &DeclAncestry<'a>,
+) -> Vec<DirectedDeclEdge<'a>> {
+    let mut directed = Vec::new();
+    let mut ordering_pairs = std::collections::BTreeSet::new();
+    for edge in graph.ordering_edges() {
+        let (source_id, target_id) = match edge.reason {
+            EdgeReason::SignatureContract => (&edge.lower, &edge.higher),
+            _ => (&edge.higher, &edge.lower),
+        };
+        ordering_pairs.insert((source_id, target_id));
+        if edge.reason == EdgeReason::ImplBehavior
+            && ancestry
+                .method_targets_by_type
+                .contains(&(source_id, target_id))
+        {
+            continue;
+        }
+        directed.push(DirectedDeclEdge {
+            source_id,
+            target_id,
+            tag: format_short_reason(edge.reason),
+        });
+    }
+    for edge in graph.reference_edges() {
+        if ordering_pairs.contains(&(&edge.source, &edge.target))
+            || (edge.kind == RelationKind::Behavior
+                && ancestry
+                    .method_targets_by_type
+                    .contains(&(&edge.source, &edge.target)))
+        {
+            continue;
+        }
+        directed.push(DirectedDeclEdge {
+            source_id: &edge.source,
+            target_id: &edge.target,
+            tag: format_short_ref_kind(edge.kind),
+        });
+    }
+    directed
+}
+
 struct GraphEdgeIndex<'a> {
     decl_by_id: BTreeMap<&'a NodeId, &'a DeclarationNode>,
     group_by_id: BTreeMap<&'a NodeId, &'a GroupNode>,
@@ -77,7 +225,7 @@ impl<'a> GraphEdgeIndex<'a> {
             .map(|group| (&group.id, group))
             .collect();
 
-        let ancestry = Self::build_decl_ancestry(graph, &group_by_id);
+        let ancestry = DeclAncestry::from_graph(graph, &group_by_id);
         let mut group_out_edges: BTreeMap<&'a NodeId, Vec<String>> = BTreeMap::new();
         let mut group_in_edges: BTreeMap<&'a NodeId, Vec<String>> = BTreeMap::new();
         Self::populate_group_edges(
@@ -89,72 +237,27 @@ impl<'a> GraphEdgeIndex<'a> {
 
         let mut decl_out_edges: BTreeMap<&'a NodeId, Vec<String>> = BTreeMap::new();
         let mut decl_in_edges: BTreeMap<&'a NodeId, Vec<String>> = BTreeMap::new();
-        let mut ordering_pairs = std::collections::BTreeSet::new();
-        for edge in graph.ordering_edges() {
-            let (source_id, target_id) = match edge.reason {
-                EdgeReason::SignatureContract => (&edge.lower, &edge.higher),
-                _ => (&edge.higher, &edge.lower),
-            };
-            ordering_pairs.insert((source_id, target_id));
-            if edge.reason == EdgeReason::ImplBehavior
-                && ancestry
-                    .method_targets_by_type
-                    .contains(&(source_id, target_id))
-            {
-                continue;
-            }
-            let reason = format_short_reason(edge.reason);
+        for edge in resolve_directed_decl_edges(graph, &ancestry) {
             let target_label = format_relative_decl(
-                source_id,
-                target_id,
+                edge.source_id,
+                edge.target_id,
                 &decl_by_id,
                 &ancestry.decl_module_path,
             );
             let source_label = format_relative_decl(
-                target_id,
-                source_id,
+                edge.target_id,
+                edge.source_id,
                 &decl_by_id,
                 &ancestry.decl_module_path,
             );
             decl_out_edges
-                .entry(source_id)
+                .entry(edge.source_id)
                 .or_default()
-                .push(format!("{target_label}[{reason}]"));
+                .push(format!("{target_label}[{}]", edge.tag));
             decl_in_edges
-                .entry(target_id)
+                .entry(edge.target_id)
                 .or_default()
-                .push(format!("{source_label}[{reason}]"));
-        }
-        for edge in graph.reference_edges() {
-            if ordering_pairs.contains(&(&edge.source, &edge.target))
-                || (edge.kind == RelationKind::Behavior
-                    && ancestry
-                        .method_targets_by_type
-                        .contains(&(&edge.source, &edge.target)))
-            {
-                continue;
-            }
-            let kind = format_short_ref_kind(edge.kind);
-            let target_label = format_relative_decl(
-                &edge.source,
-                &edge.target,
-                &decl_by_id,
-                &ancestry.decl_module_path,
-            );
-            let source_label = format_relative_decl(
-                &edge.target,
-                &edge.source,
-                &decl_by_id,
-                &ancestry.decl_module_path,
-            );
-            decl_out_edges
-                .entry(&edge.source)
-                .or_default()
-                .push(format!("{target_label}[{kind}]"));
-            decl_in_edges
-                .entry(&edge.target)
-                .or_default()
-                .push(format!("{source_label}[{kind}]"));
+                .push(format!("{source_label}[{}]", edge.tag));
         }
 
         Self {
@@ -164,44 +267,6 @@ impl<'a> GraphEdgeIndex<'a> {
             group_in_edges,
             decl_out_edges,
             decl_in_edges,
-        }
-    }
-
-    fn build_decl_ancestry(
-        graph: &'a AbstractionGraph,
-        group_by_id: &BTreeMap<&'a NodeId, &'a GroupNode>,
-    ) -> DeclAncestry<'a> {
-        let mut decl_module_path = BTreeMap::new();
-        let mut method_owner_type = BTreeMap::new();
-        for decl in graph.declarations() {
-            let mut cursor = graph.parent_of(&decl.id);
-            while let Some(parent_id) = cursor {
-                if let Some(group) = group_by_id.get(parent_id) {
-                    match &group.kind {
-                        GroupKind::TypeMembers { type_id }
-                            if !method_owner_type.contains_key(&decl.id) =>
-                        {
-                            method_owner_type.insert(&decl.id, type_id);
-                        }
-                        GroupKind::Module { path } => {
-                            decl_module_path.insert(&decl.id, path.as_str());
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                cursor = graph.parent_of(parent_id);
-            }
-        }
-        let mut method_targets_by_type = std::collections::BTreeSet::new();
-        for edge in graph.reference_edges() {
-            if let Some(&type_id) = method_owner_type.get(&edge.source) {
-                method_targets_by_type.insert((type_id, &edge.target));
-            }
-        }
-        DeclAncestry {
-            decl_module_path,
-            method_targets_by_type,
         }
     }
 
@@ -236,11 +301,6 @@ impl<'a> GraphEdgeIndex<'a> {
                 .push(format!("{higher_label}[{tag}]"));
         }
     }
-}
-
-struct DeclAncestry<'a> {
-    decl_module_path: BTreeMap<&'a NodeId, &'a str>,
-    method_targets_by_type: std::collections::BTreeSet<(&'a NodeId, &'a NodeId)>,
 }
 
 fn write_group(
@@ -397,42 +457,6 @@ fn format_relative_decl<'a>(
         format!("{mod_path}::{target_name}")
     } else {
         target_name.to_owned()
-    }
-}
-
-const fn format_short_reason(reason: EdgeReason) -> &'static str {
-    match reason {
-        EdgeReason::Call => CALL_REASON,
-        EdgeReason::Containment => "contain",
-        EdgeReason::ImplBehavior => "impl",
-        EdgeReason::Encapsulation => "encap",
-        EdgeReason::SignatureContract => "sig",
-        EdgeReason::CrossModule => "xmod",
-    }
-}
-
-const fn format_short_ref_kind(kind: RelationKind) -> &'static str {
-    match kind {
-        RelationKind::Parameter => "ref:param",
-        RelationKind::Return => "ref:ret",
-        RelationKind::Body => "ref:body",
-        RelationKind::Composition => "ref:comp",
-        RelationKind::Behavior => "ref:behav",
-    }
-}
-
-const fn format_short_visibility(visibility: Visibility) -> &'static str {
-    match visibility {
-        Visibility::Public => "pub",
-        Visibility::Private => "priv",
-    }
-}
-
-const fn format_short_decl_kind(kind: DeclarationKind) -> &'static str {
-    match kind {
-        DeclarationKind::Callable => "fn",
-        DeclarationKind::Method => METHOD_KIND,
-        DeclarationKind::Type => TYPE_KIND,
     }
 }
 
