@@ -10,6 +10,7 @@ use super::call_clusters::{
     collect_declaration_scopes, scope_findings,
 };
 use super::tree::ParsedFile;
+use crate::diagnostic::Language;
 use std::collections::HashSet;
 
 /// Everything the analyzer knows about one scope (`Module`, `Class`, or `Impl`) in a file.
@@ -203,6 +204,59 @@ pub fn collect_intra_file_references(
     refs.sort();
     refs.dedup();
     refs
+}
+
+/// Resolves the most specific declaration symbol (`"Type::method"`, `"Type"`, or `"fn_name"`)
+/// enclosing 1-based `line` in `file`.
+#[must_use]
+pub fn enclosing_scope_symbol(
+    file: &ParsedFile,
+    scopes: &[ScopeFacts],
+    line: usize,
+) -> Option<String> {
+    for scope in scopes {
+        if let DeclarationScopeKind::Class { name } | DeclarationScopeKind::Impl { type_name: name } =
+            &scope.scope
+            && let Some(item) = scope
+                .items
+                .iter()
+                .find(|item| item.start_line <= line && line <= item.end_line)
+        {
+            return Some(format!("{name}::{}", item.name));
+        }
+    }
+    for scope in scopes {
+        if scope.scope == DeclarationScopeKind::Module
+            && let Some(item) = scope.items.iter().find(|item| {
+                item.kind == ScopeItemKind::Callable
+                    && item.start_line <= line
+                    && line <= item.end_line
+            })
+        {
+            return Some(item.name.clone());
+        }
+    }
+    if file.lang() == Language::Rust
+        && let Some(self_type) = super::rust::enclosing_impl_self_type(file, line)
+        && scopes.iter().any(|scope| {
+            scope.scope == DeclarationScopeKind::Module
+                && scope.items.iter().any(|item| item.name == self_type)
+        })
+    {
+        return Some(self_type);
+    }
+    for scope in scopes {
+        if scope.scope == DeclarationScopeKind::Module
+            && let Some(item) = scope
+                .items
+                .iter()
+                .filter(|item| item.start_line <= line && line <= item.end_line)
+                .max_by_key(|item| item.start_line)
+        {
+            return Some(item.name.clone());
+        }
+    }
+    None
 }
 
 #[cfg(test)]

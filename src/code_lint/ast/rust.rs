@@ -26,7 +26,7 @@ pub(super) use self::bindings::collect_bindings;
 pub(super) use self::calls::collect_call_candidates;
 pub(in crate::code_lint) use self::declaration_order::collect_associated_items_after_methods;
 pub(super) use self::declaration_order::{
-    collect_declaration_scopes, collect_intra_file_ref_sites,
+    collect_declaration_scopes, collect_intra_file_ref_sites, enclosing_impl_self_type,
 };
 pub use self::file_summary::{
     ExternalModDeclaration, RustFileSummary, RustPathReference, VisibleUseDeclaration,

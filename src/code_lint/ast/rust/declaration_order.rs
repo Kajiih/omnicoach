@@ -930,6 +930,35 @@ fn collect_misplaced_assoc_items<'a>(
     }
 }
 
+/// Returns the self-type name of the non-test `impl` block enclosing 1-based `line`, if any.
+#[must_use]
+pub fn enclosing_impl_self_type(file: &ParsedFile, line: usize) -> Option<String> {
+    let parsed = file.rs_parsed()?;
+    let mut items: Vec<ast::Item> = parsed.tree().items().collect();
+    while let Some(item) = items.pop() {
+        let start_offset: usize = item.syntax().text_range().start().into();
+        if file.is_in_rust_inline_test(start_offset) {
+            continue;
+        }
+        match item {
+            ast::Item::Impl(impl_item) => {
+                let span = span_from_rowan_range(impl_item.syntax().text_range());
+                let impl_node = AstNode::from_span(file, span);
+                if impl_node.start_line() <= line && line <= impl_node.end_line() {
+                    return impl_self_type_name(&impl_item, &file.source);
+                }
+            }
+            ast::Item::Module(module) => {
+                if let Some(body) = module.item_list() {
+                    items.extend(body.items());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Collects [`IntraFileReference`] entries for intra-file references to `module_items` and
 /// `method_items` across production items in a Rust `file`.
 #[must_use]

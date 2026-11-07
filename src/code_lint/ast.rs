@@ -58,7 +58,7 @@ pub(in crate::code_lint) use self::returns::{
 };
 pub use self::scope_facts::{
     FindingFact, IntraFileReference, ItemFacts, ScopeFacts, collect_intra_file_references,
-    collect_scope_facts,
+    collect_scope_facts, enclosing_scope_symbol,
 };
 pub(in crate::code_lint) use self::statement_spans::{
     decorator_and_attribute_end_lines, enclosing_statement_header_range,
