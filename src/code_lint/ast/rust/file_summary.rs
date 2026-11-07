@@ -82,6 +82,8 @@ pub struct RustFileSummary {
     pub defined_architecture: Vec<DefinedComponentEntry>,
     /// Top-level external `mod <name>;` declarations (`mod foo;`, `pub mod foo;`).
     pub external_mods: Vec<ExternalModDeclaration>,
+    /// Names of top-level private inline modules (`mod foo { ... }`).
+    pub private_inline_mods: Vec<String>,
     /// `(span, item_text)` of top-level production items that are neither external `mod` declarations
     /// nor `macro_rules!` definitions.
     pub non_namespace_items: Vec<(SourceSpan, String)>,
@@ -311,6 +313,18 @@ fn summarize_top_level_items(
                 if include_header_macros_and_uses {
                     summarize_use_item(use_item, file, defined_macros, summary);
                 }
+            }
+            ast::Item::Module(module) => {
+                if module.visibility().is_none()
+                    && let Some(name_node) = module.name()
+                {
+                    summary
+                        .private_inline_mods
+                        .push(name_node.text().trim().to_string());
+                }
+                summary
+                    .non_namespace_items
+                    .push((item_span, declaration_text));
             }
             _ => {
                 summary

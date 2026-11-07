@@ -24,6 +24,7 @@ pub mod fake_without_protocol;
 pub mod field_after_method;
 pub mod identical_positional_types;
 pub mod inline_public_attribute_annotation;
+pub mod invalid_architecture_component;
 pub mod logic_in_tests;
 pub mod mock_call_assertion;
 pub mod mock_in_tests;
@@ -45,8 +46,10 @@ pub mod positional_tuple_return;
 pub mod primitive_duration;
 pub mod private_before_public;
 pub mod quote_wrapped_placeholder;
+pub mod reexported_public_item;
 pub mod repeated_index_access;
 pub mod repeated_literal;
+pub mod sibling_module_dependency;
 pub mod single_letter_name;
 pub mod sleep_in_tests;
 pub mod specific_collection_parameter;
@@ -64,6 +67,7 @@ pub mod unexplained_optional_return;
 pub mod unexplained_parameter;
 pub mod unexplained_return;
 pub mod uninherited_protocol;
+pub mod unmapped_architecture_module;
 pub mod unmatched_logger_placeholder;
 pub mod unslotted_dataclass;
 pub mod unstructured_task;
@@ -141,4 +145,8 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &adhoc_type_annotation::RULE,
     &non_boolean_predicate::RULE,
     &uninherited_protocol::RULE,
+    &sibling_module_dependency::RULE,
+    &reexported_public_item::RULE,
+    &unmapped_architecture_module::RULE,
+    &invalid_architecture_component::RULE,
 ];

@@ -72,7 +72,7 @@ The three fields are orthogonal (`rule_design_guide.md` §2). This section fixes
 
 ### 2.4 `suggestion`: the fix
 
-* Imperative mood, starts with a verb from the current list: `Wrap`, `Replace`, `Rename`, `Split`, `Add`, `Remove`, `Move`, `Pass`, `Wait`, `Destructure`, `Unpack`, `Insert`, `Spawn`, `Create`, `Load`, `Narrow`, `Assert`, `Inject`, `Specify`, `Verify`, `Extract`, `Synchronize`, `Access`. The list grows when a fix needs a verb that is not in it (see the introduction).
+* Imperative mood, starts with a verb from the current list: `Wrap`, `Replace`, `Rename`, `Split`, `Add`, `Remove`, `Move`, `Pass`, `Wait`, `Destructure`, `Unpack`, `Insert`, `Spawn`, `Create`, `Load`, `Narrow`, `Assert`, `Inject`, `Specify`, `Verify`, `Extract`, `Synchronize`, `Access`, `Import`. The list grows when a fix needs a verb that is not in it (see the introduction).
 * One canonical replacement per language, idiomatic to that language. Per-language variants replace the language-neutral `base` text entirely; a field that has a variant for every language of the rule declares no `base`, since it would never be shown (checked by `tests/registry.rs`).
 * Does not repeat "instead of `<bad construct>`" and does not re-explain the harm.
 * Claims no more certainty than the rule has. When the replacement is inferred heuristically, the summary hedges ("appears to") and the suggestion is conditional on intent ("if `{function}` is not meant to mutate `{name}`"). When the rule cannot know the right replacement, the suggestion states the criterion and names `{replacement}` only as an example ("such as").
@@ -112,6 +112,11 @@ Templates use a fixed vocabulary so the same thing has the same name in every me
 | `{phrase}` | Prose words quoted from a docstring (`Returns`, `Optional`, `or None`) | `` `{phrase}` `` |
 | `{sections}` | Canonical docstring section headers, each with its colon and in backticks, joined by "or" (`` `Args:` or `Returns:` ``) | bare |
 | `{parameters}` | Parameter names, each in backticks, joined by commas (`` `dry_run`, `*args` ``) | bare |
+| `{component}` | The architecture component that owns the flagged module or item | `` `{component}` `` |
+| `{dependency}` | The target component, sibling module, or external package referenced at the flagged site | `` `{dependency}` `` |
+| `{module}` | A module path | `` `{module}` `` |
+| `{owner}` | The component(s) designated to encapsulate an external package, each in backticks | bare |
+| `{reason}` | Why a declaration has no effect (`` `Billing` is not declared in `define_architecture!` ``), with its own backticks | bare |
 | `{max_assertions}`, `{min_positional_parameters}`, … | A threshold; always the snake_case of the option key | bare |
 
 The vocabulary grows the same way as the verb list: when a message needs a thing none of these names, add a row here and an entry in the vocabulary test, in the same change. Do not reuse an existing placeholder for a different meaning to avoid adding one.

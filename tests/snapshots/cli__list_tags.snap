@@ -1,5 +1,6 @@
 ---
 source: tests/cli.rs
+assertion_line: 195
 expression: "output.replace(BIN_NAME, \"<binary>\")"
 ---
 --- exit code ---
@@ -7,6 +8,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 --- stdout ---
 | Topic | Parent | Synonyms | Description | Scope note |
 |---|---|---|---|---|
+| `architecture` | — |  | Component ownership, module boundaries and allowed dependencies. | Declared architecture components, allowed module and external-package dependencies, sibling module isolation, and component public surfaces. Not intra-file declaration ordering (see `declaration-order`) or class inheritance (`static-typing`). |
 | `concurrency` | — |  | Concurrent execution: coroutines, tasks and threads. | Spawning, awaiting and joining concurrent work and its lifetimes. Not sleeping or waiting in tests (see `test-timing`). |
 | `declaration-order` | — |  | Order in which declarations appear in a scope. | Ordering of functions, methods and items within a module or class. Not nesting depth (see `nesting`) or naming. |
 | `docstrings` | — | `documentation` | Presence, content and sections of docstrings. | Whether a docstring is present, what it says and how its Google-style sections (`Args:`, `Returns:`, `Attributes:`) are written. Not comments or `omni:` directives. |

@@ -444,7 +444,7 @@ fn test_rule_files_and_consts_are_named_after_their_rule() {
 }
 
 /// The verbs a suggestion may open with (guide §2.4).
-const SUGGESTION_VERBS: [&str; 23] = [
+const SUGGESTION_VERBS: [&str; 24] = [
     "Wrap",
     "Replace",
     "Rename",
@@ -468,6 +468,7 @@ const SUGGESTION_VERBS: [&str; 23] = [
     "Extract",
     "Synchronize",
     "Access",
+    "Import",
 ];
 /// Verbs that describe the fix; a summary states the fact and a rationale explains the harm.
 const FIX_VERBS: [&str; 5] = ["use", "replace", "add", "rename", "remove"];
@@ -477,7 +478,7 @@ const JUDGEMENT_WORDS: [&str; 5] = ["banned", "forbidden", "discouraged", "illeg
 const ABBREVIATIONS: [&str; 2] = ["e.g.", "i.e."];
 /// The placeholders every template draws from (guide §3); a rule may also use the `snake_case`
 /// of its own count option keys.
-const PLACEHOLDERS: [&str; 25] = [
+const PLACEHOLDERS: [&str; 30] = [
     "callee",
     "caller",
     "relation",
@@ -503,6 +504,11 @@ const PLACEHOLDERS: [&str; 25] = [
     "phrase",
     "sections",
     "parameters",
+    "component",
+    "dependency",
+    "module",
+    "owner",
+    "reason",
 ];
 
 /// The fallback text, if any, and every language override of a template field.

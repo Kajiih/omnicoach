@@ -29,6 +29,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `field-after-method` (python): Flags type-annotated class and instance attributes declared after methods in a Python class body.
 - `identical-positional-types` (python): Flags Python functions whose positional parameters share a type annotation.
 - `inline-public-attribute-annotation` (python): Flags public Python instance attributes annotated inline inside methods instead of in the class body.
+- `invalid-architecture-component` (rust): Flags Rust `architecture_component!` declarations that do not establish a valid component root.
 - `logic-in-tests` (python, rust): Flags control-flow statements and conditional expressions inside test functions.
 - `missing-suppression-reason` (python, rust): Requires every suppression directive to give a reason.
 - `mock-call-assertion` (python): Flags assertions on how a mock was called in Python tests.
@@ -51,8 +52,10 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `primitive-duration` (python, rust): Flags durations held as plain numbers, detected by a time-unit suffix such as `timeout_secs` or `delay_ms`.
 - `private-before-public` (python, rust): Flags private functions, methods, and types defined above their owning or calling public entrypoints.
 - `quote-wrapped-placeholder` (python): Flags Python format placeholders wrapped in literal single or double quotes.
+- `reexported-public-item` (rust): Flags `pub use` re-exports of items outside a private child module and `#[macro_export]` outside the crate root.
 - `repeated-index-access` (python, rust): Flags a value read at several literal positions instead of being unpacked once.
 - `repeated-literal` (python, rust): Flags a string or number literal repeated inline in one file instead of being named once.
+- `sibling-module-dependency` (python, rust): Flags references between peer submodules inside an isolated architecture component.
 - `single-letter-name` (python, rust): Flags names made of a single letter.
 - `sleep-in-tests` (python, rust): Flags fixed-duration sleeps in tests.
 - `specific-collection-parameter` (python): Flags Python function parameters annotated with `Sequence` or `Collection` when the body only uses `Collection` or `Iterable` operations.
@@ -71,6 +74,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `unexplained-return` (python): Requires a `Returns:` section when a nontrivial function has an optional, boolean, union or unannotated result.
 - `uninherited-protocol` (python): Flags Python classes that implement every method of an in-scope Protocol without inheriting from it.
 - `unknown-suppression-rule` (python, rust): Flags suppression directives that name an unknown or unsuppressible rule.
+- `unmapped-architecture-module` (python, rust): Flags production modules and non-routing items that do not belong to any declared architecture component.
 - `unmatched-logger-placeholder` (python): Flags logger calls that pass positional arguments to a message with an unmatched named placeholder.
 - `unslotted-dataclass` (python): Requires Python dataclasses to declare `slots=True`.
 - `unstructured-task` (python): Flags asyncio tasks spawned outside a task group.

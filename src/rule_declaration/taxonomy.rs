@@ -325,6 +325,17 @@ impl Topic {
         },
     )
     .aliases(&["documentation"]);
+
+    pub(crate) const ARCHITECTURE: Self = Self::root(
+        "architecture",
+        TopicDoc {
+            description: "Component ownership, module boundaries and allowed dependencies.",
+            scope_note: "Declared architecture components, allowed module and external-package \
+                         dependencies, sibling module isolation, and component public surfaces. Not \
+                         intra-file declaration ordering (see `declaration-order`) or class \
+                         inheritance (`static-typing`).",
+        },
+    );
 }
 
 /// Precision facet: can the rule flag correct code?
