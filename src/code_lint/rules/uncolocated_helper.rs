@@ -11,9 +11,9 @@ use crate::rule_declaration::{
 use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
-    summary: "Private helper `{function}` is separated from the helper cluster of `{caller}`.",
+    summary: "Private helper `{function}` is {relation}.",
     rationale: "Stranding `{function}` between unrelated public functions or splitting the helpers of `{caller}` between the inline cluster and the trailing helper section fractures the layout of the scope.",
-    suggestion: "Move `{function}` to the helper cluster of `{caller}` or the end of the scope, for example below `{anchor}` (ends on line {line}).",
+    suggestion: "Move `{function}` to {section}, for example below `{anchor}` (ends on line {line}).",
 };
 
 /// The rule's declaration.
@@ -153,18 +153,48 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         .iter()
         .map(|finding| {
             let line = finding.anchor.line.to_string();
+            let relation = relation(&finding.roots, &finding.related);
+            let section = section(&finding.roots, &finding.related);
             rule.diagnostic_at_node(
                 path,
                 &finding.name_node,
                 &[
                     ("function", &finding.item),
                     ("caller", &finding.related),
+                    ("relation", &relation),
+                    ("section", &section),
                     ("anchor", &finding.anchor.name),
                     ("line", &line),
                 ],
             )
         })
         .collect()
+}
+
+/// Formats the summary `{relation}` phrase for an exclusive or shared helper finding.
+fn relation(roots: &[String], caller: &str) -> String {
+    if roots.len() > 1 {
+        let formatted_roots = roots
+            .iter()
+            .map(|root| format!("`{root}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "shared across {formatted_roots} and declared before the trailing helper section at the end of the scope"
+        )
+    } else {
+        format!("separated from the helper cluster of `{caller}`")
+    }
+}
+
+/// Formats the suggestion `{section}` phrase for an exclusive or shared helper finding.
+fn section(roots: &[String], caller: &str) -> String {
+    if roots.len() > 1 {
+        "the trailing helper section at the end of the scope (after all public declarations)"
+            .to_owned()
+    } else {
+        format!("the helper cluster of `{caller}` or the end of the scope")
+    }
 }
 
 #[cfg(test)]

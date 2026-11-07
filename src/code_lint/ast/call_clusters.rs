@@ -236,6 +236,8 @@ pub struct CallOrderFinding<'a> {
     pub item: String,
     /// Name of the declaration or enclosing type the violated placement refers to.
     pub related: String,
+    /// Public entrypoint unit names that reach `item` (`Roots(item)`).
+    pub roots: Vec<String>,
     /// Why `related` sits above `item` in the abstraction order (`callee-before-caller` only).
     pub reason: Option<OrderingReason>,
     /// Sibling declaration next to which `item` belongs.
@@ -248,6 +250,7 @@ pub(super) struct CachedCallOrderFinding {
     span: SourceSpan,
     item: String,
     related: String,
+    roots: Vec<String>,
     reason: Option<OrderingReason>,
     anchor: PlacementAnchor,
 }
@@ -295,11 +298,16 @@ pub fn collect_call_cluster_findings(
             for finding in scope_findings(&scope, &graph) {
                 let item = &scope.items[finding.item];
                 let related = finding.related_name(&scope);
+                let roots = graph.unit_owners[finding.item]
+                    .iter()
+                    .map(|&idx| scope.items[idx].name.clone())
+                    .collect();
                 out.push(CachedCallOrderFinding {
                     rule: finding.rule,
                     span: item.name_node.span(),
                     item: item.name.clone(),
                     related,
+                    roots,
                     reason: finding.reason,
                     anchor: finding.anchor,
                 });
@@ -314,6 +322,7 @@ pub fn collect_call_cluster_findings(
             name_node: AstNode::from_span(file, entry.span),
             item: entry.item.clone(),
             related: entry.related.clone(),
+            roots: entry.roots.clone(),
             reason: entry.reason,
             anchor: entry.anchor.clone(),
         })
@@ -564,7 +573,8 @@ fn generate_placements(items: &[ScopeItem<'_>], graph: &ScopeGraph) -> Vec<Place
 
 /// Finds the sibling declaration next to which `placement.subject` can move so that `placement`
 /// holds without breaking any stronger placement that held, preferring moves that break the fewest
-/// placements, then the shortest move. Returns `None` if no single move satisfies it.
+/// held placements, satisfy the most of `placement.subject`'s own constraints, and move the
+/// shortest distance. Returns `None` if no single move satisfies it.
 fn best_anchor(
     placement: &Placement,
     placements: &[Placement],
@@ -591,15 +601,26 @@ fn best_anchor(
                 return None;
             }
             let mut broken = 0;
+            let mut unfixed_own = 0;
             for (other, &other_held) in placements.iter().zip(held) {
-                if other_held && !moved.holds(other) {
+                let holds_now = moved.holds(other);
+                if other_held && !holds_now {
                     if other.strength < placement.strength {
                         return None;
                     }
                     broken += 1;
                 }
+                if other.subject == from && !holds_now {
+                    if other.strength == Strength::Hard {
+                        return None;
+                    }
+                    unfixed_own += 1;
+                }
             }
-            Some(((broken, new_pos.abs_diff(from), new_pos), after))
+            Some((
+                (broken, unfixed_own, new_pos.abs_diff(from), new_pos),
+                after,
+            ))
         })
         .min()
         .map(|(_, after)| PlacementAnchor::after(&items[after].name, items[after].end_line))
@@ -839,6 +860,20 @@ mod tests {
                 return _step_two(raw.strip())
         "},
         ("_step_two", "_step_one", "_step_one", 8)
+    )]
+    #[case::private_before_public_and_callee_before_caller_selects_conflict_free_anchor(
+        Language::Python,
+        indoc::indoc! {r"
+            def _step_two(text: str) -> str:
+                return text.lower()
+
+            def run_pipeline(raw: str) -> str:
+                return _step_one(raw)
+
+            def _step_one(raw: str) -> str:
+                return _step_two(raw.strip())
+        "},
+        ("_step_two", "run_pipeline", "_step_one", 8)
     )]
     fn test_call_cluster_placement_anchors(
         #[case] lang: Language,
