@@ -6,10 +6,12 @@
 
 use super::call_clusters::{
     CallClusterRule, DeclarationScope, DeclarationScopeKind, OrderingEdge, OrderingReason,
-    PlacementAnchor, RelationFact, ScopeGraph, ScopeItem, ScopeItemKind, Visibility,
+    PlacementAnchor, RelationFact, RelationKind, ScopeGraph, ScopeItem, ScopeItemKind, Visibility,
     collect_declaration_scopes, scope_findings,
 };
 use super::tree::ParsedFile;
+use crate::diagnostic::Language;
+use std::collections::HashSet;
 
 /// Everything the analyzer knows about one scope (`Module`, `Class`, or `Impl`) in a file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +39,8 @@ pub struct ItemFacts {
     pub visibility: Visibility,
     /// True if this callable is a lifecycle constructor (`__init__`, `pub fn new`, etc.).
     pub is_constructor: bool,
+    /// 1-based first line of the declaration (including decorators or outer attributes).
+    pub start_line: usize,
     /// 1-based line of the declaration's name identifier.
     pub line: usize,
     /// 1-based last line of the declaration, including its attached `impl` blocks or grouped
@@ -73,6 +77,20 @@ pub struct FindingFact {
     pub anchor: PlacementAnchor,
 }
 
+/// A resolved intra-file reference between two declarations in the same file, with its 1-based
+/// source line.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct IntraFileReference {
+    /// Enclosing declaration name (`"fn_name"`, `"Type"`, or `"Type::method"`).
+    pub source_symbol: String,
+    /// Target declaration name (`"fn_name"`, `"Type"`, or `"Type::method"`).
+    pub target_symbol: String,
+    /// 1-based line number of the reference site in the file.
+    pub line: usize,
+    /// Syntactic role of the reference (`Parameter`, `Return`, `Body`, or `Composition`).
+    pub kind: RelationKind,
+}
+
 /// Collects [`ScopeFacts`] for every declaration scope in `file`, in source order.
 #[must_use]
 pub fn collect_scope_facts(file: &ParsedFile) -> Vec<ScopeFacts> {
@@ -95,6 +113,7 @@ fn scope_facts(scope: &DeclarationScope<'_>) -> ScopeFacts {
                 kind: item.kind,
                 visibility: item.visibility,
                 is_constructor: item.is_constructor,
+                start_line: item.start_line,
                 line: coordinate.line,
                 end_line: item.end_line,
                 column: coordinate.column,
@@ -141,6 +160,52 @@ fn raw_relations(items: &[ScopeItem<'_>]) -> Vec<RelationFact> {
     relations.sort();
     relations.dedup();
     relations
+}
+
+/// Collects resolved intra-file references between module declarations and methods in `file`,
+/// preserving the 1-based source line of each reference site.
+#[must_use]
+pub fn collect_intra_file_references(
+    file: &ParsedFile,
+    scopes: &[ScopeFacts],
+) -> Vec<IntraFileReference> {
+    let mut module_items: HashSet<&str> = HashSet::new();
+    let mut method_items: HashSet<String> = HashSet::new();
+    for scope in scopes {
+        match &scope.scope {
+            DeclarationScopeKind::Module => {
+                for item in &scope.items {
+                    module_items.insert(item.name.as_str());
+                }
+            }
+            DeclarationScopeKind::Class { name }
+            | DeclarationScopeKind::Impl { type_name: name } => {
+                for item in &scope.items {
+                    method_items.insert(format!("{name}::{}", item.name));
+                }
+            }
+        }
+    }
+    let raw_sites = match file.lang() {
+        Language::Python => {
+            super::python::collect_intra_file_ref_sites(file, &module_items, &method_items)
+        }
+        Language::Rust => Vec::new(),
+    };
+    let mut refs: Vec<IntraFileReference> = raw_sites
+        .into_iter()
+        .filter(|site| {
+            let source_owner = site
+                .source_symbol
+                .split("::")
+                .next()
+                .unwrap_or(site.source_symbol.as_str());
+            site.source_symbol != site.target_symbol && source_owner != site.target_symbol
+        })
+        .collect();
+    refs.sort();
+    refs.dedup();
+    refs
 }
 
 #[cfg(test)]
@@ -472,6 +537,37 @@ mod tests {
                 .items
                 .iter()
                 .all(|item| item.recursion_group == facts.items[0].recursion_group)
+        );
+    }
+
+    #[test]
+    fn python_intra_file_references_include_class_composition_and_method_decorators() {
+        let file = ParsedFile::new(PYTHON_TYPE_PARTS, Language::Python);
+        let scopes = collect_scope_facts(&file);
+        let refs = collect_intra_file_references(&file, &scopes);
+
+        assert_eq!(
+            refs,
+            vec![
+                IntraFileReference {
+                    source_symbol: "Config".to_owned(),
+                    target_symbol: "Header".to_owned(),
+                    line: 5,
+                    kind: RelationKind::Composition,
+                },
+                IntraFileReference {
+                    source_symbol: "Config::size".to_owned(),
+                    target_symbol: "_measure".to_owned(),
+                    line: 8,
+                    kind: RelationKind::Body,
+                },
+                IntraFileReference {
+                    source_symbol: "_measure".to_owned(),
+                    target_symbol: "Header".to_owned(),
+                    line: 15,
+                    kind: RelationKind::Parameter,
+                },
+            ]
         );
     }
 }

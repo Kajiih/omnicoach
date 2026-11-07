@@ -56,8 +56,9 @@ pub use self::positional_reads::{ScopePositionalReads, collect_positional_reads}
 pub(in crate::code_lint) use self::returns::{
     ReturnShape, collect_function_returns, is_predicate_name,
 };
-pub(in crate::code_lint) use self::scope_facts::{
-    FindingFact, ItemFacts, ScopeFacts, collect_scope_facts,
+pub use self::scope_facts::{
+    FindingFact, IntraFileReference, ItemFacts, ScopeFacts, collect_intra_file_references,
+    collect_scope_facts,
 };
 pub(in crate::code_lint) use self::statement_spans::{
     decorator_and_attribute_end_lines, enclosing_statement_header_range,

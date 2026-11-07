@@ -45,7 +45,9 @@ pub(in crate::code_lint) use self::classes::{
     inherited_method_docstring, is_documented_by_enclosing_class, is_interface_method,
     local_ancestors,
 };
-pub(super) use self::declaration_order::collect_declaration_scopes;
+pub(super) use self::declaration_order::{
+    collect_declaration_scopes, collect_intra_file_ref_sites,
+};
 pub(in crate::code_lint) use self::declaration_order::{
     collect_fields_after_methods, collect_statements_after_main_guard,
 };

@@ -8,6 +8,7 @@ use crate::code_lint::ast::call_clusters::{
     ScopeItemKind, Visibility, collapse_whitespace, extend_references, push_unique,
     split_at_redefinitions,
 };
+use crate::code_lint::ast::scope_facts::IntraFileReference;
 use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Decorator, Expr, Stmt, StmtClassDef, StmtFunctionDef};
@@ -167,6 +168,59 @@ pub fn collect_statements_after_main_guard(
         .collect()
 }
 
+/// Collects [`IntraFileReference`] entries for intra-file references to `module_items` and
+/// `method_items` across functions and classes in a Python `file`.
+#[must_use]
+pub fn collect_intra_file_ref_sites(
+    file: &ParsedFile,
+    module_items: &HashSet<&str>,
+    method_items: &HashSet<String>,
+) -> Vec<IntraFileReference> {
+    struct TopLevelIntraRefCollector<'a> {
+        file: &'a ParsedFile,
+        targets: IntraRefTargets<'a>,
+        out: Vec<IntraFileReference>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for TopLevelIntraRefCollector<'a> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            match statement {
+                Stmt::FunctionDef(func_def) => {
+                    let name = func_def.name.id.as_str();
+                    if self.targets.module_items.contains(name) {
+                        visit_python_intra_ref_function(
+                            func_def,
+                            self.file,
+                            self.targets,
+                            name,
+                            None,
+                            &mut self.out,
+                        );
+                    }
+                }
+                Stmt::ClassDef(class_def) => {
+                    visit_python_intra_ref_class(class_def, self.file, self.targets, &mut self.out);
+                }
+                _ => walk_stmt(self, statement),
+            }
+        }
+    }
+
+    let Some(parsed) = file.py_module() else {
+        return Vec::new();
+    };
+    let mut collector = TopLevelIntraRefCollector {
+        file,
+        targets: IntraRefTargets {
+            module_items,
+            method_items,
+        },
+        out: Vec::new(),
+    };
+    collector.visit_body(&parsed.syntax().body);
+    collector.out
+}
+
 /// Returns true if `module_body` contains `from __future__ import annotations`.
 fn has_future_annotations(module_body: &[Stmt]) -> bool {
     module_body.iter().any(|stmt| {
@@ -269,13 +323,31 @@ fn build_class_declaration_scope<'a>(
             if let ScopeItemAst::Callable(defs) = &group.item {
                 for def in defs {
                     let local_names = collect_local_bound_names(def, file);
-                    ClassMethodCallVisitor {
-                        class_name,
-                        method_by_name: &method_by_name,
+                    PythonRefWalker {
+                        file,
                         local_names: &local_names,
                         has_self_param: parameters_shadow_name(&def.parameters, SELF_RECEIVER),
                         has_cls_param: parameters_shadow_name(&def.parameters, CLS_RECEIVER),
-                        callees: &mut body_callees,
+                        allow_nested_defs: true,
+                        on_expr: &mut |expr: &Expr,
+                                       active_locals: &HashSet<String>,
+                                       has_self: bool,
+                                       has_cls: bool| {
+                            if let Expr::Attribute(attr) = expr
+                                && attr.ctx.is_load()
+                                && let Expr::Name(recv) = attr.value.as_ref()
+                                && is_valid_class_receiver(
+                                    recv.id.as_str(),
+                                    class_name,
+                                    active_locals,
+                                    has_self,
+                                    has_cls,
+                                )
+                                && let Some(&idx) = method_by_name.get(attr.attr.id.as_str())
+                            {
+                                push_unique(&mut body_callees, idx);
+                            }
+                        },
                     }
                     .visit_body(&def.body);
                 }
@@ -315,43 +387,6 @@ fn build_class_declaration_scope<'a>(
     Some(DeclarationScope { kind, items })
 }
 
-struct ClassMethodCallVisitor<'map, 'local> {
-    class_name: &'map str,
-    method_by_name: &'map HashMap<String, usize>,
-    local_names: &'local HashSet<String>,
-    has_self_param: bool,
-    has_cls_param: bool,
-    callees: &'local mut Vec<usize>,
-}
-
-impl SourceOrderVisitor<'_> for ClassMethodCallVisitor<'_, '_> {
-    fn visit_stmt(&mut self, statement: &Stmt) {
-        if matches!(statement, Stmt::ClassDef(_)) {
-            return;
-        }
-        walk_stmt(self, statement);
-    }
-
-    fn visit_expr(&mut self, expr: &Expr) {
-        if let Expr::Attribute(attr) = expr
-            && attr.ctx.is_load()
-            && let Expr::Name(recv) = attr.value.as_ref()
-        {
-            let recv_name = recv.id.as_str();
-            let is_valid_receiver = (recv_name == SELF_RECEIVER
-                && (self.has_self_param || !self.local_names.contains(SELF_RECEIVER)))
-                || (recv_name == CLS_RECEIVER
-                    && (self.has_cls_param || !self.local_names.contains(CLS_RECEIVER)))
-                || (recv_name == self.class_name && !self.local_names.contains(recv_name));
-            if is_valid_receiver && let Some(&idx) = self.method_by_name.get(attr.attr.id.as_str())
-            {
-                push_unique(self.callees, idx);
-            }
-        }
-        walk_expr(self, expr);
-    }
-}
-
 struct GroupedScopeItem<'a, 'ast> {
     name_node: AstNode<'a>,
     name: String,
@@ -379,30 +414,14 @@ fn build_module_scope_item<'a>(
             let mut return_callees = Vec::new();
             let mut body_callees = Vec::new();
             for def in defs {
-                let mut param_visitor = ModuleRefVisitor {
-                    fn_by_name: item_by_name,
-                    local_names: &empty_locals,
-                    callees: &mut param_callees,
-                };
-                for dec in &def.decorator_list {
-                    param_visitor.visit_decorator(dec);
-                }
-                param_visitor.visit_parameters(&def.parameters);
-                if let Some(returns) = &def.returns {
-                    let mut ret_visitor = ModuleRefVisitor {
-                        fn_by_name: item_by_name,
-                        local_names: &empty_locals,
-                        callees: &mut return_callees,
+                walk_python_function_refs(def, file, |expr, active_locals, _, _, role| {
+                    let bucket = match role {
+                        RelationKind::Parameter => &mut param_callees,
+                        RelationKind::Return => &mut return_callees,
+                        _ => &mut body_callees,
                     };
-                    ret_visitor.visit_expr(returns);
-                }
-                let local_names = collect_local_bound_names(def, file);
-                let mut body_visitor = ModuleRefVisitor {
-                    fn_by_name: item_by_name,
-                    local_names: &local_names,
-                    callees: &mut body_callees,
-                };
-                body_visitor.visit_body(&def.body);
+                    record_module_name_ref(expr, item_by_name, active_locals, bucket);
+                });
             }
             extend_references(&mut references, param_callees, RelationKind::Parameter);
             extend_references(&mut references, return_callees, RelationKind::Return);
@@ -416,6 +435,7 @@ fn build_module_scope_item<'a>(
                 class_def,
                 item_by_name,
                 &empty_locals,
+                file,
                 &mut definition_callees,
             );
             collect_class_module_refs(
@@ -455,28 +475,12 @@ fn collect_class_module_refs(
     file: &ParsedFile,
     callees: &mut Vec<usize>,
 ) {
-    collect_class_definition_refs(class_def, item_by_name, empty_locals, callees);
+    collect_class_definition_refs(class_def, item_by_name, empty_locals, file, callees);
     for class_statement in &class_def.body {
         if let Stmt::FunctionDef(method_def) = class_statement {
-            let mut sig_visitor = ModuleRefVisitor {
-                fn_by_name: item_by_name,
-                local_names: empty_locals,
-                callees,
-            };
-            for dec in &method_def.decorator_list {
-                sig_visitor.visit_decorator(dec);
-            }
-            sig_visitor.visit_parameters(&method_def.parameters);
-            if let Some(returns) = &method_def.returns {
-                sig_visitor.visit_expr(returns);
-            }
-            let method_locals = collect_local_bound_names(method_def, file);
-            let mut body_visitor = ModuleRefVisitor {
-                fn_by_name: item_by_name,
-                local_names: &method_locals,
-                callees,
-            };
-            body_visitor.visit_body(&method_def.body);
+            walk_python_function_refs(method_def, file, |expr, active_locals, _, _, _| {
+                record_module_name_ref(expr, item_by_name, active_locals, callees);
+            });
         }
     }
 }
@@ -487,50 +491,44 @@ fn collect_class_definition_refs(
     class_def: &StmtClassDef,
     item_by_name: &HashMap<String, usize>,
     empty_locals: &HashSet<String>,
+    file: &ParsedFile,
     callees: &mut Vec<usize>,
 ) {
-    let mut header_visitor = ModuleRefVisitor {
-        fn_by_name: item_by_name,
+    let mut on_expr = |expr: &Expr, active_locals: &HashSet<String>, _: bool, _: bool| {
+        record_module_name_ref(expr, item_by_name, active_locals, callees);
+    };
+    let mut visitor = PythonRefWalker {
+        file,
         local_names: empty_locals,
-        callees,
+        has_self_param: false,
+        has_cls_param: false,
+        allow_nested_defs: false,
+        on_expr: &mut on_expr,
     };
     for dec in &class_def.decorator_list {
-        header_visitor.visit_decorator(dec);
+        visitor.visit_decorator(dec);
     }
     if let Some(args) = &class_def.arguments {
-        header_visitor.visit_arguments(args);
+        visitor.visit_arguments(args);
     }
-    for class_statement in &class_def.body {
-        if !matches!(class_statement, Stmt::FunctionDef(_)) {
-            let mut stmt_visitor = ModuleRefVisitor {
-                fn_by_name: item_by_name,
-                local_names: empty_locals,
-                callees,
-            };
-            stmt_visitor.visit_stmt(class_statement);
-        }
-    }
+    visitor.visit_body(&class_def.body);
 }
 
-struct ModuleRefVisitor<'map, 'local> {
-    fn_by_name: &'map HashMap<String, usize>,
-    local_names: &'local HashSet<String>,
-    callees: &'local mut Vec<usize>,
-}
-
-impl SourceOrderVisitor<'_> for ModuleRefVisitor<'_, '_> {
-    fn visit_expr(&mut self, expr: &Expr) {
-        if let Expr::Name(name) = expr
-            && name.ctx.is_load()
+fn record_module_name_ref(
+    expr: &Expr,
+    item_by_name: &HashMap<String, usize>,
+    local_names: &HashSet<String>,
+    callees: &mut Vec<usize>,
+) {
+    if let Expr::Name(name) = expr
+        && name.ctx.is_load()
+    {
+        let ident = name.id.as_str();
+        if !local_names.contains(ident)
+            && let Some(&idx) = item_by_name.get(ident)
         {
-            let ident = name.id.as_str();
-            if !self.local_names.contains(ident)
-                && let Some(&idx) = self.fn_by_name.get(ident)
-            {
-                push_unique(self.callees, idx);
-            }
+            push_unique(callees, idx);
         }
-        walk_expr(self, expr);
     }
 }
 
@@ -906,6 +904,299 @@ fn public_attributes(body: &[Stmt], source: &str) -> Vec<String> {
         }
     }
     attributes
+}
+
+/// The declarations whose references an intra-file reference walk records.
+#[derive(Clone, Copy)]
+struct IntraRefTargets<'a> {
+    /// Names of the file's module-level items.
+    module_items: &'a HashSet<&'a str>,
+    /// `Class::method` names of the file's methods.
+    method_items: &'a HashSet<String>,
+}
+
+fn visit_python_intra_ref_class<'a>(
+    class_def: &StmtClassDef,
+    file: &'a ParsedFile,
+    targets: IntraRefTargets<'a>,
+    out: &mut Vec<IntraFileReference>,
+) {
+    let class_name = class_def.name.id.as_str();
+    if targets.module_items.contains(class_name) {
+        let empty_locals = HashSet::new();
+        let mut on_expr =
+            |expr: &Expr, active_locals: &HashSet<String>, has_self: bool, has_cls: bool| {
+                record_python_intra_ref_expr(
+                    expr,
+                    file,
+                    targets,
+                    class_name,
+                    Some(class_name),
+                    active_locals,
+                    has_self,
+                    has_cls,
+                    RelationKind::Composition,
+                    out,
+                );
+            };
+        let mut class_visitor = PythonRefWalker {
+            file,
+            local_names: &empty_locals,
+            has_self_param: false,
+            has_cls_param: false,
+            allow_nested_defs: false,
+            on_expr: &mut on_expr,
+        };
+        for dec in &class_def.decorator_list {
+            class_visitor.visit_decorator(dec);
+        }
+        if let Some(args) = &class_def.arguments {
+            class_visitor.visit_arguments(args);
+        }
+        class_visitor.visit_body(&class_def.body);
+    }
+    for class_stmt in &class_def.body {
+        if let Stmt::FunctionDef(method_def) = class_stmt {
+            let method_symbol = format!("{class_name}::{}", method_def.name.id.as_str());
+            if targets.method_items.contains(&method_symbol) {
+                visit_python_intra_ref_function(
+                    method_def,
+                    file,
+                    targets,
+                    &method_symbol,
+                    Some(class_name),
+                    out,
+                );
+            }
+        }
+    }
+}
+
+fn visit_python_intra_ref_function<'a>(
+    func_def: &StmtFunctionDef,
+    file: &'a ParsedFile,
+    targets: IntraRefTargets<'a>,
+    source_symbol: &str,
+    enclosing_class: Option<&'a str>,
+    out: &mut Vec<IntraFileReference>,
+) {
+    walk_python_function_refs(
+        func_def,
+        file,
+        |expr, active_locals, has_self, has_cls, role| {
+            record_python_intra_ref_expr(
+                expr,
+                file,
+                targets,
+                source_symbol,
+                enclosing_class,
+                active_locals,
+                has_self,
+                has_cls,
+                role,
+                out,
+            );
+        },
+    );
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Internal AST expression recorder threading scope, receiver, and output context"
+)]
+fn record_python_intra_ref_expr(
+    expr: &Expr,
+    file: &ParsedFile,
+    targets: IntraRefTargets<'_>,
+    source_symbol: &str,
+    enclosing_class: Option<&str>,
+    local_names: &HashSet<String>,
+    has_self_param: bool,
+    has_cls_param: bool,
+    kind: RelationKind,
+    out: &mut Vec<IntraFileReference>,
+) {
+    let line = file.line_index.line(expr.range().start().into());
+    if let Expr::Name(name) = expr
+        && name.ctx.is_load()
+    {
+        let ident = name.id.as_str();
+        if !local_names.contains(ident) && targets.module_items.contains(ident) {
+            out.push(IntraFileReference {
+                source_symbol: source_symbol.to_owned(),
+                target_symbol: ident.to_owned(),
+                line,
+                kind,
+            });
+        }
+    } else if let Expr::Attribute(attr) = expr
+        && attr.ctx.is_load()
+        && let Expr::Name(recv) = attr.value.as_ref()
+    {
+        let recv_name = recv.id.as_str();
+        let method_name = attr.attr.id.as_str();
+        if let Some(class_name) = enclosing_class
+            && is_valid_class_receiver(
+                recv_name,
+                class_name,
+                local_names,
+                has_self_param,
+                has_cls_param,
+            )
+        {
+            let candidate = format!("{class_name}::{method_name}");
+            if targets.method_items.contains(&candidate) {
+                out.push(IntraFileReference {
+                    source_symbol: source_symbol.to_owned(),
+                    target_symbol: candidate,
+                    line,
+                    kind,
+                });
+            }
+        }
+        if !local_names.contains(recv_name) && targets.module_items.contains(recv_name) {
+            let candidate = format!("{recv_name}::{method_name}");
+            if targets.method_items.contains(&candidate) {
+                out.push(IntraFileReference {
+                    source_symbol: source_symbol.to_owned(),
+                    target_symbol: candidate,
+                    line,
+                    kind,
+                });
+            }
+        }
+    }
+}
+
+fn is_valid_class_receiver(
+    recv_name: &str,
+    class_name: &str,
+    local_names: &HashSet<String>,
+    has_self_param: bool,
+    has_cls_param: bool,
+) -> bool {
+    (recv_name == SELF_RECEIVER && (has_self_param || !local_names.contains(SELF_RECEIVER)))
+        || (recv_name == CLS_RECEIVER && (has_cls_param || !local_names.contains(CLS_RECEIVER)))
+        || (recv_name == class_name && !local_names.contains(recv_name))
+}
+
+fn walk_python_function_refs(
+    func_def: &StmtFunctionDef,
+    file: &ParsedFile,
+    mut on_ref: impl FnMut(&Expr, &HashSet<String>, bool, bool, RelationKind),
+) {
+    let empty_locals = HashSet::new();
+    let has_self_param = parameters_shadow_name(&func_def.parameters, SELF_RECEIVER);
+    let has_cls_param = parameters_shadow_name(&func_def.parameters, CLS_RECEIVER);
+    {
+        let mut on_param =
+            |expr: &Expr, active_locals: &HashSet<String>, has_self: bool, has_cls: bool| {
+                on_ref(
+                    expr,
+                    active_locals,
+                    has_self,
+                    has_cls,
+                    RelationKind::Parameter,
+                );
+            };
+        let mut param_visitor = PythonRefWalker {
+            file,
+            local_names: &empty_locals,
+            has_self_param,
+            has_cls_param,
+            allow_nested_defs: false,
+            on_expr: &mut on_param,
+        };
+        for dec in &func_def.decorator_list {
+            param_visitor.visit_decorator(dec);
+        }
+        param_visitor.visit_parameters(&func_def.parameters);
+    }
+    if let Some(returns) = &func_def.returns {
+        let mut on_return_expr =
+            |expr: &Expr, active_locals: &HashSet<String>, has_self: bool, has_cls: bool| {
+                on_ref(expr, active_locals, has_self, has_cls, RelationKind::Return);
+            };
+        PythonRefWalker {
+            file,
+            local_names: &empty_locals,
+            has_self_param,
+            has_cls_param,
+            allow_nested_defs: false,
+            on_expr: &mut on_return_expr,
+        }
+        .visit_expr(returns);
+    }
+    let local_names = collect_local_bound_names(func_def, file);
+    let mut on_body =
+        |expr: &Expr, active_locals: &HashSet<String>, has_self: bool, has_cls: bool| {
+            on_ref(expr, active_locals, has_self, has_cls, RelationKind::Body);
+        };
+    PythonRefWalker {
+        file,
+        local_names: &local_names,
+        has_self_param,
+        has_cls_param,
+        allow_nested_defs: true,
+        on_expr: &mut on_body,
+    }
+    .visit_body(&func_def.body);
+}
+
+type PythonRefCallback<'cb> = dyn FnMut(&Expr, &HashSet<String>, bool, bool) + 'cb;
+
+struct PythonRefWalker<'a, 'cb> {
+    file: &'a ParsedFile,
+    local_names: &'a HashSet<String>,
+    has_self_param: bool,
+    has_cls_param: bool,
+    allow_nested_defs: bool,
+    on_expr: &'cb mut PythonRefCallback<'cb>,
+}
+
+impl SourceOrderVisitor<'_> for PythonRefWalker<'_, '_> {
+    fn visit_stmt(&mut self, statement: &Stmt) {
+        match statement {
+            Stmt::ClassDef(_) => {}
+            Stmt::FunctionDef(nested_function) => {
+                if !self.allow_nested_defs {
+                    return;
+                }
+                for decorator in &nested_function.decorator_list {
+                    self.visit_decorator(decorator);
+                }
+                self.visit_parameters(&nested_function.parameters);
+                if let Some(returns) = &nested_function.returns {
+                    self.visit_expr(returns);
+                }
+                let nested_locals = collect_local_bound_names(nested_function, self.file);
+                let mut merged_locals =
+                    HashSet::with_capacity(self.local_names.len() + nested_locals.len());
+                merged_locals.extend(self.local_names.iter().cloned());
+                merged_locals.extend(nested_locals.iter().cloned());
+                PythonRefWalker {
+                    file: self.file,
+                    local_names: &merged_locals,
+                    has_self_param: self.has_self_param && !nested_locals.contains(SELF_RECEIVER),
+                    has_cls_param: self.has_cls_param && !nested_locals.contains(CLS_RECEIVER),
+                    allow_nested_defs: true,
+                    on_expr: self.on_expr,
+                }
+                .visit_body(&nested_function.body);
+            }
+            _ => walk_stmt(self, statement),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &Expr) {
+        (self.on_expr)(
+            expr,
+            self.local_names,
+            self.has_self_param,
+            self.has_cls_param,
+        );
+        walk_expr(self, expr);
+    }
 }
 
 #[cfg(test)]
@@ -1292,5 +1583,42 @@ mod tests {
                 ("_AliasTarget", None),
             ]
         );
+    }
+
+    #[test]
+    fn test_nested_def_captures_outer_self_and_module_helper_unless_shadowed() {
+        let source = indoc::indoc! {r"
+            def _captured_helper() -> int:
+                return 1
+
+            def _shadowed_helper() -> int:
+                return 2
+
+            class Worker:
+                def _step(self) -> int:
+                    return 3
+
+                def _shadowed_step(self) -> int:
+                    return 4
+
+                def run(self) -> int:
+                    def inner(_shadowed_helper: int) -> int:
+                        return self._step() + _captured_helper() + _shadowed_helper
+
+                    def rebound(self) -> int:
+                        return self._shadowed_step()
+
+                    return inner(0) + rebound(self)
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        let scopes = crate::code_lint::ast::collect_scope_facts(&file);
+        let references = crate::code_lint::ast::collect_intra_file_references(&file, &scopes);
+        let targets_from_run: Vec<&str> = references
+            .iter()
+            .filter(|edge| edge.source_symbol == "Worker::run")
+            .map(|edge| edge.target_symbol.as_str())
+            .collect();
+
+        assert_eq!(targets_from_run, vec!["Worker::_step", "_captured_helper"]);
     }
 }

@@ -1458,6 +1458,7 @@ mod tests {
             kind,
             visibility,
             is_constructor: false,
+            start_line: line,
             line,
             end_line: line,
             column: 1,
