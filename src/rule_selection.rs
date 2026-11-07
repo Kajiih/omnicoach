@@ -21,7 +21,10 @@ use strum::IntoEnumIterator as _;
 
 pub use self::taxonomy::{AnalyzedInput, Derived, Facet, RegisteredRule, Tag, registered_topics};
 use self::taxonomy::{REGISTERED_RULES, Selector};
-use crate::config::{CONFIG_FILE_NAME, Config, ContextConfig, compile_glob};
+use crate::config::{
+    ArchitectureConfig, ArchitectureConfigError, CONFIG_FILE_NAME, Config, ContextConfig,
+    compile_glob,
+};
 use crate::diagnostic::RuleName;
 use crate::diff::detect_vcs_at;
 use crate::rule_declaration::{RuleOptionsError, RuleOverrides};
@@ -133,6 +136,9 @@ pub enum ConfigError {
     /// A `[rules.<name>]` entry that the rule's declared options reject.
     #[error(transparent)]
     RuleOptions(#[from] RuleOptionsError),
+    /// An `[architecture]` table with duplicate or out-of-order component dependencies.
+    #[error(transparent)]
+    Architecture(#[from] ArchitectureConfigError),
 }
 
 /// A label given on the command line that names no rule or tag.
@@ -314,6 +320,9 @@ pub fn parse_config_with_overrides(
     overrides: &ConfigOverrides,
 ) -> Result<Config, ConfigError> {
     let raw: RawConfig = toml::from_str(config_toml)?;
+    if let Some(ref architecture) = raw.architecture {
+        architecture.validate()?;
+    }
     let file = parse_plan(raw.select, raw.ignore)?;
     let warnings = ineffective_selector_warnings(&file);
     let plan = apply_overrides(file, overrides)?;
@@ -352,6 +361,7 @@ pub fn parse_config_with_overrides(
         per_file_ignores,
         root_dir: None,
         warnings,
+        architecture: raw.architecture,
     })
 }
 
@@ -534,6 +544,8 @@ struct RawConfig {
     rules: toml::Table,
     #[serde(default)]
     context: ContextConfig,
+    #[serde(default)]
+    architecture: Option<ArchitectureConfig>,
 }
 
 fn rule_names(mut predicate: impl FnMut(&RegisteredRule) -> bool) -> HashSet<RuleName> {
@@ -999,7 +1011,7 @@ mod tests {
               |
             1 | selct = ["testing"]
               | ^^^^^
-            unknown field `selct`, expected one of `select`, `ignore`, `per-file-ignores`, `rules`, `context`"#}
+            unknown field `selct`, expected one of `select`, `ignore`, `per-file-ignores`, `rules`, `context`, `architecture`"#}
     )]
     #[case::unknown_context_key(
         "[context]\ntest-paterns = []",
@@ -1008,7 +1020,20 @@ mod tests {
               |
             2 | test-paterns = []
               | ^^^^^^^^^^^^
-            unknown field `test-paterns`, expected `test-patterns`"}
+            unknown field `test-paterns`, expected `test-patterns` or `source-roots`"}
+    )]
+    #[case::forward_architecture_dependency(
+        indoc::indoc! {r#"
+            [[architecture.components]]
+            name = "Api"
+            roots = ["app.api"]
+            depends-on = ["Core"]
+
+            [[architecture.components]]
+            name = "Core"
+            roots = ["app.core"]
+        "#},
+        "`architecture.components`: component `Api` cannot depend on `Core`; dependencies must be declared earlier in `[[architecture.components]]` to guarantee acyclicity"
     )]
     fn invalid_configs_are_rejected_loudly(#[case] config_toml: &str, #[case] message: &str) {
         let error = parse_config(config_toml).unwrap_err().to_string();

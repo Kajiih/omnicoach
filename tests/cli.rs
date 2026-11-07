@@ -558,8 +558,8 @@ fn test_graph_project_depth_levels_and_declared_components() {
         src_dir.join("architecture.rs"),
         indoc! {r"
             define_architecture! {
-                Api => [Core],
                 Core => [],
+                Api => [Core],
             }
         "},
     )

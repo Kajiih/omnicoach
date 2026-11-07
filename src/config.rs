@@ -16,7 +16,10 @@ pub const CONFIG_FILE_NAME: &str = ".omnicoach.toml";
 const DEFAULT_TEST_PATTERNS: &[&str] =
     &["**/tests/**", "**/test_*.py", "**/*_test.py", "**/tests.rs"];
 
-/// Configuration settings for path context detection (e.g. test paths).
+static CACHED_CURRENT_DIR: std::sync::LazyLock<Option<PathBuf>> =
+    std::sync::LazyLock::new(|| std::env::current_dir().ok());
+
+/// Configuration settings for path context detection (e.g. test paths) and Python source roots.
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ContextConfig {
@@ -26,14 +29,144 @@ pub struct ContextConfig {
         deserialize_with = "deserialize_test_patterns"
     )]
     pub test_patterns: globset::GlobSet,
+    /// Optional Python import source roots relative to the project root (e.g. `["src", "python"]`).
+    #[serde(default)]
+    pub source_roots: Vec<String>,
 }
 
 impl Default for ContextConfig {
     fn default() -> Self {
         Self {
             test_patterns: default_test_patterns(),
+            source_roots: Vec::new(),
         }
     }
+}
+
+/// Validation failure in an `[architecture]` configuration block.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ArchitectureConfigError {
+    /// Two `[[architecture.components]]` entries share the same `name`.
+    #[error("`architecture.components`: duplicate component `{0}`")]
+    DuplicateComponent(String),
+    /// A component lists a `depends-on` target that was not declared earlier in `components`.
+    #[error(
+        "`architecture.components`: component `{component}` cannot depend on `{dependency}`; \
+         dependencies must be declared earlier in `[[architecture.components]]` to guarantee acyclicity"
+    )]
+    ForwardOrUnknownDependency {
+        /// Dependent component name.
+        component: String,
+        /// Undeclared or out-of-order dependency name.
+        dependency: String,
+    },
+    /// A component contains a malformed `public-exports` glob pattern.
+    #[error(
+        "`architecture.components`: component `{component}` has invalid `public-exports` glob `{pattern}`: {message}"
+    )]
+    InvalidPublicExportGlob {
+        /// Component declaring `public-exports`.
+        component: String,
+        /// Raw invalid glob string.
+        pattern: String,
+        /// Underlying `globset` error description.
+        message: String,
+    },
+}
+
+/// Project-wide architectural DAG configuration (`[architecture]` in `.omnicoach.toml`).
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct ArchitectureConfig {
+    /// Optional Python import source roots relative to the project root.
+    #[serde(default)]
+    pub source_roots: Vec<String>,
+    /// Whether `depends-on` edges are transitive across the component DAG (default `true`).
+    #[serde(default = "default_true")]
+    pub transitive_dependencies: bool,
+    /// Whether every production module must belong to a declared component or pure router (default `true`).
+    #[serde(default = "default_true")]
+    pub require_component_coverage: bool,
+    /// Whether imports inside `if TYPE_CHECKING:` blocks are exempt from dependency checks.
+    #[serde(default)]
+    pub ignore_type_checking_imports: bool,
+    /// Ordered component declarations; each `depends-on` entry must name an earlier component.
+    #[serde(default)]
+    pub components: Vec<ArchitectureComponentConfig>,
+}
+
+impl Default for ArchitectureConfig {
+    fn default() -> Self {
+        Self {
+            source_roots: Vec::new(),
+            transitive_dependencies: true,
+            require_component_coverage: true,
+            ignore_type_checking_imports: false,
+            components: Vec::new(),
+        }
+    }
+}
+
+impl ArchitectureConfig {
+    /// Validates that component names are unique and every `depends-on` entry names an earlier
+    /// component in `[[architecture.components]]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ArchitectureConfigError`] on duplicate component names or forward/unknown
+    /// `depends-on` references.
+    pub fn validate(&self) -> Result<(), ArchitectureConfigError> {
+        let mut seen = HashSet::with_capacity(self.components.len());
+        for component in &self.components {
+            for dependency in &component.depends_on {
+                if !seen.contains(dependency.as_str()) {
+                    return Err(ArchitectureConfigError::ForwardOrUnknownDependency {
+                        component: component.name.clone(),
+                        dependency: dependency.clone(),
+                    });
+                }
+            }
+            if !seen.insert(component.name.as_str()) {
+                return Err(ArchitectureConfigError::DuplicateComponent(
+                    component.name.clone(),
+                ));
+            }
+            if let Some(ref patterns) = component.public_exports {
+                for pattern in patterns {
+                    if let Err(error) = compile_glob(pattern) {
+                        return Err(ArchitectureConfigError::InvalidPublicExportGlob {
+                            component: component.name.clone(),
+                            pattern: pattern.clone(),
+                            message: error.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Single component entry (`[[architecture.components]]`) in `.omnicoach.toml`.
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct ArchitectureComponentConfig {
+    /// Canonical component name (`CodeLintAst`, `Core`, `Api`).
+    pub name: String,
+    /// Root module prefix(es) belonging to this component (`["code_lint::ast"]`, `["tach.cli"]`).
+    pub roots: Vec<String>,
+    /// Directly allowed component dependencies (must appear earlier in `components`).
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// Whether direct child modules and multiple roots of this component are isolated from siblings.
+    #[serde(default)]
+    pub isolate_children: bool,
+    /// External packages or crates encapsulated by this component.
+    #[serde(default)]
+    pub owns_external: Vec<String>,
+    /// Optional exported symbol glob patterns (`["parse_*", "Config"]`).
+    #[serde(default)]
+    pub public_exports: Option<Vec<String>>,
 }
 
 /// Configuration settings resolved from `.omnicoach.toml` by `rule_selection::parse_config`.
@@ -52,6 +185,8 @@ pub struct Config {
     /// Problems that do not prevent loading, one message each, such as a `select` or
     /// `ignore` entry that changes no rule's outcome.
     pub warnings: Vec<String>,
+    /// Optional validated `[architecture]` block declared in `.omnicoach.toml`.
+    pub architecture: Option<ArchitectureConfig>,
 }
 
 impl Config {
@@ -91,23 +226,15 @@ impl Config {
             || path.is_absolute(),
             |root| !path.is_absolute() || !path.starts_with(root),
         );
-        let cwd = needs_cwd.then(|| std::env::current_dir().ok()).flatten();
-        normalize_path_with_roots(path, self.root_dir.as_deref(), cwd.as_deref())
+        let cwd = needs_cwd.then_some(CACHED_CURRENT_DIR.as_deref()).flatten();
+        normalize_path_with_roots(path, self.root_dir.as_deref(), cwd)
     }
 }
 
-/// Compiles `pattern` with `*` matching across `/`, as all config globs do.
-///
-/// # Errors
-///
-/// Returns the glob syntax error for an invalid pattern.
-pub(crate) fn compile_glob(pattern: &str) -> Result<globset::Glob, globset::Error> {
-    globset::GlobBuilder::new(pattern)
-        .literal_separator(false)
-        .build()
-}
-
-pub(crate) fn lexical_normalize(path: &Path) -> PathBuf {
+/// Normalizes `path` lexically by stripping `.` (`CurDir`) and resolving `..` (`ParentDir`)
+/// components without touching the filesystem, returning `"."` when all components collapse.
+#[must_use]
+pub fn lexical_normalize(path: &Path) -> PathBuf {
     let mut components = Vec::new();
     for component in path.components() {
         match component {
@@ -131,6 +258,21 @@ pub(crate) fn lexical_normalize(path: &Path) -> PathBuf {
     } else {
         components.iter().collect()
     }
+}
+
+/// Compiles `pattern` with `*` matching across `/`, as all config globs do.
+///
+/// # Errors
+///
+/// Returns the glob syntax error for an invalid pattern.
+pub(crate) fn compile_glob(pattern: &str) -> Result<globset::Glob, globset::Error> {
+    globset::GlobBuilder::new(pattern)
+        .literal_separator(false)
+        .build()
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 fn default_test_patterns() -> globset::GlobSet {
@@ -281,5 +423,28 @@ mod tests {
         // Path relative to root
         assert!(!config.is_rule_enabled_for_path(STYLE_RULE, Path::new("tests/cli.rs")));
         assert!(config.is_rule_enabled_for_path(STYLE_RULE, Path::new("src/lib.rs")));
+    }
+
+    #[test]
+    fn test_validate_rejects_invalid_public_export_glob() {
+        let architecture = ArchitectureConfig {
+            components: vec![ArchitectureComponentConfig {
+                name: "Auth".to_owned(),
+                roots: vec!["pkg.auth".to_owned()],
+                depends_on: Vec::new(),
+                isolate_children: false,
+                owns_external: Vec::new(),
+                public_exports: Some(vec!["[unclosed".to_owned()]),
+            }],
+            ..ArchitectureConfig::default()
+        };
+        let error = architecture
+            .validate()
+            .expect_err("unclosed bracket glob in public-exports must fail validation");
+        assert!(matches!(
+            error,
+            ArchitectureConfigError::InvalidPublicExportGlob { ref component, ref pattern, .. }
+                if component == "Auth" && pattern == "[unclosed"
+        ));
     }
 }
