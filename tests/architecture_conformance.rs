@@ -5,541 +5,40 @@
 // Workaround for rust-lang/rust-clippy#13981 so clippy.toml `allow-*-in-tests` applies to the whole file.
 #![cfg(test)]
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 
-use omnicoach::architecture::{ARCHITECTURE_GRAPH, ArchitectureComponent, ComponentDefinition};
-use omnicoach::code_lint::ast::ParsedFile;
-use omnicoach::code_lint::ast::rust::{
-    ExternalModDeclaration, RustFileSummary, VisibleUseDeclaration, summarize_rust_file,
-};
+use omnicoach::architecture::ArchitectureComponent;
 use omnicoach::code_lint::project::{
-    PathOrigin, is_in_module_subtree, normalize_relative_path,
-    resolve_inherited_component_with_root, resolve_rust_reference_path, rust_module_path,
+    ArchitectureSpec, DiskFileSource, ProjectIndex, ProjectLayout,
+    resolve_inherited_component_with_root,
 };
+use omnicoach::code_lint::rules::CODE_RULES;
+use omnicoach::code_lint::runner::{LintOptions, run_code_lint};
+use omnicoach::config::Config;
+use omnicoach::diagnostic::RuleName;
 use strum::VariantArray;
 
-/// The only modules allowed to handle the shell parser crate (`brush_parser`) directly.
-const SHELL_AST_OWNERS: &[&str] = &["command_lint::command"];
-
-/// The only modules allowed to handle dedicated Python/Rust parser crates directly.
-const DEDICATED_AST_OWNERS: &[&str] = &["code_lint::ast", "bin::ast_dumper"];
-
-/// Cached structural and dependency summary of a single `.rs` file under `src/`.
-#[derive(Debug, Clone)]
-struct SourceFileEntry {
-    path: PathBuf,
-    module_path: String,
-    is_crate_root: bool,
-    source: String,
-    summary: RustFileSummary,
-}
-
-impl SourceFileEntry {
-    fn from_source(path: impl Into<PathBuf>, module_path: impl Into<String>, source: &str) -> Self {
-        let path = path.into();
-        let module_path = module_path.into();
-        let is_crate_root = module_path == "lib" || module_path.is_empty();
-        let parsed = ParsedFile::rust(source);
-        let summary = summarize_rust_file(&parsed);
-        Self {
-            path,
-            module_path,
-            is_crate_root,
-            source: source.to_owned(),
-            summary,
-        }
-    }
-}
-
-/// Native architectural dependency rule enforcing that modules under `subject_prefix`
-/// (excluding `exempt_prefixes`) never reference any path under `forbidden_prefixes`.
-#[derive(Debug, Clone)]
-struct ForbiddenDependencyRule {
-    subject_prefix: String,
-    forbidden_prefixes: Vec<String>,
-    exempt_prefixes: Vec<String>,
-}
-
-impl ForbiddenDependencyRule {
-    fn must_not_depend_on<'a>(
-        subject_prefix: &str,
-        forbidden: impl IntoIterator<Item = &'a str>,
-    ) -> Self {
-        Self {
-            subject_prefix: subject_prefix.to_string(),
-            forbidden_prefixes: forbidden.into_iter().map(str::to_owned).collect(),
-            exempt_prefixes: Vec::new(),
-        }
-    }
-
-    fn is_applicable(&self, module_path: &str) -> bool {
-        is_in_module_subtree(module_path, &self.subject_prefix)
-            && !self
-                .exempt_prefixes
-                .iter()
-                .any(|exempt| is_in_module_subtree(module_path, exempt))
-    }
-
-    fn violations_in_file(&self, entry: &SourceFileEntry) -> Vec<String> {
-        if !self.is_applicable(&entry.module_path) {
-            return Vec::new();
-        }
-        let subject_label = if self.subject_prefix.is_empty() {
-            "omnicoach"
-        } else {
-            &self.subject_prefix
-        };
-        let mut violations = Vec::new();
-        for reference in &entry.summary.referenced_paths {
-            let resolved = resolve_rust_reference_path(
-                &entry.module_path,
-                &entry.summary.external_mods,
-                &reference.raw_path,
-                Some("omnicoach"),
-            );
-            for forbidden in &self.forbidden_prefixes {
-                if is_in_module_subtree(&resolved.canonical_path, forbidden) {
-                    violations.push(format!(
-                        "{}:{}: `{subject_label}` must not depend on `{forbidden}` (referenced `{}` -> `{}` in `{}`)",
-                        entry.path.display(),
-                        reference.line,
-                        reference.raw_path,
-                        resolved.canonical_path,
-                        reference.statement_text,
-                    ));
-                }
-            }
-        }
-        violations
-    }
-}
-
-/// Computes the set of all components transitively reachable from `from` along directed dependency edges.
-fn compute_transitive_reachability(
-    from: ArchitectureComponent,
-    graph: &[ComponentDefinition],
-) -> HashSet<ArchitectureComponent> {
-    let mut reachable = HashSet::new();
-    let mut queue = VecDeque::new();
-    queue.push_back(from);
-
-    while let Some(current) = queue.pop_front() {
-        if let Some(definition) = graph.iter().find(|item| item.component == current) {
-            for &dependency in definition.depends_on {
-                if reachable.insert(dependency) {
-                    queue.push_back(dependency);
-                }
-            }
-        }
-    }
-    reachable
+fn repo_root_directory() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
 }
 
 fn source_root_directory() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
+    repo_root_directory().join("src")
 }
 
-/// Recursively lists the `.rs` files under `directory`.
-fn rust_files(directory: &Path) -> Vec<PathBuf> {
-    let entries = std::fs::read_dir(directory).expect("source directory should be readable");
-    let mut paths: Vec<PathBuf> = entries
-        .map(|entry| entry.expect("directory entry should be readable").path())
-        .flat_map(|path| {
-            if path.is_dir() {
-                rust_files(&path)
-            } else if path.extension().is_some_and(|extension| extension == "rs") {
-                vec![path]
-            } else {
-                vec![]
-            }
-        })
-        .collect();
-    paths.sort();
-    paths
-}
-
-/// Computes the crate-relative module path of a source file (e.g. `code_lint::rules::abbreviated_name`).
-fn module_path_for_file(path: &Path) -> String {
-    let relative = normalize_relative_path(path, Some(&source_root_directory()));
-    rust_module_path(&relative)
-}
-
-/// Cached `SourceFileEntry` list for all `.rs` files under `src/`, parsed once in a single pass.
-static SOURCE_FILES: LazyLock<Vec<SourceFileEntry>> = LazyLock::new(|| {
-    rust_files(&source_root_directory())
-        .into_iter()
-        .map(|path| {
-            let source = std::fs::read_to_string(&path).expect("source files should be readable");
-            let module_path = module_path_for_file(&path);
-            SourceFileEntry::from_source(path, module_path, &source)
-        })
-        .collect()
-});
-
-/// Cached `ArchitectureComponent` declarations (`architecture_component!(...)`) in component root files under `src/`.
-static DECLARED_COMPONENTS: LazyLock<BTreeMap<String, ArchitectureComponent>> =
-    LazyLock::new(|| {
-        SOURCE_FILES
-            .iter()
-            .filter_map(|entry| {
-                let [(_, name)] = entry.summary.architecture_components.as_slice() else {
-                    return None;
-                };
-                let component = name.parse::<ArchitectureComponent>().ok()?;
-                Some((entry.module_path.clone(), component))
-            })
-            .collect()
-    });
-
-/// Resolves the `ArchitectureComponent` for `module` by climbing up its module path to the
-/// nearest ancestor (or self) that declares `architecture_component!(...)`.
-fn resolve_inherited_component(
-    module: &str,
-    declared_components: &BTreeMap<String, ArchitectureComponent>,
-) -> Option<ArchitectureComponent> {
-    resolve_inherited_component_with_root(module, declared_components)
-        .map(|inherited| *inherited.component)
-}
-
-/// Groups declared component root modules by `ArchitectureComponent`.
-fn discover_component_roots(
-    declared_components: &BTreeMap<String, ArchitectureComponent>,
-) -> BTreeMap<ArchitectureComponent, Vec<String>> {
-    let mut roots: BTreeMap<ArchitectureComponent, Vec<String>> = BTreeMap::new();
-    for (module, &component) in declared_components {
-        roots.entry(component).or_default().push(module.clone());
-    }
-    roots
-}
-
-/// Cached verification rules derived directly from `ARCHITECTURE_GRAPH`
-/// and the component root `architecture_component!(...)` declarations in `src/`.
-static ARCHITECTURE_CONFORMANCE_RULES: LazyLock<Vec<ForbiddenDependencyRule>> =
-    LazyLock::new(|| {
-        let component_roots = discover_component_roots(&DECLARED_COMPONENTS);
-        let mut rules = Vec::new();
-
-        // 1. Cross-component DAG dependency rules
-        for definition in ARCHITECTURE_GRAPH {
-            let mut allowed =
-                compute_transitive_reachability(definition.component, ARCHITECTURE_GRAPH);
-            allowed.insert(definition.component);
-
-            let forbidden_modules: Vec<&str> = ARCHITECTURE_GRAPH
-                .iter()
-                .map(|item| item.component)
-                .filter(|component| !allowed.contains(component))
-                .filter_map(|component| component_roots.get(&component))
-                .flatten()
-                .map(String::as_str)
-                .collect();
-
-            if !forbidden_modules.is_empty()
-                && let Some(subject_roots) = component_roots.get(&definition.component)
-            {
-                for subject_module in subject_roots {
-                    rules.push(ForbiddenDependencyRule::must_not_depend_on(
-                        subject_module,
-                        forbidden_modules.iter().copied(),
-                    ));
-                }
-            }
-        }
-
-        // 2. Universal intra-component sibling subtree isolation
-        for definition in ARCHITECTURE_GRAPH {
-            let Some(roots) = component_roots.get(&definition.component) else {
-                continue;
-            };
-
-            // 2a. Multi-root sibling isolation (e.g. `Bin`)
-            if roots.len() > 1 {
-                for root in roots {
-                    let siblings = roots
-                        .iter()
-                        .map(String::as_str)
-                        .filter(|&other| other != root);
-                    rules.push(ForbiddenDependencyRule::must_not_depend_on(root, siblings));
-                }
-            }
-
-            // 2b. Direct-child subtree isolation between non-private child modules under each component root
-            for root in roots {
-                let Some(root_entry) = SOURCE_FILES.iter().find(|entry| &entry.module_path == root)
-                else {
-                    continue;
-                };
-                let direct_children: Vec<String> = root_entry
-                    .summary
-                    .external_mods
-                    .iter()
-                    .filter(|declaration| !declaration.is_private)
-                    .map(|declaration| format!("{root}::{}", declaration.name))
-                    .collect();
-
-                if direct_children.len() > 1 {
-                    for child in &direct_children {
-                        let siblings = direct_children
-                            .iter()
-                            .map(String::as_str)
-                            .filter(|&other| other != child);
-                        rules.push(ForbiddenDependencyRule::must_not_depend_on(child, siblings));
-                    }
-                }
-            }
-        }
-
-        rules
-    });
-
-fn parser_encapsulation_rules() -> Vec<ForbiddenDependencyRule> {
-    vec![
-        ForbiddenDependencyRule {
-            subject_prefix: String::new(),
-            forbidden_prefixes: vec!["brush_parser".to_string()],
-            exempt_prefixes: SHELL_AST_OWNERS
-                .iter()
-                .copied()
-                .map(str::to_owned)
-                .collect(),
-        },
-        ForbiddenDependencyRule {
-            subject_prefix: String::new(),
-            forbidden_prefixes: vec![
-                "ruff_python_parser".to_string(),
-                "ruff_python_ast".to_string(),
-                "ruff_text_size".to_string(),
-                "ra_ap_syntax".to_string(),
-            ],
-            exempt_prefixes: DEDICATED_AST_OWNERS
-                .iter()
-                .copied()
-                .map(str::to_owned)
-                .collect(),
-        },
-    ]
-}
-
-fn violations_in(files: &[SourceFileEntry], rules: &[ForbiddenDependencyRule]) -> Vec<String> {
-    files
-        .iter()
-        .flat_map(|entry| rules.iter().flat_map(|rule| rule.violations_in_file(entry)))
-        .collect()
-}
-
-fn assert_src_complies_with(rules: &[ForbiddenDependencyRule]) {
-    let violations = violations_in(&SOURCE_FILES, rules);
-    assert!(
-        violations.is_empty(),
-        "Architecture violations:\n{}",
-        violations.join("\n")
-    );
-}
-
-/// Returns true if `visible_use` is an idiomatic private-child facade re-export
-/// (`mod child; pub use self::child::Item;` or `mod child; pub use child::Item;`).
-fn is_private_child_facade_reexport(
-    visible_use: &VisibleUseDeclaration,
-    external_mods: &[ExternalModDeclaration],
-) -> bool {
-    if visible_use.target_paths.is_empty() {
-        return false;
-    }
-    visible_use.target_paths.iter().all(|target| {
-        let stripped = target.strip_prefix("self::").unwrap_or(target);
-        let Some((child_module, rest)) = stripped.split_once("::") else {
-            return false;
-        };
-        !rest.is_empty()
-            && external_mods
-                .iter()
-                .any(|declaration| declaration.is_private && declaration.name == child_module)
+fn repo_architecture_spec() -> &'static (ProjectLayout, ArchitectureSpec) {
+    static REPO_SPEC: OnceLock<(ProjectLayout, ArchitectureSpec)> = OnceLock::new();
+    REPO_SPEC.get_or_init(|| {
+        let layout = ProjectLayout::discover(&source_root_directory(), &DiskFileSource, &[]);
+        let index = ProjectIndex::new(layout.clone(), &DiskFileSource);
+        let spec = index
+            .architecture_spec()
+            .expect("omnicoach should resolve an ArchitectureSpec from src/")
+            .clone();
+        (layout, spec)
     })
-}
-
-/// Returns all declarations in `entry` that introduce an illegal second path to an item.
-///
-/// Every item keeps a single public path:
-/// - `#[macro_export]` is allowed only in `src/lib.rs`.
-/// - `pub(crate) use <local_macro>;` for a `macro_rules!` defined in the same file is allowed.
-/// - `pub use` / `pub(crate) use` is allowed only when re-exporting items from a private direct
-///   child module (`mod <child>;`), acting as a single-path component facade.
-fn second_path_violations_in_entry(entry: &SourceFileEntry) -> Vec<String> {
-    let mut violations = Vec::new();
-    if !entry.is_crate_root {
-        for _ in &entry.summary.macro_exports {
-            violations.push("#[macro_export]".to_owned());
-        }
-    }
-    for visible_use in &entry.summary.visible_uses {
-        if !is_private_child_facade_reexport(visible_use, &entry.summary.external_mods) {
-            violations.push(visible_use.declaration_text.clone());
-        }
-    }
-    violations
-}
-
-/// Returns `(line, violation_message)` for any relative path (`super::` or `self::`) in `entry`
-/// that escapes the enclosing file's `ArchitectureComponent` root subtree.
-fn relative_path_boundary_violations_in_entry(
-    entry: &SourceFileEntry,
-    declared_components: &BTreeMap<String, ArchitectureComponent>,
-) -> Vec<(usize, String)> {
-    let enclosing_root =
-        resolve_inherited_component_with_root(&entry.module_path, declared_components);
-    let mut violations = Vec::new();
-
-    for reference in &entry.summary.referenced_paths {
-        let resolved = resolve_rust_reference_path(
-            &entry.module_path,
-            &entry.summary.external_mods,
-            &reference.raw_path,
-            Some("omnicoach"),
-        );
-        let PathOrigin::Relative {
-            shallowest_ancestor,
-        } = &resolved.origin
-        else {
-            continue;
-        };
-
-        let stays_in_component_root = enclosing_root
-            .zip(shallowest_ancestor.as_deref())
-            .is_some_and(|(inherited, ancestor)| {
-                is_in_module_subtree(ancestor, inherited.root_module)
-                    && is_in_module_subtree(&resolved.canonical_path, inherited.root_module)
-            });
-
-        if !stays_in_component_root {
-            violations.push((
-                reference.line,
-                format!(
-                    "`{}` resolves to `{}` outside component root (use `crate::{}` for cross-component references): {}",
-                    reference.raw_path,
-                    resolved.canonical_path,
-                    resolved.canonical_path,
-                    reference.statement_text,
-                ),
-            ));
-        }
-    }
-
-    violations
-}
-
-/// Validates a slice of `SourceFileEntry` items against the component declaration, subtree
-/// inheritance, and pure namespace router invariants, returning any human-readable violations.
-fn validate_component_declarations_and_routers(
-    entries: &[SourceFileEntry],
-    require_all_variants_covered: bool,
-) -> Vec<String> {
-    let mut violations = Vec::new();
-    let mut declared_components = BTreeMap::new();
-
-    for entry in entries {
-        match entry.summary.architecture_components.as_slice() {
-            [] => {}
-            [(_, component_name)] => match component_name.parse::<ArchitectureComponent>() {
-                Err(_) => {
-                    violations.push(format!(
-                        "{}: unknown component '{component_name}'",
-                        entry.path.display()
-                    ));
-                }
-                Ok(component) => {
-                    declared_components.insert(entry.module_path.clone(), component);
-                }
-            },
-            multiple => {
-                let names: Vec<&str> = multiple.iter().map(|(_, name)| name.as_str()).collect();
-                violations.push(format!(
-                    "{}: multiple architecture_component! declarations found: {}",
-                    entry.path.display(),
-                    names.join(", ")
-                ));
-            }
-        }
-    }
-
-    for (module, &component) in &declared_components {
-        let mut current = module.as_str();
-        while let Some((parent, _)) = current.rsplit_once("::") {
-            if let Some(&ancestor_component) = declared_components.get(parent) {
-                violations.push(format!(
-                    "{module}: declares '{component}', but ancestor '{parent}' already declares '{ancestor_component}' (child modules inherit their ancestor's component automatically)"
-                ));
-                break;
-            }
-            current = parent;
-        }
-    }
-
-    for entry in entries {
-        if !entry.summary.architecture_components.is_empty()
-            || resolve_inherited_component(&entry.module_path, &declared_components).is_some()
-        {
-            continue;
-        }
-
-        let routes_to_declared_component = entry.is_crate_root
-            || declared_components
-                .keys()
-                .any(|root| is_in_module_subtree(root, &entry.module_path));
-
-        if entry.summary.external_mods.is_empty() || !routes_to_declared_component {
-            violations.push(format!(
-                "{}: missing 'architecture_component!(<Variant>);' (and not a pure namespace router for any declared component)",
-                entry.path.display()
-            ));
-            continue;
-        }
-
-        let disallowed_items =
-            entry
-                .summary
-                .non_namespace_items
-                .iter()
-                .chain(if entry.is_crate_root {
-                    &[][..]
-                } else {
-                    entry.summary.macro_definitions.as_slice()
-                });
-        for (span, item) in disallowed_items {
-            let line = 1 + entry.source[..span.start]
-                .bytes()
-                .filter(|&byte| byte == b'\n')
-                .count();
-            violations.push(format!(
-                "{}:{line}: pure namespace router without 'architecture_component!' may only contain external 'mod' declarations, found: {item}",
-                entry.path.display()
-            ));
-        }
-    }
-
-    if require_all_variants_covered {
-        let component_roots = discover_component_roots(&declared_components);
-        for component in ArchitectureComponent::VARIANTS {
-            if component_roots.get(component).is_none_or(Vec::is_empty) {
-                violations.push(format!(
-                    "Component '{component}' has no root source files declaring it in src/"
-                ));
-            }
-        }
-    }
-
-    violations
-}
-
-#[test]
-fn test_all_source_files_declare_architecture_component() {
-    let violations = validate_component_declarations_and_routers(&SOURCE_FILES, true);
-    assert!(
-        violations.is_empty(),
-        "Component declaration or namespace router violations:\n{}",
-        violations.join("\n")
-    );
 }
 
 /// The `PascalCase` of a module path: `code_lint::ast` → `CodeLintAst`.
@@ -556,11 +55,13 @@ fn pascal_case(module_path: &str) -> String {
         .collect()
 }
 
-/// The module a component is named after: its root, or the parent its roots share when it
-/// spans several files (`bin::ast_dumper`, `bin::omnicoach`, … → `bin`).
+/// The module a component is named after: its root (or `bin` for `bin::*` entrypoints), or the
+/// parent its roots share when it spans several files.
 fn naming_module(roots: &[String]) -> Option<&str> {
     if let [root] = roots {
-        return Some(root);
+        return parent_module(root)
+            .filter(|&parent| parent == "bin")
+            .or(Some(root));
     }
     let shared = parent_module(roots.first()?)?;
     roots
@@ -573,229 +74,82 @@ fn parent_module(module_path: &str) -> Option<&str> {
     module_path.rsplit_once("::").map(|(parent, _)| parent)
 }
 
-/// A component is named after its module: the `PascalCase` of its root module path, or of the
-/// parent its roots share when it spans several files (`bin::*` → `Bin`).
+#[test]
+fn test_production_architecture_rules_on_src() {
+    let architecture_rule_names: HashSet<RuleName> = [
+        "undeclared-component-dependency",
+        "sibling-module-dependency",
+        "cross-component-relative-path",
+        "unowned-external-dependency",
+        "private-component-import",
+        "reexported-public-item",
+        "unmapped-architecture-module",
+        "invalid-architecture-component",
+    ]
+    .into_iter()
+    .map(RuleName)
+    .collect();
+    let disabled_rules: HashSet<RuleName> = CODE_RULES
+        .iter()
+        .map(|rule| rule.name())
+        .filter(|name| !architecture_rule_names.contains(name))
+        .collect();
+    let config = Config {
+        disabled_rules,
+        ..Config::default()
+    };
+    let options = LintOptions {
+        paths: vec![source_root_directory()],
+        diff: false,
+        diff_rev: None,
+    };
+    let report = run_code_lint(&options, &config).expect("run_code_lint should succeed on src/");
+    assert!(
+        report.diagnostics.is_empty(),
+        "Production Topic::ARCHITECTURE rules reported diagnostics on src/:\n{:#?}",
+        report.diagnostics
+    );
+}
+
+/// Verifies that every variant in [`ArchitectureComponent::VARIANTS`] is declared by at least one
+/// root module in `src/`.
+#[test]
+fn test_all_architecture_components_have_root_modules_in_src() {
+    let (_, spec) = repo_architecture_spec();
+    let uncovered_variants: Vec<ArchitectureComponent> = ArchitectureComponent::VARIANTS
+        .iter()
+        .copied()
+        .filter(|variant| {
+            !spec
+                .components
+                .iter()
+                .any(|comp| comp.name == variant.as_ref() && !comp.roots.is_empty())
+        })
+        .collect();
+    assert_eq!(uncovered_variants, Vec::<ArchitectureComponent>::new());
+}
+
+/// Verifies that every component name is the `PascalCase` of its root module path (or shared
+/// parent module when it spans several files, such as `bin::*` → `Bin`).
 #[test]
 fn test_components_are_named_after_their_modules() {
-    let violations: Vec<String> = discover_component_roots(&DECLARED_COMPONENTS)
+    let (_, spec) = repo_architecture_spec();
+    let naming_violations: Vec<String> = spec
+        .components
         .iter()
-        .filter(|(component, roots)| {
-            naming_module(roots).map(pascal_case).as_deref() != Some(component.as_ref())
-        })
-        .map(|(component, roots)| {
+        .filter(|comp| naming_module(&comp.roots).map(pascal_case).as_deref() != Some(&comp.name))
+        .map(|comp| {
             format!(
-                "`{component}` is declared by `{}`; a component is the PascalCase of its module path",
-                roots.join("`, `")
+                "`{}` is declared by `{}`; a component is the PascalCase of its module path",
+                comp.name,
+                comp.roots.join("`, `")
             )
         })
         .collect();
     assert!(
-        violations.is_empty(),
+        naming_violations.is_empty(),
         "Components not named after their modules:\n{}",
-        violations.join("\n")
-    );
-}
-
-#[test]
-fn test_architecture_conformance() {
-    assert_src_complies_with(&ARCHITECTURE_CONFORMANCE_RULES);
-}
-
-#[test]
-fn test_parser_crates_are_encapsulated() {
-    assert_src_complies_with(&parser_encapsulation_rules());
-}
-
-#[test]
-fn test_items_have_a_single_path() {
-    let violations: Vec<String> = SOURCE_FILES
-        .iter()
-        .flat_map(|entry| {
-            second_path_violations_in_entry(entry)
-                .into_iter()
-                .map(|declaration| format!("{}: {declaration}", entry.path.display()))
-        })
-        .collect();
-    assert!(
-        violations.is_empty(),
-        "Second paths found:\n{}",
-        violations.join("\n")
-    );
-}
-
-/// Enforces that relative paths (`super::` / `self::`) stay within their enclosing
-/// `ArchitectureComponent` root subtree, while cross-component references use `crate::`.
-#[test]
-fn test_relative_paths_stay_within_component() {
-    let violations: Vec<String> = SOURCE_FILES
-        .iter()
-        .flat_map(|entry| {
-            relative_path_boundary_violations_in_entry(entry, &DECLARED_COMPONENTS)
-                .into_iter()
-                .map(|(line, message)| format!("{}:{line}: {message}", entry.path.display()))
-        })
-        .collect();
-    assert!(
-        violations.is_empty(),
-        "Cross-component relative paths found in production code:\n{}",
-        violations.join("\n")
-    );
-}
-
-/// Guards against vacuous passes: re-exports from public submodules or other components and
-/// non-root `#[macro_export]` are flagged, while private-child `mod detail; pub use self::detail::Item;`
-/// facades and local `macro_rules!` paths are allowed.
-#[test]
-fn test_second_path_detection_allows_private_child_facades_and_rejects_duplicates() {
-    let source = indoc::indoc! {r#"
-        mod private_detail;
-        pub mod public_child;
-
-        macro_rules! local_macro {
-            () => {};
-        }
-        pub(crate) use local_macro;
-
-        // Allowed: private-child facade re-exports keep a single public path
-        pub use self::private_detail::{AllowedFacade, AnotherAllowed};
-        pub(crate) use private_detail::CrateAllowedFacade;
-
-        // Ignored: comments and string literals
-        // pub use crate::commented::Out;
-        const FIXTURE: &str = r"
-        pub use crate::fake::ReExport;
-        #[macro_export]
-        ";
-
-        // Rejected: re-exporting from a public child module creates a second public path
-        pub use self::public_child::DuplicatePathItem;
-        // Rejected: cross-component re-export hides the defining component
-        pub use crate::diagnostic::RuleName;
-        pub(crate) use crate::rule_declaration::Topic;
-        #[macro_export]
-        macro_rules! exported {
-            () => {};
-        }
-    "#};
-    let entry = SourceFileEntry::from_source("src/code_lint/ast.rs", "code_lint::ast", source);
-    assert_eq!(
-        second_path_violations_in_entry(&entry),
-        vec![
-            "#[macro_export]",
-            "pub use self::public_child::DuplicatePathItem;",
-            "pub use crate::diagnostic::RuleName;",
-            "pub(crate) use crate::rule_declaration::Topic;",
-        ]
-    );
-}
-
-/// Guards against vacuous passes in relative path boundary checking: intra-component `super::`
-/// and `self::` are allowed, while cross-component `super::` (both in `use` and inline) is rejected.
-#[test]
-fn test_relative_path_boundary_allows_intra_component_and_rejects_cross_component() {
-    let declared_components = BTreeMap::from([(
-        "code_lint::ast".to_owned(),
-        ArchitectureComponent::CodeLintAst,
-    )]);
-    let child_source = indoc::indoc! {r#"
-        // Allowed: child `code_lint::ast::rust` referencing parent root `code_lint::ast`
-        use super::{AstNode, ParsedFile};
-
-        #[cfg(test)]
-        fn test_helper() {
-            use super::super::rule::AllowedInTest;
-        }
-
-        const FIXTURE: &str = r"
-        use super::super::fake_string_import;
-        ";
-
-        // Rejected: climbing out of `code_lint::ast` into `code_lint::contract` (or re-entering `ast`)
-        use super::super::rule::CodeDetector;
-        use super::super::ast::AstNode as ReenteredAstNode;
-
-        pub fn call_escaped() {
-            let _ = super::super::diagnostic::Violation::new();
-        }
-    "#};
-    let child_entry = SourceFileEntry::from_source(
-        "src/code_lint/ast/rust.rs",
-        "code_lint::ast::rust",
-        child_source,
-    );
-    let child_lines: Vec<usize> =
-        relative_path_boundary_violations_in_entry(&child_entry, &declared_components)
-            .into_iter()
-            .map(|(line, _)| line)
-            .collect();
-
-    let root_source = indoc::indoc! {r"
-        pub mod rust;
-        // Allowed: component root referencing its own subtree via `self::`
-        use self::rust::collect_bindings;
-        // Rejected: component root using `super::` or `self::super::` to escape its root
-        use super::semantic::bindings;
-        use self::super::ast::ParsedFile;
-    "};
-    let root_entry =
-        SourceFileEntry::from_source("src/code_lint/ast.rs", "code_lint::ast", root_source);
-    let root_lines: Vec<usize> =
-        relative_path_boundary_violations_in_entry(&root_entry, &declared_components)
-            .into_iter()
-            .map(|(line, _)| line)
-            .collect();
-    assert_eq!(child_lines, vec![14, 15, 18]);
-    assert_eq!(root_lines, vec![5, 6]);
-}
-
-/// Guards against vacuous passes: upward dependencies, cross-domain dependencies, sibling-unit
-/// imports (including via `super::`), turbofish paths, and macro-argument paths must all be caught.
-#[test]
-fn test_architecture_rules_detect_forbidden_dependencies() {
-    let offending_files = [
-        SourceFileEntry::from_source(
-            "src/code_lint/rules/offending.rs",
-            "code_lint::rules::offending",
-            "fn call() { let _ = crate::code_lint::runner::lint_file::<crate::command_lint::vcs::Vcs>(); }",
-        ),
-        SourceFileEntry::from_source(
-            "src/code_lint/semantic/bindings.rs",
-            "code_lint::semantic::bindings",
-            "fn call_sibling() { assert!(super::calls::check()); }",
-        ),
-        SourceFileEntry::from_source(
-            "src/code_lint/ast/python/bindings.rs",
-            "code_lint::ast::python::bindings",
-            "use crate::code_lint::ast::rust::collect_bindings;",
-        ),
-        SourceFileEntry::from_source("src/diff.rs", "diff", "use crate::diagnostic::Violation;"),
-    ];
-
-    let violations = violations_in(&offending_files, &ARCHITECTURE_CONFORMANCE_RULES);
-    let matched_targets: Vec<&str> = [
-        "code_lint::runner",
-        "command_lint::vcs",
-        "code_lint::semantic::calls",
-        "code_lint::ast::rust",
-        "diagnostic",
-    ]
-    .into_iter()
-    .filter(|target| {
-        violations
-            .iter()
-            .any(|violation| violation.contains(target))
-    })
-    .collect();
-
-    assert_eq!(
-        matched_targets,
-        vec![
-            "code_lint::runner",
-            "command_lint::vcs",
-            "code_lint::semantic::calls",
-            "code_lint::ast::rust",
-            "diagnostic",
-        ]
+        naming_violations.join("\n")
     );
 }
 
@@ -817,7 +171,10 @@ fn test_subtree_inheritance_resolves_leaf_modules_and_rejects_namespace_routers(
     ];
     let resolved: Vec<Option<ArchitectureComponent>> = queries
         .into_iter()
-        .map(|module| resolve_inherited_component(module, &declared_components))
+        .map(|module| {
+            resolve_inherited_component_with_root(module, &declared_components)
+                .map(|inherited| *inherited.component)
+        })
         .collect();
 
     assert_eq!(
@@ -828,64 +185,6 @@ fn test_subtree_inheritance_resolves_leaf_modules_and_rejects_namespace_routers(
             Some(ArchitectureComponent::CommandLintRules),
             None,
             None,
-        ]
-    );
-}
-
-#[test]
-fn test_namespace_validator_accepts_pure_routers_and_rejects_code_or_orphan_routers() {
-    let valid_entries = [
-        SourceFileEntry::from_source(
-            "src/code_lint.rs",
-            "code_lint",
-            indoc::indoc! {r"
-                pub mod ast;
-                #[cfg(test)]
-                mod tests { fn allowed() {} }
-            "},
-        ),
-        SourceFileEntry::from_source(
-            "src/code_lint/ast.rs",
-            "code_lint::ast",
-            indoc::indoc! {r"
-                architecture_component!(CodeLintAst);
-                pub struct ParsedFile;
-            "},
-        ),
-    ];
-
-    let impure_and_orphan_entries = [
-        SourceFileEntry::from_source(
-            "src/code_lint.rs",
-            "code_lint",
-            indoc::indoc! {r"
-                pub mod ast;
-                use crate::config::Config;
-                pub const SNEAKY: usize = 1;
-            "},
-        ),
-        SourceFileEntry::from_source(
-            "src/code_lint/ast.rs",
-            "code_lint::ast",
-            "architecture_component!(CodeLintAst);\n",
-        ),
-        SourceFileEntry::from_source(
-            "src/orphan_router.rs",
-            "orphan_router",
-            "pub mod nothing;\n",
-        ),
-    ];
-    let violations = validate_component_declarations_and_routers(&impure_and_orphan_entries, false);
-    assert_eq!(
-        validate_component_declarations_and_routers(&valid_entries, false),
-        Vec::<String>::new()
-    );
-    assert_eq!(
-        violations,
-        vec![
-            "src/code_lint.rs:2: pure namespace router without 'architecture_component!' may only contain external 'mod' declarations, found: use crate::config::Config;",
-            "src/code_lint.rs:3: pure namespace router without 'architecture_component!' may only contain external 'mod' declarations, found: pub const SNEAKY: usize = 1;",
-            "src/orphan_router.rs: missing 'architecture_component!(<Variant>);' (and not a pure namespace router for any declared component)",
         ]
     );
 }

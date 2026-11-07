@@ -57,7 +57,7 @@ path = "src/bin/omnicoach.rs"
 
 [[example]]
 name = "ast_dumper"
-path = "src/bin/ast_dumper.rs"
+path = "examples/ast_dumper.rs"
 
 [[bench]]
 harness = false

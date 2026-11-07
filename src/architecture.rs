@@ -24,13 +24,16 @@ architecture_component!(Architecture);
 
 use strum::{AsRefStr, Display, EnumString, VariantArray};
 
-/// Bounded specification of an architectural component and its direct dependencies.
+/// Bounded specification of an architectural component, its direct dependencies, and the
+/// external crates it encapsulates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ComponentDefinition {
     /// The target architectural component being defined.
     pub component: ArchitectureComponent,
     /// Directly permitted dependency components (transitive dependencies are computed automatically).
     pub depends_on: &'static [ArchitectureComponent],
+    /// External third-party crates encapsulated by this component (`unowned-external-dependency`).
+    pub owns_external: &'static [&'static str],
 }
 
 /// Defines `pub enum ArchitectureComponent`, `pub const ARCHITECTURE_GRAPH`, and a compile-time
@@ -39,7 +42,7 @@ pub struct ComponentDefinition {
 macro_rules! define_architecture {
     ($(
         $(#[$meta:meta])*
-        $node:ident => [ $( $dep:ident ),* $(,)? ]
+        $node:ident => [ $( $dep:ident ),* $(,)? ] $( (owns_external: [ $( $ext:literal ),* $(,)? ]) )?
     ),* $(,)?) => {
         /// Architectural components representing bounded functional units across the codebase.
         #[derive(
@@ -69,6 +72,7 @@ macro_rules! define_architecture {
                 ComponentDefinition {
                     component: ArchitectureComponent::$node,
                     depends_on: &[ $( ArchitectureComponent::$dep ),* ],
+                    owns_external: &[ $( $( $ext ),* )? ],
                 },
             )*
         ];
@@ -107,7 +111,7 @@ define_architecture! {
 
     // --- Static Code Analysis Domain (`code_lint`) ---
     /// Parsed files and the syntax queries rules share, with parser crates encapsulated behind them (`code_lint::ast`).
-    CodeLintAst         => [Diagnostic],
+    CodeLintAst         => [Diagnostic] (owns_external: ["ra_ap_syntax", "ruff_python_ast", "ruff_python_parser", "ruff_text_size"]),
     /// Cross-language facts computed over the AST: bindings, calls, comments (`code_lint::semantic`).
     CodeLintSemantic    => [CodeLintAst],
     /// Multi-file project facts, cross-module symbol resolution, and component/path conformance (`code_lint::project`).
@@ -129,7 +133,7 @@ define_architecture! {
     /// The jj client: repository state queries for command rules (`command_lint::vcs`).
     CommandLintVcs      => [],
     /// The intercepted command parser: shell input to commands and their arguments (`command_lint::command`).
-    CommandLintCommand  => [Diagnostic],
+    CommandLintCommand  => [Diagnostic] (owns_external: ["brush_parser"]),
     /// The command rule contract: a declaration and a check over a parsed command (`command_lint::contract`).
     CommandLintContract => [CommandLintCommand, CommandLintVcs, RuleDeclaration],
     /// Concrete command safety linting rules (`command_lint::rules`).
