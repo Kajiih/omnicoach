@@ -9,6 +9,7 @@ mod declaration_order;
 mod decorators;
 mod docstrings;
 mod effects;
+mod file_summary;
 mod format_strings;
 mod functions;
 mod imports;
@@ -57,6 +58,10 @@ pub(in crate::code_lint) use self::docstrings::{
     is_clause_end, is_clause_start, leading_verb, none_words, normalize_docstring_text,
     nullability_markers, without_byte_ranges,
 };
+pub use self::file_summary::{
+    ExportedAll, PythonBaseSummary, PythonClassSummary, PythonFileSummary, PythonImportBinding,
+    PythonStarImport, PythonTopLevelItem, summarize_python_file,
+};
 pub(in crate::code_lint) use self::format_strings::{
     PythonFormatPlaceholder, PythonFormatString, PythonFormatStyle, collect_format_strings,
     extract_valid_field_root, named_format_field_roots,
@@ -68,6 +73,7 @@ pub(in crate::code_lint) use self::functions::{
     PythonParameterKind, find_nested_classes, find_nested_functions,
 };
 pub(super) use self::imports::collect_import_map;
+pub use self::imports::{PythonImportReference, collect_python_import_references};
 pub(super) use self::literals::collect_literal_occurrences;
 pub(in crate::code_lint) use self::logging::collect_logger_calls;
 pub(super) use self::multiline_strings::collect_multiline_strings;

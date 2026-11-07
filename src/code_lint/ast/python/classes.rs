@@ -3,7 +3,7 @@
 
 use super::annotations::is_bare_final_annotation_expr;
 use super::decorators::{DecoratorInfo, extract_decorators_from_slice};
-use super::docstrings::{PythonDocstring, docstring_of};
+use super::docstrings::{OwnedDocstring, PythonDocstring, docstring_of};
 use super::effects::in_place_mutated_receiver_expr;
 use super::functions::{
     CLS_RECEIVER, PythonFunctionSignature, SELF_RECEIVER, function_signature,
@@ -16,7 +16,7 @@ use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_ruff_range};
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef};
 use ruff_text_size::Ranged as _;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const INIT_METHOD: &str = "__init__";
 /// Methods whose `self.<name>` assignments create instance attributes.
@@ -185,6 +185,52 @@ impl<'a> PythonClassInfo<'a> {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Names of public (`!starts_with('_')`), non-property methods defined directly in the class body.
+    ///
+    /// A method is included when its name does not start with `_` and none of its definitions on
+    /// the class body is a property getter (`@property`, `@cached_property`) or property accessor
+    /// (`@<prop>.getter`, `@<prop>.setter`, `@<prop>.deleter`).
+    #[must_use]
+    pub(in crate::code_lint) fn public_non_property_method_names(&self) -> HashSet<String> {
+        let methods = self.methods();
+        let properties: HashSet<String> = methods
+            .iter()
+            .filter(|method| method.is_property_getter() || method.is_property_accessor())
+            .map(|method| method.name.clone())
+            .collect();
+        methods
+            .into_iter()
+            .filter(|method| !method.name.starts_with('_'))
+            .filter(|method| !properties.contains(method.name.as_str()))
+            .map(|method| method.name)
+            .collect()
+    }
+
+    /// Last documented definition's docstring for `method_name` on this class body.
+    #[must_use]
+    pub(in crate::code_lint) fn documented_method_docstring(
+        &self,
+        method_name: &str,
+    ) -> Option<PythonDocstring<'a>> {
+        self.methods()
+            .into_iter()
+            .rev()
+            .filter(|method| method.name == method_name)
+            .find_map(|method| method.docstring())
+    }
+
+    /// Map from method name to its last documented [`OwnedDocstring`] on this class body.
+    #[must_use]
+    pub(in crate::code_lint) fn documented_methods(&self) -> HashMap<String, OwnedDocstring> {
+        let mut documented = HashMap::new();
+        for method in self.methods() {
+            if let Some(docstring) = method.docstring() {
+                documented.insert(method.name, docstring.as_owned().clone());
+            }
+        }
+        documented
     }
 
     /// The `__init__` defined directly in the class body, skipping `@overload` stubs; the last
@@ -559,11 +605,7 @@ pub fn inherited_method_docstring<'c, 'a>(
         .find_map(|ancestor| {
             let class = &classes[ancestor];
             class
-                .methods()
-                .iter()
-                .rev()
-                .filter(|method| method.name == name)
-                .find_map(PythonFunctionSignature::docstring)
+                .documented_method_docstring(name)
                 .map(|docstring| PythonInheritedDocstring {
                     ancestor: class,
                     docstring,
@@ -647,6 +689,16 @@ impl PythonInstanceAttributeAnnotation<'_> {
     #[must_use]
     pub const fn is_bare_final(&self) -> bool {
         self.is_bare_final
+    }
+}
+
+/// The leaf targets of assignment target `target`, flattening tuple, list and starred targets.
+pub(super) fn unpacked_targets(target: &Expr) -> Vec<&Expr> {
+    match target {
+        Expr::Tuple(tuple) => tuple.elts.iter().flat_map(unpacked_targets).collect(),
+        Expr::List(list) => list.elts.iter().flat_map(unpacked_targets).collect(),
+        Expr::Starred(starred) => unpacked_targets(&starred.value),
+        _ => vec![target],
     }
 }
 
@@ -894,16 +946,6 @@ fn unchanged_self_copies(
         })
         .map(str::to_owned)
         .collect()
-}
-
-/// The leaf targets of assignment target `target`, flattening tuple, list and starred targets.
-fn unpacked_targets(target: &Expr) -> Vec<&Expr> {
-    match target {
-        Expr::Tuple(tuple) => tuple.elts.iter().flat_map(unpacked_targets).collect(),
-        Expr::List(list) => list.elts.iter().flat_map(unpacked_targets).collect(),
-        Expr::Starred(starred) => unpacked_targets(&starred.value),
-        _ => vec![target],
-    }
 }
 
 /// Returns true if `annotation` is `InitVar` or `InitVar[...]` from `dataclasses`.

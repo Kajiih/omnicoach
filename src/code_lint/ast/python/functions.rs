@@ -172,6 +172,15 @@ impl<'a> PythonFunctionSignature<'a> {
             .any(|decorator| decorator.matches_any(PROPERTY_DECORATOR_PATHS))
     }
 
+    /// Returns true if the function is a property accessor (`@<prop>.getter`,
+    /// `@<prop>.setter`, or `@<prop>.deleter`).
+    #[must_use]
+    pub(in crate::code_lint) fn is_property_accessor(&self) -> bool {
+        self.decorators
+            .iter()
+            .any(|decorator| decorator.is_attribute_named(PROPERTY_ACCESSOR_ATTRIBUTES))
+    }
+
     /// The function's docstring, if its body starts with one.
     #[must_use]
     pub(in crate::code_lint) fn docstring(&self) -> Option<PythonDocstring<'a>> {
