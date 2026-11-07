@@ -239,9 +239,10 @@ struct GraphArgs {
     #[arg(default_value = ".")]
     paths: Vec<PathBuf>,
 
-    /// Hierarchy depth for project graphs (`module`, `public`, or `full`)
-    #[arg(long, value_enum, default_value_t = GraphDepthArg::Full)]
-    depth: GraphDepthArg,
+    /// Hierarchy depth (`module`, `public`, or `full`); defaults to `full` for a single file and
+    /// `module` for a directory or several files
+    #[arg(long, value_enum)]
+    depth: Option<GraphDepthArg>,
 
     /// Omit language signatures and emit compact bidirectional nodes (`F2` instead of `F3`)
     #[arg(long)]
@@ -253,11 +254,11 @@ fn run_graph(args: GraphArgs, config: &Config) -> anyhow::Result<()> {
         None => {
             let options = GraphOptions {
                 paths: args.paths,
-                depth: match args.depth {
+                depth: args.depth.map(|depth| match depth {
                     GraphDepthArg::Module => ProjectDepth::ModuleOnly,
                     GraphDepthArg::Public => ProjectDepth::PublicSurface,
                     GraphDepthArg::Full => ProjectDepth::Full,
-                },
+                }),
                 format: if args.no_signatures {
                     GraphOutputFormat::CompactBi
                 } else {
@@ -292,14 +293,13 @@ fn run_graph(args: GraphArgs, config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 enum GraphDepthArg {
     /// Component and module headers only (`Component -> Module`)
     Module,
     /// Component, module, and public surface declarations (`Component -> Module -> pub items`)
     Public,
     /// Full ownership clusters, private helpers, and type methods (`Component -> Module -> Owner -> items`)
-    #[default]
     Full,
 }
 

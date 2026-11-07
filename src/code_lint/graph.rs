@@ -30,8 +30,9 @@ use std::path::{Path, PathBuf};
 pub struct GraphOptions {
     /// File or directory paths to inspect (defaults to `"."` when empty).
     pub paths: Vec<PathBuf>,
-    /// Hierarchy depth for project graphs.
-    pub depth: ProjectDepth,
+    /// Hierarchy depth, or `None` to pick it from the target: `Full` for a single file and
+    /// `ModuleOnly` for a directory or several files.
+    pub depth: Option<ProjectDepth>,
     /// Output text format (`AnnotatedStubs` or `CompactBi`).
     pub format: OutputFormat,
 }
@@ -40,7 +41,7 @@ impl Default for GraphOptions {
     fn default() -> Self {
         Self {
             paths: Vec::new(),
-            depth: ProjectDepth::Full,
+            depth: None,
             format: OutputFormat::AnnotatedStubs,
         }
     }
@@ -54,15 +55,18 @@ impl Default for GraphOptions {
 /// if graph validation fails.
 pub fn generate_graph(options: &GraphOptions, config: &Config) -> anyhow::Result<String> {
     let effective_paths = resolve_effective_paths(&options.paths)?;
+    let is_single_file = effective_paths.len() == 1 && effective_paths[0].is_file();
+    let depth = options.depth.unwrap_or(if is_single_file {
+        ProjectDepth::Full
+    } else {
+        ProjectDepth::ModuleOnly
+    });
 
-    if effective_paths.len() == 1
-        && effective_paths[0].is_file()
-        && options.depth == ProjectDepth::Full
-    {
+    if is_single_file && depth == ProjectDepth::Full {
         return generate_single_file_graph(&effective_paths[0], options.format);
     }
 
-    generate_project_graphs(&effective_paths, options.depth, options.format, config)
+    generate_project_graphs(&effective_paths, depth, options.format, config)
 }
 
 fn generate_single_file_graph(path: &Path, format: OutputFormat) -> anyhow::Result<String> {
@@ -215,4 +219,69 @@ fn derive_project_title(paths: &[PathBuf]) -> String {
         }
     }
     "project".to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn multi_file_options(depth: Option<ProjectDepth>) -> GraphOptions {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        GraphOptions {
+            paths: vec![
+                root.join("src/config.rs"),
+                root.join("src/rule_selection.rs"),
+                root.join("src/code_lint/suppression.rs"),
+            ],
+            depth,
+            format: OutputFormat::AnnotatedStubs,
+        }
+    }
+
+    #[test]
+    fn multi_file_graph_defaults_to_module_depth() {
+        let rendered = generate_graph(&multi_file_options(None), &Config::default()).unwrap();
+        assert!(
+            rendered.contains("suppression"),
+            "expected the suppression module in:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("parse_directive_prefix"),
+            "expected no declarations at module depth in:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("Module edges omitted"),
+            "expected module edges for three modules in:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn module_depth_graph_of_many_modules_omits_module_edges_with_notice() {
+        let options = GraphOptions {
+            paths: vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")],
+            ..GraphOptions::default()
+        };
+        let rendered = generate_graph(&options, &Config::default()).unwrap();
+        assert!(
+            rendered.contains("// Module edges omitted for "),
+            "expected an omission notice in:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("### Module [L0] config\n// "),
+            "expected no module edges in:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn multi_file_graph_honors_explicit_full_depth() {
+        let rendered = generate_graph(
+            &multi_file_options(Some(ProjectDepth::Full)),
+            &Config::default(),
+        )
+        .unwrap();
+        assert!(
+            rendered.contains("parse_directive_prefix"),
+            "expected declarations at full depth in:\n{rendered}"
+        );
+    }
 }

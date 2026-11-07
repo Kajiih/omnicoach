@@ -33,6 +33,17 @@ pub(super) fn render_graph(graph: &AbstractionGraph, format: OutputFormat) -> St
     let mut out = String::new();
     let _ = writeln!(out, "# Scope: {} {ALPHA_BANNER}", graph.title());
     let idx = GraphEdgeIndex::build(graph);
+    if idx.omits_module_edges() {
+        let comment_prefix = match format {
+            OutputFormat::AnnotatedStubs => "// ",
+            OutputFormat::CompactBi => "",
+        };
+        let _ = writeln!(
+            out,
+            "{comment_prefix}Module edges omitted for {} modules; graph a single component's directory to see them.",
+            idx.module_group_count
+        );
+    }
 
     if graph.groups().is_empty() {
         for decl in graph.declarations() {
@@ -206,6 +217,7 @@ pub(super) fn resolve_directed_decl_edges<'a>(
 struct GraphEdgeIndex<'a> {
     decl_by_id: BTreeMap<&'a NodeId, &'a DeclarationNode>,
     group_by_id: BTreeMap<&'a NodeId, &'a GroupNode>,
+    module_group_count: usize,
     group_out_edges: BTreeMap<&'a NodeId, Vec<String>>,
     group_in_edges: BTreeMap<&'a NodeId, Vec<String>>,
     decl_out_edges: BTreeMap<&'a NodeId, Vec<String>>,
@@ -260,14 +272,27 @@ impl<'a> GraphEdgeIndex<'a> {
                 .push(format!("{source_label}[{}]", edge.tag));
         }
 
+        let module_group_count = graph
+            .groups()
+            .iter()
+            .filter(|group| matches!(group.kind, GroupKind::Module { .. }))
+            .count();
         Self {
             decl_by_id,
             group_by_id,
+            module_group_count,
             group_out_edges,
             group_in_edges,
             decl_out_edges,
             decl_in_edges,
         }
+    }
+
+    /// Whether a module-depth graph (no declarations) has more than `MAX_MODULES_WITH_EDGES`
+    /// modules, in which case per-module edges are left out (with a notice) to keep the
+    /// output within inline tool limits; component edges are always rendered.
+    fn omits_module_edges(&self) -> bool {
+        self.decl_by_id.is_empty() && self.module_group_count > MAX_MODULES_WITH_EDGES
     }
 
     fn populate_group_edges(
@@ -327,7 +352,12 @@ fn write_group(
         GroupKind::Module { path } => {
             let file_suffix =
                 find_group_file(group, idx).map_or_else(String::new, |file| format!(" ({file})"));
-            let _ = writeln!(out, "\n### Module [L{}] {path}{file_suffix}", group.level);
+            let leading = if group.children.is_empty() { "" } else { "\n" };
+            let _ = writeln!(
+                out,
+                "{leading}### Module [L{}] {path}{file_suffix}",
+                group.level
+            );
         }
         _ => {
             let kind = format_group_kind(&group.kind, &idx.decl_by_id);
@@ -350,23 +380,86 @@ fn write_group(
         OutputFormat::AnnotatedStubs => "// ",
         OutputFormat::CompactBi => "",
     };
-    if let Some(outs) = idx.group_out_edges.get(&group.id) {
-        let _ = writeln!(out, "{edge_indent}{comment_prefix}-> {}", outs.join(", "));
-    }
-    if let Some(ins) = idx.group_in_edges.get(&group.id) {
-        let _ = writeln!(out, "{edge_indent}{comment_prefix}<- {}", ins.join(", "));
+    if !(matches!(group.kind, GroupKind::Module { .. }) && idx.omits_module_edges()) {
+        if let Some(outs) = idx.group_out_edges.get(&group.id) {
+            let formatted = format_group_edge_list(outs, &group.kind);
+            let _ = writeln!(out, "{edge_indent}{comment_prefix}-> {formatted}");
+        }
+        if let Some(ins) = idx.group_in_edges.get(&group.id) {
+            let formatted = format_group_edge_list(ins, &group.kind);
+            let _ = writeln!(out, "{edge_indent}{comment_prefix}<- {formatted}");
+        }
     }
 
     let next_depth = match &group.kind {
         GroupKind::Component { .. } | GroupKind::Module { .. } => 0,
         _ => depth + 1,
     };
+    let truncate_empty_modules =
+        count_empty_module_children(group, idx) > MAX_EMPTY_MODULES_PER_COMPONENT + 1;
+    let mut empty_modules_seen = 0usize;
+    let mut omitted_modules = 0usize;
     for child_id in &group.children {
         if let Some(child_group) = idx.group_by_id.get(child_id) {
+            if matches!(group.kind, GroupKind::Component { .. })
+                && matches!(child_group.kind, GroupKind::Module { .. })
+                && child_group.children.is_empty()
+            {
+                empty_modules_seen += 1;
+                if truncate_empty_modules && empty_modules_seen > MAX_EMPTY_MODULES_PER_COMPONENT {
+                    omitted_modules += 1;
+                    continue;
+                }
+            }
             write_group(out, child_group, next_depth, now_in_module, format, idx);
         } else if let Some(decl) = idx.decl_by_id.get(child_id) {
             write_decl(out, decl, next_depth, !now_in_module, format, idx);
         }
+    }
+    if omitted_modules > 0 {
+        let _ = writeln!(
+            out,
+            "{comment_prefix}... (+{omitted_modules} more modules in {})",
+            group.label
+        );
+    }
+}
+
+fn count_empty_module_children(group: &GroupNode, idx: &GraphEdgeIndex<'_>) -> usize {
+    if !matches!(group.kind, GroupKind::Component { .. }) {
+        return 0;
+    }
+    group
+        .children
+        .iter()
+        .filter(|child_id| {
+            idx.group_by_id.get(child_id).is_some_and(|child_group| {
+                matches!(child_group.kind, GroupKind::Module { .. })
+                    && child_group.children.is_empty()
+            })
+        })
+        .count()
+}
+
+const MAX_EMPTY_MODULES_PER_COMPONENT: usize = 2;
+const MAX_MODULES_WITH_EDGES: usize = 20;
+const MAX_MODULE_EDGE_PEERS: usize = 2;
+const MAX_COMPONENT_EDGE_PEERS: usize = 6;
+
+fn format_group_edge_list(edges: &[String], kind: &GroupKind) -> String {
+    let max_peers = match kind {
+        GroupKind::Module { .. } => Some(MAX_MODULE_EDGE_PEERS),
+        GroupKind::Component { .. } => Some(MAX_COMPONENT_EDGE_PEERS),
+        _ => None,
+    };
+    if let Some(limit) = max_peers
+        && edges.len() > limit + 1
+    {
+        let shown = edges[..limit].join(", ");
+        let remaining = edges.len() - limit;
+        format!("{shown}, ... (+{remaining} more)")
+    } else {
+        edges.join(", ")
     }
 }
 
@@ -759,5 +852,31 @@ mod tests {
         assert!(rendered.contains("//   <- frame_len[sig]"));
         assert!(rendered.contains("//   -> Frame[sig]"));
         assert!(!rendered.contains("ref:param"));
+    }
+
+    #[test]
+    fn group_edge_and_empty_module_truncation_apply_only_when_omitting_at_least_two_items() {
+        let edges_three = vec![
+            "a[xmod x1]".to_owned(),
+            "b[xmod x1]".to_owned(),
+            "c[xmod x1]".to_owned(),
+        ];
+        let edges_four = vec![
+            "a[xmod x1]".to_owned(),
+            "b[xmod x1]".to_owned(),
+            "c[xmod x1]".to_owned(),
+            "d[xmod x1]".to_owned(),
+        ];
+        let mod_kind = GroupKind::Module {
+            path: "m".to_owned(),
+        };
+        assert_eq!(
+            format_group_edge_list(&edges_three, &mod_kind),
+            "a[xmod x1], b[xmod x1], c[xmod x1]"
+        );
+        assert_eq!(
+            format_group_edge_list(&edges_four, &mod_kind),
+            "a[xmod x1], b[xmod x1], ... (+2 more)"
+        );
     }
 }
