@@ -10,7 +10,6 @@ use super::call_clusters::{
     collect_declaration_scopes, scope_findings,
 };
 use super::tree::ParsedFile;
-use crate::diagnostic::Language;
 use std::collections::HashSet;
 
 /// Everything the analyzer knows about one scope (`Module`, `Class`, or `Impl`) in a file.
@@ -186,12 +185,10 @@ pub fn collect_intra_file_references(
             }
         }
     }
-    let raw_sites = match file.lang() {
-        Language::Python => {
-            super::python::collect_intra_file_ref_sites(file, &module_items, &method_items)
-        }
-        Language::Rust => Vec::new(),
-    };
+    let raw_sites = dispatch_lang!(
+        file.lang(),
+        collect_intra_file_ref_sites(file, &module_items, &method_items)
+    );
     let mut refs: Vec<IntraFileReference> = raw_sites
         .into_iter()
         .filter(|site| {

@@ -8,6 +8,7 @@ use crate::code_lint::ast::call_clusters::{
     ScopeItemKind, Visibility, collapse_whitespace, extend_references, extend_unique, push_unique,
     split_at_redefinitions,
 };
+use crate::code_lint::ast::scope_facts::IntraFileReference;
 use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_rowan_range};
 use ra_ap_syntax::ast::{
     self, HasGenericParams as _, HasModuleItem as _, HasName as _, HasVisibility as _,
@@ -534,62 +535,28 @@ fn collect_rust_module_item_refs(
     local_names: &HashSet<String>,
     out: &mut Vec<usize>,
 ) {
-    let mut stack = vec![root.clone()];
-    while let Some(node) = stack.pop() {
-        if node != *root && (ast::Module::can_cast(node.kind()) || ast::Use::can_cast(node.kind()))
+    walk_rust_syntax_refs(root, false, |syntax_ref| {
+        if let RustSyntaxRef::Path {
+            seg0,
+            seg1,
+            has_extra_segments,
+            ..
+        } = syntax_ref
         {
-            continue;
-        }
-        if let Some(path) = ast::Path::cast(node.clone()) {
-            let is_module_local = path
-                .qualifier()
-                .is_none_or(|qualifier| qualifier.syntax().text() == SELF_KEYWORD);
-            if is_module_local
-                && let Some(segment) = path.segment()
-                && let Some(name_ref) = segment.name_ref()
+            if local_names.contains(seg0) {
+                return;
+            }
+            let is_composite = seg1.is_some() || has_extra_segments;
+            if let Some(&idx) = item_by_name.get(seg0)
+                && (!is_composite || segment_is_type[idx])
             {
-                let ident = name_ref.text();
-                let name = ident.trim();
-                if !local_names.contains(name)
-                    && let Some(&idx) = item_by_name.get(name)
-                    && (path.parent_path().is_none() || segment_is_type[idx])
-                {
-                    push_unique(out, idx);
-                }
-                if let Some(bridged) = impl_callees.get(name) {
-                    extend_unique(out, bridged.iter().copied());
-                }
+                push_unique(out, idx);
             }
-        } else if node.kind() == SyntaxKind::TOKEN_TREE {
-            for element in node.descendants_with_tokens() {
-                let Some(token) = element.into_token() else {
-                    continue;
-                };
-                if token.kind() != SyntaxKind::IDENT {
-                    continue;
-                }
-                let name = token.text();
-                if let Some(bridged) = impl_callees.get(name) {
-                    extend_unique(out, bridged.iter().copied());
-                }
-                if let Some(&idx) = item_by_name.get(name)
-                    && !local_names.contains(name)
-                {
-                    let preceded_by_dot_or_colon =
-                        previous_non_trivia_token(&token).is_some_and(|prev| {
-                            matches!(prev.kind(), SyntaxKind::DOT | SyntaxKind::COLON2)
-                        });
-                    if !preceded_by_dot_or_colon {
-                        push_unique(out, idx);
-                    }
-                }
+            if let Some(bridged) = impl_callees.get(seg0) {
+                extend_unique(out, bridged.iter().copied());
             }
-            continue;
         }
-        for child in node.children() {
-            stack.push(child);
-        }
-    }
+    });
 }
 
 /// Builds a [`DeclarationScope`] for direct non-test methods of an inherent `impl` block.
@@ -642,72 +609,24 @@ fn collect_rust_impl_method_refs(
     method_by_name: &HashMap<String, usize>,
     out: &mut Vec<usize>,
 ) {
-    let mut stack = vec![root.clone()];
-    while let Some(node) = stack.pop() {
-        if ast::Impl::can_cast(node.kind()) {
-            continue;
-        }
-        if let Some(method_call) = ast::MethodCallExpr::cast(node.clone()) {
-            if method_call
-                .receiver()
-                .is_some_and(|receiver| receiver.syntax().text() == SELF_KEYWORD)
-                && let Some(name_ref) = method_call.name_ref()
-                && let Some(&idx) = method_by_name.get(name_ref.text().trim())
-            {
+    walk_rust_syntax_refs(root, true, |syntax_ref| match syntax_ref {
+        RustSyntaxRef::SelfMethodCall { method, .. } => {
+            if let Some(&idx) = method_by_name.get(method) {
                 push_unique(out, idx);
             }
-        } else if let Some(path_expr) = ast::PathExpr::cast(node.clone())
-            && let Some(path) = path_expr.path()
-            && let Some(qualifier) = path.qualifier()
-            && qualifier.qualifier().is_none()
-        {
-            let qualifier_matches_self = qualifier.syntax().text() == SELF_TYPE_KEYWORD
-                || qualifier.syntax().text() == type_name;
-            if qualifier_matches_self
-                && let Some(segment) = path.segment()
-                && let Some(name_ref) = segment.name_ref()
-                && let Some(&idx) = method_by_name.get(name_ref.text().trim())
-            {
+        }
+        RustSyntaxRef::Path {
+            seg0,
+            seg1: Some(method),
+            has_extra_segments: false,
+            ..
+        } if seg0 == SELF_TYPE_KEYWORD || seg0 == type_name => {
+            if let Some(&idx) = method_by_name.get(method) {
                 push_unique(out, idx);
             }
-        } else if node.kind() == SyntaxKind::TOKEN_TREE {
-            for element in node.descendants_with_tokens() {
-                let Some(token) = element.into_token() else {
-                    continue;
-                };
-                if token.kind() != SyntaxKind::IDENT {
-                    continue;
-                }
-                let Some(&idx) = method_by_name.get(token.text()) else {
-                    continue;
-                };
-                if let Some(sep) = previous_non_trivia_token(&token)
-                    && let Some(recv) = previous_non_trivia_token(&sep)
-                {
-                    let is_self_call = (sep.kind() == SyntaxKind::DOT
-                        && recv.text() == SELF_KEYWORD
-                        && is_followed_by_open_paren(&token))
-                        || (sep.kind() == SyntaxKind::COLON2
-                            && (recv.text() == SELF_TYPE_KEYWORD || recv.text() == type_name));
-                    if is_self_call {
-                        push_unique(out, idx);
-                    }
-                }
-            }
-            continue;
         }
-        for child in node.children() {
-            stack.push(child);
-        }
-    }
-}
-
-/// Returns true if the next non-trivia token after `token` is `(`. Inside a macro token tree,
-/// `self.name` followed by `(` is a method call; without it, `name` is a field.
-fn is_followed_by_open_paren(token: &SyntaxToken) -> bool {
-    std::iter::successors(token.next_token(), SyntaxToken::next_token)
-        .find(|candidate| !candidate.kind().is_trivia())
-        .is_some_and(|next| next.kind() == SyntaxKind::L_PAREN)
+        RustSyntaxRef::Path { .. } => {}
+    });
 }
 
 /// Collects direct non-test `fn` items of a Rust inherent `impl` block along with their
@@ -1011,6 +930,560 @@ fn collect_misplaced_assoc_items<'a>(
     }
 }
 
+/// Collects [`IntraFileReference`] entries for intra-file references to `module_items` and
+/// `method_items` across production items in a Rust `file`.
+#[must_use]
+pub fn collect_intra_file_ref_sites(
+    file: &ParsedFile,
+    module_items: &HashSet<&str>,
+    method_items: &HashSet<String>,
+) -> Vec<IntraFileReference> {
+    let Some(parsed) = file.rs_parsed() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let targets = IntraRefTargets {
+        module_items,
+        method_items,
+    };
+    let empty_generics = HashSet::new();
+    let mut items: Vec<ast::Item> = parsed.tree().items().collect();
+    while let Some(item) = items.pop() {
+        let start_offset: usize = item.syntax().text_range().start().into();
+        if file.is_in_rust_inline_test(start_offset) {
+            continue;
+        }
+        match item {
+            ast::Item::Fn(function) => {
+                let Some(name_node) = function.name() else {
+                    continue;
+                };
+                let fn_name = name_node.text().trim();
+                if module_items.contains(fn_name) {
+                    collect_rust_fn_intra_refs(
+                        &function,
+                        file,
+                        targets,
+                        fn_name,
+                        None,
+                        &empty_generics,
+                        &mut out,
+                    );
+                }
+            }
+            ast::Item::Struct(struct_item) => {
+                collect_rust_type_item_intra_refs(
+                    struct_item.name(),
+                    struct_item.syntax(),
+                    file,
+                    targets,
+                    &mut out,
+                );
+            }
+            ast::Item::Enum(enum_item) => {
+                collect_rust_type_item_intra_refs(
+                    enum_item.name(),
+                    enum_item.syntax(),
+                    file,
+                    targets,
+                    &mut out,
+                );
+            }
+            ast::Item::Union(union_item) => {
+                collect_rust_type_item_intra_refs(
+                    union_item.name(),
+                    union_item.syntax(),
+                    file,
+                    targets,
+                    &mut out,
+                );
+            }
+            ast::Item::Trait(trait_item) => {
+                collect_rust_type_item_intra_refs(
+                    trait_item.name(),
+                    trait_item.syntax(),
+                    file,
+                    targets,
+                    &mut out,
+                );
+            }
+            ast::Item::Impl(impl_item) => {
+                collect_rust_impl_intra_refs(&impl_item, file, targets, &mut out);
+            }
+            ast::Item::Module(module) => {
+                if let Some(body) = module.item_list() {
+                    items.extend(body.items());
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The declarations whose references an intra-file reference walk records.
+#[derive(Clone, Copy)]
+struct IntraRefTargets<'a> {
+    /// Names of the file's module-level items.
+    module_items: &'a HashSet<&'a str>,
+    /// `Type::method` names of the file's methods.
+    method_items: &'a HashSet<String>,
+}
+
+fn collect_rust_type_item_intra_refs(
+    name_node: Option<ast::Name>,
+    syntax: &SyntaxNode,
+    file: &ParsedFile,
+    targets: IntraRefTargets<'_>,
+    out: &mut Vec<IntraFileReference>,
+) {
+    let Some(name_node) = name_node else {
+        return;
+    };
+    let type_name = name_node.text().trim();
+    if !targets.module_items.contains(type_name) {
+        return;
+    }
+    let locals = collect_rust_generic_param_names(syntax);
+    collect_rust_node_intra_refs(
+        syntax,
+        file,
+        targets,
+        IntraRefScope {
+            source_symbol: type_name,
+            enclosing_self_type: None,
+            local_names: &locals,
+        },
+        RelationKind::Composition,
+        out,
+    );
+}
+
+fn collect_rust_impl_intra_refs(
+    impl_item: &ast::Impl,
+    file: &ParsedFile,
+    targets: IntraRefTargets<'_>,
+    out: &mut Vec<IntraFileReference>,
+) {
+    let Some(self_type_owned) = impl_self_type_name(impl_item, &file.source) else {
+        return;
+    };
+    let self_type = self_type_owned.as_str();
+    let self_type_in_module = targets.module_items.contains(self_type);
+    let is_inherent = impl_item.trait_().is_none();
+    let impl_generics = collect_rust_generic_param_names(impl_item.syntax());
+    if self_type_in_module {
+        let impl_scope = IntraRefScope {
+            source_symbol: self_type,
+            enclosing_self_type: Some(self_type),
+            local_names: &impl_generics,
+        };
+        if let Some(trait_type) = impl_item.trait_() {
+            collect_rust_node_intra_refs(
+                trait_type.syntax(),
+                file,
+                targets,
+                impl_scope,
+                RelationKind::Body,
+                out,
+            );
+        }
+        if let Some(where_clause) = impl_item.where_clause() {
+            collect_rust_node_intra_refs(
+                where_clause.syntax(),
+                file,
+                targets,
+                impl_scope,
+                RelationKind::Body,
+                out,
+            );
+        }
+    }
+    let Some(assoc_items) = impl_item.assoc_item_list() else {
+        return;
+    };
+    for assoc_item in assoc_items.assoc_items() {
+        if file.is_in_rust_inline_test(assoc_item.syntax().text_range().start().into()) {
+            continue;
+        }
+        match assoc_item {
+            ast::AssocItem::Fn(method) => {
+                let method_source = method.name().and_then(|name_node| {
+                    let candidate = format!("{self_type}::{}", name_node.text().trim());
+                    (is_inherent && targets.method_items.contains(&candidate)).then_some(candidate)
+                });
+                let source_symbol = if let Some(ref candidate) = method_source {
+                    candidate.as_str()
+                } else if self_type_in_module {
+                    self_type
+                } else {
+                    continue;
+                };
+                collect_rust_fn_intra_refs(
+                    &method,
+                    file,
+                    targets,
+                    source_symbol,
+                    Some(self_type),
+                    &impl_generics,
+                    out,
+                );
+            }
+            other if self_type_in_module => {
+                collect_rust_node_intra_refs(
+                    other.syntax(),
+                    file,
+                    targets,
+                    IntraRefScope {
+                        source_symbol: self_type,
+                        enclosing_self_type: Some(self_type),
+                        local_names: &impl_generics,
+                    },
+                    RelationKind::Body,
+                    out,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_rust_fn_intra_refs(
+    function: &ast::Fn,
+    file: &ParsedFile,
+    targets: IntraRefTargets<'_>,
+    source_symbol: &str,
+    self_type: Option<&str>,
+    outer_generics: &HashSet<String>,
+    out: &mut Vec<IntraFileReference>,
+) {
+    let mut generic_names = outer_generics.clone();
+    generic_names.extend(collect_rust_generic_param_names(function.syntax()));
+    let mut local_names = generic_names.clone();
+    local_names.extend(collect_rust_fn_local_names(function));
+    let signature_scope = IntraRefScope {
+        source_symbol,
+        enclosing_self_type: self_type,
+        local_names: &generic_names,
+    };
+    if let Some(params) = function.param_list() {
+        collect_rust_node_intra_refs(
+            params.syntax(),
+            file,
+            targets,
+            signature_scope,
+            RelationKind::Parameter,
+            out,
+        );
+    }
+    if let Some(where_clause) = function.where_clause() {
+        collect_rust_node_intra_refs(
+            where_clause.syntax(),
+            file,
+            targets,
+            signature_scope,
+            RelationKind::Parameter,
+            out,
+        );
+    }
+    if let Some(ret_type) = function.ret_type() {
+        collect_rust_node_intra_refs(
+            ret_type.syntax(),
+            file,
+            targets,
+            signature_scope,
+            RelationKind::Return,
+            out,
+        );
+    }
+    if let Some(body) = function.body() {
+        collect_rust_node_intra_refs(
+            body.syntax(),
+            file,
+            targets,
+            IntraRefScope {
+                source_symbol,
+                enclosing_self_type: self_type,
+                local_names: &local_names,
+            },
+            RelationKind::Body,
+            out,
+        );
+    }
+}
+
+/// The names in scope where an intra-file reference walk runs.
+#[derive(Clone, Copy)]
+struct IntraRefScope<'a> {
+    /// Enclosing declaration symbol (`"fn_name"`, `"Type"`, or `"Type::method"`).
+    source_symbol: &'a str,
+    /// The `impl` self type that `Self` and `self.` resolve to, if any.
+    enclosing_self_type: Option<&'a str>,
+    /// Local bindings and generic parameters that shadow module-level items.
+    local_names: &'a HashSet<String>,
+}
+
+fn collect_rust_node_intra_refs(
+    root: &SyntaxNode,
+    file: &ParsedFile,
+    targets: IntraRefTargets<'_>,
+    scope: IntraRefScope<'_>,
+    kind: RelationKind,
+    out: &mut Vec<IntraFileReference>,
+) {
+    let IntraRefTargets {
+        module_items,
+        method_items,
+    } = targets;
+    let IntraRefScope {
+        source_symbol,
+        enclosing_self_type,
+        local_names,
+    } = scope;
+    walk_rust_syntax_refs(root, true, |syntax_ref| match syntax_ref {
+        RustSyntaxRef::SelfMethodCall { method, offset } => {
+            if let Some(self_type) = enclosing_self_type {
+                let candidate = format!("{self_type}::{method}");
+                if method_items.contains(&candidate) {
+                    out.push(IntraFileReference {
+                        source_symbol: source_symbol.to_owned(),
+                        target_symbol: candidate,
+                        line: file.line_index.line(offset),
+                        kind,
+                    });
+                }
+            }
+        }
+        RustSyntaxRef::Path {
+            seg0, seg1, offset, ..
+        } => {
+            let line = file.line_index.line(offset);
+            if seg0 != SELF_TYPE_KEYWORD
+                && !local_names.contains(seg0)
+                && module_items.contains(seg0)
+            {
+                out.push(IntraFileReference {
+                    source_symbol: source_symbol.to_owned(),
+                    target_symbol: seg0.to_owned(),
+                    line,
+                    kind,
+                });
+            }
+            if let Some(seg1) = seg1 {
+                let resolved_seg0 = if seg0 == SELF_TYPE_KEYWORD {
+                    enclosing_self_type.unwrap_or(seg0)
+                } else {
+                    seg0
+                };
+                let candidate = format!("{resolved_seg0}::{seg1}");
+                if method_items.contains(&candidate) {
+                    out.push(IntraFileReference {
+                        source_symbol: source_symbol.to_owned(),
+                        target_symbol: candidate,
+                        line,
+                        kind,
+                    });
+                }
+            }
+        }
+    });
+}
+
+enum RustSyntaxRef<'a> {
+    SelfMethodCall {
+        method: &'a str,
+        offset: usize,
+    },
+    Path {
+        seg0: &'a str,
+        seg1: Option<&'a str>,
+        has_extra_segments: bool,
+        offset: usize,
+    },
+}
+
+fn walk_rust_syntax_refs(
+    root: &SyntaxNode,
+    stop_at_impl: bool,
+    mut on_ref: impl FnMut(RustSyntaxRef<'_>),
+) {
+    let mut stack = vec![root.clone()];
+    while let Some(node) = stack.pop() {
+        if node != *root
+            && (ast::Module::can_cast(node.kind())
+                || ast::Use::can_cast(node.kind())
+                || (stop_at_impl && ast::Impl::can_cast(node.kind())))
+        {
+            continue;
+        }
+        if let Some(method_call) = ast::MethodCallExpr::cast(node.clone()) {
+            if method_call
+                .receiver()
+                .is_some_and(|receiver| receiver.syntax().text() == SELF_KEYWORD)
+                && let Some(name_ref) = method_call.name_ref()
+            {
+                on_ref(RustSyntaxRef::SelfMethodCall {
+                    method: name_ref.text().trim(),
+                    offset: name_ref.syntax().text_range().start().into(),
+                });
+            }
+        } else if let Some(path) = ast::Path::cast(node.clone())
+            && path.parent_path().is_none()
+        {
+            let segments = rust_path_segments(&path);
+            let offset = path.syntax().text_range().start().into();
+            match segments.as_slice() {
+                [seg0] => on_ref(RustSyntaxRef::Path {
+                    seg0: seg0.as_str(),
+                    seg1: None,
+                    has_extra_segments: false,
+                    offset,
+                }),
+                [seg0, seg1, rest @ ..] => on_ref(RustSyntaxRef::Path {
+                    seg0: seg0.as_str(),
+                    seg1: Some(seg1.as_str()),
+                    has_extra_segments: !rest.is_empty(),
+                    offset,
+                }),
+                [] => {}
+            }
+        } else if node.kind() == SyntaxKind::TOKEN_TREE {
+            walk_token_tree_syntax_refs(&node, &mut on_ref);
+            continue;
+        }
+        for child in node.children() {
+            stack.push(child);
+        }
+    }
+}
+
+fn walk_token_tree_syntax_refs(node: &SyntaxNode, on_ref: &mut impl FnMut(RustSyntaxRef<'_>)) {
+    for element in node.descendants_with_tokens() {
+        let Some(token) = element.into_token() else {
+            continue;
+        };
+        if token.kind() != SyntaxKind::IDENT {
+            continue;
+        }
+        let name = token.text().trim();
+        let offset = token.text_range().start().into();
+        if let Some(sep) = previous_non_trivia_token(&token)
+            && sep.kind() == SyntaxKind::DOT
+            && let Some(recv) = previous_non_trivia_token(&sep)
+            && recv.text() == SELF_KEYWORD
+            && !is_preceded_by_dot_or_double_colon(&recv)
+            && is_followed_by_open_paren(&token)
+        {
+            on_ref(RustSyntaxRef::SelfMethodCall {
+                method: name,
+                offset,
+            });
+            continue;
+        }
+        if let Some(recv) = token_before_double_colon(&token)
+            && matches!(recv.kind(), SyntaxKind::IDENT | SyntaxKind::SELF_TYPE_KW)
+        {
+            let rtext = recv.text().trim();
+            let recv_is_local = !is_preceded_by_dot_or_double_colon(&recv)
+                || token_before_double_colon(&recv).is_some_and(|qual| {
+                    qual.text().trim() == SELF_KEYWORD && !is_preceded_by_dot_or_double_colon(&qual)
+                });
+            if recv_is_local && rtext != SELF_KEYWORD {
+                on_ref(RustSyntaxRef::Path {
+                    seg0: rtext,
+                    seg1: Some(name),
+                    has_extra_segments: false,
+                    offset: recv.text_range().start().into(),
+                });
+                continue;
+            }
+        }
+        let is_self_qualified = token_before_double_colon(&token).is_some_and(|qual| {
+            qual.text().trim() == SELF_KEYWORD && !is_preceded_by_dot_or_double_colon(&qual)
+        });
+        if (!is_preceded_by_dot_or_double_colon(&token) || is_self_qualified)
+            && !is_followed_by_single_colon(&token)
+        {
+            on_ref(RustSyntaxRef::Path {
+                seg0: name,
+                seg1: None,
+                has_extra_segments: false,
+                offset,
+            });
+        }
+    }
+}
+
+fn rust_path_segments(path: &ast::Path) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = Some(path.clone());
+    while let Some(cursor) = current {
+        let Some(seg) = cursor.segment() else {
+            return Vec::new();
+        };
+        if seg.type_anchor().is_some() {
+            return Vec::new();
+        }
+        let Some(name_ref) = seg.name_ref() else {
+            return Vec::new();
+        };
+        segments.push(name_ref.text().trim().to_owned());
+        current = cursor.qualifier();
+    }
+    segments.reverse();
+    if segments.first().is_some_and(|first| first == SELF_KEYWORD) {
+        segments.remove(0);
+    }
+    segments
+}
+
+/// Returns the non-trivia token immediately preceding a `::` separator before `token`, if any.
+fn token_before_double_colon(token: &SyntaxToken) -> Option<SyntaxToken> {
+    let sep = previous_non_trivia_token(token)?;
+    if sep.kind() == SyntaxKind::COLON2 {
+        return previous_non_trivia_token(&sep);
+    }
+    if sep.kind() == SyntaxKind::COLON {
+        let first_colon = previous_non_trivia_token(&sep)?;
+        if first_colon.kind() == SyntaxKind::COLON
+            && first_colon.text_range().end() == sep.text_range().start()
+        {
+            return previous_non_trivia_token(&first_colon);
+        }
+    }
+    None
+}
+
+/// Returns true if `token` is immediately preceded (ignoring trivia) by `.` or `::`.
+fn is_preceded_by_dot_or_double_colon(token: &SyntaxToken) -> bool {
+    let Some(prev) = previous_non_trivia_token(token) else {
+        return false;
+    };
+    match prev.kind() {
+        SyntaxKind::DOT | SyntaxKind::COLON2 => true,
+        SyntaxKind::COLON => previous_non_trivia_token(&prev).is_some_and(|first| {
+            first.kind() == SyntaxKind::COLON
+                && first.text_range().end() == prev.text_range().start()
+        }),
+        _ => false,
+    }
+}
+
+/// Returns true if `token` is followed (ignoring trivia) by a single `:` (such as a struct field
+/// label `Foo { field: val }`) rather than `::`.
+fn is_followed_by_single_colon(token: &SyntaxToken) -> bool {
+    let Some(next) = std::iter::successors(token.next_token(), SyntaxToken::next_token)
+        .find(|candidate| !candidate.kind().is_trivia())
+    else {
+        return false;
+    };
+    if next.kind() != SyntaxKind::COLON {
+        return false;
+    }
+    next.next_token()
+        .is_none_or(|after| after.kind() != SyntaxKind::COLON)
+}
+
 /// Extracts the terminal type name of `impl_item.self_ty()` (or its trimmed source text when
 /// the self type is not a path type).
 fn impl_self_type_name(impl_item: &ast::Impl, source: &str) -> Option<String> {
@@ -1024,6 +1497,14 @@ fn impl_self_type_name(impl_item: &ast::Impl, source: &str) -> Option<String> {
     }
     let span = span_from_rowan_range(self_type.syntax().text_range());
     Some(source[span.start..span.end].trim().to_owned())
+}
+
+/// Returns true if the next non-trivia token after `token` is `(`. Inside a macro token tree,
+/// `self.name` followed by `(` is a method call; without it, `name` is a field.
+fn is_followed_by_open_paren(token: &SyntaxToken) -> bool {
+    std::iter::successors(token.next_token(), SyntaxToken::next_token)
+        .find(|candidate| !candidate.kind().is_trivia())
+        .is_some_and(|next| next.kind() == SyntaxKind::L_PAREN)
 }
 
 #[cfg(test)]
@@ -1163,6 +1644,77 @@ mod tests {
                 name: "decode".to_string(),
                 line: 2,
             }
+        );
+    }
+
+    #[test]
+    fn test_rust_intra_refs_resolve_macro_colon_paths_and_shadow_impl_generics() {
+        let file = ParsedFile::rust(indoc::indoc! {r"
+            pub struct Item;
+            pub struct Engine;
+
+            pub fn helper() -> usize {
+                1
+            }
+
+            impl Engine {
+                pub fn step() -> usize {
+                    2
+                }
+            }
+
+            impl<Item> Wrapper<Item> {
+                pub fn run(&self, value: Item) -> usize {
+                    assert_eq!(Engine::step(), OtherMod::helper());
+                    let _ = vec![Record { helper: 1 }];
+                    0
+                }
+            }
+
+            pub struct Wrapper<T>(T);
+        "});
+        let scopes = crate::code_lint::ast::collect_scope_facts(&file);
+        let refs = crate::code_lint::ast::collect_intra_file_references(&file, &scopes);
+        let from_run: Vec<&str> = refs
+            .iter()
+            .filter(|edge| edge.source_symbol == "Wrapper::run")
+            .map(|edge| edge.target_symbol.as_str())
+            .collect();
+        assert_eq!(from_run, vec!["Engine", "Engine::step"]);
+    }
+
+    #[test]
+    fn test_generic_parameter_shadowing_an_external_impl_type_does_not_reach_its_impl_callees() {
+        let file = ParsedFile::rust(indoc::indoc! {r"
+            impl Marker {
+                fn new() -> Self {
+                    make()
+                }
+            }
+
+            fn make() -> usize {
+                1
+            }
+
+            pub fn build<Marker: Default>() -> Marker {
+                Marker::default()
+            }
+        "});
+        let module_scope = crate::code_lint::ast::collect_scope_facts(&file).remove(0);
+        let index_of = |name: &str| {
+            module_scope
+                .items
+                .iter()
+                .position(|item| item.name == name)
+                .expect("item exists")
+        };
+        let (build, make) = (index_of("build"), index_of("make"));
+
+        assert!(
+            !module_scope
+                .relations
+                .iter()
+                .any(|relation| relation.source == build && relation.target == make)
         );
     }
 }
