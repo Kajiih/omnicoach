@@ -5,56 +5,179 @@ architecture_component!(TestUtils);
 use crate::code_lint::ast::{
     LiteralValue, ParsedFile, collect_comment_nodes, collect_literal_occurrences,
 };
-use crate::code_lint::contract::CodeRule;
+use crate::code_lint::contract::{CodeRule, ProjectCodeRule};
 use crate::code_lint::policy::is_trivial_literal;
+use crate::code_lint::project::{MemoryFileSource, ProjectContext, ProjectIndex, ProjectLayout};
 use crate::command_lint::contract::CommandRule;
 use crate::command_lint::vcs::JjClient;
 use crate::diagnostic::{Diagnostic, Language};
 use crate::rule_declaration::{
-    Declaration, EnforcementMode, LanguageDefaults, OptionsDeclaration, RuleOptions, RuleOverrides,
+    Declaration, DeclaredExamples, DeclaredRule, EnforcementMode, LanguageDefaults,
+    OptionsDeclaration, RuleOptions, RuleOverrides,
 };
+use std::collections::HashSet;
 use std::fmt::Write;
 use std::path::Path;
 
-/// Executes the rule's `check_file` in `ban` mode with optional [`RuleOverrides`], so `rule_test!`
-/// cases test the rule's own logic rather than `require-explanation` comment filtering.
+const VIRTUAL_PROJECT_ROOT: &str = "/proj";
+
+/// Uniform test-execution adapter implemented by both [`CodeRule`] and [`ProjectCodeRule`].
+pub trait TestableCodeRule {
+    /// Type-erased rule metadata (`name`, `languages`, `options`, `doc`).
+    fn declared_rule(&self) -> DeclaredRule;
+
+    /// True when the rule inspects multi-file [`ProjectContext`].
+    fn is_project_rule(&self) -> bool;
+
+    /// Runs the rule in `ban` mode (ignoring explanation comments) on `parsed` within `project`.
+    fn run_in_ban_mode(
+        &self,
+        path: &Path,
+        parsed: &ParsedFile,
+        project: Option<&ProjectContext<'_>>,
+        overrides: Option<&RuleOverrides>,
+    ) -> Vec<Diagnostic>;
+}
+
+impl<Options: OptionsDeclaration> TestableCodeRule for CodeRule<Options> {
+    fn declared_rule(&self) -> DeclaredRule {
+        self.declaration.declared()
+    }
+
+    fn is_project_rule(&self) -> bool {
+        false
+    }
+
+    fn run_in_ban_mode(
+        &self,
+        path: &Path,
+        parsed: &ParsedFile,
+        _project: Option<&ProjectContext<'_>>,
+        overrides: Option<&RuleOverrides>,
+    ) -> Vec<Diagnostic> {
+        let banned = Self {
+            declaration: Declaration {
+                options: RuleOptions {
+                    enforcement_mode: self
+                        .declaration
+                        .options
+                        .enforcement_mode
+                        .map(|_| LanguageDefaults::new(EnforcementMode::Ban, &[])),
+                    ..self.declaration.options
+                },
+                ..self.declaration
+            },
+            ..*self
+        };
+        banned.check_file(path, parsed, overrides)
+    }
+}
+
+impl<Options, Examples> TestableCodeRule for ProjectCodeRule<Options, Examples>
+where
+    Options: OptionsDeclaration,
+    Examples: Copy + Into<DeclaredExamples>,
+{
+    fn declared_rule(&self) -> DeclaredRule {
+        self.declaration.declared()
+    }
+
+    fn is_project_rule(&self) -> bool {
+        true
+    }
+
+    fn run_in_ban_mode(
+        &self,
+        path: &Path,
+        parsed: &ParsedFile,
+        project: Option<&ProjectContext<'_>>,
+        overrides: Option<&RuleOverrides>,
+    ) -> Vec<Diagnostic> {
+        let project = project.expect("ProjectCodeRule test execution requires a ProjectContext");
+        let banned = Self {
+            declaration: Declaration {
+                options: RuleOptions {
+                    enforcement_mode: self
+                        .declaration
+                        .options
+                        .enforcement_mode
+                        .map(|_| LanguageDefaults::new(EnforcementMode::Ban, &[])),
+                    ..self.declaration.options
+                },
+                ..self.declaration
+            },
+            ..*self
+        };
+        banned.check_file(path, parsed, project, overrides)
+    }
+}
+
+/// Input specification for a `pass` entry in [`rule_test!`].
+#[derive(Debug, Clone, Copy)]
+pub enum PassCaseInput<'a> {
+    /// A single standalone snippet.
+    Single(&'a str),
+    /// A multi-file virtual project `[(relative_path, content), ...]`; all matching files must pass.
+    Project(&'a [(&'a str, &'a str)]),
+}
+
+/// Input specification for a `fail` entry in [`rule_test!`].
+#[derive(Debug, Clone, Copy)]
+pub enum FailCaseInput<'a> {
+    /// A single standalone snippet expected to produce one diagnostic.
+    Single {
+        /// Source text of the snippet.
+        code: &'a str,
+        /// Optional sub-slice spanned by the diagnostic (`None` means full trimmed `code`).
+        expected_snippet: Option<&'a str>,
+    },
+    /// A multi-file virtual project expected to produce one diagnostic on `target_path` and zero
+    /// diagnostics on every sibling file.
+    Project {
+        /// Virtual project files `[(relative_path, content), ...]`.
+        files: &'a [(&'a str, &'a str)],
+        /// Relative path of the file expected to report the diagnostic.
+        target_path: &'a str,
+        /// Optional sub-slice of `target_path` spanned by the diagnostic.
+        expected_snippet: Option<&'a str>,
+    },
+}
+
+/// Executes a [`TestableCodeRule`] in `ban` mode on a single snippet `source` (`filename`).
 ///
 /// # Panics
 /// Panics if `filename` does not have a recognized file extension (`.py` or `.rs`) or if `source`
 /// has a syntax error.
 #[must_use]
 #[track_caller]
-pub fn run_code_rule<Options: OptionsDeclaration>(
-    rule: &CodeRule<Options>,
+pub fn run_code_rule<R: TestableCodeRule>(
+    rule: &R,
     source: &str,
     filename: &str,
     overrides: Option<&RuleOverrides>,
 ) -> Vec<Diagnostic> {
-    let path = Path::new(filename);
-    let lang = Language::from_path(path).unwrap_or_else(|| {
+    let declared = rule.declared_rule();
+    let relative_path = Path::new(filename);
+    let lang = Language::from_path(relative_path).unwrap_or_else(|| {
         panic!("run_code_rule: unsupported extension in test file '{filename}'")
     });
     let parsed = ParsedFile::new(source, lang);
     assert!(
         !parsed.has_syntax_error(),
         "run_code_rule [{}] ({lang:?}): test snippet has a syntax error:\n{source}",
-        rule.declaration.name.0,
+        declared.name.0,
     );
-    let banned = CodeRule {
-        declaration: Declaration {
-            options: RuleOptions {
-                enforcement_mode: rule
-                    .declaration
-                    .options
-                    .enforcement_mode
-                    .map(|_| LanguageDefaults::new(EnforcementMode::Ban, &[])),
-                ..rule.declaration.options
-            },
-            ..rule.declaration
-        },
-        ..*rule
-    };
-    banned.check_file(path, &parsed, overrides)
+    if !rule.is_project_rule() {
+        return rule.run_in_ban_mode(relative_path, &parsed, None, overrides);
+    }
+    let root = Path::new(VIRTUAL_PROJECT_ROOT);
+    let memory = MemoryFileSource::from_relative_files(root, &[(filename, source)]);
+    let full_path = root.join(filename);
+    let layout = ProjectLayout::discover(root, &memory, &[]);
+    let index = ProjectIndex::new(layout, &memory);
+    index.seed_from_parsed(&full_path, &parsed);
+    let context = ProjectContext::new(&index);
+    rule.run_in_ban_mode(&full_path, &parsed, Some(&context), overrides)
 }
 
 /// Builds a [`RuleOverrides`] setting `banned` to `entries` on `rule`, or `None` when `entries`
@@ -65,13 +188,14 @@ pub fn run_code_rule<Options: OptionsDeclaration>(
 // TODO: Investigate if this is ricr to add banned list override.
 #[must_use]
 #[track_caller]
-pub fn banned_list_overrides<Options: OptionsDeclaration>(
-    rule: &CodeRule<Options>,
+pub fn banned_list_overrides<R: TestableCodeRule>(
+    rule: &R,
     entries: &[&str],
 ) -> Option<RuleOverrides> {
     if entries.is_empty() {
         return None;
     }
+    let declared = rule.declared_rule();
     let items: Vec<toml::Value> = entries
         .iter()
         .map(|entry| toml::Value::String((*entry).to_owned()))
@@ -80,9 +204,9 @@ pub fn banned_list_overrides<Options: OptionsDeclaration>(
     table.insert("banned".to_owned(), toml::Value::Array(items));
     Some(
         RuleOverrides::parse(
-            rule.declaration.name.0,
-            &rule.declaration.options.declared(),
-            rule.declaration.languages,
+            declared.name.0,
+            &declared.options,
+            declared.languages,
             &toml::Value::Table(table),
         )
         .expect("banned_list_overrides must be valid for rule"),
@@ -161,36 +285,109 @@ pub fn run_command_rule(
     rule.check_command(&parsed, &env)
 }
 
-/// Asserts that a `pass` test case produces zero diagnostics.
+/// Asserts that a single-file `pass` test case produces zero diagnostics.
 ///
 /// # Panics
 /// Panics if the rule emits any diagnostics on `code`.
 #[track_caller]
-pub fn assert_rule_pass<Options: OptionsDeclaration>(
-    rule: &CodeRule<Options>,
+pub fn assert_rule_pass<R: TestableCodeRule>(
+    rule: &R,
     lang: Language,
     case_name: &str,
     code: &str,
     overrides: Option<&RuleOverrides>,
 ) {
-    let rule_name = rule.declaration.name.0;
-    let filename = dummy_filename(lang);
-    let diags = run_code_rule(rule, code, filename, overrides);
-    assert!(
-        diags.is_empty(),
-        indoc::indoc! {"
-            rule_test! [{}] ({:?}) PASS case '{}' failed:
-            Expected 0 diagnostics, got {}:
-            {}
-            Source:
-            {}"},
-        rule_name,
+    assert_rule_pass_input(
+        rule,
         lang,
         case_name,
-        diags.len(),
-        format_diagnostics_for_test(&diags),
-        code,
+        PassCaseInput::Single(code),
+        overrides,
     );
+}
+
+/// Asserts that a single-file or multi-file `pass` test case produces zero diagnostics.
+///
+/// # Panics
+/// Panics if the rule emits any diagnostics, if a multi-file case is used on a single-file rule,
+/// or if any `.py`/`.rs` file in the case has a syntax error.
+#[track_caller]
+pub fn assert_rule_pass_input<R: TestableCodeRule>(
+    rule: &R,
+    lang: Language,
+    case_name: &str,
+    input: PassCaseInput<'_>,
+    overrides: Option<&RuleOverrides>,
+) {
+    let declared = rule.declared_rule();
+    let rule_name = declared.name.0;
+    match input {
+        PassCaseInput::Single(code) => {
+            let filename = dummy_filename(lang);
+            let diags = run_code_rule(rule, code, filename, overrides);
+            assert!(
+                diags.is_empty(),
+                indoc::indoc! {"
+                    rule_test! [{}] ({:?}) PASS case '{}' failed:
+                    Expected 0 diagnostics, got {}:
+                    {}
+                    Source:
+                    {}"},
+                rule_name,
+                lang,
+                case_name,
+                diags.len(),
+                format_diagnostics_for_test(&diags),
+                code,
+            );
+        }
+        PassCaseInput::Project(files) => {
+            assert!(
+                rule.is_project_rule(),
+                "rule_test! [{rule_name}] ({lang:?}) PASS case '{case_name}': multi-file `{{ ... }}` cases are only valid on `ProjectCodeRule`s"
+            );
+            let parsed_files = validate_and_parse_project_files(rule_name, lang, case_name, files);
+            let root = Path::new(VIRTUAL_PROJECT_ROOT);
+            let memory = MemoryFileSource::from_relative_files(root, files);
+            let layout = discover_virtual_project_layout(root, files, &memory);
+            let index = ProjectIndex::new(layout, &memory);
+            for (relative_path, parsed) in &parsed_files {
+                index.seed_from_parsed(&root.join(relative_path), parsed);
+            }
+            let context = ProjectContext::new(&index);
+            let mut checked_any = false;
+            for (relative_path, parsed) in &parsed_files {
+                if parsed.lang() != lang {
+                    continue;
+                }
+                checked_any = true;
+                let full_path = root.join(relative_path);
+                let diags = rule.run_in_ban_mode(&full_path, parsed, Some(&context), overrides);
+                assert!(
+                    diags.is_empty(),
+                    indoc::indoc! {"
+                        rule_test! [{}] ({:?}) PASS case '{}' failed on '{}':
+                        Expected 0 diagnostics, got {}:
+                        {}"},
+                    rule_name,
+                    lang,
+                    case_name,
+                    relative_path,
+                    diags.len(),
+                    format_diagnostics_for_test(&diags),
+                );
+            }
+            if let Some(error) = index.architecture_error() {
+                panic!(
+                    "rule_test! [{rule_name}] ({lang:?}) PASS case '{case_name}': invalid project architecture: {error}"
+                );
+            }
+            assert!(
+                checked_any,
+                "rule_test! [{rule_name}] ({lang:?}) PASS case '{case_name}': multi-file project contains no {lang:?} source files"
+            );
+        }
+    }
 }
 
 /// How the repeated-occurrence check of a `fail` case builds the second copy of the code.
@@ -203,18 +400,14 @@ pub enum RepeatCheck {
     DistinctLiterals,
 }
 
-/// Asserts that a `fail` test case produces exactly one matching diagnostic.
-///
-/// Asserts that the produced diagnostic AST span matches `expected_snippet` (or `code.trim()` when
-/// `expected_snippet` is `None`), and that the same span is reported in both copies when `code` is
-/// repeated twice in one file (the second copy built as `repeat` says).
+/// Asserts that a single-file `fail` test case produces exactly one matching diagnostic.
 ///
 /// # Panics
 /// Panics if diagnostic count, `rule_name`, normalized AST span slice, or repeated-occurrence
 /// spans do not match.
 #[track_caller]
-pub fn assert_rule_fail<Options: OptionsDeclaration>(
-    rule: &CodeRule<Options>,
+pub fn assert_rule_fail<R: TestableCodeRule>(
+    rule: &R,
     lang: Language,
     case_name: &str,
     code: &str,
@@ -222,87 +415,144 @@ pub fn assert_rule_fail<Options: OptionsDeclaration>(
     repeat: RepeatCheck,
     overrides: Option<&RuleOverrides>,
 ) {
-    let rule_name = rule.declaration.name.0;
-    let filename = dummy_filename(lang);
-    let diags = run_code_rule(rule, code, filename, overrides);
-    let expected_slice = expected_snippet.unwrap_or(code).trim();
-
-    let [diagnostic] = diags.as_slice() else {
-        panic!(
-            indoc::indoc! {"
-                rule_test! [{}] ({:?}) FAIL case '{}' diagnostic count mismatch:
-                Expected exactly 1 diagnostic, got {}:
-                {}
-                Source:
-                {}"},
-            rule_name,
-            lang,
-            case_name,
-            diags.len(),
-            format_diagnostics_for_test(&diags),
+    assert_rule_fail_input(
+        rule,
+        lang,
+        case_name,
+        FailCaseInput::Single {
             code,
-        );
-    };
-
-    assert_eq!(
-        diagnostic.rule_name.0, rule_name,
-        "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': diagnostic rule_name '{}' does not match rule name.",
-        diagnostic.rule_name.0
+            expected_snippet,
+        },
+        repeat,
+        overrides,
     );
+}
 
-    let raw_slice = &code[diagnostic.location.span.start..diagnostic.location.span.end];
-    let actual_slice = normalize_span_indentation(code, diagnostic.location.span.start, raw_slice);
-    assert_eq!(
-        actual_slice, expected_slice,
-        indoc::indoc! {r##"
-            rule_test! [{}] ({:?}) FAIL case '{}' flagged span mismatch:
-            Expected flagged slice:
-            {}
-            Actual flagged slice:
-            {}
-            (Tip: if the flagged AST node is a sub-expression of the test code, add `=> r#"..."#` to specify the inner slice.)"##},
-        rule_name, lang, case_name, expected_slice, actual_slice,
-    );
-
-    let span = diagnostic.location.span.start..diagnostic.location.span.end;
-    assert_no_comment_in_explanation_position(rule_name, lang, case_name, code, span.start);
-    assert_every_occurrence_reported(rule, lang, case_name, code, span, repeat, overrides);
+/// Asserts that a single-file or multi-file `fail` test case produces exactly one matching
+/// diagnostic on the target file (and zero diagnostics on sibling files), plus both occurrences
+/// when the target file's contents are repeated twice.
+///
+/// # Panics
+/// Panics if diagnostic count, `rule_name`, target file, normalized AST span slice, comment
+/// hygiene, or repeated-occurrence spans do not match.
+#[track_caller]
+pub fn assert_rule_fail_input<R: TestableCodeRule>(
+    rule: &R,
+    lang: Language,
+    case_name: &str,
+    input: FailCaseInput<'_>,
+    repeat: RepeatCheck,
+    overrides: Option<&RuleOverrides>,
+) {
+    let declared = rule.declared_rule();
+    let rule_name = declared.name.0;
+    match input {
+        FailCaseInput::Single {
+            code,
+            expected_snippet,
+        } => {
+            let filename = dummy_filename(lang);
+            let diags = run_code_rule(rule, code, filename, overrides);
+            let span = verify_single_diagnostic(
+                rule_name,
+                lang,
+                case_name,
+                code,
+                expected_snippet,
+                &diags,
+            );
+            assert_no_comment_in_explanation_position(rule_name, lang, case_name, code, span.start);
+            assert_every_occurrence_reported(rule, lang, case_name, code, span, repeat, overrides);
+        }
+        FailCaseInput::Project {
+            files,
+            target_path,
+            expected_snippet,
+        } => {
+            assert_project_fail_input(
+                rule,
+                lang,
+                case_name,
+                files,
+                target_path,
+                expected_snippet,
+                repeat,
+                overrides,
+            );
+        }
+    }
 }
 
 const DOCUMENTED_EXAMPLE_CASE: &str = "documented example";
 const DOCUMENTED_FIX_CASE: &str = "documented fix";
 
-/// Asserts each of the rule's documented examples exactly like a `rule_test!` case: the flagged
-/// snippet as a `fail` case expecting its `flagged_span`, the fixed snippet as a `pass` case.
-///
-/// Because [`run_code_rule`] runs in `ban` mode, a documented fix can never rely on an
-/// explanatory comment.
+/// Asserts each of the rule's documented examples (`Example` or `ProjectExample`) exactly like a
+/// `rule_test!` case.
 ///
 /// # Panics
-/// Panics as [`assert_rule_fail`] and [`assert_rule_pass`] do.
+/// Panics as [`assert_rule_fail_input`] and [`assert_rule_pass_input`] do.
 #[track_caller]
-pub fn assert_documented_examples<Options: OptionsDeclaration>(
-    rule: &CodeRule<Options>,
+pub fn assert_documented_examples<R: TestableCodeRule>(
+    rule: &R,
     repeat: RepeatCheck,
     overrides: Option<&RuleOverrides>,
 ) {
-    for example in rule.declaration.doc.examples {
-        assert_rule_fail(
-            rule,
-            example.language,
-            DOCUMENTED_EXAMPLE_CASE,
-            example.flagged,
-            Some(example.flagged_span),
-            repeat,
-            overrides,
-        );
-        assert_rule_pass(
-            rule,
-            example.language,
-            DOCUMENTED_FIX_CASE,
-            example.fixed,
-            overrides,
-        );
+    let declared = rule.declared_rule();
+    match declared.doc.examples {
+        DeclaredExamples::Code(examples) => {
+            for example in examples {
+                assert_rule_fail(
+                    rule,
+                    example.language,
+                    DOCUMENTED_EXAMPLE_CASE,
+                    example.flagged,
+                    Some(example.flagged_span),
+                    repeat,
+                    overrides,
+                );
+                assert_rule_pass(
+                    rule,
+                    example.language,
+                    DOCUMENTED_FIX_CASE,
+                    example.fixed,
+                    overrides,
+                );
+            }
+        }
+        DeclaredExamples::Project(examples) => {
+            for example in examples {
+                let mut flagged_files: Vec<(&str, &str)> = example.context.to_vec();
+                flagged_files.push((example.path, example.flagged));
+                assert_rule_fail_input(
+                    rule,
+                    example.language,
+                    DOCUMENTED_EXAMPLE_CASE,
+                    FailCaseInput::Project {
+                        files: &flagged_files,
+                        target_path: example.path,
+                        expected_snippet: Some(example.flagged_span),
+                    },
+                    repeat,
+                    overrides,
+                );
+
+                let mut fixed_files: Vec<(&str, &str)> = example.context.to_vec();
+                fixed_files.push((example.path, example.fixed));
+                assert_rule_pass_input(
+                    rule,
+                    example.language,
+                    DOCUMENTED_FIX_CASE,
+                    PassCaseInput::Project(&fixed_files),
+                    overrides,
+                );
+            }
+        }
+        DeclaredExamples::Command(_) => {
+            panic!(
+                "rule_test! [{}]: code rule cannot declare CommandExample",
+                declared.name.0
+            );
+        }
     }
 }
 
@@ -311,12 +561,10 @@ pub fn assert_documented_examples<Options: OptionsDeclaration>(
 /// # Panics
 /// Panics if a supported language is missing or an unsupported language is included.
 #[track_caller]
-pub fn assert_language_completeness<Options: OptionsDeclaration>(
-    rule: &CodeRule<Options>,
-    tested_languages: &[Language],
-) {
-    let rule_name = rule.declaration.name.0;
-    let supported = rule.declaration.languages;
+pub fn assert_language_completeness<R: TestableCodeRule>(rule: &R, tested_languages: &[Language]) {
+    let declared = rule.declared_rule();
+    let rule_name = declared.name.0;
+    let supported = declared.languages;
 
     for lang in tested_languages {
         assert!(
@@ -469,11 +717,208 @@ pub fn assert_command_documented_examples(rule: &CommandRule, client: &dyn JjCli
     }
 }
 
+#[track_caller]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "internal harness helper forwarding test context"
+)]
+fn assert_project_fail_input<R: TestableCodeRule>(
+    rule: &R,
+    lang: Language,
+    case_name: &str,
+    files: &[(&str, &str)],
+    target_path: &str,
+    expected_snippet: Option<&str>,
+    repeat: RepeatCheck,
+    overrides: Option<&RuleOverrides>,
+) {
+    let declared = rule.declared_rule();
+    let rule_name = declared.name.0;
+    assert!(
+        rule.is_project_rule(),
+        "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': multi-file `{{ ... }}` cases are only valid on `ProjectCodeRule`s"
+    );
+    assert_eq!(
+        Language::from_path(Path::new(target_path)),
+        Some(lang),
+        "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': target_path '{target_path}' does not match {lang:?}"
+    );
+    let parsed_files = validate_and_parse_project_files(rule_name, lang, case_name, files);
+    let target_code = files
+        .iter()
+        .find_map(|&(path, content)| (path == target_path).then_some(content))
+        .unwrap_or_else(|| {
+            panic!(
+                "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': target_path '{target_path}' is missing from project files"
+            )
+        });
+    let root = Path::new(VIRTUAL_PROJECT_ROOT);
+    let memory = MemoryFileSource::from_relative_files(root, files);
+    let layout = discover_virtual_project_layout(root, files, &memory);
+    let index = ProjectIndex::new(layout, &memory);
+    for (relative_path, parsed) in &parsed_files {
+        index.seed_from_parsed(&root.join(relative_path), parsed);
+    }
+    let context = ProjectContext::new(&index);
+    let mut target_diags = None;
+    for (relative_path, parsed) in &parsed_files {
+        if parsed.lang() != lang {
+            continue;
+        }
+        let full_path = root.join(relative_path);
+        let diags = rule.run_in_ban_mode(&full_path, parsed, Some(&context), overrides);
+        if *relative_path == target_path {
+            let expected_context = crate::diagnostic::LocationContext::File(full_path);
+            for diagnostic in &diags {
+                assert_eq!(
+                    diagnostic.location.context, expected_context,
+                    "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': diagnostic reported on '{}' while checking '{target_path}'",
+                    diagnostic.location.context
+                );
+            }
+            target_diags = Some(diags);
+        } else {
+            assert!(
+                diags.is_empty(),
+                indoc::indoc! {"
+                    rule_test! [{}] ({:?}) FAIL case '{}' emitted unexpected diagnostics on non-target context file '{}':
+                    {}"},
+                rule_name,
+                lang,
+                case_name,
+                relative_path,
+                format_diagnostics_for_test(&diags),
+            );
+        }
+    }
+    if let Some(error) = index.architecture_error() {
+        panic!(
+            "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': invalid project architecture: {error}"
+        );
+    }
+    let diags = target_diags.expect("target_path verified present");
+    let span = verify_single_diagnostic(
+        rule_name,
+        lang,
+        case_name,
+        target_code,
+        expected_snippet,
+        &diags,
+    );
+    assert_no_comment_in_explanation_position(rule_name, lang, case_name, target_code, span.start);
+    assert_every_occurrence_reported_in_project(
+        rule,
+        lang,
+        case_name,
+        files,
+        &parsed_files,
+        target_path,
+        target_code,
+        span,
+        repeat,
+        overrides,
+    );
+}
+
+#[track_caller]
+fn validate_and_parse_project_files<'a>(
+    rule_name: &str,
+    lang: Language,
+    case_name: &str,
+    files: &[(&'a str, &'a str)],
+) -> Vec<(&'a str, ParsedFile)> {
+    assert!(
+        !files.is_empty(),
+        "rule_test! [{rule_name}] ({lang:?}) case '{case_name}': project file map cannot be empty"
+    );
+    let mut seen = HashSet::with_capacity(files.len());
+    let mut parsed_files = Vec::new();
+    for &(relative_path, content) in files {
+        assert!(
+            seen.insert(relative_path),
+            "rule_test! [{rule_name}] ({lang:?}) case '{case_name}': duplicate path '{relative_path}' in project map"
+        );
+        let path = Path::new(relative_path);
+        if let Some(file_lang) = Language::from_path(path) {
+            let parsed = ParsedFile::new(content, file_lang);
+            assert!(
+                !parsed.has_syntax_error(),
+                "rule_test! [{rule_name}] ({lang:?}) case '{case_name}': file '{relative_path}' has a syntax error:\n{content}",
+            );
+            parsed_files.push((relative_path, parsed));
+        } else if path.extension().is_some_and(|extension| extension == "pyi") {
+            let parsed = ParsedFile::new(content, Language::Python);
+            assert!(
+                !parsed.has_syntax_error(),
+                "rule_test! [{rule_name}] ({lang:?}) case '{case_name}': stub file '{relative_path}' has a syntax error:\n{content}",
+            );
+            parsed_files.push((relative_path, parsed));
+        } else if relative_path == crate::config::CONFIG_FILE_NAME
+            && let Err(error) = toml::from_str::<VirtualProjectToml>(content)
+        {
+            panic!(
+                "rule_test! [{rule_name}] ({lang:?}) case '{case_name}': invalid {relative_path}: {error}\n{content}"
+            );
+        }
+    }
+    parsed_files
+}
+
+#[track_caller]
+fn verify_single_diagnostic(
+    rule_name: &str,
+    lang: Language,
+    case_name: &str,
+    code: &str,
+    expected_snippet: Option<&str>,
+    diags: &[Diagnostic],
+) -> std::ops::Range<usize> {
+    let expected_slice = expected_snippet.unwrap_or(code).trim();
+    let [diagnostic] = diags else {
+        panic!(
+            indoc::indoc! {"
+                rule_test! [{}] ({:?}) FAIL case '{}' diagnostic count mismatch:
+                Expected exactly 1 diagnostic, got {}:
+                {}
+                Source:
+                {}"},
+            rule_name,
+            lang,
+            case_name,
+            diags.len(),
+            format_diagnostics_for_test(diags),
+            code,
+        );
+    };
+
+    assert_eq!(
+        diagnostic.rule_name.0, rule_name,
+        "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': diagnostic rule_name '{}' does not match rule name.",
+        diagnostic.rule_name.0
+    );
+
+    let raw_slice = &code[diagnostic.location.span.start..diagnostic.location.span.end];
+    let actual_slice = normalize_span_indentation(code, diagnostic.location.span.start, raw_slice);
+    assert_eq!(
+        actual_slice, expected_slice,
+        indoc::indoc! {r##"
+            rule_test! [{}] ({:?}) FAIL case '{}' flagged span mismatch:
+            Expected flagged slice:
+            {}
+            Actual flagged slice:
+            {}
+            (Tip: if the flagged AST node is a sub-expression of the test code, add `=> r#"..."#` to specify the inner slice.)"##},
+        rule_name, lang, case_name, expected_slice, actual_slice,
+    );
+
+    diagnostic.location.span.start..diagnostic.location.span.end
+}
+
 /// Repeats `code` twice in one file and asserts the rule flags the same span in both copies,
 /// so a rule that stops after its first match cannot pass.
 #[track_caller]
-fn assert_every_occurrence_reported<Options: OptionsDeclaration>(
-    rule: &CodeRule<Options>,
+fn assert_every_occurrence_reported<R: TestableCodeRule>(
+    rule: &R,
     lang: Language,
     case_name: &str,
     code: &str,
@@ -481,23 +926,137 @@ fn assert_every_occurrence_reported<Options: OptionsDeclaration>(
     repeat: RepeatCheck,
     overrides: Option<&RuleOverrides>,
 ) {
-    let rule_name = rule.declaration.name.0;
-    let second_copy = match repeat {
-        RepeatCheck::SameCode => code.to_owned(),
-        RepeatCheck::DistinctLiterals => with_distinct_literals(code, lang).unwrap_or_else(|reason| {
-            panic!(
-                indoc::indoc! {"
-                    rule_test! [{}] ({:?}) FAIL case '{}': cannot give the second copy distinct literals ({}); rename a literal in this case.
-                    Source:
-                    {}"},
-                rule_name, lang, case_name, reason, code
-            )
-        }),
-    };
+    let declared = rule.declared_rule();
+    let rule_name = declared.name.0;
+    let second_copy = build_second_copy(rule_name, lang, case_name, code, repeat);
     let repeated = format!("{code}\n{second_copy}");
     let offset = code.len() + 1;
     let diags = run_code_rule(rule, &repeated, dummy_filename(lang), overrides);
+    assert_repeated_spans(rule_name, lang, case_name, &repeated, &diags, span, offset);
+}
 
+#[track_caller]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "internal harness helper forwarding test context"
+)]
+fn assert_every_occurrence_reported_in_project<R: TestableCodeRule>(
+    rule: &R,
+    lang: Language,
+    case_name: &str,
+    files: &[(&str, &str)],
+    parsed_files: &[(&str, ParsedFile)],
+    target_path: &str,
+    target_code: &str,
+    span: std::ops::Range<usize>,
+    repeat: RepeatCheck,
+    overrides: Option<&RuleOverrides>,
+) {
+    let declared = rule.declared_rule();
+    let rule_name = declared.name.0;
+    let second_copy = build_second_copy(rule_name, lang, case_name, target_code, repeat);
+    let repeated = format!("{target_code}\n{second_copy}");
+    let offset = target_code.len() + 1;
+
+    let repeated_entries: Vec<(&str, &str)> = files
+        .iter()
+        .map(|&(path, content)| {
+            if path == target_path {
+                (path, repeated.as_str())
+            } else {
+                (path, content)
+            }
+        })
+        .collect();
+    let root = Path::new(VIRTUAL_PROJECT_ROOT);
+    let memory = MemoryFileSource::from_relative_files(root, &repeated_entries);
+    let layout = discover_virtual_project_layout(root, &repeated_entries, &memory);
+    let index = ProjectIndex::new(layout, &memory);
+    for (relative_path, parsed) in parsed_files {
+        if *relative_path != target_path {
+            index.seed_from_parsed(&root.join(relative_path), parsed);
+        }
+    }
+    let full_target = root.join(target_path);
+    let parsed_target = ParsedFile::new(&repeated, lang);
+    assert!(
+        !parsed_target.has_syntax_error(),
+        "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': repeated target '{target_path}' has a syntax error:\n{repeated}",
+    );
+    index.seed_from_parsed(&full_target, &parsed_target);
+    if let Some(error) = index.architecture_error() {
+        panic!(
+            "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}' has an invalid architecture configuration on repeat check: {error}"
+        );
+    }
+    let context = ProjectContext::new(&index);
+    let diags = rule.run_in_ban_mode(&full_target, &parsed_target, Some(&context), overrides);
+    assert_repeated_spans(rule_name, lang, case_name, &repeated, &diags, span, offset);
+}
+
+fn discover_virtual_project_layout(
+    root: &Path,
+    files: &[(&str, &str)],
+    memory: &MemoryFileSource,
+) -> ProjectLayout {
+    let parsed_config = files
+        .iter()
+        .find_map(|&(path, content)| (path == crate::config::CONFIG_FILE_NAME).then_some(content))
+        .and_then(|content| toml::from_str::<VirtualProjectToml>(content).ok())
+        .map(|virtual_toml| crate::config::Config {
+            context: virtual_toml.context,
+            architecture: virtual_toml.architecture,
+            ..crate::config::Config::default()
+        });
+    let root_refs = parsed_config
+        .as_ref()
+        .map(crate::code_lint::project::configured_source_roots)
+        .unwrap_or_default();
+    ProjectLayout::discover(root, memory, &root_refs)
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+struct VirtualProjectToml {
+    #[serde(default)]
+    context: crate::config::ContextConfig,
+    architecture: Option<crate::config::ArchitectureConfig>,
+}
+
+#[track_caller]
+fn build_second_copy(
+    rule_name: &str,
+    lang: Language,
+    case_name: &str,
+    code: &str,
+    repeat: RepeatCheck,
+) -> String {
+    match repeat {
+        RepeatCheck::SameCode => code.to_owned(),
+        RepeatCheck::DistinctLiterals => {
+            with_distinct_literals(code, lang).unwrap_or_else(|reason| {
+                panic!(
+                    indoc::indoc! {"
+                        rule_test! [{}] ({:?}) FAIL case '{}': cannot give the second copy distinct literals ({}); rename a literal in this case.
+                        Source:
+                        {}"},
+                    rule_name, lang, case_name, reason, code
+                )
+            })
+        }
+    }
+}
+
+#[track_caller]
+fn assert_repeated_spans(
+    rule_name: &str,
+    lang: Language,
+    case_name: &str,
+    repeated_source: &str,
+    diags: &[Diagnostic],
+    span: std::ops::Range<usize>,
+    offset: usize,
+) {
     let mut actual: Vec<_> = diags
         .iter()
         .map(|diagnostic| diagnostic.location.span.start..diagnostic.location.span.end)
@@ -515,8 +1074,8 @@ fn assert_every_occurrence_reported<Options: OptionsDeclaration>(
         rule_name,
         lang,
         case_name,
-        format_diagnostics_for_test(&diags),
-        repeated,
+        format_diagnostics_for_test(diags),
+        repeated_source,
     );
 }
 
@@ -715,7 +1274,8 @@ fn dummy_filename(lang: Language) -> &'static str {
     }
 }
 
-/// Declarative macro generating the complete `#[cfg(test)] mod tests` suite for a [`CodeRule`].
+/// Declarative macro generating the complete `#[cfg(test)] mod tests` suite for a [`CodeRule`]
+/// or [`ProjectCodeRule`].
 ///
 /// Every rule file ends with one invocation; bespoke `#[test]` / `#[rstest]` functions and
 /// hand-written `mod tests` blocks in rule files are rejected by `tests/registry.rs`:
@@ -740,8 +1300,8 @@ fn dummy_filename(lang: Language) -> &'static str {
 ///
 /// - A `pass` / `fail` `#[rstest]` case per entry, named after it.
 /// - `language_completeness`: every language in the rule's declaration has a block.
-/// - `documented_examples`: the doc's [`crate::rule_declaration::Example`]s, checked by
-///   [`assert_documented_examples`].
+/// - `documented_examples`: the doc's [`crate::rule_declaration::Example`]s or
+///   [`crate::rule_declaration::ProjectExample`]s, checked by [`assert_documented_examples`].
 ///
 /// # How a `fail` case is checked
 ///
@@ -795,6 +1355,27 @@ fn dummy_filename(lang: Language) -> &'static str {
 ///   fact. Change the harness only for a whole class of rules, with a guardrail so the
 ///   change cannot hide regressions.
 macro_rules! rule_test {
+    (@pass_input { $( $rel_path:literal => $file_code:literal ),+ $(,)? }) => {
+        $crate::test_utils::PassCaseInput::Project(&[
+            $( ($rel_path, indoc::indoc! { $file_code }) ),+
+        ])
+    };
+    (@pass_input $code:literal) => {
+        $crate::test_utils::PassCaseInput::Single(indoc::indoc! { $code })
+    };
+    (@fail_input { $( $rel_path:literal => $file_code:literal ),+ $(,)? }, ( $target_path:literal, $snippet:literal $(,)? )) => {
+        $crate::test_utils::FailCaseInput::Project {
+            files: &[ $( ($rel_path, indoc::indoc! { $file_code }) ),+ ],
+            target_path: $target_path,
+            expected_snippet: Some(indoc::indoc! { $snippet }),
+        }
+    };
+    (@fail_input $code:literal $( , $snippet:literal )?) => {
+        $crate::test_utils::FailCaseInput::Single {
+            code: indoc::indoc! { $code },
+            expected_snippet: None $( .or(Some(indoc::indoc! { $snippet })) )?,
+        }
+    };
     ($rule:expr, repeat: $repeat:ident, { $($body:tt)* }) => {
         $crate::test_utils::rule_test!(tests: $rule, repeat: $repeat, banned: &[], { $($body)* });
     };
@@ -825,10 +1406,10 @@ macro_rules! rule_test {
             $(
                 $lang:ident => {
                     pass: [
-                        $( $pass_name:ident => $pass_code:expr ),+ $(,)?
+                        $( $pass_name:ident => $pass_spec:tt ),+ $(,)?
                     ],
                     fail: [
-                        $( $fail_name:ident => $fail_code:expr $( => $snippet:expr )? ),+ $(,)?
+                        $( $fail_name:ident => $fail_spec:tt $( => $fail_target:tt )? ),+ $(,)?
                     ] $(,)?
                 }
             ),+ $(,)?
@@ -865,21 +1446,21 @@ macro_rules! rule_test {
                     #[case::$pass_name(
                         $crate::diagnostic::Language::$lang,
                         stringify!($pass_name),
-                        indoc::indoc! { $pass_code },
+                        $crate::test_utils::rule_test!(@pass_input $pass_spec),
                     )]
                 )+
             )+
             fn pass(
                 #[case] lang: $crate::diagnostic::Language,
                 #[case] case_name: &str,
-                #[case] code: &str,
+                #[case] input: $crate::test_utils::PassCaseInput<'_>,
             ) {
                 let overrides = test_overrides();
-                $crate::test_utils::assert_rule_pass(
+                $crate::test_utils::assert_rule_pass_input(
                     &$rule,
                     lang,
                     case_name,
-                    code,
+                    input,
                     overrides.as_ref(),
                 );
             }
@@ -890,24 +1471,21 @@ macro_rules! rule_test {
                     #[case::$fail_name(
                         $crate::diagnostic::Language::$lang,
                         stringify!($fail_name),
-                        indoc::indoc! { $fail_code },
-                        None $( .or(Some(indoc::indoc! { $snippet })) )?,
+                        $crate::test_utils::rule_test!(@fail_input $fail_spec $(, $fail_target )?),
                     )]
                 )+
             )+
             fn fail(
                 #[case] lang: $crate::diagnostic::Language,
                 #[case] case_name: &str,
-                #[case] code: &str,
-                #[case] expected_snippet: Option<&str>,
+                #[case] input: $crate::test_utils::FailCaseInput<'_>,
             ) {
                 let overrides = test_overrides();
-                $crate::test_utils::assert_rule_fail(
+                $crate::test_utils::assert_rule_fail_input(
                     &$rule,
                     lang,
                     case_name,
-                    code,
-                    expected_snippet,
+                    input,
                     $crate::test_utils::RepeatCheck::$repeat,
                     overrides.as_ref(),
                 );
@@ -990,6 +1568,132 @@ pub(crate) use command_rule_test;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::code_lint::contract::RuleTarget;
+    use crate::diagnostic::{RuleName, ViolationTemplate, violation_template};
+    use crate::rule_declaration::{
+        Classification, Consensus, ImpactedQuality, Precision, ProjectExample, RuleDoc, Topic,
+    };
+
+    const PROJECT_TEST_TEMPLATE: ViolationTemplate = violation_template! {
+        summary: "Class `{class}` shadows imported class `{name}`.",
+        rationale: "Shadowing an imported class obscures its origin.",
+        suggestion: "Rename `{class}`.",
+    };
+
+    fn check_shadowed_imported_class(
+        rule: &ProjectCodeRule,
+        path: &Path,
+        file: &ParsedFile,
+        project: &ProjectContext<'_>,
+        (): (),
+    ) -> Vec<Diagnostic> {
+        let Some(module) = project.python_module_of_path(path) else {
+            return Vec::new();
+        };
+        let Some(summary) = project.python_summary(&module) else {
+            return Vec::new();
+        };
+        summary
+            .imports
+            .keys()
+            .filter(|imported_name| {
+                summary
+                    .classes
+                    .iter()
+                    .any(|class_summary| &class_summary.name == *imported_name)
+            })
+            .flat_map(|imported_name| {
+                let pattern = format!("class {imported_name}");
+                let source = file.source_text();
+                source
+                    .match_indices(&pattern)
+                    .map(|(start, _)| {
+                        let name_start = start + 6;
+                        let span = crate::diagnostic::SourceSpan::new(
+                            name_start,
+                            name_start + imported_name.len(),
+                        );
+                        rule.diagnostic_at_span(
+                            path,
+                            file,
+                            span,
+                            &[("class", imported_name), ("name", imported_name)],
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    const DUMMY_PROJECT_RULE: ProjectCodeRule = ProjectCodeRule {
+        declaration: Declaration {
+            name: RuleName("dummy-project-rule"),
+            template: &PROJECT_TEST_TEMPLATE,
+            languages: &[Language::Python],
+            options: RuleOptions::code_rule(()),
+            classification: Classification {
+                topics: &[Topic::STATIC_TYPING],
+                precision: Precision::Exact,
+                consensus: Consensus::Opinionated,
+                impacted_quality: ImpactedQuality::Maintainability,
+            },
+            doc: RuleDoc {
+                summary: "Flags classes shadowing an imported name.",
+                what_it_does: "Flags classes shadowing an imported name.",
+                why_is_this_bad: "Shadowing is confusing.",
+                known_problems: None,
+                references: &[],
+                examples: &[ProjectExample {
+                    language: Language::Python,
+                    context: &[("pkg/base.py", "class Base: pass\n")],
+                    path: "pkg/service.py",
+                    flagged: indoc::indoc! {"
+                        from pkg.base import Base
+
+                        class Base: pass
+                    "},
+                    flagged_span: "Base",
+                    fixed: indoc::indoc! {"
+                        from pkg.base import Base
+
+                        class Service(Base): pass
+                    "},
+                }],
+            },
+        },
+        target: RuleTarget::All,
+        check: check_shadowed_imported_class,
+    };
+
+    crate::test_utils::rule_test!(
+        project_rule_harness: DUMMY_PROJECT_RULE,
+        {
+            Python => {
+                pass: [
+                    distinct_class_name => {
+                        "pkg/base.py" => "class Base: pass",
+                        "pkg/service.py" => "
+                            from pkg.base import Base
+
+                            class Child(Base):
+                                pass
+                        ",
+                    },
+                ],
+                fail: [
+                    shadows_imported_class => {
+                        "pkg/base.py" => "class Base: pass",
+                        "pkg/service.py" => "
+                            from pkg.base import Base
+
+                            class Base:
+                                pass
+                        ",
+                    } => ("pkg/service.py", "Base"),
+                ],
+            },
+        }
+    );
 
     #[rstest::rstest]
     #[case::python_strings_and_numbers(

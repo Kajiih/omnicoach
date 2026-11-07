@@ -173,10 +173,20 @@ fn test_code_rules_document_one_example_per_language() {
     use omnicoach::rule_declaration::DeclaredExamples;
 
     for rule in CODE_RULES.iter().map(|rule| rule.declaration()) {
-        let DeclaredExamples::Code(examples) = rule.doc.examples else {
-            panic!("Code rule {} must declare code examples", rule.name);
+        let example_languages: Vec<_> = match rule.doc.examples {
+            DeclaredExamples::Code(examples) => {
+                examples.iter().map(|example| example.language).collect()
+            }
+            DeclaredExamples::Project(examples) => {
+                examples.iter().map(|example| example.language).collect()
+            }
+            DeclaredExamples::Command(_) => {
+                panic!(
+                    "Code rule {} must declare code or project examples",
+                    rule.name
+                );
+            }
         };
-        let example_languages: Vec<_> = examples.iter().map(|example| example.language).collect();
         assert_eq!(
             example_languages.len(),
             rule.languages.len(),
@@ -243,7 +253,7 @@ fn rule_test_convention_violation(source: &str, macro_call: &str) -> Option<&'st
     if !source.contains(macro_call) {
         return Some("must use the declarative rule test harness macro for its test suite");
     }
-    if source.contains("mod tests") {
+    if source.contains("mod tests") || source.contains("#[cfg(test)]\nmod ") {
         return Some(
             "must not define a bespoke mod tests block; the test macro generates it automatically",
         );
