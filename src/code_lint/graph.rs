@@ -19,7 +19,7 @@ use self::builder::{build_file_graph, build_project_graph};
 use self::render::render_graph;
 
 use self::facts::{
-    collect_project_facts_from_sources, collect_project_source_files, derive_project_title,
+    collect_project_facts_with_config, collect_project_source_files, derive_project_title,
     resolve_effective_paths,
 };
 use crate::code_lint::ast::{ParsedFile, collect_intra_file_references, collect_scope_facts};
@@ -107,7 +107,12 @@ fn generate_project_graphs(
         if lang_files.is_empty() {
             continue;
         }
-        let project_facts = collect_project_facts_from_sources(&title, lang, &lang_files);
+        let project_facts = collect_project_facts_with_config(
+            &title,
+            lang,
+            &lang_files,
+            config.architecture.as_ref(),
+        );
         let graph = build_project_graph(&project_facts, depth)?;
         sections.push(render_graph(&graph, format));
     }

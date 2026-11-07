@@ -7,18 +7,21 @@ use crate::code_lint::ast::{
     collect_intra_file_references, collect_scope_facts, enclosing_scope_symbol,
 };
 use crate::code_lint::project::{
-    is_rust_crate_root, normalize_relative_path, resolve_inherited_component_with_root,
+    ArchitectureSpec, DiskFileSource, FileSource as _, MemoryFileSource, ProjectIndex,
+    ProjectLayout, ResolvedPythonTarget, configured_source_roots, is_python_package_init,
+    is_rust_crate_root, normalize_relative_path, resolve_relative_python_module,
     resolve_rust_reference_path, rust_module_path,
 };
-use crate::config::Config;
+use crate::config::{ArchitectureConfig, Config};
 use crate::diagnostic::Language;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const INIT_MODULE: &str = "__init__";
 const LIB_MODULE: &str = "lib";
 const MAX_REEXPORT_HOPS: usize = 4;
+const VIRTUAL_PROJECT_ROOT: &str = "/proj";
 /// Multi-file project facts across a Rust crate or Python package.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ProjectFacts {
@@ -78,44 +81,69 @@ pub(super) struct CrossModuleRefFact {
 }
 
 /// Collects [`ProjectFacts`] from an in-memory slice of `(relative_path, source_text)` pairs.
+#[cfg(test)]
 #[must_use]
 pub(super) fn collect_project_facts_from_sources(
     title: &str,
     lang: Language,
     files: &[(&str, &str)],
 ) -> ProjectFacts {
+    collect_project_facts_with_config(title, lang, files, None)
+}
+
+/// Collects [`ProjectFacts`] from an in-memory slice of `(relative_path, source_text)` pairs,
+/// honoring an optional `.omnicoach.toml` [`ArchitectureConfig`].
+#[must_use]
+pub(super) fn collect_project_facts_with_config(
+    title: &str,
+    lang: Language,
+    files: &[(&str, &str)],
+    architecture: Option<&ArchitectureConfig>,
+) -> ProjectFacts {
+    let root = Path::new(VIRTUAL_PROJECT_ROOT);
+    let configured_roots: Vec<PathBuf> = architecture
+        .map(|config| config.source_roots.iter().map(PathBuf::from).collect())
+        .unwrap_or_default();
+    let memory = MemoryFileSource::from_relative_files(root, files);
+    let layout = ProjectLayout::discover(root, &memory, &configured_roots);
+    let base_index = ProjectIndex::new(layout.clone(), &memory);
+    let index = match architecture {
+        Some(configured) => base_index.with_architecture_config(Some(configured.clone())),
+        None => base_index,
+    };
     match lang {
-        Language::Rust => collect_rust_project_facts(title, files),
-        Language::Python => collect_python_project_facts(title, files),
+        Language::Rust => collect_rust_project_facts(title, files, &layout, &index),
+        Language::Python => collect_python_project_facts(title, files, &layout, &index),
     }
 }
 
-fn collect_rust_project_facts(title: &str, files: &[(&str, &str)]) -> ProjectFacts {
+fn collect_rust_project_facts(
+    title: &str,
+    files: &[(&str, &str)],
+    layout: &ProjectLayout,
+    index: &ProjectIndex<'_>,
+) -> ProjectFacts {
     let entries: Vec<RustModuleEntry> = files
         .iter()
-        .map(|&(path, source)| parse_rust_module(path, source))
+        .map(|&(path, source)| parse_rust_module(path, source, layout))
         .collect();
 
-    let mut components: Vec<ComponentFact> = entries
-        .iter()
-        .flat_map(|entry| &entry.defined_architecture)
-        .map(|(name, declared_dependencies)| ComponentFact {
-            name: name.clone(),
-            declared_dependencies: declared_dependencies.clone(),
-        })
-        .collect();
-    let has_declared_architecture = !components.is_empty();
-    let declared_roots = collect_declared_component_roots(&entries);
-
+    let spec = index.architecture_spec();
+    let InitialComponents {
+        mut components,
+        mut seen_components,
+        has_declared_architecture,
+    } = initial_declared_components(spec);
     let mut modules = Vec::new();
-    let mut seen_components: BTreeSet<String> =
-        components.iter().map(|comp| comp.name.clone()).collect();
 
     for entry in &entries {
         if entry.is_crate_root && !entry.has_non_namespace_items {
             continue;
         }
-        let component = resolve_inherited_component_with_root(&entry.module_path, &declared_roots)
+        let component = spec
+            .and_then(|resolved| {
+                resolved.resolve_component_of_module(&entry.module_path, Language::Rust)
+            })
             .map_or_else(
                 || {
                     entry
@@ -125,7 +153,7 @@ fn collect_rust_project_facts(title: &str, files: &[(&str, &str)]) -> ProjectFac
                         .unwrap_or("root")
                         .to_owned()
                 },
-                |inherited| inherited.component.clone(),
+                str::to_owned,
             );
         if seen_components.insert(component.clone()) {
             components.push(ComponentFact {
@@ -142,7 +170,8 @@ fn collect_rust_project_facts(title: &str, files: &[(&str, &str)]) -> ProjectFac
         });
     }
 
-    let cross_module_refs = resolve_rust_cross_module_refs(&entries);
+    let cross_module_refs =
+        resolve_rust_cross_module_refs(&entries, layout.rust_crate_name.as_deref());
     ProjectFacts {
         title: title.to_owned(),
         has_declared_architecture,
@@ -156,8 +185,6 @@ struct RustModuleEntry {
     path: String,
     module_path: String,
     is_crate_root: bool,
-    declared_component: Option<String>,
-    defined_architecture: Vec<(String, Vec<String>)>,
     external_mods: Vec<ExternalModDeclaration>,
     visible_reexports: Vec<String>,
     has_non_namespace_items: bool,
@@ -166,20 +193,14 @@ struct RustModuleEntry {
     intra_file_refs: Vec<IntraFileReference>,
 }
 
-fn parse_rust_module(path: &str, source: &str) -> RustModuleEntry {
-    let module_path = rust_module_path(path);
+fn parse_rust_module(path: &str, source: &str, layout: &ProjectLayout) -> RustModuleEntry {
+    let full_path = Path::new(VIRTUAL_PROJECT_ROOT).join(path);
+    let module_path = layout
+        .rust_module_of_path(&full_path)
+        .unwrap_or_else(|| rust_module_path(path));
     let is_crate_root = is_rust_crate_root(&module_path);
     let parsed = ParsedFile::rust(source);
     let summary = summarize_rust_file(&parsed);
-    let declared_component = summary
-        .architecture_components
-        .first()
-        .map(|(_, name)| name.clone());
-    let defined_architecture = summary
-        .defined_architecture
-        .into_iter()
-        .map(|entry| (entry.name, entry.depends_on))
-        .collect();
     let external_mods = summary.external_mods;
     let visible_reexports = summary
         .visible_uses
@@ -204,8 +225,6 @@ fn parse_rust_module(path: &str, source: &str) -> RustModuleEntry {
         path: path.to_owned(),
         module_path,
         is_crate_root,
-        declared_component,
-        defined_architecture,
         external_mods,
         visible_reexports,
         has_non_namespace_items,
@@ -215,17 +234,10 @@ fn parse_rust_module(path: &str, source: &str) -> RustModuleEntry {
     }
 }
 
-fn collect_declared_component_roots(entries: &[RustModuleEntry]) -> BTreeMap<String, String> {
-    let mut roots = BTreeMap::new();
-    for entry in entries {
-        if let Some(component) = &entry.declared_component {
-            roots.insert(entry.module_path.clone(), component.clone());
-        }
-    }
-    roots
-}
-
-fn resolve_rust_cross_module_refs(entries: &[RustModuleEntry]) -> Vec<CrossModuleRefFact> {
+fn resolve_rust_cross_module_refs(
+    entries: &[RustModuleEntry],
+    crate_name: Option<&str>,
+) -> Vec<CrossModuleRefFact> {
     let known_modules: HashSet<&str> = entries
         .iter()
         .map(|entry| entry.module_path.as_str())
@@ -261,7 +273,7 @@ fn resolve_rust_cross_module_refs(entries: &[RustModuleEntry]) -> Vec<CrossModul
                 )
         })
         .collect();
-    let reexports = collect_rust_reexports(entries, &lib_root_names);
+    let reexports = collect_rust_reexports(entries, &lib_root_names, crate_name);
 
     let mut refs = Vec::new();
     for entry in entries {
@@ -271,6 +283,7 @@ fn resolve_rust_cross_module_refs(entries: &[RustModuleEntry]) -> Vec<CrossModul
                 &entry.external_mods,
                 &lib_root_names,
                 raw_path,
+                crate_name,
             );
             if let Some(target) =
                 resolve_rust_target(&canonical, &known_modules, &module_symbols, &reexports)
@@ -294,6 +307,7 @@ fn resolve_rust_cross_module_refs(entries: &[RustModuleEntry]) -> Vec<CrossModul
 fn collect_rust_reexports(
     entries: &[RustModuleEntry],
     lib_root_names: &HashSet<&str>,
+    crate_name: Option<&str>,
 ) -> HashMap<(String, String), String> {
     let mut reexports = HashMap::new();
     for entry in entries {
@@ -303,6 +317,7 @@ fn collect_rust_reexports(
                 &entry.external_mods,
                 lib_root_names,
                 target,
+                crate_name,
             );
             if let Some(exported) = canonical.rsplit("::").next() {
                 reexports.insert((entry.module_path.clone(), exported.to_owned()), canonical);
@@ -317,13 +332,17 @@ fn normalize_rust_reference_path(
     external_mods: &[ExternalModDeclaration],
     lib_root_names: &HashSet<&str>,
     raw_path: &str,
+    crate_name: Option<&str>,
 ) -> String {
-    let resolved = resolve_rust_reference_path(enclosing_module, external_mods, raw_path, None);
+    let resolved =
+        resolve_rust_reference_path(enclosing_module, external_mods, raw_path, crate_name);
     if resolved.canonical_path != raw_path {
         return resolved.canonical_path;
     }
     let first_segment = raw_path.split("::").next().unwrap_or(raw_path);
-    if let Some((_, rest)) = raw_path.split_once("::") {
+    if crate_name.is_none()
+        && let Some((_, rest)) = raw_path.split_once("::")
+    {
         let next_segment = rest.split("::").next().unwrap_or(rest);
         if !matches!(first_segment, "std" | "core" | "alloc")
             && !external_mods.iter().any(|decl| decl.name == first_segment)
@@ -335,18 +354,34 @@ fn normalize_rust_reference_path(
     resolved.canonical_path
 }
 
-fn collect_python_project_facts(title: &str, files: &[(&str, &str)]) -> ProjectFacts {
+fn collect_python_project_facts(
+    title: &str,
+    files: &[(&str, &str)],
+    layout: &ProjectLayout,
+    index: &ProjectIndex<'_>,
+) -> ProjectFacts {
     let entries: Vec<PythonModuleEntry> = files
         .iter()
-        .map(|&(path, source)| parse_python_module(path, source))
+        .map(|&(path, source)| parse_python_module(path, source, layout))
         .collect();
-    let cross_module_refs = resolve_python_cross_module_refs(&entries);
+    let cross_module_refs = resolve_python_cross_module_refs(&entries, index);
+    let spec = index.architecture_spec();
+    let InitialComponents {
+        mut components,
+        mut seen_components,
+        has_declared_architecture,
+    } = initial_declared_components(spec);
     let mut modules = Vec::with_capacity(entries.len());
-    let mut seen_components = BTreeSet::new();
-    let mut components = Vec::new();
 
     for entry in entries {
-        let component = python_component_name(&entry.module_path, title);
+        let component = spec
+            .and_then(|resolved| {
+                resolved.resolve_component_of_module(&entry.module_path, Language::Python)
+            })
+            .map_or_else(
+                || python_component_name(&entry.module_path, title),
+                str::to_owned,
+            );
         if seen_components.insert(component.clone()) {
             components.push(ComponentFact {
                 name: component.clone(),
@@ -364,7 +399,7 @@ fn collect_python_project_facts(title: &str, files: &[(&str, &str)]) -> ProjectF
 
     ProjectFacts {
         title: title.to_owned(),
-        has_declared_architecture: false,
+        has_declared_architecture,
         components,
         modules,
         cross_module_refs,
@@ -380,9 +415,12 @@ struct PythonModuleEntry {
     intra_file_refs: Vec<IntraFileReference>,
 }
 
-fn parse_python_module(path: &str, source: &str) -> PythonModuleEntry {
-    let is_package_init = path.ends_with("/__init__.py") || path == "__init__.py";
-    let module_path = python_module_path(path);
+fn parse_python_module(path: &str, source: &str, layout: &ProjectLayout) -> PythonModuleEntry {
+    let is_package_init = is_python_package_init(Path::new(path));
+    let full_path = Path::new(VIRTUAL_PROJECT_ROOT).join(path);
+    let module_path = layout
+        .python_module_of_path(&full_path)
+        .unwrap_or_else(|| INIT_MODULE.to_owned());
     let parsed = ParsedFile::new(source, Language::Python);
     let scopes = collect_scope_facts(&parsed);
     let intra_file_refs = collect_intra_file_references(&parsed, &scopes);
@@ -403,16 +441,29 @@ fn parse_python_module(path: &str, source: &str) -> PythonModuleEntry {
     }
 }
 
-fn python_module_path(path: &str) -> String {
-    let without_extension = path.strip_suffix(".py").unwrap_or(path);
-    let mut parts: Vec<&str> = without_extension
-        .split('/')
-        .filter(|segment| !segment.is_empty())
+struct InitialComponents {
+    components: Vec<ComponentFact>,
+    seen_components: BTreeSet<String>,
+    has_declared_architecture: bool,
+}
+
+fn initial_declared_components(spec: Option<&ArchitectureSpec>) -> InitialComponents {
+    let components: Vec<ComponentFact> = spec
+        .into_iter()
+        .flat_map(|resolved| &resolved.components)
+        .map(|comp| ComponentFact {
+            name: comp.name.clone(),
+            declared_dependencies: comp.depends_on.clone(),
+        })
         .collect();
-    if parts.len() > 1 && parts.last() == Some(&INIT_MODULE) {
-        parts.pop();
+    let has_declared_architecture = !components.is_empty();
+    let seen_components: BTreeSet<String> =
+        components.iter().map(|comp| comp.name.clone()).collect();
+    InitialComponents {
+        components,
+        seen_components,
+        has_declared_architecture,
     }
-    parts.join(".")
 }
 
 fn python_component_name(module_path: &str, fallback_title: &str) -> String {
@@ -424,7 +475,10 @@ fn python_component_name(module_path: &str, fallback_title: &str) -> String {
         .to_owned()
 }
 
-fn resolve_python_cross_module_refs(entries: &[PythonModuleEntry]) -> Vec<CrossModuleRefFact> {
+fn resolve_python_cross_module_refs(
+    entries: &[PythonModuleEntry],
+    index: &ProjectIndex<'_>,
+) -> Vec<CrossModuleRefFact> {
     let known_modules: HashSet<&str> = entries
         .iter()
         .map(|entry| entry.module_path.as_str())
@@ -439,10 +493,20 @@ fn resolve_python_cross_module_refs(entries: &[PythonModuleEntry]) -> Vec<CrossM
     let mut refs = Vec::new();
     for entry in entries {
         for &(line, ref source_symbol, ref raw_path) in &entry.references {
-            let normalized =
-                normalize_python_import_path(&entry.module_path, entry.is_package_init, raw_path);
+            let dots = raw_path
+                .chars()
+                .take_while(|&character| character == '.')
+                .count();
+            let Some(normalized) = resolve_relative_python_module(
+                &entry.module_path,
+                entry.is_package_init,
+                u32::try_from(dots).unwrap_or(u32::MAX),
+                Some(&raw_path[dots..]),
+            ) else {
+                continue;
+            };
             if let Some(target) =
-                resolve_python_target(&normalized, &known_modules, &module_symbols)
+                resolve_python_target(&normalized, &known_modules, &module_symbols, index)
                 && target.module != entry.module_path
             {
                 refs.push(CrossModuleRefFact {
@@ -458,37 +522,6 @@ fn resolve_python_cross_module_refs(entries: &[PythonModuleEntry]) -> Vec<CrossM
     refs.sort();
     refs.dedup();
     refs
-}
-
-fn normalize_python_import_path(
-    enclosing_module: &str,
-    is_package_init: bool,
-    raw_imported: &str,
-) -> String {
-    let dots = raw_imported
-        .chars()
-        .take_while(|&character| character == '.')
-        .count();
-    if dots == 0 {
-        return raw_imported.to_owned();
-    }
-    let mut package_parts: Vec<&str> = enclosing_module
-        .split('.')
-        .filter(|segment| !segment.is_empty() && *segment != INIT_MODULE)
-        .collect();
-    if !is_package_init && !package_parts.is_empty() {
-        package_parts.pop();
-    }
-    for _ in 1..dots {
-        package_parts.pop();
-    }
-    let rest = &raw_imported[dots..];
-    if !rest.is_empty() {
-        for segment in rest.split('.').filter(|segment| !segment.is_empty()) {
-            package_parts.push(segment);
-        }
-    }
-    package_parts.join(".")
 }
 
 struct ResolvedModuleTarget {
@@ -576,8 +609,21 @@ fn resolve_python_target(
     normalized: &str,
     known_modules: &HashSet<&str>,
     module_symbols: &HashMap<&str, HashSet<String>>,
+    index: &ProjectIndex<'_>,
 ) -> Option<ResolvedModuleTarget> {
-    let target = split_module_and_segments(normalized, ".", known_modules)?;
+    let mut target = split_module_and_segments(normalized, ".", known_modules)?;
+    if let Some(ref first) = target.symbol {
+        let defined_in_module = module_symbols
+            .get(target.module.as_str())
+            .is_some_and(|set| set.contains(first));
+        if !defined_in_module
+            && let ResolvedPythonTarget::Symbol { module, name } =
+                index.resolve_python_written_name(&target.module, first)
+        {
+            target.module = module;
+            target.symbol = Some(name);
+        }
+    }
     if let (Some(first), Some(member)) = (&target.symbol, &target.member) {
         let method_candidate = format!("{first}::{member}");
         if module_symbols
@@ -682,8 +728,17 @@ pub(super) fn collect_project_source_files(
                 continue;
             };
             let source = fs::read_to_string(path)?;
+            let configured_roots = configured_source_roots(config);
+            let layout = ProjectLayout::discover(path, &DiskFileSource, &configured_roots);
+            let resolved_path = layout.resolve_query_path(path);
+            let relative_path = resolved_path
+                .strip_prefix(&layout.project_root)
+                .map_or_else(
+                    |_| normalize_relative_path(path, None),
+                    |stripped| stripped.to_string_lossy().replace('\\', "/"),
+                );
             collected.push(CollectedSourceFile {
-                relative_path: normalize_relative_path(path, None),
+                relative_path,
                 lang,
                 source,
             });
@@ -737,11 +792,22 @@ pub(super) fn derive_project_title(paths: &[PathBuf]) -> String {
 }
 
 fn collect_directory_source_files(dir: &Path, config: &Config, out: &mut Vec<CollectedSourceFile>) {
-    let walk_root = if dir.join("Cargo.toml").is_file() && dir.join(SRC_DIR_NAME).is_dir() {
+    let configured_roots = configured_source_roots(config);
+    let layout = ProjectLayout::discover(dir, &DiskFileSource, &configured_roots);
+    let resolved_dir = layout.resolve_query_path(dir);
+    let walk_root = if resolved_dir == layout.project_root
+        && layout.rust_source_root != layout.project_root
+        && DiskFileSource.is_file(&layout.project_root.join("Cargo.toml"))
+    {
         dir.join(SRC_DIR_NAME)
     } else {
         dir.to_path_buf()
     };
+    let normalization_base = layout
+        .python_source_roots
+        .first()
+        .filter(|py_root| resolved_dir.starts_with(py_root.as_path()) && resolved_dir != **py_root)
+        .map_or(layout.project_root.as_path(), PathBuf::as_path);
 
     for entry in ignore::WalkBuilder::new(&walk_root)
         .require_git(false)
@@ -758,8 +824,13 @@ fn collect_directory_source_files(dir: &Path, config: &Config, out: &mut Vec<Col
         let Ok(source) = fs::read_to_string(entry_path) else {
             continue;
         };
+        let resolved_entry = layout.resolve_query_path(entry_path);
+        let relative_path = resolved_entry.strip_prefix(normalization_base).map_or_else(
+            |_| normalize_relative_path(entry_path, Some(dir)),
+            |stripped| stripped.to_string_lossy().replace('\\', "/"),
+        );
         out.push(CollectedSourceFile {
-            relative_path: normalize_relative_path(entry_path, Some(dir)),
+            relative_path,
             lang,
             source,
         });
@@ -773,6 +844,14 @@ mod tests {
     #[test]
     fn rust_project_facts_resolve_components_and_cross_module_symbols() {
         let files = [
+            (
+                "src/lib.rs",
+                indoc::indoc! {r"
+                    mod architecture;
+                    mod core;
+                    mod runner;
+                "},
+            ),
             (
                 "src/architecture.rs",
                 indoc::indoc! {r"
@@ -902,6 +981,102 @@ mod tests {
                 && reference.source_symbol.as_deref() == Some("Runner::execute")
                 && reference.target_module == "core"
                 && reference.target_symbol.as_deref() == Some("Parser::parse")
+        }));
+    }
+
+    #[test]
+    fn python_project_facts_honor_declared_toml_architecture() {
+        let files = [
+            (
+                "pkg/domain.py",
+                indoc::indoc! {"
+                    def compute() -> int:
+                        return 1
+                "},
+            ),
+            (
+                "pkg/api.py",
+                indoc::indoc! {"
+                    from pkg.domain import compute
+
+                    def serve() -> int:
+                        return compute()
+                "},
+            ),
+        ];
+        let architecture_config: ArchitectureConfig = toml::from_str(indoc::indoc! {r#"
+            [[components]]
+            name = "Domain"
+            roots = ["pkg.domain"]
+            depends-on = []
+
+            [[components]]
+            name = "Api"
+            roots = ["pkg.api"]
+            depends-on = ["Domain"]
+        "#})
+        .expect("parse architecture config");
+
+        let project = collect_project_facts_with_config(
+            "sample_py",
+            Language::Python,
+            &files,
+            Some(&architecture_config),
+        );
+
+        assert!(project.has_declared_architecture);
+        assert_eq!(
+            project.components,
+            vec![
+                ComponentFact {
+                    name: "Domain".to_owned(),
+                    declared_dependencies: Vec::new(),
+                },
+                ComponentFact {
+                    name: "Api".to_owned(),
+                    declared_dependencies: vec!["Domain".to_owned()],
+                },
+            ]
+        );
+        assert_eq!(project.modules[0].component, "Domain");
+        assert_eq!(project.modules[1].component, "Api");
+    }
+
+    #[test]
+    fn python_project_facts_follow_reexports_via_project_index() {
+        let files = [
+            (
+                "pkg/__init__.py",
+                indoc::indoc! {"
+                    from ._core import build_plan
+                "},
+            ),
+            (
+                "pkg/_core.py",
+                indoc::indoc! {"
+                    def build_plan() -> int:
+                        return 1
+                "},
+            ),
+            (
+                "pkg/api.py",
+                indoc::indoc! {"
+                    from pkg import build_plan
+
+                    def handle() -> int:
+                        return build_plan()
+                "},
+            ),
+        ];
+
+        let project =
+            collect_project_facts_from_sources("sample_reexport", Language::Python, &files);
+
+        assert!(project.cross_module_refs.iter().any(|reference| {
+            reference.source_module == "pkg.api"
+                && reference.source_symbol.as_deref() == Some("handle")
+                && reference.target_module == "pkg._core"
+                && reference.target_symbol.as_deref() == Some("build_plan")
         }));
     }
 }

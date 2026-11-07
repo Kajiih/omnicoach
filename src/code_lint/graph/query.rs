@@ -2,7 +2,7 @@
 
 use super::builder::{ProjectDepth, build_project_graph};
 use super::facts::{
-    CollectedSourceFile, ProjectFacts, collect_project_facts_from_sources,
+    CollectedSourceFile, ProjectFacts, collect_project_facts_with_config,
     collect_project_source_files, resolve_effective_paths,
 };
 use super::model::{AbstractionGraph, DeclarationKind, DeclarationNode, GroupNode, NodeId};
@@ -10,7 +10,7 @@ use super::render::{
     DeclAncestry, format_short_decl_kind, format_short_visibility, resolve_directed_decl_edges,
 };
 use crate::code_lint::ast::Visibility;
-use crate::config::Config;
+use crate::config::{ArchitectureConfig, Config};
 use crate::diagnostic::Language;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
@@ -69,6 +69,7 @@ pub fn run_slice_query(options: &SliceQueryOptions, config: &Config) -> anyhow::
         &options.symbols,
         options.hops.max(1),
         options.budget.max(100),
+        config.architecture.as_ref(),
     )
 }
 
@@ -83,7 +84,12 @@ pub fn run_find_query(options: &FindQueryOptions, config: &Config) -> anyhow::Re
     if sources.is_empty() {
         anyhow::bail!("No supported source files found in the specified paths");
     }
-    find_in_sources(&sources, &options.pattern, options.limit.max(1))
+    find_in_sources(
+        &sources,
+        &options.pattern,
+        options.limit.max(1),
+        config.architecture.as_ref(),
+    )
 }
 
 const MIN_RESERVED_CHARS_PER_SYMBOL: usize = 1_600;
@@ -93,8 +99,9 @@ fn slice_in_sources(
     symbols: &[String],
     hops: usize,
     budget: usize,
+    architecture: Option<&ArchitectureConfig>,
 ) -> anyhow::Result<String> {
-    let built_graphs = build_all_lang_graphs(sources)?;
+    let built_graphs = build_all_lang_graphs(sources, architecture)?;
     let indices: Vec<IndexedProjectGraph<'_>> = built_graphs
         .iter()
         .map(|built| {
@@ -124,8 +131,9 @@ fn find_in_sources(
     sources: &[CollectedSourceFile],
     pattern: &str,
     limit: usize,
+    architecture: Option<&ArchitectureConfig>,
 ) -> anyhow::Result<String> {
-    let built_graphs = build_all_lang_graphs(sources)?;
+    let built_graphs = build_all_lang_graphs(sources, architecture)?;
     let indices: Vec<IndexedProjectGraph<'_>> = built_graphs
         .iter()
         .map(|built| {
@@ -803,10 +811,11 @@ struct BuiltLanguageGraph {
 
 fn build_all_lang_graphs(
     sources: &[CollectedSourceFile],
+    architecture: Option<&ArchitectureConfig>,
 ) -> anyhow::Result<Vec<BuiltLanguageGraph>> {
     let mut built_graphs = Vec::new();
     for lang in [Language::Rust, Language::Python] {
-        if let Some(built) = build_lang_graph(sources, lang)? {
+        if let Some(built) = build_lang_graph(sources, lang, architecture)? {
             built_graphs.push(built);
         }
     }
@@ -816,6 +825,7 @@ fn build_all_lang_graphs(
 fn build_lang_graph(
     sources: &[CollectedSourceFile],
     lang: Language,
+    architecture: Option<&ArchitectureConfig>,
 ) -> anyhow::Result<Option<BuiltLanguageGraph>> {
     let lang_files: Vec<(&str, &str)> = sources
         .iter()
@@ -825,7 +835,7 @@ fn build_lang_graph(
     if lang_files.is_empty() {
         return Ok(None);
     }
-    let facts = collect_project_facts_from_sources("project", lang, &lang_files);
+    let facts = collect_project_facts_with_config("project", lang, &lang_files, architecture);
     let graph = build_project_graph(&facts, ProjectDepth::Full)?;
     Ok(Some(BuiltLanguageGraph { lang, facts, graph }))
 }
@@ -954,7 +964,7 @@ mod tests {
     #[test]
     fn find_symbols_ranks_exact_before_prefix_and_substring() {
         let sources = sample_rust_sources();
-        let out = find_in_sources(&sources, "from_source", 10).unwrap();
+        let out = find_in_sources(&sources, "from_source", 10, None).unwrap();
         assert!(
             out.contains("core::Tracker::from_source"),
             "expected Tracker::from_source in find output:\n{out}"
@@ -972,7 +982,8 @@ mod tests {
     #[test]
     fn slice_symbol_renders_target_callers_with_call_site_lines_callees_and_completeness_footer() {
         let sources = sample_rust_sources();
-        let out = slice_in_sources(&sources, &["Tracker::from_source".to_owned()], 1, 800).unwrap();
+        let out =
+            slice_in_sources(&sources, &["Tracker::from_source".to_owned()], 1, 800, None).unwrap();
         assert!(
             out.contains("src/runner.rs:6:"),
             "expected cross-module caller with 1-based call-site line in slice:\n{out}"
@@ -995,6 +1006,7 @@ mod tests {
             &["Tracker::from_source".to_owned(), "execute".to_owned()],
             2,
             800,
+            None,
         )
         .unwrap();
         assert!(

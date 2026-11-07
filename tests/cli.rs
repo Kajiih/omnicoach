@@ -555,6 +555,15 @@ fn test_graph_project_depth_levels_and_declared_components() {
     )
     .unwrap();
     fs::write(
+        src_dir.join("lib.rs"),
+        indoc! {r"
+            mod api;
+            mod architecture;
+            mod core;
+        "},
+    )
+    .unwrap();
+    fs::write(
         src_dir.join("architecture.rs"),
         indoc! {r"
             define_architecture! {
