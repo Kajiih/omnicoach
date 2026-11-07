@@ -14,6 +14,7 @@ pub mod concrete_collection_parameter;
 pub mod concrete_collection_return;
 pub mod constructor_after_method;
 pub mod copied_base_docstring;
+pub mod cross_component_relative_path;
 pub mod deferral_docstring;
 pub mod duplicated_test_setup;
 pub mod dynamic_attribute_access;
@@ -45,6 +46,7 @@ pub mod positional_tuple_parameter;
 pub mod positional_tuple_return;
 pub mod primitive_duration;
 pub mod private_before_public;
+pub mod private_component_import;
 pub mod quote_wrapped_placeholder;
 pub mod reexported_public_item;
 pub mod repeated_index_access;
@@ -60,6 +62,7 @@ pub mod too_many_assertions;
 pub mod type_cast;
 pub mod type_suffixed_name;
 pub mod uncolocated_helper;
+pub mod undeclared_component_dependency;
 pub mod undocumented_nontrivial_function;
 pub mod undocumented_public_attribute;
 pub mod unexplained_optional_argument;
@@ -69,6 +72,7 @@ pub mod unexplained_return;
 pub mod uninherited_protocol;
 pub mod unmapped_architecture_module;
 pub mod unmatched_logger_placeholder;
+pub mod unowned_external_dependency;
 pub mod unslotted_dataclass;
 pub mod unstructured_task;
 pub mod verb_led_property_docstring;
@@ -145,7 +149,11 @@ pub const CODE_RULES: &[&dyn AnyCodeRule] = &[
     &adhoc_type_annotation::RULE,
     &non_boolean_predicate::RULE,
     &uninherited_protocol::RULE,
+    &undeclared_component_dependency::RULE,
     &sibling_module_dependency::RULE,
+    &cross_component_relative_path::RULE,
+    &unowned_external_dependency::RULE,
+    &private_component_import::RULE,
     &reexported_public_item::RULE,
     &unmapped_architecture_module::RULE,
     &invalid_architecture_component::RULE,
