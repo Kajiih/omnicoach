@@ -125,10 +125,10 @@ Measurement `S2` ([10_stage_d_references.md](10_stage_d_references.md) §5.2) id
   - `Type` (`edge.higher`) emits `<- Callable[sig]`.
   Layer L1 `OrderingEdge` stays `higher = Type, lower = Callable` so topological levels are unaffected.
 
-### 3.5 Fix 5 — Preserve Production Rule Files Matching `*_test.rs` (`config.rs`, `graph.rs`)
+### 3.5 Fix 5 — Preserve Production Rule Files Matching `*_test.rs` (`config.rs`)
 
 - **Current flaw:** `collect_directory_source_files` skips any path matching `config.is_test_path(entry_path)`. Because `DEFAULT_TEST_PATTERNS` includes `"**/*_test.rs"`, two production rule files (`src/code_lint/rules/multi_phase_test.rs` and `src/code_lint/rules/test_calls_test.rs`, named after the lint rules `multi-phase-test` and `test-calls-test`) are dropped from the project graph (`S2` §5).
-- **Fix:** Track `ContextConfig::has_custom_test_patterns` in `src/config.rs` and update `is_excluded_test_path` in `src/code_lint/graph.rs` so `.rs` files under `src/` outside `tests/` directories and `tests.rs` are retained as production source when default test patterns are active, while honoring custom `test-patterns`.
+- **Fix (as implemented):** Remove `"**/*_test.rs"` from `DEFAULT_TEST_PATTERNS` in `src/config.rs`, so these files count as production source for both `omnicoach graph` and `omnicoach code`. Rust tests live in `tests/`, `tests.rs`, and inline `#[cfg(test)]` modules, which the remaining defaults and the AST already cover; projects that name test files `*_test.rs` add the pattern to `[context] test-patterns`. A graph-only exception in `src/code_lint/graph.rs` was rejected because the default pattern itself was wrong ([05_decisions.md](05_decisions.md) `D66`).
 
 ---
 
@@ -148,6 +148,8 @@ omnicoach graph place <FILE> [--name <NAME>] [--vis <priv|pub>] [--kind <fn|type
 ```
 
 Because clap supports an optional subcommand alongside positional `paths` on `GraphArgs` (`#[command(subcommand)] query: Option<GraphQueryCommand>`), existing invocations such as `omnicoach graph src/config.rs` or `omnicoach graph --depth module .` continue to work unchanged.
+
+> **Removed before landing:** `impact` and `place` were benchmarked as specified here but removed before landing, leaving `find` and `slice`; ADR 011 placement is served by `omnicoach code` diagnostics ([05_decisions.md](05_decisions.md) `D63`). `slice` restricts its search with a repeatable `--path <PATH>` flag instead of positional paths (`D64`).
 
 ### 4.2 `omnicoach graph find <PATTERN> [PATHS...]` (`CUJ9`, `CPD6`)
 
@@ -189,6 +191,8 @@ Builds a bidirectional neighborhood around one or more `<SYMBOL>` targets in a s
 
 ### 4.4 `omnicoach graph impact [--diff | --diff-rev <REV> | --symbol <SYMBOL>] [PATHS...]` (`CUJ11`, `I2`, `I5`)
 
+> Removed before landing ([05_decisions.md](05_decisions.md) `D63`).
+
 Computes the blast radius and architectural conformance of a work-in-progress change or target symbol:
 
 1. **Changed / Seed Declarations:** Maps changed file lines from `detect_vcs_diff(diff_rev)` (or `--symbol`) to enclosing declarations (`DeclarationNode`) and modules.
@@ -197,6 +201,8 @@ Computes the blast radius and architectural conformance of a work-in-progress ch
 4. **Candidate Verification Targets (`I5`):** Lists touched modules that contain inline `#[cfg(test)]` blocks (`cargo test --lib <module_path>`) and integration test files under `tests/` that reference the touched modules or symbols.
 
 ### 4.5 `omnicoach graph place <FILE> ...` (`CUJ12`, `I1`)
+
+> Removed before landing; `CUJ12` is served by the conflict-free anchor in `omnicoach code` diagnostics ([05_decisions.md](05_decisions.md) `D63`).
 
 Solves ADR 011 placement deterministically so the agent never has to guess line numbers or iterate through lint-fix loops:
 
@@ -240,6 +246,8 @@ Before running multi-step `rg` searches, reading whole files for signatures, or 
 ```
 
 In **Arm D (Forced First Query, `D47`)**, the task prompt additionally includes one sentence: *"Begin your investigation by running the relevant `omnicoach graph` query (`find`, `slice`, `place`, or `impact`) before reading or editing files."* Comparing Arm C and Arm D on the same tasks separates adoption rate from the intrinsic utility of the subcommands (`CPD4`).
+
+> The `place` and `impact` lines of this trial block were removed together with the subcommands before landing ([05_decisions.md](05_decisions.md) `D63`); the current guidance is in [`AGENTS.md`](../../../AGENTS.md).
 
 ---
 
@@ -314,7 +322,7 @@ Every implementation task in `custom_lints-graph` follows **Audit → RED (faili
 | **TD2** | **Graph Fidelity: Intra-Module Method Edges, Call-Site Lines & `sig` Direction** (`model.rs`, `project_facts.rs`, `builder.rs`, `render.rs`) | Unit tests asserting: (1) intra-module `Type::method -> helper_fn` and `caller_fn -> Type::method` appear in `reference_edges` with 1-indexed `line`; (2) `SignatureContract` renders on `Callable` as `-> Type[sig]` and on `Type` as `<- Callable[sig]` without duplicate `ref:param`/`ref:ret` tags. | Add `line: Option<usize>` to `ReferenceEdge` (§3.3), attach intra-module method reference edges with lines, and orient `EdgeReason::SignatureContract` along usage direction in `render.rs` (§3.4). | Standard checklist (§7.1). |
 | **TD3** | **Gate 1 Verification: SCIP & Jedi Fidelity Benchmark (`MD6`)** | Run the Phase 2 SCIP/jedi evaluation harness (`compare.py`) against the new `omnicoach graph --depth full .` output. | Fix any remaining edge cases uncovered by the SCIP diff until all `MD6` targets pass (`≥ 83%` exact recall, `≥ 85%` xmod assoc-fn & method-source recall, `≥ 94%` literal precision, `736 / 736` free fns). | **Gate 1 (`MD6`) passed.** |
 | **TD4** | **Query Subcommands: `find` and `slice`** (`query.rs`, `render.rs`, `graph.rs`, `omnicoach.rs`) | Unit + CLI tests for `omnicoach graph find <pattern>` (ranking, cap, span/roots output) and `omnicoach graph slice <symbol>` (1-hop `<-` callers with `@ file:line: <snippet>`, `->` callees with `F3` stubs, cluster siblings, and completeness footer with `rg` fallback for methods). | Implement `find_symbols` and `build_symbol_slice` in `src/code_lint/graph/query.rs`, slice rendering in `render.rs`, and `find`/`slice` subcommands in `graph.rs` and `src/bin/omnicoach.rs`. | Standard checklist (§7.1). |
-| **TD5** | **Query Subcommands: `place` and `impact`** (`architecture.rs`, `call_clusters.rs`, `query.rs`, `render.rs`, `graph.rs`, `omnicoach.rs`) | Unit + CLI tests for: (1) `omnicoach graph place <file> --name <h> --calls ... --called-by ...` returning exact `Roots(h)`, `[Lk]`, and conflict-free insertion lines verified against `collect_call_cluster_findings`; (2) `omnicoach graph impact --symbol <s>` and `--diff` returning 1/2-hop callers, `Divergent` component status, and test targets. | Expose placement simulation helper in `call_clusters.rs`, implement `compute_placement` and `compute_impact` in `query.rs`, add `Diff` to `CodeLintGraph` in `architecture.rs`, and wire `place` and `impact` in `omnicoach.rs`. | Standard checklist (§7.1) + `cargo build --release`. |
+| **TD5** | **Query Subcommands: `place` and `impact`** (`architecture.rs`, `call_clusters.rs`, `query.rs`, `render.rs`, `graph.rs`, `omnicoach.rs`). Executed for the benchmark, then removed before landing ([05_decisions.md](05_decisions.md) `D63`). | Unit + CLI tests for: (1) `omnicoach graph place <file> --name <h> --calls ... --called-by ...` returning exact `Roots(h)`, `[Lk]`, and conflict-free insertion lines verified against `collect_call_cluster_findings`; (2) `omnicoach graph impact --symbol <s>` and `--diff` returning 1/2-hop callers, `Divergent` component status, and test targets. | Expose placement simulation helper in `call_clusters.rs`, implement `compute_placement` and `compute_impact` in `query.rs`, add `Diff` to `CodeLintGraph` in `architecture.rs`, and wire `place` and `impact` in `omnicoach.rs`. | Standard checklist (§7.1) + `cargo build --release`. |
 | **TD6** | **Trial Harness & Dry-Run Verification** (scratch runner scripts, outside repo) | Dry-run verification on 1 task (`P1`): `setup_trial.sh` creates isolated `/tmp` clone at `P`, verifies `C` is unreachable, runs grading oracle (`F2P` fails at `P`, passes at `C`), and parses transcript metrics (`MD1`–`MD5`). | Build automated trial setup, prompt generator (Arms A–D), and post-run grading/transcript-audit scripts in the conversation scratch directory. | Dry run succeeds end-to-end with zero leakage. |
 | **TD7** | **Gate 2 Execution: Pilot Benchmark (`72` runs: `6` tasks × `4` arms `A`–`D` × `3` repeats)** | Execute the pilot across `P1`–`P6` (max 3 concurrent build trials), grade all runs with the automated oracle, and compute paired `MD1`–`MD5` tables. | Analyze pilot results at **Gate 2**: check voluntary adoption (`Arm C`), forced-use delta (`Arm D`), and within-task variance; tune `AGENTS.md` triggers if needed and size the main run (`D50`). | **Gate 2 passed.** |
 | **TD8** | **Main Benchmark Execution (`D48`, `D50`)** | Execute the sized main run across the expanded task pool on the primary model (`inherit`) plus the 6-task subset on the secondary model tier (`flash`). | Aggregate paired ratios, bootstrap 95% CIs, per-stratum breakdowns, and behavioral diagnostics (`MD1`–`MD6`). | All runs graded and audited for zero leakage. |
