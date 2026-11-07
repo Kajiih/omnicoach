@@ -14,6 +14,10 @@ use omnicoach::code_lint::ast::ParsedFile;
 use omnicoach::code_lint::ast::rust::{
     ExternalModDeclaration, RustFileSummary, VisibleUseDeclaration, summarize_rust_file,
 };
+use omnicoach::code_lint::project::{
+    PathOrigin, is_in_module_subtree, normalize_relative_path,
+    resolve_inherited_component_with_root, resolve_rust_reference_path, rust_module_path,
+};
 use strum::VariantArray;
 
 /// The only modules allowed to handle the shell parser crate (`brush_parser`) directly.
@@ -45,114 +49,6 @@ impl SourceFileEntry {
             summary,
         }
     }
-}
-
-/// How a syntactic path in a Rust file was anchored before normalization.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PathOrigin {
-    /// `self` / `super` relative path, recording the shallowest ancestor module reached
-    /// while resolving `super` segments (`None` if `super` climbed past the crate root).
-    Relative { shallowest_ancestor: Option<String> },
-    /// Crate-absolute (`crate::`, `omnicoach::`), local child module, or external/local path.
-    NonRelative,
-}
-
-/// A referenced path normalized to a canonical crate-relative (or external crate) path.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ResolvedPath {
-    origin: PathOrigin,
-    canonical_path: String,
-}
-
-/// Normalizes `raw_path` relative to `enclosing_module` and its declared `external_mods`.
-fn resolve_reference_path(
-    enclosing_module: &str,
-    external_mods: &[ExternalModDeclaration],
-    raw_path: &str,
-) -> ResolvedPath {
-    let effective_enclosing = if enclosing_module == "lib" {
-        ""
-    } else {
-        enclosing_module
-    };
-
-    if raw_path == "crate" || raw_path == "omnicoach" {
-        return ResolvedPath {
-            origin: PathOrigin::NonRelative,
-            canonical_path: String::new(),
-        };
-    }
-    if let Some(rest) = raw_path
-        .strip_prefix("crate::")
-        .or_else(|| raw_path.strip_prefix("omnicoach::"))
-    {
-        return ResolvedPath {
-            origin: PathOrigin::NonRelative,
-            canonical_path: rest.to_string(),
-        };
-    }
-
-    let first_segment = raw_path.split("::").next().unwrap_or(raw_path);
-    if matches!(first_segment, "self" | "super") {
-        let mut module_parts: Vec<&str> = if effective_enclosing.is_empty() {
-            Vec::new()
-        } else {
-            effective_enclosing.split("::").collect()
-        };
-        let mut shallowest_depth = module_parts.len();
-        let mut underflow = false;
-        for segment in raw_path.split("::") {
-            match segment {
-                "self" => {}
-                "super" => {
-                    if module_parts.pop().is_some() {
-                        shallowest_depth = shallowest_depth.min(module_parts.len());
-                    } else {
-                        underflow = true;
-                    }
-                }
-                other => module_parts.push(other),
-            }
-        }
-        let shallowest_ancestor = (!underflow).then(|| module_parts[..shallowest_depth].join("::"));
-        return ResolvedPath {
-            origin: PathOrigin::Relative {
-                shallowest_ancestor,
-            },
-            canonical_path: module_parts.join("::"),
-        };
-    }
-
-    if external_mods
-        .iter()
-        .any(|declaration| declaration.name == first_segment)
-    {
-        let canonical_path = if effective_enclosing.is_empty() {
-            raw_path.to_string()
-        } else {
-            format!("{effective_enclosing}::{raw_path}")
-        };
-        return ResolvedPath {
-            origin: PathOrigin::NonRelative,
-            canonical_path,
-        };
-    }
-
-    ResolvedPath {
-        origin: PathOrigin::NonRelative,
-        canonical_path: raw_path.to_string(),
-    }
-}
-
-/// Returns true if `path` equals `module_prefix` or is a descendant (`{module_prefix}::...`).
-fn is_in_module_subtree(path: &str, module_prefix: &str) -> bool {
-    if module_prefix.is_empty() {
-        return true;
-    }
-    path == module_prefix
-        || path
-            .strip_prefix(module_prefix)
-            .is_some_and(|rest| rest.starts_with("::"))
 }
 
 /// Native architectural dependency rule enforcing that modules under `subject_prefix`
@@ -195,10 +91,11 @@ impl ForbiddenDependencyRule {
         };
         let mut violations = Vec::new();
         for reference in &entry.summary.referenced_paths {
-            let resolved = resolve_reference_path(
+            let resolved = resolve_rust_reference_path(
                 &entry.module_path,
                 &entry.summary.external_mods,
                 &reference.raw_path,
+                Some("omnicoach"),
             );
             for forbidden in &self.forbidden_prefixes {
                 if is_in_module_subtree(&resolved.canonical_path, forbidden) {
@@ -263,18 +160,8 @@ fn rust_files(directory: &Path) -> Vec<PathBuf> {
 
 /// Computes the crate-relative module path of a source file (e.g. `code_lint::rules::abbreviated_name`).
 fn module_path_for_file(path: &Path) -> String {
-    let relative_path = path
-        .strip_prefix(source_root_directory())
-        .unwrap_or(path)
-        .with_extension("");
-    let mut parts: Vec<_> = relative_path
-        .components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect();
-    if parts.last().is_some_and(|last| last == "mod") {
-        parts.pop();
-    }
-    parts.join("::").replace('-', "_")
+    let relative = normalize_relative_path(path, Some(&source_root_directory()));
+    rust_module_path(&relative)
 }
 
 /// Cached `SourceFileEntry` list for all `.rs` files under `src/`, parsed once in a single pass.
@@ -304,25 +191,6 @@ static DECLARED_COMPONENTS: LazyLock<BTreeMap<String, ArchitectureComponent>> =
             .collect()
     });
 
-/// Resolves the `(component_root_module, ArchitectureComponent)` for `module` by climbing up its
-/// module path to the nearest ancestor (or self) that declares `architecture_component!(...)`.
-fn resolve_inherited_component_with_root<'a>(
-    module: &'a str,
-    declared_components: &'a BTreeMap<String, ArchitectureComponent>,
-) -> Option<(&'a str, ArchitectureComponent)> {
-    let mut current = module;
-    loop {
-        if let Some((root_key, &component)) = declared_components.get_key_value(current) {
-            return Some((root_key.as_str(), component));
-        }
-        if let Some((parent, _)) = current.rsplit_once("::") {
-            current = parent;
-        } else {
-            return None;
-        }
-    }
-}
-
 /// Resolves the `ArchitectureComponent` for `module` by climbing up its module path to the
 /// nearest ancestor (or self) that declares `architecture_component!(...)`.
 fn resolve_inherited_component(
@@ -330,7 +198,7 @@ fn resolve_inherited_component(
     declared_components: &BTreeMap<String, ArchitectureComponent>,
 ) -> Option<ArchitectureComponent> {
     resolve_inherited_component_with_root(module, declared_components)
-        .map(|(_, component)| component)
+        .map(|inherited| *inherited.component)
 }
 
 /// Groups declared component root modules by `ArchitectureComponent`.
@@ -522,10 +390,11 @@ fn relative_path_boundary_violations_in_entry(
     let mut violations = Vec::new();
 
     for reference in &entry.summary.referenced_paths {
-        let resolved = resolve_reference_path(
+        let resolved = resolve_rust_reference_path(
             &entry.module_path,
             &entry.summary.external_mods,
             &reference.raw_path,
+            Some("omnicoach"),
         );
         let PathOrigin::Relative {
             shallowest_ancestor,
@@ -536,9 +405,9 @@ fn relative_path_boundary_violations_in_entry(
 
         let stays_in_component_root = enclosing_root
             .zip(shallowest_ancestor.as_deref())
-            .is_some_and(|((root_module, _), ancestor)| {
-                is_in_module_subtree(ancestor, root_module)
-                    && is_in_module_subtree(&resolved.canonical_path, root_module)
+            .is_some_and(|(inherited, ancestor)| {
+                is_in_module_subtree(ancestor, inherited.root_module)
+                    && is_in_module_subtree(&resolved.canonical_path, inherited.root_module)
             });
 
         if !stays_in_component_root {

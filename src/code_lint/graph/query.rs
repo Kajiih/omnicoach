@@ -1,12 +1,14 @@
 //! Query evaluators for `omnicoach graph` (`find`, `slice`).
 
 use super::builder::{ProjectDepth, build_project_graph};
+use super::facts::{
+    CollectedSourceFile, ProjectFacts, collect_project_facts_from_sources,
+    collect_project_source_files, resolve_effective_paths,
+};
 use super::model::{AbstractionGraph, DeclarationKind, DeclarationNode, GroupNode, NodeId};
-use super::project_facts::{ProjectFacts, collect_project_facts_from_sources};
 use super::render::{
     DeclAncestry, format_short_decl_kind, format_short_visibility, resolve_directed_decl_edges,
 };
-use super::{CollectedSourceFile, collect_project_source_files, resolve_effective_paths};
 use crate::code_lint::ast::Visibility;
 use crate::config::Config;
 use crate::diagnostic::Language;

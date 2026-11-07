@@ -6,8 +6,8 @@
 architecture_component!(CodeLintGraph);
 
 mod builder;
+mod facts;
 mod model;
-mod project_facts;
 mod query;
 mod render;
 
@@ -16,9 +16,12 @@ pub use self::query::{FindQueryOptions, SliceQueryOptions, run_find_query, run_s
 pub use self::render::OutputFormat;
 
 use self::builder::{build_file_graph, build_project_graph};
-use self::project_facts::collect_project_facts_from_sources;
 use self::render::render_graph;
 
+use self::facts::{
+    collect_project_facts_from_sources, collect_project_source_files, derive_project_title,
+    resolve_effective_paths,
+};
 use crate::code_lint::ast::{ParsedFile, collect_intra_file_references, collect_scope_facts};
 use crate::config::Config;
 use crate::diagnostic::Language;
@@ -110,115 +113,6 @@ fn generate_project_graphs(
     }
 
     Ok(sections.join("\n"))
-}
-
-struct CollectedSourceFile {
-    relative_path: String,
-    lang: Language,
-    source: String,
-}
-
-fn collect_project_source_files(
-    paths: &[PathBuf],
-    config: &Config,
-) -> anyhow::Result<Vec<CollectedSourceFile>> {
-    let mut collected = Vec::new();
-    for path in paths {
-        if path.is_file() {
-            let Some(lang) = Language::from_path(path) else {
-                continue;
-            };
-            let source = fs::read_to_string(path)?;
-            collected.push(CollectedSourceFile {
-                relative_path: normalize_relative_path(path, None),
-                lang,
-                source,
-            });
-        } else if path.is_dir() {
-            collect_directory_source_files(path, config, &mut collected);
-        }
-    }
-    collected.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    collected.dedup_by(|left, right| left.relative_path == right.relative_path);
-    Ok(collected)
-}
-
-const SRC_DIR_NAME: &str = "src";
-
-fn collect_directory_source_files(dir: &Path, config: &Config, out: &mut Vec<CollectedSourceFile>) {
-    let walk_root = if dir.join("Cargo.toml").is_file() && dir.join(SRC_DIR_NAME).is_dir() {
-        dir.join(SRC_DIR_NAME)
-    } else {
-        dir.to_path_buf()
-    };
-
-    for entry in ignore::WalkBuilder::new(&walk_root)
-        .require_git(false)
-        .build()
-        .flatten()
-    {
-        let entry_path = entry.path();
-        if !entry_path.is_file() || config.is_test_path(entry_path) {
-            continue;
-        }
-        let Some(lang) = Language::from_path(entry_path) else {
-            continue;
-        };
-        let Ok(source) = fs::read_to_string(entry_path) else {
-            continue;
-        };
-        out.push(CollectedSourceFile {
-            relative_path: normalize_relative_path(entry_path, Some(dir)),
-            lang,
-            source,
-        });
-    }
-}
-
-fn normalize_relative_path(path: &Path, base_dir: Option<&Path>) -> String {
-    let clean_path = path.strip_prefix("./").unwrap_or(path);
-    let relative = base_dir.map_or(clean_path, |base| {
-        let clean_base = base.strip_prefix("./").unwrap_or(base);
-        if clean_base == Path::new(".") || clean_base.starts_with(SRC_DIR_NAME) {
-            clean_path
-        } else {
-            clean_path.strip_prefix(clean_base).unwrap_or(clean_path)
-        }
-    });
-    relative.to_string_lossy().replace('\\', "/")
-}
-
-fn resolve_effective_paths(paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
-    let effective = if paths.is_empty() {
-        vec![PathBuf::from(".")]
-    } else {
-        paths.to_vec()
-    };
-    for path in &effective {
-        if !path.exists() {
-            anyhow::bail!("Path does not exist: {}", path.display());
-        }
-    }
-    Ok(effective)
-}
-
-fn derive_project_title(paths: &[PathBuf]) -> String {
-    if let [only] = paths {
-        let clean = only.strip_prefix("./").unwrap_or(only);
-        if clean != Path::new(".")
-            && let Some(name) = clean.file_name().and_then(|os| os.to_str())
-            && !name.is_empty()
-        {
-            return name.to_owned();
-        }
-        if let Ok(cwd) = std::env::current_dir()
-            && let Some(name) = cwd.file_name().and_then(|os| os.to_str())
-            && !name.is_empty()
-        {
-            return name.to_owned();
-        }
-    }
-    "project".to_owned()
 }
 
 #[cfg(test)]

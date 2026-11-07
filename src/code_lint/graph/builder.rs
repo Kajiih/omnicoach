@@ -1,12 +1,12 @@
 //! Alpha / experimental Layer L2 builder: transforms [`ScopeFacts`] and [`ProjectFacts`] into a
 //! validated [`AbstractionGraph`] (`docs/dev/abstraction_graph/03_design.md` §4.2 and §5.1).
 
+use super::facts::{ModuleFact, ProjectFacts};
 use super::model::{
     AbstractionGraph, DeclarationKind, DeclarationNode, EdgeReason, GraphParts, GroupKind,
     GroupNode, ModelError, NodeId, OrderingEdge, ReferenceEdge, ReflexionStatus, SourceLocation,
     SummaryEdge,
 };
-use super::project_facts::{ModuleFact, ProjectFacts};
 use crate::code_lint::ast::{
     DeclarationScopeKind, IntraFileReference, ItemFacts, RelationKind, ScopeFacts, ScopeItemKind,
     Visibility, levels, strongly_connected_components,
@@ -1363,12 +1363,12 @@ fn compute_scc_and_levels(
 
 #[cfg(test)]
 mod tests {
-    use super::super::project_facts::{ComponentFact, CrossModuleRefFact};
     use super::*;
     use crate::code_lint::ast::{
         CallClusterRule, FindingFact, OrderingEdge as AstOrderingEdge, OrderingReason,
         PlacementAnchor, RelationFact,
     };
+    use crate::code_lint::graph::facts::{ComponentFact, CrossModuleRefFact};
 
     fn sample_scopes() -> Vec<ScopeFacts> {
         vec![sample_module_scope(), sample_impl_scope()]

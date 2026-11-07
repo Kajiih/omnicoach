@@ -1,20 +1,24 @@
-//! Multi-file project abstraction facts and cross-module symbol resolution (`CodeLintGraph`).
+//! Multi-file project abstraction facts, source discovery, and cross-module symbol resolution (`CodeLintGraph`).
 
 use crate::code_lint::ast::python::collect_path_references;
-use crate::code_lint::ast::rust::summarize_rust_file;
+use crate::code_lint::ast::rust::{ExternalModDeclaration, summarize_rust_file};
 use crate::code_lint::ast::{
     DeclarationScopeKind, IntraFileReference, ParsedFile, ScopeFacts,
     collect_intra_file_references, collect_scope_facts, enclosing_scope_symbol,
 };
+use crate::code_lint::project::{
+    is_rust_crate_root, normalize_relative_path, resolve_inherited_component_with_root,
+    resolve_rust_reference_path, rust_module_path,
+};
+use crate::config::Config;
 use crate::diagnostic::Language;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 const INIT_MODULE: &str = "__init__";
 const LIB_MODULE: &str = "lib";
 const MAX_REEXPORT_HOPS: usize = 4;
-const SELF_SEGMENT: &str = "self";
-const SUPER_SEGMENT: &str = "super";
-
 /// Multi-file project facts across a Rust crate or Python package.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ProjectFacts {
@@ -111,15 +115,18 @@ fn collect_rust_project_facts(title: &str, files: &[(&str, &str)]) -> ProjectFac
         if entry.is_crate_root && !entry.has_non_namespace_items {
             continue;
         }
-        let component = resolve_inherited_rust_component(&entry.module_path, &declared_roots)
-            .unwrap_or_else(|| {
-                entry
-                    .module_path
-                    .split("::")
-                    .next()
-                    .unwrap_or("root")
-                    .to_owned()
-            });
+        let component = resolve_inherited_component_with_root(&entry.module_path, &declared_roots)
+            .map_or_else(
+                || {
+                    entry
+                        .module_path
+                        .split("::")
+                        .next()
+                        .unwrap_or("root")
+                        .to_owned()
+                },
+                |inherited| inherited.component.clone(),
+            );
         if seen_components.insert(component.clone()) {
             components.push(ComponentFact {
                 name: component.clone(),
@@ -151,7 +158,7 @@ struct RustModuleEntry {
     is_crate_root: bool,
     declared_component: Option<String>,
     defined_architecture: Vec<(String, Vec<String>)>,
-    external_mods: Vec<String>,
+    external_mods: Vec<ExternalModDeclaration>,
     visible_reexports: Vec<String>,
     has_non_namespace_items: bool,
     references: Vec<(usize, Option<String>, String)>,
@@ -161,16 +168,12 @@ struct RustModuleEntry {
 
 fn parse_rust_module(path: &str, source: &str) -> RustModuleEntry {
     let module_path = rust_module_path(path);
-    let is_crate_root = matches!(module_path.as_str(), LIB_MODULE | "main" | "");
+    let is_crate_root = is_rust_crate_root(&module_path);
     let parsed = ParsedFile::rust(source);
     let summary = summarize_rust_file(&parsed);
     let declared_component = summary.architecture_components.first().cloned();
     let defined_architecture = summary.defined_architecture;
-    let external_mods = summary
-        .external_mods
-        .into_iter()
-        .map(|decl| decl.name)
-        .collect();
+    let external_mods = summary.external_mods;
     let visible_reexports = summary
         .visible_uses
         .into_iter()
@@ -205,19 +208,6 @@ fn parse_rust_module(path: &str, source: &str) -> RustModuleEntry {
     }
 }
 
-fn rust_module_path(path: &str) -> String {
-    let trimmed = path.strip_prefix("src/").unwrap_or(path);
-    let without_extension = trimmed.strip_suffix(".rs").unwrap_or(trimmed);
-    let mut parts: Vec<&str> = without_extension
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    if parts.len() > 1 && parts.last() == Some(&"mod") {
-        parts.pop();
-    }
-    parts.join("::").replace('-', "_")
-}
-
 fn collect_declared_component_roots(entries: &[RustModuleEntry]) -> BTreeMap<String, String> {
     let mut roots = BTreeMap::new();
     for entry in entries {
@@ -226,23 +216,6 @@ fn collect_declared_component_roots(entries: &[RustModuleEntry]) -> BTreeMap<Str
         }
     }
     roots
-}
-
-fn resolve_inherited_rust_component(
-    module_path: &str,
-    declared_roots: &BTreeMap<String, String>,
-) -> Option<String> {
-    let mut current = module_path;
-    loop {
-        if let Some(component) = declared_roots.get(current) {
-            return Some(component.clone());
-        }
-        if let Some((parent, _)) = current.rsplit_once("::") {
-            current = parent;
-        } else {
-            return None;
-        }
-    }
 }
 
 fn resolve_rust_cross_module_refs(entries: &[RustModuleEntry]) -> Vec<CrossModuleRefFact> {
@@ -265,7 +238,7 @@ fn resolve_rust_cross_module_refs(entries: &[RustModuleEntry]) -> Vec<CrossModul
             lib_entry
                 .external_mods
                 .iter()
-                .map(String::as_str)
+                .map(|decl| decl.name.as_str())
                 .chain(
                     lib_entry
                         .visible_reexports
@@ -288,7 +261,6 @@ fn resolve_rust_cross_module_refs(entries: &[RustModuleEntry]) -> Vec<CrossModul
         for &(line, ref source_symbol, ref raw_path) in &entry.references {
             let canonical = normalize_rust_reference_path(
                 &entry.module_path,
-                entry.is_crate_root,
                 &entry.external_mods,
                 &lib_root_names,
                 raw_path,
@@ -321,7 +293,6 @@ fn collect_rust_reexports(
         for target in &entry.visible_reexports {
             let canonical = normalize_rust_reference_path(
                 &entry.module_path,
-                entry.is_crate_root,
                 &entry.external_mods,
                 lib_root_names,
                 target,
@@ -336,52 +307,25 @@ fn collect_rust_reexports(
 
 fn normalize_rust_reference_path(
     enclosing_module: &str,
-    is_crate_root: bool,
-    external_mods: &[String],
+    external_mods: &[ExternalModDeclaration],
     lib_root_names: &HashSet<&str>,
     raw_path: &str,
 ) -> String {
-    let effective_enclosing = if is_crate_root { "" } else { enclosing_module };
-    if raw_path == "crate" {
-        return String::new();
-    }
-    if let Some(rest) = raw_path.strip_prefix("crate::") {
-        return rest.to_owned();
+    let resolved = resolve_rust_reference_path(enclosing_module, external_mods, raw_path, None);
+    if resolved.canonical_path != raw_path {
+        return resolved.canonical_path;
     }
     let first_segment = raw_path.split("::").next().unwrap_or(raw_path);
-    if matches!(first_segment, SELF_SEGMENT | SUPER_SEGMENT) {
-        let mut parts: Vec<&str> = if effective_enclosing.is_empty() {
-            Vec::new()
-        } else {
-            effective_enclosing.split("::").collect()
-        };
-        for segment in raw_path.split("::") {
-            match segment {
-                SELF_SEGMENT => {}
-                SUPER_SEGMENT => {
-                    parts.pop();
-                }
-                other => parts.push(other),
-            }
-        }
-        return parts.join("::");
-    }
-    if external_mods.iter().any(|name| name == first_segment) {
-        return if effective_enclosing.is_empty() {
-            raw_path.to_owned()
-        } else {
-            format!("{effective_enclosing}::{raw_path}")
-        };
-    }
     if let Some((_, rest)) = raw_path.split_once("::") {
         let next_segment = rest.split("::").next().unwrap_or(rest);
         if !matches!(first_segment, "std" | "core" | "alloc")
+            && !external_mods.iter().any(|decl| decl.name == first_segment)
             && lib_root_names.contains(next_segment)
         {
             return rest.to_owned();
         }
     }
-    raw_path.to_owned()
+    resolved.canonical_path
 }
 
 fn collect_python_project_facts(title: &str, files: &[(&str, &str)]) -> ProjectFacts {
@@ -699,6 +643,120 @@ fn split_module_and_segments(
         current = prefix;
     }
     None
+}
+
+const CURRENT_DIR_PREFIX: &str = "./";
+const SRC_DIR_NAME: &str = "src";
+
+/// A project source file discovered on disk, paired with its normalized relative path and language.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CollectedSourceFile {
+    /// Forward-slash-normalized path relative to the project root.
+    pub(super) relative_path: String,
+    /// Detected source language (`Rust` or `Python`).
+    pub(super) lang: Language,
+    /// Full UTF-8 source text.
+    pub(super) source: String,
+}
+
+/// Collects all non-excluded `.rs` and `.py` source files under `paths` in deterministic path order.
+///
+/// # Errors
+///
+/// Returns an error if an explicitly passed file path cannot be read from disk.
+pub(super) fn collect_project_source_files(
+    paths: &[PathBuf],
+    config: &Config,
+) -> anyhow::Result<Vec<CollectedSourceFile>> {
+    let mut collected = Vec::new();
+    for path in paths {
+        if path.is_file() {
+            let Some(lang) = Language::from_path(path) else {
+                continue;
+            };
+            let source = fs::read_to_string(path)?;
+            collected.push(CollectedSourceFile {
+                relative_path: normalize_relative_path(path, None),
+                lang,
+                source,
+            });
+        } else if path.is_dir() {
+            collect_directory_source_files(path, config, &mut collected);
+        }
+    }
+    collected.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    collected.dedup_by(|left, right| left.relative_path == right.relative_path);
+    Ok(collected)
+}
+
+/// Resolves `paths` (defaulting to `"."` when empty) and verifies that each path exists on disk.
+///
+/// # Errors
+///
+/// Returns an error if any resolved path does not exist.
+pub(super) fn resolve_effective_paths(paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
+    let effective = if paths.is_empty() {
+        vec![PathBuf::from(".")]
+    } else {
+        paths.to_vec()
+    };
+    for path in &effective {
+        if !path.exists() {
+            anyhow::bail!("Path does not exist: {}", path.display());
+        }
+    }
+    Ok(effective)
+}
+
+/// Derives a human-readable project title from `paths` (falling back to the current directory name).
+#[must_use]
+pub(super) fn derive_project_title(paths: &[PathBuf]) -> String {
+    if let [only] = paths {
+        let clean = only.strip_prefix(CURRENT_DIR_PREFIX).unwrap_or(only);
+        if clean != Path::new(".")
+            && let Some(name) = clean.file_name().and_then(|os| os.to_str())
+            && !name.is_empty()
+        {
+            return name.to_owned();
+        }
+        if let Ok(cwd) = std::env::current_dir()
+            && let Some(name) = cwd.file_name().and_then(|os| os.to_str())
+            && !name.is_empty()
+        {
+            return name.to_owned();
+        }
+    }
+    "project".to_owned()
+}
+
+fn collect_directory_source_files(dir: &Path, config: &Config, out: &mut Vec<CollectedSourceFile>) {
+    let walk_root = if dir.join("Cargo.toml").is_file() && dir.join(SRC_DIR_NAME).is_dir() {
+        dir.join(SRC_DIR_NAME)
+    } else {
+        dir.to_path_buf()
+    };
+
+    for entry in ignore::WalkBuilder::new(&walk_root)
+        .require_git(false)
+        .build()
+        .flatten()
+    {
+        let entry_path = entry.path();
+        if !entry_path.is_file() || config.is_test_path(entry_path) {
+            continue;
+        }
+        let Some(lang) = Language::from_path(entry_path) else {
+            continue;
+        };
+        let Ok(source) = fs::read_to_string(entry_path) else {
+            continue;
+        };
+        out.push(CollectedSourceFile {
+            relative_path: normalize_relative_path(entry_path, Some(dir)),
+            lang,
+            source,
+        });
+    }
 }
 
 #[cfg(test)]
