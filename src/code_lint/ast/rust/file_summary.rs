@@ -464,13 +464,46 @@ fn collect_token_tree_paths(
                 segments.push(segment_token.text().trim().to_string());
                 cursor = next_segment_idx + 1;
             }
+            let joined = segments.join("::");
+            let raw_path = match resolve_name(file, &joined) {
+                ResolvedName::Imported(imported) => imported,
+                ResolvedName::Local | ResolvedName::Unbound => joined,
+            };
             out.push(RustPathReference {
                 line,
-                raw_path: segments.join("::"),
+                raw_path,
                 statement_text: statement_text.to_string(),
             });
             index = cursor;
             continue;
+        }
+        if let Some(SyntaxElement::Token(token)) = elements.get(index)
+            && token.kind() == SyntaxKind::IDENT
+        {
+            let preceded_by_sep = (index > 0
+                && matches!(
+                    elements.get(index - 1),
+                    Some(SyntaxElement::Token(prev))
+                        if matches!(prev.kind(), SyntaxKind::DOT | SyntaxKind::COLON2)
+                ))
+                || (index >= 2 && consume_double_colon(&elements, index - 2) == Some(index));
+            let followed_by_single_colon = matches!(
+                elements.get(index + 1),
+                Some(SyntaxElement::Token(next)) if next.kind() == SyntaxKind::COLON
+            ) && !matches!(
+                elements.get(index + 2),
+                Some(SyntaxElement::Token(next2)) if next2.kind() == SyntaxKind::COLON
+            );
+            if !preceded_by_sep && !followed_by_single_colon {
+                let ident = token.text().trim();
+                if let ResolvedName::Imported(imported) = resolve_name(file, ident) {
+                    out.push(RustPathReference {
+                        line: file.line_index.line(token.text_range().start().into()),
+                        raw_path: imported,
+                        statement_text: statement_text.to_string(),
+                    });
+                }
+            }
         }
         index += 1;
     }
@@ -534,7 +567,7 @@ mod tests {
 
             pub(in crate::code_lint) fn run(input: super::ParentType) {
                 let _ = crate::a::b::Foo::<crate::c::d::Bar>::baz();
-                assert!(super::detail::check(input));
+                assert!(super::detail::check(Wrapper { Cfg: Cfg, input }));
             }
         "#};
         let file = ParsedFile::rust(source);
@@ -584,6 +617,7 @@ mod tests {
                 "crate::a::b::Foo",
                 "crate::c::d::Bar",
                 "super::detail::check",
+                "crate::core::Config",
             ]
         );
     }
