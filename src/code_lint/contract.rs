@@ -4,10 +4,12 @@
 architecture_component!(CodeLintContract);
 
 use crate::code_lint::ast::{AstNode, ParsedFile};
+use crate::code_lint::project::ProjectContext;
 use crate::code_lint::semantic::{bindings, calls, comments::CommentIndex};
-use crate::diagnostic::{Diagnostic, Language, RuleName};
+use crate::diagnostic::{Diagnostic, Language, RuleName, SourceSpan};
 use crate::rule_declaration::{
-    Declaration, DeclaredRule, EnforcementMode, OptionsDeclaration, RuleOverrides,
+    Declaration, DeclaredExamples, DeclaredRule, EnforcementMode, OptionsDeclaration,
+    ProjectExample, RuleOverrides,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -70,26 +72,8 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
             .options
             .options
             .resolve(file.lang(), overrides);
-        let mut diagnostics = (self.check)(self, path, file, Options::as_param(&options));
-        let mode = self
-            .declaration
-            .options
-            .enforcement_mode(file.lang(), overrides);
-        if mode == EnforcementMode::RequireExplanation && !diagnostics.is_empty() {
-            let index = CommentIndex::from_file(file);
-            diagnostics.retain(|diagnostic| {
-                !index.has_explanation_for_span(
-                    file,
-                    diagnostic.location.span,
-                    diagnostic.location.line,
-                )
-            });
-            for diagnostic in &mut diagnostics {
-                diagnostic.message.explanation_hint =
-                    Some(EnforcementMode::EXPLANATION_HINT.to_owned());
-            }
-        }
-        diagnostics
+        let diagnostics = (self.check)(self, path, file, Options::as_param(&options));
+        apply_enforcement_mode(&self.declaration, file, overrides, diagnostics)
     }
 
     /// Renders this rule's violation template at the given AST node using the node's language.
@@ -179,10 +163,81 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
     }
 }
 
-/// A [`CodeRule`] with its options type erased, so rules with different option types fit in one
-/// registry slice. Implemented once for every `CodeRule<Options>`.
+/// A code rule that queries cross-file [`ProjectContext`] in addition to the target
+/// [`ParsedFile`], emitting per-file diagnostics through the standard target, explanation,
+/// suppression, and `--diff` pipeline.
+#[derive(Clone, Copy)]
+pub struct ProjectCodeRule<Options: OptionsDeclaration = (), Examples = &'static [ProjectExample]> {
+    /// Name, template, languages, options, classification and doc.
+    pub declaration: Declaration<Options, Examples>,
+    /// The files the rule runs on.
+    pub target: RuleTarget,
+    /// Finds the rule's violations in `file` within `project`.
+    pub(crate) check: for<'a> fn(
+        &Self,
+        &Path,
+        &ParsedFile,
+        &ProjectContext<'_>,
+        Options::Param<'a>,
+    ) -> Vec<Diagnostic>,
+}
+
+impl<Options: OptionsDeclaration, Examples> ProjectCodeRule<Options, Examples> {
+    /// Finds the rule's violations in `file` within `project`, with options and enforcement mode
+    /// resolved for the file's language from `overrides`.
+    #[must_use]
+    pub fn check_file(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        project: &ProjectContext<'_>,
+        overrides: Option<&RuleOverrides>,
+    ) -> Vec<Diagnostic> {
+        let options = self
+            .declaration
+            .options
+            .options
+            .resolve(file.lang(), overrides);
+        let diagnostics = (self.check)(self, path, file, project, Options::as_param(&options));
+        apply_enforcement_mode(&self.declaration, file, overrides, diagnostics)
+    }
+
+    /// Renders this rule's violation template at the given AST node using the node's language.
+    #[must_use]
+    pub fn diagnostic_at_node(
+        &self,
+        path: &Path,
+        node: &AstNode<'_>,
+        params: &[(&str, &str)],
+    ) -> Diagnostic {
+        self.declaration.render_diagnostic_for_lang(
+            node.lang(),
+            params,
+            node.to_source_location(path),
+        )
+    }
+
+    /// Renders this rule's violation template at `span` in `file` using the file's language.
+    #[must_use]
+    pub fn diagnostic_at_span(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        span: SourceSpan,
+        params: &[(&str, &str)],
+    ) -> Diagnostic {
+        self.declaration.render_diagnostic_for_lang(
+            file.lang(),
+            params,
+            file.to_source_location(path, span),
+        )
+    }
+}
+
+/// A [`CodeRule`] or [`ProjectCodeRule`] with its options and examples type erased, so all code
+/// rules fit in one registry slice (`CODE_RULES`).
 pub trait AnyCodeRule: Send + Sync {
-    /// The rule's declaration with its options listed rather than typed.
+    /// The rule's declaration with its options and examples listed rather than typed.
     fn declaration(&self) -> DeclaredRule;
     /// The rule's name.
     fn name(&self) -> RuleName;
@@ -194,13 +249,17 @@ pub trait AnyCodeRule: Send + Sync {
     }
     /// The files the rule runs on.
     fn target(&self) -> RuleTarget;
-    /// Finds the rule's violations in `file`, given the rule's configuration.
-    fn check_file(
+    /// Whether evaluating this rule requires a [`ProjectContext`].
+    fn requires_project_context(&self) -> bool;
+    /// Evaluates the rule on `file`, returning `None` when the rule requires a [`ProjectContext`]
+    /// and `project` is `None` so callers cannot treat an unevaluated cross-file rule as clean.
+    fn check_file_in_project(
         &self,
         path: &Path,
         file: &ParsedFile,
+        project: Option<&ProjectContext<'_>>,
         overrides: Option<&RuleOverrides>,
-    ) -> Vec<Diagnostic>;
+    ) -> Option<Vec<Diagnostic>>;
 }
 
 impl<Options: OptionsDeclaration + Send + Sync> AnyCodeRule for CodeRule<Options> {
@@ -220,14 +279,79 @@ impl<Options: OptionsDeclaration + Send + Sync> AnyCodeRule for CodeRule<Options
         self.target
     }
 
-    fn check_file(
+    fn requires_project_context(&self) -> bool {
+        false
+    }
+
+    fn check_file_in_project(
         &self,
         path: &Path,
         file: &ParsedFile,
+        _project: Option<&ProjectContext<'_>>,
         overrides: Option<&RuleOverrides>,
-    ) -> Vec<Diagnostic> {
-        Self::check_file(self, path, file, overrides)
+    ) -> Option<Vec<Diagnostic>> {
+        Some(Self::check_file(self, path, file, overrides))
     }
+}
+
+impl<Options, Examples> AnyCodeRule for ProjectCodeRule<Options, Examples>
+where
+    Options: OptionsDeclaration + Send + Sync,
+    Examples: Copy + Send + Sync + Into<DeclaredExamples>,
+{
+    fn declaration(&self) -> DeclaredRule {
+        self.declaration.declared()
+    }
+
+    fn name(&self) -> RuleName {
+        self.declaration.name
+    }
+
+    fn languages(&self) -> &'static [Language] {
+        self.declaration.languages
+    }
+
+    fn target(&self) -> RuleTarget {
+        self.target
+    }
+
+    fn requires_project_context(&self) -> bool {
+        true
+    }
+
+    fn check_file_in_project(
+        &self,
+        path: &Path,
+        file: &ParsedFile,
+        project: Option<&ProjectContext<'_>>,
+        overrides: Option<&RuleOverrides>,
+    ) -> Option<Vec<Diagnostic>> {
+        project.map(|context| Self::check_file(self, path, file, context, overrides))
+    }
+}
+
+fn apply_enforcement_mode<Options: OptionsDeclaration, Examples>(
+    declaration: &Declaration<Options, Examples>,
+    file: &ParsedFile,
+    overrides: Option<&RuleOverrides>,
+    mut diagnostics: Vec<Diagnostic>,
+) -> Vec<Diagnostic> {
+    let mode = declaration.options.enforcement_mode(file.lang(), overrides);
+    if mode == EnforcementMode::RequireExplanation && !diagnostics.is_empty() {
+        let index = CommentIndex::from_file(file);
+        diagnostics.retain(|diagnostic| {
+            !index.has_explanation_for_span(
+                file,
+                diagnostic.location.span,
+                diagnostic.location.line,
+            )
+        });
+        for diagnostic in &mut diagnostics {
+            diagnostic.message.explanation_hint =
+                Some(EnforcementMode::EXPLANATION_HINT.to_owned());
+        }
+    }
+    diagnostics
 }
 
 #[cfg(test)]

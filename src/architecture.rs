@@ -113,15 +113,15 @@ define_architecture! {
     /// Multi-file project facts, cross-module symbol resolution, and component/path conformance (`code_lint::project`).
     CodeLintProject     => [CodeLintAst, Config, Diagnostic],
     /// The code rule contract: a declaration, a file target and a check function (`code_lint::contract`).
-    CodeLintContract    => [CodeLintSemantic, CodeLintAst, RuleDeclaration],
+    CodeLintContract    => [CodeLintProject, CodeLintSemantic, CodeLintAst, RuleDeclaration],
     /// Inline comment suppression tracker and directive policies (`code_lint::suppression`).
     CodeLintSuppression => [CodeLintContract, CodeLintSemantic, RuleDeclaration, Config],
     /// Policy shared by several code rules or by a rule and the test harness, built from AST facts (`code_lint::policy`).
     CodeLintPolicy      => [CodeLintAst, RuleDeclaration],
     /// Concrete static analysis linter rules (`code_lint::rules`).
-    CodeLintRules       => [CodeLintContract, CodeLintPolicy, RuleDeclaration],
+    CodeLintRules       => [CodeLintProject, CodeLintContract, CodeLintPolicy, RuleDeclaration],
     /// Static code linting multi-file orchestration runner (`code_lint::runner`).
-    CodeLintRunner      => [CodeLintRules, CodeLintSuppression, Diff],
+    CodeLintRunner      => [CodeLintProject, CodeLintRules, CodeLintSuppression, Diff],
     /// Alpha / experimental multi-level abstraction graph model, builder, and text renderers (`code_lint::graph`).
     CodeLintGraph       => [CodeLintProject, CodeLintAst, Config, Diagnostic],
 
@@ -149,7 +149,7 @@ define_architecture! {
 
     // --- Test Harness & Entrypoints ---
     /// The `rule_test!` harness and snapshot fixtures (`test_utils`).
-    TestUtils           => [CodeLintContract, CodeLintPolicy, CommandLintContract],
+    TestUtils           => [CodeLintContract, CodeLintProject, CodeLintPolicy, CommandLintContract],
     /// CLI entrypoints (`bin::*`).
     Bin                 => [CodeLintRunner, CodeLintGraph, CommandLintRunner, Hook, RuleSelection, RuleCatalog],
 }

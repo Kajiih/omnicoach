@@ -37,6 +37,9 @@ use divan::{AllocProfiler, Bencher, black_box};
 
 use omnicoach::code_lint::ast::{self, ParsedFile};
 use omnicoach::code_lint::contract::AnyCodeRule;
+use omnicoach::code_lint::project::{
+    MemoryFileSource, ProjectContext, ProjectIndex, ProjectLayout,
+};
 use omnicoach::code_lint::rules::{self, CODE_RULES};
 use omnicoach::code_lint::runner::lint_file;
 use omnicoach::code_lint::suppression::SuppressionTracker;
@@ -471,11 +474,13 @@ fn all_bench_rules_for_language(language: Language) -> Vec<BenchRule> {
 #[divan::bench_group]
 mod linter {
     use super::{
-        ALL_TEST_FILES, BenchRule, Bencher, BytesCount, DEFAULT_CONFIG, Language, NO_RULES_CONFIG,
-        PYTHON_RULE_FAMILIES, PYTHON_TEST_FILES, ParsedFile, Path, RUST_RULE_FAMILIES,
-        RUST_TEST_FILES, RuleFamily, TestFile, all_bench_rules_for_language, black_box, lint_file,
-        warm_shared_indexes,
+        ALL_TEST_FILES, BenchRule, Bencher, BytesCount, DEFAULT_CONFIG, Language, MemoryFileSource,
+        NO_RULES_CONFIG, PYTHON_RULE_FAMILIES, PYTHON_TEST_FILES, ParsedFile, Path, ProjectContext,
+        ProjectIndex, ProjectLayout, RUST_RULE_FAMILIES, RUST_TEST_FILES, RuleFamily, TestFile,
+        all_bench_rules_for_language, black_box, lint_file, warm_shared_indexes,
     };
+
+    const BENCH_PROJECT_ROOT: &str = "/bench";
 
     #[divan::bench(args = ALL_TEST_FILES)]
     fn end_to_end_all_rules(bencher: Bencher<'_, '_>, test_file: &TestFile) {
@@ -509,6 +514,9 @@ mod linter {
             .iter()
             .map(|(_, file)| file.source_text().len())
             .sum();
+        let memory = MemoryFileSource::from_relative_files(Path::new(BENCH_PROJECT_ROOT), &[]);
+        let index = build_bench_project_index(&memory, &prepared);
+        let context = ProjectContext::new(&index);
 
         bencher
             .counter(BytesCount::new(total_bytes))
@@ -519,8 +527,13 @@ mod linter {
                     for &rule in family.rules {
                         if rule.supports_language(Language::Python) {
                             total_diagnostics += rule
-                                .check_file(black_box(path), black_box(file), None)
-                                .len();
+                                .check_file_in_project(
+                                    black_box(path),
+                                    black_box(file),
+                                    Some(&context),
+                                    None,
+                                )
+                                .map_or(0, |diags| diags.len());
                         }
                     }
                 }
@@ -542,6 +555,9 @@ mod linter {
             .iter()
             .map(|(_, file)| file.source_text().len())
             .sum();
+        let memory = MemoryFileSource::from_relative_files(Path::new(BENCH_PROJECT_ROOT), &[]);
+        let index = build_bench_project_index(&memory, &prepared);
+        let context = ProjectContext::new(&index);
 
         bencher
             .counter(BytesCount::new(total_bytes))
@@ -552,8 +568,13 @@ mod linter {
                     for &rule in family.rules {
                         if rule.supports_language(Language::Rust) {
                             total_diagnostics += rule
-                                .check_file(black_box(path), black_box(file), None)
-                                .len();
+                                .check_file_in_project(
+                                    black_box(path),
+                                    black_box(file),
+                                    Some(&context),
+                                    None,
+                                )
+                                .map_or(0, |diags| diags.len());
                         }
                     }
                 }
@@ -575,6 +596,9 @@ mod linter {
             .iter()
             .map(|(_, file)| file.source_text().len())
             .sum();
+        let memory = MemoryFileSource::from_relative_files(Path::new(BENCH_PROJECT_ROOT), &[]);
+        let index = build_bench_project_index(&memory, &prepared);
+        let context = ProjectContext::new(&index);
 
         bencher
             .counter(BytesCount::new(total_bytes))
@@ -584,8 +608,13 @@ mod linter {
                     .map(|(virtual_path, file)| {
                         bench_rule
                             .0
-                            .check_file(black_box(Path::new(virtual_path)), black_box(file), None)
-                            .len()
+                            .check_file_in_project(
+                                black_box(Path::new(virtual_path)),
+                                black_box(file),
+                                Some(&context),
+                                None,
+                            )
+                            .map_or(0, |diags| diags.len())
                     })
                     .sum::<usize>()
             });
@@ -605,6 +634,9 @@ mod linter {
             .iter()
             .map(|(_, file)| file.source_text().len())
             .sum();
+        let memory = MemoryFileSource::from_relative_files(Path::new(BENCH_PROJECT_ROOT), &[]);
+        let index = build_bench_project_index(&memory, &prepared);
+        let context = ProjectContext::new(&index);
 
         bencher
             .counter(BytesCount::new(total_bytes))
@@ -614,11 +646,29 @@ mod linter {
                     .map(|(virtual_path, file)| {
                         bench_rule
                             .0
-                            .check_file(black_box(Path::new(virtual_path)), black_box(file), None)
-                            .len()
+                            .check_file_in_project(
+                                black_box(Path::new(virtual_path)),
+                                black_box(file),
+                                Some(&context),
+                                None,
+                            )
+                            .map_or(0, |diags| diags.len())
                     })
                     .sum::<usize>()
             });
+    }
+
+    fn build_bench_project_index<'a>(
+        memory: &'a MemoryFileSource,
+        prepared: &[(&str, ParsedFile)],
+    ) -> ProjectIndex<'a> {
+        let root = Path::new(BENCH_PROJECT_ROOT);
+        let layout = ProjectLayout::discover(root, memory, &[]);
+        let index = ProjectIndex::new(layout, memory);
+        for (virtual_path, file) in prepared {
+            index.seed_from_parsed(&root.join(virtual_path), file);
+        }
+        index
     }
 }
 

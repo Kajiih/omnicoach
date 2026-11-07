@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use super::event::{FileEdit, PreToolDecision, PreToolUseEvent, ToolCallPayload};
 use super::virtual_edit::{VirtualFile, apply_virtual_edit};
-use crate::code_lint::runner::lint_file;
+use crate::code_lint::runner::{lint_virtual_file, lint_virtual_file_for_rules};
 use crate::command_lint::runner::run_command_lint_with_client;
 use crate::command_lint::vcs::{JjCliClient, JjClient};
 use crate::config::{Config, lexical_normalize};
@@ -147,8 +147,23 @@ fn lint_proposed_edit(
         return Vec::new();
     };
 
-    let post_edit_diagnostics = lint_file(&target_file_path, &virtual_file.content, &config);
+    let post_edit_diagnostics = match lint_virtual_file(
+        &project_root,
+        &target_file_path,
+        &virtual_file.content,
+        &config,
+    ) {
+        Ok(diagnostics) => diagnostics,
+        Err(error) => {
+            eprintln!(
+                "[omnicoach hook] skipping lint of {}: {error}",
+                target_file_path.display()
+            );
+            return Vec::new();
+        }
+    };
     filter_relevant_diagnostics(
+        &project_root,
         &target_file_path,
         original_content.as_deref(),
         &virtual_file,
@@ -171,30 +186,46 @@ fn is_within_workspace(target_file_path: &Path, workspace_paths: &[PathBuf]) -> 
 /// Keeps diagnostics on lines touched by the edit, plus net-new spillover onto unmodified
 /// lines whose `(rule_name, summary)` multiplicity exceeds the pre-edit baseline.
 ///
-/// Modified-line diagnostics bypass `baseline_counts` without decrementing it so adding a
-/// violation on a modified line never unmasks a matching pre-existing violation on an
-/// unmodified line.
+/// The baseline lints the pre-edit source with only the rules that reported spillover, since no
+/// other rule's counts are consulted. Modified-line diagnostics bypass `baseline_counts` without
+/// decrementing it so adding a violation on a modified line never unmasks a matching
+/// pre-existing violation on an unmodified line.
 fn filter_relevant_diagnostics(
-    relative_path: &Path,
+    project_root: &Path,
+    target_file_path: &Path,
     original_content: Option<&str>,
     virtual_file: &VirtualFile,
     config: &Config,
     post_edit_diagnostics: Vec<Diagnostic>,
 ) -> Vec<Diagnostic> {
-    if post_edit_diagnostics.iter().all(|diagnostic| {
-        virtual_file
-            .modified_lines
-            .contains(&diagnostic.location.line)
-    }) {
+    let spillover_rules: Vec<RuleName> = post_edit_diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            !virtual_file
+                .modified_lines
+                .contains(&diagnostic.location.line)
+        })
+        .map(|diagnostic| diagnostic.rule_name)
+        .collect();
+    if spillover_rules.is_empty() {
         return post_edit_diagnostics;
     }
 
     let Some(before_source) = original_content else {
         return post_edit_diagnostics;
     };
+    let Ok(baseline_diagnostics) = lint_virtual_file_for_rules(
+        project_root,
+        target_file_path,
+        before_source,
+        config,
+        &spillover_rules,
+    ) else {
+        return post_edit_diagnostics;
+    };
 
     let mut baseline_counts: HashMap<(RuleName, String), usize> = HashMap::new();
-    for diagnostic in lint_file(relative_path, before_source, config) {
+    for diagnostic in baseline_diagnostics {
         *baseline_counts
             .entry((diagnostic.rule_name, diagnostic.message.summary))
             .or_default() += 1;
@@ -528,6 +559,45 @@ mod tests {
             .collect();
         assert_eq!(single_letter_warnings.len(), 1);
         assert!(single_letter_warnings[0].contains("logic.py:2:"));
+    }
+
+    #[test]
+    fn evaluate_pre_tool_use_suppresses_legacy_unused_suppression_on_unmodified_line() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("legacy.py");
+        let initial_code = indoc::indoc! {r"
+            def legacy():
+                value = 1  # omni:ignore [nested-function] -- stale directive
+                return value
+        "};
+        std::fs::write(&file_path, initial_code).unwrap();
+
+        let event = PreToolUseEvent {
+            workspace_paths: vec![temp_dir.path().to_path_buf()],
+            agent_owned_dir: None,
+            payload: ToolCallPayload::FileEdit {
+                path: file_path,
+                edit: FileEdit::Append(
+                    indoc::indoc! {r"
+
+
+                        def total():
+                            return 2
+                    "}
+                    .to_owned(),
+                ),
+            },
+        };
+        let outcome = evaluate_pre_tool_use(&event);
+
+        assert!(
+            !outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("unused-suppression")),
+            "{:?}",
+            outcome.warnings
+        );
     }
 
     #[test]
