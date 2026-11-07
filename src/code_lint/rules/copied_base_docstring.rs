@@ -1,14 +1,15 @@
 //! Flags `@override` method docstrings that repeat the docstring they inherit.
 //!
-//! Design: `docs/dev/trivial_override_docstring/03_design.md`. Only ancestors defined earlier in
-//! the same file are seen; the match is equality with the whole inherited docstring or with its
-//! summary paragraph, after normalization.
+//! Design: `docs/dev/trivial_override_docstring/03_design.md`. Ancestors are resolved in Python C3
+//! MRO order across in-file and imported project classes; the match is equality with the whole
+//! inherited docstring or with its summary paragraph, after normalization.
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::contract::{CodeRule, RuleTarget};
+use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
+use crate::code_lint::project::{InheritedDocstringMatch, ProjectContext};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
+    Classification, Consensus, Declaration, ImpactedQuality, Precision, ProjectExample, Reference,
     RuleDoc, RuleOptions, Topic,
 };
 use std::path::Path;
@@ -20,7 +21,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// The rule's declaration.
-pub const RULE: CodeRule = CodeRule {
+pub const RULE: ProjectCodeRule = ProjectCodeRule {
     declaration: Declaration {
         name: RuleName("copied-base-docstring"),
         template: &TEMPLATE,
@@ -39,21 +40,22 @@ pub const RULE: CodeRule = CodeRule {
                 `typing_extensions.override`) when it equals the docstring it inherits, or the first
                 paragraph of that docstring, ignoring case, whitespace and a trailing period. The
                 inherited docstring is the one `inspect.getdoc` would show without the override's:
-                the first ancestor class defined earlier in the file whose method of the same name
-                has a docstring. A docstring that extends, shortens or adapts the inherited text is
-                not flagged. An override has no docstring or a complete one, which is stricter than
-                the Google style guide's docstring with at least the differences."},
+                the first ancestor class in Python C3 MRO order (defined earlier in the file or
+                imported from another project module) whose method of the same name has a docstring.
+                A docstring that extends, shortens or adapts the inherited text is not flagged. An
+                override has no docstring or a complete one, which is stricter than the Google style
+                guide's docstring with at least the differences."},
             why_is_this_bad: indoc::indoc! {r"
                 `help()`, Sphinx, Pyright hovers and `inspect.getdoc` already show the inherited
                 docstring on a method that has none. A copy adds nothing, and a copy of the summary
                 alone hides the inherited sections. When the base contract changes, the copy keeps
                 the old text."},
             known_problems: Some(indoc::indoc! {r"
-                Only ancestors defined earlier in the same file are seen: a copy of the docstring of
-                an imported base class is not flagged. Methods without `@override` are not
-                inspected: enable mypy's `explicit-override` error code or Pyright's
-                `reportImplicitOverride` to make every override explicit. When the inherited
-                docstring is itself a deferral phrase, `deferral-docstring` also reports the copy."}),
+                Base classes in third-party libraries outside project source roots are not seen.
+                Methods without `@override` are not inspected: enable mypy's `explicit-override`
+                error code or Pyright's `reportImplicitOverride` to make every override explicit.
+                When the inherited docstring is itself a deferral phrase, `deferral-docstring` also
+                reports the copy."}),
             references: &[
                 Reference {
                     title: "Google Python Style Guide §3.8.3.1: Overridden Methods",
@@ -64,15 +66,21 @@ pub const RULE: CodeRule = CodeRule {
                     url: "https://docs.python.org/3/library/inspect.html#inspect.getdoc",
                 },
             ],
-            examples: &[Example {
+            examples: &[ProjectExample {
                 language: Language::Python,
+                context: &[(
+                    "pkg/base.py",
+                    indoc::indoc! {r#"
+                        class Store:
+                            def read(self, key: str) -> bytes:
+                                """Reads the value stored under a key."""
+                                raise NotImplementedError
+                    "#},
+                )],
+                path: "pkg/service.py",
                 flagged: indoc::indoc! {r#"
                     from typing import override
-
-                    class Store:
-                        def read(self, key: str) -> bytes:
-                            """Reads the value stored under a key."""
-                            raise NotImplementedError
+                    from pkg.base import Store
 
                     class FileStore(Store):
                         @override
@@ -81,19 +89,15 @@ pub const RULE: CodeRule = CodeRule {
                             return self._files[key].read_bytes()
                 "#},
                 flagged_span: r#""""Reads the value stored under a key.""""#,
-                fixed: indoc::indoc! {r#"
+                fixed: indoc::indoc! {r"
                     from typing import override
-
-                    class Store:
-                        def read(self, key: str) -> bytes:
-                            """Reads the value stored under a key."""
-                            raise NotImplementedError
+                    from pkg.base import Store
 
                     class FileStore(Store):
                         @override
                         def read(self, key: str) -> bytes:
                             return self._files[key].read_bytes()
-                "#},
+                "},
             }],
         },
     },
@@ -101,11 +105,18 @@ pub const RULE: CodeRule = CodeRule {
     check: check_file,
 };
 
-const FUNCTION: &str = "function";
-const CLASS: &str = "class";
-
-fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
+fn check_file(
+    rule: &ProjectCodeRule,
+    path: &Path,
+    file: &ParsedFile,
+    project: &ProjectContext<'_>,
+    (): (),
+) -> Vec<Diagnostic> {
+    if !file.source_text().contains("override") {
+        return Vec::new();
+    }
     let classes = ast::python::extract_classes(file);
+    let current_module = project.python_module_of_path(path);
     let mut diagnostics = Vec::new();
     for (index, class) in classes.iter().enumerate() {
         for method in class.methods() {
@@ -115,20 +126,25 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             let Some(docstring) = method.docstring() else {
                 continue;
             };
-            let Some(ast::python::PythonInheritedDocstring {
-                ancestor,
+            let Some(InheritedDocstringMatch {
+                ancestor_name,
                 docstring: inherited,
-            }) = ast::python::inherited_method_docstring(&classes, index, &method.name)
+            }) = project.resolve_inherited_method_docstring(
+                current_module.as_deref(),
+                &classes,
+                index,
+                &method.name,
+            )
             else {
                 continue;
             };
             let is_copy = docstring.normalized() == inherited.normalized()
-                || docstring.copies_summary_of(&inherited);
+                || docstring.copies_owned_summary_of(&inherited);
             if is_copy {
                 diagnostics.push(rule.diagnostic_at_node(
                     path,
                     &docstring.node(),
-                    &[(FUNCTION, &method.name), (CLASS, &ancestor.name)],
+                    &[("function", &method.name), ("class", &ancestor_name)],
                 ));
             }
         }
@@ -283,6 +299,22 @@ crate::test_utils::rule_test!(
                         def read(self, key: str) -> bytes:
                             """Reads the value stored under a key."""
                 "#,
+                imported_base_difference_exempt => {
+                    "pkg/base.py" => r#"
+                        class Store:
+                            def read(self, key: str) -> bytes:
+                                """Reads the value stored under a key."""
+                    "#,
+                    "pkg/service.py" => r#"
+                        from typing import override
+                        from .base import Store
+
+                        class CachedStore(Store):
+                            @override
+                            def read(self, key: str) -> bytes:
+                                """Reads from the in-memory cache before disk."""
+                    "#,
+                },
             ],
             fail: [
                 exact_copy => r#"
@@ -298,6 +330,90 @@ crate::test_utils::rule_test!(
                             """Reads the value stored under a key."""
                             return b''
                 "# => r#""""Reads the value stored under a key.""""#,
+                copied_imported_base_docstring => {
+                    "pkg/base.py" => r#"
+                        class Store:
+                            def read(self, key: str) -> bytes:
+                                """Reads the value stored under a key."""
+                    "#,
+                    "pkg/service.py" => r#"
+                        from typing import override
+                        from .base import Store
+
+                        class FileStore(Store):
+                            @override
+                            def read(self, key: str) -> bytes:
+                                """Reads the value stored under a key."""
+                                return b''
+                    "#,
+                } => ("pkg/service.py", r#""""Reads the value stored under a key.""""#),
+                self_shadowed_imported_base => {
+                    "pkg/base.py" => r#"
+                        class Store:
+                            def read(self, key: str) -> bytes:
+                                """Reads the value stored under a key."""
+                    "#,
+                    "pkg/service.py" => r#"
+                        from typing import override
+                        from .base import Store
+
+                        class Store(Store):
+                            @override
+                            def read(self, key: str) -> bytes:
+                                """Reads the value stored under a key."""
+                                return b''
+                    "#,
+                } => ("pkg/service.py", r#""""Reads the value stored under a key.""""#),
+                copied_pyi_stub_base_docstring => {
+                    "pkg/base.pyi" => r#"
+                        class Store:
+                            def read(self, key: str) -> bytes:
+                                """Reads the value stored under a key."""
+                                ...
+                    "#,
+                    "pkg/base.py" => r#"
+                        class Store:
+                            def read(self, key: str) -> bytes:
+                                return b''
+                    "#,
+                    "pkg/service.py" => r#"
+                        from typing import override
+                        from .base import Store
+
+                        class FileStore(Store):
+                            @override
+                            def read(self, key: str) -> bytes:
+                                """Reads the value stored under a key."""
+                                return b''
+                    "#,
+                } => ("pkg/service.py", r#""""Reads the value stored under a key.""""#),
+                diamond_mro_inherits_right_branch_before_root => {
+                    "pkg/root.py" => r#"
+                        class RootStore:
+                            def read(self, key: str) -> bytes:
+                                """Reads from the root store."""
+                    "#,
+                    "pkg/branches.py" => r#"
+                        from .root import RootStore
+
+                        class LeftStore(RootStore):
+                            pass
+
+                        class RightStore(RootStore):
+                            def read(self, key: str) -> bytes:
+                                """Reads from the right store."""
+                    "#,
+                    "pkg/service.py" => r#"
+                        from typing import override
+                        from .branches import LeftStore, RightStore
+
+                        class CombinedStore(LeftStore, RightStore):
+                            @override
+                            def read(self, key: str) -> bytes:
+                                """Reads from the right store."""
+                                return b''
+                    "#,
+                } => ("pkg/service.py", r#""""Reads from the right store.""""#),
                 copy_with_other_wrapping_and_case => r#"
                     from typing import override
 

@@ -1,14 +1,18 @@
 //! Flags `@override` method docstrings that drop a contract section of the docstring they replace.
 //!
 //! Design: `docs/dev/trivial_override_docstring/03_design.md`. Section kinds are compared, never
-//! header text or entries; only ancestors defined earlier in the same file are seen.
+//! header text or entries; ancestors are resolved in Python C3 MRO order across in-file and
+//! imported project classes.
 
-use crate::code_lint::ast::python::{DocstringSection, DocstringSectionKind, PythonDocstring};
+use crate::code_lint::ast::python::{
+    DocstringSection, DocstringSectionKind, OwnedDocstring, PythonDocstring,
+};
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::contract::{CodeRule, RuleTarget};
+use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
+use crate::code_lint::project::{InheritedDocstringMatch, ProjectContext};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
+    Classification, Consensus, Declaration, ImpactedQuality, Precision, ProjectExample, Reference,
     RuleDoc, RuleOptions, Topic,
 };
 use std::path::Path;
@@ -20,7 +24,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// The rule's declaration.
-pub const RULE: CodeRule = CodeRule {
+pub const RULE: ProjectCodeRule = ProjectCodeRule {
     declaration: Declaration {
         name: RuleName("partial-override-docstring"),
         template: &TEMPLATE,
@@ -39,14 +43,15 @@ pub const RULE: CodeRule = CodeRule {
                 `typing_extensions.override`) when the docstring it replaces has an `Args:`,
                 `Returns:`, `Yields:` or `Raises:` section of a kind the override's docstring lacks.
                 The inherited docstring is the one `inspect.getdoc` would show without the
-                override's: the first ancestor class defined earlier in the file whose method of
-                the same name has a docstring. Section kinds are compared, so `Arguments:`
-                satisfies `Args:`; `Returns:` and `Yields:` satisfy each other, as does a summary
-                starting with `Returns` or `Yields`. A base `Raises:` section listing only
-                `NotImplementedError` is not required, and other sections (`Example:`, `Note:`)
-                never are. An override has no docstring or a complete one, which is stricter than
-                the Google style guide's docstring with at least the differences. A docstring equal
-                to the inherited summary is left to `copied-base-docstring`."},
+                override's: the first ancestor class in Python C3 MRO order (defined earlier in the
+                file or imported from another project module) whose method of the same name has a
+                docstring. Section kinds are compared, so `Arguments:` satisfies `Args:`; `Returns:`
+                and `Yields:` satisfy each other, as does a summary starting with `Returns` or
+                `Yields`. A base `Raises:` section listing only `NotImplementedError` is not
+                required, and other sections (`Example:`, `Note:`) never are. An override has no
+                docstring or a complete one, which is stricter than the Google style guide's
+                docstring with at least the differences. A docstring equal to the inherited summary
+                is left to `copied-base-docstring`."},
             why_is_this_bad: indoc::indoc! {r"
                 Documentation tools never merge an override's docstring with the inherited one:
                 `help()`, Sphinx, Pyright hovers and `inspect.getdoc` show only the override's. A
@@ -54,12 +59,12 @@ pub const RULE: CodeRule = CodeRule {
                 errors hides that contract from every reader of the override, even when the
                 override changes none of it."},
             known_problems: Some(indoc::indoc! {r"
-                Only ancestors defined earlier in the same file are seen. Entries are not compared:
-                an override `Args:` section that omits one of the base's parameters is not flagged.
-                Methods without `@override` are not inspected: enable mypy's `explicit-override`
-                error code or Pyright's `reportImplicitOverride` to make every override explicit.
-                A deferral phrase such as `See base class.` over a sectioned base is also reported
-                by `deferral-docstring`."}),
+                Base classes in third-party libraries outside project source roots are not seen.
+                Entries are not compared: an override `Args:` section that omits one of the base's
+                parameters is not flagged. Methods without `@override` are not inspected: enable
+                mypy's `explicit-override` error code or Pyright's `reportImplicitOverride` to make
+                every override explicit. A deferral phrase such as `See base class.` over a
+                sectioned base is also reported by `deferral-docstring`."}),
             references: &[
                 Reference {
                     title: "Google Python Style Guide §3.8.3.1: Overridden Methods",
@@ -70,22 +75,28 @@ pub const RULE: CodeRule = CodeRule {
                     url: "https://docs.python.org/3/library/inspect.html#inspect.getdoc",
                 },
             ],
-            examples: &[Example {
+            examples: &[ProjectExample {
                 language: Language::Python,
+                context: &[(
+                    "pkg/base.py",
+                    indoc::indoc! {r#"
+                        class SessionService:
+                            def create(self, name: str) -> Session:
+                                """Creates a session.
+
+                                Args:
+                                    name: The session name, unique per user.
+
+                                Returns:
+                                    The new session.
+                                """
+                                raise NotImplementedError
+                    "#},
+                )],
+                path: "pkg/service.py",
                 flagged: indoc::indoc! {r#"
                     from typing import override
-
-                    class SessionService:
-                        def create(self, name: str) -> Session:
-                            """Creates a session.
-
-                            Args:
-                                name: The session name, unique per user.
-
-                            Returns:
-                                The new session.
-                            """
-                            raise NotImplementedError
+                    from pkg.base import SessionService
 
                     class InMemorySessionService(SessionService):
                         @override
@@ -96,18 +107,7 @@ pub const RULE: CodeRule = CodeRule {
                 flagged_span: r#""""Creates a session in memory.""""#,
                 fixed: indoc::indoc! {r#"
                     from typing import override
-
-                    class SessionService:
-                        def create(self, name: str) -> Session:
-                            """Creates a session.
-
-                            Args:
-                                name: The session name, unique per user.
-
-                            Returns:
-                                The new session.
-                            """
-                            raise NotImplementedError
+                    from pkg.base import SessionService
 
                     class InMemorySessionService(SessionService):
                         @override
@@ -138,12 +138,18 @@ const CONTRACT_SECTIONS: &[(DocstringSectionKind, &str)] = &[
 ];
 const NOT_IMPLEMENTED_ERROR: &str = "NotImplementedError";
 
-const FUNCTION: &str = "function";
-const SECTIONS: &str = "sections";
-const CLASS: &str = "class";
-
-fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
+fn check_file(
+    rule: &ProjectCodeRule,
+    path: &Path,
+    file: &ParsedFile,
+    project: &ProjectContext<'_>,
+    (): (),
+) -> Vec<Diagnostic> {
+    if !file.source_text().contains("override") {
+        return Vec::new();
+    }
     let classes = ast::python::extract_classes(file);
+    let current_module = project.python_module_of_path(path);
     let mut diagnostics = Vec::new();
     for (index, class) in classes.iter().enumerate() {
         for method in class.methods() {
@@ -153,14 +159,19 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             let Some(docstring) = method.docstring() else {
                 continue;
             };
-            let Some(ast::python::PythonInheritedDocstring {
-                ancestor,
+            let Some(InheritedDocstringMatch {
+                ancestor_name,
                 docstring: inherited,
-            }) = ast::python::inherited_method_docstring(&classes, index, &method.name)
+            }) = project.resolve_inherited_method_docstring(
+                current_module.as_deref(),
+                &classes,
+                index,
+                &method.name,
+            )
             else {
                 continue;
             };
-            if docstring.copies_summary_of(&inherited) {
+            if docstring.copies_owned_summary_of(&inherited) {
                 continue;
             }
             let required = required_kinds(&inherited);
@@ -175,9 +186,9 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                     path,
                     &docstring.node(),
                     &[
-                        (FUNCTION, &method.name),
-                        (SECTIONS, &missing.join(" or ")),
-                        (CLASS, &ancestor.name),
+                        ("function", &method.name),
+                        ("sections", &missing.join(" or ")),
+                        ("class", &ancestor_name),
                     ],
                 ));
             }
@@ -188,7 +199,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
 
 /// The section kinds of the inherited docstring, without a `Raises:` section that only
 /// documents an abstract method.
-fn required_kinds(inherited: &PythonDocstring<'_>) -> Vec<DocstringSectionKind> {
+fn required_kinds(inherited: &OwnedDocstring) -> Vec<DocstringSectionKind> {
     inherited
         .sections()
         .iter()
@@ -460,6 +471,30 @@ crate::test_utils::rule_test!(
                         def clear(self) -> None:
                             """Deletes every file in the directory."""
                 "#,
+                complete_override_of_imported_base => {
+                    "pkg/base.py" => r#"
+                        class Store:
+                            def read(self, key: str) -> bytes:
+                                """Reads a value.
+
+                                Args:
+                                    key: The key to read.
+                                """
+                    "#,
+                    "pkg/service.py" => r#"
+                        from typing import override
+                        from .base import Store
+
+                        class FileStore(Store):
+                            @override
+                            def read(self, key: str) -> bytes:
+                                """Reads a value from disk.
+
+                                Args:
+                                    key: The file name.
+                                """
+                    "#,
+                },
             ],
             fail: [
                 summary_over_sectioned_base => r#"
@@ -485,6 +520,56 @@ crate::test_utils::rule_test!(
                         def create(self, name: str, owner: str) -> Session:
                             """Creates a session in memory."""
                 "# => r#""""Creates a session in memory.""""#,
+                partial_override_of_imported_base => {
+                    "pkg/base.py" => r#"
+                        class Store:
+                            def read(self, key: str) -> bytes:
+                                """Reads a value.
+
+                                Args:
+                                    key: The key to read.
+                                """
+                    "#,
+                    "pkg/service.py" => r#"
+                        from typing import override
+                        from .base import Store
+
+                        class FileStore(Store):
+                            @override
+                            def read(self, key: str) -> bytes:
+                                """Reads a value from disk."""
+                    "#,
+                } => ("pkg/service.py", r#""""Reads a value from disk.""""#),
+                diamond_mro_requires_sections_of_right_branch => {
+                    "pkg/root.py" => r#"
+                        class RootStore:
+                            def read(self, key: str) -> bytes:
+                                """Reads a value."""
+                    "#,
+                    "pkg/branches.py" => r#"
+                        from .root import RootStore
+
+                        class LeftStore(RootStore):
+                            pass
+
+                        class RightStore(RootStore):
+                            def read(self, key: str) -> bytes:
+                                """Reads a value from right branch.
+
+                                Args:
+                                    key: The key to read.
+                                """
+                    "#,
+                    "pkg/service.py" => r#"
+                        from typing import override
+                        from .branches import LeftStore, RightStore
+
+                        class CombinedStore(LeftStore, RightStore):
+                            @override
+                            def read(self, key: str) -> bytes:
+                                """Reads a value from combined store."""
+                    "#,
+                } => ("pkg/service.py", r#""""Reads a value from combined store.""""#),
                 unchanged_signature_missing_args => r#"
                     from typing import override
 

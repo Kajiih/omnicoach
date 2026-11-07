@@ -539,12 +539,35 @@ pub fn extract_classes(file: &ParsedFile) -> Vec<PythonClassInfo<'_>> {
     visitor.classes
 }
 
+/// The field names declared by `TypedDict` classes in `file`, including subclasses of an
+/// in-file `TypedDict`.
+#[must_use]
+pub(super) fn typed_dict_keys(file: &ParsedFile) -> HashSet<String> {
+    let classes = extract_classes(file);
+    classes
+        .iter()
+        .enumerate()
+        .filter(|&(index, class)| {
+            class.is_typed_dict()
+                || local_ancestors(&classes, index)
+                    .into_iter()
+                    .any(|ancestor| classes[ancestor].is_typed_dict())
+        })
+        .flat_map(|(_, class)| {
+            class
+                .annotated_attributes()
+                .into_iter()
+                .map(|attribute| attribute.name)
+        })
+        .collect()
+}
+
 /// The indexes of the in-file ancestors of `classes[index]`, depth-first and left to right.
 ///
 /// Each class of [`local_base_classes`], transitively, appears once: an approximation of the
 /// method resolution order as far as the file shows it.
 #[must_use]
-pub fn local_ancestors(classes: &[PythonClassInfo<'_>], index: usize) -> Vec<usize> {
+fn local_ancestors(classes: &[PythonClassInfo<'_>], index: usize) -> Vec<usize> {
     let mut ancestors = Vec::new();
     let mut pending: Vec<usize> = local_base_classes(classes, index)
         .into_iter()
@@ -575,63 +598,6 @@ fn local_base_classes(classes: &[PythonClassInfo<'_>], index: usize) -> Vec<usiz
             classes[..index]
                 .iter()
                 .rposition(|candidate| candidate.name == name)
-        })
-        .collect()
-}
-
-/// A method docstring inherited from an in-file ancestor class.
-pub struct PythonInheritedDocstring<'c, 'a> {
-    /// The ancestor class whose method declares the docstring.
-    pub ancestor: &'c PythonClassInfo<'a>,
-    /// The inherited docstring.
-    pub docstring: PythonDocstring<'a>,
-}
-
-/// The docstring that documentation tools show for method `name` of `classes[index]` when the
-/// method has none of its own, as far as the file shows, with the ancestor that declares it.
-///
-/// Like `inspect.getdoc`, the lookup takes the first of [`local_ancestors`] whose body has a
-/// documented `def name`, skipping ancestors whose `def name` has no docstring. Within that body,
-/// the last documented `def name` counts, since `@overload` stubs and property setters usually
-/// have none.
-#[must_use]
-pub fn inherited_method_docstring<'c, 'a>(
-    classes: &'c [PythonClassInfo<'a>],
-    index: usize,
-    name: &str,
-) -> Option<PythonInheritedDocstring<'c, 'a>> {
-    local_ancestors(classes, index)
-        .into_iter()
-        .find_map(|ancestor| {
-            let class = &classes[ancestor];
-            class
-                .documented_method_docstring(name)
-                .map(|docstring| PythonInheritedDocstring {
-                    ancestor: class,
-                    docstring,
-                })
-        })
-}
-
-/// The field names declared by `TypedDict` classes in `file`, including subclasses of an
-/// in-file `TypedDict`.
-#[must_use]
-pub(super) fn typed_dict_keys(file: &ParsedFile) -> HashSet<String> {
-    let classes = extract_classes(file);
-    classes
-        .iter()
-        .enumerate()
-        .filter(|&(index, class)| {
-            class.is_typed_dict()
-                || local_ancestors(&classes, index)
-                    .into_iter()
-                    .any(|ancestor| classes[ancestor].is_typed_dict())
-        })
-        .flat_map(|(_, class)| {
-            class
-                .annotated_attributes()
-                .into_iter()
-                .map(|attribute| attribute.name)
         })
         .collect()
 }

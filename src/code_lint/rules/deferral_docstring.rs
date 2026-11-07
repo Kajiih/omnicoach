@@ -5,11 +5,12 @@
 
 use crate::code_lint::ast::python::{PythonBaseClass, PythonClassInfo, normalize_docstring_text};
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::contract::{CodeRule, RuleTarget};
+use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
+use crate::code_lint::project::ProjectContext;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
-    ListOption, Precision, Reference, RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
+    ListOption, Precision, ProjectExample, Reference, RuleDoc, RuleOptions, Topic,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -53,7 +54,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// The rule's declaration.
-pub const RULE: CodeRule<ListOption> = CodeRule {
+pub const RULE: ProjectCodeRule<ListOption> = ProjectCodeRule {
     declaration: Declaration {
         name: RuleName("deferral-docstring"),
         template: &TEMPLATE,
@@ -73,10 +74,11 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 phrases, such as `See base class.` or `Same as Base.run().`. Case, whitespace,
                 backticks, a trailing period, `()` and the Sphinx roles `:meth:`, `:class:` and
                 `:func:` are ignored. In a phrase, `{base}` matches a base of the enclosing class,
-                as written or by its last dotted segment, or an ancestor class defined earlier in
-                the file; `{method}` matches the method's name. A docstring that adds text after the
-                phrase is not flagged. An override has no docstring or a complete one, which is
-                stricter than the Google style guide's docstring with at least the differences."},
+                as written or by its last dotted segment, or an ancestor class in Python C3 MRO
+                order (defined earlier in the file or imported from another project module);
+                `{method}` matches the method's name. A docstring that adds text after the phrase
+                is not flagged. An override has no docstring or a complete one, which is stricter
+                than the Google style guide's docstring with at least the differences."},
             why_is_this_bad: indoc::indoc! {r"
                 `help()`, Sphinx, Pyright hovers and `inspect.getdoc` show a method's own docstring
                 and fall back to the inherited one only when the method has none. A pointer such as
@@ -85,10 +87,10 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 docstring directly."},
             known_problems: Some(indoc::indoc! {r"
                 Wordings outside the list, and phrases in other languages, are not flagged; extend
-                the list. A reference to a class that is not a base (`See Pytester.spawn.`) is not
-                flagged, since it often delegates to the only documentation. Methods without
-                `@override` are not inspected: enable mypy's `explicit-override` error code or
-                Pyright's `reportImplicitOverride` to make every override explicit."}),
+                the list. A reference to a class that is not a base (`See Pytester.spawn.`), or to a
+                base class in a third-party library outside project source roots, is not flagged.
+                Methods without `@override` are not inspected: enable mypy's `explicit-override`
+                error code or Pyright's `reportImplicitOverride` to make every override explicit."}),
             references: &[
                 Reference {
                     title: "Google Python Style Guide §3.8.3.1: Overridden Methods",
@@ -99,10 +101,21 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                     url: "https://peps.python.org/pep-0698/",
                 },
             ],
-            examples: &[Example {
+            examples: &[ProjectExample {
                 language: Language::Python,
+                context: &[(
+                    "pkg/base.py",
+                    indoc::indoc! {r#"
+                        class Store:
+                            def read(self, key: str) -> bytes:
+                                """Reads the value stored under a key."""
+                                raise NotImplementedError
+                    "#},
+                )],
+                path: "pkg/service.py",
                 flagged: indoc::indoc! {r#"
                     from typing import override
+                    from pkg.base import Store
 
                     class FileStore(Store):
                         @override
@@ -113,6 +126,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 flagged_span: r#""""See base class.""""#,
                 fixed: indoc::indoc! {r"
                     from typing import override
+                    from pkg.base import Store
 
                     class FileStore(Store):
                         @override
@@ -141,22 +155,28 @@ const SPHINX_ROLES: &[&str] = &[
     ":func:",
 ];
 
-const FUNCTION: &str = "function";
-
 fn check_file(
-    rule: &CodeRule<ListOption>,
+    rule: &ProjectCodeRule<ListOption>,
     path: &Path,
     file: &ParsedFile,
+    project: &ProjectContext<'_>,
     banned: &HashSet<String>,
 ) -> Vec<Diagnostic> {
+    if !file.source_text().contains("override") {
+        return Vec::new();
+    }
     let phrases: Vec<String> = banned
         .iter()
         .map(|phrase| normalize_docstring_text(phrase))
         .collect();
     let classes = ast::python::extract_classes(file);
+    if classes.is_empty() {
+        return Vec::new();
+    }
+    let current_module = project.python_module_of_path(path);
     let mut diagnostics = Vec::new();
     for (index, class) in classes.iter().enumerate() {
-        let base_references = base_references(&classes, index);
+        let mut cached_base_references: Option<Vec<String>> = None;
         for method in class.methods() {
             if !method.has_override_decorator() {
                 continue;
@@ -164,20 +184,23 @@ fn check_file(
             let Some(docstring) = method.docstring() else {
                 continue;
             };
+            let resolved_references = cached_base_references.get_or_insert_with(|| {
+                base_references(&classes, index, current_module.as_deref(), project)
+            });
             let text = comparable_text(&docstring.normalized());
             let method_name = method.name.to_lowercase();
             let is_deferral = phrases.iter().any(|phrase| {
                 matches_phrase(
                     &text,
                     &phrase.replace(METHOD_TOKEN, &method_name),
-                    &base_references,
+                    resolved_references,
                 )
             });
             if is_deferral {
                 diagnostics.push(rule.diagnostic_at_node(
                     path,
                     &docstring.node(),
-                    &[(FUNCTION, &method.name)],
+                    &[("function", &method.name)],
                 ));
             }
         }
@@ -186,19 +209,20 @@ fn check_file(
 }
 
 /// The lowercase references that `{base}` matches in methods of `classes[index]`: each base as
-/// written (without type arguments) and each in-file ancestor, with dotted names also matched by
-/// their last segment.
-fn base_references(classes: &[PythonClassInfo<'_>], index: usize) -> Vec<String> {
-    let ancestors = ast::python::local_ancestors(classes, index);
+/// written (without type arguments) and each in-file or cross-module ancestor in C3 MRO order,
+/// with dotted names also matched by their last segment.
+fn base_references(
+    classes: &[PythonClassInfo<'_>],
+    index: usize,
+    current_module: Option<&str>,
+    project: &ProjectContext<'_>,
+) -> Vec<String> {
+    let resolved_ancestors = project.resolve_ancestor_class_names(current_module, classes, index);
     let names = classes[index]
         .bases
         .iter()
         .map(PythonBaseClass::unsubscripted_name)
-        .chain(
-            ancestors
-                .iter()
-                .map(|&ancestor| classes[ancestor].name.as_str()),
-        );
+        .chain(resolved_ancestors.iter().map(String::as_str));
     let mut references = Vec::new();
     for name in names {
         let reference = name.to_lowercase();
@@ -349,6 +373,42 @@ crate::test_utils::rule_test!(
                         def read(self, key: str) -> bytes:
                             """See Store.read()."""
                 "# => r#""""See Store.read().""""#,
+                cross_module_grandparent_ancestor => {
+                    "pkg/root.py" => r#"
+                        class RootStore:
+                            pass
+                    "#,
+                    "pkg/base.py" => r#"
+                        from .root import RootStore
+
+                        class BaseStore(RootStore):
+                            pass
+                    "#,
+                    "pkg/service.py" => r#"
+                        from typing import override
+                        from .base import BaseStore
+
+                        class FileStore(BaseStore):
+                            @override
+                            def read(self, key: str) -> bytes:
+                                """See RootStore.read()."""
+                    "#,
+                } => ("pkg/service.py", r#""""See RootStore.read().""""#),
+                imported_base_alias_original_name => {
+                    "pkg/base.py" => r#"
+                        class KeyValueStore:
+                            pass
+                    "#,
+                    "pkg/service.py" => r#"
+                        from typing import override
+                        from .base import KeyValueStore as Store
+
+                        class FileStore(Store):
+                            @override
+                            def read(self, key: str) -> bytes:
+                                """See KeyValueStore.read()."""
+                    "#,
+                } => ("pkg/service.py", r#""""See KeyValueStore.read().""""#),
                 method_interface_phrase => r#"
                     from typing import override
 

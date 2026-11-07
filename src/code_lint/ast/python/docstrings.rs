@@ -102,13 +102,6 @@ impl<'a> PythonDocstring<'a> {
     /// Returns true if the docstring, once normalized, equals the normalized summary paragraph of
     /// `other`.
     #[must_use]
-    pub fn copies_summary_of(&self, other: &Self) -> bool {
-        self.copies_owned_summary_of(&other.owned)
-    }
-
-    /// Returns true if the docstring, once normalized, equals the normalized summary paragraph of
-    /// `other`.
-    #[must_use]
     pub fn copies_owned_summary_of(&self, other: &OwnedDocstring) -> bool {
         self.normalized() == other.normalized_summary_paragraph()
     }

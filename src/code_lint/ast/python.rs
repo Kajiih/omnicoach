@@ -42,9 +42,8 @@ pub use self::classes::{
     PythonAnnotatedAttribute, PythonBaseClass, PythonClassInfo, extract_classes,
 };
 pub(in crate::code_lint) use self::classes::{
-    PythonAttributeDefinition, PythonInheritedDocstring, enclosing_class,
-    inherited_method_docstring, is_documented_by_enclosing_class, is_interface_method,
-    local_ancestors,
+    PythonAttributeDefinition, enclosing_class, is_documented_by_enclosing_class,
+    is_interface_method,
 };
 pub(super) use self::declaration_order::{
     collect_declaration_scopes, collect_intra_file_ref_sites,
