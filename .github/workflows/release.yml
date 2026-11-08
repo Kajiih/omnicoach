@@ -98,6 +98,75 @@ jobs:
           name: wheels-sdist
           path: dist
 
+  binaries:
+    name: Standalone Binary (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15
+            target: x86_64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install musl toolchain
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+      - name: Install Rust toolchain
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup toolchain install stable --profile minimal --target "$TARGET" && rustup default stable
+      - name: Build standalone binary
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --locked --release --bin omnicoach --target "$TARGET"
+      - name: Smoke-test standalone binary
+        if: matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: ./target/"$TARGET"/release/omnicoach --version
+      - name: Package standalone archive (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p dist
+          tar -C "target/$TARGET/release" -czf "dist/omnicoach-$TARGET.tar.gz" omnicoach
+      - name: Package standalone archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "target/$env:TARGET/release/omnicoach.exe" -DestinationPath "dist/omnicoach-$env:TARGET.zip"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binaries-${{ matrix.target }}
+          path: dist
+
   wasm:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -124,7 +193,7 @@ jobs:
   github-release:
     name: Create GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, macos, windows, sdist, wasm]
+    needs: [linux, macos, windows, sdist, binaries, wasm]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -138,6 +207,11 @@ jobs:
           merge-multiple: true
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: binaries-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
           name: release-wasm
           path: dist
       - name: Publish GitHub Release
@@ -145,7 +219,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" dist/* --generate-notes --title "$TAG"
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --generate-notes --title "$TAG"
+          fi
       # A release created with `GITHUB_TOKEN` triggers no workflow, so dispatch Pages explicitly.
       - name: Redeploy Pages with the new release
         env:
@@ -156,7 +235,7 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, macos, windows, sdist]
+    needs: [linux, macos, windows, sdist, binaries, wasm]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: pypi
@@ -169,11 +248,13 @@ jobs:
           path: dist
           merge-multiple: true
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          skip-existing: true
 
   publish-crates:
     name: Publish to crates.io
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, macos, windows]
+    needs: [linux, macos, windows, sdist, binaries, wasm, github-release]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: crates-io
