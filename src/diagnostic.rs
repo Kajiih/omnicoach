@@ -3,7 +3,7 @@
 architecture_component!(Diagnostic);
 
 use serde::{Deserialize, Serialize};
-use std::io::{self, BufWriter, Write as _};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use strum::VariantArray;
 
@@ -507,14 +507,29 @@ pub enum OutputFormat {
 ///
 /// Returns an error if JSON serialization or writing to stdout fails.
 pub fn print_diagnostics(diagnostics: &[Diagnostic], format: OutputFormat) -> anyhow::Result<()> {
-    if format == OutputFormat::Json {
+    write_diagnostics_to(io::stdout().lock(), diagnostics, format)
+}
+
+fn write_diagnostics_to<W: Write>(
+    mut writer: W,
+    diagnostics: &[Diagnostic],
+    format: OutputFormat,
+) -> anyhow::Result<()> {
+    let rendered = if format == OutputFormat::Json {
         let mut sorted: Vec<&Diagnostic> = diagnostics.iter().collect();
         sorted.sort_unstable();
-        println!("{}", serde_json::to_string_pretty(&sorted)?);
+        let mut json = serde_json::to_string_pretty(&sorted)?;
+        json.push('\n');
+        json
     } else {
-        let mut stdout = BufWriter::new(io::stdout().lock());
-        stdout.write_all(format_plain(diagnostics).as_bytes())?;
-        stdout.flush()?;
+        format_plain(diagnostics)
+    };
+    if let Err(error) = writer
+        .write_all(rendered.as_bytes())
+        .and_then(|()| writer.flush())
+        && error.kind() != io::ErrorKind::BrokenPipe
+    {
+        return Err(error.into());
     }
     Ok(())
 }
@@ -702,5 +717,94 @@ mod tests {
         diagnostics.sort_unstable();
 
         assert_eq!(diagnostics, vec![diag2, diag3, diag1]);
+    }
+
+    #[test]
+    fn test_write_diagnostics_to_formats_plain_and_json_in_canonical_order() {
+        let second_diagnostic = Diagnostic::new(
+            RuleName("rule-b"),
+            ViolationMessage::new("Summary B", "Rationale B", "Suggestion B"),
+            SourceLocation::file_span(
+                "src/b.rs",
+                SourceSpan::new(10, 20),
+                LineColumn { line: 2, column: 1 },
+            ),
+        );
+        let first_diagnostic = Diagnostic::new(
+            RuleName("rule-a"),
+            ViolationMessage::new("Summary A", "Rationale A", "Suggestion A"),
+            SourceLocation::file_span(
+                "src/a.rs",
+                SourceSpan::new(0, 5),
+                LineColumn { line: 1, column: 1 },
+            ),
+        );
+        let input = [second_diagnostic, first_diagnostic];
+
+        let mut plain_output = Vec::new();
+        write_diagnostics_to(&mut plain_output, &input, OutputFormat::Plain).unwrap();
+        let mut json_output = Vec::new();
+        write_diagnostics_to(&mut json_output, &input, OutputFormat::Json).unwrap();
+        let rendered_json = String::from_utf8(json_output).unwrap();
+
+        assert_eq!(
+            String::from_utf8(plain_output).unwrap(),
+            format_plain(&input)
+        );
+        assert!(rendered_json.ends_with("]\n"), "{rendered_json}");
+        assert!(
+            rendered_json.find("src/a.rs").unwrap() < rendered_json.find("src/b.rs").unwrap(),
+            "{rendered_json}"
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::broken_pipe_write(true, io::ErrorKind::BrokenPipe, true)]
+    #[case::broken_pipe_flush(false, io::ErrorKind::BrokenPipe, true)]
+    #[case::other_error_write(true, io::ErrorKind::PermissionDenied, false)]
+    #[case::other_error_flush(false, io::ErrorKind::PermissionDenied, false)]
+    fn test_write_diagnostics_to_broken_pipe_and_flush_handling(
+        #[case] fail_on_write: bool,
+        #[case] kind: io::ErrorKind,
+        #[case] expect_ok: bool,
+    ) {
+        let diagnostic = Diagnostic::new(
+            RuleName("rule-a"),
+            ViolationMessage::new("Summary", "Rationale", "Suggestion"),
+            SourceLocation::file_span(
+                "src/a.rs",
+                SourceSpan::new(0, 5),
+                LineColumn { line: 1, column: 1 },
+            ),
+        );
+        let mut writer = FallibleDiagnosticWriter {
+            fail_on_write,
+            kind,
+            flushed: false,
+        };
+        let result = write_diagnostics_to(&mut writer, &[diagnostic], OutputFormat::Plain);
+
+        assert_eq!(result.is_ok(), expect_ok);
+        assert!(fail_on_write || writer.flushed);
+    }
+
+    struct FallibleDiagnosticWriter {
+        fail_on_write: bool,
+        kind: io::ErrorKind,
+        flushed: bool,
+    }
+
+    impl Write for FallibleDiagnosticWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.fail_on_write {
+                return Err(io::Error::new(self.kind, "simulated write failure"));
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushed = true;
+            Err(io::Error::new(self.kind, "simulated flush failure"))
+        }
     }
 }

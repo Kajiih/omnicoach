@@ -2,6 +2,7 @@
 
 omnicoach::architecture_component!(Bin);
 
+use std::io::Write as _;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -28,7 +29,7 @@ fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     if let Some(output) = cli.discovery.render(&cli.config_overrides) {
-        print!("{}", output?);
+        write_stdout_ignoring_broken_pipe(output?.as_bytes())?;
         return Ok(());
     }
 
@@ -46,7 +47,7 @@ fn run() -> anyhow::Result<()> {
         DomainCommand::Hook(args) => {
             match args.agent {
                 HookAgent::Antigravity { event } => {
-                    run_hook(|input| run_antigravity_hook(event, input));
+                    run_hook(|input| run_antigravity_hook(event, input))?;
                 }
             }
             Ok(())
@@ -89,19 +90,22 @@ fn load<E: std::fmt::Display>(
 
 /// Reads the hook payload from stdin and prints the response, failing open (no output) on any
 /// error so a malformed payload never blocks the agent.
-fn run_hook<E: std::fmt::Display>(handle: impl FnOnce(&str) -> Result<String, E>) {
+fn run_hook<E: std::fmt::Display>(
+    handle: impl FnOnce(&str) -> Result<String, E>,
+) -> std::io::Result<()> {
     let input = match std::io::read_to_string(std::io::stdin()) {
         Ok(input) => input,
         Err(error) => {
             eprintln!("[omnicoach hook] failed to read stdin: {error}");
-            return;
+            return Ok(());
         }
     };
     match handle(&input) {
-        Ok(output) if !output.is_empty() => println!("{output}"),
+        Ok(output) if !output.is_empty() => write_stdout_line_ignoring_broken_pipe(&output)?,
         Ok(_) => {}
         Err(error) => eprintln!("[omnicoach hook] ignoring invalid hook input: {error}"),
     }
+    Ok(())
 }
 
 fn run_code(options: &LintOptions, config: &Config, format: OutputFormat) -> anyhow::Result<()> {
@@ -110,10 +114,8 @@ fn run_code(options: &LintOptions, config: &Config, format: OutputFormat) -> any
     if !report.diagnostics.is_empty() {
         print_diagnostics(&report.diagnostics, format)?;
         if format == OutputFormat::Plain {
-            println!(
-                "{}",
-                code_report_footer(env!("CARGO_BIN_NAME"), &report.diagnostics)
-            );
+            let footer = code_report_footer(env!("CARGO_BIN_NAME"), &report.diagnostics);
+            write_stdout_line_ignoring_broken_pipe(&footer)?;
         }
     }
     for unreadable in &report.unreadable_files {
@@ -130,7 +132,7 @@ fn run_code(options: &LintOptions, config: &Config, format: OutputFormat) -> any
         std::process::exit(1);
     }
     if format == OutputFormat::Plain {
-        println!("All checks passed!");
+        write_stdout_line_ignoring_broken_pipe("All checks passed!")?;
     }
     Ok(())
 }
@@ -141,7 +143,7 @@ fn run_command(command: &str, config: &Config, format: OutputFormat) -> anyhow::
     if !diagnostics.is_empty() {
         print_diagnostics(&diagnostics, format)?;
         if format == OutputFormat::Plain {
-            println!("{}", explain_footer(env!("CARGO_BIN_NAME")));
+            write_stdout_line_ignoring_broken_pipe(&explain_footer(env!("CARGO_BIN_NAME")))?;
         }
         std::process::exit(1);
     }
@@ -285,10 +287,23 @@ fn run_graph(args: GraphArgs, config: &Config) -> anyhow::Result<()> {
             config,
         )?,
     };
-    if let Err(error) = std::io::Write::write_all(&mut std::io::stdout().lock(), output.as_bytes())
+    write_stdout_ignoring_broken_pipe(output.as_bytes())?;
+    Ok(())
+}
+
+/// Writes `line` and a newline to stdout, treating a reader that closed the pipe early (such as
+/// `head`) as success rather than an error.
+fn write_stdout_line_ignoring_broken_pipe(line: &str) -> std::io::Result<()> {
+    write_stdout_ignoring_broken_pipe(format!("{line}\n").as_bytes())
+}
+
+/// Writes `bytes` to stdout, treating a reader that closed the pipe early as success.
+fn write_stdout_ignoring_broken_pipe(bytes: &[u8]) -> std::io::Result<()> {
+    let mut stdout = std::io::stdout().lock();
+    if let Err(error) = stdout.write_all(bytes).and_then(|()| stdout.flush())
         && error.kind() != std::io::ErrorKind::BrokenPipe
     {
-        return Err(error.into());
+        return Err(error);
     }
     Ok(())
 }

@@ -928,3 +928,61 @@ fn test_subdirectory_invocation_discovers_ancestor_config_and_anchors_globs() {
         "{output_root}"
     );
 }
+
+#[rstest::rstest]
+#[case::help(&["--help"])]
+#[case::list_rules(&["--list-rules"])]
+fn test_closed_stdout_pipe_on_discovery_exits_zero(#[case] args: &[&str]) {
+    let (code, stderr) = run_with_closed_stdout_pipe(args);
+
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert!(stderr.is_empty(), "unexpected stderr: {stderr}");
+}
+
+#[rstest::rstest]
+#[case::clean_plain(&["code", "--select", "single-letter-name"], "def compute_total() -> int:\n    return 0\n", 0)]
+#[case::violation_plain(&["code", "--select", "single-letter-name"], "k = 1\n", 1)]
+#[case::violation_json(&["code", "--format", "json", "--select", "single-letter-name"], "k = 1\n", 1)]
+fn test_closed_stdout_pipe_on_code_preserves_exit_code_with_empty_stderr(
+    #[case] prefix_args: &[&str],
+    #[case] source: &str,
+    #[case] expected_code: i32,
+) {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let config_path = temp_dir.path().join(".omnicoach.toml");
+    fs::write(&config_path, "").unwrap();
+    let target = temp_dir.path().join("sample.py");
+    fs::write(&target, source).unwrap();
+
+    let mut args: Vec<&str> = prefix_args.to_vec();
+    args.extend([
+        "--config",
+        config_path.to_str().unwrap(),
+        target.to_str().unwrap(),
+    ]);
+
+    let (code, stderr) = run_with_closed_stdout_pipe(&args);
+
+    assert_eq!(code, Some(expected_code), "stderr: {stderr}");
+    assert!(stderr.is_empty(), "unexpected stderr: {stderr}");
+}
+
+fn run_with_closed_stdout_pipe(args: &[&str]) -> (Option<i32>, String) {
+    use std::process::Stdio;
+
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+
+    let output = std::process::Command::new(assert_cmd::cargo::cargo_bin(BIN_NAME))
+        .args(args)
+        .env("XDG_CONFIG_HOME", isolated_xdg_config_home())
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(writer))
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+    (
+        output.status.code(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+}
