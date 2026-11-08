@@ -1,20 +1,29 @@
 [package]
 name = "omnicoach"
-version = "0.3.0"
-edition = "2024"
-description = "Lightweight, high-signal static analysis and command linter for Python and Rust"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
 readme = "README.md"
-repository = "https://github.com/Kajiih/omnicoach"
-license = "MIT"
-keywords = ["agent", "hook", "linter", "python", "rust", "shell", "static-analysis"]
-categories = ["command-line-utilities", "development-tools"]
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
 include = ["/LICENSE", "/README.md", "/src/**"]
 default-run = "omnicoach"
 autobins = false
 
 [workspace]
-members = [".", "playground"]
+members = [".", "crates/omnicoach-py", "playground"]
 default-members = ["."]
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+description = "Lightweight, high-signal static analysis and command linter for Python and Rust"
+repository = "https://github.com/Kajiih/omnicoach"
+license = "MIT"
+keywords = ["agent", "hook", "linter", "python", "rust", "shell", "static-analysis"]
+categories = ["command-line-utilities", "development-tools"]
 
 [workspace.lints.clippy]
 allow_attributes = "deny"

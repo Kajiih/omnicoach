@@ -1,0 +1,26 @@
+[package]
+name = "omnicoach-py"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+readme = "../../README.md"
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+doctest = false
+name = "_omnicoach"
+# `extension-module` leaves CPython C-API symbols unresolved for host `dlopen`; disabling
+# standalone Rust test binaries avoids linker errors on macOS/Windows during `cargo test --workspace`.
+test = false
+
+[dependencies]
+omnicoach = { path = "../.." }
+pyo3 = { version = "0.30.1", features = ["abi3-py310", "extension-module"] }
+
+[lints]
+workspace = true

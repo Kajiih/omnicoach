@@ -15,13 +15,30 @@ classifiers = [
 ]
 dynamic = ["description", "keywords", "license", "readme", "urls", "version"]
 
+[project.scripts]
+omnicoach = "omnicoach._cli:main"
+
 [build-system]
-requires = ["maturin>=1.9,<2.0"]
+requires = ["maturin>=1.15,<2.0"]
 build-backend = "maturin"
 
 [tool.maturin]
-bindings = "bin"
+bindings = "pyo3"
+# Include benchmark fixtures and `playground` sources so `Cargo.lock` and all workspace targets
+# remain valid under `--locked` builds inside unpacked `sdist` archives.
 include = [
+    { path = ".cargo/config.toml", format = "sdist" },
     { path = "Cargo.lock", format = "sdist" },
     { path = "LICENSE", format = "sdist" },
+    { path = "README.md", format = "sdist" },
+    { path = "benches/omni_bench.rs", format = "sdist" },
+    { path = "benches/fixtures/**", format = "sdist" },
+    { path = "playground/Cargo.toml", format = "sdist" },
+    { path = "playground/src/**", format = "sdist" },
 ]
+manifest-path = "crates/omnicoach-py/Cargo.toml"
+module-name = "omnicoach._omnicoach"
+python-source = "crates/omnicoach-py/python"
+
+[tool.pyrefly]
+search-path = ["crates/omnicoach-py/python"]
