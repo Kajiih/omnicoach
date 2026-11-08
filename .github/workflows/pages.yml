@@ -16,7 +16,6 @@ env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: --cfg no_salsa_async_drops
   RUSTUP_MAX_RETRIES: 10
 
 # Deployed site builds from scratch without shared caches (`zizmor` cache-poisoning rule).
@@ -35,6 +34,7 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown && rustup default stable
       - run: cargo build --locked --release --target wasm32-unknown-unknown -p omnicoach-playground
+      - run: node playground/tests/verify_wasm.mjs
       - run: cp target/wasm32-unknown-unknown/release/omnicoach_playground.wasm playground/www/omnicoach_playground.wasm
       # Each release's WASM is served at `wasm/<tag>/omnicoach_playground.wasm`, the newest one
       # also at `wasm/latest/`, and `versions.json` lists `main` followed by the tags, newest first.

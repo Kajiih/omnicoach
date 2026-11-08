@@ -61,6 +61,8 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo clippy -p omnicoach-playground --target wasm32-unknown-unknown --locked -- -D warnings
+      - run: cargo build --locked --release --target wasm32-unknown-unknown -p omnicoach-playground
+      - run: node playground/tests/verify_wasm.mjs
       - run: cargo doc --workspace --no-deps --locked
       - run: cargo doc --workspace --no-deps --document-private-items --locked
 
