@@ -10,11 +10,11 @@ Until 1.0, bump the minor version (`0.2.0` → `0.3.0`) when the release adds ru
 
 Start from an empty working copy on top of the last commit to release, with every commit to ship already on `main`.
 
-1. Verify: `cargo test` and `cargo clippy --all-targets` pass.
-2. Bump the version on the `version` line of `[package]` in `Cargo.toml`, then refresh the lockfile:
+1. Verify: `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings` pass.
+2. Bump `version` under `[workspace.package]` in root `Cargo.toml` (shared by `omnicoach` and `crates/omnicoach-py`), then refresh the workspace entries in `Cargo.lock`:
 
    ```sh
-   cargo update -p omnicoach --offline
+   cargo update --workspace --offline
    jj diff --stat   # only Cargo.toml and Cargo.lock change
    ```
 
@@ -34,4 +34,4 @@ Start from an empty working copy on top of the last commit to release, with ever
    git push origin vX.Y.Z
    ```
 
-5. Check that `main@origin` and `vX.Y.Z` point to the same commit: `jj log -r 'main@origin | vX.Y.Z'`.
+5. Check that `main@origin` and `vX.Y.Z` point to the same commit: `jj log -r 'main@origin | vX.Y.Z'`. Pushing `vX.Y.Z` triggers [release.yml](../../.github/workflows/release.yml), which publishes the wheels and sdist to PyPI, standalone binaries and `omnicoach_playground.wasm` to GitHub Releases, and the `omnicoach` crate to crates.io, then dispatches [pages.yml](../../.github/workflows/pages.yml).

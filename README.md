@@ -6,19 +6,22 @@ Lightweight, high-signal static analysis engine and command coach designed to en
 
 ## 📦 Installation
 
-Prebuilt binaries are published to PyPI:
+### Python (`uv` or `pipx`)
 
 ```bash
-uv tool install omnicoach   # or: pipx install omnicoach
+uv tool install --managed-python omnicoach   # or: pipx install omnicoach
 ```
 
-From crates.io:
+Or per-project (`uv add --dev omnicoach`), run via `uv run omnicoach` or `python -m omnicoach`.
+
+### Standalone Binary
+
+Install with [cargo-binstall](https://github.com/cargo-bins/cargo-binstall), or compile from [crates.io](https://crates.io/crates/omnicoach):
 
 ```bash
-cargo install omnicoach --locked
+cargo binstall omnicoach          # prebuilt GitHub Release binary
+cargo install omnicoach --locked  # compile from source
 ```
-
-Both install the `omnicoach` binary.
 
 ---
 
@@ -49,7 +52,7 @@ omnicoach hook antigravity pre-tool-use    # evaluates PreToolUse events from st
 omnicoach hook antigravity pre-invocation  # injects queued code warnings on PreInvocation
 ```
 
-Wire into `~/.gemini/config/hooks.json`:
+Wire into `~/.gemini/config/hooks.json` (listing `~/.local/bin` before `~/.cargo/bin` prefers a `uv` tool install):
 
 ```json
 {
@@ -60,7 +63,7 @@ Wire into `~/.gemini/config/hooks.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "PATH=\"$HOME/.cargo/bin:$HOME/.local/bin:$PATH\" omnicoach hook antigravity pre-tool-use"
+            "command": "PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$PATH\" omnicoach hook antigravity pre-tool-use"
           }
         ]
       }
@@ -68,7 +71,7 @@ Wire into `~/.gemini/config/hooks.json`:
     "PreInvocation": [
       {
         "type": "command",
-        "command": "PATH=\"$HOME/.cargo/bin:$HOME/.local/bin:$PATH\" omnicoach hook antigravity pre-invocation"
+        "command": "PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$PATH\" omnicoach hook antigravity pre-invocation"
       }
     ]
   }
