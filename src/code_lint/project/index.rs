@@ -424,16 +424,20 @@ impl<'s> ProjectIndex<'s> {
     /// `[architecture]` or Rust `define_architecture!` / `architecture_component!` headers).
     #[must_use]
     pub fn architecture_spec(&self) -> Option<&ArchitectureSpec> {
+        if let Some(resolved) = self.resolved_architecture.get() {
+            return resolved.as_ref().ok()?.as_ref();
+        }
+        let resolved = (|| {
+            let toml_config = self.toml_architecture_config()?;
+            let rust_headers = self.rust_headers_map();
+            resolve_architecture_spec(
+                &self.layout.project_root,
+                toml_config.as_ref(),
+                rust_headers,
+            )
+        })();
         self.resolved_architecture
-            .get_or_init(|| {
-                let toml_config = self.toml_architecture_config()?;
-                let rust_headers = self.rust_headers_map();
-                resolve_architecture_spec(
-                    &self.layout.project_root,
-                    toml_config.as_ref(),
-                    rust_headers,
-                )
-            })
+            .get_or_init(|| resolved)
             .as_ref()
             .ok()?
             .as_ref()
@@ -558,49 +562,71 @@ impl<'s> ProjectIndex<'s> {
     /// `isolate-children`, plus, when the crate declares `define_architecture!`, every module
     /// that may declare `architecture_component!`.
     fn rust_headers_map(&self) -> &BTreeMap<String, Arc<RustFileSummary>> {
-        self.all_rust_headers.get_or_init(|| {
-            if !self.source.is_dir(&self.layout.rust_source_root) {
-                return BTreeMap::new();
-            }
-            let mut headers: BTreeMap<String, Arc<RustFileSummary>> = self
-                .toml_architecture_config()
-                .ok()
-                .flatten()
-                .into_iter()
-                .flat_map(|config| config.components)
-                .filter(|component| component.isolate_children)
-                .flat_map(|component| component.roots)
-                .filter_map(|module| {
-                    let summary = self.rust_summary(&module)?;
-                    Some((module, summary))
-                })
-                .collect();
-            if !self.declares_rust_architecture() {
-                return headers;
-            }
-            let mut rust_files = Vec::new();
-            collect_source_files_recursive(
-                &self.layout.rust_source_root,
-                RUST_EXTENSION,
-                self.source,
-                &mut rust_files,
-            );
-            rust_files.sort();
-            rust_files.dedup();
-            headers.par_extend(rust_files.par_iter().filter_map(|path| {
-                let module = self.layout.rust_module_of_path(path)?;
-                let declares_macro = self
-                    .source
-                    .read_to_string(path)
-                    .is_ok_and(|text| has_rust_architecture_macro_candidate(&text));
-                if !declares_macro {
-                    return None;
-                }
+        if let Some(headers) = self.all_rust_headers.get() {
+            return headers;
+        }
+        let headers = self.collect_rust_headers();
+        self.all_rust_headers.get_or_init(|| headers)
+    }
+
+    fn collect_rust_headers(&self) -> BTreeMap<String, Arc<RustFileSummary>> {
+        if !self.source.is_dir(&self.layout.rust_source_root) {
+            return BTreeMap::new();
+        }
+        let mut headers: BTreeMap<String, Arc<RustFileSummary>> = self
+            .toml_architecture_config()
+            .ok()
+            .flatten()
+            .into_iter()
+            .flat_map(|config| config.components)
+            .filter(|component| component.isolate_children)
+            .flat_map(|component| component.roots)
+            .filter_map(|module| {
                 let summary = self.rust_summary(&module)?;
                 Some((module, summary))
-            }));
-            headers
-        })
+            })
+            .collect();
+        if !self.declares_rust_architecture() {
+            return headers;
+        }
+        let mut rust_files = Vec::new();
+        collect_source_files_recursive(
+            &self.layout.rust_source_root,
+            RUST_EXTENSION,
+            self.source,
+            &mut rust_files,
+        );
+        rust_files.sort();
+        rust_files.dedup();
+        headers.par_extend(
+            rust_files
+                .par_iter()
+                .filter_map(|path| self.parse_macro_candidate_header(path))
+                .map(|entry| (entry.module, entry.summary)),
+        );
+        headers
+    }
+
+    fn parse_macro_candidate_header(&self, path: &Path) -> Option<ModuleHeaderEntry> {
+        let module = self.layout.rust_module_of_path(path)?;
+        let slot = self.rust_slot(&module);
+        if let Some(cached) = slot.get() {
+            return Some(ModuleHeaderEntry {
+                module,
+                summary: Arc::clone(cached.as_ref()?),
+            });
+        }
+        let text = self.source.read_to_string(path).ok()?;
+        if !has_rust_architecture_macro_candidate(&text) {
+            return None;
+        }
+        let summary = slot
+            .get_or_init(|| {
+                let parsed = ParsedFile::rust(&text);
+                Some(Arc::new(summarize_rust_module_header(&parsed)))
+            })
+            .clone()?;
+        Some(ModuleHeaderEntry { module, summary })
     }
 
     /// Whether the crate declares `define_architecture!` in its `architecture` module
@@ -1132,6 +1158,11 @@ enum ConfiguredArchitecture {
     Loaded(Option<ArchitectureConfig>),
 }
 
+struct ModuleHeaderEntry {
+    module: String,
+    summary: Arc<RustFileSummary>,
+}
+
 /// Cheap lexical prefilter for Rust files that may declare architecture macros: `true` whenever
 /// the text mentions `architecture_component!` or `define_architecture!` anywhere. The body-free
 /// header parse (`summarize_rust_module_header`) then decides which mentions are real top-level,
@@ -1456,5 +1487,86 @@ mod tests {
         "});
 
         assert_eq!(ancestors, ResolvedClassAncestors::default());
+    }
+
+    fn rust_architecture_stress_source(root: &Path) -> MemoryFileSource {
+        use std::fmt::Write as _;
+
+        let mut owned_files = vec![
+            (
+                "Cargo.toml".to_owned(),
+                "[package]\nname = \"demo\"\n".to_owned(),
+            ),
+            (
+                "src/architecture.rs".to_owned(),
+                indoc::indoc! {r"
+                    architecture_component!(Architecture);
+                    define_architecture! {
+                        Architecture => [],
+                        Core => [],
+                    }
+                "}
+                .to_owned(),
+            ),
+            (
+                "src/core.rs".to_owned(),
+                "architecture_component!(Core);\n".to_owned(),
+            ),
+        ];
+        let mut mod_decls = String::from("mod architecture;\npub mod core;\n");
+        for item_index in 0..48 {
+            let mod_name = format!("unit_{item_index}");
+            let _ = writeln!(mod_decls, "pub mod {mod_name};");
+            owned_files.push((
+                format!("src/{mod_name}.rs"),
+                format!(
+                    "// Mentions architecture_component! in comment {item_index}\npub fn run() {{}}\n"
+                ),
+            ));
+        }
+        owned_files.push(("src/lib.rs".to_owned(), mod_decls));
+        let refs: Vec<(&str, &str)> = owned_files
+            .iter()
+            .map(|(path, content)| (path.as_str(), content.as_str()))
+            .collect();
+        MemoryFileSource::from_relative_files(root, &refs)
+    }
+
+    #[test]
+    fn concurrent_rayon_and_external_thread_architecture_spec_queries_do_not_deadlock() {
+        let root = Path::new("/repo");
+        let source = rust_architecture_stress_source(root);
+        let layout = ProjectLayout::discover(root, &source, &[]);
+        let indices: Vec<ProjectIndex<'_>> = (0..16)
+            .map(|_| ProjectIndex::new(layout.clone(), &source))
+            .collect();
+
+        let (external_counts, rayon_counts) = std::thread::scope(|scope| {
+            let external = scope.spawn(|| {
+                indices
+                    .iter()
+                    .map(|index| {
+                        index
+                            .architecture_spec()
+                            .map_or(0, |spec| spec.components.len())
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let pool_counts: Vec<usize> = (0..256)
+                .into_par_iter()
+                .map(|slot| {
+                    indices[slot % indices.len()]
+                        .architecture_spec()
+                        .map_or(0, |spec| spec.components.len())
+                })
+                .collect();
+            (
+                external.join().expect("external thread must not panic"),
+                pool_counts,
+            )
+        });
+
+        assert_eq!(external_counts, vec![2; 16]);
+        assert_eq!(rayon_counts, vec![2; 256]);
     }
 }
