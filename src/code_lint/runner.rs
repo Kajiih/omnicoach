@@ -58,7 +58,7 @@ pub fn lint_virtual_file(
     virtual_content: &str,
     config: &Config,
 ) -> Result<Vec<Diagnostic>, ArchitectureError> {
-    let raw_root = if project_root.is_absolute() {
+    let raw_root = if crate::config::is_rooted_path(project_root) {
         project_root.to_path_buf()
     } else {
         std::env::current_dir().map_or_else(
@@ -67,7 +67,7 @@ pub fn lint_virtual_file(
         )
     };
     let normalized_root = crate::config::lexical_normalize(&raw_root);
-    let raw_target = if target_path.is_absolute() {
+    let raw_target = if crate::config::is_rooted_path(target_path) {
         target_path.to_path_buf()
     } else if let Ok(stripped) = target_path.strip_prefix(project_root) {
         normalized_root.join(stripped)

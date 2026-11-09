@@ -2,7 +2,7 @@
 
 use super::source::FileSource;
 use crate::code_lint::ast::rust::ExternalModDeclaration;
-use crate::config::{Config, lexical_normalize};
+use crate::config::{Config, is_rooted_path, lexical_normalize};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -80,11 +80,9 @@ impl ProjectLayout {
         source: &dyn FileSource,
         configured_python_roots: &[PathBuf],
     ) -> Self {
-        let working_directory = anchor
-            .is_relative()
-            .then(|| std::env::current_dir().ok())
-            .flatten();
-        let resolved_anchor = match (&working_directory, anchor.is_relative()) {
+        let is_relative_anchor = !is_rooted_path(anchor);
+        let working_directory = is_relative_anchor.then(|| source.current_dir()).flatten();
+        let resolved_anchor = match (&working_directory, is_relative_anchor) {
             (Some(base), true) => lexical_normalize(&base.join(anchor)),
             _ => lexical_normalize(anchor),
         };
@@ -238,14 +236,14 @@ impl ProjectLayout {
     /// absolute) when `path` is relative.
     #[must_use]
     pub fn resolve_query_path(&self, path: &Path) -> PathBuf {
-        if path.is_relative() {
+        if is_rooted_path(path) {
+            lexical_normalize(path)
+        } else {
             let base = self
                 .working_directory
                 .as_deref()
                 .unwrap_or(&self.project_root);
             lexical_normalize(&base.join(path))
-        } else {
-            lexical_normalize(path)
         }
     }
 
@@ -366,8 +364,11 @@ pub fn configured_source_roots(config: &Config) -> Vec<PathBuf> {
 /// Computes the crate-relative `::`-separated module path of a Rust source file path.
 #[must_use]
 pub fn rust_module_path(path: &str) -> String {
-    let trimmed = path.strip_prefix("src/").unwrap_or(path);
-    rust_module_from_relative(Path::new(trimmed)).unwrap_or_default()
+    let normalized = path.replace('\\', "/");
+    let trimmed = Path::new(&normalized)
+        .strip_prefix(SOURCE_DIRECTORY)
+        .unwrap_or_else(|_| Path::new(&normalized));
+    rust_module_from_relative(trimmed).unwrap_or_default()
 }
 
 /// Maps a path relative to the Rust crate source root (`src/`) to its `::`-separated module path,
@@ -598,7 +599,7 @@ fn find_project_root(start_directory: &Path, source: &dyn FileSource) -> Option<
         while source.is_file(&cursor.join(INIT_PY)) || source.is_file(&cursor.join(INIT_PYI)) {
             let Some(parent) = cursor
                 .parent()
-                .filter(|parent| *parent != Path::new("/") && source.is_dir(parent))
+                .filter(|parent| parent.parent().is_some() && source.is_dir(parent))
             else {
                 break;
             };
@@ -764,5 +765,25 @@ mod tests {
             layout.python_module_of_path(&root.join("packages/app/src/app/main.py")),
             Some("app.main".to_owned())
         );
+    }
+
+    #[test]
+    fn discover_resolves_relative_anchor_against_file_source_current_dir() {
+        let root = Path::new("/virtual_workspace");
+        let source = MemoryFileSource::from_relative_files(
+            root,
+            &[
+                ("Cargo.toml", "[package]\nname = \"demo\"\n"),
+                ("src/lib.rs", ""),
+            ],
+        );
+        let layout = ProjectLayout::discover(Path::new("src/lib.rs"), &source, &[]);
+
+        assert_eq!(layout.project_root, lexical_normalize(root));
+        assert_eq!(
+            layout.rust_module_of_path(Path::new("src/lib.rs")),
+            Some("lib".to_owned())
+        );
+        assert_eq!(rust_module_path(r"src\sub\mod.rs"), "sub");
     }
 }

@@ -27,6 +27,9 @@ pub trait FileSource: Send + Sync {
     ///
     /// Returns an I/O error if `directory` cannot be listed.
     fn read_dir(&self, directory: &Path) -> io::Result<Vec<PathBuf>>;
+
+    /// Returns the working directory used to resolve relative paths against this source, if any.
+    fn current_dir(&self) -> Option<PathBuf>;
 }
 
 /// Real OS filesystem implementation of [`FileSource`].
@@ -54,16 +57,35 @@ impl FileSource for DiskFileSource {
         entries.sort();
         Ok(entries)
     }
+
+    fn current_dir(&self) -> Option<PathBuf> {
+        std::env::current_dir().ok()
+    }
 }
 
 /// Hermetic in-memory implementation of [`FileSource`] for `rule_test!` and unit tests.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct MemoryFileSource {
+    root: PathBuf,
     files: HashMap<PathBuf, String>,
     directories: HashSet<PathBuf>,
 }
 
+impl Default for MemoryFileSource {
+    fn default() -> Self {
+        let root = lexical_normalize(Path::new(Self::VIRTUAL_ROOT));
+        Self {
+            directories: HashSet::from([root.clone()]),
+            root,
+            files: HashMap::new(),
+        }
+    }
+}
+
 impl MemoryFileSource {
+    /// Canonical virtual root path for hermetic in-memory projects.
+    pub const VIRTUAL_ROOT: &'static str = "/proj";
+
     /// Builds an in-memory filesystem rooted at `root` from `(relative_path, content)` pairs.
     #[must_use]
     pub fn from_relative_files(root: &Path, entries: &[(&str, &str)]) -> Self {
@@ -83,7 +105,11 @@ impl MemoryFileSource {
             }
             files.insert(full, content.to_owned());
         }
-        Self { files, directories }
+        Self {
+            root: norm_root,
+            files,
+            directories,
+        }
     }
 }
 
@@ -121,6 +147,10 @@ impl FileSource for MemoryFileSource {
             }
         }
         Ok(children.into_iter().collect())
+    }
+
+    fn current_dir(&self) -> Option<PathBuf> {
+        Some(self.root.clone())
     }
 }
 
@@ -193,6 +223,10 @@ impl<B: FileSource> FileSource for OverlayFileSource<B> {
         }
         Ok(children.into_iter().collect())
     }
+
+    fn current_dir(&self) -> Option<PathBuf> {
+        self.base.current_dir()
+    }
 }
 
 #[cfg(test)]
@@ -214,6 +248,7 @@ mod tests {
             ]),
         );
 
+        assert_eq!(overlay.current_dir(), Some(lexical_normalize(root)));
         assert_eq!(
             overlay.read_to_string(&root.join("pkg/a.py")).unwrap(),
             "A = 2"

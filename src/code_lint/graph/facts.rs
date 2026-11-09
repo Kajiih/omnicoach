@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 const INIT_MODULE: &str = "__init__";
 const LIB_MODULE: &str = "lib";
 const MAX_REEXPORT_HOPS: usize = 4;
-const VIRTUAL_PROJECT_ROOT: &str = "/proj";
 /// Multi-file project facts across a Rust crate or Python package.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ProjectFacts {
@@ -100,7 +99,7 @@ pub(super) fn collect_project_facts_with_config(
     files: &[(&str, &str)],
     architecture: Option<&ArchitectureConfig>,
 ) -> ProjectFacts {
-    let root = Path::new(VIRTUAL_PROJECT_ROOT);
+    let root = Path::new(MemoryFileSource::VIRTUAL_ROOT);
     let configured_roots: Vec<PathBuf> = architecture
         .map(|config| config.source_roots.iter().map(PathBuf::from).collect())
         .unwrap_or_default();
@@ -194,7 +193,7 @@ struct RustModuleEntry {
 }
 
 fn parse_rust_module(path: &str, source: &str, layout: &ProjectLayout) -> RustModuleEntry {
-    let full_path = Path::new(VIRTUAL_PROJECT_ROOT).join(path);
+    let full_path = Path::new(MemoryFileSource::VIRTUAL_ROOT).join(path);
     let module_path = layout
         .rust_module_of_path(&full_path)
         .unwrap_or_else(|| rust_module_path(path));
@@ -417,7 +416,7 @@ struct PythonModuleEntry {
 
 fn parse_python_module(path: &str, source: &str, layout: &ProjectLayout) -> PythonModuleEntry {
     let is_package_init = is_python_package_init(Path::new(path));
-    let full_path = Path::new(VIRTUAL_PROJECT_ROOT).join(path);
+    let full_path = Path::new(MemoryFileSource::VIRTUAL_ROOT).join(path);
     let module_path = layout
         .python_module_of_path(&full_path)
         .unwrap_or_else(|| INIT_MODULE.to_owned());

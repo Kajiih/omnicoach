@@ -19,8 +19,6 @@ use std::collections::HashSet;
 use std::fmt::Write;
 use std::path::Path;
 
-const VIRTUAL_PROJECT_ROOT: &str = "/proj";
-
 /// Uniform test-execution adapter implemented by both [`CodeRule`] and [`ProjectCodeRule`].
 pub trait TestableCodeRule {
     /// Type-erased rule metadata (`name`, `languages`, `options`, `doc`).
@@ -170,7 +168,7 @@ pub fn run_code_rule<R: TestableCodeRule>(
     if !rule.is_project_rule() {
         return rule.run_in_ban_mode(relative_path, &parsed, None, overrides);
     }
-    let root = Path::new(VIRTUAL_PROJECT_ROOT);
+    let root = Path::new(MemoryFileSource::VIRTUAL_ROOT);
     let memory = MemoryFileSource::from_relative_files(root, &[(filename, source)]);
     let full_path = root.join(filename);
     let layout = ProjectLayout::discover(root, &memory, &[]);
@@ -347,7 +345,7 @@ pub fn assert_rule_pass_input<R: TestableCodeRule>(
                 "rule_test! [{rule_name}] ({lang:?}) PASS case '{case_name}': multi-file `{{ ... }}` cases are only valid on `ProjectCodeRule`s"
             );
             let parsed_files = validate_and_parse_project_files(rule_name, lang, case_name, files);
-            let root = Path::new(VIRTUAL_PROJECT_ROOT);
+            let root = Path::new(MemoryFileSource::VIRTUAL_ROOT);
             let memory = MemoryFileSource::from_relative_files(root, files);
             let layout = discover_virtual_project_layout(root, files, &memory);
             let index = ProjectIndex::new(layout, &memory);
@@ -752,7 +750,7 @@ fn assert_project_fail_input<R: TestableCodeRule>(
                 "rule_test! [{rule_name}] ({lang:?}) FAIL case '{case_name}': target_path '{target_path}' is missing from project files"
             )
         });
-    let root = Path::new(VIRTUAL_PROJECT_ROOT);
+    let root = Path::new(MemoryFileSource::VIRTUAL_ROOT);
     let memory = MemoryFileSource::from_relative_files(root, files);
     let layout = discover_virtual_project_layout(root, files, &memory);
     let index = ProjectIndex::new(layout, &memory);
@@ -968,7 +966,7 @@ fn assert_every_occurrence_reported_in_project<R: TestableCodeRule>(
             }
         })
         .collect();
-    let root = Path::new(VIRTUAL_PROJECT_ROOT);
+    let root = Path::new(MemoryFileSource::VIRTUAL_ROOT);
     let memory = MemoryFileSource::from_relative_files(root, &repeated_entries);
     let layout = discover_virtual_project_layout(root, &repeated_entries, &memory);
     let index = ProjectIndex::new(layout, &memory);

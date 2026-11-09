@@ -10,7 +10,7 @@ use super::virtual_edit::{VirtualFile, apply_virtual_edit};
 use crate::code_lint::runner::{lint_virtual_file, lint_virtual_file_for_rules};
 use crate::command_lint::runner::run_command_lint_with_client;
 use crate::command_lint::vcs::{JjCliClient, JjClient};
-use crate::config::{Config, lexical_normalize};
+use crate::config::{Config, is_rooted_path, lexical_normalize};
 use crate::diagnostic::{Diagnostic, Language, RuleName};
 use crate::rule_selection::{
     ConfigOverrides, discover_project_root, load_command_config_from_root, load_config_from_root,
@@ -280,7 +280,7 @@ fn resolve_in_workspace(raw_path: &Path, workspace_paths: &[PathBuf]) -> PathBuf
             .first()
             .cloned()
             .unwrap_or_else(|| PathBuf::from("."))
-    } else if raw_path.is_relative()
+    } else if !is_rooted_path(raw_path)
         && let Some(workspace_root) = workspace_paths.first()
     {
         workspace_root.join(raw_path)

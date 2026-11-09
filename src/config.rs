@@ -223,8 +223,8 @@ impl Config {
 
     fn normalize_path_for_glob(&self, path: &Path) -> String {
         let needs_cwd = self.root_dir.as_deref().map_or_else(
-            || path.is_absolute(),
-            |root| !path.is_absolute() || !path.starts_with(root),
+            || is_rooted_path(path),
+            |root| !is_rooted_path(path) || !path.starts_with(root),
         );
         let cwd = needs_cwd.then_some(CACHED_CURRENT_DIR.as_deref()).flatten();
         normalize_path_with_roots(path, self.root_dir.as_deref(), cwd)
@@ -258,6 +258,17 @@ pub fn lexical_normalize(path: &Path) -> PathBuf {
     } else {
         components.iter().collect()
     }
+}
+
+/// Returns true if `path` is anchored at a root separator or drive/UNC prefix rather than
+/// directory-relative.
+///
+/// Unlike [`Path::is_absolute`], which returns `false` on Windows for drive-less rooted paths
+/// such as `"/repo"`, `is_rooted_path` matches the exact paths that [`Path::join`] treats as
+/// anchored instead of appending beneath a base directory.
+#[must_use]
+pub fn is_rooted_path(path: &Path) -> bool {
+    path.has_root() || matches!(path.components().next(), Some(Component::Prefix(_)))
 }
 
 /// Compiles `pattern` with `*` matching across `/`, as all config globs do.
@@ -300,7 +311,7 @@ fn compile_glob_set<'a>(
 
 fn normalize_path_with_roots(path: &Path, root_dir: Option<&Path>, cwd: Option<&Path>) -> String {
     let normalized_input = lexical_normalize(path);
-    let relative = if normalized_input.is_absolute() {
+    let relative = if is_rooted_path(&normalized_input) {
         root_dir
             .and_then(|root| normalized_input.strip_prefix(root).ok())
             .or_else(|| cwd.and_then(|current| normalized_input.strip_prefix(current).ok()))
@@ -423,6 +434,20 @@ mod tests {
         // Path relative to root
         assert!(!config.is_rule_enabled_for_path(STYLE_RULE, Path::new("tests/cli.rs")));
         assert!(config.is_rule_enabled_for_path(STYLE_RULE, Path::new("src/lib.rs")));
+    }
+
+    #[rstest::rstest]
+    #[case::unix_root("/", true)]
+    #[case::unix_anchored("/repo/src/lib.rs", true)]
+    #[case::relative_file("src/lib.rs", false)]
+    #[case::dot_relative("./src/lib.rs", false)]
+    #[case::parent_relative("../src/lib.rs", false)]
+    #[case::empty("", false)]
+    #[cfg_attr(windows, case::windows_drive_root(r"C:\repo\src\lib.rs", true))]
+    #[cfg_attr(windows, case::windows_drive_relative(r"C:src\lib.rs", true))]
+    #[cfg_attr(windows, case::windows_unc(r"\\server\share\repo\lib.rs", true))]
+    fn test_is_rooted_path(#[case] input: &str, #[case] expected: bool) {
+        assert_eq!(is_rooted_path(Path::new(input)), expected);
     }
 
     #[test]
