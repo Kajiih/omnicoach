@@ -2,7 +2,10 @@
 
 use super::bindings::{collect_rust_fn_local_names, collect_rust_generic_param_names};
 use super::names::{SELF_KEYWORD, SELF_TYPE_KEYWORD};
-use super::trivia::previous_non_trivia_token;
+use super::trivia::{
+    next_non_trivia_token, previous_non_trivia_token, token_after_double_colon,
+    token_before_double_colon,
+};
 use crate::code_lint::ast::call_clusters::{
     DeclarationScope, DeclarationScopeKind, PlacementAnchor, RelationKind, ScopeItem,
     ScopeItemKind, Visibility, collapse_whitespace, extend_references, extend_unique, push_unique,
@@ -514,17 +517,6 @@ fn collect_rust_impl_callees(
     RustImplCallees { attached, external }
 }
 
-fn impl_trait_name(impl_item: &ast::Impl) -> Option<String> {
-    if let ast::Type::PathType(path_type) = impl_item.trait_()?
-        && let Some(path) = path_type.path()
-        && let Some(segment) = path.segment()
-        && let Some(name_ref) = segment.name_ref()
-    {
-        return Some(name_ref.text().trim().to_owned());
-    }
-    None
-}
-
 /// Collects indices of sibling module items in `item_by_name` referenced inside `root`
 /// (including bridged calls via `impl_callees` and macro token trees).
 fn collect_rust_module_item_refs(
@@ -962,10 +954,11 @@ pub fn enclosing_impl_self_type(file: &ParsedFile, line: usize) -> Option<String
 /// Collects [`IntraFileReference`] entries for intra-file references to `module_items` and
 /// `method_items` across production items in a Rust `file`.
 #[must_use]
-pub fn collect_intra_file_ref_sites(
+pub fn collect_intra_file_ref_sites<'a>(
     file: &ParsedFile,
-    module_items: &HashSet<&str>,
-    method_items: &HashSet<String>,
+    module_items: &'a HashSet<&'a str>,
+    module_types: &'a HashSet<&'a str>,
+    method_items: &'a HashSet<String>,
 ) -> Vec<IntraFileReference> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
@@ -973,6 +966,7 @@ pub fn collect_intra_file_ref_sites(
     let mut out = Vec::new();
     let targets = IntraRefTargets {
         module_items,
+        module_types,
         method_items,
     };
     let empty_generics = HashSet::new();
@@ -1055,6 +1049,8 @@ pub fn collect_intra_file_ref_sites(
 struct IntraRefTargets<'a> {
     /// Names of the file's module-level items.
     module_items: &'a HashSet<&'a str>,
+    /// Names of the file's module-level type items (`struct`, `enum`, `union`, `trait`).
+    module_types: &'a HashSet<&'a str>,
     /// `Type::method` names of the file's methods.
     method_items: &'a HashSet<String>,
 }
@@ -1070,7 +1066,7 @@ fn collect_rust_type_item_intra_refs(
         return;
     };
     let type_name = name_node.text().trim();
-    if !targets.module_items.contains(type_name) {
+    if !targets.module_types.contains(type_name) {
         return;
     }
     let locals = collect_rust_generic_param_names(syntax);
@@ -1094,39 +1090,26 @@ fn collect_rust_impl_intra_refs(
     targets: IntraRefTargets<'_>,
     out: &mut Vec<IntraFileReference>,
 ) {
-    let Some(self_type_owned) = impl_self_type_name(impl_item, &file.source) else {
-        return;
-    };
-    let self_type = self_type_owned.as_str();
-    let self_type_in_module = targets.module_items.contains(self_type);
+    let self_type_owned = impl_self_type_name(impl_item, &file.source);
+    let self_type = self_type_owned.as_deref();
+    let local_self_type = self_type.filter(|name| targets.module_types.contains(name));
+    let local_trait =
+        impl_trait_name(impl_item).filter(|name| targets.module_types.contains(name.as_str()));
+    let impl_owner = local_self_type.or(local_trait.as_deref());
     let is_inherent = impl_item.trait_().is_none();
     let impl_generics = collect_rust_generic_param_names(impl_item.syntax());
-    if self_type_in_module {
-        let impl_scope = IntraRefScope {
-            source_symbol: self_type,
-            enclosing_self_type: Some(self_type),
-            local_names: &impl_generics,
-        };
-        if let Some(trait_type) = impl_item.trait_() {
-            collect_rust_node_intra_refs(
-                trait_type.syntax(),
-                file,
-                targets,
-                impl_scope,
-                RelationKind::Body,
-                out,
-            );
-        }
-        if let Some(where_clause) = impl_item.where_clause() {
-            collect_rust_node_intra_refs(
-                where_clause.syntax(),
-                file,
-                targets,
-                impl_scope,
-                RelationKind::Body,
-                out,
-            );
-        }
+    if let Some(owner) = impl_owner {
+        collect_rust_impl_header_intra_refs(
+            impl_item,
+            file,
+            targets,
+            IntraRefScope {
+                source_symbol: owner,
+                enclosing_self_type: self_type,
+                local_names: &impl_generics,
+            },
+            out,
+        );
     }
     let Some(assoc_items) = impl_item.assoc_item_list() else {
         return;
@@ -1137,15 +1120,12 @@ fn collect_rust_impl_intra_refs(
         }
         match assoc_item {
             ast::AssocItem::Fn(method) => {
-                let method_source = method.name().and_then(|name_node| {
-                    let candidate = format!("{self_type}::{}", name_node.text().trim());
+                let method_source = self_type.and_then(|st| {
+                    let name_node = method.name()?;
+                    let candidate = format!("{st}::{}", name_node.text().trim());
                     (is_inherent && targets.method_items.contains(&candidate)).then_some(candidate)
                 });
-                let source_symbol = if let Some(ref candidate) = method_source {
-                    candidate.as_str()
-                } else if self_type_in_module {
-                    self_type
-                } else {
+                let Some(source_symbol) = method_source.as_deref().or(impl_owner) else {
                     continue;
                 };
                 collect_rust_fn_intra_refs(
@@ -1153,26 +1133,27 @@ fn collect_rust_impl_intra_refs(
                     file,
                     targets,
                     source_symbol,
-                    Some(self_type),
+                    self_type,
                     &impl_generics,
                     out,
                 );
             }
-            other if self_type_in_module => {
-                collect_rust_node_intra_refs(
-                    other.syntax(),
-                    file,
-                    targets,
-                    IntraRefScope {
-                        source_symbol: self_type,
-                        enclosing_self_type: Some(self_type),
-                        local_names: &impl_generics,
-                    },
-                    RelationKind::Body,
-                    out,
-                );
+            other => {
+                if let Some(owner) = impl_owner {
+                    collect_rust_node_intra_refs(
+                        other.syntax(),
+                        file,
+                        targets,
+                        IntraRefScope {
+                            source_symbol: owner,
+                            enclosing_self_type: self_type,
+                            local_names: &impl_generics,
+                        },
+                        RelationKind::Body,
+                        out,
+                    );
+                }
             }
-            _ => {}
         }
     }
 }
@@ -1252,6 +1233,45 @@ struct IntraRefScope<'a> {
     local_names: &'a HashSet<String>,
 }
 
+fn collect_rust_impl_header_intra_refs(
+    impl_item: &ast::Impl,
+    file: &ParsedFile,
+    targets: IntraRefTargets<'_>,
+    impl_scope: IntraRefScope<'_>,
+    out: &mut Vec<IntraFileReference>,
+) {
+    if let Some(self_type) = impl_item.self_ty() {
+        collect_rust_node_intra_refs(
+            self_type.syntax(),
+            file,
+            targets,
+            impl_scope,
+            RelationKind::Body,
+            out,
+        );
+    }
+    if let Some(trait_type) = impl_item.trait_() {
+        collect_rust_node_intra_refs(
+            trait_type.syntax(),
+            file,
+            targets,
+            impl_scope,
+            RelationKind::Body,
+            out,
+        );
+    }
+    if let Some(where_clause) = impl_item.where_clause() {
+        collect_rust_node_intra_refs(
+            where_clause.syntax(),
+            file,
+            targets,
+            impl_scope,
+            RelationKind::Body,
+            out,
+        );
+    }
+}
+
 fn collect_rust_node_intra_refs(
     root: &SyntaxNode,
     file: &ParsedFile,
@@ -1262,6 +1282,7 @@ fn collect_rust_node_intra_refs(
 ) {
     let IntraRefTargets {
         module_items,
+        module_types,
         method_items,
     } = targets;
     let IntraRefScope {
@@ -1284,13 +1305,19 @@ fn collect_rust_node_intra_refs(
             }
         }
         RustSyntaxRef::Path {
-            seg0, seg1, offset, ..
+            seg0,
+            seg1,
+            has_extra_segments,
+            offset,
         } => {
             let line = file.line_index.line(offset);
-            if seg0 != SELF_TYPE_KEYWORD
-                && !local_names.contains(seg0)
-                && module_items.contains(seg0)
-            {
+            let is_composite = seg1.is_some() || has_extra_segments;
+            let matches_module_item = if is_composite {
+                module_types.contains(seg0)
+            } else {
+                module_items.contains(seg0)
+            };
+            if seg0 != SELF_TYPE_KEYWORD && !local_names.contains(seg0) && matches_module_item {
                 out.push(IntraFileReference {
                     source_symbol: source_symbol.to_owned(),
                     target_symbol: seg0.to_owned(),
@@ -1409,6 +1436,8 @@ fn walk_token_tree_syntax_refs(node: &SyntaxNode, on_ref: &mut impl FnMut(RustSy
             });
             continue;
         }
+        let followed_by_double_colon_ident =
+            token_after_double_colon(&token).is_some_and(|next| next.kind() == SyntaxKind::IDENT);
         if let Some(recv) = token_before_double_colon(&token)
             && matches!(recv.kind(), SyntaxKind::IDENT | SyntaxKind::SELF_TYPE_KW)
         {
@@ -1421,7 +1450,7 @@ fn walk_token_tree_syntax_refs(node: &SyntaxNode, on_ref: &mut impl FnMut(RustSy
                 on_ref(RustSyntaxRef::Path {
                     seg0: rtext,
                     seg1: Some(name),
-                    has_extra_segments: false,
+                    has_extra_segments: followed_by_double_colon_ident,
                     offset: recv.text_range().start().into(),
                 });
                 continue;
@@ -1432,6 +1461,7 @@ fn walk_token_tree_syntax_refs(node: &SyntaxNode, on_ref: &mut impl FnMut(RustSy
         });
         if (!is_preceded_by_dot_or_double_colon(&token) || is_self_qualified)
             && !is_followed_by_single_colon(&token)
+            && !followed_by_double_colon_ident
         {
             on_ref(RustSyntaxRef::Path {
                 seg0: name,
@@ -1466,23 +1496,6 @@ fn rust_path_segments(path: &ast::Path) -> Vec<String> {
     segments
 }
 
-/// Returns the non-trivia token immediately preceding a `::` separator before `token`, if any.
-fn token_before_double_colon(token: &SyntaxToken) -> Option<SyntaxToken> {
-    let sep = previous_non_trivia_token(token)?;
-    if sep.kind() == SyntaxKind::COLON2 {
-        return previous_non_trivia_token(&sep);
-    }
-    if sep.kind() == SyntaxKind::COLON {
-        let first_colon = previous_non_trivia_token(&sep)?;
-        if first_colon.kind() == SyntaxKind::COLON
-            && first_colon.text_range().end() == sep.text_range().start()
-        {
-            return previous_non_trivia_token(&first_colon);
-        }
-    }
-    None
-}
-
 /// Returns true if `token` is immediately preceded (ignoring trivia) by `.` or `::`.
 fn is_preceded_by_dot_or_double_colon(token: &SyntaxToken) -> bool {
     let Some(prev) = previous_non_trivia_token(token) else {
@@ -1501,9 +1514,7 @@ fn is_preceded_by_dot_or_double_colon(token: &SyntaxToken) -> bool {
 /// Returns true if `token` is followed (ignoring trivia) by a single `:` (such as a struct field
 /// label `Foo { field: val }`) rather than `::`.
 fn is_followed_by_single_colon(token: &SyntaxToken) -> bool {
-    let Some(next) = std::iter::successors(token.next_token(), SyntaxToken::next_token)
-        .find(|candidate| !candidate.kind().is_trivia())
-    else {
+    let Some(next) = next_non_trivia_token(token) else {
         return false;
     };
     if next.kind() != SyntaxKind::COLON {
@@ -1528,12 +1539,22 @@ fn impl_self_type_name(impl_item: &ast::Impl, source: &str) -> Option<String> {
     Some(source[span.start..span.end].trim().to_owned())
 }
 
+/// Extracts the terminal trait name of `impl_item.trait_()`, if any.
+fn impl_trait_name(impl_item: &ast::Impl) -> Option<String> {
+    if let ast::Type::PathType(path_type) = impl_item.trait_()?
+        && let Some(path) = path_type.path()
+        && let Some(segment) = path.segment()
+        && let Some(name_ref) = segment.name_ref()
+    {
+        return Some(name_ref.text().trim().to_owned());
+    }
+    None
+}
+
 /// Returns true if the next non-trivia token after `token` is `(`. Inside a macro token tree,
 /// `self.name` followed by `(` is a method call; without it, `name` is a field.
 fn is_followed_by_open_paren(token: &SyntaxToken) -> bool {
-    std::iter::successors(token.next_token(), SyntaxToken::next_token)
-        .find(|candidate| !candidate.kind().is_trivia())
-        .is_some_and(|next| next.kind() == SyntaxKind::L_PAREN)
+    next_non_trivia_token(token).is_some_and(|next| next.kind() == SyntaxKind::L_PAREN)
 }
 
 #[cfg(test)]
@@ -1744,6 +1765,129 @@ mod tests {
                 .relations
                 .iter()
                 .any(|relation| relation.source == build && relation.target == make)
+        );
+    }
+
+    #[test]
+    fn test_module_qualified_paths_do_not_falsely_link_same_named_fn_in_code_or_macros() {
+        let file = ParsedFile::rust(indoc::indoc! {r"
+            mod parse {
+                pub fn run() -> usize { 1 }
+            }
+
+            pub struct ArgType;
+
+            pub fn execute() -> usize {
+                let direct = parse::run();
+                assert_eq!(parse::run(), make::<ArgType>());
+                direct
+            }
+
+            fn parse() -> usize {
+                0
+            }
+
+            fn make<T>() -> usize {
+                1
+            }
+        "});
+        let scopes = crate::code_lint::ast::collect_scope_facts(&file);
+        let refs = crate::code_lint::ast::collect_intra_file_references(&file, &scopes);
+        let module_scope = &scopes[0];
+        let index_of = |name: &str| {
+            module_scope
+                .items
+                .iter()
+                .position(|item| item.name == name)
+                .expect("item exists")
+        };
+        let (execute, parse_fn, make_fn, arg_type) = (
+            index_of("execute"),
+            index_of("parse"),
+            index_of("make"),
+            index_of("ArgType"),
+        );
+        let execute_targets: Vec<&str> = refs
+            .iter()
+            .filter(|edge| edge.source_symbol == "execute")
+            .map(|edge| edge.target_symbol.as_str())
+            .collect();
+
+        assert!(
+            !module_scope
+                .relations
+                .iter()
+                .any(|relation| relation.source == execute && relation.target == parse_fn)
+        );
+        assert!(
+            module_scope
+                .relations
+                .iter()
+                .any(|relation| relation.source == execute && relation.target == make_fn)
+        );
+        assert!(
+            module_scope
+                .relations
+                .iter()
+                .any(|relation| relation.source == execute && relation.target == arg_type)
+        );
+        assert_eq!(execute_targets, vec!["ArgType", "make"]);
+    }
+
+    #[test]
+    fn test_impl_self_type_args_and_local_trait_on_external_type_record_intra_refs() {
+        let file = ParsedFile::rust(indoc::indoc! {r"
+            pub struct FieldType;
+            pub struct Payload;
+            pub struct Holder {
+                pub field: FieldType,
+            }
+            pub struct Wrapper<T>(T);
+
+            mod nested {
+                pub struct Unscoped(super::FieldType);
+            }
+
+            pub trait LocalCodec {
+                fn decode(&self) -> usize;
+            }
+
+            impl Wrapper<Payload> {
+                pub fn count(&self) -> usize {
+                    assert_eq!(self.inner_count(), 0);
+                    0
+                }
+
+                fn inner_count(&self) -> usize {
+                    0
+                }
+            }
+
+            impl LocalCodec for str {
+                fn decode(&self) -> usize {
+                    helper()
+                }
+            }
+
+            fn helper() -> usize {
+                42
+            }
+        "});
+        let scopes = crate::code_lint::ast::collect_scope_facts(&file);
+        let refs = crate::code_lint::ast::collect_intra_file_references(&file, &scopes);
+        let pairs: Vec<(&str, &str)> = refs
+            .iter()
+            .map(|edge| (edge.source_symbol.as_str(), edge.target_symbol.as_str()))
+            .collect();
+
+        assert_eq!(
+            pairs,
+            vec![
+                ("Holder", "FieldType"),
+                ("LocalCodec", "helper"),
+                ("Wrapper", "Payload"),
+                ("Wrapper::count", "Wrapper::inner_count"),
+            ]
         );
     }
 }

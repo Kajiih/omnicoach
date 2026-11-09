@@ -649,10 +649,8 @@ fn collect_token_tree_paths(
             let followed_by_single_colon = matches!(
                 elements.get(index + 1),
                 Some(SyntaxElement::Token(next)) if next.kind() == SyntaxKind::COLON
-            ) && !matches!(
-                elements.get(index + 2),
-                Some(SyntaxElement::Token(next2)) if next2.kind() == SyntaxKind::COLON
-            );
+            ) && consume_double_colon(&elements, index + 1)
+                .is_none();
             if !preceded_by_sep && !followed_by_single_colon {
                 let ident = token.text().trim();
                 if let ResolvedName::Imported(imported) = resolve_name(file, ident) {
@@ -685,6 +683,7 @@ fn consume_double_colon(elements: &[SyntaxElement], index: usize) -> Option<usiz
         SyntaxElement::Token(first) if first.kind() == SyntaxKind::COLON => {
             if let Some(SyntaxElement::Token(second)) = elements.get(index + 1)
                 && second.kind() == SyntaxKind::COLON
+                && first.text_range().end() == second.text_range().start()
             {
                 Some(index + 2)
             } else {
@@ -843,5 +842,33 @@ mod tests {
         );
         assert_eq!(header.external_mods.len(), 1);
         assert_eq!(raw_paths, vec!["crate::core::Config"]);
+    }
+
+    #[test]
+    fn test_summarize_rust_file_requires_adjacent_colons_in_macro_token_trees() {
+        let source = indoc::indoc! {r"
+            use crate::core::{Builder, Config as Cfg};
+
+            pub fn execute() {
+                dsl!(Cfg : : other, Builder::<u32>(), Record { Cfg: 1 }, Cfg::parse());
+            }
+        "};
+        let file = ParsedFile::rust(source);
+        let summary = summarize_rust_file(&file);
+        let raw_paths: Vec<&str> = summary
+            .referenced_paths
+            .iter()
+            .map(|reference| reference.raw_path.as_str())
+            .collect();
+
+        assert_eq!(
+            raw_paths,
+            vec![
+                "crate::core::Builder",
+                "crate::core::Config",
+                "crate::core::Builder",
+                "crate::core::Config::parse",
+            ]
+        );
     }
 }

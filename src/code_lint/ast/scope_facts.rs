@@ -171,12 +171,16 @@ pub fn collect_intra_file_references(
     scopes: &[ScopeFacts],
 ) -> Vec<IntraFileReference> {
     let mut module_items: HashSet<&str> = HashSet::new();
+    let mut module_types: HashSet<&str> = HashSet::new();
     let mut method_items: HashSet<String> = HashSet::new();
     for scope in scopes {
         match &scope.scope {
             DeclarationScopeKind::Module => {
                 for item in &scope.items {
                     module_items.insert(item.name.as_str());
+                    if item.kind == ScopeItemKind::Type {
+                        module_types.insert(item.name.as_str());
+                    }
                 }
             }
             DeclarationScopeKind::Class { name }
@@ -187,10 +191,17 @@ pub fn collect_intra_file_references(
             }
         }
     }
-    let raw_sites = dispatch_lang!(
-        file.lang(),
-        collect_intra_file_ref_sites(file, &module_items, &method_items)
-    );
+    let raw_sites = match file.lang() {
+        Language::Python => {
+            super::python::collect_intra_file_ref_sites(file, &module_items, &method_items)
+        }
+        Language::Rust => super::rust::collect_intra_file_ref_sites(
+            file,
+            &module_items,
+            &module_types,
+            &method_items,
+        ),
+    };
     let mut refs: Vec<IntraFileReference> = raw_sites
         .into_iter()
         .filter(|site| {

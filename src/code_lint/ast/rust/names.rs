@@ -1,6 +1,6 @@
 //! What a Rust path or macro invocation names.
 
-use super::trivia::previous_non_trivia_token;
+use super::trivia::{previous_non_trivia_token, token_before_double_colon};
 use crate::code_lint::ast::imports::QualifiedName;
 use ra_ap_syntax::ast;
 use ra_ap_syntax::{SyntaxKind, SyntaxNode};
@@ -36,20 +36,8 @@ pub(super) fn resolve_preceding_macro_path(token_tree: &SyntaxNode) -> Option<Qu
     let terminal = macro_ident.text().trim().to_string();
     let mut full_path = terminal.clone();
     let mut current = macro_ident;
-    while let Some(preceding) = previous_non_trivia_token(&current) {
-        let before_colons = if preceding.kind() == SyntaxKind::COLON2 {
-            previous_non_trivia_token(&preceding)
-        } else if preceding.kind() == SyntaxKind::COLON
-            && let Some(first_colon) = previous_non_trivia_token(&preceding)
-            && first_colon.kind() == SyntaxKind::COLON
-        {
-            previous_non_trivia_token(&first_colon)
-        } else {
-            break;
-        };
-        if let Some(prev_ident) = before_colons
-            && is_path_segment_token_kind(prev_ident.kind())
-        {
+    while let Some(prev_ident) = token_before_double_colon(&current) {
+        if is_path_segment_token_kind(prev_ident.kind()) {
             full_path = format!("{prefix}::{full_path}", prefix = prev_ident.text().trim());
             current = prev_ident;
         } else {
