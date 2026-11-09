@@ -122,6 +122,8 @@ pub const RULE: ProjectCodeRule = ProjectCodeRule {
     check: check_file,
 };
 
+const EXPORTED_ITEM_PLACEHOLDER: &str = "<exported_item>";
+
 fn check_file(
     rule: &ProjectCodeRule,
     path: &Path,
@@ -137,6 +139,7 @@ fn check_file(
         .iter()
         .map(|finding| {
             let expression = file.span_text(finding.span);
+            let name = finding.name.as_deref().unwrap_or(EXPORTED_ITEM_PLACEHOLDER);
             rule.diagnostic_at_span(
                 path,
                 file,
@@ -144,7 +147,7 @@ fn check_file(
                 &[
                     ("expression", expression),
                     ("dependency", &finding.dependency),
-                    ("name", &finding.name),
+                    ("name", name),
                     ("module", &finding.module),
                 ],
             )

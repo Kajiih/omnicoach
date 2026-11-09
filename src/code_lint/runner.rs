@@ -1376,4 +1376,69 @@ mod tests {
             ["undeclared-component-dependency"]
         );
     }
+
+    #[test]
+    fn test_architecture_rule_messages_format_multiple_owners_and_export_placeholder() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        let pkg = root.join("pkg");
+        fs::create_dir_all(pkg.join("auth")).expect("mkdir pkg/auth");
+        fs::write(pkg.join("__init__.py"), "").expect("write __init__.py");
+        fs::write(pkg.join("http_a.py"), "").expect("write http_a.py");
+        fs::write(pkg.join("http_b.py"), "").expect("write http_b.py");
+        fs::write(pkg.join("auth/__init__.py"), "def verify_token(): pass\n")
+            .expect("write auth/__init__.py");
+        fs::write(pkg.join("auth/jwt.py"), "def decode_raw(): pass\n").expect("write jwt.py");
+        let api_path = pkg.join("api.py");
+        let api_source = indoc::indoc! {"
+            import httpx
+            from pkg.auth import *
+            from pkg.auth.jwt import decode_raw
+        "};
+
+        let mut config =
+            config_enabling(&["unowned-external-dependency", "private-component-import"]);
+        config.root_dir = Some(root.to_path_buf());
+        config.architecture = Some(
+            toml::from_str(indoc::indoc! {r#"
+                [[components]]
+                name = "HttpA"
+                roots = ["pkg.http_a"]
+                owns-external = ["httpx"]
+
+                [[components]]
+                name = "HttpB"
+                roots = ["pkg.http_b"]
+                owns-external = ["httpx"]
+
+                [[components]]
+                name = "Auth"
+                roots = ["pkg.auth"]
+                public-exports = ["verify_token"]
+
+                [[components]]
+                name = "Api"
+                roots = ["pkg.api"]
+                depends-on = ["HttpA", "HttpB", "Auth"]
+            "#})
+            .expect("valid architecture config"),
+        );
+
+        let diagnostics = lint_virtual_file(root, &api_path, api_source, &config)
+            .expect("lint_virtual_file should succeed");
+
+        assert_eq!(diagnostics.len(), 3);
+        assert_eq!(
+            diagnostics[0].message.summary,
+            "Module `pkg.api` imports external package `httpx` outside its owner `pkg.http_a`, `pkg.http_b`."
+        );
+        assert_eq!(
+            diagnostics[1].message.suggestion,
+            "Import `<exported_item>` from `pkg.auth`, or expose it in `public-exports` of `Auth`."
+        );
+        assert_eq!(
+            diagnostics[2].message.suggestion,
+            "Import `decode_raw` from `pkg.auth`, or expose it in `public-exports` of `Auth`."
+        );
+    }
 }

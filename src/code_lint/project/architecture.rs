@@ -25,7 +25,6 @@ use std::sync::Arc;
 /// `define_architecture!` is recognized.
 pub(super) const RUST_ARCHITECTURE_MODULE: &str = "architecture";
 
-const EXPORTED_ITEM_PLACEHOLDER: &str = "<exported_item>";
 const RUST_MODULE_SEPARATOR: &str = "::";
 const SELF_PREFIX: &str = "self::";
 const PYTHON_MODULE_SEPARATOR: &str = ".";
@@ -232,8 +231,8 @@ pub struct UnownedExternalDependencyFinding {
     pub module: String,
     /// External crate or package name.
     pub dependency: String,
-    /// Permitted owner module prefix(es).
-    pub owner: String,
+    /// Permitted owner module prefixes.
+    pub owners: Vec<String>,
 }
 
 /// Violation finding for `private-component-import`.
@@ -243,8 +242,8 @@ pub struct PrivateComponentImportFinding {
     pub span: SourceSpan,
     /// Enclosing component name.
     pub component: String,
-    /// Imported symbol or submodule path.
-    pub name: String,
+    /// Imported symbol or submodule name, or `None` for wildcard (`*`) and bare root-module imports.
+    pub name: Option<String>,
     /// Target component root module path.
     pub module: String,
     /// Target component name whose `public-exports` were bypassed.
@@ -568,13 +567,15 @@ fn check_rust_cross_component_edge(
         && !is_rust_path_allowed_by_exports(target_root_module, canonical_path, is_glob, exports)
     {
         let symbol_name = if is_glob || canonical_path == target_root_module {
-            EXPORTED_ITEM_PLACEHOLDER.to_owned()
+            None
         } else {
-            canonical_path
-                .rsplit(RUST_MODULE_SEPARATOR)
-                .next()
-                .unwrap_or(canonical_path)
-                .to_owned()
+            Some(
+                canonical_path
+                    .rsplit(RUST_MODULE_SEPARATOR)
+                    .next()
+                    .unwrap_or(canonical_path)
+                    .to_owned(),
+            )
         };
         findings
             .private_component_imports
@@ -600,16 +601,11 @@ fn check_rust_external_owner(
             .iter()
             .any(|allowed| is_in_module_subtree(module_path, allowed));
         if is_in_module_subtree(canonical_path, package_name) && !is_allowed_owner {
-            let formatted_owners = allowed_prefixes
-                .iter()
-                .map(|prefix| format!("`{prefix}`"))
-                .collect::<Vec<_>>()
-                .join(", ");
             out.push(UnownedExternalDependencyFinding {
                 span,
                 module: module_path.to_owned(),
                 dependency: package_name.clone(),
-                owner: formatted_owners,
+                owners: allowed_prefixes.clone(),
             });
         }
     }
@@ -1011,16 +1007,16 @@ fn check_python_first_party_edge(
             || (resolved.module_path == target_match.matched_root
                 && resolved.imported_member.is_none())
         {
-            EXPORTED_ITEM_PLACEHOLDER.to_owned()
+            None
         } else {
-            resolved.imported_member.clone().unwrap_or_else(|| {
+            Some(resolved.imported_member.clone().unwrap_or_else(|| {
                 resolved
                     .full_target_path
                     .rsplit(PYTHON_MODULE_SEPARATOR)
                     .next()
                     .unwrap_or(&resolved.full_target_path)
                     .to_owned()
-            })
+            }))
         };
         findings
             .private_component_imports
@@ -1322,16 +1318,11 @@ fn check_python_external_owner(
             .iter()
             .any(|prefix| is_in_python_subtree(module_path, prefix));
         if !is_allowed {
-            let formatted_owners = allowed_prefixes
-                .iter()
-                .map(|prefix| format!("`{prefix}`"))
-                .collect::<Vec<_>>()
-                .join(", ");
             out.push(UnownedExternalDependencyFinding {
                 span,
                 module: module_path.to_owned(),
                 dependency: top_package.to_owned(),
-                owner: formatted_owners,
+                owners: allowed_prefixes.clone(),
             });
         }
     }

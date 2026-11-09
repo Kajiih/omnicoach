@@ -126,6 +126,7 @@ fn check_file(
         .unowned_external_dependencies
         .iter()
         .map(|finding| {
+            let formatted_owners = format_owners(&finding.owners);
             rule.diagnostic_at_span(
                 path,
                 file,
@@ -133,11 +134,19 @@ fn check_file(
                 &[
                     ("module", &finding.module),
                     ("dependency", &finding.dependency),
-                    ("owner", &finding.owner),
+                    ("owner", &formatted_owners),
                 ],
             )
         })
         .collect()
+}
+
+fn format_owners(owners: &[String]) -> String {
+    owners
+        .iter()
+        .map(|prefix| format!("`{prefix}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -174,6 +183,30 @@ crate::test_utils::rule_test!(
                     "#,
                     "pkg/__init__.py" => "",
                     "pkg/http.py" => "",
+                    "pkg/domain.py" => "
+                        import httpx
+                    ",
+                } => ("pkg/domain.py", "import httpx"),
+                imported_outside_multiple_owner_components => {
+                    ".omnicoach.toml" => r#"
+                        [[architecture.components]]
+                        name = "HttpA"
+                        roots = ["pkg.http_a"]
+                        owns-external = ["httpx"]
+
+                        [[architecture.components]]
+                        name = "HttpB"
+                        roots = ["pkg.http_b"]
+                        owns-external = ["httpx"]
+
+                        [[architecture.components]]
+                        name = "Domain"
+                        roots = ["pkg.domain"]
+                        depends-on = ["HttpA", "HttpB"]
+                    "#,
+                    "pkg/__init__.py" => "",
+                    "pkg/http_a.py" => "",
+                    "pkg/http_b.py" => "",
                     "pkg/domain.py" => "
                         import httpx
                     ",
