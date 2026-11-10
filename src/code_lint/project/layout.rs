@@ -49,8 +49,12 @@ pub enum PathOrigin {
         /// Shallowest ancestor module path reached during `super::` traversal.
         shallowest_ancestor: Option<String>,
     },
-    /// Crate-absolute (`crate::`, `<crate_name>::`), local child module, or external/local path.
-    NonRelative,
+    /// Explicitly crate-anchored (`crate`, `crate::...`, `<crate_name>::...`) or declared child
+    /// module (`mod child; child::...`) path within the current crate.
+    CrateLocal,
+    /// Unanchored or leading-`::` path not anchored to `crate`, `<crate_name>`, `self`, `super`,
+    /// or a declared child `mod`.
+    ExternalOrUnanchored,
 }
 
 /// A referenced path normalized to a canonical crate-relative (or external crate) path.
@@ -60,6 +64,18 @@ pub struct ResolvedPath {
     pub origin: PathOrigin,
     /// Canonical crate-relative (or external) path.
     pub canonical_path: String,
+}
+
+impl ResolvedPath {
+    /// Returns true when the path was anchored to the current crate (`crate`, `<crate_name>`,
+    /// `self`, `super`, or a declared child `mod`).
+    #[must_use]
+    pub const fn is_crate_local(&self) -> bool {
+        matches!(
+            self.origin,
+            PathOrigin::Relative { .. } | PathOrigin::CrateLocal
+        )
+    }
 }
 
 /// An inherited component and the nearest ancestor module that declared it.
@@ -407,6 +423,8 @@ pub fn resolve_rust_reference_path(
     raw_path: &str,
     crate_name: Option<&str>,
 ) -> ResolvedPath {
+    let had_leading_separator = raw_path.starts_with(RUST_MODULE_SEP);
+    let raw_path = raw_path.trim_start_matches(RUST_MODULE_SEP);
     let effective_enclosing = if is_rust_crate_root(enclosing_module) {
         ""
     } else {
@@ -415,7 +433,7 @@ pub fn resolve_rust_reference_path(
 
     if raw_path == "crate" || crate_name.is_some_and(|name| raw_path == name) {
         return ResolvedPath {
-            origin: PathOrigin::NonRelative,
+            origin: PathOrigin::CrateLocal,
             canonical_path: String::new(),
         };
     }
@@ -427,8 +445,14 @@ pub fn resolve_rust_reference_path(
         })
     }) {
         return ResolvedPath {
-            origin: PathOrigin::NonRelative,
+            origin: PathOrigin::CrateLocal,
             canonical_path: rest.to_owned(),
+        };
+    }
+    if had_leading_separator {
+        return ResolvedPath {
+            origin: PathOrigin::ExternalOrUnanchored,
+            canonical_path: raw_path.to_owned(),
         };
     }
 
@@ -474,13 +498,13 @@ pub fn resolve_rust_reference_path(
             format!("{effective_enclosing}{RUST_MODULE_SEP}{raw_path}")
         };
         return ResolvedPath {
-            origin: PathOrigin::NonRelative,
+            origin: PathOrigin::CrateLocal,
             canonical_path,
         };
     }
 
     ResolvedPath {
-        origin: PathOrigin::NonRelative,
+        origin: PathOrigin::ExternalOrUnanchored,
         canonical_path: raw_path.to_owned(),
     }
 }
@@ -735,6 +759,35 @@ mod tests {
         assert_eq!(layout.rust_crate_name.as_deref(), Some("my_custom_crate"));
         assert_eq!(self_resolved.canonical_path, "core::Config");
         assert_eq!(external_resolved.canonical_path, "omnicoach::core::Config");
+    }
+
+    #[test]
+    fn resolve_rust_reference_path_handles_leading_double_colon_paths() {
+        let leading_colon_self = resolve_rust_reference_path(
+            "runner",
+            &[],
+            "::my_custom_crate::core::Config",
+            Some("my_custom_crate"),
+        );
+        let leading_colon_external_with_shadow_mod = resolve_rust_reference_path(
+            "runner",
+            &[ExternalModDeclaration {
+                name: "serde".to_owned(),
+                declaration_text: "mod serde;".to_owned(),
+                is_private: true,
+                span: crate::diagnostic::SourceSpan { start: 0, end: 10 },
+            }],
+            "::serde::Deserialize",
+            Some("my_custom_crate"),
+        );
+
+        assert_eq!(leading_colon_self.canonical_path, "core::Config");
+        assert!(leading_colon_self.is_crate_local());
+        assert_eq!(
+            leading_colon_external_with_shadow_mod.canonical_path,
+            "serde::Deserialize"
+        );
+        assert!(!leading_colon_external_with_shadow_mod.is_crate_local());
     }
 
     #[test]

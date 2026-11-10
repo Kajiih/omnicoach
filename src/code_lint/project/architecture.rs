@@ -12,9 +12,7 @@ use crate::code_lint::ast::python::{
     PythonFileSummary, PythonImportReference, collect_python_import_references,
     summarize_python_file,
 };
-use crate::code_lint::ast::rust::{
-    DefinedComponentEntry, RustFileSummary, summarize_rust_file, summarize_rust_module_header,
-};
+use crate::code_lint::ast::rust::{DefinedComponentEntry, RustFileSummary, summarize_rust_file};
 use crate::config::{ArchitectureComponentConfig, ArchitectureConfig};
 use crate::diagnostic::{Language, SourceSpan};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -26,7 +24,6 @@ use std::sync::Arc;
 pub(super) const RUST_ARCHITECTURE_MODULE: &str = "architecture";
 
 const RUST_MODULE_SEPARATOR: &str = "::";
-const SELF_PREFIX: &str = "self::";
 const PYTHON_MODULE_SEPARATOR: &str = ".";
 const PREFIX_MATCH_RANK: usize = 3;
 
@@ -437,7 +434,6 @@ fn evaluate_rust_file_architecture(
     let mut findings = FileArchitectureFindings::default();
 
     let has_invalid_macro = check_rust_invalid_component_markers(
-        file,
         &module_path,
         &summary,
         spec,
@@ -481,20 +477,7 @@ fn evaluate_rust_file_architecture(
                 });
         }
 
-        let first_segment = reference
-            .raw_path
-            .split(RUST_MODULE_SEPARATOR)
-            .next()
-            .unwrap_or(reference.raw_path.as_str());
-        let is_local_or_self_crate = reference.raw_path.starts_with("crate::")
-            || reference.raw_path.starts_with(SELF_PREFIX)
-            || reference.raw_path.starts_with("super::")
-            || layout.rust_crate_name.as_deref() == Some(first_segment)
-            || summary
-                .external_mods
-                .iter()
-                .any(|decl| decl.name == first_segment);
-        if !is_local_or_self_crate {
+        if !resolved.is_crate_local() {
             check_rust_external_owner(
                 &module_path,
                 &resolved.canonical_path,
@@ -612,7 +595,6 @@ fn check_rust_external_owner(
 }
 
 fn check_rust_invalid_component_markers(
-    file: &ParsedFile,
     module_path: &str,
     summary: &RustFileSummary,
     spec: &ArchitectureSpec,
@@ -633,11 +615,6 @@ fn check_rust_invalid_component_markers(
         return true;
     }
 
-    let top_level_spans: HashSet<SourceSpan> = summarize_rust_module_header(file)
-        .architecture_components
-        .into_iter()
-        .map(|(span, _)| span)
-        .collect();
     let ancestor_root = module_path
         .rsplit_once(RUST_MODULE_SEPARATOR)
         .and_then(|(parent, _)| {
@@ -647,7 +624,7 @@ fn check_rust_invalid_component_markers(
     let before_len = out.len();
 
     for (span, component_name) in &summary.architecture_components {
-        if !top_level_spans.contains(span) {
+        if summary.nested_architecture_components.contains(span) {
             out.push(InvalidArchitectureComponentFinding {
                 span: *span,
                 component: component_name.clone(),
@@ -1472,7 +1449,11 @@ fn architecture_config_from_rust_headers(
     let mut roots_by_component: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     for (module_path, summary) in rust_headers {
-        let Some((_, component_name)) = summary.architecture_components.first() else {
+        let Some((_, component_name)) = summary
+            .architecture_components
+            .iter()
+            .find(|(span, _)| !summary.nested_architecture_components.contains(span))
+        else {
             continue;
         };
         let has_ancestor_root = module_path
@@ -1654,4 +1635,77 @@ fn build_rust_sibling_isolation_rules(
         }
     }
     rules
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::source::MemoryFileSource;
+    use super::*;
+
+    #[test]
+    fn rust_leading_colon_paths_enforce_external_owner_and_component_dependencies() {
+        let root = Path::new("/repo");
+        let app_source = indoc::indoc! {r"
+            use ::ra_ap_syntax::SyntaxNode;
+            use ::demo::secret::Token;
+        "};
+        let source = MemoryFileSource::from_relative_files(
+            root,
+            &[
+                (
+                    "Cargo.toml",
+                    indoc::indoc! {r#"
+                        [package]
+                        name = "demo"
+                        version = "0.1.0"
+                    "#},
+                ),
+                (
+                    "src/lib.rs",
+                    indoc::indoc! {r"
+                        mod ast;
+                        mod secret;
+                        mod app;
+                    "},
+                ),
+                ("src/ast.rs", ""),
+                ("src/secret.rs", "pub struct Token;\n"),
+                ("src/app.rs", app_source),
+            ],
+        );
+        let config: ArchitectureConfig = toml::from_str(indoc::indoc! {r#"
+            [[components]]
+            name = "Ast"
+            roots = ["ast"]
+            owns-external = ["ra_ap_syntax"]
+
+            [[components]]
+            name = "Secret"
+            roots = ["secret"]
+
+            [[components]]
+            name = "App"
+            roots = ["app"]
+            depends-on = ["Ast"]
+        "#})
+        .unwrap();
+        let spec = resolve_architecture_spec(root, Some(&config), &BTreeMap::new())
+            .unwrap()
+            .unwrap();
+        let layout = ProjectLayout::discover(root, &source, &[]);
+        let parsed = ParsedFile::rust(app_source);
+        let findings =
+            evaluate_rust_file_architecture(&parsed, &root.join("src/app.rs"), &layout, &spec);
+
+        assert_eq!(findings.unowned_external_dependencies.len(), 1);
+        assert_eq!(
+            findings.unowned_external_dependencies[0].dependency,
+            "ra_ap_syntax"
+        );
+        assert_eq!(findings.undeclared_component_dependencies.len(), 1);
+        assert_eq!(
+            findings.undeclared_component_dependencies[0].dependency,
+            "Secret"
+        );
+    }
 }

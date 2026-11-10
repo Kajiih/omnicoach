@@ -59,6 +59,9 @@ pub struct VisibleUseDeclaration {
     pub declaration_text: String,
     /// Expanded target paths imported by this `use` tree (e.g. `["self::child::Item"]`).
     pub target_paths: Vec<String>,
+    /// `(exported_name, target_path)` pairs for non-glob visible re-exports, honoring `as Alias`
+    /// renames (e.g. `[("PublicName", "self::child::Internal")]`).
+    pub reexports: Vec<(String, String)>,
 }
 
 /// Component entry extracted from a `define_architecture! { ... }` macro invocation.
@@ -78,6 +81,8 @@ pub struct DefinedComponentEntry {
 pub struct RustFileSummary {
     /// `(span, argument)` pairs of `architecture_component!(...)` macro invocations in production code.
     pub architecture_components: Vec<(SourceSpan, String)>,
+    /// Byte spans of `architecture_component!(...)` invocations that do not sit at the top level of the file.
+    pub nested_architecture_components: HashSet<SourceSpan>,
     /// Component entries extracted from `define_architecture! { ... }` macro invocations in production code.
     pub defined_architecture: Vec<DefinedComponentEntry>,
     /// Top-level external `mod <name>;` declarations (`mod foo;`, `pub mod foo;`).
@@ -182,7 +187,17 @@ fn summarize_rust_node(
     if let Some(macro_call) = ast::MacroCall::cast(node.clone()) {
         let terminal_name = macro_call_terminal_name(&macro_call);
         if terminal_name == ARCHITECTURE_COMPONENT_MACRO {
-            record_architecture_component(&macro_call, file, &mut summary.architecture_components);
+            let span = record_architecture_component(
+                &macro_call,
+                file,
+                &mut summary.architecture_components,
+            );
+            if node
+                .parent()
+                .is_none_or(|parent| parent.kind() != SyntaxKind::SOURCE_FILE)
+            {
+                summary.nested_architecture_components.insert(span);
+            }
         }
         if let Some(token_tree) = macro_call.token_tree() {
             if terminal_name == DEFINE_ARCHITECTURE_MACRO {
@@ -339,7 +354,7 @@ fn record_architecture_component(
     macro_call: &ast::MacroCall,
     file: &ParsedFile,
     architecture_components: &mut Vec<(SourceSpan, String)>,
-) {
+) -> SourceSpan {
     let macro_span = span_from_rowan_range(macro_call.syntax().text_range());
     let macro_ast_node = AstNode::from_span(file, macro_span);
     let component_argument: String = extract_macro_arguments(&macro_ast_node)
@@ -347,6 +362,7 @@ fn record_architecture_component(
         .map(|argument| argument.text().into_owned())
         .collect();
     architecture_components.push((macro_span, component_argument));
+    macro_span
 }
 
 fn summarize_use_item(
@@ -364,16 +380,23 @@ fn summarize_use_item(
     if let Some(use_tree) = use_item.use_tree() {
         expand_use_tree(&use_tree, "", &mut expanded_targets);
     }
-    for (raw_path, is_glob) in &expanded_targets {
+    for target in &expanded_targets {
         summary.referenced_paths.push(RustPathReference {
             line,
             span,
-            raw_path: raw_path.clone(),
+            raw_path: target.raw_path.clone(),
             statement_text: declaration_text.clone(),
-            is_glob: *is_glob,
+            is_glob: target.is_glob,
         });
     }
-    let target_paths: Vec<String> = expanded_targets.into_iter().map(|(path, _)| path).collect();
+    let mut target_paths = Vec::with_capacity(expanded_targets.len());
+    let mut reexports = Vec::new();
+    for target in expanded_targets {
+        if let Some(exported_name) = target.exported_name {
+            reexports.push((exported_name, target.raw_path.clone()));
+        }
+        target_paths.push(target.raw_path);
+    }
     if let Some(visibility) = use_item.visibility() {
         let is_own_macro_path = visibility.syntax().text().to_string().trim() == "pub(crate)"
             && matches!(
@@ -386,12 +409,19 @@ fn summarize_use_item(
                 span,
                 declaration_text,
                 target_paths,
+                reexports,
             });
         }
     }
 }
 
-fn expand_use_tree(use_tree: &ast::UseTree, prefix: &str, out: &mut Vec<(String, bool)>) {
+struct ExpandedUseTarget {
+    raw_path: String,
+    exported_name: Option<String>,
+    is_glob: bool,
+}
+
+fn expand_use_tree(use_tree: &ast::UseTree, prefix: &str, out: &mut Vec<ExpandedUseTarget>) {
     if let Some(sub_trees) = use_tree.use_tree_list() {
         let next_prefix = use_tree.path().map_or_else(
             || prefix.to_string(),
@@ -404,19 +434,35 @@ fn expand_use_tree(use_tree: &ast::UseTree, prefix: &str, out: &mut Vec<(String,
     }
     if use_tree.star_token().is_some() {
         if let Some(path) = use_tree.path() {
-            out.push((
-                join_use_prefix(prefix, &path.syntax().text().to_string()),
-                true,
-            ));
+            out.push(ExpandedUseTarget {
+                raw_path: join_use_prefix(prefix, &path.syntax().text().to_string()),
+                exported_name: None,
+                is_glob: true,
+            });
         } else if !prefix.is_empty() {
-            out.push((prefix.to_string(), true));
+            out.push(ExpandedUseTarget {
+                raw_path: prefix.to_string(),
+                exported_name: None,
+                is_glob: true,
+            });
         }
         return;
     }
     if let Some(path) = use_tree.path() {
         let path_text = path.syntax().text().to_string();
         if compact_path_text(&path_text) != "_" {
-            out.push((join_use_prefix(prefix, &path_text), false));
+            let raw_path = join_use_prefix(prefix, &path_text);
+            let exported_name = use_tree
+                .rename()
+                .and_then(|rename| rename.name())
+                .map(|name| name.text().trim().to_string())
+                .or_else(|| raw_path.rsplit("::").next().map(ToOwned::to_owned))
+                .filter(|name| !name.is_empty() && name != "_");
+            out.push(ExpandedUseTarget {
+                raw_path,
+                exported_name,
+                is_glob: false,
+            });
         }
     }
 }
