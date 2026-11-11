@@ -45,6 +45,15 @@ Validate an intercepted workflow command:
 omnicoach command --cmd "jj edit @"
 ```
 
+Explore module structure, call hierarchies, and symbol slices (alpha):
+
+```bash
+omnicoach graph src/config.rs               # intra-file [Lk] call clusters and line spans
+omnicoach graph src/                        # component and module map (defaults to --depth module)
+omnicoach graph find ArchitectureSpec       # locate declarations across the repository
+omnicoach graph slice load_config --hops 2  # cross-module callers, callees, and signature contracts
+```
+
 Run as an agent lifecycle hook (Antigravity):
 
 ```bash
@@ -138,6 +147,36 @@ ignore = ["test-doubles"]
 ```
 
 Unknown labels, facet names (`precision`) and a selector in both `select` and `ignore` fail at config load. Run `omnicoach --list-tags` for the topic tree; facet definitions and selection rules are in [docs/dev/tag_guide.md](https://github.com/Kajiih/omnicoach/blob/main/docs/dev/tag_guide.md).
+
+### Project Context & Architectural Conformance
+
+Configure test-file globs, Python import roots, and an acyclic component dependency graph enforced by the `architecture` rules across Python and Rust:
+
+```toml
+[context]
+test-patterns = ["**/tests/**", "**/test_*.py", "**/*_test.py", "**/tests.rs"]
+source-roots = ["src"] # optional; inferred automatically when omitted
+
+[architecture]
+transitive-dependencies = true       # default: true (multi-hop DAG reachability)
+require-component-coverage = true    # default: true (every module belongs to a component or router)
+ignore-type-checking-imports = false # default: false (exempts Python `if TYPE_CHECKING:` when true)
+
+[[architecture.components]]
+name = "Domain"
+roots = ["my_app.domain"]
+depends-on = []
+owns-external = ["pydantic"]         # only `Domain` may import `pydantic`
+public-exports = ["Order", "Order*"] # optional public facade allowlist
+
+[[architecture.components]]
+name = "Adapters"
+roots = ["my_app.adapters"]
+depends-on = ["Domain"]              # must reference components declared earlier
+isolate-children = true              # forbids lateral imports between peer submodules
+```
+
+Rust crates can alternatively declare their component DAG in code with `define_architecture!` in `src/architecture.rs` and `architecture_component!(...)` on each component root module (`omnicoach --list-rules --tag architecture`).
 
 ---
 
