@@ -53,6 +53,9 @@ pub enum TypeShape {
     Union(Vec<Self>),
     /// A tuple type (`tuple[A, B]` or `typing.Tuple[A, B]` in Python, `(A, B)` in Rust).
     Tuple(Vec<Self>),
+    /// A bracketed parameter-type list in a Python `Callable` (`[int, str]` in
+    /// `Callable[[int, str], bool]`, or `[]` in `Callable[[], None]`).
+    ParamList(Vec<Self>),
     /// A reference type (`&T` or `&mut T` in Rust).
     Reference {
         /// True for `&mut T`.
@@ -71,7 +74,7 @@ pub enum TypeShape {
         /// Generic / subscript type arguments in source order (`[]` when unparameterized).
         arguments: Vec<Self>,
     },
-    /// Any other type syntax (`Callable[[A], B]`, array/slice `[T]`, literal type).
+    /// Any other type syntax (array/slice `[T]`, literal type).
     Other,
 }
 

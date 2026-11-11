@@ -688,7 +688,7 @@ fn tuple_arity_from_args(arguments: &[&Expr]) -> Option<usize> {
     let has_ellipsis = arguments
         .iter()
         .any(|arg| matches!(arg, Expr::EllipsisLiteral(_)));
-    (!arguments.is_empty() && !is_empty_tuple && !has_ellipsis).then_some(arguments.len())
+    (!is_empty_tuple && !has_ellipsis).then_some(arguments.len())
 }
 
 /// Recursively emits [`TypeAnnotationCandidate`]s in pre-order for `expr` and its nested type
@@ -754,6 +754,13 @@ fn build_python_type_shape(expr: &Expr, file: &ParsedFile) -> TypeShape {
     match expr {
         Expr::NoneLiteral(_) => TypeShape::None,
         Expr::EllipsisLiteral(_) => TypeShape::Ellipsis,
+        Expr::List(list) => TypeShape::ParamList(
+            list.elts
+                .iter()
+                .map(|element| build_python_type_shape(element, file))
+                .collect(),
+        ),
+        Expr::Tuple(tuple) if tuple.elts.is_empty() => TypeShape::Tuple(Vec::new()),
         Expr::BinOp(bin_op) if bin_op.op == Operator::BitOr => build_union_python_shape(expr, file),
         Expr::Name(_) | Expr::Attribute(_) => {
             TypeShape::named(written_name(expr, &file.source), Vec::new(), file)
@@ -778,6 +785,10 @@ fn build_python_type_shape(expr: &Expr, file: &ParsedFile) -> TypeShape {
                     &terminal,
                     &[TUPLE_CONSTRUCTOR, TYPING_TUPLE_CONSTRUCTOR],
                 ) {
+                    if matches!(arguments.as_slice(), [Expr::Tuple(tuple)] if tuple.elts.is_empty())
+                    {
+                        return TypeShape::Tuple(Vec::new());
+                    }
                     let arg_shapes = arguments
                         .into_iter()
                         .map(|arg| build_python_type_shape(arg, file))
@@ -1070,7 +1081,9 @@ fn extract_generic_base_and_args(expr: &Expr) -> Option<GenericType<'_>> {
     let Expr::Subscript(subscript) = expr else {
         return None;
     };
-    let type_args = if let Expr::Tuple(tuple) = subscript.slice.as_ref() {
+    let type_args = if let Expr::Tuple(tuple) = subscript.slice.as_ref()
+        && !tuple.elts.is_empty()
+    {
         tuple.elts.iter().collect()
     } else {
         vec![subscript.slice.as_ref()]

@@ -159,8 +159,10 @@ enum TypePattern {
     None,
     /// Order-independent union (`A | B`, `Optional[A]`, `Union[A, B]`).
     Union(Vec<Self>),
-    /// Tuple (`tuple[A, B]`, `Tuple[A, B]`, `tuple[A, ...]`, `(A, B)`).
+    /// Tuple (`tuple[A, B]`, `Tuple[A, B]`, `tuple[A, ...]`, `tuple[()]`, `(A, B)`).
     Tuple(Vec<Self>),
+    /// Bracketed parameter-type list (`[int, str]` in `Callable[[int, str], bool]`).
+    ParamList(Vec<Self>),
     /// Rust reference (`&T` or `&mut T`).
     Reference { mutable: bool, inner: Box<Self> },
     /// Named or generic type constructor (`Width`, `Iterator[Dimensions]`, `Option<Bound>`).
@@ -242,6 +244,15 @@ fn parse_type_pattern(raw: &str) -> Option<TypePattern> {
         return Some(TypePattern::Tuple(elements));
     }
 
+    if let Some(inside) = trimmed
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        && is_balanced_delimiters(inside)
+    {
+        let elements = parse_comma_separated_patterns(inside)?;
+        return Some(TypePattern::ParamList(elements));
+    }
+
     let SplitGeneric { base, arguments } = split_generic_base_and_args(trimmed)?;
     let base_normalized = normalize_pattern_path(base)?;
     let parsed_arguments = match arguments {
@@ -272,7 +283,12 @@ fn parse_type_pattern(raw: &str) -> Option<TypePattern> {
                 return Some(TypePattern::Union(branches));
             }
             TUPLE_STD_NAME if arguments.is_some() => {
-                return Some(TypePattern::Tuple(parsed_arguments));
+                let tuple_elements = if arguments.is_some_and(|inside| inside.trim() == "()") {
+                    Vec::new()
+                } else {
+                    parsed_arguments
+                };
+                return Some(TypePattern::Tuple(tuple_elements));
             }
             _ => {}
         }
@@ -434,7 +450,8 @@ fn matches_pattern(pattern: &TypePattern, shape: &TypeShape) -> bool {
         (TypePattern::Union(pat_branches), TypeShape::Union(target_branches)) => {
             matches_union_branches(pat_branches, target_branches)
         }
-        (TypePattern::Tuple(pat_args), TypeShape::Tuple(target_args)) => {
+        (TypePattern::Tuple(pat_args), TypeShape::Tuple(target_args))
+        | (TypePattern::ParamList(pat_args), TypeShape::ParamList(target_args)) => {
             matches_argument_list(pat_args, target_args)
         }
         (
@@ -683,6 +700,46 @@ mod tests {
         "core::option::Option<Mutex<i32>>",
         "`SharedCounter`"
     )]
+    #[case::callable_with_bracketed_param_list(
+        "Callable[[int, str], bool] => Predicate",
+        "from collections.abc import Callable\ndef f(check: Callable[[int, str], bool]) -> None: pass",
+        Language::Python,
+        "Callable[[int, str], bool]",
+        "Callable[[int, str], bool]",
+        "`Predicate`"
+    )]
+    #[case::callable_with_empty_param_list(
+        "Callable[[], None] => Thunk",
+        "from typing import Callable\ndef f(action: Callable[[], None]) -> None: pass",
+        Language::Python,
+        "Callable[[], None]",
+        "Callable[[], None]",
+        "`Thunk`"
+    )]
+    #[case::python_empty_tuple_matches_tuple_unit_pattern(
+        "tuple[()] => EmptyRecord",
+        "def f() -> tuple[()]: return ()",
+        Language::Python,
+        "tuple[()]",
+        "tuple[()]",
+        "`EmptyRecord`"
+    )]
+    #[case::nested_one_tuple_of_empty_tuple_preserved(
+        "tuple[tuple[()]] => NestedEmpty",
+        "def f() -> tuple[tuple[()]]: return ((),)",
+        Language::Python,
+        "tuple[tuple[()]]",
+        "tuple[tuple[()]]",
+        "`NestedEmpty`"
+    )]
+    #[case::generic_with_empty_tuple_argument(
+        "Boxed[()] => EmptyBox",
+        "def f(item: Boxed[()]) -> None: pass",
+        Language::Python,
+        "Boxed[()]",
+        "Boxed[()]",
+        "`EmptyBox`"
+    )]
     fn find_banned_type_annotations_formats_token_expression_and_replacement(
         #[case] entry: &str,
         #[case] source: &str,
@@ -715,6 +772,11 @@ mod tests {
         "std::sync::Mutex<i32>",
         "fn f(x: Mutex<i32>) {}",
         Language::Rust
+    )]
+    #[case::nested_empty_tuple_pattern_does_not_collapse_to_flat_empty_tuple(
+        "tuple[tuple[()]]",
+        "def f() -> tuple[()]: return ()",
+        Language::Python
     )]
     fn distinct_namespaces_do_not_collide(
         #[case] entry: &str,

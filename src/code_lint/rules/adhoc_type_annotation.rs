@@ -136,6 +136,9 @@ crate::test_utils::rule_test!(
         "tuple[Segment, ...] => RoutePath",
         "dict[str, object] => TypedDict",
         "Callable[..., httpx.Response] => ResponseFactory",
+        "Callable[[int, str], bool] => Predicate",
+        "Callable[[], None] => Thunk",
+        "tuple[()] => EmptyRecord",
         "Generator[_, None, None] => collections.abc.Iterator",
         "(Width, Height) => Dimensions",
         "(Option<Bound>, Option<Bound>) => ValueRange",
@@ -202,6 +205,16 @@ crate::test_utils::rule_test!(
                     class Client:
                         factory: Callable[..., urllib.response.Response]
                 ",
+                callable_different_param_arity_exempt => r"
+                    from collections.abc import Callable
+
+                    def apply(check: Callable[[int], bool]) -> None:
+                        pass
+                ",
+                non_empty_tuple_exempt_from_empty_tuple_pattern => r"
+                    def single_flag() -> tuple[bool]:
+                        return (True,)
+                ",
             ],
             fail: [
                 dimensions_tuple_parameter => r"
@@ -266,6 +279,22 @@ crate::test_utils::rule_test!(
                     def resize(target: Annotated[tuple[Width, Height], "px"]) -> None:
                         pass
                 "# => "tuple[Width, Height]",
+                callable_bracketed_params_parameter => r"
+                    from collections.abc import Callable
+
+                    def filter_rows(predicate: Callable[[int, str], bool]) -> None:
+                        pass
+                " => "Callable[[int, str], bool]",
+                callable_empty_params_attribute => r"
+                    from collections.abc import Callable
+
+                    class Worker:
+                        on_stop: Callable[[], None]
+                " => "Callable[[], None]",
+                empty_tuple_return => r"
+                    def empty_record() -> tuple[()]:
+                        return ()
+                " => "tuple[()]",
             ],
         },
         Rust => {
