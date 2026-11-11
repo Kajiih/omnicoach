@@ -14,14 +14,19 @@ const CARGO_TOML: &str = "Cargo.toml";
 const PYTHON_EXTENSION: &str = "py";
 const PYTHON_STUB_EXTENSION: &str = "pyi";
 const RUST_EXTENSION: &str = "rs";
+const PYTHON_SUFFIX: &str = ".py";
+const PYTHON_STUB_SUFFIX: &str = ".pyi";
+const RUST_SUFFIX: &str = ".rs";
 const SOURCE_DIRECTORY: &str = "src";
 const RUST_MODULE_SEP: &str = "::";
 const SELF_SEGMENT: &str = "self";
 const SUPER_SEGMENT: &str = "super";
-const LIB_CRATE_ROOT: &str = "lib";
 const MAIN_CRATE_ROOT: &str = "main";
+const CURRENT_DIR_PREFIX: &str = "./";
+/// Crate-relative module identifier assigned to a Rust `lib.rs` crate root.
+pub(super) const LIB_CRATE_ROOT: &str = "lib";
 /// Synthetic module identifier representing a root `__init__.py` directly inside a Python source root.
-pub const ROOT_MODULE_TAG: &str = "<root>";
+pub(super) const ROOT_MODULE_TAG: &str = "<root>";
 
 /// Project boundary and source roots resolved once at the CLI, hook, or test boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +47,7 @@ pub struct ProjectLayout {
 
 /// How a syntactic path in a Rust file was anchored before normalization.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PathOrigin {
+pub(super) enum PathOrigin {
     /// `self` / `super` relative path, recording the shallowest ancestor module reached
     /// while resolving `super` segments (`None` if `super` climbed past the crate root).
     Relative {
@@ -59,18 +64,18 @@ pub enum PathOrigin {
 
 /// A referenced path normalized to a canonical crate-relative (or external crate) path.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedPath {
+pub(super) struct ResolvedPath {
     /// How the path was anchored before normalization.
-    pub origin: PathOrigin,
+    pub(super) origin: PathOrigin,
     /// Canonical crate-relative (or external) path.
-    pub canonical_path: String,
+    pub(super) canonical_path: String,
 }
 
 impl ResolvedPath {
     /// Returns true when the path was anchored to the current crate (`crate`, `<crate_name>`,
     /// `self`, `super`, or a declared child `mod`).
     #[must_use]
-    pub const fn is_crate_local(&self) -> bool {
+    pub(super) const fn is_crate_local(&self) -> bool {
         matches!(
             self.origin,
             PathOrigin::Relative { .. } | PathOrigin::CrateLocal
@@ -138,7 +143,10 @@ impl ProjectLayout {
     /// Replaces [`Self::python_source_roots`] with `configured_python_roots` (resolved against
     /// [`Self::project_root`]) when `configured_python_roots` is non-empty.
     #[must_use]
-    pub fn with_configured_python_roots(mut self, configured_python_roots: &[PathBuf]) -> Self {
+    pub(super) fn with_configured_python_roots(
+        mut self,
+        configured_python_roots: &[PathBuf],
+    ) -> Self {
         if !configured_python_roots.is_empty() {
             self.python_source_roots = configured_python_roots
                 .iter()
@@ -151,29 +159,42 @@ impl ProjectLayout {
     /// Maps a Python file path to its canonical dotted module path under the longest matching
     /// source root (for example `.../python/tach/check.py` -> `"tach.check"`).
     #[must_use]
-    pub fn python_module_of_path(&self, path: &Path) -> Option<String> {
-        let resolved = self.resolve_query_path(path);
-        let best_root = self
-            .python_source_roots
-            .iter()
-            .filter(|root| resolved.starts_with(root.as_path()))
-            .max_by_key(|root| root.components().count())?;
-        let relative = resolved.strip_prefix(best_root).ok()?;
-        python_module_from_relative(relative, false)
+    pub(super) fn python_module_of_path(&self, path: &Path) -> Option<String> {
+        python_module_from_resolved(
+            &self.resolve_query_path(path),
+            &self.python_source_roots,
+            false,
+        )
     }
 
     /// Maps a Python file path to its canonical dotted module path, returning `"<root>"` when
     /// `path` is `<source_root>/__init__.py`.
     #[must_use]
-    pub fn python_architecture_module_of_path(&self, path: &Path) -> Option<String> {
-        let resolved = self.resolve_query_path(path);
-        let best_root = self
-            .python_source_roots
-            .iter()
-            .filter(|root| resolved.starts_with(root.as_path()))
-            .max_by_key(|root| root.components().count())?;
-        let relative = resolved.strip_prefix(best_root).ok()?;
-        python_module_from_relative(relative, true)
+    pub(super) fn python_architecture_module_of_path(&self, path: &Path) -> Option<String> {
+        python_module_from_resolved(
+            &self.resolve_query_path(path),
+            &self.python_source_roots,
+            true,
+        )
+    }
+
+    /// Computes a fallback dotted Python module identifier when `full_path` lies outside all
+    /// configured Python source roots (or is a source-root `__init__.py`).
+    #[must_use]
+    pub(super) fn fallback_python_module_path(
+        &self,
+        full_path: &Path,
+        relative_path: &str,
+        is_package_init: bool,
+    ) -> String {
+        if is_package_init
+            && full_path
+                .parent()
+                .is_some_and(|parent| self.python_source_roots.iter().any(|root| root == parent))
+        {
+            return INIT_STEM.to_owned();
+        }
+        python_dotted_path(relative_path, true)
     }
 
     /// Resolves a dotted Python module name (`"pkg.sub"`) to a `.pyi` or `.py` file under
@@ -183,7 +204,11 @@ impl ProjectLayout {
     /// 3. `<root>/<module>.pyi`
     /// 4. `<root>/<module>.py`
     #[must_use]
-    pub fn python_module_file(&self, module: &str, source: &dyn FileSource) -> Option<PathBuf> {
+    pub(super) fn python_module_file(
+        &self,
+        module: &str,
+        source: &dyn FileSource,
+    ) -> Option<PathBuf> {
         if module.is_empty() {
             return None;
         }
@@ -224,7 +249,7 @@ impl ProjectLayout {
     /// Returns true if `module` corresponds to an existing directory under any Python source root
     /// (covering PEP 420 namespace packages without `__init__.py`).
     #[must_use]
-    pub fn is_python_namespace_dir(&self, module: &str, source: &dyn FileSource) -> bool {
+    pub(super) fn is_python_namespace_dir(&self, module: &str, source: &dyn FileSource) -> bool {
         if module.is_empty() || module == ROOT_MODULE_TAG {
             return false;
         }
@@ -236,7 +261,7 @@ impl ProjectLayout {
 
     /// Maps a Rust `.rs` file path to its crate-relative module path (`"lib"`, `"code_lint::ast"`).
     #[must_use]
-    pub fn rust_module_of_path(&self, path: &Path) -> Option<String> {
+    pub(super) fn rust_module_of_path(&self, path: &Path) -> Option<String> {
         let resolved = self.resolve_query_path(path);
         let relative = resolved.strip_prefix(&self.rust_source_root).ok()?;
         rust_module_from_relative(relative)
@@ -244,7 +269,11 @@ impl ProjectLayout {
 
     /// Resolves a crate-relative Rust module path (`"lib"`, `"code_lint::ast"`) to its `.rs` file.
     #[must_use]
-    pub fn rust_module_file(&self, module: &str, source: &dyn FileSource) -> Option<PathBuf> {
+    pub(super) fn rust_module_file(
+        &self,
+        module: &str,
+        source: &dyn FileSource,
+    ) -> Option<PathBuf> {
         if module == LIB_CRATE_ROOT || module == MAIN_CRATE_ROOT {
             let candidate = self.rust_source_root.join(format!("{module}.rs"));
             return source.is_file(&candidate).then_some(candidate);
@@ -264,7 +293,7 @@ impl ProjectLayout {
     /// Normalizes `path` relative to `working_directory` (or `project_root` when `anchor` was
     /// absolute) when `path` is relative.
     #[must_use]
-    pub fn resolve_query_path(&self, path: &Path) -> PathBuf {
+    pub(super) fn resolve_query_path(&self, path: &Path) -> PathBuf {
         if is_rooted_path(path) {
             lexical_normalize(path)
         } else {
@@ -278,7 +307,7 @@ impl ProjectLayout {
 
     /// Merges additional discovered Python source roots into this layout in specificity order
     /// (longest path first) without duplicates.
-    pub fn merge_python_source_roots(&mut self, additional: &[PathBuf]) {
+    pub(super) fn merge_python_source_roots(&mut self, additional: &[PathBuf]) {
         let mut changed = false;
         for candidate in additional {
             if !self.python_source_roots.contains(candidate) {
@@ -298,13 +327,58 @@ impl ProjectLayout {
     }
 }
 
+/// Resolves the [`InheritedComponent`] for `module` by climbing up its `::`-separated
+/// module path to the nearest ancestor (or self) in `declared_components`.
+#[must_use]
+pub fn resolve_inherited_component_with_root<'a, T>(
+    module: &str,
+    declared_components: &'a BTreeMap<String, T>,
+) -> Option<InheritedComponent<'a, T>> {
+    let mut current = module;
+    loop {
+        if let Some((root_key, component)) = declared_components.get_key_value(current) {
+            return Some(InheritedComponent {
+                root_module: root_key.as_str(),
+                component,
+            });
+        }
+        if let Some((parent, _)) = current.rsplit_once(RUST_MODULE_SEP) {
+            current = parent;
+        } else {
+            return None;
+        }
+    }
+}
+
 /// Package prefix and shallowest ancestor reached by a relative Python import (`level >= 1`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedRelativePackage {
+pub(super) struct ResolvedRelativePackage {
     /// Target package prefix (`None` when climbing to `<root>`).
-    pub package_prefix: Option<String>,
+    pub(super) package_prefix: Option<String>,
     /// Shallowest ancestor reached (`"<root>"` when climbing to the source root).
-    pub shallowest_ancestor: String,
+    pub(super) shallowest_ancestor: String,
+}
+
+/// Resolves a Python module specifier (`level == 0` absolute or `level >= 1` relative) from
+/// `from_module`.
+#[must_use]
+pub(super) fn resolve_relative_python_module(
+    from_module: &str,
+    is_package_init: bool,
+    level: u32,
+    specifier: Option<&str>,
+) -> Option<String> {
+    if level == 0 {
+        return specifier.map(str::to_owned);
+    }
+    let resolved = resolve_relative_python_package(from_module, is_package_init, level)?;
+    let suffix = specifier.filter(|text| !text.is_empty());
+    match (resolved.package_prefix, suffix) {
+        (Some(prefix), Some(tail)) => Some(format!("{prefix}.{tail}")),
+        (Some(prefix), None) => Some(prefix),
+        (None, Some(tail)) => Some(tail.to_owned()),
+        (None, None) => Some(String::new()),
+    }
 }
 
 /// Resolves a relative Python package prefix (`level >= 1`) from `from_module`.
@@ -313,7 +387,7 @@ pub struct ResolvedRelativePackage {
 /// ancestor reached (`"<root>"` when climbing to the source root), or `None` if `level` climbs
 /// above the source root.
 #[must_use]
-pub fn resolve_relative_python_package(
+pub(super) fn resolve_relative_python_package(
     from_module: &str,
     is_package_init: bool,
     level: u32,
@@ -344,31 +418,32 @@ pub fn resolve_relative_python_package(
     })
 }
 
-/// Resolves a Python module specifier (`level == 0` absolute or `level >= 1` relative) from
-/// `from_module`.
+/// Converts a forward-slash relative Python file path into a dotted module identifier, optionally
+/// trimming a trailing `__init__` segment (returning `"__init__"` when the path resolves to a
+/// root `__init__.py`).
 #[must_use]
-pub fn resolve_relative_python_module(
-    from_module: &str,
-    is_package_init: bool,
-    level: u32,
-    specifier: Option<&str>,
-) -> Option<String> {
-    if level == 0 {
-        return specifier.map(str::to_owned);
+pub(super) fn python_dotted_path(relative_path: &str, trim_init: bool) -> String {
+    let without_extension = relative_path
+        .strip_suffix(PYTHON_STUB_SUFFIX)
+        .or_else(|| relative_path.strip_suffix(PYTHON_SUFFIX))
+        .unwrap_or(relative_path);
+    let mut segments: Vec<&str> = without_extension
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect();
+    if trim_init && segments.last() == Some(&INIT_STEM) {
+        segments.pop();
     }
-    let resolved = resolve_relative_python_package(from_module, is_package_init, level)?;
-    let suffix = specifier.filter(|text| !text.is_empty());
-    match (resolved.package_prefix, suffix) {
-        (Some(prefix), Some(tail)) => Some(format!("{prefix}.{tail}")),
-        (Some(prefix), None) => Some(prefix),
-        (None, Some(tail)) => Some(tail.to_owned()),
-        (None, None) => Some(String::new()),
+    if segments.is_empty() {
+        INIT_STEM.to_owned()
+    } else {
+        segments.join(".")
     }
 }
 
 /// Computes the crate-relative `::`-separated module path of a Rust source file path.
 #[must_use]
-pub fn rust_module_path(path: &str) -> String {
+pub(super) fn rust_module_path(path: &str) -> String {
     let normalized = path.replace('\\', "/");
     let trimmed = Path::new(&normalized)
         .strip_prefix(SOURCE_DIRECTORY)
@@ -376,37 +451,20 @@ pub fn rust_module_path(path: &str) -> String {
     rust_module_from_relative(trimmed).unwrap_or_default()
 }
 
-/// Maps a path relative to the Rust crate source root (`src/`) to its `::`-separated module path,
-/// normalizing hyphens to underscores (`my-mod/sub.rs` -> `"my_mod::sub"`).
+/// Computes a disambiguated `::`-separated Rust module identifier preserving `src/` or parent
+/// directory segments when multiple files map to the same crate-relative module name.
 #[must_use]
-pub fn rust_module_from_relative(relative: &Path) -> Option<String> {
-    if relative
-        .extension()
-        .is_none_or(|extension| extension != RUST_EXTENSION)
-    {
-        return None;
-    }
-    let mut segments: Vec<String> = relative
-        .components()
-        .filter_map(|component| {
-            component
-                .as_os_str()
-                .to_str()
-                .map(|segment| segment.replace('-', "_"))
-        })
-        .collect();
-    let last = segments.pop()?;
-    let stem = last.strip_suffix(".rs")?;
-    if stem != "mod" || segments.is_empty() {
-        segments.push(stem.to_owned());
-    }
-    (!segments.is_empty()).then(|| segments.join(RUST_MODULE_SEP))
+pub(super) fn disambiguated_rust_module_path(relative_path: &str) -> String {
+    relative_path
+        .trim_end_matches(RUST_SUFFIX)
+        .replace('/', RUST_MODULE_SEP)
+        .replace('-', "_")
 }
 
 /// Normalizes `raw_path` relative to `enclosing_module`, its declared `external_mods`, and the
 /// optional self-crate identifier `crate_name`.
 #[must_use]
-pub fn resolve_rust_reference_path(
+pub(super) fn resolve_rust_reference_path(
     enclosing_module: &str,
     external_mods: &[ExternalModDeclaration],
     raw_path: &str,
@@ -500,7 +558,7 @@ pub fn resolve_rust_reference_path(
 
 /// Returns true if `path` equals `module_prefix` or is a `::`-delimited descendant of it.
 #[must_use]
-pub fn is_in_module_subtree(path: &str, module_prefix: &str) -> bool {
+pub(super) fn is_in_module_subtree(path: &str, module_prefix: &str) -> bool {
     if module_prefix.is_empty() {
         return true;
     }
@@ -512,58 +570,59 @@ pub fn is_in_module_subtree(path: &str, module_prefix: &str) -> bool {
 
 /// Returns true if `module_path` denotes a Rust crate root (`"lib"`, `"main"`, or `""`).
 #[must_use]
-pub fn is_rust_crate_root(module_path: &str) -> bool {
+pub(in crate::code_lint) fn is_rust_crate_root(module_path: &str) -> bool {
     matches!(module_path, LIB_CRATE_ROOT | MAIN_CRATE_ROOT | "")
 }
 
 /// Returns true if `path` is a Python package initializer (`__init__.py` or `__init__.pyi`).
 #[must_use]
-pub fn is_python_package_init(path: &Path) -> bool {
+pub(super) fn is_python_package_init(path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|name| name.to_str()),
         Some(INIT_PY | INIT_PYI)
     )
 }
 
-/// Resolves the [`InheritedComponent`] for `module` by climbing up its `::`-separated
-/// module path to the nearest ancestor (or self) in `declared_components`.
-#[must_use]
-pub fn resolve_inherited_component_with_root<'a, T>(
-    module: &str,
-    declared_components: &'a BTreeMap<String, T>,
-) -> Option<InheritedComponent<'a, T>> {
-    let mut current = module;
-    loop {
-        if let Some((root_key, component)) = declared_components.get_key_value(current) {
-            return Some(InheritedComponent {
-                root_module: root_key.as_str(),
-                component,
-            });
-        }
-        if let Some((parent, _)) = current.rsplit_once(RUST_MODULE_SEP) {
-            current = parent;
-        } else {
-            return None;
-        }
-    }
-}
-
-const CURRENT_DIR_PREFIX: &str = "./";
-const SRC_DIR_NAME: &str = "src";
-
 /// Normalizes `path` relative to `base_dir` (when provided) using forward slashes.
 #[must_use]
-pub fn normalize_relative_path(path: &Path, base_dir: Option<&Path>) -> String {
+pub(super) fn normalize_relative_path(path: &Path, base_dir: Option<&Path>) -> String {
     let clean_path = path.strip_prefix(CURRENT_DIR_PREFIX).unwrap_or(path);
     let relative = base_dir.map_or(clean_path, |base| {
         let clean_base = base.strip_prefix(CURRENT_DIR_PREFIX).unwrap_or(base);
-        if clean_base == Path::new(".") || clean_base.starts_with(SRC_DIR_NAME) {
+        if clean_base == Path::new(".") || clean_base.starts_with(SOURCE_DIRECTORY) {
             clean_path
         } else {
             clean_path.strip_prefix(clean_base).unwrap_or(clean_path)
         }
     });
     relative.to_string_lossy().replace('\\', "/")
+}
+
+/// Maps a path relative to the Rust crate source root (`src/`) to its `::`-separated module path,
+/// normalizing hyphens to underscores (`my-mod/sub.rs` -> `"my_mod::sub"`).
+#[must_use]
+fn rust_module_from_relative(relative: &Path) -> Option<String> {
+    if relative
+        .extension()
+        .is_none_or(|extension| extension != RUST_EXTENSION)
+    {
+        return None;
+    }
+    let mut segments: Vec<String> = relative
+        .components()
+        .filter_map(|component| {
+            component
+                .as_os_str()
+                .to_str()
+                .map(|segment| segment.replace('-', "_"))
+        })
+        .collect();
+    let last = segments.pop()?;
+    let stem = last.strip_suffix(RUST_SUFFIX)?;
+    if stem != "mod" || segments.is_empty() {
+        segments.push(stem.to_owned());
+    }
+    (!segments.is_empty()).then(|| segments.join(RUST_MODULE_SEP))
 }
 
 fn parse_cargo_crate_name(project_root: &Path, source: &dyn FileSource) -> Option<String> {
@@ -664,7 +723,16 @@ fn infer_python_source_roots(
     roots
 }
 
-fn python_module_from_relative(relative: &Path, allow_root_tag: bool) -> Option<String> {
+fn python_module_from_resolved(
+    resolved: &Path,
+    python_source_roots: &[PathBuf],
+    allow_root_tag: bool,
+) -> Option<String> {
+    let best_root = python_source_roots
+        .iter()
+        .filter(|root| resolved.starts_with(root.as_path()))
+        .max_by_key(|root| root.components().count())?;
+    let relative = resolved.strip_prefix(best_root).ok()?;
     let extension = relative.extension()?.to_str()?;
     if extension != PYTHON_EXTENSION && extension != PYTHON_STUB_EXTENSION {
         return None;
@@ -675,8 +743,8 @@ fn python_module_from_relative(relative: &Path, allow_root_tag: bool) -> Option<
         .collect();
     let last = segments.pop()?;
     let stem = last
-        .strip_suffix(".py")
-        .or_else(|| last.strip_suffix(".pyi"))?;
+        .strip_suffix(PYTHON_SUFFIX)
+        .or_else(|| last.strip_suffix(PYTHON_STUB_SUFFIX))?;
     if stem != INIT_STEM {
         segments.push(stem.to_owned());
     } else if segments.is_empty() && allow_root_tag {

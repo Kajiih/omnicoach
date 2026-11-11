@@ -1,7 +1,6 @@
 //! Alpha / experimental Layer L2 builder: transforms [`ScopeFacts`] and [`ProjectFacts`] into a
 //! validated [`AbstractionGraph`] (`docs/dev/abstraction_graph/03_design.md` §4.2 and §5.1).
 
-use super::facts::{ModuleFact, ProjectFacts};
 use super::model::{
     AbstractionGraph, DeclarationKind, DeclarationNode, EdgeReason, GraphParts, GroupKind,
     GroupNode, ModelError, NodeId, OrderingEdge, ReferenceEdge, ReflexionStatus, SourceLocation,
@@ -11,6 +10,7 @@ use crate::code_lint::ast::{
     DeclarationScopeKind, IntraFileReference, ItemFacts, RelationKind, ScopeFacts, ScopeItemKind,
     Visibility, levels, strongly_connected_components,
 };
+use crate::code_lint::project::{ModuleFact, ProjectFacts};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -399,44 +399,31 @@ fn append_cross_module_decl_edges(project: &ProjectFacts, acc: &mut AccumulatedP
     merge_reference_edges(&mut acc.reference_edges);
 }
 
-struct ComponentDepSets {
-    direct: BTreeSet<(String, String)>,
-    transitive: BTreeSet<(String, String)>,
+struct ComponentDepSets<'a> {
+    direct: BTreeSet<(&'a str, &'a str)>,
+    allowed: BTreeSet<(&'a str, &'a str)>,
 }
 
-fn build_component_dep_sets(project: &ProjectFacts) -> ComponentDepSets {
+fn build_component_dep_sets(project: &ProjectFacts) -> ComponentDepSets<'_> {
     let mut direct = BTreeSet::new();
-    let mut adj: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut allowed = BTreeSet::new();
     for comp in &project.components {
-        for dep in &comp.declared_dependencies {
-            direct.insert((comp.name.clone(), dep.clone()));
-            adj.entry(comp.name.as_str())
-                .or_default()
-                .push(dep.as_str());
-        }
-    }
-
-    let mut transitive = BTreeSet::new();
-    for comp in &project.components {
-        let mut visited = BTreeSet::new();
-        let mut stack = adj.get(comp.name.as_str()).cloned().unwrap_or_default();
-        while let Some(target) = stack.pop() {
-            if visited.insert(target) {
-                transitive.insert((comp.name.clone(), target.to_owned()));
-                if let Some(next_deps) = adj.get(target) {
-                    stack.extend(next_deps.iter().copied());
-                }
+        if let Some(ref deps) = comp.declared_dependencies {
+            for dep in deps {
+                direct.insert((comp.name.as_str(), dep.as_str()));
             }
         }
+        for dep in &comp.allowed_dependencies {
+            allowed.insert((comp.name.as_str(), dep.as_str()));
+        }
     }
-
-    ComponentDepSets { direct, transitive }
+    ComponentDepSets { direct, allowed }
 }
 
 fn build_module_summary_edges(
     project: &ProjectFacts,
     mod_to_comp: &BTreeMap<&str, &str>,
-    comp_deps: &ComponentDepSets,
+    comp_deps: &ComponentDepSets<'_>,
 ) -> Vec<SummaryEdge> {
     let mut mod_counts: BTreeMap<(&str, &str), usize> = BTreeMap::new();
     for rel in &project.cross_module_refs {
@@ -453,10 +440,7 @@ fn build_module_summary_edges(
         let dst_comp = mod_to_comp[dst_mod];
         let reflexion = if !project.has_declared_architecture || src_comp == dst_comp {
             Some(ReflexionStatus::Inferred)
-        } else if comp_deps
-            .transitive
-            .contains(&(src_comp.to_owned(), dst_comp.to_owned()))
-        {
+        } else if comp_deps.allowed.contains(&(src_comp, dst_comp)) {
             Some(ReflexionStatus::Convergent)
         } else {
             Some(ReflexionStatus::Divergent)
@@ -516,13 +500,17 @@ fn build_component_groups_and_summaries(
     project: &ProjectFacts,
     module_groups: &[GroupNode],
     mod_to_comp: &BTreeMap<&str, &str>,
-    comp_deps: &ComponentDepSets,
+    comp_deps: &ComponentDepSets<'_>,
 ) -> ComponentGraphParts {
     let declared_by_name: BTreeMap<&str, Vec<String>> = if project.has_declared_architecture {
         project
             .components
             .iter()
-            .map(|comp| (comp.name.as_str(), comp.declared_dependencies.clone()))
+            .filter_map(|comp| {
+                comp.declared_dependencies
+                    .as_ref()
+                    .map(|deps| (comp.name.as_str(), deps.clone()))
+            })
             .collect()
     } else {
         BTreeMap::new()
@@ -591,26 +579,24 @@ fn build_component_groups_and_summaries(
 fn build_component_reflexion_summaries(
     project: &ProjectFacts,
     mod_to_comp: &BTreeMap<&str, &str>,
-    comp_deps: &ComponentDepSets,
+    comp_deps: &ComponentDepSets<'_>,
 ) -> Vec<SummaryEdge> {
-    let mut actual_comp_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut actual_comp_counts: BTreeMap<(&str, &str), usize> = BTreeMap::new();
     for rel in &project.cross_module_refs {
         if let (Some(&src_comp), Some(&dst_comp)) = (
             mod_to_comp.get(rel.source_module.as_str()),
             mod_to_comp.get(rel.target_module.as_str()),
         ) && src_comp != dst_comp
         {
-            *actual_comp_counts
-                .entry((src_comp.to_owned(), dst_comp.to_owned()))
-                .or_insert(0) += 1;
+            *actual_comp_counts.entry((src_comp, dst_comp)).or_insert(0) += 1;
         }
     }
 
     let mut comp_summaries = Vec::new();
     if project.has_declared_architecture {
-        for (src_comp, dst_comp) in &comp_deps.direct {
+        for &(src_comp, dst_comp) in &comp_deps.direct {
             let count = actual_comp_counts
-                .remove(&(src_comp.clone(), dst_comp.clone()))
+                .remove(&(src_comp, dst_comp))
                 .unwrap_or(0);
             comp_summaries.push(SummaryEdge {
                 higher: NodeId::new(format!("comp:{src_comp}")),
@@ -625,10 +611,7 @@ fn build_component_reflexion_summaries(
             });
         }
         for ((src_comp, dst_comp), count) in actual_comp_counts {
-            let status = if comp_deps
-                .transitive
-                .contains(&(src_comp.clone(), dst_comp.clone()))
-            {
+            let status = if comp_deps.allowed.contains(&(src_comp, dst_comp)) {
                 ReflexionStatus::Convergent
             } else {
                 ReflexionStatus::Divergent
@@ -1410,7 +1393,7 @@ mod tests {
         CallClusterRule, FindingFact, OrderingEdge as AstOrderingEdge, OrderingReason,
         PlacementAnchor, RelationFact,
     };
-    use crate::code_lint::graph::facts::{ComponentFact, CrossModuleRefFact};
+    use crate::code_lint::project::{ComponentFact, CrossModuleRefFact};
 
     fn sample_scopes() -> Vec<ScopeFacts> {
         vec![sample_module_scope(), sample_impl_scope()]
@@ -1628,15 +1611,18 @@ mod tests {
             components: vec![
                 ComponentFact {
                     name: "Core".to_owned(),
-                    declared_dependencies: Vec::new(),
+                    declared_dependencies: Some(Vec::new()),
+                    allowed_dependencies: Vec::new(),
                 },
                 ComponentFact {
                     name: "Unused".to_owned(),
-                    declared_dependencies: Vec::new(),
+                    declared_dependencies: Some(Vec::new()),
+                    allowed_dependencies: Vec::new(),
                 },
                 ComponentFact {
                     name: "Runner".to_owned(),
-                    declared_dependencies: vec!["Core".to_owned(), "Unused".to_owned()],
+                    declared_dependencies: Some(vec!["Core".to_owned(), "Unused".to_owned()]),
+                    allowed_dependencies: vec!["Core".to_owned(), "Unused".to_owned()],
                 },
             ],
             modules: vec![
@@ -1694,11 +1680,13 @@ mod tests {
             components: vec![
                 ComponentFact {
                     name: "Core".to_owned(),
-                    declared_dependencies: Vec::new(),
+                    declared_dependencies: None,
+                    allowed_dependencies: Vec::new(),
                 },
                 ComponentFact {
                     name: "Runner".to_owned(),
-                    declared_dependencies: Vec::new(),
+                    declared_dependencies: None,
+                    allowed_dependencies: Vec::new(),
                 },
             ],
             modules: vec![

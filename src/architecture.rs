@@ -113,7 +113,7 @@ define_architecture! {
     /// Cross-language facts computed over the AST: bindings, calls, comments (`code_lint::semantic`).
     CodeLintSemantic    => [CodeLintAst],
     /// Multi-file project facts, cross-module symbol resolution, and component/path conformance (`code_lint::project`).
-    CodeLintProject     => [CodeLintAst, Diagnostic],
+    CodeLintProject     => [CodeLintAst, Diagnostic] (owns_external: ["ignore"]),
     /// The code rule contract: a declaration, a file target and a check function (`code_lint::contract`).
     CodeLintContract    => [CodeLintProject, CodeLintSemantic, CodeLintAst, RuleDeclaration],
     /// Rule-selection and per-rule override configuration resolved from `.omnicoach.toml` (`config`).
@@ -127,7 +127,7 @@ define_architecture! {
     /// Static code linting multi-file orchestration runner (`code_lint::runner`).
     CodeLintRunner      => [CodeLintProject, CodeLintRules, CodeLintSuppression, Diff],
     /// Alpha / experimental multi-level abstraction graph model, builder, and text renderers (`code_lint::graph`).
-    CodeLintGraph       => [CodeLintProject, CodeLintAst, Config, Diagnostic],
+    CodeLintGraph       => [CodeLintProject, CodeLintAst, Diagnostic],
 
     // --- Command Safety Domain (`command_lint`) ---
     /// The jj client: repository state queries for command rules (`command_lint::vcs`).

@@ -6,7 +6,10 @@ use super::architecture::{
     resolve_architecture_spec,
 };
 use super::config::{CONFIG_FILE_NAME, ProjectConfig, ProjectTomlError};
-use super::layout::{ProjectLayout, is_python_package_init, resolve_relative_python_module};
+use super::layout::{
+    LIB_CRATE_ROOT, ProjectLayout, is_python_package_init, resolve_relative_python_module,
+    resolve_rust_reference_path,
+};
 use super::source::FileSource;
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
@@ -68,9 +71,19 @@ pub struct ImportedProtocolSummary {
     pub ancestor_ids: HashSet<PythonClassId>,
 }
 
+/// Canonical module and optional symbol (`"fn"`, `"Type"`, or `"Type::method"`) resolved for
+/// a cross-module reference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ResolvedModuleTarget {
+    /// Canonical target module path within the project.
+    pub(super) module: String,
+    /// Target top-level symbol or `Type::method` within `module`, when resolved below module level.
+    pub(super) symbol: Option<String>,
+}
+
 /// Outcome of resolving a symbol reference in a Python module.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResolvedPythonTarget {
+pub(super) enum ResolvedPythonTarget {
     /// Resolved to a top-level symbol `name` defined in `module`.
     Symbol {
         /// Defining module path.
@@ -117,7 +130,7 @@ impl<'s> ProjectIndex<'s> {
 
     /// Attaches a [`ProjectConfig`] resolved for this project.
     #[must_use]
-    pub fn with_project_config(mut self, project_config: ProjectConfig) -> Self {
+    pub(super) fn with_project_config(mut self, project_config: ProjectConfig) -> Self {
         self.project_config = project_config;
         self
     }
@@ -253,9 +266,36 @@ impl<'s> ProjectIndex<'s> {
         }
     }
 
+    /// Seeds the memoized [`PythonFileSummary`] for a parsed Python module (`full_path` with
+    /// resolved `module_path`), preserving PEP 561 `.pyi` stub precedence while also populating
+    /// fallback or disambiguated module keys.
+    pub(super) fn seed_python_module(
+        &self,
+        full_path: &Path,
+        module_path: &str,
+        parsed: &ParsedFile,
+    ) {
+        self.seed_from_parsed(full_path, parsed);
+        let slot = self.python_slot(module_path);
+        if slot.get().is_none()
+            && self
+                .layout
+                .python_module_file(module_path, self.source)
+                .is_none()
+        {
+            let _ = slot.get_or_init(|| Some(Arc::new(summarize_python_file(parsed))));
+        }
+    }
+
+    /// Seeds the memoized [`RustFileSummary`] for `module` from an already-computed summary.
+    pub(super) fn seed_rust_summary(&self, module: &str, summary: RustFileSummary) {
+        let slot = self.rust_slot(module);
+        let _ = slot.get_or_init(|| Some(Arc::new(summary)));
+    }
+
     /// Returns the memoized [`PythonFileSummary`] for `module`, loading it on demand if needed.
     #[must_use]
-    pub fn python_summary(&self, module: &str) -> Option<Arc<PythonFileSummary>> {
+    pub(super) fn python_summary(&self, module: &str) -> Option<Arc<PythonFileSummary>> {
         let slot = self.python_slot(module);
         slot.get_or_init(|| {
             let file_path = self.layout.python_module_file(module, self.source)?;
@@ -266,23 +306,10 @@ impl<'s> ProjectIndex<'s> {
         .clone()
     }
 
-    /// Returns the memoized [`RustFileSummary`] header for `module`, loading it on demand if needed.
-    #[must_use]
-    pub fn rust_summary(&self, module: &str) -> Option<Arc<RustFileSummary>> {
-        let slot = self.rust_slot(module);
-        slot.get_or_init(|| {
-            let file_path = self.layout.rust_module_file(module, self.source)?;
-            let text = self.source.read_to_string(&file_path).ok()?;
-            let parsed = ParsedFile::rust(&text);
-            Some(Arc::new(summarize_rust_module_header(&parsed)))
-        })
-        .clone()
-    }
-
     /// Resolves a written Python expression (`Store`, `interfaces.Store`, `pkg.interfaces.Store`)
     /// from `from_module` across imports, submodules, `__all__`, and bounded `*` re-exports.
     #[must_use]
-    pub fn resolve_python_written_name(
+    pub(super) fn resolve_python_written_name(
         &self,
         from_module: &str,
         written: &str,
@@ -291,10 +318,171 @@ impl<'s> ProjectIndex<'s> {
         self.resolve_python_name_bounded(from_module, written, 0, &mut visited)
     }
 
+    /// Resolves a canonical crate-relative Rust reference path (`"core::Config"`, `"core::Parser::parse"`)
+    /// across `known_modules`, their `module_symbols`, and bounded `pub use` re-export chains.
+    #[must_use]
+    pub(super) fn resolve_rust_module_target(
+        &self,
+        canonical: &str,
+        known_modules: &HashSet<&str>,
+        module_symbols: &HashMap<&str, HashSet<String>>,
+    ) -> Option<ResolvedModuleTarget> {
+        if canonical.is_empty() {
+            return None;
+        }
+        let initial = split_module_and_segments(canonical, "::", known_modules).or_else(|| {
+            if known_modules.contains(LIB_CRATE_ROOT) {
+                let mut segments = canonical.split("::").filter(|segment| !segment.is_empty());
+                let first = segments.next().map(str::to_owned)?;
+                let remainder = {
+                    let rest: Vec<&str> = segments.collect();
+                    (!rest.is_empty()).then(|| rest.join("::"))
+                };
+                let is_known_in_lib = module_symbols
+                    .get(LIB_CRATE_ROOT)
+                    .is_some_and(|set| set.contains(&first))
+                    || self.resolve_rust_reexport(LIB_CRATE_ROOT, &first).is_some();
+                is_known_in_lib.then(|| SplitModulePath {
+                    module: LIB_CRATE_ROOT.to_owned(),
+                    symbol: Some(first),
+                    remainder,
+                })
+            } else {
+                None
+            }
+        })?;
+        let mut resolved_module = initial.module;
+        let Some(mut resolved_first) = initial.symbol else {
+            return Some(ResolvedModuleTarget {
+                module: resolved_module,
+                symbol: None,
+            });
+        };
+        let mut remaining_tail = initial.remainder;
+        for _ in 0..MAX_REEXPORT_HOPS {
+            let has_symbol = module_symbols
+                .get(resolved_module.as_str())
+                .is_some_and(|set| set.contains(&resolved_first));
+            if has_symbol {
+                break;
+            }
+            let Some(reexported) = self.resolve_rust_reexport(&resolved_module, &resolved_first)
+            else {
+                break;
+            };
+            let combined = match remaining_tail.as_deref() {
+                Some(tail) => format!("{reexported}::{tail}"),
+                None => reexported,
+            };
+            let Some(next) = split_module_and_segments(&combined, "::", known_modules) else {
+                break;
+            };
+            resolved_module = next.module;
+            remaining_tail = next.remainder;
+            if let Some(next_symbol) = next.symbol {
+                resolved_first = next_symbol;
+            } else {
+                return Some(ResolvedModuleTarget {
+                    module: resolved_module,
+                    symbol: None,
+                });
+            }
+        }
+        if let Some(member) = remaining_tail
+            .as_deref()
+            .and_then(|tail| tail.split("::").next())
+        {
+            let method_candidate = format!("{resolved_first}::{member}");
+            if module_symbols
+                .get(resolved_module.as_str())
+                .is_some_and(|set| set.contains(&method_candidate))
+            {
+                return Some(ResolvedModuleTarget {
+                    module: resolved_module,
+                    symbol: Some(method_candidate),
+                });
+            }
+        }
+        Some(ResolvedModuleTarget {
+            module: resolved_module,
+            symbol: Some(resolved_first),
+        })
+    }
+
+    /// Resolves a normalized dotted Python reference path (`"pkg.build_plan"`, `"pkg.core.Parser.parse"`)
+    /// across `known_modules`, their `module_symbols`, and package/submodule re-exports.
+    #[must_use]
+    pub(super) fn resolve_python_module_target(
+        &self,
+        normalized: &str,
+        known_modules: &HashSet<&str>,
+        module_symbols: &HashMap<&str, HashSet<String>>,
+    ) -> Option<ResolvedModuleTarget> {
+        if known_modules.contains(normalized) {
+            return Some(ResolvedModuleTarget {
+                module: normalized.to_owned(),
+                symbol: None,
+            });
+        }
+        let KnownModulePrefix {
+            module: base_module,
+            remainder,
+        } = longest_known_module_prefix(normalized, ".", known_modules)?;
+        if let Some(resolved) = self.resolve_python_symbol_or_module(
+            base_module,
+            remainder,
+            known_modules,
+            module_symbols,
+        ) {
+            return Some(resolved);
+        }
+        if let Some((symbol_prefix, member)) = remainder.rsplit_once('.')
+            && let Some(prefix_target) = self.resolve_python_symbol_or_module(
+                base_module,
+                symbol_prefix,
+                known_modules,
+                module_symbols,
+            )
+            && let Some(first_symbol) = prefix_target.symbol
+        {
+            let method_candidate = format!("{first_symbol}::{member}");
+            let resolved_symbol = if module_symbols
+                .get(prefix_target.module.as_str())
+                .is_some_and(|set| set.contains(&method_candidate))
+            {
+                method_candidate
+            } else {
+                first_symbol
+            };
+            return Some(ResolvedModuleTarget {
+                module: prefix_target.module,
+                symbol: Some(resolved_symbol),
+            });
+        }
+        let mut segments = remainder.split('.').filter(|segment| !segment.is_empty());
+        let first = segments.next().map(str::to_owned)?;
+        if let Some(member) = segments.next() {
+            let method_candidate = format!("{first}::{member}");
+            if module_symbols
+                .get(base_module)
+                .is_some_and(|set| set.contains(&method_candidate))
+            {
+                return Some(ResolvedModuleTarget {
+                    module: base_module.to_owned(),
+                    symbol: Some(method_candidate),
+                });
+            }
+        }
+        Some(ResolvedModuleTarget {
+            module: base_module.to_owned(),
+            symbol: Some(first),
+        })
+    }
+
     /// Resolves a base-class expression of `from_module` (occurring at `before_class_index`, or `None`
     /// for top-level lookup) to a concrete [`PythonClassId`].
     #[must_use]
-    pub fn resolve_python_class(
+    pub(super) fn resolve_python_class(
         &self,
         from_module: &str,
         written_base: &str,
@@ -349,7 +537,7 @@ impl<'s> ProjectIndex<'s> {
     /// Computes the Python C3 Method Resolution Order (`[self, ...ancestors]`) of `class_id`
     /// across modules.
     #[must_use]
-    pub fn python_class_mro(&self, class_id: &PythonClassId) -> Vec<PythonClassId> {
+    pub(super) fn python_class_mro(&self, class_id: &PythonClassId) -> Vec<PythonClassId> {
         let mut active = HashSet::new();
         self.compute_c3_mro(class_id, &mut active)
     }
@@ -358,7 +546,7 @@ impl<'s> ProjectIndex<'s> {
     /// combining in-file classes (`classes[..index]`) with cross-module classes resolved from
     /// `current_module`.
     #[must_use]
-    pub fn resolve_inherited_method_docstring(
+    pub(super) fn resolve_inherited_method_docstring(
         &self,
         current_module: Option<&str>,
         classes: &[PythonClassInfo<'_>],
@@ -399,7 +587,7 @@ impl<'s> ProjectIndex<'s> {
     /// Resolves the ancestor class names of `classes[index]` in C3 MRO order across in-file
     /// classes (`classes[..index]`) and cross-module classes resolved from `current_module`.
     #[must_use]
-    pub fn resolve_ancestor_class_names(
+    pub(super) fn resolve_ancestor_class_names(
         &self,
         current_module: Option<&str>,
         classes: &[PythonClassInfo<'_>],
@@ -425,7 +613,7 @@ impl<'s> ProjectIndex<'s> {
     /// Resolves the strict C3 MRO ancestors of `classes[index]` across in-file classes
     /// (`classes[..index]`) and cross-module classes resolved from `current_module`.
     #[must_use]
-    pub fn resolve_class_ancestors(
+    pub(super) fn resolve_class_ancestors(
         &self,
         current_module: Option<&str>,
         classes: &[PythonClassInfo<'_>],
@@ -456,7 +644,10 @@ impl<'s> ProjectIndex<'s> {
 
     /// Collects all `Protocol`s imported into `module` in deterministic local-name order.
     #[must_use]
-    pub fn imported_protocols_in_module(&self, module: &str) -> Vec<ImportedProtocolSummary> {
+    pub(super) fn imported_protocols_in_module(
+        &self,
+        module: &str,
+    ) -> Vec<ImportedProtocolSummary> {
         let Some(summary) = self.python_summary(module) else {
             return Vec::new();
         };
@@ -906,12 +1097,11 @@ impl<'s> ProjectIndex<'s> {
             return self.resolve_via_star_imports(from_module, &summary, head, depth + 1, visited);
         }
 
-        let head_target = summary
-            .imports
-            .get(head)
-            .map_or(ResolvedPythonTarget::Unknown, |binding| {
-                self.resolve_import_binding(from_module, binding, depth + 1, visited)
-            });
+        let head_target = if let Some(binding) = summary.imports.get(head) {
+            self.resolve_import_binding(from_module, binding, depth + 1, visited)
+        } else {
+            self.resolve_via_star_imports(from_module, &summary, head, depth + 1, visited)
+        };
         let ResolvedPythonTarget::Module(base_module) = head_target else {
             return ResolvedPythonTarget::Unknown;
         };
@@ -1113,6 +1303,76 @@ impl<'s> ProjectIndex<'s> {
         ResolvedPythonTarget::Unknown
     }
 
+    fn resolve_rust_reexport(&self, module: &str, symbol: &str) -> Option<String> {
+        let summary = self.rust_summary(module)?;
+        let crate_name = self.layout.rust_crate_name.as_deref();
+        for declaration in &summary.visible_uses {
+            for (exported_name, target) in &declaration.reexports {
+                if exported_name == symbol {
+                    return Some(
+                        resolve_rust_reference_path(
+                            module,
+                            &summary.external_mods,
+                            target,
+                            crate_name,
+                        )
+                        .canonical_path,
+                    );
+                }
+            }
+        }
+        None
+    }
+
+    fn resolve_python_symbol_or_module(
+        &self,
+        base_module: &str,
+        path: &str,
+        known_modules: &HashSet<&str>,
+        module_symbols: &HashMap<&str, HashSet<String>>,
+    ) -> Option<ResolvedModuleTarget> {
+        if !path.contains('.')
+            && module_symbols
+                .get(base_module)
+                .is_some_and(|set| set.contains(path))
+        {
+            return Some(ResolvedModuleTarget {
+                module: base_module.to_owned(),
+                symbol: Some(path.to_owned()),
+            });
+        }
+        match self.resolve_python_written_name(base_module, path) {
+            ResolvedPythonTarget::Symbol { module, name }
+                if known_modules.contains(module.as_str()) =>
+            {
+                Some(ResolvedModuleTarget {
+                    module,
+                    symbol: Some(name),
+                })
+            }
+            ResolvedPythonTarget::Module(module) if known_modules.contains(module.as_str()) => {
+                Some(ResolvedModuleTarget {
+                    module,
+                    symbol: None,
+                })
+            }
+            ResolvedPythonTarget::Symbol { .. }
+            | ResolvedPythonTarget::Module(_)
+            | ResolvedPythonTarget::Unknown => None,
+        }
+    }
+
+    fn rust_summary(&self, module: &str) -> Option<Arc<RustFileSummary>> {
+        let slot = self.rust_slot(module);
+        slot.get_or_init(|| {
+            let file_path = self.layout.rust_module_file(module, self.source)?;
+            let text = self.source.read_to_string(&file_path).ok()?;
+            let parsed = ParsedFile::rust(&text);
+            Some(Arc::new(summarize_rust_module_header(&parsed)))
+        })
+        .clone()
+    }
+
     fn python_slot(&self, module: &str) -> PythonSlot {
         let mut guard = self
             .python_slots
@@ -1151,6 +1411,63 @@ fn find_external_config_file(start_dir: &Path, source: &dyn FileSource) -> Optio
             break;
         }
         current = directory.parent();
+    }
+    None
+}
+
+struct SplitModulePath {
+    module: String,
+    symbol: Option<String>,
+    remainder: Option<String>,
+}
+
+fn split_module_and_segments(
+    path: &str,
+    separator: &str,
+    known_modules: &HashSet<&str>,
+) -> Option<SplitModulePath> {
+    if known_modules.contains(path) {
+        return Some(SplitModulePath {
+            module: path.to_owned(),
+            symbol: None,
+            remainder: None,
+        });
+    }
+    let KnownModulePrefix { module, remainder } =
+        longest_known_module_prefix(path, separator, known_modules)?;
+    let mut segments = remainder
+        .split(separator)
+        .filter(|segment| !segment.is_empty());
+    let symbol = segments.next().map(str::to_owned);
+    let tail: Vec<&str> = segments.collect();
+    let remainder = (!tail.is_empty()).then(|| tail.join(separator));
+    Some(SplitModulePath {
+        module: module.to_owned(),
+        symbol,
+        remainder,
+    })
+}
+
+struct KnownModulePrefix<'a> {
+    module: &'a str,
+    remainder: &'a str,
+}
+
+fn longest_known_module_prefix<'a>(
+    path: &'a str,
+    separator: &str,
+    known_modules: &HashSet<&str>,
+) -> Option<KnownModulePrefix<'a>> {
+    let mut current = path;
+    while let Some((prefix, _)) = current.rsplit_once(separator) {
+        if known_modules.contains(prefix) {
+            let remainder = &path[prefix.len() + separator.len()..];
+            return Some(KnownModulePrefix {
+                module: prefix,
+                remainder,
+            });
+        }
+        current = prefix;
     }
     None
 }
@@ -1654,6 +1971,141 @@ mod tests {
         assert_eq!(findings.unmapped_architecture_modules.len(), 1);
         assert_eq!(findings.unmapped_architecture_modules[0].name, "stray");
         assert!(findings.unmapped_architecture_modules[0].span.end <= impl_source.len());
+    }
+
+    #[test]
+    fn resolve_rust_module_target_follows_module_and_alias_reexports_with_methods() {
+        let root = Path::new("/repo");
+        let source = MemoryFileSource::from_relative_files(
+            root,
+            &[
+                (
+                    "Cargo.toml",
+                    indoc::indoc! {r#"
+                        [package]
+                        name = "demo"
+                    "#},
+                ),
+                ("src/lib.rs", "pub mod core;\n"),
+                (
+                    "src/core.rs",
+                    indoc::indoc! {r"
+                        mod detail;
+                        pub use self::detail::InternalConfig as PublicConfig;
+                        pub use self::detail::submod;
+                    "},
+                ),
+                (
+                    "src/core/detail.rs",
+                    indoc::indoc! {r"
+                        pub mod submod;
+                        pub struct InternalConfig;
+                    "},
+                ),
+                ("src/core/detail/submod.rs", "pub struct Thing;\n"),
+            ],
+        );
+        let index = ProjectIndex::new(ProjectLayout::discover(root, &source, &[]), &source);
+        let known_modules = HashSet::from(["lib", "core", "core::detail", "core::detail::submod"]);
+        let module_symbols = HashMap::from([
+            (
+                "core::detail",
+                HashSet::from([
+                    "InternalConfig".to_owned(),
+                    "InternalConfig::load".to_owned(),
+                ]),
+            ),
+            (
+                "core::detail::submod",
+                HashSet::from(["Thing".to_owned(), "Thing::run".to_owned()]),
+            ),
+        ]);
+
+        let alias_target = index.resolve_rust_module_target(
+            "core::PublicConfig::load",
+            &known_modules,
+            &module_symbols,
+        );
+        let submod_target = index.resolve_rust_module_target(
+            "core::submod::Thing::run",
+            &known_modules,
+            &module_symbols,
+        );
+
+        assert_eq!(
+            alias_target,
+            Some(ResolvedModuleTarget {
+                module: "core::detail".to_owned(),
+                symbol: Some("InternalConfig::load".to_owned()),
+            })
+        );
+        assert_eq!(
+            submod_target,
+            Some(ResolvedModuleTarget {
+                module: "core::detail::submod".to_owned(),
+                symbol: Some("Thing::run".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_python_module_target_resolves_module_alias_and_reexported_class_methods() {
+        let root = Path::new("/repo");
+        let source = MemoryFileSource::from_relative_files(
+            root,
+            &[
+                (
+                    "pyproject.toml",
+                    indoc::indoc! {r#"
+                        [project]
+                        name = "demo"
+                    "#},
+                ),
+                (
+                    "pkg/__init__.py",
+                    indoc::indoc! {r"
+                        from . import _core as core
+                        from ._core import Parser
+                    "},
+                ),
+                (
+                    "pkg/_core.py",
+                    indoc::indoc! {r"
+                        class Parser:
+                            def parse(self) -> None: ...
+                    "},
+                ),
+            ],
+        );
+        let index = ProjectIndex::new(ProjectLayout::discover(root, &source, &[]), &source);
+        let known_modules = HashSet::from(["pkg", "pkg._core"]);
+        let module_symbols = HashMap::from([(
+            "pkg._core",
+            HashSet::from(["Parser".to_owned(), "Parser::parse".to_owned()]),
+        )]);
+
+        let via_module_alias = index.resolve_python_module_target(
+            "pkg.core.Parser.parse",
+            &known_modules,
+            &module_symbols,
+        );
+        let via_reexported_class_without_symbols =
+            index.resolve_python_module_target("pkg.Parser.parse", &known_modules, &HashMap::new());
+
+        assert_eq!(
+            via_module_alias,
+            Some(ResolvedModuleTarget {
+                module: "pkg._core".to_owned(),
+                symbol: Some("Parser::parse".to_owned()),
+            })
+        );
+        assert_eq!(
+            via_reexported_class_without_symbols,
+            Some(ResolvedModuleTarget {
+                module: "pkg._core".to_owned(),
+                symbol: Some("Parser".to_owned()),
+            })
+        );
     }
 
     #[test]

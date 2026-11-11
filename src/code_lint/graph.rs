@@ -6,7 +6,6 @@
 architecture_component!(CodeLintGraph);
 
 mod builder;
-mod facts;
 mod index;
 mod model;
 mod query;
@@ -19,14 +18,12 @@ pub use self::render::OutputFormat;
 use self::builder::{build_file_graph, build_project_graph};
 use self::render::render_graph;
 
-use self::facts::{
-    collect_project_facts_with_config, collect_project_source_files, derive_project_title,
+use crate::code_lint::ast::{ParsedFile, collect_intra_file_references, collect_scope_facts};
+use crate::code_lint::project::{
+    DiskFileSource, FileSource as _, ProjectConfig, derive_project_title, discover_project_sources,
     resolve_effective_paths,
 };
-use crate::code_lint::ast::{ParsedFile, collect_intra_file_references, collect_scope_facts};
-use crate::config::Config;
 use crate::diagnostic::Language;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Options for generating a module or project abstraction graph.
@@ -57,9 +54,9 @@ impl Default for GraphOptions {
 ///
 /// Returns an error if any target path does not exist, if no supported source files are found, or
 /// if graph validation fails.
-pub fn generate_graph(options: &GraphOptions, config: &Config) -> anyhow::Result<String> {
+pub fn generate_graph(options: &GraphOptions, config: &ProjectConfig) -> anyhow::Result<String> {
     let effective_paths = resolve_effective_paths(&options.paths)?;
-    let is_single_file = effective_paths.len() == 1 && effective_paths[0].is_file();
+    let is_single_file = effective_paths.len() == 1 && DiskFileSource.is_file(&effective_paths[0]);
     let depth = options.depth.unwrap_or(if is_single_file {
         ProjectDepth::Full
     } else {
@@ -77,7 +74,7 @@ fn generate_single_file_graph(path: &Path, format: OutputFormat) -> anyhow::Resu
     let Some(lang) = Language::from_path(path) else {
         anyhow::bail!("Unsupported file language: {}", path.display());
     };
-    let content = fs::read_to_string(path)?;
+    let content = DiskFileSource.read_to_string(path)?;
     let parsed = ParsedFile::new(&content, lang);
     let scopes = collect_scope_facts(&parsed);
     let intra_refs = collect_intra_file_references(&parsed, &scopes);
@@ -90,30 +87,20 @@ fn generate_project_graphs(
     paths: &[PathBuf],
     depth: ProjectDepth,
     format: OutputFormat,
-    config: &Config,
+    config: &ProjectConfig,
 ) -> anyhow::Result<String> {
-    let files = collect_project_source_files(paths, config)?;
-    if files.is_empty() {
+    let discovered = discover_project_sources(paths, config)?;
+    if discovered.files.is_empty() {
         anyhow::bail!("No supported source files found in the specified paths");
     }
 
     let title = derive_project_title(paths);
     let mut sections = Vec::new();
     for lang in [Language::Rust, Language::Python] {
-        let lang_files: Vec<(&str, &str)> = files
-            .iter()
-            .filter(|file| file.lang == lang)
-            .map(|file| (file.relative_path.as_str(), file.source.as_str()))
-            .collect();
-        if lang_files.is_empty() {
+        if !discovered.files.iter().any(|file| file.lang == lang) {
             continue;
         }
-        let project_facts = collect_project_facts_with_config(
-            &title,
-            lang,
-            &lang_files,
-            config.project.architecture.as_ref(),
-        );
+        let project_facts = discovered.collect_project_facts(&title, lang);
         let graph = build_project_graph(&project_facts, depth)?;
         sections.push(render_graph(&graph, format));
     }
@@ -125,22 +112,31 @@ fn generate_project_graphs(
 mod tests {
     use super::*;
 
-    fn multi_file_options(depth: Option<ProjectDepth>) -> GraphOptions {
+    #[test]
+    fn single_file_graph_defaults_to_full_depth_and_rejects_unsupported_extension() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        GraphOptions {
-            paths: vec![
-                root.join("src/config.rs"),
-                root.join("src/rule_selection.rs"),
-                root.join("src/code_lint/suppression.rs"),
-            ],
-            depth,
+        let single_options = GraphOptions {
+            paths: vec![root.join("src/code_lint/suppression.rs")],
+            depth: None,
             format: OutputFormat::AnnotatedStubs,
-        }
+        };
+        let unsupported_options = GraphOptions {
+            paths: vec![root.join("Cargo.toml")],
+            depth: None,
+            format: OutputFormat::AnnotatedStubs,
+        };
+
+        let rendered = generate_graph(&single_options, &ProjectConfig::default()).unwrap();
+        let unsupported = generate_graph(&unsupported_options, &ProjectConfig::default());
+
+        assert!(rendered.contains("parse_directive_prefix"));
+        assert!(unsupported.is_err());
     }
 
     #[test]
     fn multi_file_graph_defaults_to_module_depth() {
-        let rendered = generate_graph(&multi_file_options(None), &Config::default()).unwrap();
+        let rendered =
+            generate_graph(&multi_file_options(None), &ProjectConfig::default()).unwrap();
         assert!(
             rendered.contains("suppression"),
             "expected the suppression module in:\n{rendered}"
@@ -161,7 +157,7 @@ mod tests {
             paths: vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")],
             ..GraphOptions::default()
         };
-        let rendered = generate_graph(&options, &Config::default()).unwrap();
+        let rendered = generate_graph(&options, &ProjectConfig::default()).unwrap();
         assert!(
             rendered.contains("// Module edges omitted for "),
             "expected an omission notice in:\n{rendered}"
@@ -176,12 +172,50 @@ mod tests {
     fn multi_file_graph_honors_explicit_full_depth() {
         let rendered = generate_graph(
             &multi_file_options(Some(ProjectDepth::Full)),
-            &Config::default(),
+            &ProjectConfig::default(),
         )
         .unwrap();
         assert!(
             rendered.contains("parse_directive_prefix"),
             "expected declarations at full depth in:\n{rendered}"
         );
+    }
+
+    #[test]
+    fn subdirectory_graph_resolves_declared_component_without_empty_siblings() {
+        let options = GraphOptions {
+            paths: vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src/code_lint/project")],
+            ..GraphOptions::default()
+        };
+        let rendered = generate_graph(&options, &ProjectConfig::default()).unwrap();
+        assert!(
+            rendered.contains("## Component [L0] CodeLintProject (depends_on=[])"),
+            "expected declared CodeLintProject component in:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("### Module [L0] code_lint::project::config"),
+            "expected L0 config module to render untruncated in:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("### Module [L1] code_lint::project::source"),
+            "expected L1 source module to render untruncated in:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("CommandLintVcs"),
+            "expected unrelated components to be omitted in:\n{rendered}"
+        );
+    }
+
+    fn multi_file_options(depth: Option<ProjectDepth>) -> GraphOptions {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        GraphOptions {
+            paths: vec![
+                root.join("src/config.rs"),
+                root.join("src/rule_selection.rs"),
+                root.join("src/code_lint/suppression.rs"),
+            ],
+            depth,
+            format: OutputFormat::AnnotatedStubs,
+        }
     }
 }

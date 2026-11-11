@@ -1,15 +1,13 @@
 //! Query evaluators for `omnicoach graph` (`find`, `slice`).
 
 use super::builder::{ProjectDepth, build_project_graph};
-use super::facts::{
-    CollectedSourceFile, collect_project_facts_with_config, collect_project_source_files,
-    resolve_effective_paths,
-};
 use super::index::{DirectedEdge, GraphIndex};
 use super::model::{AbstractionGraph, DeclarationKind, DeclarationNode, NodeId};
 use crate::code_lint::ast::Visibility;
-use crate::code_lint::project::ArchitectureConfig;
-use crate::config::Config;
+use crate::code_lint::project::{
+    DiscoveredProjectSources, ProjectConfig, ProjectSourceFile, discover_project_sources,
+    resolve_effective_paths,
+};
 use crate::diagnostic::Language;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
@@ -57,18 +55,20 @@ pub struct SliceQueryOptions {
 /// # Errors
 ///
 /// Returns an error if target paths cannot be read or graph construction fails.
-pub fn run_slice_query(options: &SliceQueryOptions, config: &Config) -> anyhow::Result<String> {
+pub fn run_slice_query(
+    options: &SliceQueryOptions,
+    config: &ProjectConfig,
+) -> anyhow::Result<String> {
     let paths = resolve_effective_paths(&options.paths)?;
-    let sources = collect_project_source_files(&paths, config)?;
-    if sources.is_empty() {
+    let discovered = discover_project_sources(&paths, config)?;
+    if discovered.files.is_empty() {
         anyhow::bail!("No supported source files found in the specified paths");
     }
     slice_in_sources(
-        &sources,
+        &discovered,
         &options.symbols,
         options.hops.max(1),
         options.budget.max(100),
-        config.project.architecture.as_ref(),
     )
 }
 
@@ -77,33 +77,30 @@ pub fn run_slice_query(options: &SliceQueryOptions, config: &Config) -> anyhow::
 /// # Errors
 ///
 /// Returns an error if target paths cannot be read or graph construction fails.
-pub fn run_find_query(options: &FindQueryOptions, config: &Config) -> anyhow::Result<String> {
+pub fn run_find_query(
+    options: &FindQueryOptions,
+    config: &ProjectConfig,
+) -> anyhow::Result<String> {
     let paths = resolve_effective_paths(&options.paths)?;
-    let sources = collect_project_source_files(&paths, config)?;
-    if sources.is_empty() {
+    let discovered = discover_project_sources(&paths, config)?;
+    if discovered.files.is_empty() {
         anyhow::bail!("No supported source files found in the specified paths");
     }
-    find_in_sources(
-        &sources,
-        &options.pattern,
-        options.limit.max(1),
-        config.project.architecture.as_ref(),
-    )
+    find_in_sources(&discovered, &options.pattern, options.limit.max(1))
 }
 
 const MIN_RESERVED_CHARS_PER_SYMBOL: usize = 1_600;
 
 fn slice_in_sources(
-    sources: &[CollectedSourceFile],
+    discovered: &DiscoveredProjectSources<'_>,
     symbols: &[String],
     hops: usize,
     budget: usize,
-    architecture: Option<&ArchitectureConfig>,
 ) -> anyhow::Result<String> {
-    let built_graphs = build_all_lang_graphs(sources, architecture)?;
+    let built_graphs = build_all_lang_graphs(discovered)?;
     let indices: Vec<LanguageQueryIndex<'_>> = built_graphs
         .iter()
-        .map(|built| LanguageQueryIndex::new(built.lang, &built.graph, sources))
+        .map(|built| LanguageQueryIndex::new(built.lang, &built.graph, &discovered.files))
         .collect();
     let effective_hops = hops.clamp(1, MAX_SLICE_HOPS);
     let mut remaining_chars = budget.saturating_mul(BYTES_PER_TOKEN);
@@ -125,15 +122,14 @@ fn slice_in_sources(
 }
 
 fn find_in_sources(
-    sources: &[CollectedSourceFile],
+    discovered: &DiscoveredProjectSources<'_>,
     pattern: &str,
     limit: usize,
-    architecture: Option<&ArchitectureConfig>,
 ) -> anyhow::Result<String> {
-    let built_graphs = build_all_lang_graphs(sources, architecture)?;
+    let built_graphs = build_all_lang_graphs(discovered)?;
     let indices: Vec<LanguageQueryIndex<'_>> = built_graphs
         .iter()
-        .map(|built| LanguageQueryIndex::new(built.lang, &built.graph, sources))
+        .map(|built| LanguageQueryIndex::new(built.lang, &built.graph, &discovered.files))
         .collect();
     Ok(find_in_indices(&indices, pattern, limit))
 }
@@ -145,11 +141,7 @@ struct LanguageQueryIndex<'a> {
 }
 
 impl<'a> LanguageQueryIndex<'a> {
-    fn new(
-        lang: Language,
-        graph: &'a AbstractionGraph,
-        sources: &'a [CollectedSourceFile],
-    ) -> Self {
+    fn new(lang: Language, graph: &'a AbstractionGraph, sources: &'a [ProjectSourceFile]) -> Self {
         let graph_index = GraphIndex::new(graph);
         let sources_by_file: BTreeMap<&'a str, &'a str> = sources
             .iter()
@@ -351,11 +343,11 @@ fn render_slice_for_decl(
     char_budget: usize,
 ) -> String {
     let qualified = index.graph_index.qualified_symbol(&declaration.id);
-    let comp = index
+    let component = index
         .graph_index
         .component_of(&declaration.id)
         .unwrap_or("unassigned");
-    let mod_path = index.graph_index.module_of(&declaration.id).unwrap_or("");
+    let module_path = index.graph_index.module_of(&declaration.id).unwrap_or("");
     let owner = index
         .graph_index
         .owner_label_of(&declaration.id)
@@ -366,7 +358,7 @@ fn render_slice_for_decl(
     let mut out = format!("# Graph Slice: {qualified}\n");
     let _ = writeln!(
         out,
-        "Component: {comp} | Module: {mod_path} ({}) | Cluster: {owner}",
+        "Component: {component} | Module: {module_path} ({}) | Cluster: {owner}",
         declaration.location.file
     );
     let _ = writeln!(
@@ -409,11 +401,11 @@ fn render_slice_callers(
         out.push_str("  (none in static graph)\n");
         return;
     }
-    let target_mod = index.graph_index.module_of(&declaration.id);
+    let target_module = index.graph_index.module_of(&declaration.id);
     let mut ordered: Vec<&DirectedEdge<'_>> = callers.iter().collect();
     ordered.sort_by_key(|edge| {
-        let same_mod = index.graph_index.module_of(edge.peer) == target_mod;
-        (!same_mod, index.graph_index.qualified_symbol(edge.peer))
+        let same_module = index.graph_index.module_of(edge.peer) == target_module;
+        (!same_module, index.graph_index.qualified_symbol(edge.peer))
     });
     let has_callees = !index
         .graph_index
@@ -701,12 +693,11 @@ struct BuiltLanguageGraph {
 }
 
 fn build_all_lang_graphs(
-    sources: &[CollectedSourceFile],
-    architecture: Option<&ArchitectureConfig>,
+    discovered: &DiscoveredProjectSources<'_>,
 ) -> anyhow::Result<Vec<BuiltLanguageGraph>> {
     let mut built_graphs = Vec::new();
     for lang in [Language::Rust, Language::Python] {
-        if let Some(built) = build_lang_graph(sources, lang, architecture)? {
+        if let Some(built) = build_lang_graph(discovered, lang)? {
             built_graphs.push(built);
         }
     }
@@ -714,19 +705,13 @@ fn build_all_lang_graphs(
 }
 
 fn build_lang_graph(
-    sources: &[CollectedSourceFile],
+    discovered: &DiscoveredProjectSources<'_>,
     lang: Language,
-    architecture: Option<&ArchitectureConfig>,
 ) -> anyhow::Result<Option<BuiltLanguageGraph>> {
-    let lang_files: Vec<(&str, &str)> = sources
-        .iter()
-        .filter(|file| file.lang == lang)
-        .map(|file| (file.relative_path.as_str(), file.source.as_str()))
-        .collect();
-    if lang_files.is_empty() {
+    if !discovered.files.iter().any(|file| file.lang == lang) {
         return Ok(None);
     }
-    let facts = collect_project_facts_with_config("project", lang, &lang_files, architecture);
+    let facts = discovered.collect_project_facts("project", lang);
     let graph = build_project_graph(&facts, ProjectDepth::Full)?;
     Ok(Some(BuiltLanguageGraph { lang, graph }))
 }
@@ -790,72 +775,84 @@ fn source_line_snippet<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::code_lint::project::{MemoryFileSource, discover_project_sources_in};
+    use std::path::Path;
 
-    fn sample_rust_sources() -> Vec<CollectedSourceFile> {
-        vec![
-            CollectedSourceFile {
-                relative_path: "src/architecture.rs".to_owned(),
-                lang: Language::Rust,
-                source: indoc::indoc! {r"
-                    define_architecture! {
-                        Core => [],
-                        Runner => [Core],
-                    }
-                "}
-                .to_owned(),
-            },
-            CollectedSourceFile {
-                relative_path: "src/core.rs".to_owned(),
-                lang: Language::Rust,
-                source: indoc::indoc! {r"
-                    architecture_component!(Core);
+    const SAMPLE_RUST_FILES: &[(&str, &str)] = &[
+        (
+            "src/architecture.rs",
+            indoc::indoc! {r"
+                define_architecture! {
+                    Core => [],
+                    Runner => [Core],
+                }
+            "},
+        ),
+        (
+            "src/core.rs",
+            indoc::indoc! {r"
+                architecture_component!(Core);
 
-                    pub struct Tracker {
-                        pub count: usize,
-                    }
+                pub struct Tracker {
+                    pub count: usize,
+                }
 
-                    impl Tracker {
-                        pub fn from_source(text: &str) -> Self {
-                            Self { count: count_lines(text) }
-                        }
-
-                        pub fn total(&self) -> usize {
-                            self.count
-                        }
+                impl Tracker {
+                    pub fn from_source(text: &str) -> Self {
+                        Self { count: count_lines(text) }
                     }
 
-                    fn count_lines(text: &str) -> usize {
-                        text.lines().count()
+                    pub fn total(&self) -> usize {
+                        self.count
                     }
-                "}
-                .to_owned(),
-            },
-            CollectedSourceFile {
-                relative_path: "src/runner.rs".to_owned(),
-                lang: Language::Rust,
-                source: indoc::indoc! {r"
-                    architecture_component!(Runner);
+                }
 
-                    use crate::core::Tracker;
+                fn count_lines(text: &str) -> usize {
+                    text.lines().count()
+                }
+            "},
+        ),
+        (
+            "src/runner.rs",
+            indoc::indoc! {r"
+                architecture_component!(Runner);
 
-                    pub fn execute(input: &str) -> usize {
-                        let tracker = Tracker::from_source(input);
-                        summarize(&tracker)
-                    }
+                use crate::core::Tracker;
 
-                    fn summarize(tracker: &Tracker) -> usize {
-                        tracker.total()
-                    }
-                "}
-                .to_owned(),
-            },
-        ]
+                pub fn execute(input: &str) -> usize {
+                    let tracker = Tracker::from_source(input);
+                    summarize(&tracker)
+                }
+
+                fn summarize(tracker: &Tracker) -> usize {
+                    tracker.total()
+                }
+            "},
+        ),
+    ];
+
+    fn sample_memory() -> MemoryFileSource {
+        MemoryFileSource::from_relative_files(
+            Path::new(MemoryFileSource::VIRTUAL_ROOT),
+            SAMPLE_RUST_FILES,
+        )
+    }
+
+    fn sample_discovered(memory: &MemoryFileSource) -> DiscoveredProjectSources<'_> {
+        let root = PathBuf::from(MemoryFileSource::VIRTUAL_ROOT);
+        discover_project_sources_in(
+            std::slice::from_ref(&root),
+            memory,
+            &ProjectConfig::default(),
+        )
+        .expect("discover sample project sources")
     }
 
     #[test]
     fn find_symbols_ranks_exact_before_prefix_and_substring() {
-        let sources = sample_rust_sources();
-        let out = find_in_sources(&sources, "from_source", 10, None).unwrap();
+        let memory = sample_memory();
+        let discovered = sample_discovered(&memory);
+        let out = find_in_sources(&discovered, "from_source", 10).unwrap();
         assert!(
             out.contains("core::Tracker::from_source"),
             "expected Tracker::from_source in find output:\n{out}"
@@ -872,9 +869,10 @@ mod tests {
 
     #[test]
     fn slice_symbol_renders_target_callers_with_call_site_lines_callees_and_completeness_footer() {
-        let sources = sample_rust_sources();
+        let memory = sample_memory();
+        let discovered = sample_discovered(&memory);
         let out =
-            slice_in_sources(&sources, &["Tracker::from_source".to_owned()], 1, 800, None).unwrap();
+            slice_in_sources(&discovered, &["Tracker::from_source".to_owned()], 1, 800).unwrap();
         assert!(
             out.contains("src/runner.rs:6:"),
             "expected cross-module caller with 1-based call-site line in slice:\n{out}"
@@ -891,13 +889,13 @@ mod tests {
 
     #[test]
     fn slice_supports_multiple_symbols_and_two_hop_neighborhood() {
-        let sources = sample_rust_sources();
+        let memory = sample_memory();
+        let discovered = sample_discovered(&memory);
         let multi = slice_in_sources(
-            &sources,
+            &discovered,
             &["Tracker::from_source".to_owned(), "execute".to_owned()],
             2,
             800,
-            None,
         )
         .unwrap();
         assert!(

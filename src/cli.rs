@@ -397,7 +397,7 @@ fn run_graph(args: GraphArgs, config: &Config) -> anyhow::Result<u8> {
                     GraphOutputFormat::AnnotatedStubs
                 },
             };
-            generate_graph(&options, config)?
+            generate_graph(&options, &config.project)?
         }
         Some(GraphQueryCommand::Find(find_args)) => run_find_query(
             &FindQueryOptions {
@@ -405,7 +405,7 @@ fn run_graph(args: GraphArgs, config: &Config) -> anyhow::Result<u8> {
                 paths: find_args.paths,
                 limit: find_args.limit,
             },
-            config,
+            &config.project,
         )?,
         Some(GraphQueryCommand::Slice(slice_args)) => run_slice_query(
             &SliceQueryOptions {
@@ -414,7 +414,7 @@ fn run_graph(args: GraphArgs, config: &Config) -> anyhow::Result<u8> {
                 hops: slice_args.hops,
                 budget: slice_args.budget,
             },
-            config,
+            &config.project,
         )?,
     };
     write_stdout_ignoring_broken_pipe(output.as_bytes())?;
