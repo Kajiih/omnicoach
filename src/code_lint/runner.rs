@@ -6,7 +6,7 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{AnyCodeRule, RuleTarget};
 use crate::code_lint::project::{
     ArchitectureError, DiskFileSource, OverlayFileSource, ProjectContext, ProjectIndex,
-    ProjectLayout, is_rooted_path, lexical_normalize,
+    ProjectLayout, is_rooted_path, lexical_normalize, resolve_against_cwd,
 };
 use crate::code_lint::rules::CODE_RULES;
 use crate::code_lint::semantic::comments::may_contain_suppression_directive;
@@ -57,15 +57,8 @@ pub fn lint_virtual_file(
     virtual_content: &str,
     config: &Config,
 ) -> Result<Vec<Diagnostic>, ArchitectureError> {
-    let raw_root = if is_rooted_path(project_root) {
-        project_root.to_path_buf()
-    } else {
-        std::env::current_dir().map_or_else(
-            |_| project_root.to_path_buf(),
-            |working_dir| working_dir.join(project_root),
-        )
-    };
-    let normalized_root = lexical_normalize(&raw_root);
+    let working_dir = std::env::current_dir().ok();
+    let normalized_root = resolve_against_cwd(project_root, working_dir.as_deref());
     let raw_target = if is_rooted_path(target_path) {
         target_path.to_path_buf()
     } else if let Ok(stripped) = target_path.strip_prefix(project_root) {
@@ -354,17 +347,27 @@ fn collect_targets(options: &LintOptions) -> anyhow::Result<Vec<LintTarget>> {
             .collect();
         Ok(targets)
     } else {
+        let working_dir = std::env::current_dir().ok();
+        let mut seen_paths = HashSet::new();
         let mut targets = Vec::new();
         for path in &effective_paths {
             if path.is_file() {
-                if Language::from_path(path).is_some() {
+                if Language::from_path(path).is_some()
+                    && seen_paths.insert(resolve_against_cwd(path, working_dir.as_deref()))
+                {
                     targets.push(LintTarget {
                         path: path.clone(),
                         changed_lines: None,
                     });
                 }
             } else if path.is_dir() {
-                targets.extend(collect_directory_candidates(path));
+                for candidate in collect_directory_candidates(path) {
+                    if seen_paths
+                        .insert(resolve_against_cwd(&candidate.path, working_dir.as_deref()))
+                    {
+                        targets.push(candidate);
+                    }
+                }
             } else {
                 anyhow::bail!("Path does not exist: {}", path.display());
             }
@@ -1571,5 +1574,26 @@ mod tests {
                 "Module in component `Core` references `from pkg import api` in `Api`, which `Core` does not depend on.",
             ]
         );
+    }
+
+    #[test]
+    fn test_run_code_lint_deduplicates_overlapping_file_and_directory_targets() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let src_dir = temp.path().join("src");
+        fs::create_dir_all(&src_dir).expect("mkdir src");
+        let file_path = src_dir.join("sample.py");
+        fs::write(&file_path, "k = 1\n").expect("write sample.py");
+        let config = config_enabling(&["single-letter-name"]);
+
+        let report = run_code_lint(
+            &LintOptions {
+                paths: vec![file_path, src_dir],
+                ..LintOptions::default()
+            },
+            &config,
+        )
+        .expect("run_code_lint");
+
+        assert_eq!(report.diagnostics.len(), 1);
     }
 }

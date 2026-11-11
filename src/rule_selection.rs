@@ -23,7 +23,7 @@ pub use self::taxonomy::{AnalyzedInput, Derived, Facet, RegisteredRule, Tag, reg
 use self::taxonomy::{REGISTERED_RULES, Selector};
 use crate::code_lint::project::{
     ArchitectureConfig, ArchitectureConfigError, CONFIG_FILE_NAME, ContextConfig, ProjectConfig,
-    compile_glob,
+    compile_glob, lexical_normalize, resolve_against_cwd,
 };
 use crate::config::Config;
 use crate::diagnostic::RuleName;
@@ -205,6 +205,29 @@ pub fn load_config(overrides: &ConfigOverrides) -> Result<Config, ConfigError> {
     load_domain_config(&start_directory, overrides, AnalyzedInput::Code)
 }
 
+/// Loads configuration for the code analysis domain for explicit target `paths`.
+///
+/// When `overrides.config_path` is unset and all existing target `paths` share a single discovered
+/// project root (or directory when outside any VCS/manifest root), discovers configuration from
+/// that root so `Config` and `ProjectIndex` agree on repository boundaries and never leak the
+/// caller's `cwd` `.omnicoach.toml` onto another repository.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] if the discovered configuration file cannot be read or parsed.
+pub fn load_config_for_paths(
+    paths: &[PathBuf],
+    overrides: &ConfigOverrides,
+) -> Result<Config, ConfigError> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let start_directory = if overrides.config_path.is_some() {
+        cwd
+    } else {
+        resolve_target_config_start_directory(&cwd, paths)
+    };
+    load_domain_config(&start_directory, overrides, AnalyzedInput::Code)
+}
+
 /// Loads configuration for the command workflow safety domain.
 ///
 /// Starts from the current directory (or `overrides.config_path`), prioritizing
@@ -249,14 +272,24 @@ pub(crate) fn load_command_config_from_root(
 
 /// Discovers the project root directory starting at `start_directory` and traversing up parent directories.
 ///
-/// A directory is considered a project root if it contains `.omnicoach.toml`, `.jj`, or `.git`.
+/// Prefers `.omnicoach.toml`, `.jj`, or `.git`, falling back to `pyproject.toml` or `Cargo.toml`
+/// when no configuration file or VCS marker is present.
 #[must_use]
 pub(crate) fn discover_project_root(start_directory: &Path) -> Option<PathBuf> {
+    const MANIFEST_MARKERS: &[&str] = &["pyproject.toml", "Cargo.toml"];
     start_directory
         .ancestors()
         .find(|ancestor| {
             !ancestor.as_os_str().is_empty()
                 && (ancestor.join(CONFIG_FILE_NAME).is_file() || detect_vcs_at(ancestor).is_some())
+        })
+        .or_else(|| {
+            start_directory.ancestors().find(|ancestor| {
+                !ancestor.as_os_str().is_empty()
+                    && MANIFEST_MARKERS
+                        .iter()
+                        .any(|marker| ancestor.join(marker).is_file())
+            })
         })
         .map(Path::to_path_buf)
 }
@@ -423,6 +456,31 @@ impl fmt::Display for RuleStatus {
 const GLOBAL_CONFIG_RELATIVE_PATH: &str = "omnicoach/config.toml";
 const DEFAULT_CONFIG_DIR_NAME: &str = ".config";
 
+fn resolve_target_config_start_directory(cwd: &Path, paths: &[PathBuf]) -> PathBuf {
+    let roots: Option<Vec<PathBuf>> = paths
+        .iter()
+        .map(|path| {
+            let directory = existing_target_directory(cwd, path)?;
+            Some(discover_project_root(&directory).unwrap_or(directory))
+        })
+        .collect();
+    match roots.as_deref() {
+        Some([first, rest @ ..]) if rest.iter().all(|root| root == first) => first.clone(),
+        _ => cwd.to_path_buf(),
+    }
+}
+
+fn existing_target_directory(cwd: &Path, path: &Path) -> Option<PathBuf> {
+    let resolved = resolve_against_cwd(path, Some(cwd));
+    if resolved.is_dir() {
+        Some(resolved)
+    } else if resolved.is_file() {
+        resolved.parent().map(Path::to_path_buf)
+    } else {
+        None
+    }
+}
+
 fn load_domain_config(
     start_directory: &Path,
     overrides: &ConfigOverrides,
@@ -496,6 +554,10 @@ fn resolve_domain_config_with(
 
     if let Some(explicit_path) = overrides.config_path.as_deref() {
         let content = read_config_at(explicit_path)?;
+        let root_dir = resolve_against_cwd(explicit_path, Some(start_directory))
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map_or_else(|| lexical_normalize(start_directory), Path::to_path_buf);
         return Ok(ResolvedDomainConfig { content, root_dir });
     }
 
@@ -1246,5 +1308,92 @@ mod tests {
         let rule = find_rule("sleep-in-tests").expect("rule exists");
         assert_eq!(discovered_root, project_root);
         assert!(!config.is_rule_enabled(rule.name));
+    }
+
+    #[test]
+    fn explicit_config_path_anchors_root_dir_and_manifest_marks_project_root() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let caller_dir = temp_dir.path().join("caller");
+        let repo_dir = temp_dir.path().join("repo");
+        let manifest_pkg = temp_dir.path().join("manifest_only/src");
+        std::fs::create_dir_all(&caller_dir).expect("mkdir caller");
+        std::fs::create_dir_all(&repo_dir).expect("mkdir repo");
+        std::fs::create_dir_all(&manifest_pkg).expect("mkdir manifest_only/src");
+        let explicit_config = repo_dir.join(CONFIG_FILE_NAME);
+        std::fs::write(
+            &explicit_config,
+            "[per-file-ignores]\n\"tests/**\" = [\"single-letter-name\"]\n",
+        )
+        .expect("write explicit config");
+        std::fs::write(
+            temp_dir.path().join("manifest_only/pyproject.toml"),
+            "[project]\nname = \"demo\"\n",
+        )
+        .expect("write pyproject.toml");
+
+        let resolved = resolve_domain_config_with(
+            &caller_dir,
+            &ConfigOverrides {
+                config_path: Some(explicit_config),
+                ..ConfigOverrides::default()
+            },
+            AnalyzedInput::Code,
+            None,
+        )
+        .expect("resolve explicit config");
+        let discovered_manifest_root = discover_project_root(&manifest_pkg);
+
+        assert_eq!(resolved.root_dir, repo_dir);
+        assert_eq!(
+            discovered_manifest_root,
+            Some(temp_dir.path().join("manifest_only"))
+        );
+    }
+
+    #[test]
+    fn resolve_target_config_start_directory_isolates_external_repos_and_joins_shared_roots() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let caller_repo = temp_dir.path().join("caller_repo");
+        let target_repo = temp_dir.path().join("target_repo");
+        let other_repo = temp_dir.path().join("other_repo");
+        std::fs::create_dir_all(&caller_repo).expect("mkdir caller_repo");
+        std::fs::create_dir_all(target_repo.join("src")).expect("mkdir target_repo/src");
+        std::fs::create_dir_all(target_repo.join("tests")).expect("mkdir target_repo/tests");
+        std::fs::create_dir_all(&other_repo).expect("mkdir other_repo");
+        std::fs::write(
+            caller_repo.join(CONFIG_FILE_NAME),
+            "select = [\"python\"]\n",
+        )
+        .expect("write caller config");
+        std::fs::write(
+            target_repo.join("pyproject.toml"),
+            "[project]\nname = \"target\"\n",
+        )
+        .expect("write target pyproject");
+        std::fs::write(
+            other_repo.join("Cargo.toml"),
+            "[package]\nname = \"other\"\n",
+        )
+        .expect("write other Cargo.toml");
+        let target_file = target_repo.join("src/app.py");
+        let target_test = target_repo.join("tests/test_app.py");
+        std::fs::write(&target_file, "").expect("write app.py");
+        std::fs::write(&target_test, "").expect("write test_app.py");
+
+        let shared = resolve_target_config_start_directory(
+            &caller_repo,
+            &[target_file.clone(), target_test],
+        );
+        let mixed = resolve_target_config_start_directory(&caller_repo, &[target_file, other_repo]);
+        let missing = resolve_target_config_start_directory(
+            &caller_repo,
+            &[temp_dir.path().join("missing/file.py")],
+        );
+        let empty = resolve_target_config_start_directory(&caller_repo, &[]);
+
+        assert_eq!(shared, target_repo);
+        assert_eq!(mixed, caller_repo);
+        assert_eq!(missing, caller_repo);
+        assert_eq!(empty, caller_repo);
     }
 }

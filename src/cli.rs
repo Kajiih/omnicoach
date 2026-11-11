@@ -19,7 +19,9 @@ use crate::config::Config;
 use crate::diagnostic::{Diagnostic, OutputFormat, print_diagnostics};
 use crate::hook::{AntigravityEvent, run_antigravity_hook};
 use crate::rule_catalog::{DiscoveryArgs, code_report_footer, explain_footer};
-use crate::rule_selection::{ConfigOverrides, load_command_config, load_config};
+use crate::rule_selection::{
+    ConfigOverrides, load_command_config, load_config, load_config_for_paths,
+};
 
 /// Exit status returned when all checks succeed or a discovery/help flag is rendered.
 pub const EXIT_SUCCESS: u8 = 0;
@@ -250,8 +252,11 @@ fn dispatch(cli: CliArgs) -> anyhow::Result<u8> {
             Ok(EXIT_SUCCESS)
         }
         DomainCommand::Code(args) => {
-            let config = load(load_config, &cli.config_overrides)?;
             let options = build_code_lint_options(args, cli.diff, cli.diff_rev);
+            let config = load(
+                |overrides| load_config_for_paths(&options.paths, overrides),
+                &cli.config_overrides,
+            )?;
             run_code(&options, &config, cli.format)
         }
         DomainCommand::Command(args) => {
@@ -264,7 +269,10 @@ fn dispatch(cli: CliArgs) -> anyhow::Result<u8> {
             run_command_check(&command, &config, cli.format)
         }
         DomainCommand::Graph(args) => {
-            let config = load(load_config, &cli.config_overrides)?;
+            let config = load(
+                |overrides| load_config_for_paths(graph_target_paths(&args), overrides),
+                &cli.config_overrides,
+            )?;
             run_graph(args, &config)
         }
     }
@@ -379,6 +387,14 @@ fn render_command_diagnostics(
         return Ok(EXIT_VIOLATIONS);
     }
     Ok(EXIT_SUCCESS)
+}
+
+fn graph_target_paths(args: &GraphArgs) -> &[PathBuf] {
+    match &args.query {
+        None => &args.paths,
+        Some(GraphQueryCommand::Find(find_args)) => &find_args.paths,
+        Some(GraphQueryCommand::Slice(slice_args)) => &slice_args.paths,
+    }
 }
 
 fn run_graph(args: GraphArgs, config: &Config) -> anyhow::Result<u8> {
@@ -711,6 +727,69 @@ mod tests {
         run_hook_io(io::Cursor::new(b"{}"), &mut stdout, |_input| outcome).unwrap();
 
         assert_eq!(String::from_utf8(stdout).unwrap(), expected_stdout);
+    }
+
+    #[test]
+    fn run_from_args_discovers_target_repo_omnicoach_toml_for_code_graph_and_explicit_config() {
+        let external_repo = tempfile::tempdir().unwrap();
+        let scripts_dir = external_repo.path().join("scripts");
+        let app_dir = external_repo.path().join("app");
+        std::fs::create_dir_all(&scripts_dir).unwrap();
+        std::fs::create_dir_all(&app_dir).unwrap();
+        let external_config = external_repo.path().join(".omnicoach.toml");
+        std::fs::write(
+            &external_config,
+            indoc::indoc! {r#"
+                select = ["single-letter-name"]
+
+                [per-file-ignores]
+                "scripts/**" = ["single-letter-name"]
+            "#},
+        )
+        .unwrap();
+        let ignored_script = scripts_dir.join("run.py");
+        let flagged_app = app_dir.join("main.py");
+        std::fs::write(&ignored_script, "k = 1\n").unwrap();
+        std::fs::write(&flagged_app, "k = 1\n").unwrap();
+
+        let auto_ignored = run_from_args(["omnicoach", "code", ignored_script.to_str().unwrap()]);
+        let auto_flagged = run_from_args(["omnicoach", "code", flagged_app.to_str().unwrap()]);
+        let explicit_ignored = run_from_args([
+            "omnicoach",
+            "--config",
+            external_config.to_str().unwrap(),
+            "code",
+            ignored_script.to_str().unwrap(),
+        ]);
+        let graph_auto =
+            run_from_args(["omnicoach", "graph", external_repo.path().to_str().unwrap()]);
+        assert_eq!(auto_ignored, EXIT_SUCCESS);
+        assert_eq!(auto_flagged, EXIT_VIOLATIONS);
+        assert_eq!(explicit_ignored, EXIT_SUCCESS);
+        assert_eq!(graph_auto, EXIT_SUCCESS);
+    }
+
+    #[test]
+    fn run_from_args_graph_subcommands_honor_target_repo_omnicoach_toml() {
+        let broken_repo = tempfile::tempdir().unwrap();
+        let broken_src = broken_repo.path().join("src");
+        std::fs::create_dir_all(&broken_src).unwrap();
+        std::fs::write(
+            broken_repo.path().join(".omnicoach.toml"),
+            "select = [\"nonexistent-rule\"]\n",
+        )
+        .unwrap();
+        std::fs::write(broken_src.join("lib.rs"), "pub fn item() -> usize { 1 }\n").unwrap();
+        let broken_path = broken_repo.path().to_str().unwrap();
+
+        let broken_graph = run_from_args(["omnicoach", "graph", broken_path]);
+        let broken_find = run_from_args(["omnicoach", "graph", "find", "item", broken_path]);
+        let broken_slice =
+            run_from_args(["omnicoach", "graph", "slice", "item", "--path", broken_path]);
+
+        assert_eq!(broken_graph, EXIT_ERROR);
+        assert_eq!(broken_find, EXIT_ERROR);
+        assert_eq!(broken_slice, EXIT_ERROR);
     }
 
     fn empty_temp_config() -> (tempfile::TempDir, PathBuf) {
