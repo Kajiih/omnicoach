@@ -219,6 +219,7 @@ fn extract_public_surface_module(
                 source: kept_old_to_new.get(&edge.source)?.clone(),
                 target: kept_old_to_new.get(&edge.target)?.clone(),
                 kind: edge.kind,
+                lines: edge.lines.clone(),
             })
         }));
 
@@ -313,6 +314,7 @@ fn extract_full_module(
             source: prefix_node_id(&prefix, &edge.source),
             target: prefix_node_id(&prefix, &edge.target),
             kind: edge.kind,
+            lines: edge.lines.clone(),
         });
     }
     for edge in module_graph.summary_edges() {
@@ -324,7 +326,6 @@ fn extract_full_module(
             reflexion: edge.reflexion,
         });
     }
-
     Ok(top_children)
 }
 
@@ -367,38 +368,23 @@ fn append_cross_module_decl_edges(project: &ProjectFacts, acc: &mut AccumulatedP
         let (Some(src_sym), Some(dst_sym)) = (&rel.source_symbol, &rel.target_symbol) else {
             continue;
         };
-        let Some(source_id) = acc
-            .decl_by_mod_and_name
-            .get(&(rel.source_module.clone(), src_sym.clone()))
-            .or_else(|| {
-                let owner = src_sym.split("::").next()?;
-                acc.decl_by_mod_and_name
-                    .get(&(rel.source_module.clone(), owner.to_owned()))
-            })
-            .cloned()
-        else {
+        let Some(source_id) = resolve_symbol_or_owner(src_sym, |sym| {
+            acc.decl_by_mod_and_name
+                .get(&(rel.source_module.clone(), sym.to_owned()))
+        }) else {
             continue;
         };
-        let mut target_ids = Vec::new();
-        if let Some(target_id) = acc
-            .decl_by_mod_and_name
-            .get(&(rel.target_module.clone(), dst_sym.clone()))
-        {
-            target_ids.push(target_id.clone());
-        }
-        if let Some((owner, _)) = dst_sym.split_once("::")
-            && let Some(owner_id) = acc
-                .decl_by_mod_and_name
-                .get(&(rel.target_module.clone(), owner.to_owned()))
-        {
-            target_ids.push(owner_id.clone());
-        }
+        let target_ids = resolve_symbol_and_owner_targets(dst_sym, |sym| {
+            acc.decl_by_mod_and_name
+                .get(&(rel.target_module.clone(), sym.to_owned()))
+        });
         for target_id in target_ids {
             if source_id != target_id {
                 acc.reference_edges.push(ReferenceEdge {
                     source: source_id.clone(),
                     target: target_id.clone(),
                     kind: RelationKind::Body,
+                    lines: vec![rel.line],
                 });
                 acc.ordering_edges.push(OrderingEdge {
                     higher: source_id.clone(),
@@ -410,8 +396,7 @@ fn append_cross_module_decl_edges(project: &ProjectFacts, acc: &mut AccumulatedP
     }
     acc.ordering_edges.sort();
     acc.ordering_edges.dedup();
-    acc.reference_edges.sort();
-    acc.reference_edges.dedup();
+    merge_reference_edges(&mut acc.reference_edges);
 }
 
 struct ComponentDepSets {
@@ -722,20 +707,26 @@ fn build_scope_graph(
         .map(|decl| (decl.name.as_str(), decl.id.clone()))
         .collect();
     for intra_ref in intra_file_refs {
-        if let (Some(source_id), Some(target_id)) = (
-            decl_id_by_name.get(intra_ref.source_symbol.as_str()),
-            decl_id_by_name.get(intra_ref.target_symbol.as_str()),
-        ) && source_id != target_id
-        {
-            extracted.reference_edges.push(ReferenceEdge {
-                source: source_id.clone(),
-                target: target_id.clone(),
-                kind: intra_ref.kind,
-            });
+        let Some(source_id) =
+            resolve_symbol_or_owner(&intra_ref.source_symbol, |sym| decl_id_by_name.get(sym))
+        else {
+            continue;
+        };
+        let target_ids = resolve_symbol_and_owner_targets(&intra_ref.target_symbol, |sym| {
+            decl_id_by_name.get(sym)
+        });
+        for target_id in target_ids {
+            if source_id != target_id {
+                extracted.reference_edges.push(ReferenceEdge {
+                    source: source_id.clone(),
+                    target: target_id,
+                    kind: intra_ref.kind,
+                    lines: vec![intra_ref.line],
+                });
+            }
         }
     }
-    extracted.reference_edges.sort();
-    extracted.reference_edges.dedup();
+    merge_reference_edges(&mut extracted.reference_edges);
 
     AbstractionGraph::new(GraphParts {
         title,
@@ -745,6 +736,56 @@ fn build_scope_graph(
         reference_edges: extracted.reference_edges,
         summary_edges: built_groups.summary_edges,
     })
+}
+
+fn resolve_symbol_or_owner<'a, F>(symbol: &str, lookup: F) -> Option<NodeId>
+where
+    F: Fn(&str) -> Option<&'a NodeId>,
+{
+    lookup(symbol)
+        .or_else(|| {
+            let owner = symbol.split("::").next()?;
+            lookup(owner)
+        })
+        .cloned()
+}
+
+fn resolve_symbol_and_owner_targets<'a, F>(symbol: &str, lookup: F) -> Vec<NodeId>
+where
+    F: Fn(&str) -> Option<&'a NodeId>,
+{
+    let mut targets = Vec::new();
+    if let Some(target_id) = lookup(symbol) {
+        targets.push(target_id.clone());
+    }
+    if let Some((owner, _)) = symbol.split_once("::")
+        && let Some(owner_id) = lookup(owner)
+    {
+        targets.push(owner_id.clone());
+    }
+    targets
+}
+
+fn merge_reference_edges(edges: &mut Vec<ReferenceEdge>) {
+    edges.sort();
+    let mut merged: Vec<ReferenceEdge> = Vec::with_capacity(edges.len());
+    for edge in edges.drain(..) {
+        if let Some(last) = merged.last_mut()
+            && last.source == edge.source
+            && last.target == edge.target
+            && last.kind == edge.kind
+        {
+            last.lines.extend(edge.lines);
+            last.lines.sort_unstable();
+            last.lines.dedup();
+        } else {
+            let mut edge = edge;
+            edge.lines.sort_unstable();
+            edge.lines.dedup();
+            merged.push(edge);
+        }
+    }
+    *edges = merged;
 }
 
 fn format_scope_title(file_path: &str, label: &DeclarationScopeKind) -> String {
@@ -932,6 +973,7 @@ fn extract_scope_items(
             source: item_ids[rel.source].clone(),
             target: item_ids[rel.target].clone(),
             kind: rel.kind,
+            lines: Vec::new(),
         })
         .collect();
     reference_edges.sort();

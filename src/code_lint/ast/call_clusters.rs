@@ -28,6 +28,17 @@ pub enum Visibility {
     Private,
 }
 
+impl Visibility {
+    /// Compact label for this visibility tier (`"pub"` or `"priv"`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "pub",
+            Self::Private => "priv",
+        }
+    }
+}
+
 /// Whether a [`ScopeItem`] is a callable (`fn` / `def`) or a type definition (`struct`, `enum`,
 /// `union`, `trait`, `class`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -2,13 +2,11 @@
 
 use super::builder::{ProjectDepth, build_project_graph};
 use super::facts::{
-    CollectedSourceFile, ProjectFacts, collect_project_facts_with_config,
-    collect_project_source_files, resolve_effective_paths,
+    CollectedSourceFile, collect_project_facts_with_config, collect_project_source_files,
+    resolve_effective_paths,
 };
-use super::model::{AbstractionGraph, DeclarationKind, DeclarationNode, GroupNode, NodeId};
-use super::render::{
-    DeclAncestry, format_short_decl_kind, format_short_visibility, resolve_directed_decl_edges,
-};
+use super::index::{DirectedEdge, GraphIndex};
+use super::model::{AbstractionGraph, DeclarationKind, DeclarationNode, NodeId};
 use crate::code_lint::ast::Visibility;
 use crate::config::{ArchitectureConfig, Config};
 use crate::diagnostic::Language;
@@ -102,11 +100,9 @@ fn slice_in_sources(
     architecture: Option<&ArchitectureConfig>,
 ) -> anyhow::Result<String> {
     let built_graphs = build_all_lang_graphs(sources, architecture)?;
-    let indices: Vec<IndexedProjectGraph<'_>> = built_graphs
+    let indices: Vec<LanguageQueryIndex<'_>> = built_graphs
         .iter()
-        .map(|built| {
-            IndexedProjectGraph::from_graph(built.lang, &built.graph, &built.facts, sources)
-        })
+        .map(|built| LanguageQueryIndex::new(built.lang, &built.graph, sources))
         .collect();
     let effective_hops = hops.clamp(1, MAX_SLICE_HOPS);
     let mut remaining_chars = budget.saturating_mul(BYTES_PER_TOKEN);
@@ -134,198 +130,81 @@ fn find_in_sources(
     architecture: Option<&ArchitectureConfig>,
 ) -> anyhow::Result<String> {
     let built_graphs = build_all_lang_graphs(sources, architecture)?;
-    let indices: Vec<IndexedProjectGraph<'_>> = built_graphs
+    let indices: Vec<LanguageQueryIndex<'_>> = built_graphs
         .iter()
-        .map(|built| {
-            IndexedProjectGraph::from_graph(built.lang, &built.graph, &built.facts, sources)
-        })
+        .map(|built| LanguageQueryIndex::new(built.lang, &built.graph, sources))
         .collect();
     Ok(find_in_indices(&indices, pattern, limit))
 }
 
-struct IndexedProjectGraph<'a> {
+struct LanguageQueryIndex<'a> {
     lang: Language,
-    graph: &'a AbstractionGraph,
-    decl_by_id: BTreeMap<&'a NodeId, &'a DeclarationNode>,
-    group_by_id: BTreeMap<&'a NodeId, &'a GroupNode>,
-    module_by_decl: BTreeMap<&'a NodeId, &'a str>,
-    component_by_decl: BTreeMap<&'a NodeId, &'a str>,
-    owner_label_by_decl: BTreeMap<&'a NodeId, String>,
-    out_edges: BTreeMap<&'a NodeId, Vec<(&'a NodeId, String)>>,
-    in_edges: BTreeMap<&'a NodeId, Vec<(&'a NodeId, String)>>,
-    call_sites: BTreeMap<(&'a NodeId, &'a NodeId), Vec<usize>>,
+    graph_index: GraphIndex<'a>,
     sources_by_file: BTreeMap<&'a str, &'a str>,
 }
 
-impl<'a> IndexedProjectGraph<'a> {
-    fn from_graph(
+impl<'a> LanguageQueryIndex<'a> {
+    fn new(
         lang: Language,
         graph: &'a AbstractionGraph,
-        facts: &'a ProjectFacts,
         sources: &'a [CollectedSourceFile],
     ) -> Self {
-        let decl_by_id: BTreeMap<&'a NodeId, &'a DeclarationNode> = graph
-            .declarations()
-            .iter()
-            .map(|decl| (&decl.id, decl))
-            .collect();
-        let group_by_id: BTreeMap<&'a NodeId, &'a GroupNode> = graph
-            .groups()
-            .iter()
-            .map(|group| (&group.id, group))
-            .collect();
+        let graph_index = GraphIndex::new(graph);
         let sources_by_file: BTreeMap<&'a str, &'a str> = sources
             .iter()
             .map(|file| (file.relative_path.as_str(), file.source.as_str()))
             .collect();
-
-        let ancestry = DeclAncestry::from_graph(graph, &group_by_id);
-        let mut out_edges: BTreeMap<&'a NodeId, Vec<(&'a NodeId, String)>> = BTreeMap::new();
-        let mut in_edges: BTreeMap<&'a NodeId, Vec<(&'a NodeId, String)>> = BTreeMap::new();
-        for edge in resolve_directed_decl_edges(graph, &ancestry) {
-            out_edges
-                .entry(edge.source_id)
-                .or_default()
-                .push((edge.target_id, edge.tag.to_owned()));
-            in_edges
-                .entry(edge.target_id)
-                .or_default()
-                .push((edge.source_id, edge.tag.to_owned()));
-        }
-        let call_sites = Self::collect_call_site_lines(facts, &ancestry.decl_by_mod_and_name);
-
         Self {
             lang,
-            graph,
-            decl_by_id,
-            group_by_id,
-            module_by_decl: ancestry.decl_module_path,
-            component_by_decl: ancestry.decl_component,
-            owner_label_by_decl: ancestry.decl_owner_label,
-            out_edges,
-            in_edges,
-            call_sites,
+            graph_index,
             sources_by_file,
-        }
-    }
-
-    fn collect_call_site_lines(
-        facts: &'a ProjectFacts,
-        decl_by_mod_and_name: &BTreeMap<(&'a str, &'a str), &'a NodeId>,
-    ) -> BTreeMap<(&'a NodeId, &'a NodeId), Vec<usize>> {
-        let mut sites: BTreeMap<(&'a NodeId, &'a NodeId), Vec<usize>> = BTreeMap::new();
-        for xmod in &facts.cross_module_refs {
-            let (Some(src_sym), Some(dst_sym)) =
-                (xmod.source_symbol.as_deref(), xmod.target_symbol.as_deref())
-            else {
-                continue;
-            };
-            Self::record_ref_call_site(
-                &mut sites,
-                decl_by_mod_and_name,
-                &xmod.source_module,
-                src_sym,
-                &xmod.target_module,
-                dst_sym,
-                xmod.line,
-            );
-        }
-        for module in &facts.modules {
-            let mod_path = module.module_path.as_str();
-            for iref in &module.intra_file_refs {
-                Self::record_ref_call_site(
-                    &mut sites,
-                    decl_by_mod_and_name,
-                    mod_path,
-                    &iref.source_symbol,
-                    mod_path,
-                    &iref.target_symbol,
-                    iref.line,
-                );
-            }
-        }
-        for list in sites.values_mut() {
-            list.sort_unstable();
-            list.dedup();
-        }
-        sites
-    }
-
-    fn record_ref_call_site(
-        sites: &mut BTreeMap<(&'a NodeId, &'a NodeId), Vec<usize>>,
-        decl_by_mod_and_name: &BTreeMap<(&'a str, &'a str), &'a NodeId>,
-        src_mod: &str,
-        src_sym: &str,
-        dst_mod: &str,
-        dst_sym: &str,
-        line: usize,
-    ) {
-        let Some(&src_id) = decl_by_mod_and_name.get(&(src_mod, src_sym)).or_else(|| {
-            let owner = src_sym.split("::").next()?;
-            decl_by_mod_and_name.get(&(src_mod, owner))
-        }) else {
-            return;
-        };
-        if let Some(&dst_id) = decl_by_mod_and_name.get(&(dst_mod, dst_sym)) {
-            sites.entry((src_id, dst_id)).or_default().push(line);
-        }
-        if let Some((owner, _)) = dst_sym.split_once("::")
-            && let Some(&owner_id) = decl_by_mod_and_name.get(&(dst_mod, owner))
-        {
-            sites.entry((src_id, owner_id)).or_default().push(line);
-        }
-    }
-
-    fn qualified_symbol(&self, decl_id: &NodeId) -> String {
-        let Some(decl) = self.decl_by_id.get(decl_id) else {
-            return decl_id.as_str().to_owned();
-        };
-        match self.module_by_decl.get(decl_id) {
-            Some(&mod_path) if !mod_path.is_empty() => format!("{mod_path}::{}", decl.name),
-            _ => decl.name.clone(),
         }
     }
 }
 
 fn slice_single_symbol(
-    indices: &[IndexedProjectGraph<'_>],
+    indices: &[LanguageQueryIndex<'_>],
     symbol: &str,
     hops: usize,
     char_budget: usize,
 ) -> String {
     let trimmed = symbol.trim();
     let needle_lower = trimmed.to_ascii_lowercase();
-    let mut qualified_exact: Vec<(&IndexedProjectGraph<'_>, &DeclarationNode)> = Vec::new();
-    let mut name_exact: Vec<(&IndexedProjectGraph<'_>, &DeclarationNode)> = Vec::new();
-    let mut fuzzy_candidates: Vec<(&IndexedProjectGraph<'_>, &DeclarationNode)> = Vec::new();
+    let mut qualified_exact: Vec<(&LanguageQueryIndex<'_>, &DeclarationNode)> = Vec::new();
+    let mut name_exact: Vec<(&LanguageQueryIndex<'_>, &DeclarationNode)> = Vec::new();
+    let mut fuzzy_candidates: Vec<(&LanguageQueryIndex<'_>, &DeclarationNode)> = Vec::new();
     for index in indices {
-        for decl in index.graph.declarations() {
-            let full_path = index.qualified_symbol(&decl.id);
-            let short_member = decl.name.rsplit("::").next().unwrap_or(decl.name.as_str());
+        for declaration in index.graph_index.graph().declarations() {
+            let full_path = index.graph_index.qualified_symbol(&declaration.id);
+            let short_member = declaration
+                .name
+                .rsplit("::")
+                .next()
+                .unwrap_or(declaration.name.as_str());
             if full_path == trimmed {
-                qualified_exact.push((index, decl));
-            } else if decl.name == trimmed {
-                name_exact.push((index, decl));
+                qualified_exact.push((index, declaration));
+            } else if declaration.name == trimmed {
+                name_exact.push((index, declaration));
             } else if short_member == trimmed
                 || matches_qualified_suffix(&full_path.to_ascii_lowercase(), &needle_lower)
             {
-                fuzzy_candidates.push((index, decl));
+                fuzzy_candidates.push((index, declaration));
             }
         }
     }
-    if let [(index, decl)] = qualified_exact.as_slice() {
-        return render_slice_for_decl(index, decl, hops, char_budget);
+    if let [(index, declaration)] = qualified_exact.as_slice() {
+        return render_slice_for_decl(index, declaration, hops, char_budget);
     }
     if qualified_exact.is_empty()
-        && let [(index, decl)] = name_exact.as_slice()
+        && let [(index, declaration)] = name_exact.as_slice()
     {
-        return render_slice_for_decl(index, decl, hops, char_budget);
+        return render_slice_for_decl(index, declaration, hops, char_budget);
     }
     if qualified_exact.is_empty()
         && name_exact.is_empty()
-        && let [(index, decl)] = fuzzy_candidates.as_slice()
+        && let [(index, declaration)] = fuzzy_candidates.as_slice()
     {
-        return render_slice_for_decl(index, decl, hops, char_budget);
+        return render_slice_for_decl(index, declaration, hops, char_budget);
     }
     let ambiguous = if !qualified_exact.is_empty() {
         qualified_exact
@@ -339,26 +218,26 @@ fn slice_single_symbol(
             "# Ambiguous symbol \"{trimmed}\" ({} matches) — pass a qualified `module::Symbol` or `Type::method`:\n",
             ambiguous.len()
         );
-        for (index, decl) in ambiguous.into_iter().take(MAX_DISAMBIGUATION_MATCHES) {
-            out.push_str(&format_find_entry(index, decl));
+        for (index, declaration) in ambiguous.into_iter().take(MAX_DISAMBIGUATION_MATCHES) {
+            out.push_str(&format_find_entry(index, declaration));
         }
         return out;
     }
     find_in_indices(indices, trimmed, MAX_FALLBACK_MATCHES)
 }
 
-fn find_in_indices(indices: &[IndexedProjectGraph<'_>], pattern: &str, limit: usize) -> String {
+fn find_in_indices(indices: &[LanguageQueryIndex<'_>], pattern: &str, limit: usize) -> String {
     let needle = pattern.trim().to_ascii_lowercase();
     let mut matches = Vec::new();
     for (graph_idx, index) in indices.iter().enumerate() {
-        for (decl_idx, decl) in index.graph.declarations().iter().enumerate() {
-            if let Some(rank) = score_declaration_match(index, decl, &needle) {
+        for (decl_idx, declaration) in index.graph_index.graph().declarations().iter().enumerate() {
+            if let Some(rank) = score_declaration_match(index, declaration, &needle) {
                 matches.push(ScoredMatch {
                     rank,
-                    visibility: decl.visibility,
-                    neg_level: Reverse(decl.level),
-                    file: decl.location.file.as_str(),
-                    start_line: decl.location.line,
+                    visibility: declaration.visibility,
+                    neg_level: Reverse(declaration.level),
+                    file: declaration.location.file.as_str(),
+                    start_line: declaration.location.line,
                     graph_idx,
                     decl_idx,
                 });
@@ -374,8 +253,8 @@ fn find_in_indices(indices: &[IndexedProjectGraph<'_>], pattern: &str, limit: us
     } else {
         for item in shown {
             let index = &indices[item.graph_idx];
-            let decl = &index.graph.declarations()[item.decl_idx];
-            out.push_str(&format_find_entry(index, decl));
+            let declaration = &index.graph_index.graph().declarations()[item.decl_idx];
+            out.push_str(&format_find_entry(index, declaration));
         }
         out.push_str(
             "# Hint: run `omnicoach graph slice <symbol>` to inspect callers, call sites, and callees.\n",
@@ -404,20 +283,23 @@ enum MatchRank {
 }
 
 fn score_declaration_match(
-    index: &IndexedProjectGraph<'_>,
-    decl: &DeclarationNode,
+    index: &LanguageQueryIndex<'_>,
+    declaration: &DeclarationNode,
     needle: &str,
 ) -> Option<MatchRank> {
-    let name_lower = decl.name.to_ascii_lowercase();
+    let name_lower = declaration.name.to_ascii_lowercase();
     let short_lower = name_lower.rsplit("::").next().unwrap_or(&name_lower);
-    let qualified_lower = index.qualified_symbol(&decl.id).to_ascii_lowercase();
+    let qualified_lower = index
+        .graph_index
+        .qualified_symbol(&declaration.id)
+        .to_ascii_lowercase();
     if short_lower == needle || name_lower == needle || qualified_lower == needle {
         Some(MatchRank::ExactSymbol)
     } else if short_lower.starts_with(needle) || name_lower.starts_with(needle) {
         Some(MatchRank::PrefixSymbol)
     } else if qualified_lower.contains(needle) {
         Some(MatchRank::QualifiedSubstring)
-    } else if decl
+    } else if declaration
         .signature
         .as_ref()
         .is_some_and(|sig| sig.to_ascii_lowercase().contains(needle))
@@ -428,21 +310,30 @@ fn score_declaration_match(
     }
 }
 
-fn format_find_entry(index: &IndexedProjectGraph<'_>, decl: &DeclarationNode) -> String {
-    let qualified = index.qualified_symbol(&decl.id);
-    let visibility_label = format_short_visibility(decl.visibility);
-    let kind = format_short_decl_kind(decl.kind);
+fn format_find_entry(index: &LanguageQueryIndex<'_>, declaration: &DeclarationNode) -> String {
+    let qualified = index.graph_index.qualified_symbol(&declaration.id);
+    let visibility_label = declaration.visibility.as_str();
+    let kind = declaration.kind.as_str();
     let owner = index
-        .owner_label_by_decl
-        .get(&decl.id)
-        .map_or(TOP_GROUP_LABEL, String::as_str);
-    let in_count = index.in_edges.get(&decl.id).map_or(0, Vec::len);
-    let out_count = index.out_edges.get(&decl.id).map_or(0, Vec::len);
+        .graph_index
+        .owner_label_of(&declaration.id)
+        .unwrap_or(TOP_GROUP_LABEL);
+    let in_count = index
+        .graph_index
+        .declaration_in_edges(&declaration.id)
+        .len();
+    let out_count = index
+        .graph_index
+        .declaration_out_edges(&declaration.id)
+        .len();
     let mut out = format!(
         "- [L{} {visibility_label} {kind}] {qualified} ({}:{}..{}, group={owner})\n",
-        decl.level, decl.location.file, decl.location.line, decl.location.end_line
+        declaration.level,
+        declaration.location.file,
+        declaration.location.line,
+        declaration.location.end_line
     );
-    if let Some(sig) = &decl.signature {
+    if let Some(sig) = &declaration.signature {
         let _ = writeln!(out, "  {sig}");
     }
     let _ = writeln!(
@@ -453,40 +344,42 @@ fn format_find_entry(index: &IndexedProjectGraph<'_>, decl: &DeclarationNode) ->
 }
 
 fn render_slice_for_decl(
-    index: &IndexedProjectGraph<'_>,
-    decl: &DeclarationNode,
+    index: &LanguageQueryIndex<'_>,
+    declaration: &DeclarationNode,
     hops: usize,
     char_budget: usize,
 ) -> String {
-    let qualified = index.qualified_symbol(&decl.id);
+    let qualified = index.graph_index.qualified_symbol(&declaration.id);
     let comp = index
-        .component_by_decl
-        .get(&decl.id)
-        .copied()
+        .graph_index
+        .component_of(&declaration.id)
         .unwrap_or("unassigned");
-    let mod_path = index.module_by_decl.get(&decl.id).copied().unwrap_or("");
+    let mod_path = index.graph_index.module_of(&declaration.id).unwrap_or("");
     let owner = index
-        .owner_label_by_decl
-        .get(&decl.id)
-        .map_or(TOP_GROUP_LABEL, String::as_str);
-    let visibility_label = format_short_visibility(decl.visibility);
-    let kind = format_short_decl_kind(decl.kind);
+        .graph_index
+        .owner_label_of(&declaration.id)
+        .unwrap_or(TOP_GROUP_LABEL);
+    let visibility_label = declaration.visibility.as_str();
+    let kind = declaration.kind.as_str();
 
     let mut out = format!("# Graph Slice: {qualified}\n");
     let _ = writeln!(
         out,
         "Component: {comp} | Module: {mod_path} ({}) | Cluster: {owner}",
-        decl.location.file
+        declaration.location.file
     );
     let _ = writeln!(
         out,
         "Target: [L{} {visibility_label} {kind}] {qualified} ({}:{}..{})",
-        decl.level, decl.location.file, decl.location.line, decl.location.end_line
+        declaration.level,
+        declaration.location.file,
+        declaration.location.line,
+        declaration.location.end_line
     );
-    if let Some(sig) = &decl.signature {
+    if let Some(sig) = &declaration.signature {
         let _ = writeln!(out, "  {sig}");
     }
-    for finding in &decl.findings {
+    for finding in &declaration.findings {
         let preposition = finding.rule.anchor_preposition();
         let _ = writeln!(
             out,
@@ -495,36 +388,36 @@ fn render_slice_for_decl(
         );
     }
 
-    render_slice_callers(&mut out, index, decl, hops, char_budget);
-    render_slice_callees(&mut out, index, decl, hops, char_budget);
-    render_slice_siblings(&mut out, index, decl, char_budget);
-    render_completeness_footer(&mut out, index.lang, decl);
+    render_slice_callers(&mut out, index, declaration, hops, char_budget);
+    render_slice_callees(&mut out, index, declaration, hops, char_budget);
+    render_slice_siblings(&mut out, index, declaration, char_budget);
+    render_completeness_footer(&mut out, index.lang, declaration);
     out
 }
 
 fn render_slice_callers(
     out: &mut String,
-    index: &IndexedProjectGraph<'_>,
-    decl: &DeclarationNode,
+    index: &LanguageQueryIndex<'_>,
+    declaration: &DeclarationNode,
     hops: usize,
     char_budget: usize,
 ) {
-    let callers = index.in_edges.get(&decl.id).map_or(&[][..], Vec::as_slice);
+    let callers = index.graph_index.declaration_in_edges(&declaration.id);
     let _ = writeln!(out, "\n<- used_by ({}):", callers.len());
     if callers.is_empty() {
         out.push_str("  (none in static graph)\n");
         return;
     }
-    let target_mod = index.module_by_decl.get(&decl.id).copied();
-    let mut ordered: Vec<&(&NodeId, String)> = callers.iter().collect();
-    ordered.sort_by_key(|(caller_id, _)| {
-        let same_mod = index.module_by_decl.get(caller_id).copied() == target_mod;
-        (!same_mod, index.qualified_symbol(caller_id))
+    let target_mod = index.graph_index.module_of(&declaration.id);
+    let mut ordered: Vec<&DirectedEdge<'_>> = callers.iter().collect();
+    ordered.sort_by_key(|edge| {
+        let same_mod = index.graph_index.module_of(edge.peer) == target_mod;
+        (!same_mod, index.graph_index.qualified_symbol(edge.peer))
     });
-    let has_callees = index
-        .out_edges
-        .get(&decl.id)
-        .is_some_and(|edges| !edges.is_empty());
+    let has_callees = !index
+        .graph_index
+        .declaration_out_edges(&declaration.id)
+        .is_empty();
     let caller_budget = if has_callees {
         char_budget.saturating_sub(char_budget >> MULTI_HOP_RESERVE_SHIFT)
     } else {
@@ -535,64 +428,64 @@ fn render_slice_callers(
     } else {
         caller_budget
     };
-    for (caller_id, reason) in &ordered {
+    for edge in &ordered {
         if out.len() >= hop1_budget {
             out.push_str(TRUNCATED_BUDGET_LINE);
             break;
         }
-        let Some(caller) = index.decl_by_id.get(caller_id) else {
+        let Some(caller) = index.graph_index.declaration(edge.peer) else {
             continue;
         };
-        let caller_qual = index.qualified_symbol(caller_id);
-        let visibility_label = format_short_visibility(caller.visibility);
-        let kind = format_short_decl_kind(caller.kind);
+        let caller_qual = index.graph_index.qualified_symbol(edge.peer);
+        let visibility_label = caller.visibility.as_str();
+        let kind = caller.kind.as_str();
+        let reason = edge.kind.as_str();
         let _ = writeln!(
             out,
             "  - [L{} {visibility_label} {kind}] {caller_qual} [{reason}] ({}:{}..{})",
             caller.level, caller.location.file, caller.location.line, caller.location.end_line
         );
-        if let Some(lines) = index.call_sites.get(&(*caller_id, &decl.id)) {
-            for &line in lines.iter().take(MAX_CALL_SITES_PER_CALLER) {
-                let snippet =
-                    source_line_snippet(&index.sources_by_file, &caller.location.file, line);
-                let _ = writeln!(out, "      @ {}:{line}: {snippet}", caller.location.file);
-            }
+        for &line in index
+            .graph_index
+            .reference_lines(edge.peer, &declaration.id)
+            .iter()
+            .take(MAX_CALL_SITES_PER_CALLER)
+        {
+            let snippet = source_line_snippet(&index.sources_by_file, &caller.location.file, line);
+            let _ = writeln!(out, "      @ {}:{line}: {snippet}", caller.location.file);
         }
     }
     if hops >= 2 {
-        render_multi_hop_callers(out, index, &decl.id, &ordered, hops, caller_budget);
+        render_multi_hop_callers(out, index, &declaration.id, &ordered, hops, caller_budget);
     }
 }
 
 fn render_multi_hop_callers<'a>(
     out: &mut String,
-    index: &IndexedProjectGraph<'a>,
+    index: &LanguageQueryIndex<'a>,
     root_id: &'a NodeId,
-    hop1_ordered: &[&(&'a NodeId, String)],
+    hop1_ordered: &[&DirectedEdge<'a>],
     hops: usize,
     char_budget: usize,
 ) {
     let mut visited: BTreeSet<&'a NodeId> = BTreeSet::from([root_id]);
     let mut current_frontier: Vec<&'a NodeId> = Vec::new();
-    for &&(caller_id, _) in hop1_ordered {
-        if visited.insert(caller_id) {
-            current_frontier.push(caller_id);
+    for edge in hop1_ordered {
+        if visited.insert(edge.peer) {
+            current_frontier.push(edge.peer);
         }
     }
     for hop in 2..=hops {
         if current_frontier.is_empty() || out.len() >= char_budget {
             break;
         }
-        let mut next_entries: Vec<(&'a NodeId, &'a NodeId, &str)> = Vec::new();
+        let mut next_entries: Vec<(&'a NodeId, &'a NodeId, &'static str)> = Vec::new();
         let mut next_frontier: Vec<&'a NodeId> = Vec::new();
         for &via_id in &current_frontier {
-            let Some(callers) = index.in_edges.get(via_id) else {
-                continue;
-            };
-            for (caller_id, reason) in callers {
-                if visited.insert(caller_id) {
-                    next_entries.push((caller_id, via_id, reason.as_str()));
-                    next_frontier.push(caller_id);
+            for edge in index.graph_index.declaration_in_edges(via_id) {
+                if visited.insert(edge.peer) {
+                    next_entries.push((edge.peer, via_id, edge.kind.as_str()));
+                    next_frontier.push(edge.peer);
                 }
             }
         }
@@ -605,16 +498,16 @@ fn render_multi_hop_callers<'a>(
                 out.push_str(TRUNCATED_BUDGET_LINE);
                 break;
             }
-            let Some(caller) = index.decl_by_id.get(caller_id) else {
+            let Some(caller) = index.graph_index.declaration(caller_id) else {
                 continue;
             };
             let via_name = index
-                .decl_by_id
-                .get(via_id)
+                .graph_index
+                .declaration(via_id)
                 .map_or(via_id.as_str(), |node| node.name.as_str());
-            let caller_qual = index.qualified_symbol(caller_id);
-            let visibility_label = format_short_visibility(caller.visibility);
-            let kind = format_short_decl_kind(caller.kind);
+            let caller_qual = index.graph_index.qualified_symbol(caller_id);
+            let visibility_label = caller.visibility.as_str();
+            let kind = caller.kind.as_str();
             let _ = writeln!(
                 out,
                 "  - [L{} {visibility_label} {kind}] {caller_qual} [{reason} via {via_name}] ({}:{}..{})",
@@ -627,28 +520,29 @@ fn render_multi_hop_callers<'a>(
 
 fn render_slice_callees(
     out: &mut String,
-    index: &IndexedProjectGraph<'_>,
-    decl: &DeclarationNode,
+    index: &LanguageQueryIndex<'_>,
+    declaration: &DeclarationNode,
     hops: usize,
     char_budget: usize,
 ) {
-    let callees = index.out_edges.get(&decl.id).map_or(&[][..], Vec::as_slice);
+    let callees = index.graph_index.declaration_out_edges(&declaration.id);
     let _ = writeln!(out, "\n-> uses ({}):", callees.len());
     if callees.is_empty() {
         out.push_str("  (leaf declaration)\n");
         return;
     }
-    for (callee_id, reason) in callees {
+    for edge in callees {
         if out.len() >= char_budget {
             out.push_str(TRUNCATED_BUDGET_LINE);
             break;
         }
-        let Some(callee) = index.decl_by_id.get(callee_id) else {
+        let Some(callee) = index.graph_index.declaration(edge.peer) else {
             continue;
         };
-        let callee_qual = index.qualified_symbol(callee_id);
-        let visibility_label = format_short_visibility(callee.visibility);
-        let kind = format_short_decl_kind(callee.kind);
+        let callee_qual = index.graph_index.qualified_symbol(edge.peer);
+        let visibility_label = callee.visibility.as_str();
+        let kind = callee.kind.as_str();
+        let reason = edge.kind.as_str();
         let _ = writeln!(
             out,
             "  - [L{} {visibility_label} {kind}] {callee_qual} [{reason}] ({}:{}..{})",
@@ -659,39 +553,36 @@ fn render_slice_callees(
         }
     }
     if hops >= 2 {
-        render_multi_hop_callees(out, index, &decl.id, callees, hops, char_budget);
+        render_multi_hop_callees(out, index, &declaration.id, callees, hops, char_budget);
     }
 }
 
 fn render_multi_hop_callees<'a>(
     out: &mut String,
-    index: &IndexedProjectGraph<'a>,
+    index: &LanguageQueryIndex<'a>,
     root_id: &'a NodeId,
-    hop1_callees: &[(&'a NodeId, String)],
+    hop1_callees: &[DirectedEdge<'a>],
     hops: usize,
     char_budget: usize,
 ) {
     let mut visited: BTreeSet<&'a NodeId> = BTreeSet::from([root_id]);
     let mut current_frontier: Vec<&'a NodeId> = Vec::new();
-    for (callee_id, _) in hop1_callees {
-        if visited.insert(callee_id) {
-            current_frontier.push(callee_id);
+    for edge in hop1_callees {
+        if visited.insert(edge.peer) {
+            current_frontier.push(edge.peer);
         }
     }
     for hop in 2..=hops {
         if current_frontier.is_empty() || out.len() >= char_budget {
             break;
         }
-        let mut next_entries: Vec<(&'a NodeId, &'a NodeId, &str)> = Vec::new();
+        let mut next_entries: Vec<(&'a NodeId, &'a NodeId, &'static str)> = Vec::new();
         let mut next_frontier: Vec<&'a NodeId> = Vec::new();
         for &via_id in &current_frontier {
-            let Some(callees) = index.out_edges.get(via_id) else {
-                continue;
-            };
-            for (callee_id, reason) in callees {
-                if visited.insert(callee_id) {
-                    next_entries.push((callee_id, via_id, reason.as_str()));
-                    next_frontier.push(callee_id);
+            for edge in index.graph_index.declaration_out_edges(via_id) {
+                if visited.insert(edge.peer) {
+                    next_entries.push((edge.peer, via_id, edge.kind.as_str()));
+                    next_frontier.push(edge.peer);
                 }
             }
         }
@@ -704,16 +595,16 @@ fn render_multi_hop_callees<'a>(
                 out.push_str(TRUNCATED_BUDGET_LINE);
                 break;
             }
-            let Some(callee) = index.decl_by_id.get(callee_id) else {
+            let Some(callee) = index.graph_index.declaration(callee_id) else {
                 continue;
             };
             let via_name = index
-                .decl_by_id
-                .get(via_id)
+                .graph_index
+                .declaration(via_id)
                 .map_or(via_id.as_str(), |node| node.name.as_str());
-            let callee_qual = index.qualified_symbol(callee_id);
-            let visibility_label = format_short_visibility(callee.visibility);
-            let kind = format_short_decl_kind(callee.kind);
+            let callee_qual = index.graph_index.qualified_symbol(callee_id);
+            let visibility_label = callee.visibility.as_str();
+            let kind = callee.kind.as_str();
             let _ = writeln!(
                 out,
                 "  - [L{} {visibility_label} {kind}] {callee_qual} [{reason} via {via_name}] ({}:{}..{})",
@@ -729,24 +620,24 @@ fn render_multi_hop_callees<'a>(
 
 fn render_slice_siblings(
     out: &mut String,
-    index: &IndexedProjectGraph<'_>,
-    decl: &DeclarationNode,
+    index: &LanguageQueryIndex<'_>,
+    declaration: &DeclarationNode,
     char_budget: usize,
 ) {
     if out.len() >= char_budget {
         return;
     }
-    let Some(parent_id) = index.graph.parent_of(&decl.id) else {
+    let Some(parent_id) = index.graph_index.graph().parent_of(&declaration.id) else {
         return;
     };
-    let Some(group) = index.group_by_id.get(parent_id) else {
+    let Some(group) = index.graph_index.group(parent_id) else {
         return;
     };
     let siblings: Vec<&DeclarationNode> = group
         .children
         .iter()
-        .filter(|&child_id| child_id != &decl.id)
-        .filter_map(|child_id| index.decl_by_id.get(child_id).copied())
+        .filter(|&child_id| child_id != &declaration.id)
+        .filter_map(|child_id| index.graph_index.declaration(child_id))
         .collect();
     if siblings.is_empty() {
         return;
@@ -757,13 +648,13 @@ fn render_slice_siblings(
         group.label,
         siblings.len()
     );
-    for sib in siblings.into_iter().take(MAX_SIBLINGS_IN_SLICE) {
-        let visibility_label = format_short_visibility(sib.visibility);
-        let kind = format_short_decl_kind(sib.kind);
+    for sibling in siblings.into_iter().take(MAX_SIBLINGS_IN_SLICE) {
+        let visibility_label = sibling.visibility.as_str();
+        let kind = sibling.kind.as_str();
         let _ = writeln!(
             out,
             "  - [L{} {visibility_label} {kind}] {} :{}..{}",
-            sib.level, sib.name, sib.location.line, sib.location.end_line
+            sibling.level, sibling.name, sibling.location.line, sibling.location.end_line
         );
     }
 }
@@ -805,7 +696,6 @@ fn render_completeness_footer(out: &mut String, lang: Language, decl: &Declarati
 
 struct BuiltLanguageGraph {
     lang: Language,
-    facts: ProjectFacts,
     graph: AbstractionGraph,
 }
 
@@ -837,7 +727,7 @@ fn build_lang_graph(
     }
     let facts = collect_project_facts_with_config("project", lang, &lang_files, architecture);
     let graph = build_project_graph(&facts, ProjectDepth::Full)?;
-    Ok(Some(BuiltLanguageGraph { lang, facts, graph }))
+    Ok(Some(BuiltLanguageGraph { lang, graph }))
 }
 
 const SELF_RECEIVER_NAME: &str = "self";

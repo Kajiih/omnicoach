@@ -56,6 +56,18 @@ pub(super) enum DeclarationKind {
     Type,
 }
 
+impl DeclarationKind {
+    /// Compact label for this declaration kind (`"fn"`, `"method"`, or `"type"`).
+    #[must_use]
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Callable => "fn",
+            Self::Method => "method",
+            Self::Type => "type",
+        }
+    }
+}
+
 /// A leaf node representing one source declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DeclarationNode {
@@ -157,6 +169,22 @@ pub(super) enum EdgeReason {
     CrossModule,
 }
 
+impl EdgeReason {
+    /// Compact bracket tag for this ordering reason (`"call"`, `"contain"`, `"impl"`, `"encap"`,
+    /// `"sig"`, or `"xmod"`).
+    #[must_use]
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Call => "call",
+            Self::Containment => "contain",
+            Self::ImplBehavior => "impl",
+            Self::Encapsulation => "encap",
+            Self::SignatureContract => "sig",
+            Self::CrossModule => "xmod",
+        }
+    }
+}
+
 impl From<OrderingReason> for EdgeReason {
     fn from(reason: OrderingReason) -> Self {
         match reason {
@@ -182,6 +210,20 @@ pub(super) enum ReflexionStatus {
     Inferred,
 }
 
+impl ReflexionStatus {
+    /// Compact label for this Reflexion classification (`"convergent"`, `"absent"`, `"divergent"`,
+    /// or `"inferred"`).
+    #[must_use]
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Convergent => "convergent",
+            Self::Absent => "absent",
+            Self::Divergent => "divergent",
+            Self::Inferred => "inferred",
+        }
+    }
+}
+
 /// An abstraction-ordering edge between two declarations (`higher` is above `lower`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct OrderingEdge {
@@ -202,6 +244,8 @@ pub(super) struct ReferenceEdge {
     pub(super) target: NodeId,
     /// Syntactic site of the reference.
     pub(super) kind: RelationKind,
+    /// Sorted, deduplicated 1-based source line numbers where `source` references `target`.
+    pub(super) lines: Vec<usize>,
 }
 
 /// Aggregated relation between two container groups in the folded overview (CP3, CUJ4, D30).

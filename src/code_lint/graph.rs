@@ -7,6 +7,7 @@ architecture_component!(CodeLintGraph);
 
 mod builder;
 mod facts;
+mod index;
 mod model;
 mod query;
 mod render;
