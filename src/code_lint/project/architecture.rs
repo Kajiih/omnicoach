@@ -77,7 +77,7 @@ pub struct ArchitectureSpec {
     pub from_rust_macros: bool,
     /// Topologically ordered components.
     pub components: Vec<ComponentSpec>,
-    external_package_owners: BTreeMap<String, Vec<String>>,
+    external_package_owners: BTreeMap<String, ExternalPackageOwner>,
     component_roots: BTreeMap<String, String>,
     allowed_dependencies: HashMap<String, HashSet<String>>,
     component_by_name: HashMap<String, usize>,
@@ -471,6 +471,9 @@ fn evaluate_rust_file_architecture(
         if !resolved.is_crate_local() {
             check_rust_external_owner(
                 &module_path,
+                enclosing
+                    .as_ref()
+                    .map(|inherited| inherited.component.as_str()),
                 &resolved.canonical_path,
                 reference.span,
                 spec,
@@ -586,23 +589,29 @@ fn collect_rust_reexported_public_items(
     items
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ExternalPackageOwner {
+    components: Vec<String>,
+    display_owners: Vec<String>,
+}
+
 fn check_rust_external_owner(
     module_path: &str,
+    enclosing_component: Option<&str>,
     canonical_path: &str,
     span: SourceSpan,
     spec: &ArchitectureSpec,
     out: &mut Vec<UnownedExternalDependencyFinding>,
 ) {
-    for (package_name, allowed_prefixes) in &spec.external_package_owners {
-        let is_allowed_owner = allowed_prefixes
-            .iter()
-            .any(|allowed| is_in_module_subtree(module_path, allowed));
+    for (package_name, owner) in &spec.external_package_owners {
+        let is_allowed_owner = enclosing_component
+            .is_some_and(|component| owner.components.iter().any(|allowed| allowed == component));
         if is_in_module_subtree(canonical_path, package_name) && !is_allowed_owner {
             out.push(UnownedExternalDependencyFinding {
                 span,
                 module: module_path.to_owned(),
                 dependency: package_name.clone(),
-                owners: allowed_prefixes.clone(),
+                owners: owner.display_owners.clone(),
             });
         }
     }
@@ -848,14 +857,10 @@ fn evaluate_python_file_architecture(
 
             if !is_first_party_python_import(&resolved.module_path, layout, source, spec) {
                 if import_ref.level == 0 {
-                    let top_package = resolved
-                        .module_path
-                        .split(PYTHON_MODULE_SEPARATOR)
-                        .next()
-                        .unwrap_or(&resolved.module_path);
                     check_python_external_owner(
                         &module_path,
-                        top_package,
+                        enclosing.as_ref().map(|matched| matched.component_name),
+                        &resolved,
                         import_ref.span,
                         spec,
                         &mut findings.unowned_external_dependencies,
@@ -987,32 +992,42 @@ fn check_python_first_party_edge(
             });
     } else if let Some(target_spec) = spec.component_spec(target_match.component_name)
         && let Some(ref exports) = target_spec.public_exports
-        && !is_python_import_allowed_by_exports(target_match.matched_root, resolved, exports)
     {
-        let symbol_name = if resolved.imported_member.as_deref() == Some("*")
-            || (resolved.module_path == target_match.matched_root
-                && resolved.imported_member.is_none())
-        {
-            None
-        } else {
-            Some(resolved.imported_member.clone().unwrap_or_else(|| {
-                resolved
-                    .full_target_path
-                    .rsplit(PYTHON_MODULE_SEPARATOR)
-                    .next()
-                    .unwrap_or(&resolved.full_target_path)
-                    .to_owned()
-            }))
-        };
-        findings
-            .private_component_imports
-            .push(PrivateComponentImportFinding {
-                span,
-                component: from_match.component_name.to_owned(),
-                name: symbol_name,
-                module: target_match.matched_root.to_owned(),
-                dependency: target_match.component_name.to_owned(),
-            });
+        let concrete_root = concrete_python_target_root(target_match.matched_root, resolved);
+        if !is_python_import_allowed_by_exports(&concrete_root, resolved, exports) {
+            let symbol_name = if resolved.imported_member.as_deref() == Some("*")
+                || (resolved.module_path == concrete_root && resolved.imported_member.is_none())
+            {
+                None
+            } else {
+                Some(resolved.imported_member.clone().unwrap_or_else(|| {
+                    resolved
+                        .full_target_path
+                        .rsplit(PYTHON_MODULE_SEPARATOR)
+                        .next()
+                        .unwrap_or(&resolved.full_target_path)
+                        .to_owned()
+                }))
+            };
+            findings
+                .private_component_imports
+                .push(PrivateComponentImportFinding {
+                    span,
+                    component: from_match.component_name.to_owned(),
+                    name: symbol_name,
+                    module: concrete_root,
+                    dependency: target_match.component_name.to_owned(),
+                });
+        }
+    }
+}
+
+fn concrete_python_target_root(matched_root: &str, resolved: &ResolvedPythonImport) -> String {
+    if matched_root == ROOT_MODULE_TAG || matched_root.contains('*') {
+        direct_child_in_python_root(&resolved.module_path, matched_root)
+            .unwrap_or_else(|| PYTHON_MODULE_SEPARATOR.to_owned())
+    } else {
+        matched_root.to_owned()
     }
 }
 
@@ -1335,21 +1350,21 @@ fn default_file_header_span(file: &ParsedFile) -> SourceSpan {
 
 fn check_python_external_owner(
     module_path: &str,
-    top_package: &str,
+    enclosing_component: Option<&str>,
+    resolved: &ResolvedPythonImport,
     span: SourceSpan,
     spec: &ArchitectureSpec,
     out: &mut Vec<UnownedExternalDependencyFinding>,
 ) {
-    if let Some(allowed_prefixes) = spec.external_package_owners.get(top_package) {
-        let is_allowed = allowed_prefixes
-            .iter()
-            .any(|prefix| is_in_python_subtree(module_path, prefix));
-        if !is_allowed {
+    for (package_name, owner) in &spec.external_package_owners {
+        let is_allowed_owner = enclosing_component
+            .is_some_and(|component| owner.components.iter().any(|allowed| allowed == component));
+        if is_in_python_subtree(&resolved.full_target_path, package_name) && !is_allowed_owner {
             out.push(UnownedExternalDependencyFinding {
                 span,
                 module: module_path.to_owned(),
-                dependency: top_package.to_owned(),
-                owners: allowed_prefixes.clone(),
+                dependency: package_name.clone(),
+                owners: owner.display_owners.clone(),
             });
         }
     }
@@ -1361,20 +1376,39 @@ fn python_sibling_violation(
     target_module: &str,
     target_root: &str,
 ) -> Option<String> {
-    if source_root != target_root {
-        return Some(target_root.to_owned());
+    let source_base = python_root_base(source_root);
+    let target_base = python_root_base(target_root);
+    if source_base != target_base {
+        if target_base == "*" || target_base == ROOT_MODULE_TAG {
+            return (target_module != ROOT_MODULE_TAG).then(|| target_module.to_owned());
+        }
+        return Some(target_base.to_owned());
     }
     let source_child = direct_child_in_python_root(source_module, source_root)?;
     let target_child = direct_child_in_python_root(target_module, target_root)?;
-    (source_child != target_child).then(|| format!("{target_root}.{target_child}"))
+    (source_child != target_child).then_some(target_child)
 }
 
-fn direct_child_in_python_root<'a>(module_path: &'a str, root: &str) -> Option<&'a str> {
+fn direct_child_in_python_root(module_path: &str, root: &str) -> Option<String> {
+    if module_path == ROOT_MODULE_TAG {
+        return None;
+    }
+    let base = python_root_base(root);
+    if base == "*" || base == ROOT_MODULE_TAG {
+        let child = module_path.split(PYTHON_MODULE_SEPARATOR).next()?;
+        return (!child.is_empty()).then(|| child.to_owned());
+    }
     let rest = module_path
-        .strip_prefix(root)?
+        .strip_prefix(base)?
         .strip_prefix(PYTHON_MODULE_SEPARATOR)?;
     let child = rest.split(PYTHON_MODULE_SEPARATOR).next()?;
-    (!child.is_empty()).then_some(child)
+    (!child.is_empty()).then(|| format!("{base}.{child}"))
+}
+
+fn python_root_base(root: &str) -> &str {
+    root.strip_suffix(".**")
+        .or_else(|| root.strip_suffix(".*"))
+        .unwrap_or(root)
 }
 
 fn is_in_python_subtree(module_path: &str, prefix: &str) -> bool {
@@ -1438,7 +1472,11 @@ fn build_architecture_spec(
             roots: entry.roots.clone(),
             depends_on: entry.depends_on.clone(),
             isolate_children: entry.isolate_children,
-            owns_external: entry.owns_external.clone(),
+            owns_external: entry
+                .owns_external
+                .iter()
+                .map(|package| normalize_external_package_name(package))
+                .collect(),
             public_exports,
         });
     }
@@ -1462,6 +1500,10 @@ fn build_architecture_spec(
         },
         rust_headers,
     ))
+}
+
+fn normalize_external_package_name(raw: &str) -> String {
+    raw.trim().replace('-', "_")
 }
 
 /// Synthesizes the component DAG of a crate that declares `define_architecture!` in its
@@ -1550,14 +1592,30 @@ fn finalize_architecture_spec(
     spec
 }
 
-fn build_external_package_owners(components: &[ComponentSpec]) -> BTreeMap<String, Vec<String>> {
-    let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
+fn build_external_package_owners(
+    components: &[ComponentSpec],
+) -> BTreeMap<String, ExternalPackageOwner> {
+    let mut owners: BTreeMap<String, ExternalPackageOwner> = BTreeMap::new();
     for component in components {
+        let has_wildcard_or_empty_roots = component.roots.is_empty()
+            || component
+                .roots
+                .iter()
+                .any(|root| root.is_empty() || root == ROOT_MODULE_TAG || root.contains('*'));
         for package in &component.owns_external {
-            let allowed = owners.entry(package.clone()).or_default();
-            for root in &component.roots {
-                if !allowed.contains(root) {
-                    allowed.push(root.clone());
+            let entry = owners.entry(package.clone()).or_default();
+            if !entry.components.contains(&component.name) {
+                entry.components.push(component.name.clone());
+            }
+            if has_wildcard_or_empty_roots {
+                if !entry.display_owners.contains(&component.name) {
+                    entry.display_owners.push(component.name.clone());
+                }
+            } else {
+                for root in &component.roots {
+                    if !entry.display_owners.contains(root) {
+                        entry.display_owners.push(root.clone());
+                    }
                 }
             }
         }
@@ -1739,6 +1797,82 @@ mod tests {
         assert_eq!(
             findings.undeclared_component_dependencies[0].dependency,
             "Secret"
+        );
+    }
+
+    #[test]
+    fn wildcard_and_rootless_components_format_owners_and_concrete_export_roots() {
+        let root = Path::new("/repo");
+        let api_source = indoc::indoc! {"
+            import httpx
+            import redis
+            from pkg.plugins.loader import load
+            from pkg.plugins.loader.internal import raw
+        "};
+        let source = MemoryFileSource::from_relative_files(
+            root,
+            &[
+                ("pkg/__init__.py", ""),
+                ("pkg/plugins/__init__.py", ""),
+                (
+                    "pkg/plugins/loader/__init__.py",
+                    "def load() -> None: pass\n",
+                ),
+                (
+                    "pkg/plugins/loader/internal.py",
+                    "def raw() -> None: pass\n",
+                ),
+                ("pkg/api.py", api_source),
+            ],
+        );
+        let config: ArchitectureConfig = toml::from_str(indoc::indoc! {r#"
+            [[components]]
+            name = "RootlessHttp"
+            roots = []
+            owns-external = ["httpx"]
+
+            [[components]]
+            name = "WildcardCache"
+            roots = ["pkg.cache.*"]
+            owns-external = ["redis"]
+
+            [[components]]
+            name = "Plugins"
+            roots = ["pkg.plugins.**"]
+            public-exports = ["load"]
+
+            [[components]]
+            name = "Api"
+            roots = ["pkg.api"]
+            depends-on = ["RootlessHttp", "WildcardCache", "Plugins"]
+        "#})
+        .unwrap();
+        let spec = resolve_architecture_spec(Some(&config), &BTreeMap::new())
+            .unwrap()
+            .unwrap();
+        let layout = ProjectLayout::discover(root, &source, &[]);
+        let parsed = ParsedFile::new(api_source, Language::Python);
+        let findings = evaluate_python_file_architecture(
+            &parsed,
+            &root.join("pkg/api.py"),
+            &layout,
+            &source,
+            &spec,
+            None,
+        );
+
+        assert_eq!(
+            findings.unowned_external_dependencies[0].owners,
+            vec!["RootlessHttp".to_owned()]
+        );
+        assert_eq!(
+            findings.unowned_external_dependencies[1].owners,
+            vec!["WildcardCache".to_owned()]
+        );
+        assert_eq!(findings.private_component_imports.len(), 1);
+        assert_eq!(
+            findings.private_component_imports[0].module,
+            "pkg.plugins.loader"
         );
     }
 }

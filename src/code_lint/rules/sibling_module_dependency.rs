@@ -168,6 +168,20 @@ crate::test_utils::rule_test!(
                         from pkg.handlers.billing import charge
                     ",
                 } => ("pkg/handlers/orders.py", "from pkg.handlers.billing import charge"),
+                wildcard_root_isolates_peer_children => {
+                    ".omnicoach.toml" => r#"
+                        [[architecture.components]]
+                        name = "Handlers"
+                        roots = ["pkg.handlers.**"]
+                        isolate-children = true
+                    "#,
+                    "pkg/__init__.py" => "",
+                    "pkg/handlers/__init__.py" => "",
+                    "pkg/handlers/billing.py" => "def charge() -> None: pass",
+                    "pkg/handlers/orders.py" => "
+                        from pkg.handlers.billing import charge
+                    ",
+                } => ("pkg/handlers/orders.py", "from pkg.handlers.billing import charge"),
             ],
         },
         Rust => {

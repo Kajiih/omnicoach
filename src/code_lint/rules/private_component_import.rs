@@ -179,6 +179,25 @@ crate::test_utils::rule_test!(
                         from pkg.auth import verify_token
                     ",
                 },
+                imports_declared_export_from_wildcard_plugin_root => {
+                    ".omnicoach.toml" => r#"
+                        [[architecture.components]]
+                        name = "Plugins"
+                        roots = ["pkg.plugins.*"]
+                        public-exports = ["load"]
+
+                        [[architecture.components]]
+                        name = "Api"
+                        roots = ["pkg.api"]
+                        depends-on = ["Plugins"]
+                    "#,
+                    "pkg/__init__.py" => "",
+                    "pkg/plugins/__init__.py" => "",
+                    "pkg/plugins/csv.py" => "def load() -> None: pass",
+                    "pkg/api.py" => "
+                        from pkg.plugins.csv import load
+                    ",
+                },
             ],
             fail: [
                 imports_internal_submodule_directly => {

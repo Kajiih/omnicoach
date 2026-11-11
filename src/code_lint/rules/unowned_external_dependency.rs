@@ -211,6 +211,39 @@ crate::test_utils::rule_test!(
                         import httpx
                     ",
                 } => ("pkg/domain.py", "import httpx"),
+                hyphenated_and_dotted_external_blocked_in_nested_child_component => {
+                    ".omnicoach.toml" => r#"
+                        [[architecture.components]]
+                        name = "Infra"
+                        roots = ["pkg"]
+                        owns-external = ["pydantic-settings", "google.protobuf"]
+
+                        [[architecture.components]]
+                        name = "Domain"
+                        roots = ["pkg.domain"]
+                    "#,
+                    "pkg/__init__.py" => "import pydantic_settings\nfrom google import protobuf",
+                    "pkg/domain.py" => "
+                        import pydantic_settings
+                    ",
+                } => ("pkg/domain.py", "import pydantic_settings"),
+                dotted_external_from_import_outside_owner => {
+                    ".omnicoach.toml" => r#"
+                        [[architecture.components]]
+                        name = "Proto"
+                        roots = ["pkg.proto"]
+                        owns-external = ["google.protobuf"]
+
+                        [[architecture.components]]
+                        name = "Domain"
+                        roots = ["pkg.domain"]
+                    "#,
+                    "pkg/__init__.py" => "",
+                    "pkg/proto.py" => "from google import protobuf",
+                    "pkg/domain.py" => "
+                        from google import protobuf
+                    ",
+                } => ("pkg/domain.py", "from google import protobuf"),
             ],
         },
         Rust => {
