@@ -142,11 +142,21 @@ pub struct PythonClassInfo<'a> {
     decorators: Vec<DecoratorInfo>,
     /// The parsed definition, for analyses of the body.
     definition: &'a StmtClassDef,
+    /// Immediate lexical scope enclosing this class definition.
+    enclosing_scope: EnclosingScope,
 }
 
 impl<'a> PythonClassInfo<'a> {
-    /// Builds [`PythonClassInfo`] from a parsed `class` statement.
+    /// Builds [`PythonClassInfo`] from a parsed `class` statement at module scope.
     pub(super) fn from_ast(class_def: &'a StmtClassDef, file: &'a ParsedFile) -> Self {
+        Self::from_ast_in_scope(class_def, file, EnclosingScope::Module)
+    }
+
+    fn from_ast_in_scope(
+        class_def: &'a StmtClassDef,
+        file: &'a ParsedFile,
+        enclosing_scope: EnclosingScope,
+    ) -> Self {
         let bases = class_def
             .bases()
             .iter()
@@ -165,6 +175,29 @@ impl<'a> PythonClassInfo<'a> {
             docstring: docstring_of(&class_def.body, file),
             decorators: extract_decorators_from_slice(&class_def.decorator_list, file),
             definition: class_def,
+            enclosing_scope,
+        }
+    }
+
+    /// True if this class is defined in module scope rather than inside a `def` or `class` body.
+    #[must_use]
+    pub(in crate::code_lint) const fn is_module_level(&self) -> bool {
+        matches!(self.enclosing_scope, EnclosingScope::Module)
+    }
+
+    /// True if an unqualified reference in `use_class`'s base class list can resolve to `self`
+    /// under Python's PEP 227 lexical scoping rules (module globals, enclosing `def` closures, or
+    /// direct sibling statements in the same `class` body—never another function's locals or an
+    /// outer `class` body from inside a nested method).
+    #[must_use]
+    pub(in crate::code_lint) fn is_visible_at(&self, use_class: &Self) -> bool {
+        let use_span = span_from_ruff_range(use_class.definition.range());
+        match self.enclosing_scope {
+            EnclosingScope::Module => true,
+            EnclosingScope::Function(func_span) => func_span.contains(use_span),
+            EnclosingScope::Class(cls_span) => {
+                use_class.enclosing_scope == EnclosingScope::Class(cls_span)
+            }
         }
     }
 
@@ -515,16 +548,30 @@ pub fn is_documented_by_enclosing_class(signature: &PythonFunctionSignature<'_>)
 pub fn extract_classes(file: &ParsedFile) -> Vec<PythonClassInfo<'_>> {
     struct ClassVisitor<'a> {
         file: &'a ParsedFile,
+        scope: EnclosingScope,
         classes: Vec<PythonClassInfo<'a>>,
     }
 
     impl<'a> SourceOrderVisitor<'a> for ClassVisitor<'a> {
         fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if let Stmt::ClassDef(class_def) = statement {
-                self.classes
-                    .push(PythonClassInfo::from_ast(class_def, self.file));
+            match statement {
+                Stmt::ClassDef(class_def) => {
+                    self.classes.push(PythonClassInfo::from_ast_in_scope(
+                        class_def, self.file, self.scope,
+                    ));
+                    let previous_scope = self.scope;
+                    self.scope = EnclosingScope::Class(span_from_ruff_range(class_def.range()));
+                    walk_stmt(self, statement);
+                    self.scope = previous_scope;
+                }
+                Stmt::FunctionDef(func_def) => {
+                    let previous_scope = self.scope;
+                    self.scope = EnclosingScope::Function(span_from_ruff_range(func_def.range()));
+                    walk_stmt(self, statement);
+                    self.scope = previous_scope;
+                }
+                _ => walk_stmt(self, statement),
             }
-            walk_stmt(self, statement);
         }
     }
 
@@ -533,6 +580,7 @@ pub fn extract_classes(file: &ParsedFile) -> Vec<PythonClassInfo<'_>> {
     };
     let mut visitor = ClassVisitor {
         file,
+        scope: EnclosingScope::Module,
         classes: Vec::new(),
     };
     visitor.visit_body(&parsed.syntax().body);
@@ -595,9 +643,9 @@ fn local_base_classes(classes: &[PythonClassInfo<'_>], index: usize) -> Vec<usiz
         .iter()
         .filter_map(|base| {
             let name = base.unsubscripted_name();
-            classes[..index]
-                .iter()
-                .rposition(|candidate| candidate.name == name)
+            classes[..index].iter().rposition(|candidate| {
+                candidate.name == name && candidate.is_visible_at(&classes[index])
+            })
         })
         .collect()
 }
@@ -666,6 +714,17 @@ pub(super) fn unpacked_targets(target: &Expr) -> Vec<&Expr> {
         Expr::Starred(starred) => unpacked_targets(&starred.value),
         _ => vec![target],
     }
+}
+
+/// Immediate lexical scope in which a Python `class` statement is defined (PEP 227).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnclosingScope {
+    /// Module scope (top level or inside module-level `if` / `try` / `with` / `for` / `match`).
+    Module,
+    /// Directly inside the `def` / `async def` body at this byte span.
+    Function(crate::diagnostic::SourceSpan),
+    /// Directly inside the `class` body at this byte span.
+    Class(crate::diagnostic::SourceSpan),
 }
 
 /// Walks `body` (without entering nested `Stmt::ClassDef`s) and records attribute names

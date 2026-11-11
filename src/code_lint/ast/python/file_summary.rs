@@ -2,6 +2,7 @@
 
 use super::classes::{PythonClassInfo, unpacked_targets};
 use super::docstrings::OwnedDocstring;
+use super::imports::{is_negated_type_checking_guard, is_type_checking_guard};
 use crate::code_lint::ast::tree::{ParsedFile, span_from_ruff_range};
 use crate::diagnostic::SourceSpan;
 use ruff_python_ast::{ExceptHandler, Expr, Operator, Stmt};
@@ -21,6 +22,8 @@ pub struct PythonImportBinding {
     pub module: Option<String>,
     /// Imported attribute name (`Some("Store")` for `from m import Store`, `None` for `import m`).
     pub imported_name: Option<String>,
+    /// True when the binding only appears inside `if TYPE_CHECKING:` (never imported at runtime).
+    pub type_checking_only: bool,
 }
 
 /// Top-level `from ... import *` wildcard re-export target.
@@ -114,18 +117,23 @@ pub fn summarize_python_file(file: &ParsedFile) -> PythonFileSummary {
     let Some(parsed) = file.py_module() else {
         return summary;
     };
-    collect_top_level_statements(&parsed.syntax().body, file, &mut summary);
+    collect_top_level_statements(&parsed.syntax().body, file, false, &mut summary);
     summary
 }
 
-fn collect_top_level_statements(body: &[Stmt], file: &ParsedFile, out: &mut PythonFileSummary) {
+fn collect_top_level_statements(
+    body: &[Stmt],
+    file: &ParsedFile,
+    in_type_checking: bool,
+    out: &mut PythonFileSummary,
+) {
     for statement in body {
         match statement {
             Stmt::Import(import_statement) => {
-                record_top_level_import(import_statement, out);
+                record_top_level_import(import_statement, in_type_checking, out);
             }
             Stmt::ImportFrom(import_from) => {
-                record_top_level_import_from(import_from, out);
+                record_top_level_import_from(import_from, in_type_checking, out);
             }
             Stmt::FunctionDef(function_def) => {
                 let name = function_def.name.to_string();
@@ -190,9 +198,31 @@ fn collect_top_level_statements(body: &[Stmt], file: &ParsedFile, out: &mut Pyth
                     });
                 }
             }
+            Stmt::If(if_statement) => {
+                collect_top_level_statements(
+                    &if_statement.body,
+                    file,
+                    in_type_checking || is_type_checking_guard(&if_statement.test),
+                    out,
+                );
+                let else_is_type_checking = is_negated_type_checking_guard(&if_statement.test)
+                    && if_statement.elif_else_clauses.len() == 1;
+                for clause in &if_statement.elif_else_clauses {
+                    let clause_type_checking = clause
+                        .test
+                        .as_ref()
+                        .map_or(else_is_type_checking, is_type_checking_guard);
+                    collect_top_level_statements(
+                        &clause.body,
+                        file,
+                        in_type_checking || clause_type_checking,
+                        out,
+                    );
+                }
+            }
             _ => {
                 for block in module_scope_blocks(statement) {
-                    collect_top_level_statements(block, file, out);
+                    collect_top_level_statements(block, file, in_type_checking, out);
                 }
             }
         }
@@ -203,14 +233,6 @@ fn collect_top_level_statements(body: &[Stmt], file: &ParsedFile, out: &mut Pyth
 /// `if`, `try`, `with`, `for`, `while`, and `match`, but not of `def` or `class`.
 fn module_scope_blocks(statement: &Stmt) -> Vec<&[Stmt]> {
     match statement {
-        Stmt::If(if_statement) => std::iter::once(if_statement.body.as_slice())
-            .chain(
-                if_statement
-                    .elif_else_clauses
-                    .iter()
-                    .map(|clause| clause.body.as_slice()),
-            )
-            .collect(),
         Stmt::Try(try_statement) => std::iter::once(try_statement.body.as_slice())
             .chain(
                 try_statement
@@ -243,6 +265,7 @@ fn module_scope_blocks(statement: &Stmt) -> Vec<&[Stmt]> {
 
 fn record_top_level_import(
     import_statement: &ruff_python_ast::StmtImport,
+    in_type_checking: bool,
     out: &mut PythonFileSummary,
 ) {
     for alias in &import_statement.names {
@@ -253,6 +276,7 @@ fn record_top_level_import(
                 level: 0,
                 module: Some(full_module),
                 imported_name: None,
+                type_checking_only: in_type_checking,
             }
         } else {
             for (dot_index, _) in full_module.match_indices('.') {
@@ -274,14 +298,16 @@ fn record_top_level_import(
                 level: 0,
                 module: Some(root_package),
                 imported_name: None,
+                type_checking_only: in_type_checking,
             }
         };
-        out.imports.insert(binding.local_name.clone(), binding);
+        insert_import_binding(out, binding);
     }
 }
 
 fn record_top_level_import_from(
     import_from: &ruff_python_ast::StmtImportFrom,
+    in_type_checking: bool,
     out: &mut PythonFileSummary,
 ) {
     let module = import_from.module.as_ref().map(ToString::to_string);
@@ -295,13 +321,26 @@ fn record_top_level_import_from(
         }
         let local_name = alias.asname.as_ref().unwrap_or(&alias.name).to_string();
         let binding = PythonImportBinding {
-            local_name: local_name.clone(),
+            local_name,
             level: import_from.level,
             module: module.clone(),
             imported_name: Some(alias.name.to_string()),
+            type_checking_only: in_type_checking,
         };
-        out.imports.insert(local_name, binding);
+        insert_import_binding(out, binding);
     }
+}
+
+fn insert_import_binding(out: &mut PythonFileSummary, binding: PythonImportBinding) {
+    if binding.type_checking_only
+        && out
+            .imports
+            .get(&binding.local_name)
+            .is_some_and(|existing| !existing.type_checking_only)
+    {
+        return;
+    }
+    out.imports.insert(binding.local_name.clone(), binding);
 }
 
 fn summarize_class(
@@ -507,5 +546,24 @@ mod tests {
         let summary = summarize_python_file(&file);
         assert!(!summary.defined_names.contains("User"));
         assert!(summary.defined_names.contains("assigned"));
+    }
+
+    #[test]
+    fn summarize_python_file_tracks_type_checking_only_imports() {
+        let source = indoc::indoc! {r"
+            from typing import TYPE_CHECKING
+            if TYPE_CHECKING:
+                from .interfaces import OnlyTyped, Both
+            if not TYPE_CHECKING:
+                from .runtime import RuntimeOnly, Both
+            else:
+                from .interfaces import NegatedTyped
+        "};
+        let file = ParsedFile::new(source, Language::Python);
+        let summary = summarize_python_file(&file);
+        assert!(summary.imports["OnlyTyped"].type_checking_only);
+        assert!(summary.imports["NegatedTyped"].type_checking_only);
+        assert!(!summary.imports["RuntimeOnly"].type_checking_only);
+        assert!(!summary.imports["Both"].type_checking_only);
     }
 }

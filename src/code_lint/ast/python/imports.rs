@@ -53,6 +53,25 @@ pub fn collect_import_map(file: &ParsedFile) -> ImportMap {
     map
 }
 
+pub(super) fn is_negated_type_checking_guard(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::UnaryOp(unary)
+            if unary.op == ruff_python_ast::UnaryOp::Not && is_type_checking_guard(&unary.operand)
+    )
+}
+
+pub(super) fn is_type_checking_guard(expr: &Expr) -> bool {
+    match expr {
+        Expr::Name(name) => name.id.as_str() == TYPE_CHECKING_GUARD,
+        Expr::Attribute(attribute) => attribute.attr.as_str() == TYPE_CHECKING_GUARD,
+        Expr::BoolOp(bool_op) if bool_op.op == ruff_python_ast::BoolOp::And => {
+            bool_op.values.iter().any(is_type_checking_guard)
+        }
+        _ => false,
+    }
+}
+
 struct PythonImportVisitor<'a> {
     _file: &'a ParsedFile,
     function_depth: usize,
@@ -115,9 +134,13 @@ impl StatementVisitor<'_> for PythonImportVisitor<'_> {
                     is_type_checking_guard(&if_statement.test),
                     &if_statement.body,
                 );
+                let else_is_type_checking = is_negated_type_checking_guard(&if_statement.test)
+                    && if_statement.elif_else_clauses.len() == 1;
                 for clause in &if_statement.elif_else_clauses {
-                    let clause_is_type_checking =
-                        clause.test.as_ref().is_some_and(is_type_checking_guard);
+                    let clause_is_type_checking = clause
+                        .test
+                        .as_ref()
+                        .map_or(else_is_type_checking, is_type_checking_guard);
                     self.visit_guarded_body(clause_is_type_checking, &clause.body);
                 }
             }
@@ -127,17 +150,6 @@ impl StatementVisitor<'_> for PythonImportVisitor<'_> {
 }
 
 const TYPE_CHECKING_GUARD: &str = "TYPE_CHECKING";
-
-fn is_type_checking_guard(expr: &Expr) -> bool {
-    match expr {
-        Expr::Name(name) => name.id.as_str() == TYPE_CHECKING_GUARD,
-        Expr::Attribute(attribute) => attribute.attr.as_str() == TYPE_CHECKING_GUARD,
-        Expr::BoolOp(bool_op) if bool_op.op == ruff_python_ast::BoolOp::And => {
-            bool_op.values.iter().any(is_type_checking_guard)
-        }
-        _ => false,
-    }
-}
 
 /// Records the imports and definitions of a Python module body or top-level block `body`.
 fn collect_python_import_bindings(body: &[Stmt], line_index: &LineIndex, map: &mut ImportMap) {

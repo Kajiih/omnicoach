@@ -257,18 +257,18 @@ fn uninherited_protocol_names<'p>(
 
     let mut matched_local: Vec<&LocalProtocol> = local_protocols
         .iter()
+        .filter(|protocol| classes[protocol.index].is_visible_at(&classes[index]))
         .filter(|protocol| is_bound_protocol(classes, local_protocols, protocol, index))
         .filter(|protocol| protocol.methods.is_subset(defined))
         .filter(|protocol| !ancestors.in_file.contains(&protocol.index))
         .collect();
 
     let is_shadowed_locally = |name: &str| {
-        classes[..index]
+        classes[..index].iter().any(|earlier_class| {
+            earlier_class.name == name && earlier_class.is_visible_at(&classes[index])
+        }) || matched_local
             .iter()
-            .any(|earlier_class| earlier_class.name == name)
-            || matched_local
-                .iter()
-                .any(|protocol| classes[protocol.index].name == name)
+            .any(|protocol| classes[protocol.index].name == name)
     };
 
     let mut seen_imported_ids = HashSet::new();
@@ -318,9 +318,10 @@ fn is_bound_protocol(
 ) -> bool {
     let name = &classes[protocol.index].name;
     let same_name = || {
-        protocols
-            .iter()
-            .filter(|other| classes[other.index].name == *name)
+        protocols.iter().filter(|other| {
+            classes[other.index].name == *name
+                && classes[other.index].is_visible_at(&classes[index])
+        })
     };
     same_name()
         .rfind(|other| other.index < index)
@@ -577,6 +578,57 @@ crate::test_utils::rule_test!(
                         def read(self, key: str) -> bytes:
                             return b""
                 "#,
+                protocol_inside_other_function_not_in_scope => r#"
+                    def define_fixture() -> None:
+                        class LocalStore(Protocol):
+                            def read(self, key: str) -> bytes: ...
+                            def write(self, key: str, data: bytes) -> None: ...
+
+                    class MemoryStore:
+                        def read(self, key: str) -> bytes:
+                            return b""
+
+                        def write(self, key: str, data: bytes) -> None:
+                            pass
+                "#,
+                protocol_inside_class_body_not_visible_in_method => r#"
+                    class Namespace:
+                        class ScopedStore(Protocol):
+                            def read(self, key: str) -> bytes: ...
+                            def write(self, key: str, data: bytes) -> None: ...
+
+                        def make_store(self) -> object:
+                            class LocalStore:
+                                def read(self, key: str) -> bytes:
+                                    return b""
+
+                                def write(self, key: str, data: bytes) -> None:
+                                    pass
+
+                            return LocalStore()
+                "#,
+                type_checking_only_imported_protocol_exempt => {
+                    "pkg/interfaces.py" => r#"
+                        from typing import Protocol
+
+                        class Store(Protocol):
+                            def load(self, key: str) -> str: ...
+                            def save(self, key: str, value: str) -> None: ...
+                    "#,
+                    "pkg/service.py" => r#"
+                        from typing import TYPE_CHECKING
+
+                        if TYPE_CHECKING:
+                            from .interfaces import Store
+
+                        class MemoryStore:
+                            def load(self, key: str) -> str:
+                                return key
+
+                            def save(self, key: str, value: str) -> None:
+                                pass
+                    "#,
+                },
             ],
             fail: [
                 uninherited_implementation => r#"

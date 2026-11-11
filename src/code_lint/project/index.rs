@@ -658,7 +658,7 @@ impl<'s> ProjectIndex<'s> {
             let Some(binding) = summary.imports.get(local_name) else {
                 continue;
             };
-            if binding.imported_name.is_none() {
+            if binding.imported_name.is_none() || binding.type_checking_only {
                 continue;
             }
             if let ResolvedPythonTarget::Symbol {
@@ -954,46 +954,16 @@ impl<'s> ProjectIndex<'s> {
         classes: &[PythonClassInfo<'_>],
         index: usize,
     ) -> Vec<ClassMroEntry> {
-        let summary_indices = self.summary_class_indices(current_module, classes);
         let mut active = HashSet::new();
-        self.compute_local_class_mro(
-            current_module,
-            classes,
-            &summary_indices,
-            index,
-            &mut active,
-        )
-    }
-
-    /// Maps each of `classes` (every class of the file of `current_module`, in source order) to
-    /// its index among the module-level classes of the module summary, or `None` for a class
-    /// nested in a `def` or `class` body (or when the module has no summary).
-    fn summary_class_indices(
-        &self,
-        current_module: Option<&str>,
-        classes: &[PythonClassInfo<'_>],
-    ) -> Vec<Option<usize>> {
-        let summary = current_module.and_then(|module| self.python_summary(module));
-        classes
-            .iter()
-            .map(|class| {
-                summary
-                    .as_ref()?
-                    .classes
-                    .iter()
-                    .position(|candidate| candidate.name_span == class.name_node.span())
-            })
-            .collect()
+        self.compute_local_class_mro(current_module, classes, index, &mut active)
     }
 
     /// Computes the C3 MRO of `classes[index]`. As at runtime, a simple base name refers to the
-    /// last class of that name bound before the subclass; a module-level subclass only sees
-    /// module-level classes, never classes nested in a `def` or `class` body.
+    /// last lexically visible class of that name bound before the subclass.
     fn compute_local_class_mro(
         &self,
         current_module: Option<&str>,
         classes: &[PythonClassInfo<'_>],
-        summary_indices: &[Option<usize>],
         index: usize,
         active: &mut HashSet<usize>,
     ) -> Vec<ClassMroEntry> {
@@ -1001,8 +971,10 @@ impl<'s> ProjectIndex<'s> {
         if index >= classes.len() || !active.insert(index) {
             return Vec::new();
         }
-        let is_module_level = summary_indices[index].is_some();
-        let module_level_classes_before = summary_indices[..index].iter().flatten().count();
+        let module_level_classes_before = classes[..index]
+            .iter()
+            .filter(|class| class.is_module_level())
+            .count();
         let mut direct_bases = Vec::new();
         for base in &classes[index].bases {
             if base.is_structural_marker() {
@@ -1012,7 +984,7 @@ impl<'s> ProjectIndex<'s> {
             if !base_name.contains('.')
                 && let Some(local_index) = (0..index).rev().find(|&candidate| {
                     classes[candidate].name == base_name
-                        && (!is_module_level || summary_indices[candidate].is_some())
+                        && classes[candidate].is_visible_at(&classes[index])
                 })
             {
                 direct_bases.push(ClassMroEntry::Local(local_index));
@@ -1034,13 +1006,9 @@ impl<'s> ProjectIndex<'s> {
             .iter()
             .map(|base_entry| {
                 let mut mro = match base_entry {
-                    ClassMroEntry::Local(base_index) => self.compute_local_class_mro(
-                        current_module,
-                        classes,
-                        summary_indices,
-                        *base_index,
-                        active,
-                    ),
+                    ClassMroEntry::Local(base_index) => {
+                        self.compute_local_class_mro(current_module, classes, *base_index, active)
+                    }
                     ClassMroEntry::Imported(base_id) => self
                         .python_class_mro(base_id)
                         .into_iter()
