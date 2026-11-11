@@ -84,6 +84,28 @@ pub(super) struct ScopeItem<'a> {
 }
 
 impl ScopeItem<'_> {
+    /// Merges an alternate conditional redefinition of the same symbol into this item.
+    pub(super) fn merge_redefinition(&mut self, other: Self) {
+        self.visibility = self.visibility.min(other.visibility);
+        self.is_constructor |= other.is_constructor;
+        self.has_receiver |= other.has_receiver;
+        push_unique(&mut self.impl_spans, (other.start_line, other.end_line));
+        extend_unique(&mut self.impl_spans, other.impl_spans);
+        for (target, kind) in other.references {
+            extend_references(&mut self.references, [target], kind);
+        }
+    }
+
+    /// Appends `item` at `target_idx` when first encountered, or merges a conditional redefinition
+    /// into the existing item at `target_idx`.
+    pub(super) fn push_or_merge(items: &mut Vec<Self>, target_idx: usize, item: Self) {
+        if target_idx == items.len() {
+            items.push(item);
+        } else {
+            items[target_idx].merge_redefinition(item);
+        }
+    }
+
     /// Returns true if this item references `target` in `kind`.
     fn has_reference(&self, target: usize, kind: RelationKind) -> bool {
         self.references.contains(&(target, kind))
@@ -144,6 +166,18 @@ pub(super) struct DeclarationScope<'a> {
     pub(super) kind: DeclarationScopeKind,
     /// Direct declarations in source order.
     pub(super) items: Vec<ScopeItem<'a>>,
+}
+
+/// How declaration scopes are extracted when a file contains conditional redefinitions or inline
+/// nested modules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::code_lint::ast) enum ScopeExtractionMode {
+    /// Split module scopes at redefinitions and include inline `mod` / function-nested `class`
+    /// scopes so call-cluster lint rules evaluate each lexical segment independently.
+    LintSegments,
+    /// Coalesce conditional redefinitions into a single top-level `Module` scope (at `scopes[0]`)
+    /// and top-level type scopes for `ScopeFacts` and abstraction graphs.
+    CoalescedModule,
 }
 
 /// Splits `declarations` into consecutive segments, starting a new segment whenever `name`
@@ -344,10 +378,23 @@ pub fn collect_call_cluster_findings(
         .collect()
 }
 
-/// Collects all module and class/`impl` [`DeclarationScope`]s in `file`.
+/// Collects all module and class/`impl` [`DeclarationScope`]s in `file` for call-cluster linting.
 #[must_use]
 pub(super) fn collect_declaration_scopes(file: &ParsedFile) -> Vec<DeclarationScope<'_>> {
-    dispatch_lang!(file.lang(), collect_declaration_scopes(file))
+    dispatch_lang!(
+        file.lang(),
+        collect_declaration_scopes(file, ScopeExtractionMode::LintSegments)
+    )
+}
+
+/// Collects coalesced top-level `Module` and type [`DeclarationScope`]s in `file` for
+/// [`super::scope_facts::ScopeFacts`] and abstraction graphs.
+#[must_use]
+pub(super) fn collect_graph_declaration_scopes(file: &ParsedFile) -> Vec<DeclarationScope<'_>> {
+    dispatch_lang!(
+        file.lang(),
+        collect_declaration_scopes(file, ScopeExtractionMode::CoalescedModule)
+    )
 }
 
 /// Finds the call-cluster findings of one scope from its graph.

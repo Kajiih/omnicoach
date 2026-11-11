@@ -217,6 +217,14 @@ impl ProjectConfig {
             .is_match(self.normalize_path_for_glob(path))
     }
 
+    /// Returns true if every file inside `directory` falls under a configured directory-level test
+    /// pattern (such as `**/tests/**`).
+    #[must_use]
+    pub fn is_test_directory(&self, directory: &Path) -> bool {
+        let probe = format!("{}/_", self.normalize_path_for_glob(directory));
+        self.context.test_patterns.is_match(probe)
+    }
+
     /// Returns true if any Python `source-roots` are explicitly configured in `[context]` or
     /// `[architecture]`.
     #[must_use]

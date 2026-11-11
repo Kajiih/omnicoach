@@ -7,7 +7,7 @@
 use super::call_clusters::{
     CallClusterRule, DeclarationScope, DeclarationScopeKind, OrderingEdge, OrderingReason,
     PlacementAnchor, RelationFact, RelationKind, ScopeGraph, ScopeItem, ScopeItemKind, Visibility,
-    collect_declaration_scopes, scope_findings,
+    collect_graph_declaration_scopes, scope_findings,
 };
 use super::tree::ParsedFile;
 use crate::diagnostic::Language;
@@ -95,10 +95,11 @@ pub struct IntraFileReference {
     pub kind: RelationKind,
 }
 
-/// Collects [`ScopeFacts`] for every declaration scope in `file`, in source order.
+/// Collects [`ScopeFacts`] for every coalesced top-level module and type scope in `file`, in
+/// source order.
 #[must_use]
 pub fn collect_scope_facts(file: &ParsedFile) -> Vec<ScopeFacts> {
-    collect_declaration_scopes(file)
+    collect_graph_declaration_scopes(file)
         .iter()
         .map(scope_facts)
         .collect()
@@ -636,5 +637,93 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn rust_conditional_redefinitions_coalesce_without_leaking_inline_mod() {
+        let source = indoc::indoc! {r"
+            mod nested {
+                pub fn internal_only() -> usize { 9 }
+            }
+
+            #[cfg(unix)]
+            pub fn open_handle() -> usize {
+                shared_leaf()
+            }
+
+            #[cfg(windows)]
+            pub fn open_handle() -> usize {
+                2
+            }
+
+            pub fn run_after_cfg() -> usize {
+                open_handle() + trailing_helper()
+            }
+
+            fn trailing_helper() -> usize {
+                3
+            }
+
+            fn shared_leaf() -> usize {
+                4
+            }
+        "};
+        let scopes = collect_scope_facts(&ParsedFile::rust(source));
+        let summary: Vec<_> = scopes[0]
+            .items
+            .iter()
+            .map(|item| (item.name.as_str(), item.roots.as_slice(), item.level))
+            .collect();
+
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(
+            summary,
+            [
+                ("open_handle", &[0][..], 1),
+                ("run_after_cfg", &[1][..], 2),
+                ("trailing_helper", &[1][..], 0),
+                ("shared_leaf", &[0][..], 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn python_conditional_class_definitions_coalesce_methods() {
+        let source = indoc::indoc! {r#"
+            import sys
+
+            def helper() -> None:
+                class InnerLocal:
+                    def ignored(self) -> None:
+                        pass
+
+            if sys.platform == "linux":
+                class Client:
+                    def connect(self) -> None:
+                        pass
+            else:
+                class Client:
+                    def connect(self) -> None:
+                        pass
+
+                    def reconnect(self) -> None:
+                        self.connect()
+        "#};
+        let scopes = collect_scope_facts(&ParsedFile::new(source, Language::Python));
+        let client_scope = scopes
+            .iter()
+            .find(|scope| matches!(&scope.scope, DeclarationScopeKind::Class { name } if name == "Client"))
+            .expect("expected Client class scope");
+        let methods: Vec<_> = client_scope
+            .items
+            .iter()
+            .map(|item| (item.name.as_str(), item.level))
+            .collect();
+
+        assert_eq!(scopes[0].scope, DeclarationScopeKind::Module);
+        assert_eq!(methods, [("connect", 0), ("reconnect", 1)]);
+        assert!(!scopes.iter().any(|scope| {
+            matches!(&scope.scope, DeclarationScopeKind::Class { name } if name == "InnerLocal")
+        }));
     }
 }

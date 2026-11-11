@@ -4,8 +4,8 @@ use super::annotations::annotated_metadata_exprs;
 use super::bindings::{collect_local_bound_names, parameters_shadow_name};
 use super::functions::{CLS_RECEIVER, SELF_RECEIVER, is_overload_def, is_property_accessor_def};
 use crate::code_lint::ast::call_clusters::{
-    DeclarationScope, DeclarationScopeKind, PlacementAnchor, RelationKind, ScopeItem,
-    ScopeItemKind, Visibility, collapse_whitespace, extend_references, push_unique,
+    DeclarationScope, DeclarationScopeKind, PlacementAnchor, RelationKind, ScopeExtractionMode,
+    ScopeItem, ScopeItemKind, Visibility, collapse_whitespace, extend_references, push_unique,
     split_at_redefinitions,
 };
 use crate::code_lint::ast::scope_facts::IntraFileReference;
@@ -48,22 +48,46 @@ pub struct PythonStatementAfterMainGuard<'a> {
     pub guard_line: usize,
 }
 
-/// Collects all module and `class` [`DeclarationScope`]s in a Python `file`.
+/// Collects module and `class` [`DeclarationScope`]s in a Python `file` according to `mode`.
 #[must_use]
-pub fn collect_declaration_scopes(file: &ParsedFile) -> Vec<DeclarationScope<'_>> {
+pub(in crate::code_lint::ast) fn collect_declaration_scopes(
+    file: &ParsedFile,
+    mode: ScopeExtractionMode,
+) -> Vec<DeclarationScope<'_>> {
     struct ScopeCollector<'a> {
         file: &'a ParsedFile,
         future_annotations: bool,
+        mode: ScopeExtractionMode,
         scopes: Vec<DeclarationScope<'a>>,
+        class_order: Vec<&'a str>,
+        classes_by_name: HashMap<&'a str, Vec<&'a StmtClassDef>>,
     }
 
     impl<'a> SourceOrderVisitor<'a> for ScopeCollector<'a> {
         fn visit_stmt(&mut self, statement: &'a Stmt) {
-            if let Stmt::ClassDef(class_def) = statement
-                && let Some(scope) =
-                    build_class_declaration_scope(class_def, self.future_annotations, self.file)
+            if self.mode == ScopeExtractionMode::CoalescedModule
+                && matches!(statement, Stmt::FunctionDef(_))
             {
-                self.scopes.push(scope);
+                return;
+            }
+            if let Stmt::ClassDef(class_def) = statement {
+                if self.mode == ScopeExtractionMode::CoalescedModule {
+                    let name = class_def.name.id.as_str();
+                    self.classes_by_name
+                        .entry(name)
+                        .or_insert_with(|| {
+                            self.class_order.push(name);
+                            Vec::new()
+                        })
+                        .push(class_def);
+                } else if let Some(scope) = build_class_declaration_scope(
+                    &[class_def],
+                    self.future_annotations,
+                    self.mode,
+                    self.file,
+                ) {
+                    self.scopes.push(scope);
+                }
             }
             walk_stmt(self, statement);
         }
@@ -74,13 +98,36 @@ pub fn collect_declaration_scopes(file: &ParsedFile) -> Vec<DeclarationScope<'_>
     };
     let module_body = &parsed.syntax().body;
     let future_annotations = has_future_annotations(module_body);
-    let scopes = build_module_declaration_scopes(module_body, future_annotations, file);
+    let scopes = build_module_declaration_scopes(module_body, future_annotations, mode, file);
     let mut collector = ScopeCollector {
         file,
         future_annotations,
+        mode,
         scopes,
+        class_order: Vec::new(),
+        classes_by_name: HashMap::new(),
     };
     collector.visit_body(module_body);
+    if mode == ScopeExtractionMode::CoalescedModule {
+        for class_name in collector.class_order {
+            if let Some(class_defs) = collector.classes_by_name.remove(class_name)
+                && let Some(scope) =
+                    build_class_declaration_scope(&class_defs, future_annotations, mode, file)
+            {
+                collector.scopes.push(scope);
+            }
+        }
+        if !collector.scopes.is_empty() && collector.scopes[0].kind != DeclarationScopeKind::Module
+        {
+            collector.scopes.insert(
+                0,
+                DeclarationScope {
+                    kind: DeclarationScopeKind::Module,
+                    items: Vec::new(),
+                },
+            );
+        }
+    }
     collector.scopes
 }
 
@@ -239,16 +286,41 @@ fn has_future_annotations(module_body: &[Stmt]) -> bool {
     })
 }
 
-/// Builds [`DeclarationScope`]s for top-level functions and classes in `module_body`, starting a
-/// new scope segment whenever a non-overload, non-property declaration name is redefined.
+/// Builds [`DeclarationScope`]s for top-level functions and classes in `module_body`, either
+/// splitting at redefinitions (`LintSegments`) or coalescing them (`CoalescedModule`).
 fn build_module_declaration_scopes<'a>(
     module_body: &[Stmt],
     future_annotations: bool,
+    mode: ScopeExtractionMode,
     file: &'a ParsedFile,
 ) -> Vec<DeclarationScope<'a>> {
     let grouped = group_scope_items(module_body, false, file);
     if grouped.is_empty() {
         return Vec::new();
+    }
+    if mode == ScopeExtractionMode::CoalescedModule {
+        let indexed = index_grouped_items(&grouped, true);
+        let mut items: Vec<ScopeItem<'a>> = Vec::with_capacity(indexed.first_stmt_indices.len());
+        for group in &grouped {
+            let target_idx = indexed.by_name[&group.name];
+            let built = build_module_scope_item(group, &indexed.by_name, file);
+            ScopeItem::push_or_merge(&mut items, target_idx, built);
+        }
+        let evaluated_before = direct_evaluated_before(
+            module_body,
+            0..module_body.len(),
+            &indexed.first_stmt_indices,
+            &indexed.by_name,
+            future_annotations,
+            file,
+        );
+        for (item, evaluated) in items.iter_mut().zip(evaluated_before) {
+            item.evaluated_before = evaluated;
+        }
+        return vec![DeclarationScope {
+            kind: DeclarationScopeKind::Module,
+            items,
+        }];
     }
 
     let segments = split_at_redefinitions(grouped, |item| item.name.as_str());
@@ -267,23 +339,17 @@ fn build_module_declaration_scopes<'a>(
             .get(seg_idx + 1)
             .map_or(module_body.len(), |next| next[0].first_stmt_idx);
 
-        let item_by_name: HashMap<String, usize> = segment
-            .iter()
-            .enumerate()
-            .map(|(idx, item)| (item.name.clone(), idx))
-            .collect();
+        let indexed = index_grouped_items(segment, false);
         let mut items: Vec<ScopeItem<'a>> = segment
             .iter()
-            .map(|group| build_module_scope_item(group, &item_by_name, file))
+            .map(|group| build_module_scope_item(group, &indexed.by_name, file))
             .collect();
 
-        let first_stmt_indices: Vec<usize> =
-            segment.iter().map(|item| item.first_stmt_idx).collect();
         let evaluated_before = direct_evaluated_before(
             module_body,
             seg_start..seg_end,
-            &first_stmt_indices,
-            &item_by_name,
+            &indexed.first_stmt_indices,
+            &indexed.by_name,
             future_annotations,
             file,
         );
@@ -300,89 +366,97 @@ fn build_module_declaration_scopes<'a>(
     scopes
 }
 
-/// Builds a [`DeclarationScope`] for direct methods of `class_def`.
+/// Builds a [`DeclarationScope`] for direct methods across `class_defs` (single definition in
+/// `LintSegments`, or coalesced conditional definitions of the same class in `CoalescedModule`).
 fn build_class_declaration_scope<'a>(
-    class_def: &StmtClassDef,
+    class_defs: &[&StmtClassDef],
     future_annotations: bool,
+    mode: ScopeExtractionMode,
     file: &'a ParsedFile,
 ) -> Option<DeclarationScope<'a>> {
-    let grouped = group_scope_items(&class_def.body, true, file);
+    let first_class = *class_defs.first()?;
+    let grouped: Vec<GroupedScopeItem<'a, '_>> = class_defs
+        .iter()
+        .flat_map(|class_def| group_scope_items(&class_def.body, true, file))
+        .collect();
     if grouped.is_empty() {
         return None;
     }
-    let method_by_name: HashMap<String, usize> = grouped
-        .iter()
-        .enumerate()
-        .map(|(idx, item)| (item.name.clone(), idx))
-        .collect();
-    let class_name = class_def.name.id.as_str();
-    let first_stmt_indices: Vec<usize> = grouped.iter().map(|item| item.first_stmt_idx).collect();
+    let coalesce = mode == ScopeExtractionMode::CoalescedModule;
+    let indexed = index_grouped_items(&grouped, coalesce);
+    let class_name = first_class.name.id.as_str();
 
-    let mut items: Vec<ScopeItem<'a>> = grouped
-        .into_iter()
-        .map(|group| {
-            let mut body_callees = Vec::new();
-            if let ScopeItemAst::Callable(defs) = &group.item {
-                for def in defs {
-                    let local_names = collect_local_bound_names(def, file);
-                    PythonRefWalker {
-                        file,
-                        local_names: &local_names,
-                        has_self_param: parameters_shadow_name(&def.parameters, SELF_RECEIVER),
-                        has_cls_param: parameters_shadow_name(&def.parameters, CLS_RECEIVER),
-                        allow_nested_defs: true,
-                        on_expr: &mut |expr: &Expr,
-                                       active_locals: &HashSet<String>,
-                                       has_self: bool,
-                                       has_cls: bool| {
-                            if let Expr::Attribute(attr) = expr
-                                && attr.ctx.is_load()
-                                && let Expr::Name(recv) = attr.value.as_ref()
-                                && is_valid_class_receiver(
-                                    recv.id.as_str(),
-                                    class_name,
-                                    active_locals,
-                                    has_self,
-                                    has_cls,
-                                )
-                                && let Some(&idx) = method_by_name.get(attr.attr.id.as_str())
-                            {
-                                push_unique(&mut body_callees, idx);
-                            }
-                        },
-                    }
-                    .visit_body(&def.body);
+    let mut items: Vec<ScopeItem<'a>> = Vec::with_capacity(indexed.first_stmt_indices.len());
+    for group in grouped {
+        let mut body_callees = Vec::new();
+        if let ScopeItemAst::Callable(defs) = &group.item {
+            for def in defs {
+                let local_names = collect_local_bound_names(def, file);
+                PythonRefWalker {
+                    file,
+                    local_names: &local_names,
+                    has_self_param: parameters_shadow_name(&def.parameters, SELF_RECEIVER),
+                    has_cls_param: parameters_shadow_name(&def.parameters, CLS_RECEIVER),
+                    allow_nested_defs: true,
+                    on_expr: &mut |expr: &Expr,
+                                   active_locals: &HashSet<String>,
+                                   has_self: bool,
+                                   has_cls: bool| {
+                        if let Expr::Attribute(attr) = expr
+                            && attr.ctx.is_load()
+                            && let Expr::Name(recv) = attr.value.as_ref()
+                            && is_valid_class_receiver(
+                                recv.id.as_str(),
+                                class_name,
+                                active_locals,
+                                has_self,
+                                has_cls,
+                            )
+                            && let Some(&idx) = indexed.by_name.get(attr.attr.id.as_str())
+                        {
+                            push_unique(&mut body_callees, idx);
+                        }
+                    },
                 }
+                .visit_body(&def.body);
             }
-            let mut references = Vec::new();
-            extend_references(&mut references, body_callees, RelationKind::Body);
-            ScopeItem {
-                name_node: group.name_node,
-                name: group.name,
-                start_line: group.start_line,
-                end_line: group.end_line,
-                signature: Some(group.signature),
-                visibility: group.visibility,
-                is_constructor: group.is_constructor,
-                has_receiver: group.has_receiver,
-                impl_spans: Vec::new(),
-                kind: ScopeItemKind::Callable,
-                references,
-                evaluated_before: None,
-            }
-        })
-        .collect();
+        }
+        let mut references = Vec::new();
+        extend_references(&mut references, body_callees, RelationKind::Body);
+        let built = ScopeItem {
+            name_node: group.name_node,
+            name: group.name.clone(),
+            start_line: group.start_line,
+            end_line: group.end_line,
+            signature: Some(group.signature),
+            visibility: group.visibility,
+            is_constructor: group.is_constructor,
+            has_receiver: group.has_receiver,
+            impl_spans: Vec::new(),
+            kind: ScopeItemKind::Callable,
+            references,
+            evaluated_before: None,
+        };
+        if coalesce {
+            let target_idx = indexed.by_name[&group.name];
+            ScopeItem::push_or_merge(&mut items, target_idx, built);
+        } else {
+            items.push(built);
+        }
+    }
 
-    let evaluated_before = direct_evaluated_before(
-        &class_def.body,
-        0..class_def.body.len(),
-        &first_stmt_indices,
-        &method_by_name,
-        future_annotations,
-        file,
-    );
-    for (item, evaluated) in items.iter_mut().zip(evaluated_before) {
-        item.evaluated_before = evaluated;
+    if let [single_class] = class_defs {
+        let evaluated_before = direct_evaluated_before(
+            &single_class.body,
+            0..single_class.body.len(),
+            &indexed.first_stmt_indices,
+            &indexed.by_name,
+            future_annotations,
+            file,
+        );
+        for (item, evaluated) in items.iter_mut().zip(evaluated_before) {
+            item.evaluated_before = evaluated;
+        }
     }
 
     let kind = DeclarationScopeKind::Class {
@@ -402,6 +476,34 @@ struct GroupedScopeItem<'a, 'ast> {
     has_receiver: bool,
     first_stmt_idx: usize,
     item: ScopeItemAst<'ast>,
+}
+
+struct IndexedScopeItems {
+    by_name: HashMap<String, usize>,
+    first_stmt_indices: Vec<usize>,
+}
+
+/// Indexes `grouped` items by name alongside each entry's `first_stmt_idx`, keeping only the first
+/// occurrence when `coalesce` is true.
+fn index_grouped_items(grouped: &[GroupedScopeItem<'_, '_>], coalesce: bool) -> IndexedScopeItems {
+    let mut by_name: HashMap<String, usize> = HashMap::new();
+    let mut first_stmt_indices = Vec::new();
+    for (idx, item) in grouped.iter().enumerate() {
+        if coalesce {
+            if !by_name.contains_key(&item.name) {
+                let next_idx = first_stmt_indices.len();
+                by_name.insert(item.name.clone(), next_idx);
+                first_stmt_indices.push(item.first_stmt_idx);
+            }
+        } else {
+            by_name.insert(item.name.clone(), idx);
+            first_stmt_indices.push(item.first_stmt_idx);
+        }
+    }
+    IndexedScopeItems {
+        by_name,
+        first_stmt_indices,
+    }
 }
 
 /// Builds the [`ScopeItem`] for `group` from the sibling references in its signatures, bodies,
@@ -1287,7 +1389,7 @@ mod tests {
                 pass
         "};
         let file = ParsedFile::new(&format!("{header}{body}"), Language::Python);
-        let scopes = collect_declaration_scopes(&file);
+        let scopes = collect_declaration_scopes(&file, ScopeExtractionMode::LintSegments);
         let module_scope = scopes
             .iter()
             .find(|scope| matches!(scope.kind, DeclarationScopeKind::Module))
@@ -1336,7 +1438,7 @@ mod tests {
                     pass
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let scopes = collect_declaration_scopes(&file);
+        let scopes = collect_declaration_scopes(&file, ScopeExtractionMode::LintSegments);
         let module_signatures: Vec<_> = scopes
             .iter()
             .filter(|scope| matches!(scope.kind, DeclarationScopeKind::Module))
@@ -1440,7 +1542,7 @@ mod tests {
                     registry._helper()
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let scopes = collect_declaration_scopes(&file);
+        let scopes = collect_declaration_scopes(&file, ScopeExtractionMode::LintSegments);
         let class_scope = scopes
             .iter()
             .find(|scope| matches!(scope.kind, DeclarationScopeKind::Class { .. }))
@@ -1603,7 +1705,7 @@ mod tests {
                 pass
         "};
         let file = ParsedFile::new(source, Language::Python);
-        let scopes = collect_declaration_scopes(&file);
+        let scopes = collect_declaration_scopes(&file, ScopeExtractionMode::LintSegments);
         let module_scope = scopes
             .iter()
             .find(|scope| matches!(scope.kind, DeclarationScopeKind::Module))
@@ -1686,7 +1788,7 @@ mod tests {
                 return sep
         "##};
         let file = ParsedFile::new(source, Language::Python);
-        let scopes = collect_declaration_scopes(&file);
+        let scopes = collect_declaration_scopes(&file, ScopeExtractionMode::LintSegments);
         assert_eq!(
             scopes[0].items[0].signature.as_deref(),
             Some(r##"def parse( sep: str = "#", ) -> str"##)

@@ -100,7 +100,7 @@ fn generate_project_graphs(
         if !discovered.files.iter().any(|file| file.lang == lang) {
             continue;
         }
-        let project_facts = discovered.collect_project_facts(&title, lang);
+        let project_facts = discovered.collect_project_facts(&title, lang)?;
         let graph = build_project_graph(&project_facts, depth)?;
         sections.push(render_graph(&graph, format));
     }

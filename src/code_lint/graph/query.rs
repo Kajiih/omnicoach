@@ -220,11 +220,11 @@ fn slice_single_symbol(
 }
 
 fn find_in_indices(indices: &[LanguageQueryIndex<'_>], pattern: &str, limit: usize) -> String {
-    let needle = pattern.trim().to_ascii_lowercase();
+    let query = NormalizedQuery::new(pattern);
     let mut matches = Vec::new();
     for (graph_idx, index) in indices.iter().enumerate() {
         for (decl_idx, declaration) in index.graph_index.graph().declarations().iter().enumerate() {
-            if let Some(rank) = score_declaration_match(index, declaration, &needle) {
+            if let Some(rank) = score_declaration_match(index, declaration, &query) {
                 matches.push(ScoredMatch {
                     rank,
                     visibility: declaration.visibility,
@@ -267,31 +267,73 @@ struct ScoredMatch<'a> {
     decl_idx: usize,
 }
 
+struct NormalizedQuery {
+    raw: String,
+    separator_normalized: Option<String>,
+}
+
+impl NormalizedQuery {
+    fn new(pattern: &str) -> Self {
+        let raw = pattern.trim().to_ascii_lowercase();
+        let normalized = normalize_symbol_separators(&raw);
+        let separator_normalized = normalized
+            .bytes()
+            .any(|byte| byte != b':')
+            .then_some(normalized);
+        Self {
+            raw,
+            separator_normalized,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum MatchRank {
     ExactSymbol,
     PrefixSymbol,
     QualifiedSubstring,
+    FilePathSubstring,
     SignatureSubstring,
 }
 
 fn score_declaration_match(
     index: &LanguageQueryIndex<'_>,
     declaration: &DeclarationNode,
-    needle: &str,
+    query: &NormalizedQuery,
 ) -> Option<MatchRank> {
+    let needle = query.raw.as_str();
     let name_lower = declaration.name.to_ascii_lowercase();
     let short_lower = name_lower.rsplit("::").next().unwrap_or(&name_lower);
     let qualified_lower = index
         .graph_index
         .qualified_symbol(&declaration.id)
         .to_ascii_lowercase();
-    if short_lower == needle || name_lower == needle || qualified_lower == needle {
+    let norm_name = normalize_symbol_separators(&name_lower);
+    let norm_qualified = normalize_symbol_separators(&qualified_lower);
+    let norm_needle = query.separator_normalized.as_deref();
+
+    if short_lower == needle
+        || name_lower == needle
+        || qualified_lower == needle
+        || norm_needle.is_some_and(|norm| norm_name == norm || norm_qualified == norm)
+    {
         Some(MatchRank::ExactSymbol)
-    } else if short_lower.starts_with(needle) || name_lower.starts_with(needle) {
+    } else if short_lower.starts_with(needle)
+        || name_lower.starts_with(needle)
+        || norm_needle.is_some_and(|norm| norm_name.starts_with(norm))
+    {
         Some(MatchRank::PrefixSymbol)
-    } else if qualified_lower.contains(needle) {
+    } else if qualified_lower.contains(needle)
+        || norm_needle.is_some_and(|norm| norm_qualified.contains(norm))
+    {
         Some(MatchRank::QualifiedSubstring)
+    } else if declaration
+        .location
+        .file
+        .to_ascii_lowercase()
+        .contains(needle)
+    {
+        Some(MatchRank::FilePathSubstring)
     } else if declaration
         .signature
         .as_ref()
@@ -707,7 +749,7 @@ fn build_lang_graph(
     if !discovered.files.iter().any(|file| file.lang == lang) {
         return Ok(None);
     }
-    let facts = discovered.collect_project_facts("project", lang);
+    let facts = discovered.collect_project_facts("project", lang)?;
     let graph = build_project_graph(&facts, ProjectDepth::Full)?;
     Ok(Some(BuiltLanguageGraph { lang, graph }))
 }
@@ -716,12 +758,16 @@ fn matches_qualified_suffix(qualified_lower: &str, needle_lower: &str) -> bool {
     if needle_lower.is_empty() {
         return false;
     }
-    let norm_qualified = qualified_lower.replace('.', "::");
-    let norm_needle = needle_lower.replace('.', "::");
+    let norm_qualified = normalize_symbol_separators(qualified_lower);
+    let norm_needle = normalize_symbol_separators(needle_lower);
     let Some(prefix) = norm_qualified.strip_suffix(&norm_needle) else {
         return false;
     };
     prefix.is_empty() || prefix.ends_with("::")
+}
+
+fn normalize_symbol_separators(symbol: &str) -> String {
+    symbol.replace('.', "::")
 }
 
 fn source_line_snippet<'a>(
@@ -898,6 +944,47 @@ mod tests {
         assert!(
             receiver_slice.contains("Receiver-typed calls (x.total())"),
             "expected receiver method footer in:\n{receiver_slice}"
+        );
+    }
+
+    #[test]
+    fn find_matches_python_dotted_symbols_and_file_paths() {
+        let root = PathBuf::from(MemoryFileSource::VIRTUAL_ROOT);
+        let files = [
+            ("pkg/__init__.py", ""),
+            (
+                "pkg/service.py",
+                indoc::indoc! {"
+                    class MemoryStore:
+                        def load(self, key: str) -> str:
+                            return key
+                "},
+            ),
+            ("src/config.rs", "pub fn load_settings() -> usize { 1 }\n"),
+        ];
+        let memory = MemoryFileSource::from_relative_files(&root, &files);
+        let discovered = discover_project_sources_in(
+            std::slice::from_ref(&root),
+            &memory,
+            &ProjectConfig::default(),
+        )
+        .expect("discover mixed sources");
+
+        let method_out = find_in_sources(&discovered, "MemoryStore.load", 10).unwrap();
+        let class_out = find_in_sources(&discovered, "pkg.service.MemoryStore", 10).unwrap();
+        let file_out = find_in_sources(&discovered, "src/config.rs", 10).unwrap();
+
+        assert!(
+            method_out.contains("pkg.service::MemoryStore::load"),
+            "expected MemoryStore.load match in:\n{method_out}"
+        );
+        assert!(
+            class_out.contains("pkg.service::MemoryStore"),
+            "expected pkg.service.MemoryStore match in:\n{class_out}"
+        );
+        assert!(
+            file_out.contains("load_settings"),
+            "expected src/config.rs file match in:\n{file_out}"
         );
     }
 

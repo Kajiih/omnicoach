@@ -77,8 +77,6 @@ pub(super) fn build_project_graph(
     })
 }
 
-const MODULE_SCOPE_ID_STRIDE: usize = 10_000;
-
 struct AccumulatedProjectModules {
     declarations: Vec<DeclarationNode>,
     module_groups: Vec<GroupNode>,
@@ -87,6 +85,7 @@ struct AccumulatedProjectModules {
     reference_edges: Vec<ReferenceEdge>,
     inner_summaries: Vec<SummaryEdge>,
     decl_by_mod_and_name: BTreeMap<(String, String), NodeId>,
+    next_scope_id: usize,
 }
 
 fn accumulate_project_modules(
@@ -101,6 +100,7 @@ fn accumulate_project_modules(
         reference_edges: Vec::new(),
         inner_summaries: Vec::new(),
         decl_by_mod_and_name: BTreeMap::new(),
+        next_scope_id: 0,
     };
 
     for (module_idx, module_fact) in project.modules.iter().enumerate() {
@@ -146,12 +146,26 @@ fn extract_public_surface_module(
         0,
     )?;
     let prefix = format!("m{module_idx}:");
-    let scope_offset = (module_idx + 1) * MODULE_SCOPE_ID_STRIDE;
+    let scope_offset = acc.next_scope_id;
+    acc.next_scope_id += module_fact.scopes.len().max(1);
+    let local_types: BTreeSet<&str> = module_fact
+        .scopes
+        .first()
+        .into_iter()
+        .flat_map(|scope| &scope.items)
+        .filter(|item| item.kind == ScopeItemKind::Type)
+        .map(|item| item.name.as_str())
+        .collect();
 
     let mut kept_old_to_new = BTreeMap::new();
     let mut pub_decls = Vec::new();
     for decl in module_graph.declarations() {
-        if decl.visibility == Visibility::Public && decl.kind != DeclarationKind::Method {
+        let is_attached_method = decl.kind == DeclarationKind::Method
+            && decl
+                .name
+                .split_once("::")
+                .is_some_and(|(type_name, _)| local_types.contains(type_name));
+        if decl.visibility == Visibility::Public && !is_attached_method {
             let new_id = prefix_node_id(&prefix, &decl.id);
             kept_old_to_new.insert(decl.id.clone(), new_id.clone());
             acc.decl_by_mod_and_name.insert(
@@ -276,7 +290,8 @@ fn extract_full_module(
         0,
     )?;
     let prefix = format!("m{module_idx}:");
-    let scope_offset = (module_idx + 1) * MODULE_SCOPE_ID_STRIDE;
+    let scope_offset = acc.next_scope_id;
+    acc.next_scope_id += module_fact.scopes.len().max(1);
 
     for decl in module_graph.declarations() {
         let new_id = prefix_node_id(&prefix, &decl.id);
@@ -697,6 +712,36 @@ fn build_scope_graph(
     };
     let title = format_scope_title(&file_path, &scope.scope);
     let mut extracted = extract_scope_items(scope, scope_index, &file_path, None);
+    if scope.scope == DeclarationScopeKind::Module {
+        let local_types: BTreeSet<String> = extracted
+            .declarations
+            .iter()
+            .filter(|decl| decl.kind == DeclarationKind::Type)
+            .map(|decl| decl.name.clone())
+            .collect();
+        for (candidate_index, candidate) in scopes.iter().enumerate() {
+            let orphan_type = match &candidate.scope {
+                DeclarationScopeKind::Class { name }
+                | DeclarationScopeKind::Impl { type_name: name }
+                    if !local_types.contains(name.as_str()) =>
+                {
+                    Some(name.as_str())
+                }
+                _ => None,
+            };
+            if let Some(type_name) = orphan_type {
+                let prefix = TypeMemberPrefix {
+                    type_name,
+                    owners: &[],
+                };
+                let orphan =
+                    extract_scope_items(candidate, candidate_index, &file_path, Some(prefix));
+                extracted.declarations.extend(orphan.declarations);
+                extracted.ordering_edges.extend(orphan.ordering_edges);
+                extracted.reference_edges.extend(orphan.reference_edges);
+            }
+        }
+    }
 
     apply_local_owner_levels(&mut extracted.declarations, &extracted.ordering_edges);
 
@@ -1835,5 +1880,238 @@ mod tests {
             lower: NodeId::new("m0:s0:i3:leaf_pub"),
             reason: EdgeReason::Call,
         }));
+    }
+
+    #[test]
+    fn file_graph_preserves_declarations_and_levels_across_conditional_redefinitions() {
+        let source = indoc::indoc! {r"
+            #[cfg(unix)]
+            pub struct Handle {
+                pub descriptor: i32,
+            }
+
+            #[cfg(windows)]
+            pub struct Handle {
+                pub raw: usize,
+            }
+
+            impl Handle {
+                pub fn is_valid(&self) -> bool {
+                    true
+                }
+            }
+
+            #[cfg(unix)]
+            pub fn open_handle() -> usize {
+                1
+            }
+
+            #[cfg(windows)]
+            pub fn open_handle() -> usize {
+                2
+            }
+
+            pub fn run_after_cfg() -> usize {
+                open_handle() + trailing_helper()
+            }
+
+            fn trailing_helper() -> usize {
+                3
+            }
+        "};
+        let parsed = crate::code_lint::ast::ParsedFile::rust(source);
+        let scopes = crate::code_lint::ast::collect_scope_facts(&parsed);
+        let intra_refs = crate::code_lint::ast::collect_intra_file_references(&parsed, &scopes);
+
+        let graph = build_file_graph(Path::new("src/platform.rs"), &scopes, &intra_refs)
+            .expect("conditional redefinition graph should be valid");
+        let by_name: BTreeMap<&str, &DeclarationNode> = graph
+            .declarations()
+            .iter()
+            .map(|decl| (decl.name.as_str(), decl))
+            .collect();
+
+        assert!(by_name.contains_key("Handle::is_valid"));
+        assert_eq!(by_name["run_after_cfg"].level, 1);
+        assert_eq!(
+            by_name["trailing_helper"].owners,
+            [by_name["run_after_cfg"].id.clone()]
+        );
+    }
+
+    #[test]
+    fn file_and_project_graphs_qualify_methods_in_multi_impl_submodule() {
+        let source = indoc::indoc! {r"
+            impl Alpha {
+                pub fn first(&self) -> usize {
+                    self.detail()
+                }
+
+                fn detail(&self) -> usize {
+                    1
+                }
+            }
+
+            impl Beta {
+                pub fn second(&self) -> usize {
+                    2
+                }
+            }
+        "};
+        let parsed = crate::code_lint::ast::ParsedFile::rust(source);
+        let scopes = crate::code_lint::ast::collect_scope_facts(&parsed);
+        let intra_refs = crate::code_lint::ast::collect_intra_file_references(&parsed, &scopes);
+        let project = ProjectFacts {
+            title: "multi_impl".to_owned(),
+            has_declared_architecture: false,
+            components: vec![ComponentFact {
+                name: "sub".to_owned(),
+                declared_dependencies: None,
+                allowed_dependencies: Vec::new(),
+            }],
+            modules: vec![ModuleFact {
+                module_path: "sub".to_owned(),
+                path: "src/sub.rs".to_owned(),
+                component: "sub".to_owned(),
+                scopes: scopes.clone(),
+                intra_file_refs: intra_refs.clone(),
+            }],
+            cross_module_refs: Vec::new(),
+        };
+
+        let file_graph = build_file_graph(Path::new("src/sub.rs"), &scopes, &intra_refs)
+            .expect("multi-impl file graph should be valid");
+        let pub_graph = build_project_graph(&project, ProjectDepth::PublicSurface)
+            .expect("multi-impl public surface graph should be valid");
+        let full_graph = build_project_graph(&project, ProjectDepth::Full)
+            .expect("multi-impl project graph should be valid");
+        let file_names: Vec<&str> = file_graph
+            .declarations()
+            .iter()
+            .map(|decl| decl.name.as_str())
+            .collect();
+        let pub_names: Vec<&str> = pub_graph
+            .declarations()
+            .iter()
+            .map(|decl| decl.name.as_str())
+            .collect();
+        let full_names: Vec<&str> = full_graph
+            .declarations()
+            .iter()
+            .map(|decl| decl.name.as_str())
+            .collect();
+
+        assert_eq!(file_graph.title(), "src/sub.rs");
+        assert_eq!(
+            file_names,
+            ["Alpha::first", "Beta::second", "Alpha::detail"]
+        );
+        assert_eq!(pub_names, ["Alpha::first", "Beta::second"]);
+        assert_eq!(file_names, full_names);
+    }
+
+    #[test]
+    fn project_graph_assigns_distinct_monotonic_scope_ids_across_modules() {
+        let project = ProjectFacts {
+            title: "monotonic_scopes".to_owned(),
+            has_declared_architecture: false,
+            components: vec![ComponentFact {
+                name: "Core".to_owned(),
+                declared_dependencies: None,
+                allowed_dependencies: Vec::new(),
+            }],
+            modules: vec![
+                ModuleFact {
+                    module_path: "first".to_owned(),
+                    path: "src/first.rs".to_owned(),
+                    component: "Core".to_owned(),
+                    scopes: sample_scopes(),
+                    intra_file_refs: Vec::new(),
+                },
+                ModuleFact {
+                    module_path: "second".to_owned(),
+                    path: "src/second.rs".to_owned(),
+                    component: "Core".to_owned(),
+                    scopes: sample_scopes(),
+                    intra_file_refs: Vec::new(),
+                },
+            ],
+            cross_module_refs: Vec::new(),
+        };
+
+        let full = build_project_graph(&project, ProjectDepth::Full).expect("Full valid");
+        let pub_surface = build_project_graph(&project, ProjectDepth::PublicSurface)
+            .expect("PublicSurface valid");
+        let max_first_scope = full
+            .declarations()
+            .iter()
+            .filter(|decl| decl.location.file == "src/first.rs")
+            .map(|decl| decl.scope_id)
+            .max();
+        let min_second_scope = full
+            .declarations()
+            .iter()
+            .filter(|decl| decl.location.file == "src/second.rs")
+            .map(|decl| decl.scope_id)
+            .min();
+        let min_pub_second_scope = pub_surface
+            .declarations()
+            .iter()
+            .filter(|decl| decl.location.file == "src/second.rs")
+            .map(|decl| decl.scope_id)
+            .min();
+
+        assert_eq!(max_first_scope, Some(1));
+        assert_eq!(min_second_scope, Some(2));
+        assert_eq!(min_pub_second_scope, Some(2));
+    }
+
+    #[test]
+    fn public_surface_omits_attached_methods_and_retains_orphan_methods() {
+        let source = indoc::indoc! {r"
+            pub struct Local;
+
+            impl Local {
+                pub fn attached(&self) -> usize {
+                    1
+                }
+            }
+
+            impl External {
+                pub fn orphan(&self) -> usize {
+                    2
+                }
+            }
+        "};
+        let parsed = crate::code_lint::ast::ParsedFile::rust(source);
+        let scopes = crate::code_lint::ast::collect_scope_facts(&parsed);
+        let intra_refs = crate::code_lint::ast::collect_intra_file_references(&parsed, &scopes);
+        let project = ProjectFacts {
+            title: "pub_surface_methods".to_owned(),
+            has_declared_architecture: false,
+            components: vec![ComponentFact {
+                name: "sub".to_owned(),
+                declared_dependencies: None,
+                allowed_dependencies: Vec::new(),
+            }],
+            modules: vec![ModuleFact {
+                module_path: "sub".to_owned(),
+                path: "src/sub.rs".to_owned(),
+                component: "sub".to_owned(),
+                scopes,
+                intra_file_refs: intra_refs,
+            }],
+            cross_module_refs: Vec::new(),
+        };
+
+        let pub_graph = build_project_graph(&project, ProjectDepth::PublicSurface)
+            .expect("PublicSurface graph should be valid");
+        let pub_names: Vec<&str> = pub_graph
+            .declarations()
+            .iter()
+            .map(|decl| decl.name.as_str())
+            .collect();
+
+        assert_eq!(pub_names, ["Local", "External::orphan"]);
     }
 }

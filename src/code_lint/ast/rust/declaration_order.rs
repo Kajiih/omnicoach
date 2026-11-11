@@ -7,9 +7,9 @@ use super::trivia::{
     token_before_double_colon,
 };
 use crate::code_lint::ast::call_clusters::{
-    DeclarationScope, DeclarationScopeKind, PlacementAnchor, RelationKind, ScopeItem,
-    ScopeItemKind, Visibility, collapse_whitespace, extend_references, extend_unique, push_unique,
-    split_at_redefinitions,
+    DeclarationScope, DeclarationScopeKind, PlacementAnchor, RelationKind, ScopeExtractionMode,
+    ScopeItem, ScopeItemKind, Visibility, collapse_whitespace, extend_references, extend_unique,
+    push_unique, split_at_redefinitions,
 };
 use crate::code_lint::ast::scope_facts::IntraFileReference;
 use crate::code_lint::ast::tree::{AstNode, ParsedFile, span_from_rowan_range};
@@ -32,13 +32,19 @@ pub struct RustAssociatedItemAfterMethod<'a> {
     pub node: AstNode<'a>,
 }
 
-/// Collects all module and inherent `impl` [`DeclarationScope`]s in a Rust `file`.
+/// Collects module and inherent `impl` [`DeclarationScope`]s in a Rust `file` according to `mode`.
 #[must_use]
-pub fn collect_declaration_scopes(file: &ParsedFile) -> Vec<DeclarationScope<'_>> {
+pub(in crate::code_lint::ast) fn collect_declaration_scopes(
+    file: &ParsedFile,
+    mode: ScopeExtractionMode,
+) -> Vec<DeclarationScope<'_>> {
     let Some(parsed) = file.rs_parsed() else {
         return Vec::new();
     };
     let root_items: Vec<ast::Item> = parsed.tree().items().collect();
+    if mode == ScopeExtractionMode::CoalescedModule {
+        return collect_coalesced_rust_scopes(&root_items, file);
+    }
     let mut scopes = build_rust_module_declaration_scopes(&root_items, file);
     for node in parsed.tree().syntax().descendants() {
         if file.is_in_rust_inline_test(node.text_range().start().into()) {
@@ -56,6 +62,28 @@ pub fn collect_declaration_scopes(file: &ParsedFile) -> Vec<DeclarationScope<'_>
             scopes.push(scope);
         }
     }
+    scopes
+}
+
+fn collect_coalesced_rust_scopes<'a>(
+    root_items: &[ast::Item],
+    file: &'a ParsedFile,
+) -> Vec<DeclarationScope<'a>> {
+    let RustModuleContents {
+        declarations,
+        impl_items,
+    } = collect_rust_module_decls(root_items, file);
+    let impl_scopes = build_coalesced_rust_impl_scopes(&impl_items, file);
+    if declarations.is_empty() && impl_scopes.is_empty() {
+        return Vec::new();
+    }
+    let items = build_coalesced_rust_module_items(&declarations, &impl_items, file);
+    let mut scopes = Vec::with_capacity(1 + impl_scopes.len());
+    scopes.push(DeclarationScope {
+        kind: DeclarationScopeKind::Module,
+        items,
+    });
+    scopes.extend(impl_scopes);
     scopes
 }
 
@@ -210,6 +238,50 @@ struct RustModuleDecl<'a> {
     syntax_start: usize,
     signature: Option<String>,
     item: RustModuleItem,
+}
+
+fn build_coalesced_rust_module_items<'a>(
+    declarations: &[RustModuleDecl<'a>],
+    impl_items: &[(usize, ast::Impl)],
+    file: &'a ParsedFile,
+) -> Vec<ScopeItem<'a>> {
+    if declarations.is_empty() {
+        return Vec::new();
+    }
+    let mut item_by_name: HashMap<&str, usize> = HashMap::new();
+    let mut segment_is_type = Vec::new();
+    for decl in declarations {
+        if !item_by_name.contains_key(decl.name.as_str()) {
+            let next_idx = segment_is_type.len();
+            item_by_name.insert(decl.name.as_str(), next_idx);
+            segment_is_type.push(matches!(decl.item, RustModuleItem::Type(_)));
+        }
+    }
+    let impl_callees = collect_rust_impl_callees(
+        impl_items,
+        0..usize::MAX,
+        &item_by_name,
+        &segment_is_type,
+        file,
+    );
+    let mut items: Vec<ScopeItem<'a>> = Vec::with_capacity(segment_is_type.len());
+    for (decl_idx, decl) in declarations.iter().enumerate() {
+        let next_start = declarations
+            .get(decl_idx + 1)
+            .map_or(usize::MAX, |next| next.syntax_start);
+        let spans = rust_decl_spans(decl, next_start, impl_items, file);
+        let target_idx = item_by_name[decl.name.as_str()];
+        let built = build_rust_module_scope_item(
+            decl,
+            spans,
+            &impl_callees.attached[target_idx],
+            &item_by_name,
+            &segment_is_type,
+            &impl_callees.external,
+        );
+        ScopeItem::push_or_merge(&mut items, target_idx, built);
+    }
+    items
 }
 
 fn rust_type_decl<'a>(
@@ -568,6 +640,48 @@ fn collect_rust_module_item_refs(
     });
 }
 
+fn build_coalesced_rust_impl_scopes<'a>(
+    impl_items: &[(usize, ast::Impl)],
+    file: &'a ParsedFile,
+) -> Vec<DeclarationScope<'a>> {
+    let mut type_order: Vec<String> = Vec::new();
+    let mut methods_by_type: HashMap<String, Vec<(ScopeItem<'a>, ast::Fn)>> = HashMap::new();
+    for (_, impl_item) in impl_items {
+        if impl_item.trait_().is_some() {
+            continue;
+        }
+        let (Some(type_name), Some(associated_items)) = (
+            impl_self_type_name(impl_item, &file.source),
+            impl_item.assoc_item_list(),
+        ) else {
+            continue;
+        };
+        let methods = collect_rust_impl_methods(&associated_items, &type_name, file);
+        if methods.is_empty() {
+            continue;
+        }
+        if !methods_by_type.contains_key(&type_name) {
+            type_order.push(type_name.clone());
+        }
+        methods_by_type
+            .entry(type_name)
+            .or_default()
+            .extend(methods);
+    }
+    let mut scopes = Vec::with_capacity(type_order.len());
+    for type_name in type_order {
+        let Some(methods) = methods_by_type.remove(&type_name) else {
+            continue;
+        };
+        scopes.push(build_rust_impl_scope_from_methods(
+            type_name,
+            methods,
+            ScopeExtractionMode::CoalescedModule,
+        ));
+    }
+    scopes
+}
+
 /// Builds a [`DeclarationScope`] for direct non-test methods of an inherent `impl` block.
 fn build_rust_impl_declaration_scope<'a>(
     impl_item: &ast::Impl,
@@ -581,31 +695,50 @@ fn build_rust_impl_declaration_scope<'a>(
         return None;
     }
 
-    let method_by_name: HashMap<String, usize> = methods
-        .iter()
-        .enumerate()
-        .map(|(idx, (item, _))| (item.name.clone(), idx))
-        .collect();
+    Some(build_rust_impl_scope_from_methods(
+        type_name,
+        methods,
+        ScopeExtractionMode::LintSegments,
+    ))
+}
 
-    let items = methods
-        .into_iter()
-        .map(|(mut item, function)| {
-            let mut body_callees = Vec::new();
-            if let Some(body) = function.body() {
-                collect_rust_impl_method_refs(
-                    body.syntax(),
-                    &type_name,
-                    &method_by_name,
-                    &mut body_callees,
-                );
-            }
-            extend_references(&mut item.references, body_callees, RelationKind::Body);
-            item
-        })
-        .collect();
-
-    let kind = DeclarationScopeKind::Impl { type_name };
-    Some(DeclarationScope { kind, items })
+fn build_rust_impl_scope_from_methods<'a>(
+    type_name: String,
+    methods: Vec<(ScopeItem<'a>, ast::Fn)>,
+    mode: ScopeExtractionMode,
+) -> DeclarationScope<'a> {
+    let mut method_by_name: HashMap<String, usize> = HashMap::new();
+    for (item, _) in &methods {
+        let next_idx = method_by_name.len();
+        if mode == ScopeExtractionMode::CoalescedModule {
+            method_by_name.entry(item.name.clone()).or_insert(next_idx);
+        } else {
+            method_by_name.insert(item.name.clone(), next_idx);
+        }
+    }
+    let mut items: Vec<ScopeItem<'a>> = Vec::with_capacity(method_by_name.len());
+    for (mut item, function) in methods {
+        let mut body_callees = Vec::new();
+        if let Some(body) = function.body() {
+            collect_rust_impl_method_refs(
+                body.syntax(),
+                &type_name,
+                &method_by_name,
+                &mut body_callees,
+            );
+        }
+        extend_references(&mut item.references, body_callees, RelationKind::Body);
+        if mode == ScopeExtractionMode::CoalescedModule {
+            let target_idx = method_by_name[&item.name];
+            ScopeItem::push_or_merge(&mut items, target_idx, item);
+        } else {
+            items.push(item);
+        }
+    }
+    DeclarationScope {
+        kind: DeclarationScopeKind::Impl { type_name },
+        items,
+    }
 }
 
 /// Collects indices of sibling `impl` methods in `method_by_name` called via `self.method()`,
@@ -1568,7 +1701,7 @@ mod tests {
             }
         "};
         let file = ParsedFile::rust(source);
-        let scopes = collect_declaration_scopes(&file);
+        let scopes = collect_declaration_scopes(&file, ScopeExtractionMode::LintSegments);
         let summary: Vec<_> = scopes
             .iter()
             .filter_map(|scope| {

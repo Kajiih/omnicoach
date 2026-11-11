@@ -1,7 +1,7 @@
 //! Multi-file project abstraction facts, source discovery, and cross-module symbol resolution (`CodeLintProject`).
 
-use super::architecture::ArchitectureSpec;
-use super::config::ProjectConfig;
+use super::architecture::{ArchitectureError, ArchitectureSpec};
+use super::config::{ProjectConfig, resolve_against_cwd};
 use super::index::ProjectIndex;
 use super::layout::{
     ProjectLayout, disambiguated_rust_module_path, is_python_package_init, is_rust_crate_root,
@@ -20,7 +20,6 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 const INIT_MODULE: &str = "__init__";
-const CURRENT_DIR_PREFIX: &str = "./";
 const CARGO_TOML_NAME: &str = "Cargo.toml";
 
 /// A project source file discovered via [`FileSource`], paired with its full query path,
@@ -111,12 +110,16 @@ impl DiscoveredProjectSources<'_> {
     /// Extracts multi-file [`ProjectFacts`] for `lang` from these discovered sources, seeding the
     /// shared [`ProjectIndex`] from each file's single AST parse and resolving architecture and
     /// cross-module re-exports against [`ProjectIndex`].
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ArchitectureError`] when project architecture declarations conflict or fail
+    /// validation.
     pub(in crate::code_lint) fn collect_project_facts(
         &self,
         title: &str,
         lang: Language,
-    ) -> ProjectFacts {
+    ) -> Result<ProjectFacts, ArchitectureError> {
         match lang {
             Language::Rust => {
                 collect_rust_project_facts(title, &self.files, &self.index, self.scope)
@@ -166,7 +169,6 @@ pub(in crate::code_lint) fn discover_project_sources_in<'s>(
         }
     }
 
-    let scope = determine_graph_scope(paths, source, &index);
     let mut files = Vec::new();
     for path in paths {
         if source.is_file(path) {
@@ -185,6 +187,9 @@ pub(in crate::code_lint) fn discover_project_sources_in<'s>(
     }
     files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     files.dedup_by(|left, right| left.relative_path == right.relative_path);
+
+    merge_discovered_python_subpackage_roots(&files, source, &mut index);
+    let scope = determine_graph_scope(paths, source, &index);
 
     Ok(DiscoveredProjectSources {
         index,
@@ -217,16 +222,13 @@ pub(in crate::code_lint) fn resolve_effective_paths(
 /// Derives a human-readable project title from `paths` (falling back to the current directory name).
 #[must_use]
 pub(in crate::code_lint) fn derive_project_title(paths: &[PathBuf]) -> String {
+    derive_project_title_with_cwd(paths, DiskFileSource.current_dir().as_deref())
+}
+
+fn derive_project_title_with_cwd(paths: &[PathBuf], current_dir: Option<&Path>) -> String {
     if let [only] = paths {
-        let clean = only.strip_prefix(CURRENT_DIR_PREFIX).unwrap_or(only);
-        if clean != Path::new(".")
-            && let Some(name) = clean.file_name().and_then(|os| os.to_str())
-            && !name.is_empty()
-        {
-            return name.to_owned();
-        }
-        if let Some(cwd) = DiskFileSource.current_dir()
-            && let Some(name) = cwd.file_name().and_then(|os| os.to_str())
+        let resolved = resolve_against_cwd(only, current_dir);
+        if let Some(name) = resolved.file_name().and_then(|os| os.to_str())
             && !name.is_empty()
         {
             return name.to_owned();
@@ -251,7 +253,7 @@ fn collect_rust_project_facts(
     files: &[ProjectSourceFile],
     index: &ProjectIndex<'_>,
     scope: ProjectGraphScope,
-) -> ProjectFacts {
+) -> Result<ProjectFacts, ArchitectureError> {
     let rust_files: Vec<&ProjectSourceFile> = files
         .iter()
         .filter(|file| file.lang == Language::Rust)
@@ -264,6 +266,9 @@ fn collect_rust_project_facts(
         .collect();
 
     let spec = index.architecture_spec();
+    if let Some(error) = index.architecture_error() {
+        return Err(error.clone());
+    }
     let mut modules = Vec::new();
     for entry in &entries {
         let declared_component = spec.and_then(|resolved| {
@@ -298,13 +303,13 @@ fn collect_rust_project_facts(
 
     let finalized = finalize_components(spec, &modules, scope);
     let cross_module_refs = resolve_rust_cross_module_refs(&entries, index);
-    ProjectFacts {
+    Ok(ProjectFacts {
         title: title.to_owned(),
         has_declared_architecture: finalized.has_declared_architecture,
         components: finalized.components,
         modules,
         cross_module_refs,
-    }
+    })
 }
 
 struct RustModuleEntry {
@@ -422,7 +427,7 @@ fn collect_python_project_facts(
     files: &[ProjectSourceFile],
     index: &ProjectIndex<'_>,
     scope: ProjectGraphScope,
-) -> ProjectFacts {
+) -> Result<ProjectFacts, ArchitectureError> {
     let python_files: Vec<&ProjectSourceFile> = files
         .iter()
         .filter(|file| file.lang == Language::Python)
@@ -433,8 +438,11 @@ fn collect_python_project_facts(
         .zip(module_paths)
         .map(|(file, module_path)| parse_python_module(file, module_path, index))
         .collect();
-    let cross_module_refs = resolve_python_cross_module_refs(&entries, index);
     let spec = index.architecture_spec();
+    if let Some(error) = index.architecture_error() {
+        return Err(error.clone());
+    }
+    let cross_module_refs = resolve_python_cross_module_refs(&entries, index);
     let mut modules = Vec::with_capacity(entries.len());
 
     for entry in entries {
@@ -456,13 +464,13 @@ fn collect_python_project_facts(
     }
 
     let finalized = finalize_components(spec, &modules, scope);
-    ProjectFacts {
+    Ok(ProjectFacts {
         title: title.to_owned(),
         has_declared_architecture: finalized.has_declared_architecture,
         components: finalized.components,
         modules,
         cross_module_refs,
-    }
+    })
 }
 
 struct PythonModuleEntry {
@@ -697,6 +705,40 @@ fn collect_scope_symbol_names(scopes: &[ScopeFacts], out: &mut HashSet<String>) 
     }
 }
 
+fn merge_discovered_python_subpackage_roots(
+    files: &[ProjectSourceFile],
+    source: &dyn FileSource,
+    index: &mut ProjectIndex<'_>,
+) {
+    if index.project_config().has_configured_python_roots() {
+        return;
+    }
+    let project_root = index.layout().project_root.clone();
+    let mut visited_directories = HashSet::new();
+    let mut inferred_roots = Vec::new();
+    for file in files {
+        if file.lang != Language::Python {
+            continue;
+        }
+        let mut cursor = file.full_path.parent();
+        while let Some(directory) = cursor {
+            if !directory.starts_with(&project_root)
+                || directory == project_root
+                || !visited_directories.insert(directory.to_path_buf())
+            {
+                break;
+            }
+            if let Some(root) = index.layout().infer_package_source_root(directory, source) {
+                inferred_roots.push(root);
+            }
+            cursor = directory.parent();
+        }
+    }
+    if !inferred_roots.is_empty() {
+        index.merge_python_source_roots(&inferred_roots);
+    }
+}
+
 fn determine_graph_scope(
     paths: &[PathBuf],
     source: &dyn FileSource,
@@ -753,6 +795,7 @@ fn collect_directory_source_files(
     out: &mut Vec<ProjectSourceFile>,
 ) {
     let resolved_dir = layout.resolve_query_path(dir);
+    let allow_test_files = config.is_test_directory(&resolved_dir);
     let restrict_rust_to_source_root = resolved_dir == layout.project_root
         && layout.rust_source_root != layout.project_root
         && source.is_file(&layout.project_root.join(CARGO_TOML_NAME));
@@ -765,7 +808,7 @@ fn collect_directory_source_files(
             continue;
         };
         let full_path = layout.resolve_query_path(&entry_path);
-        if config.is_test_path(&full_path) {
+        if !allow_test_files && config.is_test_path(&full_path) {
             continue;
         }
         if restrict_rust_to_source_root
@@ -1127,7 +1170,9 @@ mod tests {
             discover_project_sources_in(&subset_paths, &memory, &ProjectConfig::default())
                 .expect("discover subset sources");
 
-        let project = discovered.collect_project_facts("subset_rs", Language::Rust);
+        let project = discovered
+            .collect_project_facts("subset_rs", Language::Rust)
+            .expect("collect subset project facts");
 
         assert_eq!(
             project.components,
@@ -1251,6 +1296,141 @@ mod tests {
         );
     }
 
+    #[test]
+    fn collect_project_facts_propagates_conflicting_architecture_error() {
+        let files = [
+            (
+                ".omnicoach.toml",
+                indoc::indoc! {r#"
+                    [[architecture.components]]
+                    name = "Core"
+                    roots = ["core"]
+                "#},
+            ),
+            (
+                "src/architecture.rs",
+                indoc::indoc! {r"
+                    architecture_component!(Architecture);
+                    define_architecture! {
+                        Architecture => [],
+                        Core => [],
+                    }
+                "},
+            ),
+            (
+                "src/core.rs",
+                "architecture_component!(Core);\npub fn compute() -> usize { 1 }\n",
+            ),
+        ];
+        let root = PathBuf::from(MemoryFileSource::VIRTUAL_ROOT);
+        let memory = MemoryFileSource::from_relative_files(&root, &files);
+        let discovered = discover_project_sources_in(
+            std::slice::from_ref(&root),
+            &memory,
+            &ProjectConfig::default(),
+        )
+        .expect("discover sources without eager architecture evaluation");
+
+        let error = discovered
+            .collect_project_facts("conflict", Language::Rust)
+            .expect_err("conflicting architecture should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("conflicting architecture declarations")
+        );
+    }
+
+    #[test]
+    fn discover_project_sources_merges_nested_python_subpackage_roots() {
+        let files = [
+            (".omnicoach.toml", ""),
+            (
+                "services/auth/auth_svc/__init__.py",
+                "from .tokens import issue_token\n",
+            ),
+            (
+                "services/auth/auth_svc/tokens.py",
+                "def issue_token() -> str:\n    return 'ok'\n",
+            ),
+        ];
+
+        let project = collect_virtual_facts(
+            "multi_pkg",
+            Language::Python,
+            &files,
+            &ProjectConfig::default(),
+        );
+        let module_paths: Vec<&str> = project
+            .modules
+            .iter()
+            .map(|module| module.module_path.as_str())
+            .collect();
+
+        assert_eq!(module_paths, ["auth_svc", "auth_svc.tokens"]);
+    }
+
+    #[test]
+    fn discover_project_sources_includes_explicitly_targeted_test_directory() {
+        let files = [
+            (
+                "Cargo.toml",
+                indoc::indoc! {r#"
+                    [package]
+                    name = "demo"
+                    version = "0.1.0"
+                "#},
+            ),
+            ("src/lib.rs", "pub fn prod() -> usize { 1 }\n"),
+            (
+                "tests/integration_helper.rs",
+                "pub fn helper() -> usize { 2 }\n",
+            ),
+        ];
+        let root = PathBuf::from(MemoryFileSource::VIRTUAL_ROOT);
+        let tests_dir = root.join("tests");
+        let memory = MemoryFileSource::from_relative_files(&root, &files);
+        let config = ProjectConfig::default();
+
+        let root_discovered =
+            discover_project_sources_in(std::slice::from_ref(&root), &memory, &config)
+                .expect("discover root");
+        let tests_discovered =
+            discover_project_sources_in(std::slice::from_ref(&tests_dir), &memory, &config)
+                .expect("discover explicit tests dir");
+        let root_paths: Vec<&str> = root_discovered
+            .files
+            .iter()
+            .map(|file| file.relative_path.as_str())
+            .collect();
+        let test_paths: Vec<&str> = tests_discovered
+            .files
+            .iter()
+            .map(|file| file.relative_path.as_str())
+            .collect();
+
+        assert_eq!(root_paths, ["src/lib.rs"]);
+        assert_eq!(test_paths, ["tests/integration_helper.rs"]);
+    }
+
+    #[test]
+    fn derive_project_title_normalizes_parent_dir_components() {
+        let nested_parent = [PathBuf::from("services/auth/..")];
+        let absolute_parent = [PathBuf::from("/workspace/crates/engine/..")];
+        let bare_parent = [PathBuf::from("..")];
+
+        assert_eq!(derive_project_title(&nested_parent), "services");
+        assert_eq!(derive_project_title(&absolute_parent), "crates");
+        assert_eq!(
+            derive_project_title_with_cwd(
+                &bare_parent,
+                Some(Path::new("/workspace/omnicoach/src"))
+            ),
+            "omnicoach"
+        );
+    }
+
     fn collect_virtual_facts(
         title: &str,
         lang: Language,
@@ -1261,6 +1441,8 @@ mod tests {
         let memory = MemoryFileSource::from_relative_files(&root, files);
         let discovered = discover_project_sources_in(std::slice::from_ref(&root), &memory, config)
             .expect("discover virtual project sources");
-        discovered.collect_project_facts(title, lang)
+        discovered
+            .collect_project_facts(title, lang)
+            .expect("collect virtual project facts")
     }
 }

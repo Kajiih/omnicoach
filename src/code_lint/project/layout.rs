@@ -1,6 +1,6 @@
 //! Project boundary, source-root layout, and module-path resolution (`ProjectLayout`).
 
-use super::config::{is_rooted_path, lexical_normalize, resolve_against_cwd};
+use super::config::{CONFIG_FILE_NAME, is_rooted_path, lexical_normalize, resolve_against_cwd};
 use super::source::FileSource;
 use crate::code_lint::ast::rust::ExternalModDeclaration;
 use serde::Deserialize;
@@ -297,6 +297,34 @@ impl ProjectLayout {
             .as_deref()
             .unwrap_or(&self.project_root);
         resolve_against_cwd(path, Some(base))
+    }
+
+    /// Infers an unconfigured Python source root for `directory` inside [`Self::project_root`]
+    /// when `directory` is a nested Python package (`__init__.py` / `__init__.pyi`) or carries a
+    /// subpackage `pyproject.toml`, stopping at any nested `.omnicoach.toml` or VCS boundary.
+    #[must_use]
+    pub(super) fn infer_package_source_root(
+        &self,
+        directory: &Path,
+        source: &dyn FileSource,
+    ) -> Option<PathBuf> {
+        if !directory.starts_with(&self.project_root) || directory == self.project_root {
+            return None;
+        }
+        let mut ancestor = directory;
+        while ancestor != self.project_root {
+            if source.is_file(&ancestor.join(CONFIG_FILE_NAME)) || is_vcs_boundary(ancestor, source)
+            {
+                return None;
+            }
+            ancestor = ancestor.parent()?;
+        }
+        if is_python_package_dir(directory, source) {
+            return infer_enclosing_package_source_root(&self.project_root, directory, source);
+        }
+        source
+            .is_file(&directory.join(PYPROJECT_TOML))
+            .then(|| directory.to_path_buf())
     }
 
     /// Merges additional discovered Python source roots into this layout in specificity order
@@ -648,7 +676,7 @@ struct CargoLibTarget {
 }
 
 fn find_project_root(start_directory: &Path, source: &dyn FileSource) -> Option<PathBuf> {
-    let markers = [".omnicoach.toml", PYPROJECT_TOML, CARGO_TOML];
+    let markers = [CONFIG_FILE_NAME, PYPROJECT_TOML, CARGO_TOML];
     let mut current = Some(start_directory);
     while let Some(directory) = current {
         if markers
@@ -684,22 +712,10 @@ fn infer_python_source_roots(
     source: &dyn FileSource,
 ) -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if start_directory.starts_with(project_root) {
-        let mut cursor = start_directory;
-        while cursor != project_root
-            && (source.is_file(&cursor.join(INIT_PY)) || source.is_file(&cursor.join(INIT_PYI)))
-        {
-            let Some(parent) = cursor.parent() else {
-                break;
-            };
-            cursor = parent;
-        }
-        if cursor != project_root
-            && !source.is_file(&cursor.join(INIT_PY))
-            && !source.is_file(&cursor.join(INIT_PYI))
-        {
-            roots.push(cursor.to_path_buf());
-        }
+    if let Some(inferred) =
+        infer_enclosing_package_source_root(project_root, start_directory, source)
+    {
+        roots.push(inferred);
     }
     let has_cargo_toml = source.is_file(&project_root.join(CARGO_TOML));
     let has_pyproject_toml = source.is_file(&project_root.join(PYPROJECT_TOML));
@@ -722,9 +738,7 @@ fn infer_python_source_roots(
 }
 
 fn is_non_package_directory(directory: &Path, source: &dyn FileSource) -> bool {
-    source.is_dir(directory)
-        && !source.is_file(&directory.join(INIT_PY))
-        && !source.is_file(&directory.join(INIT_PYI))
+    source.is_dir(directory) && !is_python_package_dir(directory, source)
 }
 
 fn directory_contains_python_package(directory: &Path, source: &dyn FileSource) -> bool {
@@ -732,10 +746,7 @@ fn directory_contains_python_package(directory: &Path, source: &dyn FileSource) 
         .read_dir(directory)
         .unwrap_or_default()
         .into_iter()
-        .any(|entry| {
-            source.is_dir(&entry)
-                && (source.is_file(&entry.join(INIT_PY)) || source.is_file(&entry.join(INIT_PYI)))
-        })
+        .any(|entry| source.is_dir(&entry) && is_python_package_dir(&entry, source))
 }
 
 fn python_module_from_resolved(
@@ -766,6 +777,25 @@ fn python_module_from_resolved(
         return Some(ROOT_MODULE_TAG.to_owned());
     }
     (!segments.is_empty()).then(|| segments.join("."))
+}
+
+fn infer_enclosing_package_source_root(
+    project_root: &Path,
+    start_directory: &Path,
+    source: &dyn FileSource,
+) -> Option<PathBuf> {
+    if !start_directory.starts_with(project_root) {
+        return None;
+    }
+    let mut cursor = start_directory;
+    while cursor != project_root && is_python_package_dir(cursor, source) {
+        cursor = cursor.parent()?;
+    }
+    (cursor != project_root && !is_python_package_dir(cursor, source)).then(|| cursor.to_path_buf())
+}
+
+fn is_python_package_dir(directory: &Path, source: &dyn FileSource) -> bool {
+    source.is_file(&directory.join(INIT_PY)) || source.is_file(&directory.join(INIT_PYI))
 }
 
 #[cfg(test)]
