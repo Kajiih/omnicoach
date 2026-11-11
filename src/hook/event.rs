@@ -37,8 +37,11 @@ pub(super) enum FileEdit {
     Overwrite(String),
     /// Appends content to the end of the file (or creates it if absent).
     Append(String),
-    /// Applies one or more exact substring replacements sequentially.
+    /// Resolves one or more substring replacements against original pre-edit coordinates,
+    /// rejecting overlapping target spans.
     Replace(Vec<TextReplacement>),
+    /// Applies one or more exact substring replacements sequentially against evolving content.
+    ReplaceSequential(Vec<TextReplacement>),
 }
 
 /// A single substring replacement within a file.

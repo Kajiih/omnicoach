@@ -19,6 +19,9 @@ pub(super) enum VirtualEditError {
     /// Target string matched multiple times when `allow_multiple` is false.
     #[error("target pattern matched multiple times with allow_multiple = false")]
     AmbiguousTarget,
+    /// Two replacement chunks matched overlapping byte ranges in the original file.
+    #[error("replacement chunks target overlapping spans")]
+    OverlappingTargets,
 }
 
 /// Result of applying a proposed tool edit to a file in memory.
@@ -40,7 +43,12 @@ pub(super) fn apply_virtual_edit(
     let content = match edit {
         FileEdit::Overwrite(new_content) => new_content.clone(),
         FileEdit::Append(new_content) => format!("{existing}{new_content}"),
-        FileEdit::Replace(replacements) => apply_replacements(original_content, replacements)?,
+        FileEdit::Replace(replacements) => {
+            apply_original_replacements(original_content, replacements)?
+        }
+        FileEdit::ReplaceSequential(replacements) => {
+            apply_sequential_replacements(original_content, replacements)?
+        }
     };
 
     let mut modified_lines = HashSet::new();
@@ -68,7 +76,7 @@ pub(super) fn apply_virtual_edit(
     })
 }
 
-fn apply_replacements(
+fn apply_sequential_replacements(
     original_content: Option<&str>,
     replacements: &[TextReplacement],
 ) -> Result<String, VirtualEditError> {
@@ -78,52 +86,108 @@ fn apply_replacements(
     }
     let mut current = original.to_owned();
     for chunk in replacements {
-        current = apply_single_replacement(&current, chunk)?;
+        current = apply_original_replacements(Some(&current), std::slice::from_ref(chunk))?;
     }
     Ok(current)
 }
 
-fn apply_single_replacement(
-    content: &str,
-    chunk: &TextReplacement,
+fn apply_original_replacements(
+    original_content: Option<&str>,
+    replacements: &[TextReplacement],
 ) -> Result<String, VirtualEditError> {
+    let original = original_content.ok_or(VirtualEditError::MissingOriginalFile)?;
+    if replacements.is_empty() {
+        return Err(VirtualEditError::TargetNotFound);
+    }
+
+    let mut matched_edits: Vec<(Range<usize>, &str)> = Vec::with_capacity(replacements.len());
+    for chunk in replacements {
+        collect_chunk_edits(original, chunk, &mut matched_edits)?;
+    }
+
+    matched_edits.sort_by_key(|(span, _)| (span.start, span.end));
+    if matched_edits
+        .windows(2)
+        .any(|pair| pair[1].0.start < pair[0].0.end)
+    {
+        return Err(VirtualEditError::OverlappingTargets);
+    }
+
+    let mut spliced = String::with_capacity(original.len());
+    let mut cursor = 0;
+    for (span, replacement_text) in matched_edits {
+        spliced.push_str(&original[cursor..span.start]);
+        spliced.push_str(replacement_text);
+        cursor = span.end;
+    }
+    spliced.push_str(&original[cursor..]);
+    Ok(spliced)
+}
+
+fn collect_chunk_edits<'a>(
+    original: &str,
+    chunk: &'a TextReplacement,
+    out: &mut Vec<(Range<usize>, &'a str)>,
+) -> Result<(), VirtualEditError> {
     if chunk.target.is_empty() {
         return Err(VirtualEditError::TargetNotFound);
     }
 
-    if let Some(line_range) = &chunk.line_range
-        && let Some(byte_range) =
-            line_range_byte_bounds(content, *line_range.start(), *line_range.end())
-    {
-        let scoped = &content[byte_range.clone()];
-        let scoped_matches = scoped.matches(chunk.target.as_str()).count();
-        if scoped_matches > 0 {
-            if scoped_matches > 1 && !chunk.allow_multiple {
-                return Err(VirtualEditError::AmbiguousTarget);
-            }
-            let replaced = scoped.replace(chunk.target.as_str(), &chunk.replacement);
-            return Ok(format!(
-                "{}{replaced}{}",
-                &content[..byte_range.start],
-                &content[byte_range.end..]
-            ));
+    if let Some(line_range) = &chunk.line_range {
+        if let Some(byte_range) =
+            line_range_byte_bounds(original, *line_range.start(), *line_range.end())
+            && push_matches(&original[byte_range.clone()], byte_range.start, chunk, out)?
+        {
+            return Ok(());
         }
         // Matches `apply_edit.go`: when a line range is given and the target is not found
         // locally, fall back to whole-file replacement only if the target is unique globally.
-        if content.matches(chunk.target.as_str()).count() == 1 {
-            return Ok(content.replacen(chunk.target.as_str(), &chunk.replacement, 1));
+        let mut global_matches = original.match_indices(chunk.target.as_str());
+        if let Some((only_start, _)) = global_matches.next()
+            && global_matches.next().is_none()
+        {
+            out.push((
+                only_start..only_start + chunk.target.len(),
+                chunk.replacement.as_str(),
+            ));
+            return Ok(());
         }
         return Err(VirtualEditError::TargetNotFound);
     }
 
-    let global_matches = content.matches(chunk.target.as_str()).count();
-    if global_matches == 0 {
-        return Err(VirtualEditError::TargetNotFound);
+    if push_matches(original, 0, chunk, out)? {
+        Ok(())
+    } else {
+        Err(VirtualEditError::TargetNotFound)
     }
-    if global_matches > 1 && !chunk.allow_multiple {
+}
+
+fn push_matches<'a>(
+    haystack: &str,
+    base_offset: usize,
+    chunk: &'a TextReplacement,
+    out: &mut Vec<(Range<usize>, &'a str)>,
+) -> Result<bool, VirtualEditError> {
+    let mut matches = haystack.match_indices(chunk.target.as_str());
+    let Some((first_offset, _)) = matches.next() else {
+        return Ok(false);
+    };
+    if !chunk.allow_multiple && matches.next().is_some() {
         return Err(VirtualEditError::AmbiguousTarget);
     }
-    Ok(content.replace(chunk.target.as_str(), &chunk.replacement))
+    let first_start = base_offset + first_offset;
+    out.push((
+        first_start..first_start + chunk.target.len(),
+        chunk.replacement.as_str(),
+    ));
+    for (extra_offset, _) in matches {
+        let start = base_offset + extra_offset;
+        out.push((
+            start..start + chunk.target.len(),
+            chunk.replacement.as_str(),
+        ));
+    }
+    Ok(true)
 }
 
 fn line_range_byte_bounds(
@@ -400,5 +464,88 @@ mod tests {
         }]);
         let error = apply_virtual_edit(Some(original), &edit).unwrap_err();
         assert!(matches!(error, VirtualEditError::AmbiguousTarget));
+    }
+
+    #[test]
+    fn apply_replace_resolves_all_line_ranges_against_original_lines() {
+        let original = indoc::indoc! {"
+            val = None
+            val = None
+            val = None
+        "};
+        let first_replacement = indoc::indoc! {"
+            setup()
+            validate()
+            val = 1"};
+        let expected = indoc::indoc! {"
+            setup()
+            validate()
+            val = 1
+            val = None
+            val = 3
+        "};
+        let edit = FileEdit::Replace(vec![
+            TextReplacement {
+                target: "val = None".to_owned(),
+                replacement: first_replacement.to_owned(),
+                line_range: Some(1..=1),
+                allow_multiple: false,
+            },
+            TextReplacement {
+                target: "val = None".to_owned(),
+                replacement: "val = 3".to_owned(),
+                line_range: Some(3..=3),
+                allow_multiple: false,
+            },
+        ]);
+        let virtual_file =
+            apply_virtual_edit(Some(original), &edit).expect("multi-chunk edit should succeed");
+        assert_eq!(virtual_file.content, expected);
+    }
+
+    #[test]
+    fn apply_replace_rejects_overlapping_chunks() {
+        let original = indoc::indoc! {"
+            let alpha = 1;
+            let beta = 2;
+            let gamma = 3;
+        "};
+        let edit = FileEdit::Replace(vec![
+            TextReplacement {
+                target: "let alpha = 1;\nlet beta = 2;".to_owned(),
+                replacement: "let alpha = 10;\nlet beta = 20;".to_owned(),
+                line_range: Some(1..=2),
+                allow_multiple: false,
+            },
+            TextReplacement {
+                target: "let beta = 2;\nlet gamma = 3;".to_owned(),
+                replacement: "let beta = 200;\nlet gamma = 300;".to_owned(),
+                line_range: Some(2..=3),
+                allow_multiple: false,
+            },
+        ]);
+        let error = apply_virtual_edit(Some(original), &edit).unwrap_err();
+        assert!(matches!(error, VirtualEditError::OverlappingTargets));
+    }
+
+    #[test]
+    fn apply_replace_sequential_allows_chained_edits() {
+        let edit = FileEdit::ReplaceSequential(vec![
+            TextReplacement {
+                target: "alpha".to_owned(),
+                replacement: "beta".to_owned(),
+                line_range: None,
+                allow_multiple: true,
+            },
+            TextReplacement {
+                target: "beta".to_owned(),
+                replacement: "gamma".to_owned(),
+                line_range: None,
+                allow_multiple: true,
+            },
+        ]);
+        let virtual_file =
+            apply_virtual_edit(Some("let alpha = 1;\n"), &edit).expect("chained edit succeeds");
+        assert_eq!(virtual_file.content, "let gamma = 1;\n");
     }
 }

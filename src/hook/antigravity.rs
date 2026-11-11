@@ -4,7 +4,6 @@
 //! the model. Code lint warnings on a file edit are therefore queued in the conversation's
 //! artifact directory and injected as an ephemeral message on the next `PreInvocation`.
 
-use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -253,7 +252,7 @@ fn parse_edit_file_args(args: &serde_json::Value, tool_name: &str) -> ToolCallPa
 
     ToolCallPayload::FileEdit {
         path: parsed.path,
-        edit: FileEdit::Replace(replacements),
+        edit: FileEdit::ReplaceSequential(replacements),
     }
 }
 
@@ -263,23 +262,36 @@ fn parse_replace_content_args(args: &serde_json::Value, tool_name: &str) -> Tool
     };
 
     let replacements = if !parsed.replacement_chunks.is_empty() {
-        parsed
+        let Some(chunks) = parsed
             .replacement_chunks
             .into_iter()
-            .map(|chunk| TextReplacement {
-                target: chunk.target_content,
-                replacement: chunk.replacement_content,
-                line_range: optional_line_range(chunk.start_line, chunk.end_line),
-                allow_multiple: chunk.allow_multiple,
+            .map(|chunk| {
+                into_text_replacement(
+                    chunk.target_content,
+                    chunk.replacement_content,
+                    chunk.start_line,
+                    chunk.end_line,
+                    chunk.allow_multiple,
+                    tool_name,
+                )
             })
-            .collect()
+            .collect::<Option<Vec<_>>>()
+        else {
+            return ToolCallPayload::Other;
+        };
+        chunks
     } else if !parsed.target_content.is_empty() || !parsed.replacement_content.is_empty() {
-        vec![TextReplacement {
-            target: parsed.target_content,
-            replacement: parsed.replacement_content,
-            line_range: optional_line_range(parsed.start_line, parsed.end_line),
-            allow_multiple: parsed.allow_multiple,
-        }]
+        let Some(single) = into_text_replacement(
+            parsed.target_content,
+            parsed.replacement_content,
+            parsed.start_line,
+            parsed.end_line,
+            parsed.allow_multiple,
+            tool_name,
+        ) else {
+            return ToolCallPayload::Other;
+        };
+        vec![single]
     } else {
         eprintln!(
             "[omnicoach hook] ignoring malformed {tool_name} args: missing target_content/replacement_content"
@@ -293,6 +305,31 @@ fn parse_replace_content_args(args: &serde_json::Value, tool_name: &str) -> Tool
     }
 }
 
+fn into_text_replacement(
+    target: String,
+    replacement: String,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+    allow_multiple: bool,
+    tool_name: &str,
+) -> Option<TextReplacement> {
+    let line_range = match (start_line, end_line) {
+        (None, None) => None,
+        (Some(start), Some(end)) if start > 0 && end >= start => Some(start..=end),
+        (Some(line), None) | (None, Some(line)) if line > 0 => Some(line..=line),
+        _ => {
+            eprintln!("[omnicoach hook] ignoring malformed {tool_name} args: invalid line range");
+            return None;
+        }
+    };
+    Some(TextReplacement {
+        target,
+        replacement,
+        line_range,
+        allow_multiple,
+    })
+}
+
 fn deserialize_tool_args<T: serde::de::DeserializeOwned>(
     args: &serde_json::Value,
     tool_name: &str,
@@ -303,17 +340,6 @@ fn deserialize_tool_args<T: serde::de::DeserializeOwned>(
             eprintln!("[omnicoach hook] ignoring malformed {tool_name} args: {error}");
             None
         }
-    }
-}
-
-const fn optional_line_range(
-    start_line: Option<usize>,
-    end_line: Option<usize>,
-) -> Option<RangeInclusive<usize>> {
-    match (start_line, end_line) {
-        (Some(start), Some(end)) if start > 0 && end >= start => Some(start..=end),
-        (Some(line), None) | (None, Some(line)) if line > 0 => Some(line..=line),
-        _ => None,
     }
 }
 
@@ -537,7 +563,7 @@ mod tests {
                     agent_owned_dir: None,
                     payload: ToolCallPayload::FileEdit {
                         path: PathBuf::from("src/main.rs"),
-                        edit: FileEdit::Replace(vec![TextReplacement {
+                        edit: FileEdit::ReplaceSequential(vec![TextReplacement {
                             target: "old".to_owned(),
                             replacement: "new".to_owned(),
                             line_range: None,
@@ -574,7 +600,7 @@ mod tests {
                     agent_owned_dir: None,
                     payload: ToolCallPayload::FileEdit {
                         path: PathBuf::from("src/main.rs"),
-                        edit: FileEdit::Replace(vec![
+                        edit: FileEdit::ReplaceSequential(vec![
                             TextReplacement {
                                 target: "old1".to_owned(),
                                 replacement: "new1".to_owned(),
@@ -671,6 +697,29 @@ mod tests {
                 },
                 warning_queue: None,
             }
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::zero_start_line(
+        r#"{"toolCall":{"name":"replace_file_content","args":{"TargetFile":"src/main.rs","TargetContent":"old","ReplacementContent":"new","StartLine":0,"EndLine":3}}}"#
+    )]
+    #[case::single_zero_start_line(
+        r#"{"toolCall":{"name":"replace_file_content","args":{"TargetFile":"src/main.rs","TargetContent":"old","ReplacementContent":"new","StartLine":0}}}"#
+    )]
+    #[case::end_before_start(
+        r#"{"toolCall":{"name":"replace_file_content","args":{"TargetFile":"src/main.rs","TargetContent":"old","ReplacementContent":"new","StartLine":8,"EndLine":4}}}"#
+    )]
+    #[case::chunk_end_before_start(
+        r#"{"toolCall":{"name":"multi_replace_file_content","args":{"TargetFile":"src/main.rs","ReplacementChunks":[{"TargetContent":"a","ReplacementContent":"b","StartLine":1,"EndLine":2},{"TargetContent":"c","ReplacementContent":"d","StartLine":9,"EndLine":5}]}}}"#
+    )]
+    fn parse_pre_tool_use_rejects_malformed_line_ranges_as_other(#[case] json_text: &str) {
+        assert_eq!(
+            parse_pre_tool_use(json_text)
+                .expect("parse succeeds")
+                .tool_call
+                .payload,
+            ToolCallPayload::Other
         );
     }
 

@@ -64,10 +64,11 @@ impl WarningQueue {
             return;
         }
 
-        let mut content = String::new();
-        if file.read_to_string(&mut content).is_err() {
+        let mut raw_bytes = Vec::new();
+        if file.read_to_end(&mut raw_bytes).is_err() {
             return;
         }
+        let content = String::from_utf8_lossy(&raw_bytes);
         let queued = collect_unique_warnings(&content, warnings);
 
         if file.set_len(0).is_err() || file.seek(SeekFrom::Start(0)).is_err() {
@@ -90,11 +91,12 @@ impl WarningQueue {
             return Vec::new();
         }
 
-        let mut content = String::new();
-        if file.read_to_string(&mut content).is_err() {
+        let mut raw_bytes = Vec::new();
+        if file.read_to_end(&mut raw_bytes).is_err() {
             return Vec::new();
         }
         let _ = file.set_len(0);
+        let content = String::from_utf8_lossy(&raw_bytes);
 
         collect_unique_warnings(&content, &[])
     }
@@ -199,5 +201,29 @@ mod tests {
             .map(|index| warning("rule-a", &format!("warning number {index}")))
             .collect();
         assert_eq!(drained, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::drain_directly(vec![], vec![warning("rule-a", "kept warning")])]
+    #[case::push_then_drain(
+        vec![warning("rule-c", "healed warning")],
+        vec![warning("rule-a", "kept warning"), warning("rule-c", "healed warning")]
+    )]
+    fn self_heals_invalid_utf8_bytes_from_partial_write(
+        #[case] pushed: Vec<QueuedWarning>,
+        #[case] expected: Vec<QueuedWarning>,
+    ) {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut raw = br#"{"rule_name":"rule-a","message":"kept warning"}"#.to_vec();
+        raw.extend_from_slice(b"\n{\"rule_name\":\"rule-b\",\"message\":\"\xff\xfe");
+        std::fs::write(temp_dir.path().join(QUEUE_FILENAME), raw).expect("write corrupted queue");
+
+        let queue = WarningQueue::in_dir(temp_dir.path());
+        queue.push(&pushed);
+        let first_drain = queue.drain();
+        let second_drain = queue.drain();
+
+        assert_eq!(first_drain, expected);
+        assert_eq!(second_drain, Vec::<QueuedWarning>::new());
     }
 }
