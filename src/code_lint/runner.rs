@@ -9,9 +9,8 @@ use crate::code_lint::project::{
     ProjectLayout, is_rooted_path, lexical_normalize,
 };
 use crate::code_lint::rules::CODE_RULES;
-use crate::code_lint::suppression::{
-    SUPPRESSION_AUDITS, SuppressionTracker, contains_directive_prefix,
-};
+use crate::code_lint::semantic::comments::may_contain_suppression_directive;
+use crate::code_lint::suppression::{SUPPRESSION_AUDITS, SuppressionTracker};
 use crate::config::Config;
 use crate::diagnostic::{Diagnostic, Language, RuleName};
 use rayon::prelude::*;
@@ -521,7 +520,8 @@ fn is_rule_applicable(
 }
 
 /// Returns true if any active suppression hygiene rule is enabled and applicable to `path`,
-/// and the file content may contain a suppression directive (see [`contains_directive_prefix`]).
+/// and the file content may contain a suppression directive
+/// (see [`may_contain_suppression_directive`]).
 #[must_use]
 fn has_active_suppression_audit(
     path: &Path,
@@ -529,7 +529,7 @@ fn has_active_suppression_audit(
     content: &str,
     config: &Config,
 ) -> bool {
-    if !contains_directive_prefix(content, lang) {
+    if !may_contain_suppression_directive(content, lang) {
         return false;
     }
     SUPPRESSION_AUDITS.iter().any(|audit| {

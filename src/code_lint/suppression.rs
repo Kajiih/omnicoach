@@ -4,7 +4,9 @@ architecture_component!(CodeLintSuppression);
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::semantic::comments::{
-    CommentIndex, NOQA, starts_with_tool_directive, strip_comment_delimiters,
+    CommentIndex, OmniDirectivePrefix, is_line_prefix_whitespace, is_line_suffix_whitespace,
+    is_standalone_comment_span, may_contain_suppression_directive, parse_omni_directive_prefix,
+    split_python_directive_segments, starts_with_tool_directive, strip_comment_delimiters,
 };
 use crate::config::Config;
 use crate::diagnostic::{
@@ -212,33 +214,10 @@ pub const SUPPRESSION_AUDITS: &[Declaration] = &[
 /// Tracker responsible for collecting directives, filtering diagnostics, and auditing hygiene.
 #[derive(Debug, Default)]
 pub struct SuppressionTracker {
-    /// Collected suppression directives in the file.
+    /// Collected `omni:` / `omnicoach:` suppression directives in the file.
     directives: Vec<ParsedDirective>,
-    /// Third-party Python suppression directives (`# noqa`, `# type: ignore`, ...) giving no reason.
-    unexplained_tool_directives: Vec<DirectiveSite>,
-}
-
-const DIRECTIVE_NAMESPACES: &[&str] = &["omnicoach:", "omni:"];
-
-/// Substrings, besides `noqa` in any case, of which every other third-party Python suppression
-/// directive contains at least one.
-const TOOL_DIRECTIVE_MARKERS: &[&str] = &["ignore", "disable", "skip-file"];
-
-/// Returns `true` if `content` may contain a suppression directive: an `omni:` or `omnicoach:`
-/// one in any language, or a third-party one in Python.
-#[must_use]
-pub(super) fn contains_directive_prefix(content: &str, lang: Language) -> bool {
-    DIRECTIVE_NAMESPACES
-        .iter()
-        .any(|namespace| content.contains(namespace))
-        || (lang == Language::Python
-            && (TOOL_DIRECTIVE_MARKERS
-                .iter()
-                .any(|marker| content.contains(marker))
-                || content
-                    .as_bytes()
-                    .windows(NOQA.len())
-                    .any(|window| window.eq_ignore_ascii_case(NOQA.as_bytes()))))
+    /// Comment sites holding at least one unexplained omni or Python tool suppression directive.
+    unexplained_directives: Vec<DirectiveSite>,
 }
 
 impl SuppressionTracker {
@@ -246,7 +225,7 @@ impl SuppressionTracker {
     #[must_use]
     pub fn from_file(file: &ParsedFile, content: &str) -> Self {
         // Skip the comment-node traversal when no suppression directive can exist.
-        if !contains_directive_prefix(content, file.lang()) {
+        if !may_contain_suppression_directive(content, file.lang()) {
             return Self::default();
         }
 
@@ -255,7 +234,7 @@ impl SuppressionTracker {
         let mut skippable_end_lines = ast::decorator_and_attribute_end_lines(file);
         for comment_node in &comment_nodes {
             let span = comment_node.span();
-            if is_standalone_span_on_lines(content, span) {
+            if is_standalone_comment_span(content, span) {
                 let start_line = comment_node.start_line();
                 let end_line = comment_node.end_line();
                 skippable_end_lines
@@ -269,23 +248,17 @@ impl SuppressionTracker {
             let text = comment_node.text();
             let site = DirectiveSite {
                 span: comment_node.span(),
+                end_line: comment_node.end_line(),
                 coord: comment_node.start_coordinate(),
             };
-            let is_explained_above = || comment_index.has_explanation_above(site.coord.line);
-            if let Some(directive) = Self::parse_comment_text(
+            tracker.collect_comment(
+                file.lang(),
                 &text,
                 site,
                 content,
                 &skippable_end_lines,
-                is_explained_above,
-            ) {
-                tracker.directives.push(directive);
-            } else if file.lang() == Language::Python
-                && is_unexplained_tool_directive(&text)
-                && !is_explained_above()
-            {
-                tracker.unexplained_tool_directives.push(site);
-            }
+                &comment_index,
+            );
         }
         tracker
     }
@@ -349,7 +322,7 @@ impl SuppressionTracker {
             );
         }
         if config.is_rule_enabled_for_path(MISSING_SUPPRESSION_REASON.name, path) {
-            diagnostics.extend(self.unexplained_tool_directives.iter().map(|site| {
+            diagnostics.extend(self.unexplained_directives.iter().map(|site| {
                 MISSING_SUPPRESSION_REASON
                     .render_diagnostic(&[], SourceLocation::file_span(path, site.span, site.coord))
             }));
@@ -357,47 +330,62 @@ impl SuppressionTracker {
         diagnostics
     }
 
-    /// Helper to parse a single comment's text into a `ParsedDirective` if it is an omni directive.
-    ///
-    /// `is_explained_above` reports whether the comment block above the directive gives a reason.
-    fn parse_comment_text(
+    /// Collects all omni and third-party suppression directives from a single comment node.
+    fn collect_comment(
+        &mut self,
+        language: Language,
         text: &str,
         site: DirectiveSite,
         content: &str,
-        decorator_end_lines: &HashMap<usize, usize>,
-        is_explained_above: impl FnOnce() -> bool,
-    ) -> Option<ParsedDirective> {
-        let stripped = strip_comment_delimiters(text)?;
-        let DirectivePrefix { is_file, remainder } = parse_directive_prefix(stripped)?;
-        let BracketedRules {
-            rules: target_rules,
-            rest: after_rules,
-        } = parse_bracketed_rules(remainder.trim_start());
-        let is_blanket = target_rules.is_empty();
+        skippable_end_lines: &HashMap<usize, usize>,
+        comment_index: &CommentIndex<'_>,
+    ) {
+        let Some(stripped) = strip_comment_delimiters(text) else {
+            return;
+        };
+        let segments = if language == Language::Python {
+            split_python_directive_segments(stripped)
+        } else {
+            vec![stripped]
+        };
+        let tail_has_reason = segments
+            .last()
+            .is_some_and(|last| segment_has_reason(last, language));
+        let mut has_unexplained_segment = false;
 
-        let has_inline_reason = after_rules
-            .trim_start()
-            .strip_prefix("--")
-            .is_some_and(|reason| !reason.trim().is_empty());
+        for segment in &segments {
+            let trimmed = segment.trim_start();
+            if let Some(OmniDirectivePrefix { is_file, remainder }) =
+                parse_omni_directive_prefix(trimmed)
+            {
+                let BracketedRules {
+                    rules: target_rules,
+                    rest: after_rules,
+                } = parse_bracketed_rules(remainder.trim_start());
+                let is_blanket = target_rules.is_empty();
+                has_unexplained_segment |= !(has_dash_reason(after_rules) || tail_has_reason);
+                let placement =
+                    resolve_directive_placement(is_file, content, skippable_end_lines, site);
+                let matched_count = target_rules.iter().map(|rule| (rule.clone(), 0)).collect();
+                self.directives.push(ParsedDirective {
+                    placement,
+                    span: site.span,
+                    coord: site.coord,
+                    target_rules,
+                    is_blanket,
+                    matched_count,
+                });
+            } else if language == Language::Python
+                && starts_with_tool_directive(trimmed)
+                && !(has_dash_reason_anywhere(trimmed) || tail_has_reason)
+            {
+                has_unexplained_segment = true;
+            }
+        }
 
-        let placement = resolve_directive_placement(
-            is_file,
-            content,
-            decorator_end_lines,
-            site.span,
-            site.coord.line,
-        );
-        let matched_count = target_rules.iter().map(|rule| (rule.clone(), 0)).collect();
-
-        Some(ParsedDirective {
-            placement,
-            span: site.span,
-            coord: site.coord,
-            target_rules,
-            is_explained: has_inline_reason || is_explained_above(),
-            is_blanket,
-            matched_count,
-        })
+        if has_unexplained_segment && !comment_index.has_prose_explanation_above(site.coord.line) {
+            self.unexplained_directives.push(site);
+        }
     }
 }
 
@@ -406,55 +394,34 @@ impl SuppressionTracker {
 struct DirectiveSite {
     /// The byte span of the comment.
     span: SourceSpan,
+    /// The 1-indexed line where the comment ends.
+    end_line: usize,
     /// The 1-indexed line and column where the comment starts.
     coord: LineColumn,
 }
 
-/// Returns true if a Python comment holds a third-party suppression directive and has no
-/// non-empty `-- <reason>`.
-///
-/// A directive may start the comment or follow a later `#` in it, as in
-/// `# see below  # noqa: E501`, and the reason may follow any directive chained in the same
-/// comment, as in `# noqa: F401  # type: ignore[attr-defined] -- <reason>`.
-fn is_unexplained_tool_directive(text: &str) -> bool {
-    let Some(body) = strip_comment_delimiters(text) else {
-        return false;
-    };
-    body.split('#')
-        .any(|segment| starts_with_tool_directive(segment.trim_start()))
-        && body
-            .split_once("--")
-            .is_none_or(|(_, reason)| reason.trim().is_empty())
-}
-
-/// The `omni:` or `omnicoach:` prefix of a suppression directive.
-struct DirectivePrefix<'a> {
-    /// True for `disable-file`, false for `ignore`.
-    is_file: bool,
-    /// The directive text after the prefix.
-    remainder: &'a str,
-}
-
-/// Parses the `omni:` or `omnicoach:` (`disable-file` / `ignore`) prefix and validates boundary delimiters.
-fn parse_directive_prefix(stripped: &str) -> Option<DirectivePrefix<'_>> {
-    let body = DIRECTIVE_NAMESPACES
-        .iter()
-        .find_map(|namespace| stripped.strip_prefix(namespace))?;
-    let (is_file, remainder) = if let Some(rest) = body.strip_prefix("disable-file") {
-        (true, rest)
-    } else {
-        (false, body.strip_prefix("ignore")?)
-    };
-
-    // Require boundary delimiter (whitespace, '[', or '-') after directive prefix
-    // so ordinary comments like `# omni:ignored by compiler` are not treated as directives.
-    if !remainder.is_empty()
-        && !remainder.starts_with(|c: char| c.is_whitespace() || c == '[' || c == '-')
-    {
-        return None;
+fn segment_has_reason(segment: &str, language: Language) -> bool {
+    let trimmed = segment.trim_start();
+    if let Some(OmniDirectivePrefix { remainder, .. }) = parse_omni_directive_prefix(trimmed) {
+        let BracketedRules { rest, .. } = parse_bracketed_rules(remainder.trim_start());
+        return has_dash_reason(rest);
     }
+    language == Language::Python
+        && starts_with_tool_directive(trimmed)
+        && has_dash_reason_anywhere(trimmed)
+}
 
-    Some(DirectivePrefix { is_file, remainder })
+fn has_dash_reason(after_rules: &str) -> bool {
+    after_rules
+        .trim_start()
+        .strip_prefix("--")
+        .is_some_and(|reason| !reason.trim().is_empty())
+}
+
+fn has_dash_reason_anywhere(segment: &str) -> bool {
+    segment
+        .split_once("--")
+        .is_some_and(|(_, reason)| !reason.trim().is_empty())
 }
 
 /// The bracketed rule names `[rule-a, rule-b]` of a directive body.
@@ -504,8 +471,6 @@ struct ParsedDirective {
     coord: LineColumn,
     /// Rule names targeted by the directive (e.g. `["single-letter-name"]`).
     target_rules: Vec<String>,
-    /// Whether a reason is given after `--` or in the comment block directly above.
-    is_explained: bool,
     /// Whether the directive omitted bracketed rule names (`[...]`).
     is_blanket: bool,
     /// Counter of violations matched and suppressed for each target rule.
@@ -536,36 +501,25 @@ fn resolve_directive_placement(
     is_file: bool,
     content: &str,
     skippable_end_lines: &HashMap<usize, usize>,
-    span: SourceSpan,
-    raw_line: usize,
+    site: DirectiveSite,
 ) -> DirectivePlacement {
     if is_file {
         return DirectivePlacement::File;
     }
-    if is_line_prefix_whitespace(content, span.start) {
-        DirectivePlacement::PrecedingLine {
-            target_line: raw_line + 1,
-            end_target_line: compute_effective_target_line(skippable_end_lines, raw_line),
-        }
-    } else {
-        DirectivePlacement::SameLine { line: raw_line }
+    if !is_line_prefix_whitespace(content, site.span.start) {
+        return DirectivePlacement::SameLine {
+            line: site.coord.line,
+        };
     }
-}
-
-/// Returns true if `span` is surrounded only by whitespace on its start and end lines.
-fn is_standalone_span_on_lines(content: &str, span: SourceSpan) -> bool {
-    let suffix_on_line = content[span.end..]
-        .split_once('\n')
-        .map_or(&content[span.end..], |(suffix, _)| suffix);
-    is_line_prefix_whitespace(content, span.start) && suffix_on_line.trim().is_empty()
-}
-
-/// Returns true if the text on the line before byte `offset` consists only of whitespace.
-fn is_line_prefix_whitespace(content: &str, offset: usize) -> bool {
-    let prefix_on_line = content[..offset]
-        .rsplit_once('\n')
-        .map_or(&content[..offset], |(_, prefix)| prefix);
-    prefix_on_line.trim().is_empty()
+    if !is_line_suffix_whitespace(content, site.span.end) {
+        return DirectivePlacement::SameLine {
+            line: site.end_line,
+        };
+    }
+    DirectivePlacement::PrecedingLine {
+        target_line: site.end_line + 1,
+        end_target_line: compute_effective_target_line(skippable_end_lines, site.end_line),
+    }
 }
 
 /// Computes the declaration line after skipping contiguous attributes, decorators, or standalone
@@ -612,12 +566,6 @@ fn audit_single_directive(
 
     if directive.is_blanket && config.is_rule_enabled_for_path(BLANKET_SUPPRESSION.name, path) {
         diagnostics.push(BLANKET_SUPPRESSION.render_diagnostic(&[], location.clone()));
-    }
-
-    if !directive.is_explained
-        && config.is_rule_enabled_for_path(MISSING_SUPPRESSION_REASON.name, path)
-    {
-        diagnostics.push(MISSING_SUPPRESSION_REASON.render_diagnostic(&[], location.clone()));
     }
 
     if config.is_rule_enabled_for_path(UNKNOWN_SUPPRESSION_RULE.name, path) {
@@ -668,6 +616,14 @@ mod tests {
         "let x = 1;\nlet a = 1; // omni:ignore [single-letter-name] -- math variable",
         2
     )]
+    #[case::leading_block_comment_before_code(
+        "/* omni:ignore [single-letter-name] -- math variable */ let a = 1;",
+        1
+    )]
+    #[case::multiline_leading_block_comment_before_code(
+        "/* omni:ignore [single-letter-name]\n   -- math variable */ let a = 1;",
+        2
+    )]
     fn test_parse_valid_inline_directive_same_line(
         #[case] content: &str,
         #[case] expected_line: usize,
@@ -678,7 +634,7 @@ mod tests {
 
         assert_eq!(tracker.directives.len(), 1);
         assert_eq!(directive.target_rules, vec!["single-letter-name"]);
-        assert!(directive.is_explained);
+        assert!(tracker.unexplained_directives.is_empty());
         assert_eq!(
             directive.placement,
             DirectivePlacement::SameLine {
@@ -766,6 +722,16 @@ mod tests {
         2,
         5
     )]
+    #[case::standalone_multiline_block_directive_targets_line_after_comment_end(
+        indoc::indoc! {r"
+            /* omni:ignore [single-letter-name]
+               -- math */
+            #[allow(dead_code)]
+            fn f(a: i32) {}"},
+        Language::Rust,
+        3,
+        4
+    )]
     fn test_parse_valid_inline_directive_preceding_line(
         #[case] content: &str,
         #[case] lang: Language,
@@ -804,7 +770,7 @@ mod tests {
             directive.target_rules,
             vec!["nested-function", "single-letter-name"]
         );
-        assert!(directive.is_explained);
+        assert!(tracker.unexplained_directives.is_empty());
         assert_eq!(directive.placement, DirectivePlacement::File);
     }
 
@@ -868,6 +834,13 @@ mod tests {
         );
     }
 
+    fn has_unexplained_python_directive(comment: &str) -> bool {
+        let file = ParsedFile::new(comment, Language::Python);
+        !SuppressionTracker::from_file(&file, comment)
+            .unexplained_directives
+            .is_empty()
+    }
+
     #[rstest]
     #[case::noqa("# noqa: F401")]
     #[case::bare_noqa("# noqa")]
@@ -890,13 +863,14 @@ mod tests {
     #[case::type_ignore_mid_comment("# see below  # type: ignore[attr-defined]")]
     #[case::pylint_mid_comment("# see below  # pylint: disable=unused-import")]
     fn test_unexplained_tool_directive_detected(#[case] comment: &str) {
-        assert!(is_unexplained_tool_directive(comment));
+        assert!(has_unexplained_python_directive(comment));
     }
 
     #[rstest]
     #[case::inline_reason("# type: ignore[attr-defined] -- set by the plugin loader")]
     #[case::chained_shared_reason("# noqa: F401  # type: ignore[attr-defined] -- re-exported")]
     #[case::mid_comment_reason("# see below  # noqa: E501 -- the URL cannot be wrapped")]
+    #[case::url_anchor_fragment("# See https://docs.astral.sh/ruff/linter/#noqa for details")]
     #[case::reenable("# pylint: enable=protected-access")]
     #[case::type_comment("# type: int")]
     #[case::keyword_prefix("# noquality checks below")]
@@ -905,9 +879,8 @@ mod tests {
     #[case::ruff_noqa_uppercase("# RUFF: NOQA")]
     #[case::pylint_uppercase("# PYLINT: DISABLE=unused-import")]
     #[case::keyword_in_prose("# we disable caching here")]
-    #[case::omni_directive("# omni:ignore [nested-function]")]
     fn test_explained_or_non_tool_directive_not_detected(#[case] comment: &str) {
-        assert!(!is_unexplained_tool_directive(comment));
+        assert!(!has_unexplained_python_directive(comment));
     }
 
     #[rstest]
@@ -933,12 +906,22 @@ mod tests {
         "b = 2  # The fixture needs a closure here.\na = 1  # omni:ignore [single-letter-name]",
         false
     )]
+    #[case::stacked_directive_reason_does_not_excuse_next_directive(
+        indoc::indoc! {r"
+            # omni:ignore [nested-function] -- closure required for fixture
+            # omni:ignore [single-letter-name]
+            def inner(): pass"},
+        false
+    )]
     fn test_omni_directive_explained_above(#[case] content: &str, #[case] expected: bool) {
         let file = ParsedFile::new(content, Language::Python);
         let tracker = SuppressionTracker::from_file(&file, content);
 
-        assert_eq!(tracker.directives.len(), 1);
-        assert_eq!(tracker.directives[0].is_explained, expected);
+        assert!(
+            !tracker.directives.is_empty(),
+            "expected at least one omni directive"
+        );
+        assert_eq!(tracker.unexplained_directives.is_empty(), expected);
     }
 
     #[rstest]
@@ -951,7 +934,32 @@ mod tests {
     )]
     #[case::string_ignored("TEXT = \"# noqa: F401\"", Language::Python, 0)]
     #[case::rust_ignored("let a = 1; // noqa: F401", Language::Rust, 0)]
-    fn test_unexplained_tool_directives_collected(
+    #[case::chained_tool_and_omni_shared_reason(
+        "value = cast(int, raw)  # type: ignore[arg-type]  # omni:ignore [type-cast] -- validated upstream",
+        Language::Python,
+        0
+    )]
+    #[case::chained_omni_and_tool_shared_reason(
+        "value = cast(int, raw)  # omni:ignore [type-cast]  # type: ignore[arg-type] -- validated upstream",
+        Language::Python,
+        0
+    )]
+    #[case::chained_omni_with_reason_then_unexplained_tool(
+        "value = cast(int, raw)  # omni:ignore [type-cast] -- validated upstream  # type: ignore[arg-type]",
+        Language::Python,
+        1
+    )]
+    #[case::chained_two_unexplained_omni_emits_single_site(
+        "value = cast(int, raw)  # omni:ignore [type-cast]  # omni:ignore [single-letter-name]",
+        Language::Python,
+        1
+    )]
+    #[case::reason_with_hash_issue_number(
+        "value = cast(int, raw)  # type: ignore[arg-type]  # omni:ignore [type-cast] -- tracks #42",
+        Language::Python,
+        0
+    )]
+    fn test_unexplained_directives_collected(
         #[case] content: &str,
         #[case] lang: Language,
         #[case] expected_count: usize,
@@ -959,6 +967,6 @@ mod tests {
         let file = ParsedFile::new(content, lang);
         let tracker = SuppressionTracker::from_file(&file, content);
 
-        assert_eq!(tracker.unexplained_tool_directives.len(), expected_count);
+        assert_eq!(tracker.unexplained_directives.len(), expected_count);
     }
 }

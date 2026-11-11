@@ -5,12 +5,12 @@
 //! operations (such as exception suppression) are accompanied by substantive explanation comments.
 
 use crate::code_lint::ast::{self, AstNode, ParsedFile};
-use crate::diagnostic::Language;
+use crate::diagnostic::{Language, SourceSpan};
 use std::collections::HashMap;
 
 /// Index of non-doc source comments, mapping 1-indexed lines to comment AST nodes.
-#[derive(Default)]
 pub struct CommentIndex<'a> {
+    lang: Language,
     comments_by_line: HashMap<usize, IndexedComment<'a>>,
 }
 
@@ -28,9 +28,7 @@ impl<'a> CommentIndex<'a> {
             }
             let start_line = node.start_line();
             let end_line = node.end_line();
-            let node_offset = node.span().start;
-            let line_start_offset = source[..node_offset].rfind('\n').map_or(0, |idx| idx + 1);
-            let is_standalone = source[line_start_offset..node_offset].trim().is_empty();
+            let is_standalone = is_standalone_comment_span(source, node.span());
             for line in start_line..=end_line {
                 comments_by_line.insert(
                     line,
@@ -42,7 +40,10 @@ impl<'a> CommentIndex<'a> {
             }
         }
 
-        Self { comments_by_line }
+        Self {
+            lang: file.lang(),
+            comments_by_line,
+        }
     }
 
     /// Verifies if a diagnostic at `span` (starting at 1-indexed `line`) has a substantive
@@ -55,7 +56,7 @@ impl<'a> CommentIndex<'a> {
     pub fn has_explanation_for_span(
         &self,
         file: &ParsedFile,
-        span: crate::diagnostic::SourceSpan,
+        span: SourceSpan,
         line: usize,
     ) -> bool {
         if self.has_adjacent_explanation(line) {
@@ -86,7 +87,7 @@ impl<'a> CommentIndex<'a> {
     #[must_use]
     fn has_inline_explanation(&self, line: usize) -> bool {
         self.comment_on_line(line).is_some_and(|text| {
-            let cleaned = clean_explanation(text.as_ref());
+            let cleaned = clean_explanation_for_lang(text.as_ref(), self.lang);
             is_substantive_explanation(cleaned)
         })
     }
@@ -100,34 +101,47 @@ impl<'a> CommentIndex<'a> {
     }
 
     /// Verifies if the contiguous standalone comment block directly above 1-indexed `line`
-    /// holds a substantive explanation.
+    /// holds a substantive explanation (including reasons attached to directive comments).
     #[must_use]
     pub fn has_explanation_above(&self, line: usize) -> bool {
+        self.collect_explanation_above(line, true)
+    }
+
+    /// Verifies if the contiguous standalone comment block directly above 1-indexed `line`
+    /// holds a substantive prose explanation, ignoring standalone suppression directives so a
+    /// directive's own `-- <reason>` never excuses a stacked reasonless directive below it.
+    #[must_use]
+    pub(in crate::code_lint) fn has_prose_explanation_above(&self, line: usize) -> bool {
+        self.collect_explanation_above(line, false)
+    }
+
+    fn collect_explanation_above(&self, line: usize, allow_directive_reasons: bool) -> bool {
         let mut curr_line = line.saturating_sub(1);
-        let mut prev_range: Option<crate::diagnostic::SourceSpan> = None;
+        let mut prev_range: Option<SourceSpan> = None;
         let mut parts = Vec::new();
 
         while curr_line > 0 {
-            if let Some(entry) = self.comments_by_line.get(&curr_line) {
-                // Preceding comment blocks must consist exclusively of standalone comment lines.
-                // An inline comment on a preceding code line belongs to that line, not this block.
-                if !entry.is_standalone {
-                    break;
-                }
+            let Some(entry) = self.comments_by_line.get(&curr_line) else {
+                break;
+            };
+            // Preceding comment blocks must consist exclusively of standalone comment lines.
+            // An inline comment on a preceding code line belongs to that line, not this block.
+            if !entry.is_standalone {
+                break;
+            }
 
-                let range = entry.node.span();
-                if prev_range != Some(range) {
-                    prev_range = Some(range);
-                    let comment_text = entry.node.text();
-                    let cleaned = clean_explanation(comment_text.as_ref());
+            let range = entry.node.span();
+            if prev_range != Some(range) {
+                prev_range = Some(range);
+                let comment_text = entry.node.text();
+                if allow_directive_reasons || !contains_any_directive(&comment_text, self.lang) {
+                    let cleaned = clean_explanation_for_lang(&comment_text, self.lang);
                     if !cleaned.is_empty() {
                         parts.push(cleaned.to_string());
                     }
                 }
-                curr_line = curr_line.saturating_sub(1);
-            } else {
-                break;
             }
+            curr_line = curr_line.saturating_sub(1);
         }
 
         if parts.is_empty() {
@@ -138,15 +152,94 @@ impl<'a> CommentIndex<'a> {
     }
 }
 
-const OMNI_DIRECTIVE_PREFIXES: &[&str] = &[
-    "omnicoach:ignore",
-    "omnicoach:disable-file",
-    "omni:ignore",
-    "omni:disable-file",
-];
+/// Parsed `omni:` or `omnicoach:` suppression directive prefix.
+pub(in crate::code_lint) struct OmniDirectivePrefix<'a> {
+    /// True for `disable-file`, false for `ignore`.
+    pub(in crate::code_lint) is_file: bool,
+    /// Remainder of the comment segment after `ignore` or `disable-file`.
+    pub(in crate::code_lint) remainder: &'a str,
+}
+
+const DIRECTIVE_NAMESPACES: &[&str] = &["omnicoach:", "omni:"];
+
+/// Substrings, besides `noqa` in any case, of which every other third-party Python suppression
+/// directive contains at least one.
+const TOOL_DIRECTIVE_MARKERS: &[&str] = &["ignore", "disable", "skip-file"];
 
 /// The bare `# noqa` directive, honored by Ruff and flake8 in any case.
 pub(in crate::code_lint) const NOQA: &str = "noqa";
+
+/// Fast pre-filter returning `true` if `content` may contain an `omni:`/`omnicoach:` suppression
+/// directive in `lang`, or a third-party suppression directive in Python.
+#[must_use]
+pub(in crate::code_lint) fn may_contain_suppression_directive(
+    content: &str,
+    lang: Language,
+) -> bool {
+    DIRECTIVE_NAMESPACES
+        .iter()
+        .any(|namespace| content.contains(namespace))
+        || (lang == Language::Python
+            && (TOOL_DIRECTIVE_MARKERS
+                .iter()
+                .any(|marker| content.contains(marker))
+                || content
+                    .as_bytes()
+                    .windows(NOQA.len())
+                    .any(|window| window.eq_ignore_ascii_case(NOQA.as_bytes()))))
+}
+
+/// Parses an `omni:` or `omnicoach:` (`disable-file` / `ignore`) prefix at the start of `segment`
+/// and validates boundary delimiters so prose such as `omni:ignored` is not matched.
+#[must_use]
+pub(in crate::code_lint) fn parse_omni_directive_prefix(
+    segment: &str,
+) -> Option<OmniDirectivePrefix<'_>> {
+    let body = DIRECTIVE_NAMESPACES
+        .iter()
+        .find_map(|namespace| segment.strip_prefix(namespace))?;
+    let (is_file, remainder) = if let Some(rest) = body.strip_prefix("disable-file") {
+        (true, rest)
+    } else {
+        (false, body.strip_prefix("ignore")?)
+    };
+    if !remainder.is_empty()
+        && !remainder.starts_with(|character: char| {
+            character.is_whitespace() || matches!(character, '[' | '-' | ':' | '=')
+        })
+    {
+        return None;
+    }
+    Some(OmniDirectivePrefix { is_file, remainder })
+}
+
+/// Splits a delimiter-stripped Python comment body into `#`-delimited directive segments.
+///
+/// Only splits at a `#` at byte `0` or preceded by whitespace when the text after `#` begins with
+/// a recognized `omni:`/`omnicoach:` or third-party Python directive, so URL fragments such as
+/// `https://docs.astral.sh/ruff/#noqa` and issue references such as `-- tracks #42` stay intact.
+#[must_use]
+pub(in crate::code_lint) fn split_python_directive_segments(stripped: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut segment_start = 0;
+    for (byte_offset, character) in stripped.char_indices() {
+        if character == '#'
+            && (byte_offset == 0 || stripped[..byte_offset].ends_with(char::is_whitespace))
+        {
+            let after_hash = stripped[byte_offset + 1..].trim_start();
+            if parse_omni_directive_prefix(after_hash).is_some()
+                || starts_with_tool_directive(after_hash)
+            {
+                if byte_offset > segment_start {
+                    segments.push(stripped[segment_start..byte_offset].trim_end());
+                }
+                segment_start = byte_offset + 1;
+            }
+        }
+    }
+    segments.push(stripped[segment_start..].trim_end());
+    segments
+}
 
 /// Returns true if `segment` starts with a third-party directive as its tool accepts it: bare
 /// `noqa` in any case (Ruff and flake8 honor `# NOQA`), the others in lowercase only (mypy,
@@ -174,10 +267,53 @@ pub fn strip_comment_delimiters(text: &str) -> Option<&str> {
         })
 }
 
+/// Returns true if `span` has only whitespace before `span.start` on its start line and only
+/// whitespace after `span.end` on its end line.
+#[must_use]
+pub(in crate::code_lint) fn is_standalone_comment_span(source: &str, span: SourceSpan) -> bool {
+    is_line_prefix_whitespace(source, span.start) && is_line_suffix_whitespace(source, span.end)
+}
+
+/// Returns true if the text on the line before byte `offset` consists only of whitespace.
+#[must_use]
+pub(in crate::code_lint) fn is_line_prefix_whitespace(source: &str, offset: usize) -> bool {
+    let prefix_on_line = source[..offset]
+        .rsplit_once('\n')
+        .map_or(&source[..offset], |(_, prefix)| prefix);
+    prefix_on_line.trim().is_empty()
+}
+
+/// Returns true if the text on the line after byte `offset` consists only of whitespace.
+#[must_use]
+pub(in crate::code_lint) fn is_line_suffix_whitespace(source: &str, offset: usize) -> bool {
+    let suffix_on_line = source[offset..]
+        .split_once('\n')
+        .map_or(&source[offset..], |(suffix, _)| suffix);
+    suffix_on_line.trim().is_empty()
+}
+
 #[derive(Clone)]
 struct IndexedComment<'a> {
     node: AstNode<'a>,
     is_standalone: bool,
+}
+
+#[must_use]
+fn contains_any_directive(text: &str, lang: Language) -> bool {
+    let Some(stripped) = strip_comment_delimiters(text) else {
+        return false;
+    };
+    if lang == Language::Python {
+        split_python_directive_segments(stripped)
+            .into_iter()
+            .any(|segment| {
+                let trimmed = segment.trim_start();
+                parse_omni_directive_prefix(trimmed).is_some()
+                    || starts_with_tool_directive(trimmed)
+            })
+    } else {
+        parse_omni_directive_prefix(stripped).is_some()
+    }
 }
 
 /// Strips standard linter/tooling directives (`noqa`, `type: ignore`, `pyright`, `pylint`, `omni:ignore`).
@@ -185,14 +321,37 @@ struct IndexedComment<'a> {
 /// If the comment contains an explanatory reason after a separator (e.g. `-- reason`),
 /// the directive prefix is stripped and the remaining reason text is returned.
 /// If the comment consists solely of directives and rule codes, `""` is returned.
+#[cfg(test)]
 #[must_use]
 fn clean_explanation(text: &str) -> &str {
+    let lang = if text.trim_start().starts_with('#') {
+        Language::Python
+    } else {
+        Language::Rust
+    };
+    clean_explanation_for_lang(text, lang)
+}
+
+#[must_use]
+fn clean_explanation_for_lang(text: &str, lang: Language) -> &str {
     let stripped = strip_comment_delimiters(text).unwrap_or_else(|| text.trim());
     if stripped.is_empty() {
         return "";
     }
+    if lang == Language::Python {
+        return split_python_directive_segments(stripped)
+            .into_iter()
+            .rev()
+            .map(|segment| clean_single_segment(segment.trim(), Language::Python))
+            .find(|cleaned| !cleaned.is_empty())
+            .unwrap_or("");
+    }
+    clean_single_segment(stripped, lang)
+}
 
-    let Some(prefix_len) = find_directive_prefix(stripped) else {
+#[must_use]
+fn clean_single_segment(stripped: &str, lang: Language) -> &str {
+    let Some(prefix_len) = find_directive_prefix(stripped, lang) else {
         return stripped.trim();
     };
 
@@ -247,26 +406,13 @@ fn is_substantive_explanation(text: &str) -> bool {
     true
 }
 
-fn find_directive_prefix(text: &str) -> Option<usize> {
-    if let Some(len) = match_tool_directive_prefix_len(text) {
+fn find_directive_prefix(text: &str, lang: Language) -> Option<usize> {
+    if lang == Language::Python
+        && let Some(len) = match_tool_directive_prefix_len(text)
+    {
         return Some(len);
     }
-    for &prefix in OMNI_DIRECTIVE_PREFIXES {
-        if text
-            .get(..prefix.len())
-            .is_some_and(|sub| sub.eq_ignore_ascii_case(prefix))
-        {
-            let rest = &text[prefix.len()..];
-            if rest.is_empty()
-                || rest.starts_with(|c: char| {
-                    c.is_whitespace() || c == ':' || c == '=' || c == '[' || c == '-'
-                })
-            {
-                return Some(prefix.len());
-            }
-        }
-    }
-    None
+    parse_omni_directive_prefix(text).map(|prefix| text.len() - prefix.remainder.len())
 }
 
 fn strip_rule_codes(mut text: &str) -> &str {
@@ -461,6 +607,11 @@ mod tests {
         "# café au lait délicieux et nécessaire",
         "café au lait délicieux et nécessaire"
     )]
+    #[case::chained_bare_directives_stripped("# noqa: F401  # type: ignore[attr-defined]", "")]
+    #[case::chained_directives_with_trailing_reason(
+        "# noqa: F401  # type: ignore[attr-defined] -- re-exported for plugins",
+        "re-exported for plugins"
+    )]
     fn test_clean_explanation_directive_stripping(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(clean_explanation(input), expected);
     }
@@ -531,6 +682,51 @@ mod tests {
 
         // Line 2 has no standalone comment preceding it; line 1 is code with inline comment
         assert!(!index.has_adjacent_explanation(2));
+    }
+
+    #[rstest]
+    #[case::leading_block_comment_before_code_not_standalone(
+        "/* substantive note on first line */ let first = 1;\nlet second = 2;",
+        Language::Rust,
+        2,
+        false,
+        false
+    )]
+    #[case::directive_reason_counts_for_code_but_not_stacked_directive(
+        indoc! {r"
+            # omni:ignore [nested-function] -- closure required for test fixture
+            with suppress(FileNotFoundError):
+                pass"},
+        Language::Python,
+        2,
+        true,
+        false
+    )]
+    #[case::prose_above_stacked_directives_counts_for_both(
+        indoc! {r"
+            # Shared prose reason covering stacked directives.
+            # omni:ignore [nested-function]
+            # omni:ignore [single-letter-name]
+            a = 1"},
+        Language::Python,
+        3,
+        true,
+        true
+    )]
+    fn test_explanation_vs_prose_explanation_above(
+        #[case] source: &str,
+        #[case] language: Language,
+        #[case] target_line: usize,
+        #[case] expected_any: bool,
+        #[case] expected_prose: bool,
+    ) {
+        let file = ParsedFile::new(source, language);
+        let index = CommentIndex::from_file(&file);
+        assert_eq!(index.has_explanation_above(target_line), expected_any);
+        assert_eq!(
+            index.has_prose_explanation_above(target_line),
+            expected_prose
+        );
     }
 
     #[rstest]

@@ -129,7 +129,7 @@ mod tests {
         let rendered = generate_graph(&single_options, &ProjectConfig::default()).unwrap();
         let unsupported = generate_graph(&unsupported_options, &ProjectConfig::default());
 
-        assert!(rendered.contains("parse_directive_prefix"));
+        assert!(rendered.contains("parse_bracketed_rules"));
         assert!(unsupported.is_err());
     }
 
@@ -142,7 +142,7 @@ mod tests {
             "expected the suppression module in:\n{rendered}"
         );
         assert!(
-            !rendered.contains("parse_directive_prefix"),
+            !rendered.contains("parse_bracketed_rules"),
             "expected no declarations at module depth in:\n{rendered}"
         );
         assert!(
@@ -176,7 +176,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            rendered.contains("parse_directive_prefix"),
+            rendered.contains("parse_bracketed_rules"),
             "expected declarations at full depth in:\n{rendered}"
         );
     }
