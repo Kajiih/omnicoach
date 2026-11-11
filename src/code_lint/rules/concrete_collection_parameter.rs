@@ -1,4 +1,4 @@
-//! Flags Python function parameters annotated with concrete mutable collection types.
+//! Flags Python function parameters annotated with concrete collection types.
 //!
 //! Python-only because Rust's `clippy::ptr_arg` (`&Vec<T>`, `&String`, `&PathBuf`) and borrow
 //! checker already enforce the Rust equivalent with compiler type resolution. Note that
@@ -7,8 +7,8 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    AnnotationTraversalDepth, CollectionKind, PythonCollectionType, PythonParameterKind,
-    collect_collection_types, extract_function_signatures,
+    AnnotationTraversalDepth, PythonCollectionType, PythonParameterKind, collect_collection_types,
+    extract_function_signatures,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::{is_exempt_from_signature_rules, read_only_collection_replacements};
@@ -21,7 +21,7 @@ use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Parameter `{name}` of `{function}` has annotation `{expression}`, which contains concrete collection type `{token}`.",
-    rationale: "Concrete mutable collection types such as `list`, `dict`, and `set` are invariant in their type arguments and reject read-only inputs such as `tuple`, `frozenset`, or subtype sequences.",
+    rationale: "Concrete collection types such as `list`, `dict`, `set`, `tuple`, and `frozenset` require that exact container at call sites—and mutable containers are invariant in their type arguments—rejecting compatible `Sequence`, `Mapping`, or `Set` inputs.",
     suggestion: "Replace `{token}` in `{name}` with the most general `collections.abc` type that supports every operation `{function}` performs on `{name}`, such as `{replacement}` for read-only access or its `Mutable` counterpart for in-place mutation.",
 };
 
@@ -39,20 +39,24 @@ pub const RULE: CodeRule = CodeRule {
             impacted_quality: ImpactedQuality::Maintainability,
         },
         doc: RuleDoc {
-            summary: "Flags Python function parameters annotated with concrete mutable collection types such as `list`, `dict`, or `set`.",
+            summary: "Flags Python function parameters annotated with concrete collection types such as `list`, `dict`, `set`, `tuple`, or `frozenset`.",
             what_it_does: indoc::indoc! {r"
-                Flags function and method parameters whose annotation uses a concrete mutable
-                collection type, such as `items: list[str]`, including inside covariant wrappers
-                such as `Sequence[list[str]]` (but not `Callable` argument types or invariant outer
-                containers such as `MutableSequence[list[str]]`). Methods that cannot freely change
-                their signature, such as `@override` methods, `Protocol` and `ABC` members and most
-                dunder methods, are skipped."},
+                Flags function and method parameters whose annotation uses a concrete collection
+                type, such as `items: list[str]`, `items: tuple[str, ...]`, or
+                `tags: frozenset[str]`, including inside covariant wrappers such as
+                `Sequence[list[str]]` (but not `Callable` argument types or invariant outer
+                containers such as `MutableSequence[list[str]]`). Fixed-length tuple annotations
+                (`tuple[str, int]`, `tuple[int]`, `tuple[()]`) are not flagged here (see
+                `positional-tuple-parameter`). Methods that cannot freely change their signature,
+                such as `@override` methods, `Protocol` and `ABC` members and most dunder methods,
+                are skipped."},
             why_is_this_bad: indoc::indoc! {r"
-                In Python's type system, `list`, `dict`, and `set` are invariant in their type
-                parameters and require a mutable concrete container at call sites. A function
-                annotated with `items: list[str]` rejects callers holding a `tuple[str, ...]`, a
-                `Sequence[str]` parameter, or a `list[SubStr]`, forcing defensive `list(...)`
-                copies.
+                In Python's type system, concrete collection types require that exact container at
+                call sites, and `list`, `dict`, and `set` are also invariant in their type
+                parameters. Annotating a parameter with `items: list[str]` rejects callers holding a
+                `tuple[str, ...]`, a `Sequence[str]`, or a `list[SubStr]`, while
+                `items: tuple[str, ...]` rejects callers holding a `list[str]` or `Sequence[str]`,
+                forcing defensive `list(...)` or `tuple(...)` copies.
 
                 Choose the annotation from what the function does with the parameter: `Iterable` for
                 a single pass, `Collection` for `len()`, `in`, or several passes, `Sequence`,
@@ -106,9 +110,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             let matched: Vec<_> =
                 collect_collection_types(type_node, AnnotationTraversalDepth::CovariantPositions)
                     .into_iter()
-                    .filter(|collection_type| {
-                        collection_type.kind == CollectionKind::ConcreteMutable
-                    })
+                    .filter(|collection_type| collection_type.kind.is_concrete())
                     .collect();
             if matched.is_empty() {
                 continue;
@@ -154,11 +156,18 @@ crate::test_utils::rule_test!(
                     def process(tags: Set[str]) -> None:
                         pass
                 "#,
-                immutable_concrete_builtins => r#"
+                fixed_length_tuples_exempt => r#"
+                    from typing import Tuple
+
                     def process(
-                        coords: tuple[int, ...],
-                        flags: frozenset[str],
+                        pair: tuple[int, str],
+                        typing_pair: Tuple[int, str],
+                        single: tuple[int],
                     ) -> None:
+                        pass
+                "#,
+                empty_tuple_exempt => r#"
+                    def process(empty: tuple[()]) -> None:
                         pass
                 "#,
                 non_collection_builtin_types => r#"
@@ -385,6 +394,18 @@ crate::test_utils::rule_test!(
                     def process(tags: Set[str]) -> None:
                         pass
                 "# => "Set[str]",
+                variable_length_tuple_parameter => r#"
+                    def process(items: tuple[int, ...]) -> None:
+                        pass
+                "# => "tuple[int, ...]",
+                bare_tuple_parameter => r#"
+                    def process(items: tuple) -> None:
+                        pass
+                "# => "tuple",
+                frozenset_parameter => r#"
+                    def process(tags: frozenset[str]) -> None:
+                        pass
+                "# => "frozenset[str]",
             ],
         },
     }

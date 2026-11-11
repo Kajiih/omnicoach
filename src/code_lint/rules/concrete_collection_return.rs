@@ -1,8 +1,8 @@
-//! Flags Python function return annotations that use concrete mutable collection types.
+//! Flags Python function return annotations that use concrete collection types.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    AnnotationTraversalDepth, CollectionKind, PythonCollectionType, collect_collection_types,
+    AnnotationTraversalDepth, PythonCollectionType, collect_collection_types,
     extract_function_signatures,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
@@ -16,7 +16,7 @@ use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Return annotation `{expression}` of `{function}` contains concrete collection type `{token}`.",
-    rationale: "Returning an invariant concrete collection type such as `list`, `dict`, or `set` exposes mutability across the boundary and forces callers holding a `Sequence` or `Mapping` to copy before returning.",
+    rationale: "Returning a concrete collection type such as `list`, `dict`, `set`, `tuple`, or `frozenset` couples the signature to a specific container representation, exposes mutability for mutable containers, and forces a copy when the implementation holds another `Sequence`, `Mapping`, or `Set`.",
     suggestion: "Replace `{token}` in the return annotation of `{function}` with the `collections.abc` type that states what callers may do with the result, such as `{replacement}` for a read-only result or its `Mutable` counterpart for a result callers mutate.",
 };
 
@@ -34,24 +34,28 @@ pub const RULE: CodeRule = CodeRule {
             impacted_quality: ImpactedQuality::Maintainability,
         },
         doc: RuleDoc {
-            summary: "Flags Python function return annotations using concrete mutable collection types such as `list`, `dict`, or `set`.",
+            summary: "Flags Python function return annotations using concrete collection types such as `list`, `dict`, `set`, `tuple`, or `frozenset`.",
             what_it_does: indoc::indoc! {r"
-                Flags functions and methods whose return annotation uses a concrete mutable
-                collection type, such as `-> list[str]`, including inside covariant wrappers such
-                as `Sequence[list[str]]`. Methods that cannot freely change their signature, such
+                Flags functions and methods whose return annotation uses a concrete collection type,
+                such as `-> list[str]`, `-> tuple[str, ...]`, or `-> frozenset[str]`, including
+                inside covariant wrappers such as `Sequence[list[str]]`. Fixed-length tuple
+                annotations (`tuple[str, int]`, `tuple[int]`, `tuple[()]`) are not flagged here (see
+                `positional-tuple-return`). Methods that cannot freely change their signature, such
                 as `@override` methods, `Protocol` and `ABC` members and most dunder methods, are
                 skipped."},
             why_is_this_bad: indoc::indoc! {r"
-                Returning a concrete `list`, `dict`, or `set` exposes internal state to in-place
-                caller mutation and locks the implementation into returning an invariant mutable
-                container even when it could otherwise return a cached `tuple`, a `Sequence` view,
-                or a parameter directly without copying.
+                Returning a concrete `list`, `dict`, `set`, `tuple[T, ...]`, or `frozenset` couples
+                the signature to a specific container representation—and, for `list`, `dict`, and
+                `set`, exposes internal state to in-place caller mutation—locking the implementation
+                into allocating that exact container even when it could otherwise return a cached
+                `tuple`, a `list`, a `Sequence` view, or a parameter directly without copying.
 
                 Choose the return type as a contract: `Sequence`, `Mapping`, or `Set` (imported as
                 `AbstractSet`) for read-only results, and their `Mutable` counterparts for results
                 callers are meant to mutate. A concrete collection is a deliberate exception, for
-                example when callers rely on `list.sort()`. The message names the read-only
-                counterpart of the flagged type; it does not know how callers use the result."},
+                example when callers rely on `list.sort()` or `tuple` / `frozenset` hashability. The
+                message names the read-only counterpart of the flagged type; it does not know how
+                callers use the result."},
             known_problems: Some(indoc::indoc! {r"
                 Type aliases such as `Names: TypeAlias = list[str]` are not expanded, so annotations
                 that use them are not checked."}),
@@ -97,7 +101,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             AnnotationTraversalDepth::CovariantPositions,
         )
         .into_iter()
-        .filter(|collection_type| collection_type.kind == CollectionKind::ConcreteMutable)
+        .filter(|collection_type| collection_type.kind.is_concrete())
         .collect();
         if matched.is_empty() {
             continue;
@@ -147,12 +151,21 @@ crate::test_utils::rule_test!(
                     def get_tags() -> Set[str]:
                         return {"v1"}
                 "#,
-                immutable_concrete_return_types => r#"
-                    def get_coords() -> tuple[int, ...]:
-                        return (1, 2)
+                fixed_length_tuple_return_types_exempt => r#"
+                    from typing import Tuple
 
-                    def get_flags() -> frozenset[str]:
-                        return frozenset()
+                    def get_pair() -> tuple[int, str]:
+                        return (1, "a")
+
+                    def get_typing_pair() -> Tuple[int, str]:
+                        return (1, "a")
+
+                    def get_single() -> tuple[int]:
+                        return (1,)
+                "#,
+                empty_tuple_return_type_exempt => r#"
+                    def get_empty() -> tuple[()]:
+                        return ()
                 "#,
                 protocol_class_exempt => r#"
                     from typing import Protocol
@@ -193,6 +206,18 @@ crate::test_utils::rule_test!(
                     def get_users() -> list[str]:
                         return ["alice"]
                 "# => "list[str]",
+                variable_length_tuple_return => r#"
+                    def get_coords() -> tuple[int, ...]:
+                        return (1, 2)
+                "# => "tuple[int, ...]",
+                bare_tuple_return => r#"
+                    def get_coords() -> tuple:
+                        return (1, 2)
+                "# => "tuple",
+                frozenset_return => r#"
+                    def get_flags() -> frozenset[str]:
+                        return frozenset()
+                "# => "frozenset[str]",
                 ordered_dict_return => r#"
                     from collections import OrderedDict
 

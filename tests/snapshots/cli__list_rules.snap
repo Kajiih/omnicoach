@@ -13,9 +13,9 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `bare-multiline-string` (python, rust): Flags multiline string literals that are not wrapped in a dedent helper.
 - `blanket-suppression` (python, rust): Flags suppression directives that name no rule.
 - `callee-before-caller` (python, rust): Flags private functions and methods defined before their private callers.
-- `concrete-collection-attribute` (python): Flags public Python class and instance attributes annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
-- `concrete-collection-parameter` (python): Flags Python function parameters annotated with concrete mutable collection types such as `list`, `dict`, or `set`.
-- `concrete-collection-return` (python): Flags Python function return annotations using concrete mutable collection types such as `list`, `dict`, or `set`.
+- `concrete-collection-attribute` (python): Flags public Python class and instance attributes annotated with concrete collection types such as `list`, `dict`, `set`, `tuple`, or `frozenset`.
+- `concrete-collection-parameter` (python): Flags Python function parameters annotated with concrete collection types such as `list`, `dict`, `set`, `tuple`, or `frozenset`.
+- `concrete-collection-return` (python): Flags Python function return annotations using concrete collection types such as `list`, `dict`, `set`, `tuple`, or `frozenset`.
 - `constructor-after-method` (python, rust): Flags class and inherent `impl` constructors defined after regular methods.
 - `copied-base-docstring` (python): Flags `@override` method docstrings that repeat the inherited docstring or its summary.
 - `cross-component-relative-path` (python, rust): Flags relative imports and `super::` paths that escape the enclosing architecture component.

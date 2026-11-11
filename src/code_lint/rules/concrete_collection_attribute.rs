@@ -1,9 +1,8 @@
-//! Flags public Python class and instance attributes annotated with concrete mutable collection types.
+//! Flags public Python class and instance attributes annotated with concrete collection types.
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    AnnotationTraversalDepth, CollectionKind, PythonCollectionType, collect_collection_types,
-    extract_classes,
+    AnnotationTraversalDepth, PythonCollectionType, collect_collection_types, extract_classes,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::read_only_collection_replacements;
@@ -16,7 +15,7 @@ use std::path::Path;
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Attribute `{name}` of `{class}` has annotation `{expression}`, which contains concrete collection type `{token}`.",
-    rationale: "A public attribute typed as `list`, `dict`, or `set` turns assigning a `tuple`, `Sequence`, or `Mapping` (including through a dataclass constructor) into a type error and exposes internal state to in-place caller mutation.",
+    rationale: "A public attribute typed as `list`, `dict`, `set`, `tuple[T, ...]`, or `frozenset` turns assigning another compatible collection (such as a `tuple`, `list`, `Sequence`, or `Mapping`, including through a dataclass constructor) into a type error, and mutable containers also expose internal state to in-place caller mutation.",
     suggestion: "Replace `{token}` on `{name}` with the `collections.abc` type that states what users of `{class}` may do with it, such as `{replacement}` for read-only access or its `Mutable` counterpart for in-place mutation, or prefix internal state with `_`.",
 };
 
@@ -34,25 +33,26 @@ pub const RULE: CodeRule = CodeRule {
             impacted_quality: ImpactedQuality::Maintainability,
         },
         doc: RuleDoc {
-            summary: "Flags public Python class and instance attributes annotated with concrete mutable collection types such as `list`, `dict`, or `set`.",
+            summary: "Flags public Python class and instance attributes annotated with concrete collection types such as `list`, `dict`, `set`, `tuple`, or `frozenset`.",
             what_it_does: indoc::indoc! {r"
-                Flags public class and instance attributes whose annotation uses a concrete mutable
-                collection type, such as `items: list[str]` in a class body or
-                `self.counts: dict[str, int]` in `__init__`, including inside covariant wrappers
-                such as `Sequence[list[str]]`. Attributes of `Protocol` and `ABC` classes are
-                skipped."},
+                Flags public class and instance attributes whose annotation uses a concrete
+                collection type, such as `items: list[str]`, `items: tuple[str, ...]`, or
+                `tags: frozenset[str]` in a class body or `self.counts: dict[str, int]` in
+                `__init__`, including inside covariant wrappers such as `Sequence[list[str]]`.
+                Fixed-length record tuples (`tuple[int, str]`, `tuple[int]`, `tuple[()]`) and
+                attributes of `Protocol` and `ABC` classes are skipped."},
             why_is_this_bad: indoc::indoc! {r"
                 On a `@dataclass` or public class interface, annotating a field as
-                `items: list[str]` forces callers constructing the class to pass a concrete `list`
-                rather than a `tuple` or an upstream `Sequence[str]` parameter, and exposes a
-                mutable container on the instance even when `@dataclass(frozen=True)` is used.
+                `items: list[str]` or `items: tuple[str, ...]` forces callers constructing the
+                class to pass that exact concrete type rather than any `Sequence[str]`, and a
+                mutable container (`list`, `dict`, `set`) also exposes internal state to in-place
+                mutation even when `@dataclass(frozen=True)` is used.
 
                 Choose the annotation as a contract: `Sequence`, `Mapping`, or `Set` (imported as
                 `AbstractSet`) for read-only fields, and their `Mutable` counterparts for fields
-                mutated in place. Internal mutable state belongs in a `_`-prefixed attribute. A
-                public concrete collection is a deliberate exception. The message names the
-                read-only counterpart of the flagged type; it does not check how the attribute is
-                used."},
+                mutated in place. Internal state belongs in a `_`-prefixed attribute. A public
+                concrete collection is a deliberate exception. The message names the read-only
+                counterpart of the flagged type; it does not check how the attribute is used."},
             known_problems: Some(indoc::indoc! {r"
                 Type aliases such as `Names: TypeAlias = list[str]` are not expanded, so annotations
                 that use them are not checked."}),
@@ -103,7 +103,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                 AnnotationTraversalDepth::CovariantPositions,
             )
             .into_iter()
-            .filter(|collection_type| collection_type.kind == CollectionKind::ConcreteMutable)
+            .filter(|collection_type| collection_type.kind.is_concrete())
             .collect();
             if matched.is_empty() {
                 continue;
@@ -149,9 +149,17 @@ crate::test_utils::rule_test!(
                     class Buffer:
                         items: MutableSequence[int]
                 "#,
-                immutable_concrete_attributes => r#"
+                fixed_length_tuple_attributes_exempt => r#"
+                    from typing import Tuple
+
                     class Point:
-                        coords: tuple[int, ...]
+                        coords: tuple[int, str]
+                        legacy_coords: Tuple[int, str]
+                        singleton: tuple[int]
+                "#,
+                empty_tuple_attribute_exempt => r#"
+                    class Empty:
+                        empty: tuple[()]
                 "#,
                 unaliased_collections_abc_set_detected => r#"
                     from collections.abc import Set
@@ -230,6 +238,18 @@ crate::test_utils::rule_test!(
                     class Payload(TypedDict):
                         items: list[str]
                 "# => "list[str]",
+                variable_length_tuple_attribute => r#"
+                    class Point:
+                        coords: tuple[int, ...]
+                "# => "tuple[int, ...]",
+                bare_tuple_attribute => r#"
+                    class Point:
+                        coords: tuple
+                "# => "tuple",
+                frozenset_attribute => r#"
+                    class Config:
+                        tags: frozenset[str]
+                "# => "frozenset[str]",
             ],
         },
     }
