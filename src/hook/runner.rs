@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use super::event::{FileEdit, PreToolDecision, PreToolUseEvent, ToolCallPayload};
 use super::virtual_edit::{VirtualFile, apply_virtual_edit};
+use super::warning_queue::QueuedWarning;
 use crate::code_lint::project::{is_rooted_path, lexical_normalize};
 use crate::code_lint::runner::{lint_virtual_file, lint_virtual_file_for_rules};
 use crate::command_lint::runner::run_command_lint_with_client;
@@ -25,9 +26,9 @@ pub(super) struct ToolCallOutcome {
     /// Whether the tool call may run.
     pub(super) decision: PreToolDecision,
     /// Code lint warnings introduced by a file edit (on modified lines or net-new on unmodified
-    /// lines), one formatted warning per diagnostic. How and when they reach the model depends on
+    /// lines), one structured warning per diagnostic. How and when they reach the model depends on
     /// what the agent's hooks support, so delivering them is the adapter's job.
-    pub(super) warnings: Vec<String>,
+    pub(super) warnings: Vec<QueuedWarning>,
 }
 
 /// Evaluates a tool call against the repository on disk.
@@ -102,7 +103,7 @@ fn lint_proposed_edit(
     event: &PreToolUseEvent,
     raw_target_path: &Path,
     edit: &FileEdit,
-) -> Vec<String> {
+) -> Vec<QueuedWarning> {
     let target_file_path = resolve_in_workspace(raw_target_path, &event.workspace_paths);
 
     let is_agent_owned_file = event
@@ -227,9 +228,14 @@ fn filter_relevant_diagnostics(
 
     let mut baseline_counts: HashMap<(RuleName, String), usize> = HashMap::new();
     for diagnostic in baseline_diagnostics {
-        *baseline_counts
-            .entry((diagnostic.rule_name, diagnostic.message.summary))
-            .or_default() += 1;
+        if virtual_file
+            .unmodified_old_lines
+            .contains(&diagnostic.location.line)
+        {
+            *baseline_counts
+                .entry((diagnostic.rule_name, diagnostic.message.summary))
+                .or_default() += 1;
+        }
     }
 
     post_edit_diagnostics
@@ -254,9 +260,9 @@ fn filter_relevant_diagnostics(
         .collect()
 }
 
-/// Formats a diagnostic for warning delivery. The first-line `<path>:<line>:<col>: [<rule>] <summary>`
-/// layout is parsed by `super::antigravity::extract_rule_name` to resolve rule classifications.
-fn format_code_warning(target_path: &Path, diagnostic: &Diagnostic) -> String {
+/// Formats a diagnostic into a structured [`QueuedWarning`] carrying both the rule name and the
+/// rendered warning block.
+fn format_code_warning(target_path: &Path, diagnostic: &Diagnostic) -> QueuedWarning {
     let mut warning = indoc::formatdoc! {"
         {}:{}:{}: [{}] {}
           Rationale: {}
@@ -272,7 +278,10 @@ fn format_code_warning(target_path: &Path, diagnostic: &Diagnostic) -> String {
     if let Some(hint) = &diagnostic.message.explanation_hint {
         let _ = write!(warning, "\n  Or: {hint}");
     }
-    warning
+    QueuedWarning {
+        rule_name: diagnostic.rule_name.0.to_owned(),
+        message: warning,
+    }
 }
 
 fn resolve_in_workspace(raw_path: &Path, workspace_paths: &[PathBuf]) -> PathBuf {
@@ -449,7 +458,7 @@ mod tests {
                 conflict: false,
             })
         });
-        assert_eq!(outcome.warnings, Vec::<String>::new());
+        assert_eq!(outcome.warnings, Vec::<QueuedWarning>::new());
     }
 
     #[test]
@@ -475,7 +484,7 @@ mod tests {
             },
         };
         let outcome = evaluate_pre_tool_use(&event);
-        assert_eq!(outcome.warnings, Vec::<String>::new());
+        assert_eq!(outcome.warnings, Vec::<QueuedWarning>::new());
     }
 
     #[test]
@@ -511,13 +520,13 @@ mod tests {
         let outcome = evaluate_pre_tool_use(&event);
 
         assert_eq!(outcome.warnings.len(), 1);
-        assert!(outcome.warnings[0].contains("repeated-literal"));
-        assert!(outcome.warnings[0].contains("\"settled\""));
+        assert_eq!(outcome.warnings[0].rule_name, "repeated-literal");
+        assert!(outcome.warnings[0].message.contains("\"settled\""));
         assert!(
             !outcome
                 .warnings
                 .iter()
-                .any(|warning| warning.contains("single-letter-name"))
+                .any(|warning| warning.rule_name == "single-letter-name")
         );
     }
 
@@ -553,13 +562,51 @@ mod tests {
         };
         let outcome = evaluate_pre_tool_use(&event);
 
-        let single_letter_warnings: Vec<&String> = outcome
+        let single_letter_warnings: Vec<&QueuedWarning> = outcome
             .warnings
             .iter()
-            .filter(|warning| warning.contains("single-letter-name"))
+            .filter(|warning| warning.rule_name == "single-letter-name")
             .collect();
         assert_eq!(single_letter_warnings.len(), 1);
-        assert!(single_letter_warnings[0].contains("logic.py:2:"));
+        assert!(single_letter_warnings[0].message.contains("logic.py:2:"));
+    }
+
+    #[test]
+    fn evaluate_pre_tool_use_does_not_suppress_new_spillover_when_deleted_line_had_same_violation()
+    {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("billing.py");
+        let initial_code = indoc::indoc! {r#"
+            def old_first(status: str) -> bool:
+                return status == "settled"
+
+            def old_second(status: str) -> bool:
+                return status == "settled"
+
+            def check_status(status: str) -> bool:
+                return status == "settled"
+        "#};
+        std::fs::write(&file_path, initial_code).unwrap();
+
+        let replacement_code = indoc::indoc! {r#"
+            STATUS_SETTLED = "settled"
+
+            def check_status(status: str) -> bool:
+                return status == "settled"
+        "#};
+        let event = PreToolUseEvent {
+            workspace_paths: vec![temp_dir.path().to_path_buf()],
+            agent_owned_dir: None,
+            payload: ToolCallPayload::FileEdit {
+                path: file_path,
+                edit: FileEdit::Overwrite(replacement_code.to_owned()),
+            },
+        };
+        let outcome = evaluate_pre_tool_use(&event);
+
+        assert_eq!(outcome.warnings.len(), 1);
+        assert_eq!(outcome.warnings[0].rule_name, "repeated-literal");
+        assert!(outcome.warnings[0].message.contains("billing.py:4:"));
     }
 
     #[test]
@@ -595,7 +642,7 @@ mod tests {
             !outcome
                 .warnings
                 .iter()
-                .any(|warning| warning.contains("unused-suppression")),
+                .any(|warning| warning.rule_name == "unused-suppression"),
             "{:?}",
             outcome.warnings
         );
@@ -620,10 +667,19 @@ mod tests {
         let diagnostic = Diagnostic::new(RuleName("sample-rule"), message, location);
         let warning = format_code_warning(Path::new("sample.rs"), &diagnostic);
 
-        assert!(warning.contains("sample.rs:1:1: [sample-rule] Summary message."));
-        assert!(warning.contains("Rationale: Rationale explanation."));
-        assert!(warning.contains("Suggestion: Suggestion fix."));
-        assert!(warning.contains("Or: Comment hint."));
+        assert_eq!(
+            warning,
+            QueuedWarning {
+                rule_name: "sample-rule".to_owned(),
+                message: concat!(
+                    "sample.rs:1:1: [sample-rule] Summary message.\n",
+                    "  Rationale: Rationale explanation.\n",
+                    "  Suggestion: Suggestion fix.\n",
+                    "  Or: Comment hint.",
+                )
+                .to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -694,9 +750,9 @@ mod tests {
             "warnings: {:?}",
             outcome.warnings
         );
-        assert!(outcome.warnings[0].contains("[uninherited-protocol]"));
-        assert!(outcome.warnings[0].contains("MemoryStore"));
-        assert!(!outcome.warnings[0].contains("LegacyCodec"));
+        assert_eq!(outcome.warnings[0].rule_name, "uninherited-protocol");
+        assert!(outcome.warnings[0].message.contains("MemoryStore"));
+        assert!(!outcome.warnings[0].message.contains("LegacyCodec"));
     }
 
     #[test]
@@ -749,6 +805,6 @@ mod tests {
         };
         let outcome = evaluate_pre_tool_use(&event);
 
-        assert_eq!(outcome.warnings, Vec::<String>::new());
+        assert_eq!(outcome.warnings, Vec::<QueuedWarning>::new());
     }
 }

@@ -379,29 +379,46 @@ impl ScriptWalker<'_> {
             AssignmentName::ArrayElementName(var, subscript) => format!("{var}[{subscript}]"),
         };
         let full_span = self.word_span(full_word);
-        let value_offset = full_word.value.find('=').map_or(0, |index| index + 1);
+        let after_name = full_word
+            .value
+            .get(name.len()..)
+            .unwrap_or(&full_word.value);
+        let value_offset = after_name
+            .find('=')
+            .map_or(0, |index| name.len() + index + 1);
         let value_span = SourceSpan::new(full_span.start + value_offset, full_span.end);
         let value = match &assignment.value {
             AssignmentValue::Scalar(val_word) => {
-                self.parse_word_at_span(&val_word.value, value_span, scopes, nested_commands)
+                let scalar_span = val_word
+                    .location()
+                    .map_or(value_span, |loc| self.char_offsets.map_span(&loc));
+                self.parse_word_at_span(&val_word.value, scalar_span, scopes, nested_commands)
             }
             AssignmentValue::Array(elements) => {
                 let mut has_expansion = false;
+                let mut search_offset = value_offset;
                 for (key, element_value) in elements {
                     if let Some(key_word) = key {
+                        let key_span = self.array_part_span(
+                            full_word,
+                            full_span,
+                            key_word,
+                            &mut search_offset,
+                        );
                         has_expansion |= self
-                            .parse_word_at_span(
-                                &key_word.value,
-                                value_span,
-                                scopes,
-                                nested_commands,
-                            )
+                            .parse_word_at_span(&key_word.value, key_span, scopes, nested_commands)
                             .has_expansion;
                     }
+                    let elem_span = self.array_part_span(
+                        full_word,
+                        full_span,
+                        element_value,
+                        &mut search_offset,
+                    );
                     has_expansion |= self
                         .parse_word_at_span(
                             &element_value.value,
-                            value_span,
+                            elem_span,
                             scopes,
                             nested_commands,
                         )
@@ -420,6 +437,30 @@ impl ScriptWalker<'_> {
             append: assignment.append,
             span: full_span,
         }
+    }
+
+    fn array_part_span(
+        &self,
+        full_word: &Word,
+        full_span: SourceSpan,
+        part: &Word,
+        search_offset: &mut usize,
+    ) -> SourceSpan {
+        if let Some(loc) = part.location() {
+            let span = self.char_offsets.map_span(&loc);
+            if span.end > span.start {
+                return span;
+            }
+        }
+        let remainder = full_word.value.get(*search_offset..).unwrap_or_default();
+        let rel = remainder.find(&part.value).unwrap_or(0);
+        let start_in_word = *search_offset + rel;
+        let end_in_word = start_in_word + part.value.len();
+        *search_offset = end_in_word;
+        SourceSpan::new(
+            full_span.start + start_in_word,
+            full_span.start + end_in_word,
+        )
     }
 
     fn parse_io_redirect(

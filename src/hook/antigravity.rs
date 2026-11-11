@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::event::{FileEdit, PreToolDecision, PreToolUseEvent, TextReplacement, ToolCallPayload};
 use super::runner::evaluate_pre_tool_use;
-use super::warning_queue::WarningQueue;
+use super::warning_queue::{QueuedWarning, WarningQueue};
 use crate::rule_catalog::code_report_footer_for_rules;
 
 /// Subdirectory of the conversation's artifact directory that Antigravity reserves for scratch
@@ -117,17 +117,21 @@ fn serialize_pre_tool_decision(
     }
 }
 
-fn serialize_pre_invocation(warnings: &[String]) -> Result<String, AntigravityProtocolError> {
+fn serialize_pre_invocation(
+    warnings: &[QueuedWarning],
+) -> Result<String, AntigravityProtocolError> {
     if warnings.is_empty() {
         return Ok(String::new());
     }
     let footer = code_report_footer_for_rules(
         "omnicoach",
-        warnings
-            .iter()
-            .filter_map(|warning| extract_rule_name(warning)),
+        warnings.iter().map(|warning| warning.rule_name.as_str()),
     );
-    let formatted_warnings = warnings.join("\n\n");
+    let formatted_warnings = warnings
+        .iter()
+        .map(|warning| warning.message.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
     let inject_steps = vec![WireInjectStep {
         ephemeral_message: indoc::formatdoc! {"
             [omnicoach] Proposed file modification(s) introduced code lint warnings. Please review and fix them if appropriate:
@@ -139,15 +143,6 @@ fn serialize_pre_invocation(warnings: &[String]) -> Result<String, AntigravityPr
     Ok(serde_json::to_string(&WirePreInvocationResult {
         inject_steps,
     })?)
-}
-
-/// Extracts the rule name from a warning formatted by `super::runner::format_code_warning`,
-/// which starts with `<path>:<line>:<col>: [<rule_name>] <summary>`.
-fn extract_rule_name(warning: &str) -> Option<&str> {
-    let first_line = warning.lines().next()?;
-    let (_, after_open) = first_line.split_once(": [")?;
-    let (rule_name, _) = after_open.split_once("] ")?;
-    Some(rule_name)
 }
 
 #[derive(Debug, Deserialize)]
@@ -742,19 +737,26 @@ mod tests {
 
     #[test]
     fn serialize_pre_invocation_injects_warnings_as_one_step() {
-        let warning_one = indoc::indoc! {"
-            src/tests/test_foo.py:1:1: [sleep-in-tests] Test calls sleep.
-              Rationale: Slow.
-              Suggestion: Mock.
-        "};
-        let warning_two = indoc::indoc! {"
-            src/tests/test_bar.py:2:1: [sleep-in-tests] Test calls sleep.
-              Rationale: Slow.
-              Suggestion: Mock.
-        "};
+        let warning_one = QueuedWarning {
+            rule_name: "sleep-in-tests".to_owned(),
+            message: indoc::indoc! {"
+                src/tests/test_foo.py:1:1: [sleep-in-tests] Test calls sleep.
+                  Rationale: Slow.
+                  Suggestion: Mock.
+            "}
+            .to_owned(),
+        };
+        let warning_two = QueuedWarning {
+            rule_name: "sleep-in-tests".to_owned(),
+            message: indoc::indoc! {"
+                src/tests/test_bar.py:2:1: [sleep-in-tests] Test calls sleep.
+                  Rationale: Slow.
+                  Suggestion: Mock.
+            "}
+            .to_owned(),
+        };
         let serialized =
-            serialize_pre_invocation(&[warning_one.to_owned(), warning_two.to_owned()])
-                .expect("serialization succeeds");
+            serialize_pre_invocation(&[warning_one, warning_two]).expect("serialization succeeds");
         assert!(serialized.contains("test_foo.py:1:1: [sleep-in-tests]"));
         assert!(serialized.contains("test_bar.py:2:1: [sleep-in-tests]"));
         assert!(serialized.contains("Note: Fix each finding by applying its suggestion."));
@@ -763,13 +765,16 @@ mod tests {
 
     #[test]
     fn serialize_pre_invocation_includes_suppression_note_for_heuristic_rule() {
-        let warning = indoc::indoc! {"
-            src/lib.rs:2:9: [abbreviated-name] Variable uses abbreviated name.
-              Rationale: Unclear.
-              Suggestion: Rename.
-        "};
-        let serialized =
-            serialize_pre_invocation(&[warning.to_owned()]).expect("serialization succeeds");
+        let warning = QueuedWarning {
+            rule_name: "abbreviated-name".to_owned(),
+            message: indoc::indoc! {"
+                src/lib.rs:2:9: [abbreviated-name] Variable uses abbreviated name.
+                  Rationale: Unclear.
+                  Suggestion: Rename.
+            "}
+            .to_owned(),
+        };
+        let serialized = serialize_pre_invocation(&[warning]).expect("serialization succeeds");
         assert!(serialized.contains("abbreviated-name"));
         assert!(serialized.contains("Note: Some rules use heuristics. When a finding conflicts with the clearest, most robust design, suppress it with `omni:ignore [<rule>] -- <reason>`"));
         assert!(serialized.contains(

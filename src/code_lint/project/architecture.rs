@@ -794,7 +794,7 @@ fn evaluate_python_file_architecture(
     spec: &ArchitectureSpec,
     python_summary: Option<&PythonFileSummary>,
 ) -> FileArchitectureFindings {
-    if spec.from_rust_macros || path.extension().is_some_and(|extension| extension == "pyi") {
+    if spec.from_rust_macros {
         return FileArchitectureFindings::default();
     }
     let Some(module_path) = layout.python_architecture_module_of_path(path) else {

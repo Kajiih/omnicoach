@@ -392,4 +392,30 @@ mod tests {
         assert_eq!(parsed.commands()[1].arguments[0].text, "a b");
         assert!(parsed.commands()[1].arguments[1].has_expansion);
     }
+
+    #[test]
+    fn test_array_and_subscript_assignment_command_substitution_spans() {
+        let script = "ARR=($(jj status) $(jj edit d123)) map[k=1]=$(jj log)";
+        let parsed = ParsedCommand::new(script);
+        let slices: Vec<&str> = parsed
+            .commands()
+            .iter()
+            .map(|cmd| &parsed.source()[cmd.span.start..cmd.span.end])
+            .collect();
+        assert_eq!(slices, vec!["jj status", "jj edit d123", "jj log"]);
+    }
+
+    #[test]
+    fn test_parse_args_consumes_dash_prefixed_option_values() {
+        let cmd =
+            InterceptedCommand::parse_all("jj describe -m -wip --message -second @-").remove(0);
+        let schema = ProgramCliSchema {
+            program_name: "jj",
+            options_with_values: &["-m", "--message"],
+        };
+        let args = cmd.parse_args(&schema);
+        assert_eq!(args.positionals, vec!["describe", "@-"]);
+        assert_eq!(args.get_option("-m"), Some("-wip"));
+        assert_eq!(args.get_option("--message"), Some("-second"));
+    }
 }

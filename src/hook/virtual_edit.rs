@@ -28,6 +28,8 @@ pub(super) struct VirtualFile {
     pub(super) content: String,
     /// Set of 1-based line numbers in `content` that were added or modified by the edit.
     pub(super) modified_lines: HashSet<usize>,
+    /// Set of 1-based line numbers in the original pre-edit content that were kept unchanged.
+    pub(super) unmodified_old_lines: HashSet<usize>,
 }
 
 pub(super) fn apply_virtual_edit(
@@ -41,11 +43,28 @@ pub(super) fn apply_virtual_edit(
         FileEdit::Replace(replacements) => apply_replacements(original_content, replacements)?,
     };
 
-    let modified_lines = changed_line_numbers(existing, &content);
+    let mut modified_lines = HashSet::new();
+    let mut unmodified_old_lines = HashSet::new();
+    for change in TextDiff::from_lines(existing, &content).iter_all_changes() {
+        match change.tag() {
+            ChangeTag::Insert => {
+                if let Some(index) = change.new_index() {
+                    modified_lines.insert(index + 1);
+                }
+            }
+            ChangeTag::Equal => {
+                if let Some(index) = change.old_index() {
+                    unmodified_old_lines.insert(index + 1);
+                }
+            }
+            ChangeTag::Delete => {}
+        }
+    }
 
     Ok(VirtualFile {
         content,
         modified_lines,
+        unmodified_old_lines,
     })
 }
 
@@ -131,14 +150,6 @@ fn line_range_byte_bounds(
     range_start
         .filter(|&start| start <= content.len())
         .map(|start| start..content.len())
-}
-
-fn changed_line_numbers(old: &str, new: &str) -> HashSet<usize> {
-    TextDiff::from_lines(old, new)
-        .iter_all_changes()
-        .filter(|change| change.tag() == ChangeTag::Insert)
-        .filter_map(|change| change.new_index().map(|index| index + 1))
-        .collect()
 }
 
 #[cfg(test)]

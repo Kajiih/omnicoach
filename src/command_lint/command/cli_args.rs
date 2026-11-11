@@ -118,7 +118,7 @@ impl<'a> ArgParser<'a> {
             && self
                 .arguments_iter
                 .peek()
-                .is_some_and(|next_arg| !next_arg.text.starts_with('-'))
+                .is_some_and(|next_arg| next_arg.text != "--")
         {
             if let Some(option_value) = self.arguments_iter.next() {
                 self.options
@@ -147,7 +147,7 @@ impl<'a> ArgParser<'a> {
                 let next_is_value = self
                     .arguments_iter
                     .peek()
-                    .is_some_and(|next_arg| !next_arg.text.starts_with('-'));
+                    .is_some_and(|next_arg| next_arg.text != "--");
                 if next_is_value && let Some(option_value) = self.arguments_iter.next() {
                     self.options
                         .entry(flag)

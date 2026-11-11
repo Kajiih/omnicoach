@@ -10,8 +10,19 @@ use std::fs::OpenOptions;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 const QUEUE_FILENAME: &str = "omnicoach_lint_warnings.jsonl";
 const MAX_QUEUED_WARNINGS: usize = 64;
+
+/// A queued lint warning recorded during a tool call and replayed on the next turn.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(super) struct QueuedWarning {
+    /// Canonical rule identifier (e.g., `"todo-comment"`).
+    pub(super) rule_name: String,
+    /// Rendered terminal warning block for this finding.
+    pub(super) message: String,
+}
 
 /// Warning queue stored in one session's state directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,7 +41,7 @@ impl WarningQueue {
     /// Appends warnings, skipping blank ones and capping the queue at [`MAX_QUEUED_WARNINGS`]
     /// unique entries. Best effort: I/O errors drop the warnings, since a hook must never fail
     /// the agent's tool call.
-    pub(super) fn push(&self, warnings: &[String]) {
+    pub(super) fn push(&self, warnings: &[QueuedWarning]) {
         if warnings.is_empty() {
             return;
         }
@@ -71,7 +82,7 @@ impl WarningQueue {
 
     /// Removes and returns the queued warnings in insertion order, without duplicates.
     #[must_use]
-    pub(super) fn drain(&self) -> Vec<String> {
+    pub(super) fn drain(&self) -> Vec<QueuedWarning> {
         let Ok(mut file) = OpenOptions::new().read(true).write(true).open(&self.path) else {
             return Vec::new();
         };
@@ -89,19 +100,24 @@ impl WarningQueue {
     }
 }
 
-fn collect_unique_warnings(existing_jsonl: &str, new_warnings: &[String]) -> Vec<String> {
+fn collect_unique_warnings(
+    existing_jsonl: &str,
+    new_warnings: &[QueuedWarning],
+) -> Vec<QueuedWarning> {
     let existing = existing_jsonl
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
-        .filter_map(|line| serde_json::from_str::<String>(line).ok());
-    let added = new_warnings
-        .iter()
-        .map(|warning| warning.trim())
-        .filter(|warning| !warning.is_empty())
-        .map(str::to_owned);
+        .filter_map(|line| serde_json::from_str::<QueuedWarning>(line).ok());
+    let added = new_warnings.iter().filter_map(|warning| {
+        let trimmed = warning.message.trim();
+        (!trimmed.is_empty()).then(|| QueuedWarning {
+            rule_name: warning.rule_name.clone(),
+            message: trimmed.to_owned(),
+        })
+    });
     let mut seen = HashSet::new();
-    let mut queued: Vec<String> = existing
+    let mut queued: Vec<QueuedWarning> = existing
         .chain(added)
         .filter(|warning| seen.insert(warning.clone()))
         .collect();
@@ -116,33 +132,40 @@ fn collect_unique_warnings(existing_jsonl: &str, new_warnings: &[String]) -> Vec
 mod tests {
     use super::*;
 
+    fn warning(rule_name: &str, message: &str) -> QueuedWarning {
+        QueuedWarning {
+            rule_name: rule_name.to_owned(),
+            message: message.to_owned(),
+        }
+    }
+
     #[test]
     fn drain_returns_unique_warnings_in_order_and_empties_the_queue() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let queue = WarningQueue::in_dir(temp_dir.path());
 
         queue.push(&[
-            "warning one\nwith details".to_owned(),
-            "warning two".to_owned(),
-            "warning one\nwith details".to_owned(),
-            "  ".to_owned(),
+            warning("rule-a", "warning one\nwith details"),
+            warning("rule-b", "warning two"),
+            warning("rule-a", "warning one\nwith details"),
+            warning("rule-c", "  "),
         ]);
 
         assert_eq!(
             queue.drain(),
             [
-                "warning one\nwith details".to_owned(),
-                "warning two".to_owned()
+                warning("rule-a", "warning one\nwith details"),
+                warning("rule-b", "warning two"),
             ]
         );
-        assert_eq!(queue.drain(), Vec::<String>::new());
+        assert_eq!(queue.drain(), Vec::<QueuedWarning>::new());
     }
 
     #[test]
     fn drain_on_missing_queue_returns_empty() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let queue = WarningQueue::in_dir(temp_dir.path());
-        assert_eq!(queue.drain(), Vec::<String>::new());
+        assert_eq!(queue.drain(), Vec::<QueuedWarning>::new());
     }
 
     #[test]
@@ -150,11 +173,11 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let queue = WarningQueue::in_dir(temp_dir.path());
 
-        queue.push(&["initial warning".to_owned()]);
+        queue.push(&[warning("rule-a", "initial warning")]);
         let _ = queue.drain();
 
-        queue.push(&["subsequent warning".to_owned()]);
-        assert_eq!(queue.drain(), ["subsequent warning".to_owned()]);
+        queue.push(&[warning("rule-b", "subsequent warning")]);
+        assert_eq!(queue.drain(), [warning("rule-b", "subsequent warning")]);
     }
 
     #[test]
@@ -162,18 +185,18 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let queue = WarningQueue::in_dir(temp_dir.path());
 
-        let first_batch: Vec<String> = (0..40)
-            .map(|index| format!("warning number {index}"))
+        let first_batch: Vec<QueuedWarning> = (0..40)
+            .map(|index| warning("rule-a", &format!("warning number {index}")))
             .collect();
-        let second_batch: Vec<String> = (40..70)
-            .map(|index| format!("warning number {index}"))
+        let second_batch: Vec<QueuedWarning> = (40..70)
+            .map(|index| warning("rule-a", &format!("warning number {index}")))
             .collect();
         queue.push(&first_batch);
         queue.push(&second_batch);
 
         let drained = queue.drain();
-        let expected: Vec<String> = (6..70)
-            .map(|index| format!("warning number {index}"))
+        let expected: Vec<QueuedWarning> = (6..70)
+            .map(|index| warning("rule-a", &format!("warning number {index}")))
             .collect();
         assert_eq!(drained, expected);
     }

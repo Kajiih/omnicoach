@@ -1408,7 +1408,11 @@ fn find_external_config_file(start_dir: &Path, source: &dyn FileSource) -> Optio
         if source.is_file(&candidate) {
             return Some(candidate);
         }
-        if source.is_dir(&directory.join(".jj")) || source.is_dir(&directory.join(".git")) {
+        let git_marker = directory.join(".git");
+        if source.is_dir(&directory.join(".jj"))
+            || source.is_dir(&git_marker)
+            || source.is_file(&git_marker)
+        {
             break;
         }
         current = directory.parent();
@@ -2147,6 +2151,24 @@ mod tests {
         assert_eq!(
             index.layout().python_source_roots,
             vec![root.join("packages/app/src")]
+        );
+    }
+
+    #[test]
+    fn find_external_config_file_stops_at_git_worktree_file_boundary() {
+        let outer = Path::new("/outer");
+        let source = MemoryFileSource::from_relative_files(
+            outer,
+            &[
+                (".omnicoach.toml", "[context]\nsource-roots = [\"wrong\"]\n"),
+                ("worktree/.git", "gitdir: /outer/.git/worktrees/wt\n"),
+                ("worktree/pkg/__init__.py", ""),
+            ],
+        );
+
+        assert_eq!(
+            find_external_config_file(&outer.join("worktree/pkg"), &source),
+            None
         );
     }
 }

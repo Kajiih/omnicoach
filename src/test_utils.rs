@@ -354,7 +354,7 @@ pub fn assert_rule_pass_input<R: TestableCodeRule>(
             let context = ProjectContext::new(&index);
             let mut checked_any = false;
             for (relative_path, parsed) in &parsed_files {
-                if parsed.lang() != lang {
+                if Language::from_path(Path::new(relative_path)) != Some(lang) {
                     continue;
                 }
                 checked_any = true;
@@ -758,7 +758,7 @@ fn assert_project_fail_input<R: TestableCodeRule>(
     let context = ProjectContext::new(&index);
     let mut target_diags = None;
     for (relative_path, parsed) in &parsed_files {
-        if parsed.lang() != lang {
+        if Language::from_path(Path::new(relative_path)) != Some(lang) {
             continue;
         }
         let full_path = root.join(relative_path);
