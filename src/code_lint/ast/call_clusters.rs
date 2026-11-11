@@ -71,6 +71,10 @@ pub(super) struct ScopeItem<'a> {
     pub(super) visibility: Visibility,
     /// True if this callable is a Tier 0 lifecycle constructor.
     pub(super) is_constructor: bool,
+    /// True if this method takes an instance or class receiver (`self` / `cls`).
+    pub(super) has_receiver: bool,
+    /// 1-based `(start_line, end_line)` spans of `impl` blocks attached to this type declaration.
+    pub(super) impl_spans: Vec<(usize, usize)>,
     /// Direct references from this declaration to sibling items in [`DeclarationScope::items`],
     /// paired with the [`RelationKind`] where each reference occurs.
     pub(super) references: Vec<(usize, RelationKind)>,

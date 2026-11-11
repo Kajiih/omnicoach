@@ -115,10 +115,10 @@ fn build_rust_module_declaration_scopes<'a>(
                 let next_start = segment
                     .get(idx + 1)
                     .map_or(seg_end, |next| next.syntax_start);
-                let end_line = rust_decl_end_line(decl, next_start, &impl_items, file);
+                let spans = rust_decl_spans(decl, next_start, &impl_items, file);
                 build_rust_module_scope_item(
                     decl,
-                    end_line,
+                    spans,
                     &impl_callees.attached[idx],
                     &item_by_name,
                     &segment_is_type,
@@ -235,48 +235,63 @@ fn rust_type_decl<'a>(
     })
 }
 
-/// Returns the 1-based ending line of `decl`, extended to cover any contiguous `impl` blocks for
-/// `decl` that appear before the next declaration at `next_start`.
-fn rust_decl_end_line(
+struct RustDeclSpans {
+    end_line: usize,
+    impl_spans: Vec<(usize, usize)>,
+}
+
+/// Returns the 1-based ending line of `decl` (extended to cover any contiguous `impl` blocks
+/// before `next_start`) alongside the `(start_line, end_line)` spans of all same-module `impl`
+/// blocks whose self-type is `decl`.
+fn rust_decl_spans(
     decl: &RustModuleDecl<'_>,
     next_start: usize,
     impl_items: &[(usize, ast::Impl)],
     file: &ParsedFile,
-) -> usize {
+) -> RustDeclSpans {
     let (syntax, is_type) = match &decl.item {
         RustModuleItem::Fn(function) => (function.syntax(), false),
         RustModuleItem::Type(syntax) => (syntax, true),
     };
     let mut end_line =
         AstNode::from_span(file, span_from_rowan_range(syntax.text_range())).end_line();
+    let mut impl_spans = Vec::new();
     if !is_type {
-        return end_line;
+        return RustDeclSpans {
+            end_line,
+            impl_spans,
+        };
     }
     for (start, impl_item) in impl_items {
-        if !(decl.syntax_start..next_start).contains(start) {
-            continue;
-        }
-        let matches_decl = impl_self_type_name(impl_item, &file.source)
+        let matches_self = impl_self_type_name(impl_item, &file.source)
             .as_deref()
-            .is_some_and(|name| name == decl.name)
-            || impl_trait_name(impl_item)
-                .as_deref()
-                .is_some_and(|name| name == decl.name);
-        if matches_decl {
-            let impl_end =
-                AstNode::from_span(file, span_from_rowan_range(impl_item.syntax().text_range()))
-                    .end_line();
-            end_line = end_line.max(impl_end);
+            .is_some_and(|name| name == decl.name);
+        let matches_trait = impl_trait_name(impl_item)
+            .as_deref()
+            .is_some_and(|name| name == decl.name);
+        if matches_self || matches_trait {
+            let impl_node =
+                AstNode::from_span(file, span_from_rowan_range(impl_item.syntax().text_range()));
+            let impl_end = impl_node.end_line();
+            if (decl.syntax_start..next_start).contains(start) {
+                end_line = end_line.max(impl_end);
+            }
+            if matches_self {
+                impl_spans.push((impl_node.start_line(), impl_end));
+            }
         }
     }
-    end_line
+    RustDeclSpans {
+        end_line,
+        impl_spans,
+    }
 }
 
 /// Builds the [`ScopeItem`] for `decl`, merging the sibling references collected from its own
 /// syntax with `attached_impl_callees` from its same-module `impl` blocks.
 fn build_rust_module_scope_item<'a>(
     decl: &RustModuleDecl<'a>,
-    end_line: usize,
+    spans: RustDeclSpans,
     attached_impl_callees: &[usize],
     item_by_name: &HashMap<&str, usize>,
     segment_is_type: &[bool],
@@ -321,11 +336,13 @@ fn build_rust_module_scope_item<'a>(
     ScopeItem {
         name_node: decl.name_node,
         start_line: decl.start_line,
-        end_line,
+        end_line: spans.end_line,
         name: decl.name.clone(),
         signature: decl.signature.clone(),
         visibility: decl.visibility,
         is_constructor: false,
+        has_receiver: false,
+        impl_spans: spans.impl_spans,
         kind,
         references,
         evaluated_before: None,
@@ -667,6 +684,8 @@ fn collect_rust_impl_methods<'a>(
                 signature: rust_item_signature(function.syntax(), &file.source),
                 visibility,
                 is_constructor,
+                has_receiver: has_self,
+                impl_spans: Vec::new(),
                 kind: ScopeItemKind::Callable,
                 references: Vec::new(),
                 evaluated_before: None,
@@ -920,35 +939,6 @@ fn collect_misplaced_assoc_items<'a>(
             });
         }
     }
-}
-
-/// Returns the self-type name of the non-test `impl` block enclosing 1-based `line`, if any.
-#[must_use]
-pub fn enclosing_impl_self_type(file: &ParsedFile, line: usize) -> Option<String> {
-    let parsed = file.rs_parsed()?;
-    let mut items: Vec<ast::Item> = parsed.tree().items().collect();
-    while let Some(item) = items.pop() {
-        let start_offset: usize = item.syntax().text_range().start().into();
-        if file.is_in_rust_inline_test(start_offset) {
-            continue;
-        }
-        match item {
-            ast::Item::Impl(impl_item) => {
-                let span = span_from_rowan_range(impl_item.syntax().text_range());
-                let impl_node = AstNode::from_span(file, span);
-                if impl_node.start_line() <= line && line <= impl_node.end_line() {
-                    return impl_self_type_name(&impl_item, &file.source);
-                }
-            }
-            ast::Item::Module(module) => {
-                if let Some(body) = module.item_list() {
-                    items.extend(body.items());
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 /// Collects [`IntraFileReference`] entries for intra-file references to `module_items` and

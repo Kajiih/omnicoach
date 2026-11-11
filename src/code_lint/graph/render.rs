@@ -84,9 +84,12 @@ fn write_group(
                 group.level, group.label
             );
         }
-        GroupKind::Module { path } => {
-            let file_suffix = find_group_file(group, graph_index)
-                .map_or_else(String::new, |file| format!(" ({file})"));
+        GroupKind::Module { path, file } => {
+            let file_suffix = if file.is_empty() {
+                String::new()
+            } else {
+                format!(" ({file})")
+            };
             let leading = if group.children.is_empty() { "" } else { "\n" };
             let _ = writeln!(
                 out,
@@ -168,24 +171,10 @@ fn format_declared_dependencies(declared: Option<&[String]>) -> String {
     })
 }
 
-fn find_group_file<'a>(group: &'a GroupNode, graph_index: &GraphIndex<'a>) -> Option<&'a str> {
-    for child_id in &group.children {
-        if let Some(declaration) = graph_index.declaration(child_id) {
-            return Some(declaration.location.file.as_str());
-        }
-        if let Some(child_group) = graph_index.group(child_id)
-            && let Some(found) = find_group_file(child_group, graph_index)
-        {
-            return Some(found);
-        }
-    }
-    None
-}
-
 fn format_group_kind(kind: &GroupKind, graph_index: &GraphIndex<'_>) -> String {
     match kind {
         GroupKind::Component { .. } => "component".to_owned(),
-        GroupKind::Module { path } => format!("module:{path}"),
+        GroupKind::Module { path, .. } => format!("module:{path}"),
         GroupKind::Owner { root } => {
             let owner_name = graph_index
                 .declaration(root)
@@ -430,6 +419,7 @@ mod tests {
             kind: DeclarationKind::Callable,
             visibility: Visibility::Public,
             is_constructor: false,
+            has_receiver: false,
             location: SourceLocation {
                 file: "src/fixture.rs".to_owned(),
                 line: 10,
@@ -449,6 +439,7 @@ mod tests {
             kind: DeclarationKind::Callable,
             visibility: Visibility::Private,
             is_constructor: false,
+            has_receiver: false,
             location: SourceLocation {
                 file: "src/fixture.rs".to_owned(),
                 line: 20,
@@ -551,6 +542,7 @@ mod tests {
             label: "runner".to_owned(),
             kind: GroupKind::Module {
                 path: "runner".to_owned(),
+                file: "src/runner.rs".to_owned(),
             },
             recursion_group: 0,
             level: 0,
@@ -591,6 +583,7 @@ mod tests {
             kind: DeclarationKind::Type,
             visibility: Visibility::Public,
             is_constructor: false,
+            has_receiver: false,
             location: SourceLocation {
                 file: "src/frame.rs".to_owned(),
                 line: 1,
@@ -610,6 +603,7 @@ mod tests {
             kind: DeclarationKind::Callable,
             visibility: Visibility::Public,
             is_constructor: false,
+            has_receiver: false,
             location: SourceLocation {
                 file: "src/frame.rs".to_owned(),
                 line: 5,
@@ -662,6 +656,7 @@ mod tests {
         ];
         let mod_kind = GroupKind::Module {
             path: "m".to_owned(),
+            file: "src/m.rs".to_owned(),
         };
         assert_eq!(
             format_group_edge_list(&edges_three, &mod_kind),
@@ -718,7 +713,7 @@ mod tests {
         let twenty = render_graph(&module_depth_fixture_graph(20), OutputFormat::CompactBi);
         let twenty_one = render_graph(&module_depth_fixture_graph(21), OutputFormat::CompactBi);
 
-        assert!(twenty.contains("### Module [L0] unit_19\n"));
+        assert!(twenty.contains("### Module [L0] unit_19 (src/unit_19.rs)\n"));
         assert!(twenty.contains("-> unit_1[xmod x1,inferred]\n"));
         assert!(twenty_one.contains("... (+19 more modules in Core)\n"));
     }
@@ -734,6 +729,7 @@ mod tests {
                 label: format!("unit_{index}"),
                 kind: GroupKind::Module {
                     path: format!("unit_{index}"),
+                    file: format!("src/unit_{index}.rs"),
                 },
                 recursion_group: 0,
                 level: 0,

@@ -85,6 +85,8 @@ pub(super) struct DeclarationNode {
     pub(super) visibility: Visibility,
     /// Whether this callable is a constructor (`new`, `__init__`, etc.).
     pub(super) is_constructor: bool,
+    /// Whether this method takes an instance or class receiver (`self` / `cls`).
+    pub(super) has_receiver: bool,
     /// File, line, and column of the declaration name.
     pub(super) location: SourceLocation,
     /// Public declaration IDs that reach this declaration through private declarations only.
@@ -110,6 +112,8 @@ pub(super) enum GroupKind {
     Module {
         /// Module path (such as `code_lint::rules::callee_before_caller`).
         path: String,
+        /// Relative source file path (such as `src/code_lint/rules/callee_before_caller.rs`).
+        file: String,
     },
     /// A public entrypoint or public type `root` together with its exclusive private helpers.
     Owner {
@@ -689,6 +693,7 @@ mod tests {
             kind: DeclarationKind::Callable,
             visibility,
             is_constructor: false,
+            has_receiver: false,
             location: SourceLocation {
                 file: "src/sample.rs".to_owned(),
                 line: 1,

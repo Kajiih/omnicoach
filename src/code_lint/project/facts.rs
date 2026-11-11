@@ -353,7 +353,7 @@ fn parse_rust_module(
         .into_iter()
         .map(|reference| RawSymbolReference {
             line: reference.line,
-            source_symbol: enclosing_scope_symbol(&parsed, &scopes, reference.line),
+            source_symbol: enclosing_scope_symbol(&scopes, reference.line),
             raw_path: reference.raw_path,
         })
         .collect();
@@ -510,7 +510,7 @@ fn parse_python_module(
         .into_iter()
         .map(|(line, raw_path)| RawSymbolReference {
             line,
-            source_symbol: enclosing_scope_symbol(&parsed, &scopes, line),
+            source_symbol: enclosing_scope_symbol(&scopes, line),
             raw_path,
         })
         .collect();

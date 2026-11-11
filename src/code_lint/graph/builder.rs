@@ -117,6 +117,7 @@ fn accumulate_project_modules(
             label: module_fact.module_path.clone(),
             kind: GroupKind::Module {
                 path: module_fact.module_path.clone(),
+                file: module_fact.path.clone(),
             },
             recursion_group: 0,
             level: 0,
@@ -165,6 +166,7 @@ fn extract_public_surface_module(
                 kind: decl.kind,
                 visibility: decl.visibility,
                 is_constructor: decl.is_constructor,
+                has_receiver: decl.has_receiver,
                 location: decl.location.clone(),
                 owners: vec![new_id],
                 recursion_group: 0,
@@ -174,45 +176,7 @@ fn extract_public_surface_module(
         }
     }
 
-    let owner_root_by_group: BTreeMap<&NodeId, &NodeId> = module_graph
-        .groups()
-        .iter()
-        .filter_map(|group| match &group.kind {
-            GroupKind::Owner { root } => Some((&group.id, root)),
-            _ => None,
-        })
-        .collect();
-
-    let mut mod_ordering: Vec<OrderingEdge> = module_graph
-        .ordering_edges()
-        .iter()
-        .filter_map(|edge| {
-            Some(OrderingEdge {
-                higher: kept_old_to_new.get(&edge.higher)?.clone(),
-                lower: kept_old_to_new.get(&edge.lower)?.clone(),
-                reason: edge.reason,
-            })
-        })
-        .collect();
-    for summary in module_graph.summary_edges() {
-        if let (Some(&higher_root), Some(&lower_root)) = (
-            owner_root_by_group.get(&summary.higher),
-            owner_root_by_group.get(&summary.lower),
-        ) && let (Some(higher), Some(lower)) = (
-            kept_old_to_new.get(higher_root),
-            kept_old_to_new.get(lower_root),
-        ) && higher != lower
-        {
-            let candidate = OrderingEdge {
-                higher: higher.clone(),
-                lower: lower.clone(),
-                reason: summary.reason,
-            };
-            if !mod_ordering.contains(&candidate) {
-                mod_ordering.push(candidate);
-            }
-        }
-    }
+    let mod_ordering = project_public_surface_ordering_edges(&module_graph, &kept_old_to_new);
     acc.reference_edges
         .extend(module_graph.reference_edges().iter().filter_map(|edge| {
             Some(ReferenceEdge {
@@ -237,6 +201,64 @@ fn extract_public_surface_module(
     acc.declarations.extend(pub_decls);
     acc.ordering_edges.extend(mod_ordering);
     Ok(children)
+}
+
+fn project_public_surface_ordering_edges(
+    module_graph: &AbstractionGraph,
+    kept_old_to_new: &BTreeMap<NodeId, NodeId>,
+) -> Vec<OrderingEdge> {
+    let decl_by_id: BTreeMap<&NodeId, &DeclarationNode> = module_graph
+        .declarations()
+        .iter()
+        .map(|decl| (&decl.id, decl))
+        .collect();
+    let mut mod_ordering = Vec::new();
+    for edge in module_graph.ordering_edges() {
+        if edge.reason == EdgeReason::SignatureContract {
+            let Some(higher) = kept_old_to_new.get(&edge.higher) else {
+                continue;
+            };
+            let Some(lower_decl) = decl_by_id.get(&edge.lower) else {
+                continue;
+            };
+            for owner_id in &lower_decl.owners {
+                if let Some(lower) = kept_old_to_new.get(owner_id)
+                    && higher != lower
+                {
+                    let candidate = OrderingEdge {
+                        higher: higher.clone(),
+                        lower: lower.clone(),
+                        reason: edge.reason,
+                    };
+                    if !mod_ordering.contains(&candidate) {
+                        mod_ordering.push(candidate);
+                    }
+                }
+            }
+        } else {
+            let Some(lower) = kept_old_to_new.get(&edge.lower) else {
+                continue;
+            };
+            let Some(higher_decl) = decl_by_id.get(&edge.higher) else {
+                continue;
+            };
+            for owner_id in &higher_decl.owners {
+                if let Some(higher) = kept_old_to_new.get(owner_id)
+                    && higher != lower
+                {
+                    let candidate = OrderingEdge {
+                        higher: higher.clone(),
+                        lower: lower.clone(),
+                        reason: edge.reason,
+                    };
+                    if !mod_ordering.contains(&candidate) {
+                        mod_ordering.push(candidate);
+                    }
+                }
+            }
+        }
+    }
+    mod_ordering
 }
 
 fn extract_full_module(
@@ -270,6 +292,7 @@ fn extract_full_module(
             kind: decl.kind,
             visibility: decl.visibility,
             is_constructor: decl.is_constructor,
+            has_receiver: decl.has_receiver,
             location: decl.location.clone(),
             owners: decl
                 .owners
@@ -336,7 +359,10 @@ fn prefix_group_kind(prefix: &str, kind: &GroupKind) -> GroupKind {
         } => GroupKind::Component {
             declared_dependencies: declared_dependencies.clone(),
         },
-        GroupKind::Module { path } => GroupKind::Module { path: path.clone() },
+        GroupKind::Module { path, file } => GroupKind::Module {
+            path: path.clone(),
+            file: file.clone(),
+        },
         GroupKind::Owner { root } => GroupKind::Owner {
             root: prefix_node_id(prefix, root),
         },
@@ -463,7 +489,7 @@ fn assign_intra_component_module_levels(
 ) {
     let mut mods_by_comp: BTreeMap<&str, Vec<NodeId>> = BTreeMap::new();
     for group in module_groups.iter() {
-        if let GroupKind::Module { path } = &group.kind
+        if let GroupKind::Module { path, .. } = &group.kind
             && let Some(&comp) = mod_to_comp.get(path.as_str())
         {
             mods_by_comp.entry(comp).or_default().push(group.id.clone());
@@ -547,7 +573,7 @@ fn build_component_groups_and_summaries(
             .filter(|group| {
                 matches!(
                     &group.kind,
-                    GroupKind::Module { path }
+                    GroupKind::Module { path, .. }
                         if mod_to_comp.get(path.as_str()) == Some(&comp_name.as_str())
                 )
             })
@@ -1010,6 +1036,7 @@ fn build_declaration_node(
         kind,
         visibility: item.visibility,
         is_constructor: item.is_constructor,
+        has_receiver: item.has_receiver,
         location: SourceLocation {
             file: file_path.to_owned(),
             line: item.line,
@@ -1524,6 +1551,8 @@ mod tests {
             kind,
             visibility,
             is_constructor: false,
+            has_receiver: false,
+            impl_spans: Vec::new(),
             start_line: line,
             line,
             end_line: line,
@@ -1719,6 +1748,92 @@ mod tests {
         assert!(full.reference_edges().iter().any(|edge| {
             edge.source == NodeId::new("m1:s1:i0:Spec::new")
                 && edge.target == NodeId::new("m0:s1:i0:Spec::new")
+        }));
+    }
+
+    #[test]
+    fn public_surface_module_projects_ordering_edges_across_shared_helpers() {
+        let scope = ScopeFacts {
+            scope: DeclarationScopeKind::Module,
+            items: vec![
+                sample_item(
+                    "entry_a",
+                    ScopeItemKind::Callable,
+                    Visibility::Public,
+                    10,
+                    &[0],
+                    3,
+                    2,
+                ),
+                sample_item(
+                    "entry_b",
+                    ScopeItemKind::Callable,
+                    Visibility::Public,
+                    20,
+                    &[1],
+                    2,
+                    2,
+                ),
+                sample_item(
+                    "shared_helper",
+                    ScopeItemKind::Callable,
+                    Visibility::Private,
+                    30,
+                    &[0, 1],
+                    1,
+                    1,
+                ),
+                sample_item(
+                    "leaf_pub",
+                    ScopeItemKind::Callable,
+                    Visibility::Public,
+                    40,
+                    &[3],
+                    0,
+                    0,
+                ),
+            ],
+            relations: vec![
+                sample_rel(0, 2, RelationKind::Body),
+                sample_rel(1, 2, RelationKind::Body),
+                sample_rel(2, 3, RelationKind::Body),
+            ],
+            ordering: vec![
+                sample_ord(0, 2, OrderingReason::Call),
+                sample_ord(1, 2, OrderingReason::Call),
+                sample_ord(2, 3, OrderingReason::Call),
+            ],
+        };
+        let project = ProjectFacts {
+            title: "shared_pub".to_owned(),
+            has_declared_architecture: false,
+            components: vec![ComponentFact {
+                name: "Core".to_owned(),
+                declared_dependencies: None,
+                allowed_dependencies: Vec::new(),
+            }],
+            modules: vec![ModuleFact {
+                module_path: "core".to_owned(),
+                path: "src/core.rs".to_owned(),
+                component: "Core".to_owned(),
+                scopes: vec![scope],
+                intra_file_refs: Vec::new(),
+            }],
+            cross_module_refs: Vec::new(),
+        };
+
+        let pub_surface = build_project_graph(&project, ProjectDepth::PublicSurface)
+            .expect("PublicSurface valid");
+
+        assert!(pub_surface.ordering_edges().contains(&OrderingEdge {
+            higher: NodeId::new("m0:s0:i0:entry_a"),
+            lower: NodeId::new("m0:s0:i3:leaf_pub"),
+            reason: EdgeReason::Call,
+        }));
+        assert!(pub_surface.ordering_edges().contains(&OrderingEdge {
+            higher: NodeId::new("m0:s0:i1:entry_b"),
+            lower: NodeId::new("m0:s0:i3:leaf_pub"),
+            reason: EdgeReason::Call,
         }));
     }
 }

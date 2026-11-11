@@ -15,6 +15,8 @@ use ruff_python_ast::{Decorator, Expr, Stmt, StmtClassDef, StmtFunctionDef};
 use ruff_text_size::{Ranged as _, TextRange};
 use std::collections::{HashMap, HashSet};
 
+const STATICMETHOD_DECORATOR: &str = "staticmethod";
+
 const CONSTRUCTOR_NAMES: &[&str] = &[
     "__prepare__",
     "__init_subclass__",
@@ -362,6 +364,8 @@ fn build_class_declaration_scope<'a>(
                 signature: Some(group.signature),
                 visibility: group.visibility,
                 is_constructor: group.is_constructor,
+                has_receiver: group.has_receiver,
+                impl_spans: Vec::new(),
                 kind: ScopeItemKind::Callable,
                 references,
                 evaluated_before: None,
@@ -395,6 +399,7 @@ struct GroupedScopeItem<'a, 'ast> {
     signature: String,
     visibility: Visibility,
     is_constructor: bool,
+    has_receiver: bool,
     first_stmt_idx: usize,
     item: ScopeItemAst<'ast>,
 }
@@ -462,6 +467,8 @@ fn build_module_scope_item<'a>(
         signature: Some(group.signature.clone()),
         visibility: group.visibility,
         is_constructor: group.is_constructor,
+        has_receiver: false,
+        impl_spans: Vec::new(),
         kind,
         references,
         evaluated_before: None,
@@ -728,6 +735,7 @@ fn group_scope_items<'a, 'ast>(
                 );
                 let visibility = visibility_of(&name);
                 let is_constructor = is_class_scope && CONSTRUCTOR_NAMES.contains(&name.as_str());
+                let has_receiver = is_class_scope && is_python_receiver_method(function_def, file);
                 let def_node = AstNode::from_span(file, span_from_ruff_range(function_def.range));
                 items.push(GroupedScopeItem {
                     name_node: AstNode::from_span(
@@ -740,6 +748,7 @@ fn group_scope_items<'a, 'ast>(
                     signature: function_signature_text(function_def, file),
                     visibility,
                     is_constructor,
+                    has_receiver,
                     first_stmt_idx: stmt_idx,
                     item: ScopeItemAst::Callable(vec![function_def]),
                 });
@@ -757,6 +766,7 @@ fn group_scope_items<'a, 'ast>(
                     signature: class_signature_text(class_def, file),
                     visibility,
                     is_constructor: false,
+                    has_receiver: false,
                     first_stmt_idx: stmt_idx,
                     item: ScopeItemAst::Type(class_def),
                 });
@@ -783,6 +793,23 @@ fn visibility_of(name: &str) -> Visibility {
     } else {
         Visibility::Private
     }
+}
+
+/// Returns true if `function_def` is a non-`@staticmethod` class method whose first positional
+/// parameter is `self` or `cls`.
+fn is_python_receiver_method(function_def: &StmtFunctionDef, file: &ParsedFile) -> bool {
+    let is_staticmethod = function_def.decorator_list.iter().any(|decorator| {
+        collapse_whitespace(&file.source[decorator.expression.range()]) == STATICMETHOD_DECORATOR
+    });
+    if is_staticmethod {
+        return false;
+    }
+    function_def
+        .parameters
+        .posonlyargs
+        .first()
+        .or_else(|| function_def.parameters.args.first())
+        .is_some_and(|param| matches!(param.parameter.name.as_str(), SELF_RECEIVER | CLS_RECEIVER))
 }
 
 /// Returns true if `statement` is `if __name__ == "__main__":` or `if "__main__" == __name__:`.
@@ -818,8 +845,11 @@ fn function_signature_text(function_def: &StmtFunctionDef, file: &ParsedFile) ->
         .iter()
         .filter_map(|decorator| {
             let text = collapse_whitespace(&file.source[decorator.expression.range()]);
-            matches!(text.as_str(), "classmethod" | "staticmethod" | "property")
-                .then(|| format!("@{text} "))
+            matches!(
+                text.as_str(),
+                "classmethod" | STATICMETHOD_DECORATOR | "property"
+            )
+            .then(|| format!("@{text} "))
         })
         .collect();
     let header = header_text(

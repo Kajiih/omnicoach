@@ -654,11 +654,7 @@ fn render_slice_siblings(
 
 fn render_completeness_footer(out: &mut String, lang: Language, decl: &DeclarationNode) {
     let short_name = decl.name.rsplit("::").next().unwrap_or(decl.name.as_str());
-    let takes_self = decl.kind == DeclarationKind::Method
-        && decl
-            .signature
-            .as_deref()
-            .is_some_and(|signature| signature_has_receiver_param(signature, lang));
+    let takes_self = decl.kind == DeclarationKind::Method && decl.has_receiver;
     match (lang, takes_self) {
         (Language::Rust, true) => {
             let _ = writeln!(
@@ -716,9 +712,6 @@ fn build_lang_graph(
     Ok(Some(BuiltLanguageGraph { lang, graph }))
 }
 
-const SELF_RECEIVER_NAME: &str = "self";
-const CLS_RECEIVER_NAME: &str = "cls";
-
 fn matches_qualified_suffix(qualified_lower: &str, needle_lower: &str) -> bool {
     if needle_lower.is_empty() {
         return false;
@@ -729,33 +722,6 @@ fn matches_qualified_suffix(qualified_lower: &str, needle_lower: &str) -> bool {
         return false;
     };
     prefix.is_empty() || prefix.ends_with("::")
-}
-
-fn signature_has_receiver_param(signature: &str, lang: Language) -> bool {
-    let Some(open_paren) = signature.find('(') else {
-        return false;
-    };
-    let rest = &signature[open_paren + 1..];
-    let first_param = rest.split([',', ')']).next().map_or("", str::trim);
-    if first_param.is_empty() {
-        return false;
-    }
-    match lang {
-        Language::Rust => {
-            let without_colon = first_param.split(':').next().unwrap_or(first_param);
-            without_colon
-                .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-                .any(|token| token == SELF_RECEIVER_NAME)
-        }
-        Language::Python => {
-            let param_name = first_param
-                .split([':', '='])
-                .next()
-                .unwrap_or(first_param)
-                .trim();
-            matches!(param_name, SELF_RECEIVER_NAME | CLS_RECEIVER_NAME)
-        }
-    }
 }
 
 fn source_line_snippet<'a>(
@@ -916,27 +882,23 @@ mod tests {
         );
     }
 
-    #[rstest::rstest]
-    #[case::rust_ref_self("pub fn total(&self) -> usize", Language::Rust, true)]
-    #[case::rust_mut_self("pub fn reset(&mut self)", Language::Rust, true)]
-    #[case::rust_assoc_fn_with_self_substring(
-        "pub fn from_self_config(self_path: &str) -> Self",
-        Language::Rust,
-        false
-    )]
-    #[case::python_self("def load(self, key: str) -> str", Language::Python, true)]
-    #[case::python_cls("def create(cls, raw: str) -> Self", Language::Python, true)]
-    #[case::python_staticmethod_with_cls_substring(
-        "def parse(cls_name: str) -> None",
-        Language::Python,
-        false
-    )]
-    fn signature_receiver_detection_checks_first_parameter_only(
-        #[case] signature: &str,
-        #[case] language: Language,
-        #[case] expected: bool,
-    ) {
-        assert_eq!(signature_has_receiver_param(signature, language), expected);
+    #[test]
+    fn slice_completeness_footer_distinguishes_receiver_methods_from_associated_functions() {
+        let memory = sample_memory();
+        let discovered = sample_discovered(&memory);
+        let assoc_slice =
+            slice_in_sources(&discovered, &["Tracker::from_source".to_owned()], 1, 800).unwrap();
+        let receiver_slice =
+            slice_in_sources(&discovered, &["Tracker::total".to_owned()], 1, 800).unwrap();
+
+        assert!(
+            assoc_slice.contains("lists static direct and qualified path references"),
+            "expected associated function footer in:\n{assoc_slice}"
+        );
+        assert!(
+            receiver_slice.contains("Receiver-typed calls (x.total())"),
+            "expected receiver method footer in:\n{receiver_slice}"
+        );
     }
 
     #[test]

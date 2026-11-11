@@ -163,7 +163,7 @@ mod tests {
             "expected an omission notice in:\n{rendered}"
         );
         assert!(
-            !rendered.contains("### Module [L0] config\n// "),
+            !rendered.contains("### Module [L0] config (src/config.rs)\n// "),
             "expected no module edges in:\n{rendered}"
         );
     }

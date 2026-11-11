@@ -248,7 +248,7 @@ impl<'a> DeclarationAncestry<'a> {
                                 .entry(&declaration.id)
                                 .or_insert(group.label.as_str());
                         }
-                        GroupKind::Module { path } => {
+                        GroupKind::Module { path, .. } => {
                             module_by_declaration
                                 .entry(&declaration.id)
                                 .or_insert(path.as_str());
@@ -460,6 +460,7 @@ mod tests {
             kind,
             visibility: Visibility::Public,
             is_constructor: false,
+            has_receiver: false,
             location: SourceLocation {
                 file: "src/sample.rs".to_owned(),
                 line: 1,
@@ -506,6 +507,7 @@ mod tests {
             label: "core".to_owned(),
             kind: GroupKind::Module {
                 path: "core".to_owned(),
+                file: "src/core.rs".to_owned(),
             },
             recursion_group: 0,
             level: 0,
@@ -628,6 +630,7 @@ mod tests {
                     label: "api".to_owned(),
                     kind: GroupKind::Module {
                         path: "api".to_owned(),
+                        file: "src/api.rs".to_owned(),
                     },
                     recursion_group: 0,
                     level: 1,
@@ -638,6 +641,7 @@ mod tests {
                     label: "core".to_owned(),
                     kind: GroupKind::Module {
                         path: "core".to_owned(),
+                        file: "src/core.rs".to_owned(),
                     },
                     recursion_group: 0,
                     level: 0,

@@ -39,6 +39,10 @@ pub struct ItemFacts {
     pub visibility: Visibility,
     /// True if this callable is a lifecycle constructor (`__init__`, `pub fn new`, etc.).
     pub is_constructor: bool,
+    /// True if this method takes an instance or class receiver (`self` / `cls`).
+    pub has_receiver: bool,
+    /// 1-based `(start_line, end_line)` spans of `impl` blocks attached to this type declaration.
+    pub impl_spans: Vec<(usize, usize)>,
     /// 1-based first line of the declaration (including decorators or outer attributes).
     pub start_line: usize,
     /// 1-based line of the declaration's name identifier.
@@ -113,6 +117,8 @@ fn scope_facts(scope: &DeclarationScope<'_>) -> ScopeFacts {
                 kind: item.kind,
                 visibility: item.visibility,
                 is_constructor: item.is_constructor,
+                has_receiver: item.has_receiver,
+                impl_spans: item.impl_spans.clone(),
                 start_line: item.start_line,
                 line: coordinate.line,
                 end_line: item.end_line,
@@ -219,13 +225,9 @@ pub fn collect_intra_file_references(
 }
 
 /// Resolves the most specific declaration symbol (`"Type::method"`, `"Type"`, or `"fn_name"`)
-/// enclosing 1-based `line` in `file`.
+/// enclosing 1-based `line` across `scopes`.
 #[must_use]
-pub fn enclosing_scope_symbol(
-    file: &ParsedFile,
-    scopes: &[ScopeFacts],
-    line: usize,
-) -> Option<String> {
+pub fn enclosing_scope_symbol(scopes: &[ScopeFacts], line: usize) -> Option<String> {
     for scope in scopes {
         if let DeclarationScopeKind::Class { name } | DeclarationScopeKind::Impl { type_name: name } =
             &scope.scope
@@ -248,14 +250,16 @@ pub fn enclosing_scope_symbol(
             return Some(item.name.clone());
         }
     }
-    if file.lang() == Language::Rust
-        && let Some(self_type) = super::rust::enclosing_impl_self_type(file, line)
-        && scopes.iter().any(|scope| {
-            scope.scope == DeclarationScopeKind::Module
-                && scope.items.iter().any(|item| item.name == self_type)
-        })
-    {
-        return Some(self_type);
+    for scope in scopes {
+        if scope.scope == DeclarationScopeKind::Module
+            && let Some(item) = scope.items.iter().find(|item| {
+                item.impl_spans
+                    .iter()
+                    .any(|&(start, end)| start <= line && line <= end)
+            })
+        {
+            return Some(item.name.clone());
+        }
     }
     for scope in scopes {
         if scope.scope == DeclarationScopeKind::Module
