@@ -14,7 +14,6 @@ pub use self::architecture::{
     InvalidArchitectureComponentKind, PrivateComponentImportFinding,
     SiblingModuleDependencyFinding, UndeclaredComponentDependencyFinding,
     UnmappedArchitectureModuleFinding, UnownedExternalDependencyFinding,
-    evaluate_file_architecture, resolve_architecture_spec,
 };
 pub use self::context::ProjectContext;
 pub use self::index::{

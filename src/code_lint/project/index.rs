@@ -21,8 +21,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-const PYTHON_EXTENSION: &str = "py";
-const PYTHON_STUB_EXTENSION: &str = "pyi";
 const RUST_EXTENSION: &str = "rs";
 const MAX_REEXPORT_HOPS: usize = 8;
 const MAX_STAR_IMPORTS_PER_QUERY: usize = 32;
@@ -99,7 +97,6 @@ pub struct ProjectIndex<'s> {
     rust_slots: Mutex<HashMap<String, RustSlot>>,
     all_rust_headers: OnceLock<BTreeMap<String, Arc<RustFileSummary>>>,
     resolved_architecture: OnceLock<Result<Option<ArchitectureSpec>, ArchitectureError>>,
-    resolved_toml_architecture: OnceLock<Result<Option<ArchitectureSpec>, ArchitectureError>>,
     architecture_findings_cache: Mutex<HashMap<PathBuf, Arc<FileArchitectureFindings>>>,
 }
 
@@ -115,7 +112,6 @@ impl<'s> ProjectIndex<'s> {
             rust_slots: Mutex::new(HashMap::new()),
             all_rust_headers: OnceLock::new(),
             resolved_architecture: OnceLock::new(),
-            resolved_toml_architecture: OnceLock::new(),
             architecture_findings_cache: Mutex::new(HashMap::new()),
         }
     }
@@ -145,16 +141,13 @@ impl<'s> ProjectIndex<'s> {
         match parsed.lang() {
             Language::Python => {
                 if let Some(module) = self.layout.python_module_of_path(path) {
-                    let is_shadowed_by_stub = path
-                        .extension()
-                        .is_some_and(|extension| extension == PYTHON_EXTENSION)
-                        && self.source.is_file(
-                            &self
-                                .layout
-                                .resolve_query_path(path)
-                                .with_extension(PYTHON_STUB_EXTENSION),
-                        );
-                    if !is_shadowed_by_stub {
+                    let resolved = self.layout.resolve_query_path(path);
+                    if self
+                        .layout
+                        .python_module_file(&module, self.source)
+                        .as_deref()
+                        == Some(resolved.as_path())
+                    {
                         let slot = self.python_slot(&module);
                         let _ = slot.get_or_init(|| Some(Arc::new(summarize_python_file(parsed))));
                     }
@@ -430,11 +423,7 @@ impl<'s> ProjectIndex<'s> {
         let resolved = (|| {
             let toml_config = self.toml_architecture_config()?;
             let rust_headers = self.rust_headers_map();
-            resolve_architecture_spec(
-                &self.layout.project_root,
-                toml_config.as_ref(),
-                rust_headers,
-            )
+            resolve_architecture_spec(toml_config.as_ref(), rust_headers)
         })();
         self.resolved_architecture
             .get_or_init(|| resolved)
@@ -447,29 +436,26 @@ impl<'s> ProjectIndex<'s> {
     /// [`ArchitectureSpec`], if an architecture evaluation was attempted and failed.
     #[must_use]
     pub fn architecture_error(&self) -> Option<&ArchitectureError> {
-        if let Some(Err(error)) = self.resolved_architecture.get() {
-            return Some(error);
+        match self.resolved_architecture.get() {
+            Some(Err(error)) => Some(error),
+            _ => None,
         }
-        if let Some(Err(error)) = self.resolved_toml_architecture.get() {
-            return Some(error);
-        }
-        None
     }
 
     /// Evaluates (or returns cached) architectural conformance findings for `file` at `path`.
     #[must_use]
-    pub fn file_architecture_findings(
+    pub(super) fn file_architecture_findings(
         &self,
         file: &ParsedFile,
         path: &Path,
     ) -> Option<Arc<FileArchitectureFindings>> {
+        let resolved = self.architecture_spec();
+        if self.architecture_error().is_some() {
+            return None;
+        }
         let spec = match file.lang() {
-            Language::Python => Some(self.python_architecture_spec()?),
+            Language::Python => Some(resolved?),
             Language::Rust => {
-                let resolved = self.architecture_spec();
-                if self.architecture_error().is_some() {
-                    return None;
-                }
                 if resolved.is_none()
                     && !file
                         .source_text()
@@ -480,15 +466,6 @@ impl<'s> ProjectIndex<'s> {
                 resolved
             }
         };
-        {
-            let guard = self
-                .architecture_findings_cache
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(cached) = guard.get(path) {
-                return Some(Arc::clone(cached));
-            }
-        }
         let normalized_path = self.layout.resolve_query_path(path);
         {
             let guard = self
@@ -505,6 +482,12 @@ impl<'s> ProjectIndex<'s> {
                 let cached_python_summary = if file.lang() == Language::Python {
                     self.layout
                         .python_module_of_path(&normalized_path)
+                        .filter(|module| {
+                            self.layout
+                                .python_module_file(module, self.source)
+                                .as_deref()
+                                == Some(normalized_path.as_path())
+                        })
                         .and_then(|module| {
                             let guard = self
                                 .python_slots
@@ -532,30 +515,9 @@ impl<'s> ProjectIndex<'s> {
                 .architecture_findings_cache
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if path != normalized_path {
-                guard.insert(path.to_path_buf(), Arc::clone(&evaluated));
-            }
             guard.insert(normalized_path, Arc::clone(&evaluated));
         }
         Some(evaluated)
-    }
-
-    fn python_architecture_spec(&self) -> Option<&ArchitectureSpec> {
-        self.resolved_toml_architecture
-            .get_or_init(|| {
-                let Some(toml_config) = self.toml_architecture_config()? else {
-                    return Ok(None);
-                };
-                let empty_headers = BTreeMap::new();
-                resolve_architecture_spec(
-                    &self.layout.project_root,
-                    Some(&toml_config),
-                    &empty_headers,
-                )
-            })
-            .as_ref()
-            .ok()?
-            .as_ref()
     }
 
     /// Headers of the Rust modules the architecture spec reads: the `[architecture]` roots with
@@ -647,9 +609,7 @@ impl<'s> ProjectIndex<'s> {
     fn toml_architecture_config(&self) -> Result<Option<ArchitectureConfig>, ArchitectureError> {
         if let ConfiguredArchitecture::Loaded(ref configured) = self.configured_architecture {
             if let Some(config) = configured {
-                config
-                    .validate()
-                    .map_err(|error| ArchitectureError::Parse(error.to_string()))?;
+                config.validate()?;
             }
             return Ok(configured.clone());
         }
@@ -657,12 +617,9 @@ impl<'s> ProjectIndex<'s> {
         let Ok(content) = self.source.read_to_string(&config_path) else {
             return Ok(None);
         };
-        let parsed: PartialConfigWithArchitecture = toml::from_str(&content)
-            .map_err(|error| ArchitectureError::Parse(error.to_string()))?;
+        let parsed: PartialConfigWithArchitecture = toml::from_str(&content)?;
         if let Some(ref config) = parsed.architecture {
-            config
-                .validate()
-                .map_err(|error| ArchitectureError::Parse(error.to_string()))?;
+            config.validate()?;
         }
         Ok(parsed.architecture)
     }
@@ -1537,5 +1494,44 @@ mod tests {
 
         assert_eq!(external_counts, vec![2; 16]);
         assert_eq!(rayon_counts, vec![2; 256]);
+    }
+
+    #[test]
+    fn file_architecture_findings_do_not_reuse_stub_spans_for_python_implementation() {
+        let root = Path::new("/repo");
+        let impl_source = "def stray() -> int:\n    return 1\n";
+        let stub_source = "# long header padding so stub spans exceed impl file length\n".repeat(4)
+            + "def stub_only() -> int: ...\n";
+        let source = MemoryFileSource::from_relative_files(
+            root,
+            &[
+                (
+                    ".omnicoach.toml",
+                    indoc::indoc! {r#"
+                        [architecture]
+                        require-component-coverage = true
+
+                        [[architecture.components]]
+                        name = "Core"
+                        roots = ["pkg.core"]
+                    "#},
+                ),
+                ("pkg/__init__.py", ""),
+                ("pkg/core.py", "def ok() -> int:\n    return 1\n"),
+                ("pkg/orphan.py", impl_source),
+                ("pkg/orphan.pyi", &stub_source),
+            ],
+        );
+        let index = ProjectIndex::new(ProjectLayout::discover(root, &source, &[]), &source);
+        let _ = index.python_summary("pkg.orphan");
+        let parsed_impl = ParsedFile::new(impl_source, Language::Python);
+
+        let findings = index
+            .file_architecture_findings(&parsed_impl, Path::new("/repo/pkg/orphan.py"))
+            .expect("findings should resolve");
+
+        assert_eq!(findings.unmapped_architecture_modules.len(), 1);
+        assert_eq!(findings.unmapped_architecture_modules[0].name, "stray");
+        assert!(findings.unmapped_architecture_modules[0].span.end <= impl_source.len());
     }
 }

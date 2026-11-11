@@ -13,10 +13,12 @@ use crate::code_lint::ast::python::{
     summarize_python_file,
 };
 use crate::code_lint::ast::rust::{DefinedComponentEntry, RustFileSummary, summarize_rust_file};
-use crate::config::{ArchitectureComponentConfig, ArchitectureConfig};
+use crate::config::{
+    ArchitectureComponentConfig, ArchitectureConfig, ArchitectureConfigError, compile_glob,
+};
 use crate::diagnostic::{Language, SourceSpan};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 /// Canonical Rust module name (`src/architecture.rs` or `src/architecture/mod.rs`) where
@@ -28,46 +30,20 @@ const PYTHON_MODULE_SEPARATOR: &str = ".";
 const PREFIX_MATCH_RANK: usize = 3;
 
 /// Errors raised when loading or validating a project's [`ArchitectureSpec`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ArchitectureError {
     /// Both `.omnicoach.toml` `[[architecture.components]]` and Rust `define_architecture!` exist.
+    #[error(
+        "conflicting architecture declarations: both `.omnicoach.toml` `[[architecture.components]]` and Rust `define_architecture!` are present"
+    )]
     ConflictingDeclarations,
-    /// Two component declarations share the same component name.
-    DuplicateComponent(String),
-    /// Component `component` lists `dependency` which is undeclared or declared after `component`.
-    ForwardOrUnknownDependency {
-        /// Dependent component name.
-        component: String,
-        /// Invalid or out-of-order dependency name.
-        dependency: String,
-    },
-    /// Configuration parsing failure.
-    Parse(String),
+    /// Invalid `[architecture]` configuration or synthesized component DAG.
+    #[error(transparent)]
+    InvalidConfig(#[from] ArchitectureConfigError),
+    /// Invalid TOML syntax or unknown keys in `.omnicoach.toml`.
+    #[error(transparent)]
+    InvalidProjectToml(#[from] toml::de::Error),
 }
-
-impl std::fmt::Display for ArchitectureError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ConflictingDeclarations => write!(
-                f,
-                "conflicting architecture declarations: both `.omnicoach.toml` `[[architecture.components]]` and Rust `define_architecture!` are present"
-            ),
-            Self::DuplicateComponent(name) => {
-                write!(f, "duplicate architecture component `{name}`")
-            }
-            Self::ForwardOrUnknownDependency {
-                component,
-                dependency,
-            } => write!(
-                f,
-                "component `{component}` depends on `{dependency}`, which is undeclared or declared later in the topological component list"
-            ),
-            Self::Parse(message) => write!(f, "invalid `[architecture]` configuration: {message}"),
-        }
-    }
-}
-
-impl std::error::Error for ArchitectureError {}
 
 /// Validated, language-agnostic architectural specification for a project.
 #[expect(
@@ -76,8 +52,6 @@ impl std::error::Error for ArchitectureError {}
 )]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchitectureSpec {
-    /// Python source roots relative to project root.
-    pub source_roots: Vec<PathBuf>,
     /// Whether `depends_on` reachability is transitive.
     pub transitive_dependencies: bool,
     /// Whether unmapped production files are flagged.
@@ -86,8 +60,8 @@ pub struct ArchitectureSpec {
     pub check_local_imports: bool,
     /// Whether Python imports inside `if TYPE_CHECKING:` blocks are exempt.
     pub ignore_type_checking_imports: bool,
-    /// True when component roots were synthesized from `define_architecture!` (requiring every
-    /// declared component to have at least one `architecture_component!(...)` root).
+    /// True when component roots were synthesized from `define_architecture!` and
+    /// `architecture_component!(...)` module headers rather than `.omnicoach.toml`.
     pub from_rust_macros: bool,
     /// Topologically ordered components.
     pub components: Vec<ComponentSpec>,
@@ -121,7 +95,7 @@ pub struct ComponentSpec {
 pub struct ExportPattern {
     /// Configured glob symbol pattern (`build_*`, `main`).
     pub pattern: String,
-    matcher: Option<globset::GlobMatcher>,
+    matcher: globset::GlobMatcher,
 }
 
 impl PartialEq for ExportPattern {
@@ -133,26 +107,17 @@ impl PartialEq for ExportPattern {
 impl Eq for ExportPattern {}
 
 impl ExportPattern {
-    /// Compiles a symbol export glob pattern (`build_*`, `main`) into a reusable matcher.
-    #[must_use]
-    pub fn new(raw: &str) -> Self {
-        let matcher = crate::config::compile_glob(raw)
-            .ok()
-            .map(|glob| glob.compile_matcher());
-        Self {
+    fn new(raw: &str) -> Result<Self, globset::Error> {
+        let matcher = compile_glob(raw)?.compile_matcher();
+        Ok(Self {
             pattern: raw.to_owned(),
             matcher,
-        }
+        })
     }
 
-    /// Returns true if `candidate` matches this export pattern.
     #[must_use]
-    pub fn matches(&self, candidate: &str) -> bool {
-        self.pattern == candidate
-            || self
-                .matcher
-                .as_ref()
-                .is_some_and(|compiled| compiled.is_match(candidate))
+    fn matches(&self, candidate: &str) -> bool {
+        self.pattern == candidate || self.matcher.is_match(candidate)
     }
 }
 
@@ -175,6 +140,15 @@ impl ArchitectureSpec {
                 resolve_python_component(module_path, self).map(|matched| matched.component_name)
             }
         }
+    }
+
+    /// Returns true if `from_component` is permitted to depend on `target_component` under this
+    /// specification (honoring `transitive_dependencies`).
+    #[must_use]
+    pub fn allows_dependency(&self, from_component: &str, target_component: &str) -> bool {
+        self.allowed_dependencies
+            .get(from_component)
+            .is_some_and(|allowed| allowed.contains(target_component))
     }
 
     fn component_spec(&self, name: &str) -> Option<&ComponentSpec> {
@@ -315,23 +289,10 @@ pub struct FileArchitectureFindings {
     pub invalid_architecture_components: Vec<InvalidArchitectureComponentFinding>,
 }
 
-/// Evaluates the component-level architectural conformance rules for a single parsed `file` at
-/// `path`.
-#[must_use]
-pub fn evaluate_file_architecture(
-    file: &ParsedFile,
-    path: &Path,
-    layout: &ProjectLayout,
-    source: &dyn FileSource,
-    spec: &ArchitectureSpec,
-) -> FileArchitectureFindings {
-    evaluate_file_architecture_with_summary(file, path, layout, source, spec, None)
-}
-
 /// Evaluates the component-level architectural conformance rules for `file` (`path`), reusing an
 /// optional pre-computed [`PythonFileSummary`] when `file` is a Python module.
 #[must_use]
-pub fn evaluate_file_architecture_with_summary(
+pub(super) fn evaluate_file_architecture_with_summary(
     file: &ParsedFile,
     path: &Path,
     layout: &ProjectLayout,
@@ -350,7 +311,7 @@ pub fn evaluate_file_architecture_with_summary(
 /// Evaluates stray `architecture_component!(...)` macro calls in a Rust `file` (`path`) when
 /// the project declares no [`ArchitectureSpec`].
 #[must_use]
-pub fn evaluate_stray_rust_component_markers(
+pub(super) fn evaluate_stray_rust_component_markers(
     file: &ParsedFile,
     path: &Path,
     layout: &ProjectLayout,
@@ -391,8 +352,7 @@ pub fn evaluate_stray_rust_component_markers(
 /// Returns [`ArchitectureError`] if both `.omnicoach.toml` `[[architecture.components]]` and Rust
 /// `define_architecture!` in `architecture` are non-empty, or if `depends_on` violates forward
 /// declaration order.
-pub fn resolve_architecture_spec(
-    project_root: &Path,
+pub(super) fn resolve_architecture_spec(
     toml_config: Option<&ArchitectureConfig>,
     rust_headers: &BTreeMap<String, Arc<RustFileSummary>>,
 ) -> Result<Option<ArchitectureSpec>, ArchitectureError> {
@@ -406,13 +366,12 @@ pub fn resolve_architecture_spec(
             return Err(ArchitectureError::ConflictingDeclarations);
         }
         let synthesized_config = architecture_config_from_rust_headers(rust_headers);
-        return build_architecture_spec(project_root, &synthesized_config, true, rust_headers)
-            .map(Some);
+        return build_architecture_spec(&synthesized_config, true, rust_headers).map(Some);
     }
 
     match toml_config {
         Some(config) if has_toml_components => {
-            build_architecture_spec(project_root, config, false, rust_headers).map(Some)
+            build_architecture_spec(config, false, rust_headers).map(Some)
         }
         _ => Ok(None),
     }
@@ -533,11 +492,7 @@ fn check_rust_cross_component_edge(
     spec: &ArchitectureSpec,
     findings: &mut FileArchitectureFindings,
 ) {
-    let allowed = spec
-        .allowed_dependencies
-        .get(from_component)
-        .is_some_and(|set| set.contains(target_component));
-    if !allowed {
+    if !spec.allows_dependency(from_component, target_component) {
         findings
             .undeclared_component_dependencies
             .push(UndeclaredComponentDependencyFinding {
@@ -780,7 +735,7 @@ fn evaluate_python_file_architecture(
     spec: &ArchitectureSpec,
     python_summary: Option<&PythonFileSummary>,
 ) -> FileArchitectureFindings {
-    if path.extension().is_some_and(|extension| extension == "pyi") {
+    if spec.from_rust_macros || path.extension().is_some_and(|extension| extension == "pyi") {
         return FileArchitectureFindings::default();
     }
     let Some(module_path) = layout.python_architecture_module_of_path(path) else {
@@ -964,11 +919,7 @@ fn check_python_first_party_edge(
         return;
     }
 
-    let is_allowed = spec
-        .allowed_dependencies
-        .get(from_match.component_name)
-        .is_some_and(|set| set.contains(target_match.component_name));
-    if !is_allowed {
+    if !spec.allows_dependency(from_match.component_name, target_match.component_name) {
         findings
             .undeclared_component_dependencies
             .push(UndeclaredComponentDependencyFinding {
@@ -1357,32 +1308,32 @@ fn is_rust_path_allowed_by_exports(
 }
 
 fn build_architecture_spec(
-    project_root: &Path,
     config: &ArchitectureConfig,
     from_rust_macros: bool,
     rust_headers: &BTreeMap<String, Arc<RustFileSummary>>,
 ) -> Result<ArchitectureSpec, ArchitectureError> {
-    let mut seen = HashSet::with_capacity(config.components.len());
+    config.validate()?;
     let mut components = Vec::with_capacity(config.components.len());
-
     for entry in &config.components {
-        for dependency in &entry.depends_on {
-            if !seen.contains(dependency.as_str()) {
-                return Err(ArchitectureError::ForwardOrUnknownDependency {
-                    component: entry.name.clone(),
-                    dependency: dependency.clone(),
-                });
-            }
-        }
-        if !seen.insert(entry.name.clone()) {
-            return Err(ArchitectureError::DuplicateComponent(entry.name.clone()));
-        }
-        let public_exports = entry.public_exports.as_ref().map(|patterns| {
-            patterns
-                .iter()
-                .map(|pattern| ExportPattern::new(pattern))
-                .collect()
-        });
+        let public_exports = match &entry.public_exports {
+            Some(patterns) => Some(
+                patterns
+                    .iter()
+                    .map(|pattern| {
+                        ExportPattern::new(pattern).map_err(|error| {
+                            ArchitectureError::InvalidConfig(
+                                ArchitectureConfigError::InvalidPublicExportGlob {
+                                    component: entry.name.clone(),
+                                    pattern: pattern.clone(),
+                                    message: error.to_string(),
+                                },
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+            None => None,
+        };
         components.push(ComponentSpec {
             name: entry.name.clone(),
             roots: entry.roots.clone(),
@@ -1393,27 +1344,10 @@ fn build_architecture_spec(
         });
     }
 
-    let source_roots = if config.source_roots.is_empty() {
-        vec![project_root.to_path_buf()]
-    } else {
-        config
-            .source_roots
-            .iter()
-            .map(|relative_root| {
-                if relative_root == "." || relative_root.is_empty() {
-                    project_root.to_path_buf()
-                } else {
-                    project_root.join(relative_root)
-                }
-            })
-            .collect()
-    };
-
     let require_component_coverage =
         (!components.is_empty() || from_rust_macros) && config.require_component_coverage;
     Ok(finalize_architecture_spec(
         ArchitectureSpec {
-            source_roots,
             transitive_dependencies: config.transitive_dependencies,
             require_component_coverage,
             check_local_imports: true,
@@ -1689,7 +1623,7 @@ mod tests {
             depends-on = ["Ast"]
         "#})
         .unwrap();
-        let spec = resolve_architecture_spec(root, Some(&config), &BTreeMap::new())
+        let spec = resolve_architecture_spec(Some(&config), &BTreeMap::new())
             .unwrap()
             .unwrap();
         let layout = ProjectLayout::discover(root, &source, &[]);
