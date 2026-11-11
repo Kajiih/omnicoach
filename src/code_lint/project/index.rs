@@ -5,7 +5,7 @@ use super::architecture::{
     evaluate_file_architecture_with_summary, evaluate_stray_rust_component_markers,
     resolve_architecture_spec,
 };
-use super::config::{ArchitectureConfig, CONFIG_FILE_NAME};
+use super::config::{CONFIG_FILE_NAME, ProjectConfig, ProjectTomlError};
 use super::layout::{ProjectLayout, is_python_package_init, resolve_relative_python_module};
 use super::source::FileSource;
 use crate::code_lint::ast::ParsedFile;
@@ -16,7 +16,6 @@ use crate::code_lint::ast::python::{
 use crate::code_lint::ast::rust::{RustFileSummary, summarize_rust_module_header};
 use crate::diagnostic::Language;
 use rayon::prelude::*;
-use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -92,7 +91,7 @@ type RustSlot = Arc<OnceLock<Option<Arc<RustFileSummary>>>>;
 pub struct ProjectIndex<'s> {
     layout: ProjectLayout,
     source: &'s dyn FileSource,
-    configured_architecture: ConfiguredArchitecture,
+    project_config: ProjectConfig,
     python_slots: Mutex<HashMap<String, PythonSlot>>,
     rust_slots: Mutex<HashMap<String, RustSlot>>,
     all_rust_headers: OnceLock<BTreeMap<String, Arc<RustFileSummary>>>,
@@ -107,7 +106,7 @@ impl<'s> ProjectIndex<'s> {
         Self {
             layout,
             source,
-            configured_architecture: ConfiguredArchitecture::Unset,
+            project_config: ProjectConfig::default(),
             python_slots: Mutex::new(HashMap::new()),
             rust_slots: Mutex::new(HashMap::new()),
             all_rust_headers: OnceLock::new(),
@@ -116,11 +115,92 @@ impl<'s> ProjectIndex<'s> {
         }
     }
 
-    /// Attaches a pre-validated [`ArchitectureConfig`] from `.omnicoach.toml`.
+    /// Attaches a [`ProjectConfig`] resolved for this project.
     #[must_use]
-    pub fn with_architecture_config(mut self, architecture: Option<ArchitectureConfig>) -> Self {
-        self.configured_architecture = ConfiguredArchitecture::Loaded(architecture);
+    pub fn with_project_config(mut self, project_config: ProjectConfig) -> Self {
+        self.project_config = project_config;
         self
+    }
+
+    /// Discovers [`ProjectLayout`] from `anchor` on `source` and constructs a [`ProjectIndex`]
+    /// configured from `config` when `config` governs the discovered project root, or from
+    /// the nearest ancestor `.omnicoach.toml` when present on `source`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProjectTomlError`] if an external `.omnicoach.toml` fails TOML deserialization
+    /// or `[architecture]` validation.
+    pub fn discover_with_config(
+        anchor: &Path,
+        source: &'s dyn FileSource,
+        config: &ProjectConfig,
+    ) -> Result<Self, ProjectTomlError> {
+        let base_layout = ProjectLayout::discover(anchor, source, &[]);
+        Self::from_layout_and_config(base_layout, source, config)
+    }
+
+    /// Constructs a [`ProjectIndex`] from an already-discovered `base_layout`, applying `config`
+    /// when it governs `base_layout.project_root` or loading the nearest ancestor `.omnicoach.toml`
+    /// from `source`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProjectTomlError`] if an external `.omnicoach.toml` fails TOML deserialization
+    /// or `[architecture]` validation.
+    pub fn from_layout_and_config(
+        base_layout: ProjectLayout,
+        source: &'s dyn FileSource,
+        config: &ProjectConfig,
+    ) -> Result<Self, ProjectTomlError> {
+        let external_config_file = find_external_config_file(&base_layout.project_root, source);
+        let applies_to_project = config.root_dir.as_deref().map_or_else(
+            || {
+                config.architecture.is_some()
+                    || !config.context.source_roots.is_empty()
+                    || external_config_file.is_none()
+            },
+            |config_root| {
+                let resolved_config_root = base_layout.resolve_query_path(config_root);
+                base_layout.project_root == resolved_config_root
+                    || (base_layout.project_root.starts_with(&resolved_config_root)
+                        && external_config_file.as_ref().is_none_or(|external_path| {
+                            external_path.parent() == Some(resolved_config_root.as_path())
+                        }))
+            },
+        );
+        if applies_to_project {
+            let mut effective_config = config.clone();
+            let resolved_root = effective_config.root_dir.as_deref().map_or_else(
+                || base_layout.project_root.clone(),
+                |root| base_layout.resolve_query_path(root),
+            );
+            effective_config.root_dir = Some(resolved_root);
+            let configured_roots = effective_config.configured_source_roots();
+            let layout = base_layout.with_configured_python_roots(&configured_roots);
+            return Ok(Self::new(layout, source).with_project_config(effective_config));
+        }
+        let Some(external_config_path) = external_config_file else {
+            let default_config = ProjectConfig {
+                root_dir: Some(base_layout.project_root.clone()),
+                ..ProjectConfig::default()
+            };
+            return Ok(Self::new(base_layout, source).with_project_config(default_config));
+        };
+        let Ok(content) = source.read_to_string(&external_config_path) else {
+            let default_config = ProjectConfig {
+                root_dir: Some(base_layout.project_root.clone()),
+                ..ProjectConfig::default()
+            };
+            return Ok(Self::new(base_layout, source).with_project_config(default_config));
+        };
+        let mut external = ProjectConfig::from_toml_str(&content)?;
+        external.root_dir = external_config_path
+            .parent()
+            .map(Path::to_path_buf)
+            .or_else(|| Some(base_layout.project_root.clone()));
+        let external_roots = external.configured_source_roots();
+        let final_layout = base_layout.with_configured_python_roots(&external_roots);
+        Ok(Self::new(final_layout, source).with_project_config(external))
     }
 
     /// Project layout used by this index.
@@ -129,10 +209,18 @@ impl<'s> ProjectIndex<'s> {
         &self.layout
     }
 
-    /// Merges additional Python source roots discovered from nested `pyproject.toml` files inside
-    /// the same `project_root`.
+    /// Rule-registry-independent project configuration resolved for this index.
+    #[must_use]
+    pub const fn project_config(&self) -> &ProjectConfig {
+        &self.project_config
+    }
+
+    /// Merges additional inferred Python source roots discovered inside the same `project_root`
+    /// when Python source roots were not explicitly configured in `.omnicoach.toml`.
     pub fn merge_python_source_roots(&mut self, additional: &[PathBuf]) {
-        self.layout.merge_python_source_roots(additional);
+        if !self.project_config.has_configured_python_roots() {
+            self.layout.merge_python_source_roots(additional);
+        }
     }
 
     /// Seeds the memoized summary for `path` from an already-parsed [`ParsedFile`], avoiding a
@@ -420,11 +508,9 @@ impl<'s> ProjectIndex<'s> {
         if let Some(resolved) = self.resolved_architecture.get() {
             return resolved.as_ref().ok()?.as_ref();
         }
-        let resolved = (|| {
-            let toml_config = self.toml_architecture_config()?;
-            let rust_headers = self.rust_headers_map();
-            resolve_architecture_spec(toml_config.as_ref(), rust_headers)
-        })();
+        let rust_headers = self.rust_headers_map();
+        let resolved =
+            resolve_architecture_spec(self.project_config.architecture.as_ref(), rust_headers);
         self.resolved_architecture
             .get_or_init(|| resolved)
             .as_ref()
@@ -536,16 +622,15 @@ impl<'s> ProjectIndex<'s> {
             return BTreeMap::new();
         }
         let mut headers: BTreeMap<String, Arc<RustFileSummary>> = self
-            .toml_architecture_config()
-            .ok()
-            .flatten()
-            .into_iter()
-            .flat_map(|config| config.components)
+            .project_config
+            .architecture
+            .iter()
+            .flat_map(|config| &config.components)
             .filter(|component| component.isolate_children)
-            .flat_map(|component| component.roots)
+            .flat_map(|component| &component.roots)
             .filter_map(|module| {
-                let summary = self.rust_summary(&module)?;
-                Some((module, summary))
+                let summary = self.rust_summary(module)?;
+                Some((module.clone(), summary))
             })
             .collect();
         if !self.declares_rust_architecture() {
@@ -604,24 +689,6 @@ impl<'s> ProjectIndex<'s> {
             && self
                 .rust_summary(RUST_ARCHITECTURE_MODULE)
                 .is_some_and(|summary| !summary.defined_architecture.is_empty())
-    }
-
-    fn toml_architecture_config(&self) -> Result<Option<ArchitectureConfig>, ArchitectureError> {
-        if let ConfiguredArchitecture::Loaded(ref configured) = self.configured_architecture {
-            if let Some(config) = configured {
-                config.validate()?;
-            }
-            return Ok(configured.clone());
-        }
-        let config_path = self.layout.project_root.join(CONFIG_FILE_NAME);
-        let Ok(content) = self.source.read_to_string(&config_path) else {
-            return Ok(None);
-        };
-        let parsed: PartialConfigWithArchitecture = toml::from_str(&content)?;
-        if let Some(ref config) = parsed.architecture {
-            config.validate()?;
-        }
-        Ok(parsed.architecture)
     }
 
     fn protocol_counted_methods(&self, mro: &[PythonClassId]) -> HashSet<String> {
@@ -1073,15 +1140,19 @@ impl<'s> ProjectIndex<'s> {
     }
 }
 
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "kebab-case")]
-struct PartialConfigWithArchitecture {
-    architecture: Option<ArchitectureConfig>,
-}
-
-enum ConfiguredArchitecture {
-    Unset,
-    Loaded(Option<ArchitectureConfig>),
+fn find_external_config_file(start_dir: &Path, source: &dyn FileSource) -> Option<PathBuf> {
+    let mut current = Some(start_dir);
+    while let Some(directory) = current {
+        let candidate = directory.join(CONFIG_FILE_NAME);
+        if source.is_file(&candidate) {
+            return Some(candidate);
+        }
+        if source.is_dir(&directory.join(".jj")) || source.is_dir(&directory.join(".git")) {
+            break;
+        }
+        current = directory.parent();
+    }
+    None
 }
 
 struct ModuleHeaderEntry {
@@ -1497,6 +1568,51 @@ mod tests {
     }
 
     #[test]
+    fn discover_with_config_rejects_invalid_external_project_toml() {
+        let root = Path::new("/external");
+        let source = MemoryFileSource::from_relative_files(
+            root,
+            &[(".omnicoach.toml", "[[architecture.components\n")],
+        );
+        let caller_config = ProjectConfig {
+            root_dir: Some(PathBuf::from("/caller")),
+            ..ProjectConfig::default()
+        };
+
+        let result = ProjectIndex::discover_with_config(root, &source, &caller_config);
+
+        assert!(matches!(result, Err(ProjectTomlError::Toml(_))));
+    }
+
+    #[test]
+    fn merge_python_source_roots_preserves_explicit_configured_roots() {
+        let root = Path::new("/repo");
+        let source = MemoryFileSource::from_relative_files(
+            root,
+            &[
+                (
+                    ".omnicoach.toml",
+                    "[context]\nsource-roots = [\"python\"]\n",
+                ),
+                ("python/pkg/__init__.py", ""),
+            ],
+        );
+        let caller_config = ProjectConfig {
+            root_dir: Some(PathBuf::from("/other")),
+            ..ProjectConfig::default()
+        };
+        let mut index = ProjectIndex::discover_with_config(root, &source, &caller_config)
+            .expect("valid external TOML");
+
+        index.merge_python_source_roots(&[PathBuf::from("/repo/extra")]);
+
+        assert_eq!(
+            index.layout().python_source_roots,
+            vec![PathBuf::from("/repo/python")]
+        );
+    }
+
+    #[test]
     fn file_architecture_findings_do_not_reuse_stub_spans_for_python_implementation() {
         let root = Path::new("/repo");
         let impl_source = "def stray() -> int:\n    return 1\n";
@@ -1522,7 +1638,12 @@ mod tests {
                 ("pkg/orphan.pyi", &stub_source),
             ],
         );
-        let index = ProjectIndex::new(ProjectLayout::discover(root, &source, &[]), &source);
+        let caller_config = ProjectConfig {
+            root_dir: Some(PathBuf::from("/other")),
+            ..ProjectConfig::default()
+        };
+        let index = ProjectIndex::discover_with_config(root, &source, &caller_config)
+            .expect("valid external TOML");
         let _ = index.python_summary("pkg.orphan");
         let parsed_impl = ParsedFile::new(impl_source, Language::Python);
 
@@ -1533,5 +1654,46 @@ mod tests {
         assert_eq!(findings.unmapped_architecture_modules.len(), 1);
         assert_eq!(findings.unmapped_architecture_modules[0].name, "stray");
         assert!(findings.unmapped_architecture_modules[0].span.end <= impl_source.len());
+    }
+
+    #[test]
+    fn discover_with_config_finds_ancestor_omnicoach_toml_from_subpackage_and_preserves_context() {
+        let root = Path::new("/monorepo");
+        let source = MemoryFileSource::from_relative_files(
+            root,
+            &[
+                (".jj/repo", ""),
+                (
+                    ".omnicoach.toml",
+                    indoc::indoc! {r#"
+                        [context]
+                        source-roots = ["packages/app/src"]
+                    "#},
+                ),
+                (
+                    "packages/app/pyproject.toml",
+                    indoc::indoc! {r#"
+                        [project]
+                        name = "app"
+                    "#},
+                ),
+                ("packages/app/src/app/__init__.py", ""),
+            ],
+        );
+        let caller_config = ProjectConfig {
+            root_dir: Some(PathBuf::from("/unrelated")),
+            ..ProjectConfig::default()
+        };
+        let index = ProjectIndex::discover_with_config(
+            &root.join("packages/app/src/app/__init__.py"),
+            &source,
+            &caller_config,
+        )
+        .expect("should load ancestor .omnicoach.toml");
+
+        assert_eq!(
+            index.layout().python_source_roots,
+            vec![root.join("packages/app/src")]
+        );
     }
 }

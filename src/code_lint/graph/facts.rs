@@ -8,9 +8,9 @@ use crate::code_lint::ast::{
 };
 use crate::code_lint::project::{
     ArchitectureConfig, ArchitectureSpec, DiskFileSource, FileSource as _, MemoryFileSource,
-    ProjectIndex, ProjectLayout, ResolvedPythonTarget, is_python_package_init, is_rust_crate_root,
-    normalize_relative_path, resolve_relative_python_module, resolve_rust_reference_path,
-    rust_module_path,
+    ProjectConfig, ProjectIndex, ProjectLayout, ResolvedPythonTarget, is_python_package_init,
+    is_rust_crate_root, normalize_relative_path, resolve_relative_python_module,
+    resolve_rust_reference_path, rust_module_path,
 };
 use crate::config::Config;
 use crate::diagnostic::Language;
@@ -107,7 +107,10 @@ pub(super) fn collect_project_facts_with_config(
     let layout = ProjectLayout::discover(root, &memory, &configured_roots);
     let base_index = ProjectIndex::new(layout.clone(), &memory);
     let index = match architecture {
-        Some(configured) => base_index.with_architecture_config(Some(configured.clone())),
+        Some(configured) => base_index.with_project_config(ProjectConfig {
+            architecture: Some(configured.clone()),
+            ..ProjectConfig::default()
+        }),
         None => base_index,
     };
     match lang {

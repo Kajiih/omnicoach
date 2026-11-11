@@ -167,6 +167,17 @@ pub struct ArchitectureComponentConfig {
     pub public_exports: Option<Vec<String>>,
 }
 
+/// Failure while parsing project-layout or `[architecture]` sections of `.omnicoach.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ProjectTomlError {
+    /// Invalid TOML syntax or field types in `[context]` or `[architecture]`.
+    #[error(transparent)]
+    Toml(#[from] toml::de::Error),
+    /// Invalid `[architecture]` DAG or `public-exports` glob.
+    #[error(transparent)]
+    Architecture(#[from] ArchitectureConfigError),
+}
+
 /// Rule-registry-independent project layout, path context, and `[architecture]` settings from `.omnicoach.toml`.
 #[derive(Debug, Default, Clone)]
 pub struct ProjectConfig {
@@ -179,6 +190,25 @@ pub struct ProjectConfig {
 }
 
 impl ProjectConfig {
+    /// Parses and validates the rule-registry-independent project sections (`[context]` and
+    /// `[architecture]`) from `.omnicoach.toml` text, ignoring rule-selection keys (`select`,
+    /// `ignore`, `per-file-ignores`, `rules`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProjectTomlError`] if TOML deserialization or [`ArchitectureConfig::validate`] fails.
+    pub fn from_toml_str(toml_content: &str) -> Result<Self, ProjectTomlError> {
+        let raw: RawProjectToml = toml::from_str(toml_content)?;
+        if let Some(ref architecture) = raw.architecture {
+            architecture.validate()?;
+        }
+        Ok(Self {
+            context: raw.context,
+            root_dir: None,
+            architecture: raw.architecture,
+        })
+    }
+
     /// Returns true if the given path matches any configured test pattern.
     #[must_use]
     pub fn is_test_path(&self, path: &Path) -> bool {
@@ -281,6 +311,23 @@ pub fn compile_glob(pattern: &str) -> Result<globset::Glob, globset::Error> {
     globset::GlobBuilder::new(pattern)
         .literal_separator(false)
         .build()
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct RawProjectToml {
+    #[serde(default)]
+    context: ContextConfig,
+    #[serde(default)]
+    architecture: Option<ArchitectureConfig>,
+    #[serde(default, rename = "select")]
+    _select: Option<serde::de::IgnoredAny>,
+    #[serde(default, rename = "ignore")]
+    _ignore: Option<serde::de::IgnoredAny>,
+    #[serde(default, rename = "per-file-ignores")]
+    _per_file_ignores: Option<serde::de::IgnoredAny>,
+    #[serde(default, rename = "rules")]
+    _rules: Option<serde::de::IgnoredAny>,
 }
 
 const fn default_true() -> bool {
@@ -432,6 +479,95 @@ mod tests {
             error,
             ArchitectureConfigError::InvalidPublicExportGlob { ref component, ref pattern, .. }
                 if component == "Auth" && pattern == "[unclosed"
+        ));
+    }
+
+    #[test]
+    fn test_from_toml_str_parses_context_and_architecture_while_ignoring_rule_keys() {
+        let parsed = ProjectConfig::from_toml_str(indoc::indoc! {r#"
+            select = ["architecture"]
+            ignore = ["single-letter-name"]
+
+            [per-file-ignores]
+            "scripts/**" = ["architecture"]
+
+            [context]
+            source-roots = ["python"]
+
+            [rules.single-letter-name]
+            enforcement-mode = "ban"
+
+            [[architecture.components]]
+            name = "Core"
+            roots = ["pkg.core"]
+
+            [[architecture.components]]
+            name = "Api"
+            roots = ["pkg.api"]
+            depends-on = ["Core"]
+        "#})
+        .expect("valid project TOML should parse");
+
+        assert_eq!(parsed.context.source_roots, vec!["python".to_owned()]);
+        assert_eq!(
+            parsed
+                .architecture
+                .as_ref()
+                .map(|architecture| architecture.components.len()),
+            Some(2)
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::invalid_toml("[[architecture.components\nname = \"Core\"")]
+    #[case::unknown_top_level_table("[architecure]\nsource-roots = [\"py\"]")]
+    fn test_from_toml_str_rejects_malformed_or_unknown_toml_keys(#[case] content: &str) {
+        let result = ProjectConfig::from_toml_str(content);
+
+        assert!(matches!(result, Err(ProjectTomlError::Toml(_))));
+    }
+
+    #[test]
+    fn test_from_toml_str_validates_architecture_dag_and_export_globs() {
+        let duplicate = ProjectConfig::from_toml_str(indoc::indoc! {r#"
+            [[architecture.components]]
+            name = "Core"
+            roots = ["a"]
+            [[architecture.components]]
+            name = "Core"
+            roots = ["b"]
+        "#});
+        let forward = ProjectConfig::from_toml_str(indoc::indoc! {r#"
+            [[architecture.components]]
+            name = "Api"
+            roots = ["api"]
+            depends-on = ["Core"]
+        "#});
+        let bad_glob = ProjectConfig::from_toml_str(indoc::indoc! {r#"
+            [[architecture.components]]
+            name = "Core"
+            roots = ["core"]
+            public-exports = ["[unclosed"]
+        "#});
+
+        assert_eq!(
+            duplicate.expect_err("duplicate component must fail"),
+            ProjectTomlError::Architecture(ArchitectureConfigError::DuplicateComponent(
+                "Core".to_owned()
+            ))
+        );
+        assert_eq!(
+            forward.expect_err("forward dependency must fail"),
+            ProjectTomlError::Architecture(ArchitectureConfigError::ForwardOrUnknownDependency {
+                component: "Api".to_owned(),
+                dependency: "Core".to_owned(),
+            })
+        );
+        assert!(matches!(
+            bad_glob,
+            Err(ProjectTomlError::Architecture(
+                ArchitectureConfigError::InvalidPublicExportGlob { .. }
+            ))
         ));
     }
 }

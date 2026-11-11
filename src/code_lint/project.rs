@@ -19,7 +19,7 @@ pub use self::architecture::{
 pub(crate) use self::config::compile_glob;
 pub use self::config::{
     ArchitectureComponentConfig, ArchitectureConfig, ArchitectureConfigError, CONFIG_FILE_NAME,
-    ContextConfig, ProjectConfig, is_rooted_path, lexical_normalize,
+    ContextConfig, ProjectConfig, ProjectTomlError, is_rooted_path, lexical_normalize,
 };
 pub use self::context::ProjectContext;
 pub use self::index::{

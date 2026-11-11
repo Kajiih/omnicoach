@@ -135,6 +135,19 @@ impl ProjectLayout {
         }
     }
 
+    /// Replaces [`Self::python_source_roots`] with `configured_python_roots` (resolved against
+    /// [`Self::project_root`]) when `configured_python_roots` is non-empty.
+    #[must_use]
+    pub fn with_configured_python_roots(mut self, configured_python_roots: &[PathBuf]) -> Self {
+        if !configured_python_roots.is_empty() {
+            self.python_source_roots = configured_python_roots
+                .iter()
+                .map(|root| lexical_normalize(&self.project_root.join(root)))
+                .collect();
+        }
+        self
+    }
+
     /// Maps a Python file path to its canonical dotted module path under the longest matching
     /// source root (for example `.../python/tach/check.py` -> `"tach.check"`).
     #[must_use]

@@ -2,7 +2,8 @@
 //! conformance evaluators (`CodeLintProject`).
 
 use super::config::{
-    ArchitectureComponentConfig, ArchitectureConfig, ArchitectureConfigError, compile_glob,
+    ArchitectureComponentConfig, ArchitectureConfig, ArchitectureConfigError, ProjectTomlError,
+    compile_glob,
 };
 use super::layout::{
     PathOrigin, ProjectLayout, ROOT_MODULE_TAG, is_in_module_subtree, is_python_package_init,
@@ -43,6 +44,17 @@ pub enum ArchitectureError {
     /// Invalid TOML syntax or unknown keys in `.omnicoach.toml`.
     #[error(transparent)]
     InvalidProjectToml(#[from] toml::de::Error),
+}
+
+impl From<ProjectTomlError> for ArchitectureError {
+    fn from(error: ProjectTomlError) -> Self {
+        match error {
+            ProjectTomlError::Toml(toml_error) => Self::InvalidProjectToml(toml_error),
+            ProjectTomlError::Architecture(architecture_error) => {
+                Self::InvalidConfig(architecture_error)
+            }
+        }
+    }
 }
 
 /// Validated, language-agnostic architectural specification for a project.

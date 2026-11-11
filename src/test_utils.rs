@@ -347,8 +347,7 @@ pub fn assert_rule_pass_input<R: TestableCodeRule>(
             let parsed_files = validate_and_parse_project_files(rule_name, lang, case_name, files);
             let root = Path::new(MemoryFileSource::VIRTUAL_ROOT);
             let memory = MemoryFileSource::from_relative_files(root, files);
-            let layout = discover_virtual_project_layout(root, files, &memory);
-            let index = ProjectIndex::new(layout, &memory);
+            let index = build_virtual_project_index(root, &memory, rule_name, lang, case_name);
             for (relative_path, parsed) in &parsed_files {
                 index.seed_from_parsed(&root.join(relative_path), parsed);
             }
@@ -752,8 +751,7 @@ fn assert_project_fail_input<R: TestableCodeRule>(
         });
     let root = Path::new(MemoryFileSource::VIRTUAL_ROOT);
     let memory = MemoryFileSource::from_relative_files(root, files);
-    let layout = discover_virtual_project_layout(root, files, &memory);
-    let index = ProjectIndex::new(layout, &memory);
+    let index = build_virtual_project_index(root, &memory, rule_name, lang, case_name);
     for (relative_path, parsed) in &parsed_files {
         index.seed_from_parsed(&root.join(relative_path), parsed);
     }
@@ -852,7 +850,7 @@ fn validate_and_parse_project_files<'a>(
             );
             parsed_files.push((relative_path, parsed));
         } else if relative_path == crate::code_lint::project::CONFIG_FILE_NAME
-            && let Err(error) = toml::from_str::<VirtualProjectToml>(content)
+            && let Err(error) = crate::code_lint::project::ProjectConfig::from_toml_str(content)
         {
             panic!(
                 "rule_test! [{rule_name}] ({lang:?}) case '{case_name}': invalid {relative_path}: {error}\n{content}"
@@ -968,8 +966,7 @@ fn assert_every_occurrence_reported_in_project<R: TestableCodeRule>(
         .collect();
     let root = Path::new(MemoryFileSource::VIRTUAL_ROOT);
     let memory = MemoryFileSource::from_relative_files(root, &repeated_entries);
-    let layout = discover_virtual_project_layout(root, &repeated_entries, &memory);
-    let index = ProjectIndex::new(layout, &memory);
+    let index = build_virtual_project_index(root, &memory, rule_name, lang, case_name);
     for (relative_path, parsed) in parsed_files {
         if *relative_path != target_path {
             index.seed_from_parsed(&root.join(relative_path), parsed);
@@ -992,35 +989,25 @@ fn assert_every_occurrence_reported_in_project<R: TestableCodeRule>(
     assert_repeated_spans(rule_name, lang, case_name, &repeated, &diags, span, offset);
 }
 
-fn discover_virtual_project_layout(
+#[track_caller]
+fn build_virtual_project_index<'a>(
     root: &Path,
-    files: &[(&str, &str)],
-    memory: &MemoryFileSource,
-) -> ProjectLayout {
-    let parsed_config = files
-        .iter()
-        .find_map(|&(path, content)| {
-            (path == crate::code_lint::project::CONFIG_FILE_NAME).then_some(content)
-        })
-        .and_then(|content| toml::from_str::<VirtualProjectToml>(content).ok())
-        .map(|virtual_toml| crate::code_lint::project::ProjectConfig {
-            context: virtual_toml.context,
-            architecture: virtual_toml.architecture,
-            ..crate::code_lint::project::ProjectConfig::default()
-        });
-    let root_refs = parsed_config
-        .as_ref()
-        .map(crate::code_lint::project::ProjectConfig::configured_source_roots)
-        .unwrap_or_default();
-    ProjectLayout::discover(root, memory, &root_refs)
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(rename_all = "kebab-case")]
-struct VirtualProjectToml {
-    #[serde(default)]
-    context: crate::code_lint::project::ContextConfig,
-    architecture: Option<crate::code_lint::project::ArchitectureConfig>,
+    memory: &'a MemoryFileSource,
+    rule_name: &str,
+    lang: Language,
+    case_name: &str,
+) -> ProjectIndex<'a> {
+    ProjectIndex::discover_with_config(
+        root,
+        memory,
+        &crate::code_lint::project::ProjectConfig::default(),
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "rule_test! [{rule_name}] ({lang:?}) case '{case_name}': invalid {}: {error}",
+            crate::code_lint::project::CONFIG_FILE_NAME
+        )
+    })
 }
 
 #[track_caller]

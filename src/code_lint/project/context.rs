@@ -190,29 +190,29 @@ mod tests {
     fn evaluates_toml_architecture_findings_across_python_modules() {
         let root = Path::new("/repo");
         let bad_api_code = "from pkg.cli import run_cli\n";
+        let toml_content = indoc::indoc! {r#"
+            [[architecture.components]]
+            name = "Core"
+            roots = ["pkg.core"]
+
+            [[architecture.components]]
+            name = "Cli"
+            roots = ["pkg.cli"]
+            depends-on = ["Core"]
+        "#};
         let source = MemoryFileSource::from_relative_files(
             root,
             &[
-                (
-                    ".omnicoach.toml",
-                    indoc::indoc! {r#"
-                        [[architecture.components]]
-                        name = "Core"
-                        roots = ["pkg.core"]
-
-                        [[architecture.components]]
-                        name = "Cli"
-                        roots = ["pkg.cli"]
-                        depends-on = ["Core"]
-                    "#},
-                ),
+                (".omnicoach.toml", toml_content),
                 ("pkg/__init__.py", ""),
                 ("pkg/core.py", "X = 1\n"),
                 ("pkg/cli.py", "def run_cli(): pass\n"),
             ],
         );
+        let project_config = super::super::config::ProjectConfig::from_toml_str(toml_content)
+            .expect("valid project TOML");
         let layout = ProjectLayout::discover(root, &source, &[]);
-        let index = ProjectIndex::new(layout, &source);
+        let index = ProjectIndex::new(layout, &source).with_project_config(project_config);
         let context = ProjectContext::new(&index);
         let parsed = ParsedFile::new(bad_api_code, Language::Python);
         let findings = context

@@ -108,10 +108,8 @@ pub fn lint_virtual_file(
         DiskFileSource,
         HashMap::from([(resolved_target.clone(), virtual_content.to_owned())]),
     );
-    let configured_roots = effective_config.project.configured_source_roots();
-    let layout = ProjectLayout::discover(&resolved_target, &overlay, &configured_roots);
     let index =
-        attach_configured_architecture(ProjectIndex::new(layout, &overlay), &effective_config);
+        ProjectIndex::discover_with_config(&resolved_target, &overlay, &effective_config.project)?;
     let context = ProjectContext::new(&index);
     let mut diagnostics = lint_file_with_index(
         &resolved_target,
@@ -221,7 +219,6 @@ pub fn run_code_lint(options: &LintOptions, config: &Config) -> anyhow::Result<L
         rule.requires_project_context() && !config.disabled_rules.contains(&rule.name())
     });
     let disk = DiskFileSource;
-    let configured_roots = config.project.configured_source_roots();
     let mut project_indices: Vec<ProjectIndex<'_>> = Vec::new();
     let mut target_project_idx: Vec<Option<usize>> = Vec::with_capacity(targets.len());
     if has_project_rules {
@@ -236,20 +233,21 @@ pub fn run_code_lint(options: &LintOptions, config: &Config) -> anyhow::Result<L
             let index_pos = if let Some(&cached_pos) = directory_to_project_index.get(&parent_dir) {
                 cached_pos
             } else {
-                let layout = ProjectLayout::discover(&target.path, &disk, &configured_roots);
+                let base_layout = ProjectLayout::discover(&target.path, &disk, &[]);
                 let resolved_pos = if let Some(existing_pos) = project_indices
                     .iter()
-                    .position(|index| index.layout().project_root == layout.project_root)
+                    .position(|index| index.layout().project_root == base_layout.project_root)
                 {
                     project_indices[existing_pos]
-                        .merge_python_source_roots(&layout.python_source_roots);
+                        .merge_python_source_roots(&base_layout.python_source_roots);
                     existing_pos
                 } else {
                     let new_pos = project_indices.len();
-                    project_indices.push(attach_configured_architecture(
-                        ProjectIndex::new(layout, &disk),
-                        config,
-                    ));
+                    project_indices.push(ProjectIndex::from_layout_and_config(
+                        base_layout,
+                        &disk,
+                        &config.project,
+                    )?);
                     new_pos
                 };
                 directory_to_project_index.insert(parent_dir, resolved_pos);
@@ -422,24 +420,6 @@ fn rewrite_diagnostic_paths(diagnostics: &mut [Diagnostic], display_path: &Path)
     for diagnostic in diagnostics {
         diagnostic.location.context =
             crate::diagnostic::LocationContext::File(display_path.to_path_buf());
-    }
-}
-
-/// Attaches the `[architecture]` block of `config` to `index` when the configuration governs the
-/// index's project: the configuration root is the project root or one of its ancestors (a
-/// sub-package with its own `pyproject.toml` stays under the repository's `.omnicoach.toml`).
-fn attach_configured_architecture<'a>(
-    index: ProjectIndex<'a>,
-    config: &Config,
-) -> ProjectIndex<'a> {
-    let applies_to_project = config.project.root_dir.as_deref().map_or_else(
-        || config.project.architecture.is_some(),
-        |config_root| index.layout().project_root.starts_with(config_root),
-    );
-    if applies_to_project {
-        index.with_architecture_config(config.project.architecture.clone())
-    } else {
-        index
     }
 }
 
@@ -1225,18 +1205,80 @@ mod tests {
         );
     }
     #[test]
-    fn test_run_code_lint_isolates_nested_subproject_root_from_outer_project() {
+    fn test_run_code_lint_isolates_nested_subproject_root_and_loads_nested_toml() {
         let temp = tempfile::tempdir().expect("tempdir");
         let outer = temp.path();
         fs::write(outer.join(".omnicoach.toml"), "").expect("write outer marker");
-        let _ = write_protocol_project(outer);
+        let outer_pkg = outer.join("pkg");
+        fs::create_dir_all(&outer_pkg).expect("mkdir outer pkg");
+        fs::write(outer_pkg.join("__init__.py"), "").expect("write outer init");
+        fs::write(
+            outer_pkg.join("interfaces.py"),
+            indoc::indoc! {r"
+                from typing import Protocol
+
+                class OuterStore(Protocol):
+                    def fetch_outer(self, key: str) -> str: ...
+                    def save_outer(self, key: str, value: str) -> None: ...
+            "},
+        )
+        .expect("write outer interfaces");
+        fs::write(
+            outer_pkg.join("service.py"),
+            indoc::indoc! {r"
+                from pkg.interfaces import OuterStore
+
+                class OuterImpl:
+                    def fetch_outer(self, key: str) -> str:
+                        return key
+                    def save_outer(self, key: str, value: str) -> None:
+                        return None
+            "},
+        )
+        .expect("write outer service");
 
         let nested = outer.join("services").join("nested");
-        fs::create_dir_all(&nested).expect("create nested dir");
-        fs::write(nested.join(".omnicoach.toml"), "").expect("write nested marker");
-        let _ = write_protocol_project(&nested);
+        let nested_pkg = nested.join("custom_src").join("pkg");
+        fs::create_dir_all(&nested_pkg).expect("create nested pkg");
+        fs::write(
+            nested.join(".omnicoach.toml"),
+            "[context]\nsource-roots = [\"custom_src\"]\n",
+        )
+        .expect("write nested marker");
+        fs::write(nested_pkg.join("__init__.py"), "").expect("write nested init");
+        fs::write(
+            nested_pkg.join("interfaces.py"),
+            indoc::indoc! {r"
+                from typing import Protocol
 
-        let config = config_enabling(&["uninherited-protocol"]);
+                class NestedStore(Protocol):
+                    def load_nested(self, key: str) -> str: ...
+                    def write_nested(self, key: str, value: str) -> None: ...
+            "},
+        )
+        .expect("write nested interfaces");
+        fs::write(
+            nested_pkg.join("service.py"),
+            indoc::indoc! {r"
+                from pkg.interfaces import NestedStore, OuterStore
+
+                class NestedImpl:
+                    def load_nested(self, key: str) -> str:
+                        return key
+                    def write_nested(self, key: str, value: str) -> None:
+                        return None
+
+                class ShouldNotMatchOuter:
+                    def fetch_outer(self, key: str) -> str:
+                        return key
+                    def save_outer(self, key: str, value: str) -> None:
+                        return None
+            "},
+        )
+        .expect("write nested service");
+
+        let mut config = config_enabling(&["uninherited-protocol"]);
+        config.project.root_dir = Some(outer.to_path_buf());
         let report = run_code_lint(
             &LintOptions {
                 paths: vec![outer.to_path_buf()],
@@ -1245,8 +1287,20 @@ mod tests {
             &config,
         )
         .expect("run_code_lint with nested subproject");
+        let mut summaries: Vec<&str> = report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.summary.as_str())
+            .collect();
+        summaries.sort_unstable();
 
-        assert_eq!(report.diagnostics.len(), 2);
+        assert_eq!(
+            summaries,
+            [
+                "Class `NestedImpl` implements every method of `Protocol` `NestedStore` without inheriting from it.",
+                "Class `OuterImpl` implements every method of `Protocol` `OuterStore` without inheriting from it.",
+            ]
+        );
     }
 
     #[test]
@@ -1453,6 +1507,69 @@ mod tests {
         assert_eq!(
             diagnostics[2].message.suggestion,
             "Import `decode_raw` from `pkg.auth`, or expose it in `public-exports` of `Auth`."
+        );
+    }
+
+    #[test]
+    fn test_run_code_lint_loads_external_project_toml_source_roots_and_architecture() {
+        let caller_temp = tempfile::tempdir().expect("caller tempdir");
+        let external_temp = tempfile::tempdir().expect("external tempdir");
+        let external_root = external_temp.path();
+        let pkg = external_root.join("custom_py/pkg");
+        let scripts = external_root.join("scripts");
+        fs::create_dir_all(&pkg).expect("mkdir custom_py/pkg");
+        fs::create_dir_all(&scripts).expect("mkdir scripts");
+        fs::write(
+            external_root.join(".omnicoach.toml"),
+            indoc::indoc! {r#"
+                [context]
+                source-roots = ["custom_py"]
+
+                [architecture]
+                require-component-coverage = true
+
+                [[architecture.components]]
+                name = "Core"
+                roots = ["pkg.core"]
+
+                [[architecture.components]]
+                name = "Api"
+                roots = ["pkg.api"]
+                depends-on = ["Core"]
+            "#},
+        )
+        .expect("write .omnicoach.toml");
+        fs::write(pkg.join("__init__.py"), "").expect("write __init__.py");
+        fs::write(pkg.join("core.py"), "from pkg import api\n").expect("write core.py");
+        fs::write(pkg.join("api.py"), "def serve():\n    return 1\n").expect("write api.py");
+        fs::write(pkg.join("orphan.py"), "def stray():\n    return 3\n").expect("write orphan.py");
+        fs::write(scripts.join("helper.py"), "def run():\n    return 2\n")
+            .expect("write helper.py");
+
+        let mut config = config_enabling(&[
+            "undeclared-component-dependency",
+            "unmapped-architecture-module",
+        ]);
+        config.project.root_dir = Some(caller_temp.path().to_path_buf());
+        let options = LintOptions {
+            paths: vec![external_root.to_path_buf()],
+            ..LintOptions::default()
+        };
+
+        let report = run_code_lint(&options, &config).expect("run_code_lint should succeed");
+        let mut summaries: Vec<&str> = report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.summary.as_str())
+            .collect();
+        summaries.sort_unstable();
+
+        assert_eq!(
+            summaries,
+            [
+                "Item `stray` in `pkg.orphan` belongs to no declared architecture component.",
+                "Module in component `Core` references `from pkg import api` in `Api`, which `Core` does not depend on.",
+            ]
         );
     }
 }
