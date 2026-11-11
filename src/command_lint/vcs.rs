@@ -57,14 +57,16 @@ impl JjClient for JjCliClient {
     /// Returns an error if the `jj` command fails to run or returns a non-zero exit status.
     fn get_commit_info(&self, revision: &str) -> Result<CommitInfo, String> {
         let mut command = std::process::Command::new("jj");
+        let rev_arg = format!("-r={revision}");
         command.args([
             "log",
             "--no-graph",
+            "--color=never",
+            "--no-pager",
             "--ignore-working-copy",
             "--limit",
             "1",
-            "-r",
-            revision,
+            &rev_arg,
             "-T",
             COMMIT_INFO_TEMPLATE,
         ]);

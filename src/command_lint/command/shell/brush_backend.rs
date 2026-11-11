@@ -38,18 +38,22 @@ pub(super) fn parse_script_into(
         .collect();
 
     let walker = ScriptWalker {
+        tokens: &tokens,
         char_offsets: &char_offsets,
         token_spans: &token_spans,
         parser_options: &parser_options,
+        array_token_cursor: std::cell::Cell::new(0),
     };
     walker.walk_program(&program, scopes, out);
     true
 }
 
 struct ScriptWalker<'a> {
+    tokens: &'a [Token],
     char_offsets: &'a CharToByteMap,
     token_spans: &'a [SourceSpan],
     parser_options: &'a ParserOptions,
+    array_token_cursor: std::cell::Cell<usize>,
 }
 
 impl ScriptWalker<'_> {
@@ -60,13 +64,11 @@ impl ScriptWalker<'_> {
         out: &mut Vec<InterceptedCommand>,
     ) {
         let multiple_lines = program.complete_commands.len() > 1;
-        if multiple_lines {
-            push_unique_scope(scopes, ShellScope::ChainedList);
-        }
+        let pushed = multiple_lines && push_unique_scope(scopes, ShellScope::ChainedList);
         for list in &program.complete_commands {
             self.walk_compound_list(list, scopes, out);
         }
-        if multiple_lines {
+        if pushed {
             scopes.pop();
         }
     }
@@ -241,7 +243,10 @@ impl ScriptWalker<'_> {
                     scopes.pop();
                 }
             }
-            CompoundCommand::Arithmetic(_) | CompoundCommand::Coprocess(_) => {}
+            CompoundCommand::Coprocess(coproc) => {
+                self.walk_command(&coproc.body, scopes, out);
+            }
+            CompoundCommand::Arithmetic(_) => {}
         }
     }
 
@@ -274,7 +279,7 @@ impl ScriptWalker<'_> {
                 self.collect_prefix_or_suffix_item(
                     item,
                     scopes,
-                    &mut env_assignments,
+                    AssignmentSink::Env(&mut env_assignments),
                     &mut redirects,
                     &mut arguments,
                     &mut nested_commands,
@@ -292,7 +297,7 @@ impl ScriptWalker<'_> {
                 self.collect_prefix_or_suffix_item(
                     item,
                     scopes,
-                    &mut env_assignments,
+                    AssignmentSink::SuffixArg,
                     &mut redirects,
                     &mut arguments,
                     &mut nested_commands,
@@ -328,19 +333,41 @@ impl ScriptWalker<'_> {
         &self,
         item: &CommandPrefixOrSuffixItem,
         scopes: &mut Vec<ShellScope>,
-        env_assignments: &mut Vec<EnvAssignment>,
+        assignment_sink: AssignmentSink<'_>,
         redirects: &mut Vec<CommandRedirect>,
         arguments: &mut Vec<CommandArg>,
         nested_commands: &mut Vec<InterceptedCommand>,
     ) {
         match item {
             CommandPrefixOrSuffixItem::AssignmentWord(assignment, full_word) => {
-                env_assignments.push(self.parse_assignment(
-                    assignment,
-                    full_word,
-                    scopes,
-                    nested_commands,
-                ));
+                match assignment_sink {
+                    AssignmentSink::Env(env_assignments) => {
+                        env_assignments.push(self.parse_assignment(
+                            assignment,
+                            full_word,
+                            scopes,
+                            nested_commands,
+                        ));
+                    }
+                    AssignmentSink::SuffixArg => match &assignment.value {
+                        AssignmentValue::Scalar(_) => {
+                            arguments.push(self.parse_word(full_word, scopes, nested_commands));
+                        }
+                        AssignmentValue::Array(_) => {
+                            let assigned = self.parse_assignment(
+                                assignment,
+                                full_word,
+                                scopes,
+                                nested_commands,
+                            );
+                            arguments.push(CommandArg {
+                                text: full_word.value.clone(),
+                                span: assigned.span,
+                                has_expansion: assigned.value.has_expansion,
+                            });
+                        }
+                    },
+                }
             }
             CommandPrefixOrSuffixItem::Word(word) => {
                 arguments.push(self.parse_word(word, scopes, nested_commands));
@@ -378,7 +405,7 @@ impl ScriptWalker<'_> {
             AssignmentName::VariableName(var) => var.clone(),
             AssignmentName::ArrayElementName(var, subscript) => format!("{var}[{subscript}]"),
         };
-        let full_span = self.word_span(full_word);
+        let mut full_span = self.word_span(full_word);
         let after_name = full_word
             .value
             .get(name.len()..)
@@ -394,41 +421,8 @@ impl ScriptWalker<'_> {
                     .map_or(value_span, |loc| self.char_offsets.map_span(&loc));
                 self.parse_word_at_span(&val_word.value, scalar_span, scopes, nested_commands)
             }
-            AssignmentValue::Array(elements) => {
-                let mut has_expansion = false;
-                let mut search_offset = value_offset;
-                for (key, element_value) in elements {
-                    if let Some(key_word) = key {
-                        let key_span = self.array_part_span(
-                            full_word,
-                            full_span,
-                            key_word,
-                            &mut search_offset,
-                        );
-                        has_expansion |= self
-                            .parse_word_at_span(&key_word.value, key_span, scopes, nested_commands)
-                            .has_expansion;
-                    }
-                    let elem_span = self.array_part_span(
-                        full_word,
-                        full_span,
-                        element_value,
-                        &mut search_offset,
-                    );
-                    has_expansion |= self
-                        .parse_word_at_span(
-                            &element_value.value,
-                            elem_span,
-                            scopes,
-                            nested_commands,
-                        )
-                        .has_expansion;
-                }
-                CommandArg {
-                    text: String::new(),
-                    span: value_span,
-                    has_expansion,
-                }
+            AssignmentValue::Array(_) => {
+                self.parse_array_assignment(&mut full_span, value_span, scopes, nested_commands)
             }
         };
         EnvAssignment {
@@ -439,28 +433,52 @@ impl ScriptWalker<'_> {
         }
     }
 
-    fn array_part_span(
+    fn parse_array_assignment(
         &self,
-        full_word: &Word,
-        full_span: SourceSpan,
-        part: &Word,
-        search_offset: &mut usize,
-    ) -> SourceSpan {
-        if let Some(loc) = part.location() {
-            let span = self.char_offsets.map_span(&loc);
-            if span.end > span.start {
-                return span;
+        full_span: &mut SourceSpan,
+        fallback_value_span: SourceSpan,
+        scopes: &mut Vec<ShellScope>,
+        nested_commands: &mut Vec<InterceptedCommand>,
+    ) -> CommandArg {
+        let mut has_expansion = false;
+        let mut value_span = fallback_value_span;
+        let search_start = self.array_token_cursor.get();
+        let head_offset = self.tokens[search_start..].windows(2).position(|pair| {
+            matches!(&pair[0], Token::Word(head, _) if head.ends_with('='))
+                && matches!(&pair[1], Token::Operator(op, _) if op == "(")
+        });
+        if let Some(relative_head) = head_offset {
+            let head_index = search_start + relative_head;
+            full_span.start = self.token_spans[head_index].start;
+            value_span.start = self.token_spans[head_index + 1].start;
+            let mut depth = 1usize;
+            for index in (head_index + 2)..self.tokens.len() {
+                let token_span = self.token_spans[index];
+                match &self.tokens[index] {
+                    Token::Operator(op, _) if op == "(" => depth += 1,
+                    Token::Operator(op, _) if op == ")" => {
+                        depth -= 1;
+                        if depth == 0 {
+                            full_span.end = token_span.end;
+                            value_span.end = token_span.end;
+                            self.array_token_cursor.set(index + 1);
+                            break;
+                        }
+                    }
+                    Token::Word(word_text, _) if depth == 1 => {
+                        has_expansion |= self
+                            .parse_word_at_span(word_text, token_span, scopes, nested_commands)
+                            .has_expansion;
+                    }
+                    _ => {}
+                }
             }
         }
-        let remainder = full_word.value.get(*search_offset..).unwrap_or_default();
-        let rel = remainder.find(&part.value).unwrap_or(0);
-        let start_in_word = *search_offset + rel;
-        let end_in_word = start_in_word + part.value.len();
-        *search_offset = end_in_word;
-        SourceSpan::new(
-            full_span.start + start_in_word,
-            full_span.start + end_in_word,
-        )
+        CommandArg {
+            text: String::new(),
+            span: value_span,
+            has_expansion,
+        }
     }
 
     fn parse_io_redirect(
@@ -718,6 +736,11 @@ impl ScriptWalker<'_> {
             |loc| self.char_offsets.map_span(&loc),
         )
     }
+}
+
+enum AssignmentSink<'a> {
+    Env(&'a mut Vec<EnvAssignment>),
+    SuffixArg,
 }
 
 /// Maps `brush_parser`'s 0-based Unicode `char` offset to 0-based UTF-8 byte offsets, shifted by

@@ -471,12 +471,19 @@ impl LineIndex {
         }
     }
 
-    /// Resolves a byte offset to a 1-indexed (line, column) coordinate.
+    /// Resolves a byte offset to a 1-indexed (line, column) coordinate, clamping out-of-bounds
+    /// or mid-codepoint offsets to the nearest valid UTF-8 character boundary.
     #[must_use]
     pub(crate) fn lookup(&self, offset: usize) -> LineColumn {
-        let line_col = self.inner.line_col(line_index::TextSize::from(
-            u32::try_from(offset).unwrap_or(u32::MAX),
-        ));
+        let doc_len = usize::from(self.inner.len());
+        let clamped = offset.min(doc_len);
+        let line_col = (0..=3)
+            .filter_map(|back| clamped.checked_sub(back))
+            .find_map(|pos| {
+                let size = u32::try_from(pos).ok()?;
+                self.inner.try_line_col(line_index::TextSize::from(size))
+            })
+            .unwrap_or(line_index::LineCol { line: 0, col: 0 });
         LineColumn {
             line: line_col.line as usize + 1,
             column: line_col.col as usize + 1,
@@ -678,6 +685,19 @@ mod tests {
             }
         );
         assert_eq!(virtual_loc.format_header(), "VCS_Context:2:1");
+    }
+
+    #[rstest::rstest]
+    #[case::empty_out_of_bounds("", 5, LineColumn { line: 1, column: 1 })]
+    #[case::past_end("a\nb", 99, LineColumn { line: 2, column: 2 })]
+    #[case::mid_two_byte_utf8("a\nbé", 4, LineColumn { line: 2, column: 2 })]
+    #[case::mid_four_byte_utf8_last_byte("a\nb🦀", 6, LineColumn { line: 2, column: 2 })]
+    fn test_line_index_lookup_clamps_invalid_and_mid_codepoint_offsets(
+        #[case] content: &str,
+        #[case] offset: usize,
+        #[case] expected: LineColumn,
+    ) {
+        assert_eq!(LineIndex::new(content).lookup(offset), expected);
     }
 
     #[test]

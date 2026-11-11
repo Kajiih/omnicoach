@@ -158,6 +158,7 @@ crate::test_utils::command_rule_test!(
             long_revision_flag => "jj edit --revision kpqxywon",
             long_equals_revision_flag => "jj edit --revision=kpqxywon",
             with_global_repository_flag => "jj -R . edit kpqxywon",
+            with_config_assignment_arg => "jj --config FOO=bar edit kpqxywon",
             with_ignore_working_copy_flag => "jj edit --ignore-working-copy kpqxywon",
             bare_edit_with_output_redirect => "jj edit > out.txt",
             with_leading_env_assignment => "JJ_USER=alice jj edit kpqxywon",

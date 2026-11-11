@@ -418,4 +418,53 @@ mod tests {
         assert_eq!(args.get_option("-m"), Some("-wip"));
         assert_eq!(args.get_option("--message"), Some("-second"));
     }
+
+    #[test]
+    fn test_suffix_assignment_words_stay_in_arguments() {
+        let cmds = InterceptedCommand::parse_all(r#"jj --config FOO="bar" edit @-"#);
+        assert_eq!(cmds[0].env_assignments.len(), 0);
+        assert_eq!(
+            summarize(&cmds[0]).args,
+            vec!["--config", "FOO=bar", "edit", "@-"]
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::utf8_and_keyed_elements(
+        r#"(true) && ARR=(     "ééé" [m]=$(jj edit d123)) ARR=($(jj status))"#,
+        &["jj edit d123", "jj status"]
+    )]
+    #[case::after_heredoc(
+        indoc::indoc! {r#"
+            cat <<EOF
+            body
+            EOF
+            ARR=(     "ééé" $(jj edit d123))"#},
+        &["jj edit d123"]
+    )]
+    fn test_array_assignment_with_subshell_utf8_and_heredoc_extracts_exact_spans(
+        #[case] script: &str,
+        #[case] expected: &[&str],
+    ) {
+        let parsed = ParsedCommand::new(script);
+        let slices: Vec<&str> = parsed
+            .commands()
+            .iter()
+            .filter(|cmd| cmd.program_name() == "jj")
+            .map(|cmd| &parsed.source()[cmd.span.start..cmd.span.end])
+            .collect();
+        assert!(!parsed.has_syntax_error(), "syntax error in: {script}");
+        assert_eq!(slices, expected);
+    }
+
+    #[test]
+    fn test_coprocess_and_multiline_substitution_scopes() {
+        let script = "coproc jj edit d123; echo \"$(true\nfalse)\" && jj status";
+        let parsed = ParsedCommand::new(script);
+        assert_eq!(parsed.commands()[0].program_name(), "jj");
+        assert_eq!(
+            parsed.commands().last().unwrap().enclosing_scopes,
+            vec![ShellScope::ChainedList]
+        );
+    }
 }
