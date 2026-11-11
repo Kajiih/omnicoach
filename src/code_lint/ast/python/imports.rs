@@ -16,9 +16,9 @@ pub struct PythonImportReference {
     /// Referenced module path (e.g. `Some("pkg.mod")` for `import pkg.mod` or `from pkg.mod import x`,
     /// `None` for `from . import x`).
     pub module: Option<String>,
-    /// Imported symbol name (`Some("x")` for `from pkg.mod import x`, `Some("*")` for wildcard,
-    /// `None` for `import pkg.mod`).
-    pub imported_name: Option<String>,
+    /// Imported symbol names (`vec!["x", "y"]` for `from pkg.mod import x, y`, `vec!["*"]` for
+    /// wildcard, empty `vec![]` for `import pkg.mod`).
+    pub imported_names: Vec<String>,
     /// Whether this import appears inside a `def` / `async def` body.
     pub in_function: bool,
     /// Whether this import appears inside the true branch of an `if TYPE_CHECKING:` guard.
@@ -82,7 +82,7 @@ impl StatementVisitor<'_> for PythonImportVisitor<'_> {
                         span,
                         level: 0,
                         module: Some(alias.name.to_string()),
-                        imported_name: None,
+                        imported_names: Vec::new(),
                         in_function: self.function_depth > 0,
                         in_type_checking: self.type_checking_depth > 0,
                     });
@@ -91,16 +91,19 @@ impl StatementVisitor<'_> for PythonImportVisitor<'_> {
             Stmt::ImportFrom(import_from) => {
                 let span = span_from_ruff_range(import_from.range);
                 let module = import_from.module.as_ref().map(ToString::to_string);
-                for alias in &import_from.names {
-                    self.references.push(PythonImportReference {
-                        span,
-                        level: import_from.level,
-                        module: module.clone(),
-                        imported_name: Some(alias.name.to_string()),
-                        in_function: self.function_depth > 0,
-                        in_type_checking: self.type_checking_depth > 0,
-                    });
-                }
+                let imported_names = import_from
+                    .names
+                    .iter()
+                    .map(|alias| alias.name.to_string())
+                    .collect();
+                self.references.push(PythonImportReference {
+                    span,
+                    level: import_from.level,
+                    module,
+                    imported_names,
+                    in_function: self.function_depth > 0,
+                    in_type_checking: self.type_checking_depth > 0,
+                });
             }
             Stmt::FunctionDef(_) => {
                 self.function_depth += 1;
@@ -215,7 +218,7 @@ mod tests {
 
     #[test]
     fn collect_python_import_references_tracks_function_and_type_checking_scopes() {
-        type ImportEntry<'a> = (&'a Option<String>, &'a Option<String>, u32, bool, bool);
+        type ImportEntry<'a> = (&'a Option<String>, &'a [String], u32, bool, bool);
         let source = indoc::indoc! {"
             from typing import TYPE_CHECKING
             import pkg.core
@@ -235,7 +238,7 @@ mod tests {
             .map(|reference| {
                 (
                     &reference.module,
-                    &reference.imported_name,
+                    reference.imported_names.as_slice(),
                     reference.level,
                     reference.in_function,
                     reference.in_type_checking,
@@ -247,29 +250,29 @@ mod tests {
             vec![
                 (
                     &Some("typing".to_string()),
-                    &Some("TYPE_CHECKING".to_string()),
+                    &["TYPE_CHECKING".to_string()][..],
                     0,
                     false,
                     false
                 ),
-                (&Some("pkg.core".to_string()), &None, 0, false, false),
+                (&Some("pkg.core".to_string()), &[][..], 0, false, false),
                 (
                     &Some("models".to_string()),
-                    &Some("User".to_string()),
+                    &["User".to_string()][..],
                     2,
                     false,
                     true
                 ),
                 (
                     &Some("fallback".to_string()),
-                    &Some("Guest".to_string()),
+                    &["Guest".to_string()][..],
                     1,
                     false,
                     false
                 ),
                 (
                     &Some("lazy".to_string()),
-                    &Some("Loader".to_string()),
+                    &["Loader".to_string()][..],
                     1,
                     true,
                     false

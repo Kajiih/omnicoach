@@ -7,9 +7,24 @@ use super::index::{
 };
 use super::layout::ProjectLayout;
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::ast::python::{PythonClassInfo, PythonFileSummary};
+use crate::code_lint::ast::python::{
+    OwnedDocstring, PythonClassInfo, PythonDocstring, PythonFileSummary, extract_classes,
+};
 use std::path::Path;
 use std::sync::Arc;
+
+/// A documented `@override` method paired with the docstring it inherits in Python C3 MRO order.
+#[derive(Clone)]
+pub struct DocumentedOverrideMethod<'a> {
+    /// Name of the `@override` method.
+    pub method_name: String,
+    /// The `@override` method's own docstring.
+    pub docstring: PythonDocstring<'a>,
+    /// Name of the first ancestor class in C3 MRO order whose method of the same name has a docstring.
+    pub ancestor_name: String,
+    /// Inherited docstring from `ancestor_name`.
+    pub inherited_docstring: OwnedDocstring,
+}
 
 /// Read-only cross-file query handle passed to project-aware rules.
 ///
@@ -84,6 +99,51 @@ impl<'a> ProjectContext<'a> {
     ) -> Option<InheritedDocstringMatch> {
         self.index
             .resolve_inherited_method_docstring(current_module, classes, index, method_name)
+    }
+
+    /// Extracts every `@override` method in `file` (`path`) that has both its own docstring and an
+    /// inherited docstring in Python C3 MRO order across in-file and imported project classes.
+    #[must_use]
+    pub fn documented_override_methods<'f>(
+        &self,
+        file: &'f ParsedFile,
+        path: &Path,
+    ) -> Vec<DocumentedOverrideMethod<'f>> {
+        if !file.source_text().contains("override") {
+            return Vec::new();
+        }
+        let classes = extract_classes(file);
+        let current_module = self.python_module_of_path(path);
+        let mut overrides = Vec::new();
+        for (index, class) in classes.iter().enumerate() {
+            for method in class.methods() {
+                if !method.has_override_decorator() {
+                    continue;
+                }
+                let Some(docstring) = method.docstring() else {
+                    continue;
+                };
+                let Some(InheritedDocstringMatch {
+                    ancestor_name,
+                    docstring: inherited_docstring,
+                }) = self.resolve_inherited_method_docstring(
+                    current_module.as_deref(),
+                    &classes,
+                    index,
+                    &method.name,
+                )
+                else {
+                    continue;
+                };
+                overrides.push(DocumentedOverrideMethod {
+                    method_name: method.name,
+                    docstring,
+                    ancestor_name,
+                    inherited_docstring,
+                });
+            }
+        }
+        overrides
     }
 
     /// Resolves the ancestor class names of `classes[index]` in C3 MRO order across in-file

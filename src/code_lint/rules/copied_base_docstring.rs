@@ -4,9 +4,9 @@
 //! MRO order across in-file and imported project classes; the match is equality with the whole
 //! inherited docstring or with its summary paragraph, after normalization.
 
-use crate::code_lint::ast::{self, ParsedFile};
+use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
-use crate::code_lint::project::{InheritedDocstringMatch, ProjectContext};
+use crate::code_lint::project::ProjectContext;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, ImpactedQuality, Precision, ProjectExample, Reference,
@@ -112,44 +112,26 @@ fn check_file(
     project: &ProjectContext<'_>,
     (): (),
 ) -> Vec<Diagnostic> {
-    if !file.source_text().contains("override") {
-        return Vec::new();
-    }
-    let classes = ast::python::extract_classes(file);
-    let current_module = project.python_module_of_path(path);
-    let mut diagnostics = Vec::new();
-    for (index, class) in classes.iter().enumerate() {
-        for method in class.methods() {
-            if !method.has_override_decorator() {
-                continue;
-            }
-            let Some(docstring) = method.docstring() else {
-                continue;
-            };
-            let Some(InheritedDocstringMatch {
-                ancestor_name,
-                docstring: inherited,
-            }) = project.resolve_inherited_method_docstring(
-                current_module.as_deref(),
-                &classes,
-                index,
-                &method.name,
+    project
+        .documented_override_methods(file, path)
+        .into_iter()
+        .filter(|entry| {
+            entry.docstring.normalized() == entry.inherited_docstring.normalized()
+                || entry
+                    .docstring
+                    .copies_owned_summary_of(&entry.inherited_docstring)
+        })
+        .map(|entry| {
+            rule.diagnostic_at_node(
+                path,
+                &entry.docstring.node(),
+                &[
+                    ("function", &entry.method_name),
+                    ("class", &entry.ancestor_name),
+                ],
             )
-            else {
-                continue;
-            };
-            let is_copy = docstring.normalized() == inherited.normalized()
-                || docstring.copies_owned_summary_of(&inherited);
-            if is_copy {
-                diagnostics.push(rule.diagnostic_at_node(
-                    path,
-                    &docstring.node(),
-                    &[("function", &method.name), ("class", &ancestor_name)],
-                ));
-            }
-        }
-    }
-    diagnostics
+        })
+        .collect()
 }
 
 #[cfg(test)]

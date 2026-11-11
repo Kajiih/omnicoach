@@ -14,7 +14,7 @@ mod source;
 pub use self::architecture::{
     ArchitectureError, ArchitectureSpec, ComponentSpec, CrossComponentRelativePathFinding,
     ExportPattern, FileArchitectureFindings, InvalidArchitectureComponentFinding,
-    InvalidArchitectureComponentKind, PrivateComponentImportFinding,
+    InvalidArchitectureComponentKind, PrivateComponentImportFinding, ReexportedPublicItemFinding,
     SiblingModuleDependencyFinding, UndeclaredComponentDependencyFinding,
     UnmappedArchitectureModuleFinding, UnownedExternalDependencyFinding,
 };
@@ -23,7 +23,7 @@ pub use self::config::{
     ArchitectureComponentConfig, ArchitectureConfig, ArchitectureConfigError, CONFIG_FILE_NAME,
     ContextConfig, ProjectConfig, ProjectTomlError, is_rooted_path, lexical_normalize,
 };
-pub use self::context::ProjectContext;
+pub use self::context::{DocumentedOverrideMethod, ProjectContext};
 #[cfg(test)]
 pub(in crate::code_lint) use self::facts::{
     ComponentFact, CrossModuleRefFact, discover_project_sources_in,
@@ -36,6 +36,5 @@ pub use self::index::{
     ImportedProtocolSummary, InheritedDocstringMatch, ProjectIndex, PythonClassId,
     ResolvedClassAncestors,
 };
-pub(in crate::code_lint) use self::layout::is_rust_crate_root;
 pub use self::layout::{InheritedComponent, ProjectLayout, resolve_inherited_component_with_root};
 pub use self::source::{DiskFileSource, FileSource, MemoryFileSource, OverlayFileSource};

@@ -18,6 +18,7 @@ use std::collections::HashSet;
 
 const ARCHITECTURE_COMPONENT_MACRO: &str = "architecture_component";
 const DEFINE_ARCHITECTURE_MACRO: &str = "define_architecture";
+const SELF_PREFIX: &str = "self::";
 
 /// Visibility and name of a top-level external `mod <name>;` declaration in a Rust file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +102,33 @@ pub struct RustFileSummary {
     /// All module/item paths referenced in production code (`use` trees, inline qualified paths,
     /// `use`-imported path usages, and `::`-qualified paths inside macro `token_tree` arguments).
     pub referenced_paths: Vec<RustPathReference>,
+}
+
+impl RustFileSummary {
+    /// Returns true if every target of `visible_use` lies inside a private direct child module
+    /// declared in this file (`mod child;` or `mod child { ... }`, then
+    /// `pub use self::child::Item;`).
+    #[must_use]
+    pub fn is_private_child_facade_reexport(&self, visible_use: &VisibleUseDeclaration) -> bool {
+        if visible_use.target_paths.is_empty() {
+            return false;
+        }
+        visible_use.target_paths.iter().all(|target| {
+            let stripped = target.strip_prefix(SELF_PREFIX).unwrap_or(target);
+            let Some((child_module, rest)) = stripped.split_once("::") else {
+                return false;
+            };
+            !rest.is_empty()
+                && (self
+                    .external_mods
+                    .iter()
+                    .any(|declaration| declaration.is_private && declaration.name == child_module)
+                    || self
+                        .private_inline_mods
+                        .iter()
+                        .any(|name| name == child_module))
+        })
+    }
 }
 
 /// Extracts a complete structural and dependency summary of the production code in `file`
@@ -359,7 +387,7 @@ fn record_architecture_component(
     let macro_ast_node = AstNode::from_span(file, macro_span);
     let component_argument: String = extract_macro_arguments(&macro_ast_node)
         .into_iter()
-        .map(|argument| argument.text().into_owned())
+        .map(|argument| argument.text().trim().to_owned())
         .collect();
     architecture_components.push((macro_span, component_argument));
     macro_span
@@ -473,7 +501,7 @@ fn join_use_prefix(prefix: &str, segment: &str) -> String {
         clean
     } else if clean == SELF_KEYWORD {
         prefix.to_string()
-    } else if let Some(rest) = clean.strip_prefix("self::") {
+    } else if let Some(rest) = clean.strip_prefix(SELF_PREFIX) {
         format!("{prefix}::{rest}")
     } else {
         format!("{prefix}::{clean}")

@@ -93,19 +93,15 @@ fn check_file(
     let Some(findings) = project.file_architecture_findings(file, path) else {
         return Vec::new();
     };
-    let source_text = file.source_text();
     findings
         .invalid_architecture_components
         .iter()
         .map(|finding| {
-            let expression = source_text
-                .get(finding.span.start..finding.span.end)
-                .map_or("", str::trim);
-            let trimmed_component = finding.component.trim();
-            let component = if trimmed_component.is_empty() {
+            let expression = file.span_text(finding.span).trim();
+            let component = if finding.component.is_empty() {
                 COMPONENT_PLACEHOLDER
             } else {
-                trimmed_component
+                &finding.component
             };
             let reason = format_reason(&finding.kind, component, &finding.module);
             rule.diagnostic_at_span(
@@ -137,12 +133,11 @@ fn format_reason(kind: &InvalidArchitectureComponentKind, component: &str, modul
                 .to_owned()
         }
         InvalidArchitectureComponentKind::DuplicateInModule { first_component } => {
-            let trimmed_first = first_component.trim();
-            if trimmed_first.is_empty() {
+            if first_component.is_empty() {
                 format!("module `{module}` already declares a top-level `architecture_component!`")
             } else {
                 format!(
-                    "module `{module}` already declares `architecture_component!({trimmed_first})`"
+                    "module `{module}` already declares `architecture_component!({first_component})`"
                 )
             }
         }

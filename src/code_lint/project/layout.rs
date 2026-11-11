@@ -570,7 +570,7 @@ pub(super) fn is_in_module_subtree(path: &str, module_prefix: &str) -> bool {
 
 /// Returns true if `module_path` denotes a Rust crate root (`"lib"`, `"main"`, or `""`).
 #[must_use]
-pub(in crate::code_lint) fn is_rust_crate_root(module_path: &str) -> bool {
+pub(super) fn is_rust_crate_root(module_path: &str) -> bool {
     matches!(module_path, LIB_CRATE_ROOT | MAIN_CRATE_ROOT | "")
 }
 
@@ -583,19 +583,11 @@ pub(super) fn is_python_package_init(path: &Path) -> bool {
     )
 }
 
-/// Normalizes `path` relative to `base_dir` (when provided) using forward slashes.
+/// Normalizes `path` using forward slashes, stripping any leading `./` prefix.
 #[must_use]
-pub(super) fn normalize_relative_path(path: &Path, base_dir: Option<&Path>) -> String {
+pub(super) fn normalize_relative_path(path: &Path) -> String {
     let clean_path = path.strip_prefix(CURRENT_DIR_PREFIX).unwrap_or(path);
-    let relative = base_dir.map_or(clean_path, |base| {
-        let clean_base = base.strip_prefix(CURRENT_DIR_PREFIX).unwrap_or(base);
-        if clean_base == Path::new(".") || clean_base.starts_with(SOURCE_DIRECTORY) {
-            clean_path
-        } else {
-            clean_path.strip_prefix(clean_base).unwrap_or(clean_path)
-        }
-    });
-    relative.to_string_lossy().replace('\\', "/")
+    clean_path.to_string_lossy().replace('\\', "/")
 }
 
 /// Maps a path relative to the Rust crate source root (`src/`) to its `::`-separated module path,

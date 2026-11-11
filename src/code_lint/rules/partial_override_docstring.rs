@@ -4,12 +4,12 @@
 //! header text or entries; ancestors are resolved in Python C3 MRO order across in-file and
 //! imported project classes.
 
+use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     DocstringSection, DocstringSectionKind, OwnedDocstring, PythonDocstring,
 };
-use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
-use crate::code_lint::project::{InheritedDocstringMatch, ProjectContext};
+use crate::code_lint::project::ProjectContext;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, ImpactedQuality, Precision, ProjectExample, Reference,
@@ -145,53 +145,31 @@ fn check_file(
     project: &ProjectContext<'_>,
     (): (),
 ) -> Vec<Diagnostic> {
-    if !file.source_text().contains("override") {
-        return Vec::new();
-    }
-    let classes = ast::python::extract_classes(file);
-    let current_module = project.python_module_of_path(path);
     let mut diagnostics = Vec::new();
-    for (index, class) in classes.iter().enumerate() {
-        for method in class.methods() {
-            if !method.has_override_decorator() {
-                continue;
-            }
-            let Some(docstring) = method.docstring() else {
-                continue;
-            };
-            let Some(InheritedDocstringMatch {
-                ancestor_name,
-                docstring: inherited,
-            }) = project.resolve_inherited_method_docstring(
-                current_module.as_deref(),
-                &classes,
-                index,
-                &method.name,
-            )
-            else {
-                continue;
-            };
-            if docstring.copies_owned_summary_of(&inherited) {
-                continue;
-            }
-            let required = required_kinds(&inherited);
-            let documented = documented_kinds(&docstring);
-            let missing: Vec<String> = CONTRACT_SECTIONS
-                .iter()
-                .filter(|(kind, _)| required.contains(kind) && !documented.contains(kind))
-                .map(|(_, header)| format!("`{header}:`"))
-                .collect();
-            if !missing.is_empty() {
-                diagnostics.push(rule.diagnostic_at_node(
-                    path,
-                    &docstring.node(),
-                    &[
-                        ("function", &method.name),
-                        ("sections", &missing.join(" or ")),
-                        ("class", &ancestor_name),
-                    ],
-                ));
-            }
+    for entry in project.documented_override_methods(file, path) {
+        if entry
+            .docstring
+            .copies_owned_summary_of(&entry.inherited_docstring)
+        {
+            continue;
+        }
+        let required = required_kinds(&entry.inherited_docstring);
+        let documented = documented_kinds(&entry.docstring);
+        let missing: Vec<String> = CONTRACT_SECTIONS
+            .iter()
+            .filter(|(kind, _)| required.contains(kind) && !documented.contains(kind))
+            .map(|(_, header)| format!("`{header}:`"))
+            .collect();
+        if !missing.is_empty() {
+            diagnostics.push(rule.diagnostic_at_node(
+                path,
+                &entry.docstring.node(),
+                &[
+                    ("function", &entry.method_name),
+                    ("sections", &missing.join(" or ")),
+                    ("class", &entry.ancestor_name),
+                ],
+            ));
         }
     }
     diagnostics

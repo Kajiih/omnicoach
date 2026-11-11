@@ -735,10 +735,8 @@ fn collect_single_file_source(
     };
     let file_source = source.read_to_string(path)?;
     let full_path = layout.resolve_query_path(path);
-    let relative_path = full_path.strip_prefix(&layout.project_root).map_or_else(
-        |_| normalize_relative_path(path, None),
-        |stripped| normalize_relative_path(stripped, None),
-    );
+    let relative_path =
+        normalize_relative_path(full_path.strip_prefix(&layout.project_root).unwrap_or(path));
     Ok(Some(ProjectSourceFile {
         full_path,
         relative_path,
@@ -779,9 +777,11 @@ fn collect_directory_source_files(
         let Ok(file_source) = source.read_to_string(&entry_path) else {
             continue;
         };
-        let relative_path = full_path.strip_prefix(&layout.project_root).map_or_else(
-            |_| normalize_relative_path(&entry_path, Some(dir)),
-            |stripped| normalize_relative_path(stripped, None),
+        let relative_path = normalize_relative_path(
+            full_path
+                .strip_prefix(&layout.project_root)
+                .or_else(|_| full_path.strip_prefix(&resolved_dir))
+                .unwrap_or(&entry_path),
         );
         out.push(ProjectSourceFile {
             full_path,

@@ -2,19 +2,14 @@
 //! outside the crate root.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::ast::rust::{RustFileSummary, VisibleUseDeclaration, summarize_rust_file};
 use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
-use crate::code_lint::project::{ProjectContext, is_rust_crate_root};
+use crate::code_lint::project::ProjectContext;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, ImpactedQuality, Precision, ProjectExample, RuleDoc,
     RuleOptions, Topic,
 };
 use std::path::Path;
-
-const MACRO_EXPORT_ATTRIBUTE: &str = "#[macro_export]";
-const SELF_PREFIX: &str = "self::";
-const MODULE_SEPARATOR: &str = "::";
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Item `{expression}` in `{module}` creates a second public path outside its defining module.",
@@ -82,58 +77,24 @@ fn check_file(
     project: &ProjectContext<'_>,
     (): (),
 ) -> Vec<Diagnostic> {
-    let Some(module_path) = project.rust_module_of_path(path) else {
+    let Some(findings) = project.file_architecture_findings(file, path) else {
         return Vec::new();
     };
-    let summary = summarize_rust_file(file);
-    let macro_exports = summary
-        .macro_exports
+    findings
+        .reexported_public_items
         .iter()
-        .filter(|_| !is_rust_crate_root(&module_path))
-        .map(|&span| (span, MACRO_EXPORT_ATTRIBUTE));
-    let reexports = summary
-        .visible_uses
-        .iter()
-        .filter(|visible_use| !is_private_child_facade_reexport(visible_use, &summary))
-        .map(|visible_use| (visible_use.span, visible_use.declaration_text.as_str()));
-    macro_exports
-        .chain(reexports)
-        .map(|(span, expression)| {
+        .map(|finding| {
             rule.diagnostic_at_span(
                 path,
                 file,
-                span,
-                &[("expression", expression), ("module", &module_path)],
+                finding.span,
+                &[
+                    ("expression", &finding.expression),
+                    ("module", &finding.module),
+                ],
             )
         })
         .collect()
-}
-
-/// Returns true if every target of `visible_use` lies inside a private direct child module
-/// declared in the same file (`mod child;` or `mod child { ... }`, then
-/// `pub use self::child::Item;`).
-fn is_private_child_facade_reexport(
-    visible_use: &VisibleUseDeclaration,
-    summary: &RustFileSummary,
-) -> bool {
-    if visible_use.target_paths.is_empty() {
-        return false;
-    }
-    visible_use.target_paths.iter().all(|target| {
-        let stripped = target.strip_prefix(SELF_PREFIX).unwrap_or(target);
-        let Some((child_module, rest)) = stripped.split_once(MODULE_SEPARATOR) else {
-            return false;
-        };
-        !rest.is_empty()
-            && (summary
-                .external_mods
-                .iter()
-                .any(|declaration| declaration.is_private && declaration.name == child_module)
-                || summary
-                    .private_inline_mods
-                    .iter()
-                    .any(|name| name == child_module))
-    })
 }
 
 #[cfg(test)]

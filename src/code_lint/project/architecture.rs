@@ -282,6 +282,17 @@ pub struct InvalidArchitectureComponentFinding {
     pub kind: InvalidArchitectureComponentKind,
 }
 
+/// Violation finding for `reexported-public-item`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReexportedPublicItemFinding {
+    /// AST byte span of the offending `pub use` or `pub(...) use` item.
+    pub span: SourceSpan,
+    /// Source text of the re-export item.
+    pub expression: String,
+    /// Enclosing Rust module path.
+    pub module: String,
+}
+
 /// All architectural conformance findings evaluated for a single source file.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct FileArchitectureFindings {
@@ -299,6 +310,8 @@ pub struct FileArchitectureFindings {
     pub unmapped_architecture_modules: Vec<UnmappedArchitectureModuleFinding>,
     /// Findings for `invalid-architecture-component`.
     pub invalid_architecture_components: Vec<InvalidArchitectureComponentFinding>,
+    /// Findings for `reexported-public-item`.
+    pub reexported_public_items: Vec<ReexportedPublicItemFinding>,
 }
 
 /// Evaluates the component-level architectural conformance rules for `file` (`path`), reusing an
@@ -320,8 +333,9 @@ pub(super) fn evaluate_file_architecture_with_summary(
     }
 }
 
-/// Evaluates stray `architecture_component!(...)` macro calls in a Rust `file` (`path`) when
-/// the project declares no [`ArchitectureSpec`].
+/// Evaluates spec-independent Rust architectural findings (stray `architecture_component!(...)`
+/// macro calls and non-root `pub use` re-exports) in `file` (`path`) when the project declares no
+/// [`ArchitectureSpec`].
 #[must_use]
 pub(super) fn evaluate_stray_rust_component_markers(
     file: &ParsedFile,
@@ -335,6 +349,7 @@ pub(super) fn evaluate_stray_rust_component_markers(
         return FileArchitectureFindings::default();
     };
     let summary = summarize_rust_file(file);
+    let reexported_public_items = collect_rust_reexported_public_items(&module_path, &summary);
     let mut findings = FileArchitectureFindings {
         invalid_architecture_components: summary
             .architecture_components
@@ -346,6 +361,7 @@ pub(super) fn evaluate_stray_rust_component_markers(
                 kind: InvalidArchitectureComponentKind::MissingDefineArchitecture,
             })
             .collect(),
+        reexported_public_items,
         ..FileArchitectureFindings::default()
     };
     deduplicate_findings(&mut findings);
@@ -398,11 +414,15 @@ fn evaluate_rust_file_architecture(
     let Some(module_path) = layout.rust_module_of_path(path) else {
         return FileArchitectureFindings::default();
     };
-    if spec.components.is_empty() && !spec.from_rust_macros {
-        return FileArchitectureFindings::default();
-    }
     let summary = summarize_rust_file(file);
-    let mut findings = FileArchitectureFindings::default();
+    let mut findings = FileArchitectureFindings {
+        reexported_public_items: collect_rust_reexported_public_items(&module_path, &summary),
+        ..FileArchitectureFindings::default()
+    };
+    if spec.components.is_empty() && !spec.from_rust_macros {
+        deduplicate_findings(&mut findings);
+        return findings;
+    }
 
     let has_invalid_macro = check_rust_invalid_component_markers(
         &module_path,
@@ -537,6 +557,33 @@ fn check_rust_cross_component_edge(
                 dependency: target_component.to_owned(),
             });
     }
+}
+
+fn collect_rust_reexported_public_items(
+    module_path: &str,
+    summary: &RustFileSummary,
+) -> Vec<ReexportedPublicItemFinding> {
+    if is_rust_crate_root(module_path) {
+        return Vec::new();
+    }
+    let mut items: Vec<ReexportedPublicItemFinding> = summary
+        .visible_uses
+        .iter()
+        .filter(|reexport| !summary.is_private_child_facade_reexport(reexport))
+        .map(|reexport| ReexportedPublicItemFinding {
+            span: reexport.span,
+            expression: reexport.declaration_text.clone(),
+            module: module_path.to_owned(),
+        })
+        .collect();
+    for &span in &summary.macro_exports {
+        items.push(ReexportedPublicItemFinding {
+            span,
+            expression: "#[macro_export]".to_owned(),
+            module: module_path.to_owned(),
+        });
+    }
+    items
 }
 
 fn check_rust_external_owner(
@@ -774,63 +821,61 @@ fn evaluate_python_file_architecture(
         {
             continue;
         }
-        let Some(resolved) = resolve_python_import_target_with_layout(
+        for resolved in resolve_python_import_targets_with_layout(
             &module_path,
             is_package_init,
             &import_ref,
             layout,
             source,
-        ) else {
-            continue;
-        };
-
-        if let Some(ref enclosing_match) = enclosing
-            && import_ref.level > 0
-            && !resolved.stays_within_root(enclosing_match.matched_root)
-        {
-            let dependency = if resolved.module_path == ROOT_MODULE_TAG {
-                resolved.full_target_path.clone()
-            } else {
-                resolved.module_path.clone()
-            };
-            findings
-                .cross_component_relative_paths
-                .push(CrossComponentRelativePathFinding {
-                    span: import_ref.span,
-                    dependency,
-                    component: enclosing_match.component_name.to_owned(),
-                });
-        }
-
-        if !is_first_party_python_import(&resolved.module_path, layout, source, spec) {
-            if import_ref.level == 0 {
-                let top_package = resolved
-                    .module_path
-                    .split(PYTHON_MODULE_SEPARATOR)
-                    .next()
-                    .unwrap_or(&resolved.module_path);
-                check_python_external_owner(
-                    &module_path,
-                    top_package,
-                    import_ref.span,
-                    spec,
-                    &mut findings.unowned_external_dependencies,
-                );
+        ) {
+            if let Some(ref enclosing_match) = enclosing
+                && import_ref.level > 0
+                && !resolved.stays_within_root(enclosing_match.matched_root)
+            {
+                let dependency = if resolved.module_path == ROOT_MODULE_TAG {
+                    resolved.full_target_path.clone()
+                } else {
+                    resolved.module_path.clone()
+                };
+                findings
+                    .cross_component_relative_paths
+                    .push(CrossComponentRelativePathFinding {
+                        span: import_ref.span,
+                        dependency,
+                        component: enclosing_match.component_name.to_owned(),
+                    });
             }
-            continue;
-        }
 
-        let Some(ref from_match) = enclosing else {
-            continue;
-        };
-        check_python_first_party_edge(
-            &module_path,
-            from_match,
-            &resolved,
-            import_ref.span,
-            spec,
-            &mut findings,
-        );
+            if !is_first_party_python_import(&resolved.module_path, layout, source, spec) {
+                if import_ref.level == 0 {
+                    let top_package = resolved
+                        .module_path
+                        .split(PYTHON_MODULE_SEPARATOR)
+                        .next()
+                        .unwrap_or(&resolved.module_path);
+                    check_python_external_owner(
+                        &module_path,
+                        top_package,
+                        import_ref.span,
+                        spec,
+                        &mut findings.unowned_external_dependencies,
+                    );
+                }
+                continue;
+            }
+
+            let Some(ref from_match) = enclosing else {
+                continue;
+            };
+            check_python_first_party_edge(
+                &module_path,
+                from_match,
+                &resolved,
+                import_ref.span,
+                spec,
+                &mut findings,
+            );
+        }
     }
 
     deduplicate_findings(&mut findings);
@@ -845,6 +890,7 @@ fn deduplicate_findings(findings: &mut FileArchitectureFindings) {
     sort_and_dedup(&mut findings.private_component_imports, |f| f.span);
     sort_and_dedup(&mut findings.unmapped_architecture_modules, |f| f.span);
     sort_and_dedup(&mut findings.invalid_architecture_components, |f| f.span);
+    sort_and_dedup(&mut findings.reexported_public_items, |f| f.span);
 }
 
 fn sort_and_dedup<T: PartialEq>(items: &mut Vec<T>, span_of: fn(&T) -> SourceSpan) {
@@ -1041,26 +1087,31 @@ fn python_root_specificity(module_path: &str, root_pattern: &str) -> Option<Spec
     None
 }
 
-fn resolve_python_import_target_with_layout(
+fn resolve_python_import_targets_with_layout(
     enclosing_module: &str,
     is_package_init: bool,
     import_ref: &PythonImportReference,
     layout: &ProjectLayout,
     source: &dyn FileSource,
-) -> Option<ResolvedPythonImport> {
+) -> Vec<ResolvedPythonImport> {
     if import_ref.level == 0 {
-        let base_module = import_ref.module.as_deref()?;
-        return Some(resolve_imported_member_on_base(
+        let Some(base_module) = import_ref.module.as_deref() else {
+            return Vec::new();
+        };
+        return resolve_imported_members_on_base(
             base_module.to_owned(),
-            import_ref.imported_name.as_deref(),
+            &import_ref.imported_names,
             Some(base_module.to_owned()),
             layout,
             source,
-        ));
+        );
     }
 
-    let resolved_package =
-        resolve_relative_python_package(enclosing_module, is_package_init, import_ref.level)?;
+    let Some(resolved_package) =
+        resolve_relative_python_package(enclosing_module, is_package_init, import_ref.level)
+    else {
+        return Vec::new();
+    };
     let shallowest = Some(resolved_package.shallowest_ancestor);
     let Some(base_module) = (match (
         resolved_package.package_prefix,
@@ -1071,32 +1122,68 @@ fn resolve_python_import_target_with_layout(
         (None, Some(suffix)) => Some(suffix.to_owned()),
         (None, None) => None,
     }) else {
-        let member = import_ref.imported_name.as_ref()?;
-        if layout.python_module_file(member, source).is_some()
-            || layout.is_python_namespace_dir(member, source)
-        {
-            return Some(ResolvedPythonImport {
-                module_path: member.clone(),
-                full_target_path: member.clone(),
-                imported_member: None,
-                shallowest_relative_ancestor: shallowest,
-            });
-        }
-        return Some(ResolvedPythonImport {
-            module_path: ROOT_MODULE_TAG.to_owned(),
-            full_target_path: member.clone(),
-            imported_member: Some(member.clone()),
-            shallowest_relative_ancestor: shallowest,
-        });
+        return import_ref
+            .imported_names
+            .iter()
+            .map(|member| {
+                if layout.python_module_file(member, source).is_some()
+                    || layout.is_python_namespace_dir(member, source)
+                {
+                    ResolvedPythonImport {
+                        module_path: member.clone(),
+                        full_target_path: member.clone(),
+                        imported_member: None,
+                        shallowest_relative_ancestor: shallowest.clone(),
+                    }
+                } else {
+                    ResolvedPythonImport {
+                        module_path: ROOT_MODULE_TAG.to_owned(),
+                        full_target_path: member.clone(),
+                        imported_member: Some(member.clone()),
+                        shallowest_relative_ancestor: shallowest.clone(),
+                    }
+                }
+            })
+            .collect();
     };
 
-    Some(resolve_imported_member_on_base(
+    resolve_imported_members_on_base(
         base_module,
-        import_ref.imported_name.as_deref(),
+        &import_ref.imported_names,
         shallowest,
         layout,
         source,
-    ))
+    )
+}
+
+fn resolve_imported_members_on_base(
+    base_module: String,
+    imported_names: &[String],
+    shallowest_relative_ancestor: Option<String>,
+    layout: &ProjectLayout,
+    source: &dyn FileSource,
+) -> Vec<ResolvedPythonImport> {
+    if imported_names.is_empty() {
+        return vec![resolve_imported_member_on_base(
+            base_module,
+            None,
+            shallowest_relative_ancestor,
+            layout,
+            source,
+        )];
+    }
+    imported_names
+        .iter()
+        .map(|imported_name| {
+            resolve_imported_member_on_base(
+                base_module.clone(),
+                Some(imported_name.as_str()),
+                shallowest_relative_ancestor.clone(),
+                layout,
+                source,
+            )
+        })
+        .collect()
 }
 
 fn resolve_imported_member_on_base(

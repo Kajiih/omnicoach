@@ -733,10 +733,11 @@ impl<'s> ProjectIndex<'s> {
         let spec = match file.lang() {
             Language::Python => Some(resolved?),
             Language::Rust => {
+                let source_text = file.source_text();
                 if resolved.is_none()
-                    && !file
-                        .source_text()
-                        .contains(ARCHITECTURE_COMPONENT_CALL_PREFIX)
+                    && !source_text.contains(ARCHITECTURE_COMPONENT_CALL_PREFIX)
+                    && !source_text.contains("use")
+                    && !source_text.contains("macro_export")
                 {
                     return None;
                 }
