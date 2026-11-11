@@ -8,7 +8,7 @@ Related design documents:
 - [ADR 007: Faceted Rule Taxonomy, Hierarchical Selection, and Tag-Free Rule Execution](decisions/007_rule_taxonomy_and_selection.md)
 - [ADR 011: Colocated Top-Down Abstraction Ordering](decisions/011_colocated_abstraction_ordering.md)
 - [ADR 012: Module Placement by Abstraction](decisions/012_module_placement_by_abstraction.md)
-- [Abstraction Graph 03 Design](abstraction_graph/03_design.md) (`D19`, `D21`) and [05 Decisions](abstraction_graph/05_decisions.md) (`D30`, `D37`)
+- [Abstraction Graph 03 Design](abstraction_graph/03_design.md) and [05 Decisions](abstraction_graph/05_decisions.md)
 
 ---
 
@@ -22,23 +22,19 @@ Related design documents:
 
 ## 2. Pre-Split Architectural Seams (In-Place Cleanups)
 
-Two seams inside `src/` currently couple foundational layers to higher-level `omnicoach` concepts and should be resolved before or during crate extraction:
+One remaining seam inside `src/` couples foundational layers to higher-level `omnicoach` concepts and should be resolved before or during crate extraction (project-topology configuration has already been decoupled into `CodeLintProject`; see §2.2):
 
 ### 2.1. Split Source Span Primitives out of `diagnostic` ([ADR 012](decisions/012_module_placement_by_abstraction.md) P1)
 
 - **Current state**: [src/diagnostic.rs](../../src/diagnostic.rs) (`Diagnostic`) bundles two distinct abstractions:
   1. **Source coordinate primitives**: `Language`, `SourceSpan`, `LineColumn`, `LineIndex`, `SourceLocation`.
   2. **Linter violation reporting**: `RuleName`, `LanguageText`, `ViolationTemplate`, `ViolationMessage`, `Diagnostic`, terminal and JSON formatters.
-- **Consequence**: In [src/architecture.rs](../../src/architecture.rs), `CodeLintAst => [Diagnostic]` and `CommandLintCommand => [Diagnostic]`, even though neither layer produces linter diagnostics—both only need `Language`, `SourceSpan`, `LineColumn`, `LineIndex`, and `SourceLocation`.
-- **Target**: Extract the source coordinate primitives into a zero-dependency foundation component (`Source` / `span`) at the bottom of the DAG so `CodeLintAst`, `CommandLintCommand`, and any extracted AST/graph/command crate do not depend on linter diagnostic types.
+- **Consequence**: In [src/architecture.rs](../../src/architecture.rs), `CodeLintAst => [Diagnostic]`, `CodeLintProject => [CodeLintAst, Diagnostic]`, `CodeLintGraph => [CodeLintProject, CodeLintAst, Diagnostic]`, and `CommandLintCommand => [Diagnostic]`, even though none of these layers formats linter diagnostics—they only need `Language`, `SourceSpan`, `LineColumn`, `LineIndex`, and `SourceLocation`.
+- **Target**: Extract the source coordinate primitives into a zero-dependency foundation component (`Source` / `span`) at the bottom of the DAG so `CodeLintAst`, `CodeLintProject`, `CodeLintGraph`, `CommandLintCommand`, and any extracted AST/graph/command crate do not depend on linter diagnostic types.
 
-### 2.2. Unify Rust Module, Component, and Reference Path Resolution ([ADR 012](decisions/012_module_placement_by_abstraction.md) P6, `D37`)
+### 2.2. Completed: `ProjectConfig` in `CodeLintProject` ([ADR 012](decisions/012_module_placement_by_abstraction.md) P1, P7)
 
-- **Current state**: Three closely related facts over `RustFileSummary` ([src/code_lint/ast/rust/file_summary.rs](../../src/code_lint/ast/rust/file_summary.rs)) are derived independently in two places:
-  1. **File path $\to$ Rust module path**: `module_path_for_file` in [tests/architecture_conformance.rs](../../tests/architecture_conformance.rs) and `rust_module_path` in [src/code_lint/graph/project_facts.rs](../../src/code_lint/graph/project_facts.rs).
-  2. **Ancestor `architecture_component!` inheritance**: `resolve_inherited_component_with_root` in [tests/architecture_conformance.rs](../../tests/architecture_conformance.rs) and `resolve_inherited_rust_component` in [src/code_lint/graph/project_facts.rs](../../src/code_lint/graph/project_facts.rs).
-  3. **Syntactic reference path normalization (`crate::`, `self::`, `super::`, child `mod`, re-exports)**: `resolve_reference_path` in [tests/architecture_conformance.rs](../../tests/architecture_conformance.rs) and `normalize_rust_reference_path` + `collect_rust_reexports` in [src/code_lint/graph/project_facts.rs](../../src/code_lint/graph/project_facts.rs).
-- **Target**: Unify Rust module discovery, component inheritance, and reference path resolution into a single project-fact derivation used by both architectural conformance checking and multi-file abstraction graph generation (`ReflexionStatus::{Convergent, Absent, Divergent, Inferred}`).
+- **Resolved state**: Project-topology configuration (`ProjectConfig`, `ContextConfig`, `ArchitectureConfig`, `ArchitectureComponentConfig`, `DEFAULT_TEST_PATTERNS`) lives in [src/code_lint/project/config.rs](../../src/code_lint/project/config.rs) inside `CodeLintProject`, while rule-selection `Config` in [src/config.rs](../../src/config.rs) wraps `pub project: ProjectConfig` alongside `disabled_rules`, `per_file_ignores`, and `rule_options`. File-to-module derivation (`rust_module_path`), ancestor `architecture_component!` inheritance (`resolve_inherited_component_with_root`), and syntactic reference path normalization (`resolve_rust_reference_path`) live in [src/code_lint/project/layout.rs](../../src/code_lint/project/layout.rs), `FileSource` ([src/code_lint/project/source.rs](../../src/code_lint/project/source.rs)) encapsulates directory walking (`walk_files`, owning `ignore`), and `ProjectIndex` ([src/code_lint/project/index.rs](../../src/code_lint/project/index.rs)) owns cross-module symbol and re-export resolution across Rust and Python. In [src/architecture.rs](../../src/architecture.rs), `CodeLintProject => [CodeLintAst, Diagnostic]` and `CodeLintGraph => [CodeLintProject, CodeLintAst, Diagnostic]` have zero dependency on `Config` or `RuleDeclaration`.
 
 ---
 
@@ -53,24 +49,23 @@ Two seams inside `src/` currently couple foundational layers to higher-level `om
     - Compile-time topological order assertion (`E0080` on forward/cyclic edges) and `strum` metadata derives.
   - **Conformance Runner (`[dev-dependencies]` or feature `check`)**:
     - Single-pass Rust CST summary (`RustFileSummary`, `ExternalModDeclaration`, `VisibleUseDeclaration`, `RustPathReference`) and project module/path resolver.
-    - Conformance checks from [tests/architecture_conformance.rs](../../tests/architecture_conformance.rs):
+    - Conformance checks from [src/code_lint/project/architecture.rs](../../src/code_lint/project/architecture.rs) and [tests/architecture_conformance.rs](../../tests/architecture_conformance.rs):
       1. Every source file belongs to a declared component subtree or is a CST-verified pure namespace router (`mod`-only).
       2. Component names match `PascalCase` of their root module path.
       3. Transitive DAG reachability across all `use` trees, inline paths, turbofish args, and macro `token_tree` paths.
       4. Universal intra-component sibling subtree isolation.
       5. Single public path per item (private-child facade `mod child; pub use self::child::Item;` allowed; duplicate public paths and non-root `#[macro_export]` rejected).
       6. Relative paths (`super::` / `self::`) stay within their enclosing component root subtree.
-      7. Configurable external-crate encapsulation rules (`ForbiddenDependencyRule` for restricting parser or I/O crates to designated adapter modules).
+      7. Configurable external-crate encapsulation rules (`owns_external` for restricting parser or I/O crates to designated adapter components).
 
-### 3.2. Multi-Level Abstraction Graph (`omni-graph`, per [03_design.md](abstraction_graph/03_design.md) `D19`)
+### 3.2. Multi-Level Abstraction Graph (`omni-graph`, per [03_design.md](abstraction_graph/03_design.md))
 
 - **Purpose**: Extract per-file and multi-file declaration hierarchies, entrypoint ownership (`Roots(h)`), [ADR 011](decisions/011_colocated_abstraction_ordering.md) topological abstraction levels, recursion groups (SCCs), and Murphy et al. Reflexion Model component summaries, and render them into compact structural outlines for humans and AI coding agents (`AnnotatedStubs`, `CompactBi`).
 - **Contents**:
-  - **Fact extractors**: `ScopeFacts`, `ItemFacts`, `RelationFact`, `OrderingEdge` ([src/code_lint/ast/scope_facts.rs](../../src/code_lint/ast/scope_facts.rs) and [src/code_lint/ast/call_clusters.rs](../../src/code_lint/ast/call_clusters.rs)) + multi-file `ProjectFacts` ([src/code_lint/graph/project_facts.rs](../../src/code_lint/graph/project_facts.rs)).
-  - **Validated graph model (Layer L1)**: `AbstractionGraph`, `DeclarationNode`, `GroupNode`, `SummaryEdge`, `ReflexionStatus`, `ModelError` ([src/code_lint/graph/model.rs](../../src/code_lint/graph/model.rs)).
-  - **Graph builder (Layer L2) & format renderers (Layer L3)**: `build_file_graph`, `build_project_graph`, `ProjectDepth` ([src/code_lint/graph/builder.rs](../../src/code_lint/graph/builder.rs)), and `OutputFormat` renderers ([src/code_lint/graph/render.rs](../../src/code_lint/graph/render.rs)).
-- **Decoupling needed**:
-  - Replace the `&Config` parameter on `generate_graph` ([src/code_lint/graph.rs](../../src/code_lint/graph.rs), which only calls `config.is_test_path(entry_path)`) with a caller-supplied path predicate or `GraphOptions` filter.
+  - **Fact extractors**: `ScopeFacts`, `ItemFacts`, `RelationFact`, `OrderingEdge` ([src/code_lint/ast/scope_facts.rs](../../src/code_lint/ast/scope_facts.rs) and [src/code_lint/ast/call_clusters.rs](../../src/code_lint/ast/call_clusters.rs)) + multi-file `ProjectFacts` ([src/code_lint/project/facts.rs](../../src/code_lint/project/facts.rs)).
+  - **Validated graph model & index (Layer L1)**: `AbstractionGraph`, `DeclarationNode`, `GroupNode`, `SummaryEdge`, `ReflexionStatus`, `ModelError` ([src/code_lint/graph/model.rs](../../src/code_lint/graph/model.rs)), and `GraphIndex` ([src/code_lint/graph/index.rs](../../src/code_lint/graph/index.rs)).
+  - **Graph builder (Layer L2), format renderers & queries (Layer L3)**: `build_file_graph`, `build_project_graph`, `ProjectDepth` ([src/code_lint/graph/builder.rs](../../src/code_lint/graph/builder.rs)), `OutputFormat` renderers ([src/code_lint/graph/render.rs](../../src/code_lint/graph/render.rs)), and `find` / `slice` queries ([src/code_lint/graph/query.rs](../../src/code_lint/graph/query.rs)).
+- **Decoupling needed**: Extract `SourceSpan` and `Language` from `Diagnostic` (§2.1).
 
 ### 3.3. Faceted Tag & Hierarchical Selector Engine (`tagonomy`)
 
