@@ -737,7 +737,7 @@ fn group_scope_items<'a, 'ast>(
                     name,
                     start_line: def_node.start_line(),
                     end_line: def_node.end_line(),
-                    signature: function_signature_text(function_def, &file.source),
+                    signature: function_signature_text(function_def, file),
                     visibility,
                     is_constructor,
                     first_stmt_idx: stmt_idx,
@@ -754,7 +754,7 @@ fn group_scope_items<'a, 'ast>(
                     name,
                     start_line: class_node.start_line(),
                     end_line: class_node.end_line(),
-                    signature: class_signature_text(class_def, &file.source),
+                    signature: class_signature_text(class_def, file),
                     visibility,
                     is_constructor: false,
                     first_stmt_idx: stmt_idx,
@@ -812,12 +812,12 @@ fn is_dunder_main_literal(expr: &Expr) -> bool {
 
 /// Renders the compact signature of a `def`: its header without the trailing colon, prefixed by a
 /// `@classmethod`, `@staticmethod`, or `@property` decorator.
-fn function_signature_text(function_def: &StmtFunctionDef, source: &str) -> String {
+fn function_signature_text(function_def: &StmtFunctionDef, file: &ParsedFile) -> String {
     let decorators: String = function_def
         .decorator_list
         .iter()
         .filter_map(|decorator| {
-            let text = collapse_whitespace(&source[decorator.expression.range()]);
+            let text = collapse_whitespace(&file.source[decorator.expression.range()]);
             matches!(text.as_str(), "classmethod" | "staticmethod" | "property")
                 .then(|| format!("@{text} "))
         })
@@ -826,21 +826,21 @@ fn function_signature_text(function_def: &StmtFunctionDef, source: &str) -> Stri
         function_def.range(),
         &function_def.decorator_list,
         &function_def.body,
-        source,
+        file,
     );
     format!("{decorators}{header}")
 }
 
 /// Renders the compact signature of a `class`: its header followed by its public annotated or
 /// constructor-assigned attributes.
-fn class_signature_text(class_def: &StmtClassDef, source: &str) -> String {
+fn class_signature_text(class_def: &StmtClassDef, file: &ParsedFile) -> String {
     let header = header_text(
         class_def.range(),
         &class_def.decorator_list,
         &class_def.body,
-        source,
+        file,
     );
-    let attributes = public_attributes(&class_def.body, source);
+    let attributes = public_attributes(&class_def.body, &file.source);
     if attributes.is_empty() {
         header
     } else {
@@ -850,16 +850,41 @@ fn class_signature_text(class_def: &StmtClassDef, source: &str) -> String {
 
 /// The header of a `def` or `class` spanning `range`: the text between its decorators and its
 /// body, joined into one line without comments or the trailing colon.
-fn header_text(range: TextRange, decorators: &[Decorator], body: &[Stmt], source: &str) -> String {
+fn header_text(
+    range: TextRange,
+    decorators: &[Decorator],
+    body: &[Stmt],
+    file: &ParsedFile,
+) -> String {
     let start = decorators
         .last()
         .map_or_else(|| range.start(), |decorator| decorator.range().end());
     let end = body
         .first()
         .map_or_else(|| range.end(), |statement| statement.range().start());
-    let lines: Vec<&str> = source[TextRange::new(start, end)]
+    let mut stripped = String::new();
+    let mut cursor = usize::from(start);
+    let end_offset = usize::from(end);
+    if let Some(parsed) = file.py_module() {
+        for token in parsed.tokens() {
+            let token_range = token.range();
+            if token_range.end() <= start {
+                continue;
+            }
+            if token_range.start() >= end {
+                break;
+            }
+            if token.kind() == ruff_python_ast::token::TokenKind::Comment {
+                let comment_start = usize::from(token_range.start()).max(cursor);
+                stripped.push_str(&file.source[cursor..comment_start]);
+                cursor = usize::from(token_range.end()).min(end_offset);
+            }
+        }
+    }
+    stripped.push_str(&file.source[cursor..end_offset]);
+    let lines: Vec<&str> = stripped
         .lines()
-        .map(|line| line.split('#').next().unwrap_or(line).trim())
+        .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect();
     collapse_whitespace(lines.join(" ").trim_end_matches(':'))
@@ -1620,5 +1645,21 @@ mod tests {
             .collect();
 
         assert_eq!(targets_from_run, vec!["Worker::_step", "_captured_helper"]);
+    }
+
+    #[test]
+    fn test_function_signature_text_preserves_hash_in_string_default_and_strips_comment() {
+        let source = indoc::indoc! {r##"
+            def parse(
+                sep: str = "#",  # default comment delimiter
+            ) -> str:
+                return sep
+        "##};
+        let file = ParsedFile::new(source, Language::Python);
+        let scopes = collect_declaration_scopes(&file);
+        assert_eq!(
+            scopes[0].items[0].signature.as_deref(),
+            Some(r##"def parse( sep: str = "#", ) -> str"##)
+        );
     }
 }

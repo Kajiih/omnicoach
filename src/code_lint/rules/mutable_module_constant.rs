@@ -98,8 +98,7 @@ pub const RULE: CodeRule = CodeRule {
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for assignment in collect_module_assignments(file) {
-        let is_dunder = assignment.name.starts_with("__") && assignment.name.ends_with("__");
-        if is_dunder || !assignment.is_constant() {
+        if !assignment.is_constant() {
             continue;
         }
         let Some(MutableCollections {
@@ -163,7 +162,7 @@ fn mutable_collections<'tree, 'assignment>(
     let built = collection_display(value).or_else(|| {
         call_callee(value)
             .and_then(|callee| collection_type(&callee))
-            .filter(is_runtime_mutable_collection_constructor)
+            .filter(PythonCollectionType::is_runtime_mutable_constructor)
     })?;
     let is_read_only_mapping = assignment.annotation.as_ref().is_some_and(|annotation| {
         collect_collection_types(
@@ -180,15 +179,6 @@ fn mutable_collections<'tree, 'assignment>(
         node: value,
         collection_types: vec![built],
     })
-}
-
-/// Returns true if `constructed` is called at runtime to build a mutable collection: `list`,
-/// `dict`, `set`, `defaultdict`, `deque`, `Counter`, or `OrderedDict`.
-fn is_runtime_mutable_collection_constructor(constructed: &PythonCollectionType) -> bool {
-    matches!(
-        constructed.name.as_str(),
-        "list" | DICT | "set" | "defaultdict" | "deque" | "Counter" | "OrderedDict"
-    )
 }
 
 #[cfg(test)]

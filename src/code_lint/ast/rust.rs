@@ -37,7 +37,7 @@ pub(super) use self::literals::collect_literal_occurrences;
 pub(super) use self::multiline_strings::collect_multiline_strings;
 pub(super) use self::positional_reads::collect_positional_reads;
 pub(super) use self::returns::collect_function_returns;
-pub(in crate::code_lint) use self::returns::{NullableReturnPayload, nullable_return_payload};
+pub(in crate::code_lint) use self::returns::nullable_return_collection_type;
 pub(super) use self::statement_spans::{
     enclosing_statement_header_span, record_decorator_and_attribute_spans,
 };

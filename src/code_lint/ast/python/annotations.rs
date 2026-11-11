@@ -38,6 +38,7 @@ const DICT_CONSTRUCTOR: &str = "dict";
 const TYPING_DICT_CONSTRUCTOR: &str = "Dict";
 const TYPE_DEFAULTDICT: &str = "defaultdict";
 const TYPE_TYPING_DEFAULTDICT: &str = "DefaultDict";
+const TYPE_DEQUE: &str = "deque";
 const TYPE_COUNTER: &str = "Counter";
 const ORDERED_DICT_CONSTRUCTOR: &str = "OrderedDict";
 const TUPLE_CONSTRUCTOR: &str = "tuple";
@@ -152,6 +153,23 @@ impl PythonCollectionType {
             .map(|collection_type| collection_type.path.as_str())
             .collect::<Vec<_>>()
             .join(", ")
+    }
+
+    /// Returns true if the collection constructor is called at runtime to build a mutable
+    /// collection (`list`, `dict`, `set`, `defaultdict`, `deque`, `Counter`, `OrderedDict`),
+    /// excluding `typing` aliases (`List`, `Dict`, `Set`, `DefaultDict`, `Deque`).
+    #[must_use]
+    pub fn is_runtime_mutable_constructor(&self) -> bool {
+        matches!(
+            self.name.as_str(),
+            LIST_CONSTRUCTOR
+                | DICT_CONSTRUCTOR
+                | SET_CONSTRUCTOR
+                | TYPE_DEFAULTDICT
+                | TYPE_DEQUE
+                | TYPE_COUNTER
+                | ORDERED_DICT_CONSTRUCTOR
+        )
     }
 }
 
@@ -405,8 +423,19 @@ pub struct PythonReturnTypeBranch<'a> {
     /// The collection type the branch names, directly (`list`) or as the base of a subscript
     /// (`list[int]`); see [`collection_type`].
     pub collection: Option<PythonCollectionType>,
+    /// The element count if the branch is a non-empty fixed-length tuple (`tuple[int]`,
+    /// `tuple[str, int]`, `Tuple[a, b, c]`; not `tuple[int, ...]`, `tuple[()]`, or unsubscripted
+    /// `tuple`).
+    positional_tuple_arity: Option<usize>,
+    /// True if `collection` is a variable-length collection (any collection other than a
+    /// fixed-length or empty subscripted `tuple`/`Tuple`).
+    is_variable_length_collection: bool,
     /// The type arguments if the branch is a subscript (`int` and `...` in `tuple[int, ...]`).
-    pub type_arguments: Option<Vec<AstNode<'a>>>,
+    #[cfg(test)]
+    type_arguments: Option<Vec<AstNode<'a>>>,
+    /// Retains the lifetime parameter `'a` when test-only AST node fields are compiled out.
+    #[cfg(not(test))]
+    _marker: std::marker::PhantomData<&'a ()>,
     /// The constructor (the branch, or the base of its subscript) resolved through the file's
     /// imports, as a path and its terminal name.
     constructor: Option<QualifiedName>,
@@ -417,21 +446,19 @@ impl PythonReturnTypeBranch<'_> {
     /// `tuple[str, int]`, `Tuple[a, b, c]`; not `tuple[int, ...]`, `tuple[()]`, or unsubscripted
     /// `tuple`).
     #[must_use]
-    pub fn positional_tuple_arity(&self) -> Option<usize> {
-        let collection = self.collection.as_ref()?;
-        if !matches!(
-            collection.name.as_str(),
-            TUPLE_CONSTRUCTOR | TYPING_TUPLE_CONSTRUCTOR
-        ) {
-            return None;
+    pub const fn positional_tuple_arity(&self) -> Option<usize> {
+        self.positional_tuple_arity
+    }
+
+    /// Returns the collection type if this branch is a variable-length collection (any collection
+    /// other than a fixed-length or empty subscripted `tuple`/`Tuple`).
+    #[must_use]
+    pub const fn variable_length_collection(&self) -> Option<&PythonCollectionType> {
+        if self.is_variable_length_collection {
+            self.collection.as_ref()
+        } else {
+            None
         }
-        let arguments = self.type_arguments.as_ref()?;
-        let is_empty_tuple = matches!(arguments.as_slice(), [arg] if arg.text().trim() == "()");
-        let is_fixed_length = !is_empty_tuple
-            && arguments
-                .iter()
-                .all(|argument| argument.text().trim() != "...");
-        (!arguments.is_empty() && is_fixed_length).then_some(arguments.len())
     }
 
     /// Returns true if the branch's constructor is one of the standard-library types `names`.
@@ -617,20 +644,56 @@ fn positional_tuple_type_arity(type_node: &AstNode<'_>) -> Option<usize> {
 
 /// Builds a [`PythonReturnTypeBranch`] for a single non-`None` union branch expression `branch`.
 fn build_return_type_branch<'a>(branch: &Expr, file: &'a ParsedFile) -> PythonReturnTypeBranch<'a> {
+    #[cfg(test)]
     let node_of = |expr: &Expr| AstNode::from_span(file, span_from_ruff_range(expr.range()));
     let generic = extract_generic_base_and_args(branch);
     let constructor = generic.as_ref().map_or(branch, |generic| generic.base);
+    let collection = collection_type_expr(constructor, file);
+    let is_tuple_constructor = collection.as_ref().is_some_and(|col| {
+        matches!(
+            col.name.as_str(),
+            TUPLE_CONSTRUCTOR | TYPING_TUPLE_CONSTRUCTOR
+        )
+    });
+    let positional_tuple_arity = if is_tuple_constructor {
+        generic
+            .as_ref()
+            .and_then(|generic| tuple_arity_from_args(&generic.arguments))
+    } else {
+        None
+    };
+    let is_variable_length_collection = collection.is_some()
+        && (!is_tuple_constructor
+            || generic.as_ref().is_none_or(|generic| {
+                matches!(generic.arguments.as_slice(), [_, Expr::EllipsisLiteral(_)])
+            }));
     PythonReturnTypeBranch {
         #[cfg(test)]
         node: node_of(branch),
-        collection: collection_type_expr(constructor, file),
+        collection,
+        positional_tuple_arity,
+        is_variable_length_collection,
+        #[cfg(test)]
         type_arguments: generic.map(|generic| generic.arguments.into_iter().map(node_of).collect()),
+        #[cfg(not(test))]
+        _marker: std::marker::PhantomData,
         constructor: written_name(constructor, &file.source).resolve(file),
     }
 }
 
+/// Returns the arity of a subscripted tuple's type arguments if it is a non-empty fixed-length
+/// tuple (`tuple[int]`, `tuple[int, str]`), or `None` for `tuple[()]` and `tuple[T, ...]`.
+fn tuple_arity_from_args(arguments: &[&Expr]) -> Option<usize> {
+    let is_empty_tuple = matches!(arguments, [Expr::Tuple(tuple)] if tuple.elts.is_empty());
+    let has_ellipsis = arguments
+        .iter()
+        .any(|arg| matches!(arg, Expr::EllipsisLiteral(_)));
+    (!arguments.is_empty() && !is_empty_tuple && !has_ellipsis).then_some(arguments.len())
+}
+
 /// Recursively emits [`TypeAnnotationCandidate`]s in pre-order for `expr` and its nested type
-/// arguments, skipping `Annotated` wrappers and their metadata arguments (`args[1..]`).
+/// arguments, skipping transparent first-arg wrappers (`Annotated`, `ClassVar`, `Final`,
+/// `InitVar`, `Required`, `NotRequired`, `ReadOnly`) and `Annotated` metadata arguments.
 fn collect_python_candidates_expr<'a>(
     expr: &Expr,
     file: &'a ParsedFile,
@@ -652,7 +715,7 @@ fn collect_python_candidates_expr<'a>(
         }
         Expr::Subscript(_) => {
             if let Some(GenericType { base, arguments }) = extract_generic_base_and_args(expr)
-                && is_annotated_constructor(base, file)
+                && is_transparent_first_arg_wrapper(base, file)
             {
                 if let Some(&first_arg) = arguments.first() {
                     collect_python_candidates_expr(first_arg, file, expression, out);
@@ -699,7 +762,7 @@ fn build_python_type_shape(expr: &Expr, file: &ParsedFile) -> TypeShape {
             let Some(GenericType { base, arguments }) = extract_generic_base_and_args(expr) else {
                 return TypeShape::Other;
             };
-            if is_annotated_constructor(base, file)
+            if is_transparent_first_arg_wrapper(base, file)
                 && let Some(&first_arg) = arguments.first()
             {
                 return build_python_type_shape(first_arg, file);
@@ -755,11 +818,14 @@ fn push_unique_shape(out: &mut Vec<TypeShape>, shape: TypeShape) {
     }
 }
 
-/// Returns true if `base` resolves to `typing.Annotated` or `typing_extensions.Annotated`.
-fn is_annotated_constructor(base: &Expr, file: &ParsedFile) -> bool {
+/// Returns true if `base` resolves to a transparent first-arg wrapper (`Annotated`, `ClassVar`,
+/// `Final`, `InitVar`, `Required`, `NotRequired`, `ReadOnly`).
+fn is_transparent_first_arg_wrapper(base: &Expr, file: &ParsedFile) -> bool {
     written_name(base, &file.source)
         .resolve(file)
-        .is_some_and(|name| is_std_type_constructor(&name.path, &name.terminal, &[TYPE_ANNOTATED]))
+        .is_some_and(|name| {
+            is_std_type_constructor(&name.path, &name.terminal, TRANSPARENT_FIRST_ARG_WRAPPERS)
+        })
 }
 
 /// Unwraps outer return-annotation envelopes (`Annotated[T, ...]`, `Awaitable[T]`, and
@@ -1043,7 +1109,7 @@ fn is_concrete_collection_constructor(path: &str, terminal: &str) -> bool {
         }
         TYPE_DEFAULTDICT
         | TYPE_TYPING_DEFAULTDICT
-        | "deque"
+        | TYPE_DEQUE
         | "Deque"
         | TYPE_COUNTER
         | ORDERED_DICT_CONSTRUCTOR => {

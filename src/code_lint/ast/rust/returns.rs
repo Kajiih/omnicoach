@@ -16,20 +16,16 @@ const POLL_TYPE_NAME: &str = "Poll";
 /// The Rust boolean primitive.
 const BOOL_TYPE_NAME: &str = "bool";
 
-/// The payload `T` of an optional return type, as classified by [`nullable_return_payload`].
-pub enum NullableReturnPayload {
-    /// A slice or unsized array type (`[T]`), with its source text.
-    Slice(String),
-    /// A generic path type (`std::vec::Vec<T>`).
-    Generic {
-        /// Source text of the base path (`std::vec::Vec`).
-        base: String,
-        /// The base path with whitespace and any leading `::` removed.
-        path: String,
-        /// The last segment of the base path (`Vec`).
-        terminal: String,
-    },
-}
+const RUST_COLLECTION_TYPES: &[&str] = &[
+    "Vec",
+    "VecDeque",
+    "LinkedList",
+    "HashMap",
+    "BTreeMap",
+    "HashSet",
+    "BTreeSet",
+    "BinaryHeap",
+];
 
 /// See [`crate::code_lint::ast::collect_function_returns`]: trait items, trait implementations and
 /// inline tests are skipped.
@@ -69,14 +65,15 @@ pub fn collect_function_returns(file: &ParsedFile) -> Vec<FunctionReturn<'_>> {
     out
 }
 
-/// Classifies the payload `T` of `return_type` if it is `Option<T>`.
+/// Extracts the collection or slice type `T` from `return_type` if it is `Option<T>`.
 ///
 /// Outer `Result<T, ...>` (and aliases ending in `Result`) and `Poll<T>` envelopes are unwrapped
 /// first, then transparent borrow and smart-pointer wrappers (`&T`, `&mut T`, `Box<T>`, `Rc<T>`,
 /// `Arc<T>`, `Cow<'_, T>`) around `T`. Returns `None` if there is no `Option` or `T` is neither a
-/// slice nor a generic path type.
+/// slice (`[U]`) nor a standard-library collection type (`Vec`, `VecDeque`, `LinkedList`,
+/// `HashMap`, `BTreeMap`, `HashSet`, `BTreeSet`, `BinaryHeap`).
 #[must_use]
-pub fn nullable_return_payload(return_type: &AstNode<'_>) -> Option<NullableReturnPayload> {
+pub fn nullable_return_collection_type(return_type: &AstNode<'_>) -> Option<String> {
     let file = return_type.file;
     let source = &file.source;
     let return_type = cast_at_span::<ast::Type>(return_type)?;
@@ -85,15 +82,11 @@ pub fn nullable_return_payload(return_type: &AstNode<'_>) -> Option<NullableRetu
     match &inner {
         ast::Type::SliceType(_) => {
             let span = span_from_rowan_range(inner.syntax().text_range());
-            Some(NullableReturnPayload::Slice(
-                source[span.start..span.end].trim().to_owned(),
-            ))
+            Some(source[span.start..span.end].trim().to_owned())
         }
         ast::Type::ArrayType(array_type) if array_type.const_arg().is_none() => {
             let span = span_from_rowan_range(inner.syntax().text_range());
-            Some(NullableReturnPayload::Slice(
-                source[span.start..span.end].trim().to_owned(),
-            ))
+            Some(source[span.start..span.end].trim().to_owned())
         }
         ast::Type::PathType(path_type) => {
             let GenericPathType {
@@ -101,14 +94,30 @@ pub fn nullable_return_payload(return_type: &AstNode<'_>) -> Option<NullableRetu
                 base: QualifiedName { path, terminal },
                 ..
             } = extract_path_type_generics(path_type, file)?;
-            Some(NullableReturnPayload::Generic {
-                base: source[base_span.start..base_span.end].trim().to_owned(),
-                path,
-                terminal,
-            })
+            is_rust_collection_constructor(&path, &terminal)
+                .then(|| source[base_span.start..base_span.end].trim().to_owned())
         }
         _ => None,
     }
+}
+
+/// Returns true if `(path, terminal)` resolves to a standard-library Rust collection constructor.
+fn is_rust_collection_constructor(path: &str, terminal: &str) -> bool {
+    if !RUST_COLLECTION_TYPES.contains(&terminal) {
+        return false;
+    }
+    path == terminal
+        || path.strip_suffix(terminal).is_some_and(|prefix| {
+            matches!(
+                prefix,
+                "vec::"
+                    | "std::vec::"
+                    | "alloc::vec::"
+                    | "collections::"
+                    | "std::collections::"
+                    | "alloc::collections::"
+            )
+        })
 }
 
 /// Returns true if `function` is declared inside a `trait` block or an `impl Trait for Type` block.

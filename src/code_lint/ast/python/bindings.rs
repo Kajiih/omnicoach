@@ -33,10 +33,10 @@ pub struct PythonModuleAssignment<'a> {
 
 impl PythonModuleAssignment<'_> {
     /// Whether the assignment declares a constant: an `UPPER_SNAKE_CASE` name or a `Final`
-    /// annotation.
+    /// annotation (excluding dunder module attributes such as `__all__`).
     #[must_use]
     pub fn is_constant(&self) -> bool {
-        is_constant_name(&self.name) || self.has_final_annotation
+        !is_dunder_name(&self.name) && (is_constant_name(&self.name) || self.has_final_annotation)
     }
 }
 
@@ -90,8 +90,11 @@ pub(super) fn constant_assignment_value<'a>(
         Stmt::AnnAssign(ann)
             if matches!(
                 ann.target.as_ref(),
-                Expr::Name(name) if is_constant_name(name.id.as_str())
-            ) || has_final_annotation_expr(&ann.annotation, file) =>
+                Expr::Name(name)
+                    if !is_dunder_name(name.id.as_str())
+                        && (is_constant_name(name.id.as_str())
+                            || has_final_annotation_expr(&ann.annotation, file))
+            ) =>
         {
             ann.value.as_deref()
         }
@@ -361,10 +364,16 @@ impl<'a> SourceOrderVisitor<'a> for BindingVisitor<'a> {
 
 /// Returns true if `name` is spelled as a constant (`MAX_RETRIES`, `_TIMEOUT_S`).
 fn is_constant_name(name: &str) -> bool {
-    name.chars().any(|character| character.is_ascii_uppercase())
+    !is_dunder_name(name)
+        && name.chars().any(|character| character.is_ascii_uppercase())
         && name.chars().all(|character| {
             character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
         })
+}
+
+/// Returns true if `name` is a dunder identifier (`__all__`, `__version__`).
+fn is_dunder_name(name: &str) -> bool {
+    name.starts_with("__") && name.ends_with("__")
 }
 
 /// Collects single-name module-level assignments from `stmts`, recursing into top-level

@@ -3,7 +3,9 @@
 architecture_component!(CodeLintSuppression);
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::semantic::comments::{CommentIndex, strip_comment_delimiters};
+use crate::code_lint::semantic::comments::{
+    CommentIndex, NOQA, starts_with_tool_directive, strip_comment_delimiters,
+};
 use crate::config::Config;
 use crate::diagnostic::{
     Diagnostic, Language, LineColumn, RuleName, SourceLocation, SourceSpan, ViolationTemplate,
@@ -218,9 +220,6 @@ pub struct SuppressionTracker {
 
 const DIRECTIVE_NAMESPACES: &[&str] = &["omnicoach:", "omni:"];
 
-/// The bare `# noqa` directive, honored by Ruff and flake8 in any case.
-const NOQA: &str = "noqa";
-
 /// Substrings, besides `noqa` in any case, of which every other third-party Python suppression
 /// directive contains at least one.
 const TOOL_DIRECTIVE_MARKERS: &[&str] = &["ignore", "disable", "skip-file"];
@@ -252,9 +251,21 @@ impl SuppressionTracker {
         }
 
         let comment_index = CommentIndex::from_file(file);
-        let decorator_end_lines = ast::decorator_and_attribute_end_lines(file);
+        let comment_nodes = ast::collect_comment_nodes(file);
+        let mut skippable_end_lines = ast::decorator_and_attribute_end_lines(file);
+        for comment_node in &comment_nodes {
+            let span = comment_node.span();
+            if is_standalone_span_on_lines(content, span) {
+                let start_line = comment_node.start_line();
+                let end_line = comment_node.end_line();
+                skippable_end_lines
+                    .entry(start_line)
+                    .and_modify(|existing| *existing = (*existing).max(end_line))
+                    .or_insert(end_line);
+            }
+        }
         let mut tracker = Self::default();
-        for comment_node in ast::collect_comment_nodes(file) {
+        for comment_node in comment_nodes {
             let text = comment_node.text();
             let site = DirectiveSite {
                 span: comment_node.span(),
@@ -265,7 +276,7 @@ impl SuppressionTracker {
                 &text,
                 site,
                 content,
-                &decorator_end_lines,
+                &skippable_end_lines,
                 is_explained_above,
             ) {
                 tracker.directives.push(directive);
@@ -399,46 +410,6 @@ struct DirectiveSite {
     coord: LineColumn,
 }
 
-/// A third-party Python suppression directive, written `# <tool>: <keyword>...`.
-struct ToolDirective {
-    /// The tool namespace before the colon, such as `type` or `pylint`.
-    tool: &'static str,
-    /// The keywords after the colon that suppress findings, such as `ignore` or `disable`.
-    keywords: &'static [&'static str],
-}
-
-/// Third-party Python suppression directives besides bare `# noqa`.
-const TOOL_DIRECTIVES: &[ToolDirective] = &[
-    ToolDirective {
-        tool: "type",
-        keywords: &["ignore"],
-    },
-    ToolDirective {
-        tool: "pyright",
-        keywords: &["ignore"],
-    },
-    ToolDirective {
-        tool: "ty",
-        keywords: &["ignore"],
-    },
-    ToolDirective {
-        tool: "pyrefly",
-        keywords: &["ignore"],
-    },
-    ToolDirective {
-        tool: "ruff",
-        keywords: &["noqa", "ignore", "disable", "file-ignore"],
-    },
-    ToolDirective {
-        tool: "flake8",
-        keywords: &["noqa"],
-    },
-    ToolDirective {
-        tool: "pylint",
-        keywords: &["disable", "skip-file"],
-    },
-];
-
 /// Returns true if a Python comment holds a third-party suppression directive and has no
 /// non-empty `-- <reason>`.
 ///
@@ -454,32 +425,6 @@ fn is_unexplained_tool_directive(text: &str) -> bool {
         && body
             .split_once("--")
             .is_none_or(|(_, reason)| reason.trim().is_empty())
-}
-
-/// Returns true if `segment` starts with a third-party directive as its tool accepts it: bare
-/// `noqa` in any case (Ruff and flake8 honor `# NOQA`), the others in lowercase only (mypy,
-/// pyright, ty, pyrefly, Ruff and pylint ignore `# TYPE: IGNORE` or `# PYLINT: DISABLE`).
-fn starts_with_tool_directive(segment: &str) -> bool {
-    starts_with_keyword(&segment.to_ascii_lowercase(), NOQA)
-        || segment.split_once(':').is_some_and(|(tool, rest)| {
-            TOOL_DIRECTIVES.iter().any(|directive| {
-                directive.tool == tool
-                    && directive
-                        .keywords
-                        .iter()
-                        .any(|keyword| starts_with_keyword(rest.trim_start(), keyword))
-            })
-        })
-}
-
-/// Returns true if `text` starts with `keyword` as a whole word, so `ignore` matches
-/// `ignore[code]` and `ignore-errors` but not `ignored`.
-fn starts_with_keyword(text: &str, keyword: &str) -> bool {
-    text.strip_prefix(keyword).is_some_and(|rest| {
-        rest.chars()
-            .next()
-            .is_none_or(|next| !next.is_alphanumeric() && next != '_')
-    })
 }
 
 /// The `omni:` or `omnicoach:` prefix of a suppression directive.
@@ -590,49 +535,51 @@ enum DirectivePlacement {
 fn resolve_directive_placement(
     is_file: bool,
     content: &str,
-    decorator_end_lines: &HashMap<usize, usize>,
+    skippable_end_lines: &HashMap<usize, usize>,
     span: SourceSpan,
     raw_line: usize,
 ) -> DirectivePlacement {
     if is_file {
         return DirectivePlacement::File;
     }
-    let prefix_on_line = content[..span.start]
-        .rsplit_once('\n')
-        .map_or(&content[..span.start], |(_, prefix)| prefix);
-    if prefix_on_line.trim().is_empty() {
+    if is_line_prefix_whitespace(content, span.start) {
         DirectivePlacement::PrecedingLine {
             target_line: raw_line + 1,
-            end_target_line: compute_effective_target_line(content, decorator_end_lines, raw_line),
+            end_target_line: compute_effective_target_line(skippable_end_lines, raw_line),
         }
     } else {
         DirectivePlacement::SameLine { line: raw_line }
     }
 }
 
-/// Computes the declaration line after skipping contiguous attributes, decorators, or comments.
+/// Returns true if `span` is surrounded only by whitespace on its start and end lines.
+fn is_standalone_span_on_lines(content: &str, span: SourceSpan) -> bool {
+    let suffix_on_line = content[span.end..]
+        .split_once('\n')
+        .map_or(&content[span.end..], |(suffix, _)| suffix);
+    is_line_prefix_whitespace(content, span.start) && suffix_on_line.trim().is_empty()
+}
+
+/// Returns true if the text on the line before byte `offset` consists only of whitespace.
+fn is_line_prefix_whitespace(content: &str, offset: usize) -> bool {
+    let prefix_on_line = content[..offset]
+        .rsplit_once('\n')
+        .map_or(&content[..offset], |(_, prefix)| prefix);
+    prefix_on_line.trim().is_empty()
+}
+
+/// Computes the declaration line after skipping contiguous attributes, decorators, or standalone
+/// comments.
 ///
-/// `decorator_end_lines` maps the first line of each decorator or attribute to its last line,
-/// so continuation lines of a multiline one are skipped too.
+/// `skippable_end_lines` maps the first line of each decorator, attribute, or standalone comment
+/// to its last line, so continuation lines of multiline items and block comments are skipped too.
 fn compute_effective_target_line(
-    content: &str,
-    decorator_end_lines: &HashMap<usize, usize>,
+    skippable_end_lines: &HashMap<usize, usize>,
     raw_line: usize,
 ) -> usize {
     let mut current_line = raw_line + 1;
-    for (index, line_text) in content.lines().enumerate().skip(raw_line) {
-        let line_number = index + 1;
-        if line_number < current_line {
-            continue;
-        }
-        let trimmed = line_text.trim();
-        if let Some(&end_line) = decorator_end_lines.get(&line_number) {
-            current_line = end_line + 1;
-        } else if trimmed.starts_with("//") || trimmed.starts_with('#') {
-            current_line += 1;
-        } else {
-            break;
-        }
+    while let Some(&end_line) = skippable_end_lines.get(&current_line) {
+        current_line = end_line + 1;
     }
     current_line
 }
@@ -807,6 +754,17 @@ mod tests {
         Language::Rust,
         2,
         10
+    )]
+    #[case::skips_multiline_rust_block_comment(
+        indoc::indoc! {r"
+            // omni:ignore [single-letter-name] -- math
+            /* multiline
+               block comment */
+            #[allow(dead_code)]
+            fn f(a: i32) {}"},
+        Language::Rust,
+        2,
+        5
     )]
     fn test_parse_valid_inline_directive_preceding_line(
         #[case] content: &str,

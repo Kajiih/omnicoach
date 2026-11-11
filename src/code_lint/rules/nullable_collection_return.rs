@@ -8,8 +8,6 @@
 //!   `Option<[u8; 4]>`) are fixed-arity records where `()` is not a valid inhabitant, whereas
 //!   variadic `tuple[T, ...] | None` is a variable-length sequence and is flagged.
 
-use crate::code_lint::ast::python::PythonReturnTypeBranch;
-use crate::code_lint::ast::rust::NullableReturnPayload;
 use crate::code_lint::ast::{self, AstNode, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
@@ -127,17 +125,6 @@ pub const RULE: CodeRule = CodeRule {
     check: check_file,
 };
 
-const RUST_COLLECTION_TYPES: &[&str] = &[
-    "Vec",
-    "VecDeque",
-    "LinkedList",
-    "HashMap",
-    "BTreeMap",
-    "HashSet",
-    "BTreeSet",
-    "BinaryHeap",
-];
-
 fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
     ast::collect_function_returns(file)
         .into_iter()
@@ -145,7 +132,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             let return_type = function.declared_type?;
             let collections = match file.lang() {
                 Language::Python => extract_python_nullable_collection_type(&return_type)?,
-                Language::Rust => extract_rust_nullable_collection_type(&return_type)?,
+                Language::Rust => ast::rust::nullable_return_collection_type(&return_type)?,
             };
             let expression = return_type.text();
             Some(rule.diagnostic_at_node(
@@ -174,54 +161,12 @@ fn extract_python_nullable_collection_type(return_type: &AstNode<'_>) -> Option<
     }
     let mut collection_types = Vec::new();
     for branch in &union.branches {
-        let type_name = python_collection_branch_type(branch)?;
-        if !collection_types.contains(&type_name) {
-            collection_types.push(type_name);
+        let collection = branch.variable_length_collection()?;
+        if !collection_types.contains(&collection.path) {
+            collection_types.push(collection.path.clone());
         }
     }
     (!collection_types.is_empty()).then(|| collection_types.join(", "))
-}
-
-fn python_collection_branch_type(branch: &PythonReturnTypeBranch<'_>) -> Option<String> {
-    let collection = branch.collection.as_ref()?;
-    if let Some(args) = &branch.type_arguments
-        && matches!(collection.name.as_str(), "tuple" | "Tuple")
-    {
-        let is_variadic = args.len() == 2 && args[1].text() == "...";
-        if !is_variadic {
-            return None;
-        }
-    }
-    Some(collection.path.clone())
-}
-
-fn extract_rust_nullable_collection_type(return_type_node: &AstNode<'_>) -> Option<String> {
-    match ast::rust::nullable_return_payload(return_type_node)? {
-        NullableReturnPayload::Slice(slice_type) => Some(slice_type),
-        NullableReturnPayload::Generic {
-            base,
-            path,
-            terminal,
-        } => is_rust_collection_constructor(&path, &terminal).then_some(base),
-    }
-}
-
-fn is_rust_collection_constructor(path: &str, terminal: &str) -> bool {
-    if !RUST_COLLECTION_TYPES.contains(&terminal) {
-        return false;
-    }
-    path == terminal
-        || path.strip_suffix(terminal).is_some_and(|prefix| {
-            matches!(
-                prefix,
-                "vec::"
-                    | "std::vec::"
-                    | "alloc::vec::"
-                    | "collections::"
-                    | "std::collections::"
-                    | "alloc::collections::"
-            )
-        })
 }
 
 #[cfg(test)]

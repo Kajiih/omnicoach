@@ -138,21 +138,23 @@ impl<'a> CommentIndex<'a> {
     }
 }
 
-const DIRECTIVE_PREFIXES: &[&str] = &[
+const OMNI_DIRECTIVE_PREFIXES: &[&str] = &[
     "omnicoach:ignore",
     "omnicoach:disable-file",
     "omni:ignore",
     "omni:disable-file",
-    "ruff: noqa",
-    "ruff:noqa",
-    "type: ignore",
-    "type:ignore",
-    "pyright: ignore",
-    "pyright:ignore",
-    "pylint: disable",
-    "pylint:disable",
-    "noqa",
 ];
+
+/// The bare `# noqa` directive, honored by Ruff and flake8 in any case.
+pub(in crate::code_lint) const NOQA: &str = "noqa";
+
+/// Returns true if `segment` starts with a third-party directive as its tool accepts it: bare
+/// `noqa` in any case (Ruff and flake8 honor `# NOQA`), the others in lowercase only (mypy,
+/// pyright, ty, pyrefly, Ruff and pylint ignore `# TYPE: IGNORE` or `# PYLINT: DISABLE`).
+#[must_use]
+pub(in crate::code_lint) fn starts_with_tool_directive(segment: &str) -> bool {
+    match_tool_directive_prefix_len(segment).is_some()
+}
 
 /// Strips leading and trailing comment delimiters (`//`, `#`, `/* ... */`).
 ///
@@ -246,7 +248,10 @@ fn is_substantive_explanation(text: &str) -> bool {
 }
 
 fn find_directive_prefix(text: &str) -> Option<usize> {
-    for &prefix in DIRECTIVE_PREFIXES {
+    if let Some(len) = match_tool_directive_prefix_len(text) {
+        return Some(len);
+    }
+    for &prefix in OMNI_DIRECTIVE_PREFIXES {
         if text
             .get(..prefix.len())
             .is_some_and(|sub| sub.eq_ignore_ascii_case(prefix))
@@ -304,6 +309,93 @@ fn is_rule_code_token(word: &str) -> bool {
         })
 }
 
+/// Matches a third-party Python directive prefix at the start of `segment` and returns its byte
+/// length.
+///
+/// Bare `noqa` matches in any case (Ruff and flake8 honor `# NOQA`); the others match in
+/// lowercase only (mypy, pyright, ty, pyrefly, Ruff and pylint ignore `# TYPE: IGNORE` or
+/// `# PYLINT: DISABLE`). Hyphenated keyword suffixes such as `disable-next`, `disable-line`,
+/// and `ignore-errors` are included in the matched prefix length.
+#[must_use]
+fn match_tool_directive_prefix_len(segment: &str) -> Option<usize> {
+    if starts_with_keyword(&segment.to_ascii_lowercase(), NOQA) {
+        return Some(NOQA.len());
+    }
+    let (tool, rest) = segment.split_once(':')?;
+    let directive = TOOL_DIRECTIVES.iter().find(|entry| entry.tool == tool)?;
+    let trimmed_rest = rest.trim_start();
+    let ws_len = rest.len() - trimmed_rest.len();
+    let keyword = directive
+        .keywords
+        .iter()
+        .copied()
+        .find(|kw| starts_with_keyword(trimmed_rest, kw))?;
+    let mut after_kw = &trimmed_rest[keyword.len()..];
+    let mut suffix_len = 0;
+    while after_kw.starts_with('-') && !after_kw.starts_with("--") {
+        let word_len = after_kw[1..]
+            .bytes()
+            .take_while(u8::is_ascii_alphanumeric)
+            .count();
+        if word_len == 0 {
+            break;
+        }
+        suffix_len += 1 + word_len;
+        after_kw = &after_kw[1 + word_len..];
+    }
+    Some(tool.len() + 1 + ws_len + keyword.len() + suffix_len)
+}
+
+/// A third-party Python suppression directive, written `# <tool>: <keyword>...`.
+struct ToolDirective {
+    /// The tool namespace before the colon, such as `type` or `pylint`.
+    tool: &'static str,
+    /// The keywords after the colon that suppress findings, such as `ignore` or `disable`.
+    keywords: &'static [&'static str],
+}
+
+/// Third-party Python suppression directives besides bare `# noqa`.
+const TOOL_DIRECTIVES: &[ToolDirective] = &[
+    ToolDirective {
+        tool: "type",
+        keywords: &["ignore"],
+    },
+    ToolDirective {
+        tool: "pyright",
+        keywords: &["ignore"],
+    },
+    ToolDirective {
+        tool: "ty",
+        keywords: &["ignore"],
+    },
+    ToolDirective {
+        tool: "pyrefly",
+        keywords: &["ignore"],
+    },
+    ToolDirective {
+        tool: "ruff",
+        keywords: &["noqa", "ignore", "disable", "file-ignore"],
+    },
+    ToolDirective {
+        tool: "flake8",
+        keywords: &["noqa"],
+    },
+    ToolDirective {
+        tool: "pylint",
+        keywords: &["disable", "skip-file"],
+    },
+];
+
+/// Returns true if `text` starts with `keyword` as a whole word, so `ignore` matches
+/// `ignore[code]` and `ignore-errors` but not `ignored`.
+fn starts_with_keyword(text: &str, keyword: &str) -> bool {
+    text.strip_prefix(keyword).is_some_and(|rest| {
+        rest.chars()
+            .next()
+            .is_none_or(|next| !next.is_alphanumeric() && next != '_')
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +435,12 @@ mod tests {
     )]
     #[case::omni_ignore("# omni:ignore[rule-name] -- explanation", "explanation")]
     #[case::pylint_disable("# pylint: disable=broad-except", "")]
+    #[case::pylint_disable_next("# pylint: disable-next=broad-except", "")]
+    #[case::pylint_skip_file("# pylint: skip-file", "")]
+    #[case::ty_ignore("# ty: ignore[invalid-argument-type]", "")]
+    #[case::pyrefly_ignore_errors("# pyrefly: ignore-errors", "")]
+    #[case::ruff_disable("# ruff: disable[E501]", "")]
+    #[case::flake8_noqa("# flake8: noqa", "")]
     #[case::pylint_disable_with_explanation(
         "# pylint: disable=broad-except file may be missing",
         "file may be missing"

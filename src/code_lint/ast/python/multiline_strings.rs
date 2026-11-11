@@ -19,7 +19,6 @@ pub fn collect_multiline_strings(file: &ParsedFile) -> Vec<MultilineString<'_>> 
     };
     let mut collector = MultilineStringCollector {
         file,
-        docstring_expr_span: None,
         enclosing_calls: Vec::new(),
         out: Vec::new(),
     };
@@ -29,16 +28,12 @@ pub fn collect_multiline_strings(file: &ParsedFile) -> Vec<MultilineString<'_>> 
 
 struct MultilineStringCollector<'a> {
     file: &'a ParsedFile,
-    docstring_expr_span: Option<SourceSpan>,
     enclosing_calls: Vec<String>,
     out: Vec<MultilineString<'a>>,
 }
 
 impl MultilineStringCollector<'_> {
     fn record_part(&mut self, span: SourceSpan, is_triple_quoted: bool, decoded: &[u8]) {
-        if self.docstring_expr_span == Some(span) {
-            return;
-        }
         if is_triple_quoted && self.file.source[span.start..span.end].contains('\n') {
             self.out.push(MultilineString {
                 node: AstNode::from_span(self.file, span),
@@ -58,13 +53,16 @@ impl MultilineStringCollector<'_> {
 impl<'a> SourceOrderVisitor<'a> for MultilineStringCollector<'a> {
     fn visit_stmt(&mut self, statement: &'a Stmt) {
         if let Stmt::Expr(expr_statement) = statement {
-            let prev_doc = self.docstring_expr_span;
-            self.docstring_expr_span = Some(span_from_ruff_range(expr_statement.range()));
-            walk_stmt(self, statement);
-            self.docstring_expr_span = prev_doc;
-        } else {
-            walk_stmt(self, statement);
+            match expr_statement.value.as_ref() {
+                Expr::StringLiteral(_) | Expr::BytesLiteral(_) => return,
+                Expr::FString(_) => {
+                    walk_expr(self, &expr_statement.value);
+                    return;
+                }
+                _ => {}
+            }
         }
+        walk_stmt(self, statement);
     }
 
     fn visit_expr(&mut self, expr: &'a Expr) {
