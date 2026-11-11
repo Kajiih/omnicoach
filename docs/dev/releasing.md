@@ -10,7 +10,7 @@ Until 1.0, bump the minor version (`0.2.0` → `0.3.0`) when the release adds ru
 
 Start from an empty working copy on top of the last commit to release, with every commit to ship already on `main`.
 
-1. Verify: `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings` pass.
+1. Verify: `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo publish --dry-run --locked` pass.
 2. Bump `version` under `[workspace.package]` in root `Cargo.toml` (shared by `omnicoach` and `crates/omnicoach-py`), then refresh the workspace entries in `Cargo.lock`:
 
    ```sh

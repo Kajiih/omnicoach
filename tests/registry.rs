@@ -733,3 +733,41 @@ fn test_doc_summaries_open_with_flags_or_requires() {
         );
     }
 }
+
+/// Crates.io rejects `cargo publish` when a crate declares more than 5 keywords or categories,
+/// or when a keyword exceeds 20 ASCII bytes or starts with a non-alphanumeric character.
+#[rstest]
+#[case("keywords", true)]
+#[case("categories", false)]
+fn test_cargo_manifest_satisfies_crates_io_limits(#[case] field: &str, #[case] check_syntax: bool) {
+    let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let manifest: toml::Value =
+        toml::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
+    let entries = manifest["workspace"]["package"][field].as_array().unwrap();
+
+    assert_eq!(
+        manifest["package"][field]["workspace"].as_bool(),
+        Some(true)
+    );
+    assert!(
+        (1..=5).contains(&entries.len()),
+        "crates.io allows 1..=5 {field}"
+    );
+    if check_syntax {
+        for entry in entries {
+            let keyword = entry.as_str().unwrap();
+            assert!(
+                is_valid_crates_io_keyword(keyword),
+                "invalid crates.io keyword `{keyword}`"
+            );
+        }
+    }
+}
+
+fn is_valid_crates_io_keyword(keyword: &str) -> bool {
+    (1..=20).contains(&keyword.len())
+        && keyword.starts_with(|character: char| character.is_ascii_alphanumeric())
+        && keyword.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '+')
+        })
+}

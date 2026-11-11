@@ -107,7 +107,7 @@ Omnicoach resolves configuration across two scopes:
 - **Project configuration (`.omnicoach.toml`)**: Discovered by walking up ancestor directories from the target path (or current directory), stopping at `.git` or `.jj` repository boundaries. Relative `[per-file-ignores]` globs are anchored to the directory containing `.omnicoach.toml`.
 - **Global user configuration (`$XDG_CONFIG_HOME/omnicoach/config.toml` or `~/.config/omnicoach/config.toml`)**:
   - **`code` & `graph` (repo-first fallback)**: Used only when no ancestor `.omnicoach.toml` is found for a target, preserving team-shared repository configs.
-  - **`command` & non-project queries (global-first precedence)**: User-level shell and VCS guardrails in global config take precedence over repository `.omnicoach.toml`.
+  - **`command` & `--explain <command-rule>` (global-first precedence)**: User-level shell and VCS guardrails in global config take precedence over repository `.omnicoach.toml`.
 
 ### Framework Rule Design: Enforcement Modes
 
@@ -206,17 +206,18 @@ task = asyncio.create_task(loop())  # omni:ignore [unstructured-task] -- top-lev
 ```
 
 ```rust
-let x = 1; // omni:ignore [single-letter-name] -- 2D vector coordinate
+let y = 1; // omni:ignore [single-letter-name] -- 2D vertical coordinate
 ```
 
 ### Preceding-Line Suppression (`omni:ignore` / `omnicoach:ignore`)
 
 ```python
-# omni:ignore [nested-function] -- factory requires localized closure
-@dataclass
-def make_handler():
-    def helper(): pass
-    return helper
+def traced(handler):
+    # omni:ignore [nested-function] -- decorator requires closure over handler
+    @functools.wraps(handler)
+    def wrapper(request):
+        return handler(request)
+    return wrapper
 ```
 
 ### File-Level Suppression (`omni:disable-file` / `omnicoach:disable-file`)

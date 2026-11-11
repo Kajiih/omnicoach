@@ -36,7 +36,7 @@ edition = "2024"
 description = "Lightweight, high-signal static analysis and command linter for Python and Rust"
 repository = "https://github.com/Kajiih/omnicoach"
 license = "MIT"
-keywords = ["agent", "hook", "linter", "python", "rust", "shell", "static-analysis"]
+keywords = ["agent", "linter", "python", "rust", "static-analysis"]
 categories = ["command-line-utilities", "development-tools"]
 
 [workspace.lints.clippy]
@@ -77,10 +77,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "omnicoach"
 path = "src/bin/omnicoach.rs"
-
-[[example]]
-name = "ast_dumper"
-path = "examples/ast_dumper.rs"
 
 [[bench]]
 harness = false

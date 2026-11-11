@@ -65,6 +65,7 @@ jobs:
       - run: node playground/tests/verify_wasm.mjs
       - run: cargo doc --workspace --no-deps --locked
       - run: cargo doc --workspace --no-deps --document-private-items --locked
+      - run: cargo publish --dry-run --locked
 
   wheel:
     name: Wheel (${{ matrix.os }})
