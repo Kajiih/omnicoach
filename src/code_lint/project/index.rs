@@ -589,15 +589,16 @@ impl<'s> ProjectIndex<'s> {
         if !self.declares_rust_architecture() {
             return headers;
         }
-        let mut rust_files = Vec::new();
-        collect_source_files_recursive(
-            &self.layout.rust_source_root,
-            RUST_EXTENSION,
-            self.source,
-            &mut rust_files,
-        );
-        rust_files.sort();
-        rust_files.dedup();
+        let rust_files: Vec<PathBuf> = self
+            .source
+            .walk_files(&self.layout.rust_source_root)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == RUST_EXTENSION)
+            })
+            .collect();
         headers.par_extend(
             rust_files
                 .par_iter()
@@ -1119,38 +1120,6 @@ impl<'s> ProjectIndex<'s> {
 #[serde(rename_all = "kebab-case")]
 struct PartialConfigWithArchitecture {
     architecture: Option<ArchitectureConfig>,
-}
-
-fn collect_source_files_recursive(
-    directory: &Path,
-    expected_extension: &str,
-    source: &dyn FileSource,
-    out: &mut Vec<PathBuf>,
-) {
-    let Ok(entries) = source.read_dir(directory) else {
-        return;
-    };
-    for entry in entries {
-        let skip = entry
-            .file_name()
-            .and_then(|os_name| os_name.to_str())
-            .is_some_and(|name| {
-                name.starts_with('.')
-                    || matches!(name, "target" | "__pycache__" | "node_modules" | "venv")
-            });
-        if skip {
-            continue;
-        }
-        if source.is_dir(&entry) {
-            collect_source_files_recursive(&entry, expected_extension, source, out);
-        } else if entry
-            .extension()
-            .is_some_and(|extension| extension == expected_extension)
-            && source.is_file(&entry)
-        {
-            out.push(entry);
-        }
-    }
 }
 
 enum ConfiguredArchitecture {

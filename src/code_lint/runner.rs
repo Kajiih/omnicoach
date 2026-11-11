@@ -377,16 +377,15 @@ fn collect_targets(options: &LintOptions) -> anyhow::Result<Vec<LintTarget>> {
 }
 
 fn collect_directory_candidates(dir: &Path) -> impl Iterator<Item = LintTarget> {
-    ignore::WalkBuilder::new(dir)
-        .require_git(false)
-        .build()
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.path();
-            (path.is_file() && Language::from_path(path).is_some()).then(|| LintTarget {
-                path: path.to_path_buf(),
-                changed_lines: None,
-            })
+    use crate::code_lint::project::FileSource as _;
+    DiskFileSource
+        .walk_files(dir)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|path| Language::from_path(path).is_some())
+        .map(|path| LintTarget {
+            path,
+            changed_lines: None,
         })
 }
 
